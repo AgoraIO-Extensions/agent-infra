@@ -138,8 +138,12 @@ Security Review
 阻止 Merge，管理员也不能绕过保护规则。
 
 人工批准即为 Merge 决策。配置的 CI、人工审批和评论解决全部通过后，AI 或自动化可以
-执行 Merge，但不得自行批准 PR 或绕过任何门禁。人可以依据 Evidence Package 缩小 diff
-阅读范围，但以下变更必须定向检查：
+执行 Merge，但不得自行批准 PR 或绕过任何门禁。
+
+在第 19 节第 2 步完成，且确定性 CI 与 `Claude Review` 均成为 required check 前，Merge
+仍由人执行。仓库允许使用 Auto-merge 只表示 GitHub 功能可用，不表示自动合并已经启用。
+
+人可以依据 Evidence Package 缩小 diff 阅读范围，但以下变更必须定向检查：
 
 - PRD、架构 Spec、ADR 和 Agent Runtime Contract。
 - 身份、授权、Connection 隔离和凭证边界。
@@ -185,8 +189,14 @@ Security Review
 
 初始清单选自 [mattpocock/skills](https://github.com/mattpocock/skills) commit
 [`2ab958093e83e0ec752e6c1c5932da465bf23e0c`](https://github.com/mattpocock/skills/tree/2ab958093e83e0ec752e6c1c5932da465bf23e0c)，
-不全量安装该仓库。安装时提交 `.agents/.skill-lock.json`，记录上游来源和内容哈希；本地修改
-随项目文件接受评审。
+不全量安装该仓库。安装时固定
+[`vercel-labs/skills`](https://github.com/vercel-labs/skills) CLI 版本，并提交实际 Skill 文件和
+该工具生成的根目录 `skills-lock.json`。
+
+`skills-lock.json` 使用工具的标准 schema，记录 `source`、完整 commit `ref`、`skillPath` 和
+`computedHash`。`computedHash` 是当前 Skill 目录全部文件按相对路径排序后，将路径和内容
+依次纳入计算得到的 SHA-256，不是上游原始文件的独立哈希。本地修改必须重新计算该值并随
+Skill 文件接受评审；CI 校验 lock 与工作区内容一致。
 
 采用范围：
 
@@ -368,6 +378,9 @@ Claude Code 作为独立 Reviewer 接入 GitHub Actions，补充人工评审和�
 固定 commit `be7b93b1907a4abad570368f3c74b6fe3807510b`，对应 `v1.0.183`。升级 Action 必须通过 PR
 评审，不使用浮动 tag。
 
+本节定义第 19 节第 2 步的目标设计。对应 workflow、网关配置和 required check 尚未落地，
+完成该步骤的冒烟验证和 GitHub API 回读后才视为启用。
+
 ### 16.1 Workflow 与触发
 
 - `.github/workflows/claude-pr-review.yml` 负责 PR Review。对同仓库、非 Draft PR 的
@@ -478,9 +491,10 @@ seeded bug 和权限攻击样例，多次运行以观察非确定性。
 
 ## 19. 实施顺序
 
-1. **仓库控制：** 公开仓库、保护 `main`、建立 PR 模板和文档 CI。
-2. **Claude Reviewer：** 配置网关、最小权限 workflow 和 `claude` label；通过真实 PR 验证
-   后启用 required check。
+1. **仓库控制：** 公开仓库、保护 `main`、建立 PR 模板，并将文档 CI 设为 required check。
+2. **Claude Reviewer：** 配置网关、最小权限 workflow 和 `claude` label；先用最小 PR 验证
+   streaming、tool use、行级评论和 summary 完整往返，再将 `Claude Review` 设为
+   required check 并允许自动化执行 Merge。
 3. **Harness 基线：** 安装固定 Skills、定义 Codex roles 和 Hooks、补充真实验证命令。
 4. **单 ticket pilot：** 在独立 worktree 运行 Loop，生成 Evidence Package。
 5. **Eval 基线：** 对固定任务重复运行，记录人工时间、成功率和失败类型。
@@ -498,6 +512,7 @@ seeded bug 和权限攻击样例，多次运行以观察非确定性。
 - AI 不能通过修改测试、阈值、CI 或 Harness 绕过失败。
 - 每个 Loop 达到停止条件后进入明确异常状态，不无限重试。
 - PR 包含完整 Evidence Package，未执行检查不会被表述为通过。
+- 网关在 required check 启用前已通过最小 PR 的 streaming 和 tool use 冒烟验证。
 - 同仓库、非 Draft PR 自动运行 `Claude Review`；新提交取消旧任务并产生针对新 head 的结果。
 - 有权限成员可以在 PR 和 Issue 中通过 `@claude` 或 `claude` label 获得只读分析；无权限
   用户、bot、Draft 和 fork 不调用模型。
