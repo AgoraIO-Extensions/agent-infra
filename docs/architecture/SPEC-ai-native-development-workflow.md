@@ -180,7 +180,13 @@ Security Review
 
 ## 9. Skills
 
-初始工程流程采用可编辑并固定上游 commit 的 Skills，不全量安装社区仓库。
+仓库工作流只依赖提交到 `.agents/skills/<skill-name>/SKILL.md` 的项目级 Skills，不依赖成员
+个人安装的全局 Skills。项目级 Skills 可以基于社区版本修改，也可以由项目自行编写。
+
+初始清单选自 [mattpocock/skills](https://github.com/mattpocock/skills) commit
+[`2ab958093e83e0ec752e6c1c5932da465bf23e0c`](https://github.com/mattpocock/skills/tree/2ab958093e83e0ec752e6c1c5932da465bf23e0c)，
+不全量安装该仓库。安装时提交 `.agents/.skill-lock.json`，记录上游来源和内容哈希；本地修改
+随项目文件接受评审。
 
 采用范围：
 
