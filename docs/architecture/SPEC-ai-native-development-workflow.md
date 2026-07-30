@@ -15,7 +15,7 @@
 ### 2.1 目标
 
 - 所有可以机械执行和自动验证的开发工作优先由 AI 完成。
-- 人负责目标、约束、关键设计、测试依据、风险例外和最终 Merge。
+- 人负责目标、约束、关键设计、测试依据、风险例外和 Merge 审批。
 - 每项工作都可以从需求追溯到设计、测试、实现、评审和合并结果。
 - AI 在隔离环境中迭代，失败时有明确停止条件，不以无限重试代替决策。
 - 人工评审聚焦需求、风险和证据，不要求逐行检查所有低风险代码。
@@ -24,7 +24,7 @@
 
 - 不以“全部代码由 AI 生成”作为质量指标。
 - 不让同一个 Agent 同时承担实现和最终裁决。
-- 不在当前阶段自动 Merge 或自动发布生产环境。
+- 不在当前阶段自动发布生产环境。
 - 不在当前阶段建设通用 Graph Engine 或 durable workflow 平台。
 - 不把开发工作流并入 Agent 平台 M1 的产品功能。
 
@@ -62,7 +62,7 @@
 - 审批产品范围、身份、授权、数据归属、公开契约和迁移策略变更。
 - 处理 Agent 无法消除的需求歧义、风险例外和生产权限请求。
 - 审核 Evidence Package、高风险 diff 和独立评审 findings。
-- 决定 Merge 和生产发布。
+- 批准 Merge，决定生产发布。
 
 ### 5.2 AI 的责任
 
@@ -137,8 +137,9 @@ Security Review
 有权限成员批准；最后一次 push 的提交者不能批准该 PR。过期审批自动失效，未解决评论
 阻止 Merge，管理员也不能绕过保护规则。
 
-AI 不自动 Merge。人可以依据 Evidence Package 缩小 diff 阅读范围，但以下变更必须定向
-检查：
+人工批准即为 Merge 决策。配置的 CI、人工审批和评论解决全部通过后，AI 或自动化可以
+执行 Merge，但不得自行批准 PR 或绕过任何门禁。人可以依据 Evidence Package 缩小 diff
+阅读范围，但以下变更必须定向检查：
 
 - PRD、架构 Spec、ADR 和 Agent Runtime Contract。
 - 身份、授权、Connection 隔离和凭证边界。
@@ -317,7 +318,7 @@ GitHub 是开发 Graph 的权威来源：
 - Issue 保存目标、acceptance criteria、状态和 blocking edges。
 - PR 保存实现、review 和讨论。
 - Actions/Checks 保存确定性检查结果。
-- Branch protection 和人工审批决定 Merge。
+- Branch protection 和人工审批决定 PR 何时可以 Merge。
 
 未来首个 dispatcher 只选择状态为 `Ready for Agent`、blockers 全部完成且位于批准允许范围内
 的 frontier ticket，每个节点启动一个独立 Loop。LLM 不计算或覆盖权威依赖状态。
@@ -336,7 +337,7 @@ GitHub 是开发 Graph 的权威来源：
 - 评论解决是合并前置条件。
 - 管理员遵守相同保护规则。
 - 禁止 force push 和删除 `main`。
-- 要求线性历史，不允许 AI 自动 Merge。
+- 要求线性历史，自动 Merge 也必须满足全部合并门禁。
 
 ### 15.2 权限
 
@@ -345,7 +346,8 @@ GitHub 是开发 Graph 的权威来源：
 - 人工监督的本地 Codex 会话可以使用操作者当前 GitHub 身份，但不能作为独立审批人，
   也不能在会话结束后继续无人值守运行。
 - AI 身份不具有仓库 Admin、规则绕过或生产权限。
-- Contents 写权限只用于工作分支；Issue 和 PR 权限按职责授予。
+- Contents 写权限只用于工作分支和执行已经通过全部门禁的 Merge；Issue 和 PR 权限按职责
+  授予。
 - GitHub Actions 默认使用只读 `GITHUB_TOKEN`，不得审批 PR；需要写权限的 workflow 必须
   显式声明最小权限并经过人工评审。
 - 来自 fork 或其他不可信分支的 PR workflow 不获取 Secrets，也不获取写权限。
@@ -385,12 +387,12 @@ seeded bug 和权限攻击样例，多次运行以观察非确定性。
 
 自治按以下顺序升级：
 
-1. AI 生成设计和 PR，人执行所有状态迁移。
+1. AI 生成设计和 PR，人执行人工检查点。
 2. AI 在单 ticket Loop 中自动修复，人批准设计和 Merge。
 3. Dispatcher 自动领取 ADR 明确允许的 frontier tickets，人批准设计和 Merge。
 4. 更高自治必须由新的 ADR 和 Eval 证据批准。
 
-本文不授权自动 Merge。
+所有阶段均遵循第 7.2 节的 Merge 检查点，生产发布仍需独立人工决定。
 
 ## 18. 实施顺序
 
@@ -413,4 +415,4 @@ seeded bug 和权限攻击样例，多次运行以观察非确定性。
 - 每个 Loop 达到停止条件后进入明确异常状态，不无限重试。
 - PR 包含完整 Evidence Package，未执行检查不会被表述为通过。
 - 自动派发前已有可重复的 Harness Eval 基线。
-- 仓库不存在 AI 自动 Merge 或自动生产发布路径。
+- AI 只能在全部合并门禁通过后自动 Merge，生产发布不自动执行。
