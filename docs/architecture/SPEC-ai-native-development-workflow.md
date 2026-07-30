@@ -261,8 +261,8 @@ PR CI 重复快速检查，并运行工程 Spec 要求的完整测试、契约�
 - 人在设计检查点批准 acceptance criteria、测试 seam、关键示例和负向场景。
 - verifier 从权威 Spec 独立验证行为，不复用 implementer 的判断过程。
 - implementer 可以新增单元和集成测试，但不能为通过 CI 弱化已批准的验收测试。
-- 修改受保护的 acceptance fixture、权限矩阵、阈值或测试 Harness 必须触发 Code Owner
-  review。
+- 修改受保护的 acceptance fixture、权限矩阵、阈值或测试 Harness，必须由非本次变更作者的
+  有权限成员定向检查。
 - 覆盖率用于发现空白，不作为测试质量的唯一指标；高风险模块同时观察 mutation 结果和
   缺陷检出能力。
 
@@ -332,7 +332,7 @@ GitHub 是开发 Graph 的权威来源：
 - 仓库公开可读，`main` 只接受 PR 合并。
 - 每个 PR 至少需要一名非作者批准。
 - 新 push 使旧审批失效，最后 push 者不能批准。
-- Code Owner review 和评论解决是合并前置条件。
+- 评论解决是合并前置条件。
 - 管理员遵守相同保护规则。
 - 禁止 force push 和删除 `main`。
 - 要求线性历史，不允许 AI 自动 Merge。
@@ -346,17 +346,6 @@ GitHub 是开发 Graph 的权威来源：
 - AI 身份不具有仓库 Admin、规则绕过或生产权限。
 - Contents 写权限只用于工作分支；Issue 和 PR 权限按职责授予。
 - 第三方 GitHub Actions 固定完整 commit SHA，不使用浮动 tag。
-
-### 15.3 Code Owners
-
-以下范围必须指定能够承担责任的 Code Owner：
-
-- PRD、架构 Spec 和 ADR。
-- `.github/`、`.codex/`、`AGENTS.md` 和 Skills。
-- 身份、授权、Connection、凭证边界和 Agent Runtime Contract。
-- migration、公开 API 和受保护的 acceptance tests。
-
-工程脚手架生成前只声明已存在的文档与自动化路径，不创建不存在的代码目录占位规则。
 
 ## 16. Evidence Package
 
@@ -400,7 +389,7 @@ seeded bug 和权限攻击样例，多次运行以观察非确定性。
 
 ## 18. 实施顺序
 
-1. **仓库控制：** 公开仓库、保护 `main`、建立 Code Owners、PR 模板和文档 CI。
+1. **仓库控制：** 公开仓库、保护 `main`、建立 PR 模板和文档 CI。
 2. **Harness 基线：** 安装固定 Skills、定义 Codex roles 和 Hooks、补充真实验证命令。
 3. **单 ticket pilot：** 在独立 worktree 运行 Loop，生成 Evidence Package。
 4. **Eval 基线：** 对固定任务重复运行，记录人工时间、成功率和失败类型。
