@@ -346,6 +346,10 @@ GitHub 是开发 Graph 的权威来源：
   也不能在会话结束后继续无人值守运行。
 - AI 身份不具有仓库 Admin、规则绕过或生产权限。
 - Contents 写权限只用于工作分支；Issue 和 PR 权限按职责授予。
+- GitHub Actions 默认使用只读 `GITHUB_TOKEN`，不得审批 PR；需要写权限的 workflow 必须
+  显式声明最小权限并经过人工评审。
+- 来自 fork 或其他不可信分支的 PR workflow 不获取 Secrets，也不获取写权限。
+- 禁止使用 `pull_request_target` checkout 或执行不可信的 PR head。
 - 第三方 GitHub Actions 固定完整 commit SHA，不使用浮动 tag。
 
 ## 16. Evidence Package
