@@ -1,0 +1,21 @@
+name: Claude Review Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions: {}
+
+jobs:
+  request:
+    name: Request Claude Review
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false &&
+      !endsWith(github.actor, '[bot]') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'claude')
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Emit trusted request
+        run: echo 'Request accepted for trusted resolution.'

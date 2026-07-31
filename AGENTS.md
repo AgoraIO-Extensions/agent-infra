@@ -67,16 +67,21 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 
 ## Current Validation Commands
 
-仓库仍是文档阶段。修改文档后，从仓库根目录执行：
+仓库仍是文档阶段。修改仓库内容后，从仓库根目录执行：
 
 ```bash
-pnpm dlx markdownlint-cli2 README.md AGENTS.md "docs/**/*.md"
-pnpm dlx markdown-link-check README.md
-pnpm dlx markdown-link-check <changed-file.md>
+npx --yes markdownlint-cli2@0.23.2 README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
+find README.md AGENTS.md .github docs -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
+  npx --yes markdown-link-check@3.15.0 --config .markdown-link-check.json "$file"
+done
+npm install --no-save --ignore-scripts --package-lock=false yaml@2.8.1
+node --test .github/scripts/*.test.mjs
+node .github/scripts/verify-workflow-policy.mjs
+.github/scripts/run-actionlint.sh
 git diff --check
 ```
 
-对每个修改过且包含链接的 Markdown 文件运行 `markdown-link-check`。工程脚手架生成后，用真实的 `package.json` 脚本替换本节，不提前编造安装、构建或测试命令。
+工程脚手架生成后，用真实的 `package.json` 脚本替换本节，不提前编造应用安装、构建或测试命令。
 
 ## Security
 
