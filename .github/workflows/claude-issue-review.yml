@@ -60,7 +60,7 @@ jobs:
             Do not modify files, labels, Issue state, branches, or pull requests.
           claude_args: |
             --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
-            --max-turns ${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}
+            --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --allowedTools "Read,Grep,Glob"
             --disallowedTools "Edit,Write,MultiEdit,Bash"
 
@@ -102,6 +102,6 @@ jobs:
           show_full_output: ${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}
           claude_args: |
             --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
-            --max-turns ${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}
+            --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --allowedTools "Read,Grep,Glob"
             --disallowedTools "Edit,Write,MultiEdit,Bash"

@@ -77,7 +77,7 @@ test("configures every Claude model job through repository variables", async () 
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
 
     assert.equal(job["timeout-minutes"], timeout);
-    assert.ok(action.with.claude_args.includes(`--max-turns ${maxTurns}`));
+    assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
     assert.equal(action.with.show_full_output, verbose);
   }
 });
