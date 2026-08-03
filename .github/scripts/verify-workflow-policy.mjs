@@ -61,6 +61,30 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const issueReview = workflows["claude-issue-review.yml"];
+  for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
+    if (/contains\s*\(\s*fromJSON\([\s\S]*?author_association\s*\)/.test(job.if ?? "")) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
+      );
+    }
+  }
+
+  for (const [name, workflow] of Object.entries(workflows)) {
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      const claudeSteps = (job.steps ?? []).filter((step) =>
+        step.uses?.startsWith(CLAUDE_ACTION),
+      );
+      const scrubbingEnabled =
+        job.env?.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === "1" ||
+        claudeSteps.some(
+          (step) => step.env?.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === "1",
+        );
+      if (claudeSteps.length && scrubbingEnabled) {
+        errors.push(`${name}/${jobName}: must not enable subprocess env scrubbing`);
+      }
+    }
+  }
+
   for (const step of workflowSteps(issueReview ?? {})) {
     if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
     const args = step.with?.claude_args ?? "";
