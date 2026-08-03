@@ -19,7 +19,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: ${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}
     permissions:
       contents: read
       pull-requests: read
@@ -73,7 +73,7 @@ jobs:
             RIGHT-side diff line. Return only the required JSON object.
           claude_args: |
             --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
-            --max-turns 20
+            --max-turns ${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}
             --add-dir pr-head
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*)"
             --json-schema '{"type":"object","additionalProperties":false,"properties":{"completed":{"const":true},"head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"properties":{"severity":{"enum":["P0","P1","P2"]},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1}},"required":["severity","title","body","path","line"]}}},"required":["completed","head_sha","summary","findings"]}'

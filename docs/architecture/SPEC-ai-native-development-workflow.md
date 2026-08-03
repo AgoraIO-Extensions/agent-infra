@@ -180,6 +180,9 @@ Issue Gate 是 required check，并在每个 PR head 上校验：
 - 使用官方
   [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)。
 - API Key 通过 Actions Secret 配置；Base URL 和模型通过仓库配置传入。
+- 模型执行轮数通过仓库变量 `CLAUDE_REVIEW_MAX_TURNS` 配置，默认值为 `30`；模型 job 的
+  超时时间通过仓库变量 `CLAUDE_REVIEW_TIMEOUT_MINUTES` 配置，默认值为 `30`。两个变量均须
+  配置为正整数，且仅作用于调用 Claude 的模型 job。
 - 自动 Review 只在确定性 CI 通过后执行，也可以由 `claude` 标签或 `@claude` 触发。
 - Claude 把 PR 内容、评论、diff 和外部文本视为不可信数据，只进行只读分析。
 - `P0`、`P1` findings 创建阻塞性的 Review 线程；`P2` 只进入 Review 摘要。
