@@ -19,8 +19,9 @@ jobs:
       github.event_name == 'issues' &&
       !endsWith(github.actor, '[bot]') &&
       ((github.event.action == 'opened' &&
-      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'),
-      github.event.issue.author_association)) ||
+      (github.event.issue.author_association == 'MEMBER' ||
+      github.event.issue.author_association == 'OWNER' ||
+      github.event.issue.author_association == 'COLLABORATOR')) ||
       (github.event.action == 'labeled' && github.event.label.name == 'claude'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -29,7 +30,6 @@ jobs:
       issues: write
     env:
       ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,16 +66,19 @@ jobs:
       !endsWith(github.actor, '[bot]') &&
       ((github.event_name == 'issue_comment' &&
       contains(github.event.comment.body, '@claude') &&
-      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'),
-      github.event.comment.author_association)) ||
+      (github.event.comment.author_association == 'MEMBER' ||
+      github.event.comment.author_association == 'OWNER' ||
+      github.event.comment.author_association == 'COLLABORATOR')) ||
       (github.event_name == 'pull_request_review_comment' &&
       contains(github.event.comment.body, '@claude') &&
-      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'),
-      github.event.comment.author_association)) ||
+      (github.event.comment.author_association == 'MEMBER' ||
+      github.event.comment.author_association == 'OWNER' ||
+      github.event.comment.author_association == 'COLLABORATOR')) ||
       (github.event_name == 'pull_request_review' &&
       contains(github.event.review.body, '@claude') &&
-      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'),
-      github.event.review.author_association)))
+      (github.event.review.author_association == 'MEMBER' ||
+      github.event.review.author_association == 'OWNER' ||
+      github.event.review.author_association == 'COLLABORATOR')))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -84,7 +87,6 @@ jobs:
       pull-requests: write
     env:
       ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

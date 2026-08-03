@@ -67,6 +67,32 @@ test("requires member association before an at-claude mention invokes the model"
   assert.match(condition, /author_association/);
 });
 
+test("rejects collection membership checks for trusted actor associations", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if = `
+    github.event.action == 'opened' &&
+    contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'),
+      github.event.issue.author_association)
+  `;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("explicit actor association comparisons"),
+    ),
+  );
+});
+
+test("rejects subprocess env scrubbing when Claude isolation is not installed", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-pr-review.yml"].jobs.analyze.env = {
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must not enable subprocess env scrubbing"),
+    ),
+  );
+});
+
 test("serializes every PR Gate event by authoritative PR number", async () => {
   const workflows = await actualWorkflows();
   assert.deepEqual(workflows["pr-gates.yml"].concurrency, {
@@ -74,6 +100,14 @@ test("serializes every PR Gate event by authoritative PR number", async () => {
       "pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || format('issue-{0}', github.event.issue.number) }}",
     "cancel-in-progress": true,
   });
+});
+
+test("grants PR write permission before restoring human validation labels", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(
+    workflows["pr-gates.yml"].jobs.gates.permissions["pull-requests"],
+    "write",
+  );
 });
 
 test("keeps the official Issue Review model on read-only tools", async () => {
