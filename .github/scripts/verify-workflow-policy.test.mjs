@@ -132,6 +132,60 @@ test("serializes every PR Gate event by authoritative PR number", async () => {
   });
 });
 
+test("defines the minimal native auto-merge enrollment workflow", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["auto-merge.yml"];
+  assert.deepEqual(workflow.on.pull_request_target.types, [
+    "opened",
+    "reopened",
+    "ready_for_review",
+  ]);
+  assert.deepEqual(workflow.concurrency, {
+    group: "auto-merge-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
+  });
+  assert.deepEqual(workflow.jobs.enroll.permissions, {
+    contents: "write",
+    "pull-requests": "write",
+  });
+  assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
+  assert.match(workflow.jobs.enroll.if, /repository\.default_branch/);
+});
+
+test("rejects PR-head execution in every pull-request-target workflow", async () => {
+  const workflows = await actualWorkflows();
+  const checkout = workflows["auto-merge.yml"].jobs.enroll.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  );
+  checkout.with.ref = "${{ github.event.pull_request.head.sha }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("pull_request_target jobs must not execute PR head"),
+    ),
+  );
+});
+
+test("rejects expanded auto-merge permissions", async () => {
+  const workflows = await actualWorkflows();
+  workflows["auto-merge.yml"].jobs.enroll.permissions.issues = "write";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Auto-merge Enrollment permissions"),
+    ),
+  );
+});
+
+test("rejects direct merge or administrative bypass commands", async () => {
+  const workflows = await actualWorkflows();
+  const run = workflows["auto-merge.yml"].jobs.enroll.steps.find((step) => step.run);
+  run.run = "gh pr merge --admin";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must only enroll native auto-merge"),
+    ),
+  );
+});
+
 test("grants PR write permission before restoring human validation labels", async () => {
   const workflows = await actualWorkflows();
   assert.equal(
