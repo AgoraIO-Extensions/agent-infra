@@ -81,6 +81,16 @@ test("guards every Issue Review model step with the trusted authorizer", async (
   }
 });
 
+test("gives the trusted Issue authorizer only the workflow token", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["claude-issue-review.yml"];
+  const steps = workflow.jobs["automatic-issue-review"].steps;
+  const authorize = steps.find((step) => step.name === "Authorize Claude event");
+
+  assert.equal(authorize.env?.GITHUB_TOKEN, "${{ github.token }}");
+  assert.doesNotMatch(JSON.stringify(authorize), /secrets\./);
+});
+
 test("rejects collection membership checks for trusted actor associations", async () => {
   const workflows = await actualWorkflows();
   workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if = `

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { authorizeClaudeEvent } from "./claude-event-authorization.mjs";
+import * as authorization from "./claude-event-authorization.mjs";
+
+const { authorizeClaudeEvent } = authorization;
 
 const trustedAssociations = ["MEMBER", "OWNER", "COLLABORATOR"];
 
@@ -27,6 +29,100 @@ test("rejects a new Issue from an untrusted association", () => {
       false,
     );
   }
+});
+
+test("uses a verified Issue association when the event association is not trusted", () => {
+  for (const authorAssociation of ["NONE", undefined]) {
+    for (const verifiedIssueAuthorAssociation of trustedAssociations) {
+      assert.equal(
+        authorizeClaudeEvent(
+          "issues",
+          {
+            action: "opened",
+            issue: { number: 10, author_association: authorAssociation },
+          },
+          { verifiedIssueAuthorAssociation },
+        ),
+        true,
+      );
+    }
+  }
+});
+
+test("rejects an untrusted verified Issue association", () => {
+  for (const verifiedIssueAuthorAssociation of [
+    "CONTRIBUTOR",
+    "FIRST_TIMER",
+    "FIRST_TIME_CONTRIBUTOR",
+    "NONE",
+    undefined,
+  ]) {
+    assert.equal(
+      authorizeClaudeEvent(
+        "issues",
+        {
+          action: "opened",
+          issue: { number: 10, author_association: undefined },
+        },
+        { verifiedIssueAuthorAssociation },
+      ),
+      false,
+    );
+  }
+});
+
+test("keeps a trusted event association authoritative", () => {
+  assert.equal(
+    authorizeClaudeEvent(
+      "issues",
+      {
+        action: "opened",
+        issue: { number: 10, author_association: "OWNER" },
+      },
+      { verifiedIssueAuthorAssociation: "NONE" },
+    ),
+    true,
+  );
+});
+
+test("reads the authoritative Issue association from the GitHub API", async () => {
+  assert.equal(typeof authorization.fetchIssueAuthorAssociation, "function");
+
+  const calls = [];
+  const result = await authorization.fetchIssueAuthorAssociation({
+    repository: "example/agent-infra",
+    issueNumber: 10,
+    token: "test-token",
+    request: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ author_association: "COLLABORATOR" }),
+      };
+    },
+  });
+
+  assert.equal(result, "COLLABORATOR");
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    "https://api.github.com/repos/example/agent-infra/issues/10",
+  );
+  assert.equal(calls[0].options.headers.Authorization, "Bearer test-token");
+});
+
+test("fails closed when the Issue association lookup fails", async () => {
+  assert.equal(typeof authorization.fetchIssueAuthorAssociation, "function");
+
+  await assert.rejects(
+    authorization.fetchIssueAuthorAssociation({
+      repository: "example/agent-infra",
+      issueNumber: 10,
+      token: "test-token",
+      request: async () => ({ ok: false, status: 503 }),
+    }),
+    /GitHub Issue lookup failed: 503/,
+  );
 });
 
 test("authorizes only the claude label on labeled Issue events", () => {
