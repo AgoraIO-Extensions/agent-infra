@@ -31,9 +31,14 @@ test("rejects a new Issue from an untrusted association", () => {
   }
 });
 
-test("uses a verified Issue association when the event association is not trusted", () => {
+test("uses a verified repository permission when the event association is not trusted", () => {
   for (const authorAssociation of ["NONE", undefined]) {
-    for (const verifiedIssueAuthorAssociation of trustedAssociations) {
+    for (const verifiedRepositoryPermission of [
+      "admin",
+      "maintain",
+      "write",
+      "triage",
+    ]) {
       assert.equal(
         authorizeClaudeEvent(
           "issues",
@@ -41,7 +46,7 @@ test("uses a verified Issue association when the event association is not truste
             action: "opened",
             issue: { number: 10, author_association: authorAssociation },
           },
-          { verifiedIssueAuthorAssociation },
+          { verifiedRepositoryPermission },
         ),
         true,
       );
@@ -49,14 +54,8 @@ test("uses a verified Issue association when the event association is not truste
   }
 });
 
-test("rejects an untrusted verified Issue association", () => {
-  for (const verifiedIssueAuthorAssociation of [
-    "CONTRIBUTOR",
-    "FIRST_TIMER",
-    "FIRST_TIME_CONTRIBUTOR",
-    "NONE",
-    undefined,
-  ]) {
+test("rejects repository permissions below triage", () => {
+  for (const verifiedRepositoryPermission of ["read", "none", undefined]) {
     assert.equal(
       authorizeClaudeEvent(
         "issues",
@@ -64,7 +63,7 @@ test("rejects an untrusted verified Issue association", () => {
           action: "opened",
           issue: { number: 10, author_association: undefined },
         },
-        { verifiedIssueAuthorAssociation },
+        { verifiedRepositoryPermission },
       ),
       false,
     );
@@ -79,49 +78,49 @@ test("keeps a trusted event association authoritative", () => {
         action: "opened",
         issue: { number: 10, author_association: "OWNER" },
       },
-      { verifiedIssueAuthorAssociation: "NONE" },
+      { verifiedRepositoryPermission: "read" },
     ),
     true,
   );
 });
 
-test("reads the authoritative Issue association from the GitHub API", async () => {
-  assert.equal(typeof authorization.fetchIssueAuthorAssociation, "function");
+test("reads the Issue author's repository permission from the GitHub API", async () => {
+  assert.equal(typeof authorization.fetchRepositoryPermission, "function");
 
   const calls = [];
-  const result = await authorization.fetchIssueAuthorAssociation({
+  const result = await authorization.fetchRepositoryPermission({
     repository: "example/agent-infra",
-    issueNumber: 10,
+    username: "member-user",
     token: "test-token",
     request: async (url, options) => {
       calls.push({ url, options });
       return {
         ok: true,
-        json: async () => ({ author_association: "COLLABORATOR" }),
+        json: async () => ({ permission: "write", role_name: "maintain" }),
       };
     },
   });
 
-  assert.equal(result, "COLLABORATOR");
+  assert.equal(result, "maintain");
   assert.equal(calls.length, 1);
   assert.equal(
     calls[0].url,
-    "https://api.github.com/repos/example/agent-infra/issues/10",
+    "https://api.github.com/repos/example/agent-infra/collaborators/member-user/permission",
   );
   assert.equal(calls[0].options.headers.Authorization, "Bearer test-token");
 });
 
-test("fails closed when the Issue association lookup fails", async () => {
-  assert.equal(typeof authorization.fetchIssueAuthorAssociation, "function");
+test("fails closed when the repository permission lookup fails", async () => {
+  assert.equal(typeof authorization.fetchRepositoryPermission, "function");
 
   await assert.rejects(
-    authorization.fetchIssueAuthorAssociation({
+    authorization.fetchRepositoryPermission({
       repository: "example/agent-infra",
-      issueNumber: 10,
+      username: "member-user",
       token: "test-token",
       request: async () => ({ ok: false, status: 503 }),
     }),
-    /GitHub Issue lookup failed: 503/,
+    /GitHub repository permission lookup failed: 503/,
   );
 });
 
