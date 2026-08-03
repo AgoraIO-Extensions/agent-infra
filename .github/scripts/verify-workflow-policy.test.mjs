@@ -61,10 +61,24 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("requires member association before an at-claude mention invokes the model", async () => {
+test("gives structured Claude PR Review enough bounded turns", async () => {
   const workflows = await actualWorkflows();
-  const condition = workflows["claude-issue-review.yml"].jobs.mentions.if;
-  assert.match(condition, /author_association/);
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find((step) =>
+    step.uses?.startsWith("anthropics/"),
+  );
+  assert.match(action.with.claude_args, /--max-turns 20(?:\n|$)/);
+});
+
+test("guards every Issue Review model step with the trusted authorizer", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["claude-issue-review.yml"];
+  for (const job of Object.values(workflow.jobs)) {
+    assert.doesNotMatch(job.if, /author_association/);
+    const authorize = job.steps.find((step) => step.id === "authorize");
+    assert.equal(authorize.run, "node .github/scripts/claude-event-authorization.mjs");
+    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    assert.equal(action.if, "steps.authorize.outputs.allowed == 'true'");
+  }
 });
 
 test("rejects collection membership checks for trusted actor associations", async () => {
@@ -77,6 +91,30 @@ test("rejects collection membership checks for trusted actor associations", asyn
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("explicit actor association comparisons"),
+    ),
+  );
+});
+
+test("rejects identity authorization in job-level expressions", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if =
+    "github.event.issue.author_association == 'MEMBER'";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must authorize identity in a trusted step"),
+    ),
+  );
+});
+
+test("rejects an unguarded Issue Review model step", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-issue-review.yml"].jobs.mentions.steps.find(
+    (step) => step.uses?.startsWith("anthropics/"),
+  );
+  delete action.if;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model step must use trusted authorization output"),
     ),
   );
 });
@@ -100,6 +138,60 @@ test("serializes every PR Gate event by authoritative PR number", async () => {
       "pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || format('issue-{0}', github.event.issue.number) }}",
     "cancel-in-progress": true,
   });
+});
+
+test("defines the minimal native auto-merge enrollment workflow", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["auto-merge.yml"];
+  assert.deepEqual(workflow.on.pull_request_target.types, [
+    "opened",
+    "reopened",
+    "ready_for_review",
+  ]);
+  assert.deepEqual(workflow.concurrency, {
+    group: "auto-merge-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
+  });
+  assert.deepEqual(workflow.jobs.enroll.permissions, {
+    contents: "write",
+    "pull-requests": "write",
+  });
+  assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
+  assert.match(workflow.jobs.enroll.if, /repository\.default_branch/);
+});
+
+test("rejects PR-head execution in every pull-request-target workflow", async () => {
+  const workflows = await actualWorkflows();
+  const checkout = workflows["auto-merge.yml"].jobs.enroll.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  );
+  checkout.with.ref = "${{ github.event.pull_request.head.sha }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("pull_request_target jobs must not execute PR head"),
+    ),
+  );
+});
+
+test("rejects expanded auto-merge permissions", async () => {
+  const workflows = await actualWorkflows();
+  workflows["auto-merge.yml"].jobs.enroll.permissions.issues = "write";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Auto-merge Enrollment permissions"),
+    ),
+  );
+});
+
+test("rejects direct merge or administrative bypass commands", async () => {
+  const workflows = await actualWorkflows();
+  const run = workflows["auto-merge.yml"].jobs.enroll.steps.find((step) => step.run);
+  run.run = "gh pr merge --admin";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must only enroll native auto-merge"),
+    ),
+  );
 });
 
 test("grants PR write permission before restoring human validation labels", async () => {

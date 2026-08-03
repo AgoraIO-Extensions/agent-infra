@@ -76,6 +76,8 @@
 - 外部用户创建的 Issue 不自动调用模型；仓库成员添加 `claude` 标签后才触发 Review。
 - Issue 中的 `@claude` 可以请求补充分析。
 - Claude Issue Review 只提供建议，不改变 Issue 状态，也不是进入实现的门禁。
+- Issue 事件先由默认分支中的可信步骤判断成员身份或 `claude` 标签授权；只有授权通过的
+  模型步骤才能读取 Claude Secret。外部 Issue 内容不能参与授权判断或组成可执行命令。
 
 ### 5.2 本地需求梳理
 
@@ -227,11 +229,23 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 满足门禁后使用 GitHub 原生 Squash Auto-merge。仓库不实现自定义 Merge job，AI 不能批准
 自己的 PR，也不能绕过 required checks 或分支保护。
 
+`main` 分支保护必须将 `Docs CI`、`Issue Gate`、`Claude Review`、
+`Human Validation Gate`、至少一名人工 Approve 和评论解决同时设为合并门禁。Auto-merge
+自动化只负责为 PR 启用 GitHub 原生 Squash Auto-merge，不重复判断或替代这些门禁。
+
+Auto-merge enrollment 使用独立的 `pull_request_target` workflow，并只处理打开、重新打开或
+转为 Ready 的 PR。PR 必须处于打开、非 Draft 状态，目标为默认分支，且 head 属于当前仓库；
+PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读取或执行 PR head。已经
+启用 auto-merge 时按成功处理；人手工关闭后，后续 commit 不会自动重新启用。Squash 标题和
+提交信息沿用仓库默认配置。
+
 ## 11. 安全边界
 
 - GitHub Actions 默认使用只读 `GITHUB_TOKEN`，写权限按 job 明确声明。
 - 第三方 Actions 固定到完整 commit SHA，不使用浮动 tag。
 - `pull_request_target` 只用于默认分支中的元数据门禁，不 checkout 或执行 PR 内容。
+- Auto-merge enrollment 使用单独的 PR 级并发组，只获得启用原生 auto-merge 所需的
+  `contents: write` 和 `pull-requests: write`，不能调用直接合并或管理员绕过接口。
 - required Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
 - Issue 建议和 `@claude` 回复复用官方 Action 的评论机制，禁止模型使用文件写入和 Bash，
   只保留官方 Action 对当前评论的受控更新。
@@ -247,6 +261,7 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 - 实现 Issue Gate 和 Human Validation Gate。
 - 实现 Claude Issue Review 和 CI 后的 Claude PR Review。
 - 将确定性 CI、Issue Gate、Claude Review、Human Validation Gate 和评论解决设为合并门禁。
+- 启用 GitHub 原生 Squash Auto-merge enrollment，不新增自定义 Merge 实现。
 
 ### Stage 2：Codex Worker
 
@@ -255,11 +270,10 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 - 接入项目级 `implement` Skill。
 - 使用结构化输出和可信发布 job 维护 branch、PR 正文与标签。
 
-### Stage 3：修复与自动合并
+### Stage 3：修复循环
 
 - 实现 CI 和 Claude finding 驱动的两轮自动修复。
 - 实现人工重新授权、失败停止和 Issue/PR 状态回写。
-- 启用 GitHub 原生 Squash Auto-merge，不新增自定义 Merge 实现。
 
 每个 Stage 独立通过 PR 评审和真实 GitHub 冒烟验证。只有前一阶段在默认分支稳定运行后，
 才启用下一阶段。
@@ -275,4 +289,8 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 - 人工 Approve 和人工验证是两个独立门禁，任何标签操作都不能跳过 required checks。
 - 无人值守修复最多两轮；人工重新授权后才能开始新的两轮。
 - Codex、Claude 和发布 job 均不能 Approve、绕过门禁或直接修改分支保护。
-- 所有门禁通过后，GitHub 原生 Squash Auto-merge 可以完成合并。
+- 同仓库、非 Draft、目标为默认分支的 PR 可以启用原生 Squash Auto-merge；人工关闭后，
+  新增 commit 不会自动重新启用。
+- 所有门禁通过后，GitHub 原生 Squash Auto-merge 完成合并，并正常触发默认分支 CI。
+- 新增或修改 `pull_request_target` workflow 后，使用合入后的默认分支和后续 PR 完成真实
+  冒烟验证，不能用实现 PR 自证其写权限行为。
