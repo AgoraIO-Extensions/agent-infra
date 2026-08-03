@@ -61,6 +61,14 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
+test("gives structured Claude PR Review enough bounded turns", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find((step) =>
+    step.uses?.startsWith("anthropics/"),
+  );
+  assert.match(action.with.claude_args, /--max-turns 20(?:\n|$)/);
+});
+
 test("guards every Issue Review model step with the trusted authorizer", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["claude-issue-review.yml"];
