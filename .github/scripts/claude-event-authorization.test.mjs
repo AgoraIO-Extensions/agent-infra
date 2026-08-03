@@ -96,7 +96,7 @@ test("reads the Issue author's repository permission from the GitHub API", async
       calls.push({ url, options });
       return {
         ok: true,
-        json: async () => ({ permission: "maintain" }),
+        json: async () => ({ permission: "write", role_name: "maintain" }),
       };
     },
   });

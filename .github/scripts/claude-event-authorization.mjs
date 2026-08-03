@@ -69,10 +69,10 @@ export async function fetchRepositoryPermission({
   }
 
   const payload = await response.json();
-  if (typeof payload.permission !== "string") {
-    throw new Error("GitHub repository permission lookup returned no permission");
+  if (typeof payload.role_name !== "string") {
+    throw new Error("GitHub repository permission lookup returned no role");
   }
-  return payload.permission;
+  return payload.role_name;
 }
 
 function requiredEnvironment(name) {
