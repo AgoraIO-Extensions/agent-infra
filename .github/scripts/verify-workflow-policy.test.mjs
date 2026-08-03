@@ -65,7 +65,7 @@ test("configures every Claude model job through repository variables", async () 
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
   const timeout = "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}";
-  const verbose = "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}";
+  const verbose = "${{ fromJSON(vars.CLAUDE_REVIEW_VERBOSE || 'false') }}";
   const modelJobs = [
     ["claude-issue-review.yml", "automatic-issue-review"],
     ["claude-issue-review.yml", "mentions"],
