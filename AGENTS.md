@@ -11,8 +11,9 @@
 1. [Agent 平台 M1 PRD](docs/prd/PRD-agent-platform-M1.md)：产品范围、行为和验收标准。
 2. [Connection M1 PRD](docs/prd/PRD-connection-M1.md)：Connection 的产品范围、授权和隔离标准。
 3. [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)：技术栈、部署单元、模块接口和工程约束。
+4. [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)：开发责任、人工检查点、Agent 分工和自动化边界。
 
-PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源。两者冲突时不要自行选择，先明确冲突并修正文档。
+PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源，开发工作流 Spec 是交付流程的权威来源。文档冲突时不要自行选择，先明确冲突并修正文档。
 
 本地 `archive/` 与 `research/` 已被 Git 忽略，只用于保留历史和调研证据，不是当前需求或架构依据。不要把其中的旧结论恢复到正式文档。
 
@@ -66,16 +67,21 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 
 ## Current Validation Commands
 
-仓库仍是文档阶段。修改文档后，从仓库根目录执行：
+仓库仍是文档阶段。修改仓库内容后，从仓库根目录执行：
 
 ```bash
-pnpm dlx markdownlint-cli2 README.md AGENTS.md "docs/**/*.md"
-pnpm dlx markdown-link-check README.md
-pnpm dlx markdown-link-check <changed-file.md>
+npx --yes markdownlint-cli2@0.23.2 README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
+find README.md AGENTS.md .github docs -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
+  npx --yes markdown-link-check@3.15.0 --config .markdown-link-check.json "$file"
+done
+npm install --no-save --ignore-scripts --package-lock=false yaml@2.8.1
+node --test .github/scripts/*.test.mjs
+node .github/scripts/verify-workflow-policy.mjs
+.github/scripts/run-actionlint.sh
 git diff --check
 ```
 
-对每个修改过且包含链接的 Markdown 文件运行 `markdown-link-check`。工程脚手架生成后，用真实的 `package.json` 脚本替换本节，不提前编造安装、构建或测试命令。
+工程脚手架生成后，用真实的 `package.json` 脚本替换本节，不提前编造应用安装、构建或测试命令。
 
 ## Security
 

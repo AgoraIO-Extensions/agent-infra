@@ -1,0 +1,71 @@
+name: PR Gates
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled, ready_for_review]
+  issues:
+    types: [closed, reopened, labeled, unlabeled]
+  repository_dispatch:
+    types: [pr-gates]
+
+permissions: {}
+
+concurrency:
+  group: pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || format('issue-{0}', github.event.issue.number) }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch-issue-update:
+    name: Dispatch affected PR Gates
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Dispatch affected PR Gates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/pr-gates.mjs
+
+  gates:
+    name: Evaluate PR Gates
+    if: github.event_name != 'issues'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Evaluate Issue and human validation gates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/pr-gates.mjs
