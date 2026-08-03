@@ -67,6 +67,32 @@ export function validateWorkflowDocuments(workflows) {
         `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
       );
     }
+    if ((job.if ?? "").includes("author_association")) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: must authorize identity in a trusted step`,
+      );
+    }
+    const authorizeIndex = (job.steps ?? []).findIndex(
+      (step) =>
+        step.id === "authorize" &&
+        step.run === "node .github/scripts/claude-event-authorization.mjs",
+    );
+    const modelIndex = (job.steps ?? []).findIndex((step) =>
+      step.uses?.startsWith(CLAUDE_ACTION),
+    );
+    if (modelIndex >= 0 && (authorizeIndex < 0 || authorizeIndex >= modelIndex)) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: trusted authorization must run before model`,
+      );
+    }
+    if (
+      modelIndex >= 0 &&
+      job.steps[modelIndex].if !== "steps.authorize.outputs.allowed == 'true'"
+    ) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: model step must use trusted authorization output`,
+      );
+    }
   }
 
   for (const [name, workflow] of Object.entries(workflows)) {

@@ -18,10 +18,7 @@ jobs:
     if: >-
       github.event_name == 'issues' &&
       !endsWith(github.actor, '[bot]') &&
-      ((github.event.action == 'opened' &&
-      (github.event.issue.author_association == 'MEMBER' ||
-      github.event.issue.author_association == 'OWNER' ||
-      github.event.issue.author_association == 'COLLABORATOR')) ||
+      (github.event.action == 'opened' ||
       (github.event.action == 'labeled' && github.event.label.name == 'claude'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -38,7 +35,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Authorize Claude event
+        id: authorize
+        run: node .github/scripts/claude-event-authorization.mjs
+
       - name: Review Issue
+        if: steps.authorize.outputs.allowed == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -64,21 +66,9 @@ jobs:
     name: Claude Mention
     if: >-
       !endsWith(github.actor, '[bot]') &&
-      ((github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '@claude') &&
-      (github.event.comment.author_association == 'MEMBER' ||
-      github.event.comment.author_association == 'OWNER' ||
-      github.event.comment.author_association == 'COLLABORATOR')) ||
-      (github.event_name == 'pull_request_review_comment' &&
-      contains(github.event.comment.body, '@claude') &&
-      (github.event.comment.author_association == 'MEMBER' ||
-      github.event.comment.author_association == 'OWNER' ||
-      github.event.comment.author_association == 'COLLABORATOR')) ||
-      (github.event_name == 'pull_request_review' &&
-      contains(github.event.review.body, '@claude') &&
-      (github.event.review.author_association == 'MEMBER' ||
-      github.event.review.author_association == 'OWNER' ||
-      github.event.review.author_association == 'COLLABORATOR')))
+      (github.event_name == 'issue_comment' ||
+      github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'pull_request_review')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -95,7 +85,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Authorize Claude event
+        id: authorize
+        run: node .github/scripts/claude-event-authorization.mjs
+
       - name: Answer mention
+        if: steps.authorize.outputs.allowed == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

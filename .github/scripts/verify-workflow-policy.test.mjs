@@ -61,10 +61,16 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("requires member association before an at-claude mention invokes the model", async () => {
+test("guards every Issue Review model step with the trusted authorizer", async () => {
   const workflows = await actualWorkflows();
-  const condition = workflows["claude-issue-review.yml"].jobs.mentions.if;
-  assert.match(condition, /author_association/);
+  const workflow = workflows["claude-issue-review.yml"];
+  for (const job of Object.values(workflow.jobs)) {
+    assert.doesNotMatch(job.if, /author_association/);
+    const authorize = job.steps.find((step) => step.id === "authorize");
+    assert.equal(authorize.run, "node .github/scripts/claude-event-authorization.mjs");
+    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    assert.equal(action.if, "steps.authorize.outputs.allowed == 'true'");
+  }
 });
 
 test("rejects collection membership checks for trusted actor associations", async () => {
@@ -77,6 +83,30 @@ test("rejects collection membership checks for trusted actor associations", asyn
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("explicit actor association comparisons"),
+    ),
+  );
+});
+
+test("rejects identity authorization in job-level expressions", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if =
+    "github.event.issue.author_association == 'MEMBER'";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must authorize identity in a trusted step"),
+    ),
+  );
+});
+
+test("rejects an unguarded Issue Review model step", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-issue-review.yml"].jobs.mentions.steps.find(
+    (step) => step.uses?.startsWith("anthropics/"),
+  );
+  delete action.if;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model step must use trusted authorization output"),
     ),
   );
 });
