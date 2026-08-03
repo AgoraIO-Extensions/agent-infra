@@ -102,6 +102,14 @@ test("serializes every PR Gate event by authoritative PR number", async () => {
   });
 });
 
+test("grants PR write permission before restoring human validation labels", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(
+    workflows["pr-gates.yml"].jobs.gates.permissions["pull-requests"],
+    "write",
+  );
+});
+
 test("keeps the official Issue Review model on read-only tools", async () => {
   const workflows = await actualWorkflows();
   const issueWorkflow = workflows["claude-issue-review.yml"];
