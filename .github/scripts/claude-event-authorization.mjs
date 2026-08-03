@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const TRUSTED_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"]);
+const TRUSTED_REPOSITORY_PERMISSIONS = new Set([
+  "admin",
+  "maintain",
+  "write",
+  "triage",
+]);
 
 function isTrustedMention(value) {
   return (
@@ -13,13 +19,13 @@ function isTrustedMention(value) {
 export function authorizeClaudeEvent(
   eventName,
   event,
-  { verifiedIssueAuthorAssociation } = {},
+  { verifiedRepositoryPermission } = {},
 ) {
   if (eventName === "issues") {
     if (event.action === "opened") {
       return (
         TRUSTED_ASSOCIATIONS.has(event.issue?.author_association) ||
-        TRUSTED_ASSOCIATIONS.has(verifiedIssueAuthorAssociation)
+        TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission)
       );
     }
     return event.action === "labeled" && event.label?.name === "claude";
@@ -34,20 +40,20 @@ export function authorizeClaudeEvent(
   return false;
 }
 
-export async function fetchIssueAuthorAssociation({
+export async function fetchRepositoryPermission({
   repository,
-  issueNumber,
+  username,
   token,
   request = fetch,
 }) {
   if (!repository) throw new Error("GitHub repository is required");
-  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
-    throw new Error("GitHub Issue number is invalid");
+  if (typeof username !== "string" || !/^[A-Za-z0-9-]{1,39}$/.test(username)) {
+    throw new Error("GitHub username is invalid");
   }
   if (!token) throw new Error("GitHub token is required");
 
   const response = await request(
-    `https://api.github.com/repos/${repository}/issues/${issueNumber}`,
+    `https://api.github.com/repos/${repository}/collaborators/${encodeURIComponent(username)}/permission`,
     {
       method: "GET",
       headers: {
@@ -59,14 +65,14 @@ export async function fetchIssueAuthorAssociation({
     },
   );
   if (!response.ok) {
-    throw new Error(`GitHub Issue lookup failed: ${response.status}`);
+    throw new Error(`GitHub repository permission lookup failed: ${response.status}`);
   }
 
   const payload = await response.json();
-  if (typeof payload.author_association !== "string") {
-    throw new Error("GitHub Issue lookup returned no author association");
+  if (typeof payload.permission !== "string") {
+    throw new Error("GitHub repository permission lookup returned no permission");
   }
-  return payload.author_association;
+  return payload.permission;
 }
 
 function requiredEnvironment(name) {
@@ -80,20 +86,20 @@ async function main() {
     await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"),
   );
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
-  let verifiedIssueAuthorAssociation;
+  let verifiedRepositoryPermission;
   if (
     eventName === "issues" &&
     event.action === "opened" &&
     !authorizeClaudeEvent(eventName, event)
   ) {
-    verifiedIssueAuthorAssociation = await fetchIssueAuthorAssociation({
+    verifiedRepositoryPermission = await fetchRepositoryPermission({
       repository: requiredEnvironment("GITHUB_REPOSITORY"),
-      issueNumber: event.issue?.number,
+      username: event.issue?.user?.login,
       token: requiredEnvironment("GITHUB_TOKEN"),
     });
   }
   const allowed = authorizeClaudeEvent(eventName, event, {
-    verifiedIssueAuthorAssociation,
+    verifiedRepositoryPermission,
   });
   await fs.appendFile(requiredEnvironment("GITHUB_OUTPUT"), `allowed=${allowed}\n`);
   console.log(allowed ? "Claude event authorized" : "Claude event not authorized");
