@@ -37,6 +37,8 @@ jobs:
 
       - name: Authorize Claude event
         id: authorize
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/claude-event-authorization.mjs
 
       - name: Review Issue
