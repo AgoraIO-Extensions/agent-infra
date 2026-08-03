@@ -61,10 +61,11 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("configures every Claude model job through numeric repository variables", async () => {
+test("configures every Claude model job through repository variables", async () => {
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
   const timeout = "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}";
+  const verbose = "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}";
   const modelJobs = [
     ["claude-issue-review.yml", "automatic-issue-review"],
     ["claude-issue-review.yml", "mentions"],
@@ -77,6 +78,7 @@ test("configures every Claude model job through numeric repository variables", a
 
     assert.equal(job["timeout-minutes"], timeout);
     assert.ok(action.with.claude_args.includes(`--max-turns ${maxTurns}`));
+    assert.equal(action.with.show_full_output, verbose);
   }
 });
 

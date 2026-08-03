@@ -52,7 +52,7 @@ jobs:
           classify_inline_comments: "false"
           display_report: "false"
           include_fix_links: "false"
-          show_full_output: "false"
+          show_full_output: ${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}
           prompt: |
             Review PR #${{ github.event.workflow_run.pull_requests[0].number }} at
             head ${{ github.event.workflow_run.head_sha }} in ${{ github.repository }}.
