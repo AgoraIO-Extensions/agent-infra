@@ -117,8 +117,8 @@ Codex 只领取同时满足以下条件的 Issue：
 
 - Issue 处于打开状态并带有 `ready-for-agent`。
 - 不带 `ready-for-human`、`needs-triage` 或 `wontfix`。
-- 存在 `## Blocked by` 时，其中只包含 `- #<issue-number>` 格式的依赖且均已关闭；章节缺失
-  或只写 `None` 表示没有 blocker，其他格式视为需要重新梳理。
+- 必须存在 `## Blocked by`；其中只包含 `- #<issue-number>` 格式的依赖且均已关闭，或只写
+  `None` 表示没有 blocker。章节缺失或使用其他格式时视为需要重新梳理。
 - 当前没有该 Issue 的其他活动执行，也没有已进入 Ready for review 的未合并 Worker PR；固定
   branch 和现有 Draft PR 只能属于同一个 Issue 并可被复用。
 
@@ -134,6 +134,9 @@ Codex 只领取同时满足以下条件的 Issue：
 - 每个 Issue 使用 `codex/issue-<number>` 固定 branch、一个并发组和最多一个未合并 PR。
 - 首次执行以当时的默认分支 head 为起始 commit；已有固定 branch 时以该 branch head 为起始
   commit。发布只允许在该起始 commit 上增加普通 commit 并 fast-forward，不使用 force push。
+- `implement` job checkout 记录的起始 commit；恢复执行时，该 commit 即发布前校验通过的固定
+  branch head。无论起始 commit 来自默认分支还是固定 branch，checkout 都不保留凭证，工作区
+  内容都按不可信代码处理。
 - `implement` job 在只读 GitHub 权限下完成实现、自检和结果导出，不提交远端变更。
 - `publish` job 在新的 Runner 上校验实现结果，创建或复用 Draft PR，并在发布完成后标记为
   Ready for review。
@@ -152,7 +155,7 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
   `:workspace`，只允许写入 checkout workspace，允许完整公网访问，禁止本地和私有网络访问。
 - 官方 Codex Action 固定到完整 commit SHA，Codex CLI 固定到支持 permission profile 的明确
   版本，且不得低于 `0.138.0`；同时使用 `safety-strategy: drop-sudo`。
-- `implement` job checkout 可信默认分支时必须设置 `persist-credentials: false`，job 权限仅为
+- `implement` job checkout 起始 commit 时必须设置 `persist-credentials: false`，job 权限仅为
   `contents: read`，不得把 `GITHUB_TOKEN` 或其他仓库凭证写入 workspace、Git 配置或模型环境。
 - 模型只获得完成实现所需的代码工作区和工具，不获得用于发布 GitHub 变更的 PAT。
 - 模型/API Secret 和 fine-grained GitHub PAT 分开配置。
@@ -183,7 +186,7 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
 
 - Issue 仍满足 frontier 条件，目标 branch 和 PR 属于当前 Issue。已有 branch 的远端 head 必须
   等于起始 commit；首次发布时固定 branch 必须尚不存在。模型运行期间默认分支可以前进，
-  合并冲突和兼容性由新 PR 上的现有门禁处理。
+  合并冲突由 GitHub PR 检测；Stage 2 不自动验证 Worker PR 与最新默认分支的兼容性。
 - Patch 不超过 400 KiB，不包含二进制内容、路径穿越、符号链接、gitlink/submodule、可执行位
   或其他文件模式变更。
 - Patch 不修改 `.github/`、`.codex/`、`.claude/`、`.agents/skills/`、任意层级的 `AGENTS.md`
@@ -252,6 +255,9 @@ Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR �
 行为、兼容性破坏或关键测试失真的问题；`P2` 表示影响较小但证据明确的问题。
 
 ## 8. 修复循环
+
+本节属于 Stage 3，Stage 2 不实现自动修复。Stage 3 开发前必须另行定义修复运行的授权、发布
+校验和状态机；对 Ready for review Worker PR 的修复不以来源 Issue 仍满足 frontier 条件为前提。
 
 - Codex 创建的 PR 出现确定性 CI 失败或 Claude `P0`、`P1` finding 时，可以在原 PR 自动
   修复。
@@ -358,7 +364,7 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 - Claude 只 Review CI 通过的当前 PR head，`P0`、`P1` 阻塞合并，`P2` 不阻塞。
 - 需要人工验证的 PR 在标签被人移除前不能合并；新增 commit 后标签重新出现。
 - 人工 Approve 和人工验证是两个独立门禁，任何标签操作都不能跳过 required checks。
-- 无人值守修复最多两轮；人工重新授权后才能开始新的两轮。
+- Stage 3 启用后，无人值守修复最多两轮；人工重新授权后才能开始新的两轮。
 - Codex、Claude 和发布 job 均不能 Approve、绕过门禁或直接修改分支保护。
 - 同仓库、非 Draft、目标为默认分支的 PR 可以启用原生 Squash Auto-merge；人工关闭后，
   新增 commit 不会自动重新启用。
