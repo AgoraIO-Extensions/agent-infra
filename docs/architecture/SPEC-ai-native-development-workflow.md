@@ -51,7 +51,8 @@
 ### 4.3 GitHub Actions 中的 Codex
 
 - 领取符合条件的 `ready-for-agent` Issue。
-- 在独立分支完成实现、自检和 Draft PR 更新。
+- 在隔离工作区完成实现和自检，向可信发布 job 提供固定 Patch Artifact，不直接写入远端
+  branch 或 PR。
 - 按授权触发修复，不批准或绕过自己的 PR。
 - 通过结构化输出向可信发布 job 提供变更摘要和验证结果。
 
