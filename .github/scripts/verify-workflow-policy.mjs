@@ -7,14 +7,79 @@ const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
+  "codex-worker.yml",
   "docs-ci.yml",
   "pr-gates.yml",
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
+const CODEX_ACTION =
+  "openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9";
+const UPLOAD_ARTIFACT_ACTION =
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const DOWNLOAD_ARTIFACT_ACTION =
+  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 
 function workflowSteps(workflow) {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
+}
+
+function sameObject(actual, expected) {
+  return JSON.stringify(Object.entries(actual ?? {}).sort()) ===
+    JSON.stringify(Object.entries(expected).sort());
+}
+
+function referencedSecrets(value) {
+  return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(
+    (match) => match[1],
+  );
+}
+
+function validateStepSecrets(errors, workflowName, jobName, step) {
+  for (const secret of referencedSecrets(step)) {
+    if (secret === "ANTHROPIC_API_KEY") {
+      if (
+        !step.uses?.startsWith(CLAUDE_ACTION) ||
+        step.with?.anthropic_api_key !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+        referencedSecrets(step).length !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ANTHROPIC_API_KEY is allowed only in the official Claude Action`,
+        );
+      }
+      continue;
+    }
+    if (secret === "CODEX_API_KEY") {
+      if (
+        workflowName !== "codex-worker.yml" ||
+        jobName !== "implement" ||
+        step.uses !== CODEX_ACTION ||
+        step.with?.["openai-api-key"] !== "${{ secrets.CODEX_API_KEY }}" ||
+        referencedSecrets(step).length !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: CODEX_API_KEY is allowed only in the pinned official Codex Action`,
+        );
+      }
+      continue;
+    }
+    if (secret === "CODEX_GITHUB_TOKEN") {
+      if (
+        workflowName !== "codex-worker.yml" ||
+        jobName !== "publish" ||
+        step.name !== "Publish fixed branch and Draft PR" ||
+        step.run !== "node trusted/.github/scripts/codex-worker.mjs publish" ||
+        step.env?.CODEX_GITHUB_TOKEN !== "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
+        referencedSecrets(step).length !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in the fixed Worker publication step`,
+        );
+      }
+      continue;
+    }
+    errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
+  }
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -26,21 +91,19 @@ export function validateWorkflowDocuments(workflows) {
 
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
-    for (const step of workflowSteps(workflow)) {
-      if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
-        errors.push(`${name}: third-party Actions must use a full commit SHA`);
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      for (const secret of referencedSecrets(job.env)) {
+        errors.push(`${name}/${jobName}: ${secret} is not allowed in job environment`);
       }
-      if (
-        JSON.stringify(step).includes("secrets.") &&
-        !step.uses?.startsWith(CLAUDE_ACTION)
-      ) {
-        errors.push(`${name}: model Secret is allowed only in an official Claude Action step`);
+      for (const step of job.steps ?? []) {
+        if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
+          errors.push(`${name}: third-party Actions must use a full commit SHA`);
+        }
+        validateStepSecrets(errors, name, jobName, step);
       }
     }
-    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-      if (JSON.stringify(job.env ?? {}).includes("secrets.")) {
-        errors.push(`${name}/${jobName}: model Secret is not allowed in job environment`);
-      }
+    for (const secret of referencedSecrets(workflow.env)) {
+      errors.push(`${name}: ${secret} is not allowed in workflow environment`);
     }
   }
 
@@ -53,9 +116,19 @@ export function validateWorkflowDocuments(workflows) {
       for (const checkout of (job.steps ?? []).filter((step) =>
         step.uses?.startsWith("actions/checkout@"),
       )) {
+        const workerRecordedCheckout =
+          name === "codex-worker.yml" &&
+          checkout.name === "Checkout recorded start commit" &&
+          checkout.with?.path === "workspace" &&
+          checkout.with?.["persist-credentials"] === false &&
+          [
+            "${{ steps.prepare.outputs.start_sha }}",
+            "${{ needs.implement.outputs.start_sha }}",
+          ].includes(checkout.with?.ref);
         if (
-          checkout.with?.ref !== "${{ github.event.repository.default_branch }}" ||
-          checkout.with?.["persist-credentials"] !== false
+          !workerRecordedCheckout &&
+          (checkout.with?.ref !== "${{ github.event.repository.default_branch }}" ||
+            checkout.with?.["persist-credentials"] !== false)
         ) {
           errors.push(
             `${name}/${jobName}: pull_request_target checkout must use the trusted default branch`,
@@ -66,6 +139,141 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const gates = workflows["pr-gates.yml"]?.jobs?.gates;
+
+  const worker = workflows["codex-worker.yml"];
+  const implement = worker?.jobs?.implement;
+  const publish = worker?.jobs?.publish;
+  const workerGroup = String(worker?.concurrency?.group ?? "");
+  const workerCancellation = String(worker?.concurrency?.["cancel-in-progress"] ?? "");
+  if (
+    !workerGroup.includes("github.event.pull_request.head.repo.full_name != github.repository") ||
+    !workerGroup.includes("github.event.pull_request.number") ||
+    !workerGroup.includes("github.event.pull_request.head.ref") ||
+    !workerGroup.includes("github.event.issue.number")
+  ) {
+    errors.push("Codex Worker concurrency must isolate external fork PRs");
+  }
+  if (
+    !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
+    !workerCancellation.includes("github.repository")
+  ) {
+    errors.push("Codex Worker cancellation must require a same-repository PR");
+  }
+  if (
+    JSON.stringify(implement?.permissions) !== JSON.stringify({ contents: "read" })
+  ) {
+    errors.push("Codex Worker implement job permissions must stay contents: read");
+  }
+  if (
+    JSON.stringify(publish?.permissions) !==
+    JSON.stringify({
+      contents: "read",
+      issues: "write",
+      "pull-requests": "write",
+    })
+  ) {
+    errors.push("Codex Worker publish job permissions must stay minimal");
+  }
+  if (JSON.stringify(implement ?? {}).includes("CODEX_GITHUB_TOKEN")) {
+    errors.push("Codex Worker model job must not contain CODEX_GITHUB_TOKEN");
+  }
+  if (JSON.stringify(publish ?? {}).includes("CODEX_API_KEY")) {
+    errors.push("Codex Worker publisher must not contain CODEX_API_KEY");
+  }
+
+  const implementSteps = implement?.steps ?? [];
+  const codexIndex = implementSteps.findIndex((step) =>
+    step.uses?.startsWith("openai/codex-action@"),
+  );
+  if (codexIndex < 0 || implementSteps[codexIndex].uses !== CODEX_ACTION) {
+    errors.push("Codex Worker must use the pinned official Codex Action");
+  } else {
+    const codexInputs = implementSteps[codexIndex].with;
+    if (
+      !sameObject(codexInputs, {
+        "openai-api-key": "${{ secrets.CODEX_API_KEY }}",
+        "responses-api-endpoint": "${{ vars.CODEX_RESPONSES_API_ENDPOINT }}",
+        "prompt-file":
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/prompt.md",
+        "output-file":
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json",
+        "output-schema-file":
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/result.schema.json",
+        "working-directory": "${{ github.workspace }}/workspace",
+        "codex-home": "${{ runner.temp }}/codex-home",
+        "permission-profile": "github-worker",
+        "codex-version": "0.146.0",
+        model: "${{ vars.CODEX_MODEL }}",
+        effort: "${{ vars.CODEX_EFFORT }}",
+        "safety-strategy": "drop-sudo",
+      })
+    ) {
+      errors.push("Codex Worker Codex Action inputs must stay fixed");
+    }
+    const afterCodex = implementSteps.slice(codexIndex + 1);
+    if (
+      afterCodex.length !== 1 ||
+      afterCodex[0].uses !== UPLOAD_ARTIFACT_ACTION ||
+      afterCodex[0].name !== "Upload fixed Worker Artifact"
+    ) {
+      errors.push("Codex Worker may only upload the fixed Artifact after Codex");
+    }
+    const upload = afterCodex[0];
+    if (
+      !sameObject(upload?.with, {
+        name: "codex-worker-output",
+        path:
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/plan.json\n" +
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/output/change.patch\n" +
+          "${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json\n",
+        "if-no-files-found": "error",
+        "include-hidden-files": true,
+        "retention-days": 1,
+      })
+    ) {
+      errors.push("Codex Worker Artifact upload contract must stay fixed");
+    }
+  }
+  const download = (publish?.steps ?? []).find(
+    (step) => step.name === "Download fixed Worker Artifact",
+  );
+  if (download?.uses !== DOWNLOAD_ARTIFACT_ACTION) {
+    errors.push("Codex Worker must use the pinned Artifact download Action");
+  }
+  if (
+    !sameObject(download?.with, {
+      name: "codex-worker-output",
+      path: "${{ runner.temp }}/codex-worker-artifact",
+    })
+  ) {
+    errors.push("Codex Worker Artifact download contract must stay fixed");
+  }
+
+  for (const [jobName, job, expectedRef] of [
+    ["implement", implement, "${{ steps.prepare.outputs.start_sha }}"],
+    ["publish", publish, "${{ needs.implement.outputs.start_sha }}"],
+  ]) {
+    const trustedCheckout = (job?.steps ?? []).find(
+      (step) => step.name === "Checkout trusted default branch",
+    );
+    if (
+      trustedCheckout?.with?.ref !== "${{ github.event.repository.default_branch }}" ||
+      trustedCheckout?.with?.path !== "trusted" ||
+      trustedCheckout?.with?.["persist-credentials"] !== false
+    ) {
+      errors.push(`Codex Worker ${jobName} trusted checkout is invalid`);
+    }
+    const recordedCheckout = (job?.steps ?? []).find(
+      (step) => step.name === "Checkout recorded start commit",
+    );
+    if (
+      recordedCheckout?.with?.ref !== expectedRef ||
+      recordedCheckout?.with?.path !== "workspace" ||
+      recordedCheckout?.with?.["persist-credentials"] !== false
+    ) {
+      errors.push(`Codex Worker ${jobName} recorded checkout must use workspace`);
+    }
+  }
 
   const review = workflows["claude-pr-review.yml"];
   if (!review?.on?.workflow_run?.workflows?.includes("Docs CI")) {

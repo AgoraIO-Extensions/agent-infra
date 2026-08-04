@@ -13,7 +13,7 @@ export function extractPrimaryIssueNumbers(body = "") {
   return [...withoutFences.matchAll(CLOSE_KEYWORD)].map((match) => Number(match[1]));
 }
 
-export function evaluateIssueGate({ issueNumbers, issue }) {
+export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
   if (issueNumbers.length !== 1) {
     return {
       ok: false,
@@ -33,6 +33,29 @@ export function evaluateIssueGate({ issueNumbers, issue }) {
   }
   if (labelNames(issue.labels).includes("wontfix")) {
     return { ok: false, description: `Primary Issue #${number} is marked wontfix` };
+  }
+
+  const workerBranch = /^codex\/issue-(\d+)$/.exec(headRef ?? "");
+  if ((headRef ?? "").startsWith("codex/issue-") && !workerBranch) {
+    return { ok: false, description: "Worker branch name is invalid" };
+  }
+  if (workerBranch) {
+    if (Number(workerBranch[1]) !== number) {
+      return {
+        ok: false,
+        description: `Worker branch does not match Primary Issue #${number}`,
+      };
+    }
+    if (!labelNames(issue.labels).includes("ready-for-agent")) {
+      return {
+        ok: false,
+        description: `Worker Issue #${number} is not ready for Agent`,
+      };
+    }
+    return {
+      ok: true,
+      description: `Worker Issue #${number} is ready for Agent`,
+    };
   }
   return { ok: true, description: `Primary Issue #${number} is open` };
 }
@@ -143,7 +166,11 @@ async function evaluatePullRequest(repository, number, action) {
       ? await githubRequest(`/repos/${repository}/issues/${issueNumbers[0]}`)
       : undefined;
   const targetUrl = pr.html_url;
-  const issueResult = evaluateIssueGate({ issueNumbers, issue });
+  const issueResult = evaluateIssueGate({
+    issueNumbers,
+    issue,
+    headRef: pr.head.ref,
+  });
   const humanResult = evaluateHumanValidationGate(labels);
 
   await Promise.all([
