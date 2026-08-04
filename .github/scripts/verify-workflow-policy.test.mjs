@@ -61,12 +61,25 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("gives structured Claude PR Review enough bounded turns", async () => {
+test("configures every Claude model job through repository variables", async () => {
   const workflows = await actualWorkflows();
-  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find((step) =>
-    step.uses?.startsWith("anthropics/"),
-  );
-  assert.match(action.with.claude_args, /--max-turns 20(?:\n|$)/);
+  const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
+  const timeout = "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}";
+  const verbose = "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}";
+  const modelJobs = [
+    ["claude-issue-review.yml", "automatic-issue-review"],
+    ["claude-issue-review.yml", "mentions"],
+    ["claude-pr-review.yml", "analyze"],
+  ];
+
+  for (const [workflowName, jobName] of modelJobs) {
+    const job = workflows[workflowName].jobs[jobName];
+    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+
+    assert.equal(job["timeout-minutes"], timeout);
+    assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
+    assert.equal(action.with.show_full_output, verbose);
+  }
 });
 
 test("guards every Issue Review model step with the trusted authorizer", async () => {
