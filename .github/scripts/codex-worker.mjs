@@ -750,6 +750,7 @@ async function writePrepareOutputs({ operation, reason, issueNumber, plan }) {
   await writeOutput("reason", reason ?? "none");
   await writeOutput("issue_number", issueNumber ?? "");
   await writeOutput("start_sha", plan?.startSha ?? "");
+  await writeOutput("default_branch", plan?.defaultBranch ?? "");
 }
 
 async function prepareCommand() {
@@ -876,6 +877,7 @@ async function preflightCommand() {
     repository: requiredEnvironment("GITHUB_REPOSITORY"),
     issueNumber: Number(requiredEnvironment("WORKER_ISSUE_NUMBER")),
     startSha: requiredEnvironment("WORKER_START_SHA"),
+    defaultBranch: requiredEnvironment("WORKER_DEFAULT_BRANCH"),
   };
   try {
     const plan = await readWorkerPlan(requiredEnvironment("WORKER_PLAN_PATH"), expected);
@@ -954,6 +956,7 @@ async function publishCommand() {
     repository: requiredEnvironment("GITHUB_REPOSITORY"),
     issueNumber: Number(requiredEnvironment("WORKER_ISSUE_NUMBER")),
     startSha: requiredEnvironment("WORKER_START_SHA"),
+    defaultBranch: requiredEnvironment("WORKER_DEFAULT_BRANCH"),
   };
   const plan = await readWorkerPlan(requiredEnvironment("WORKER_PLAN_PATH"), expected);
   const commitSha = requiredEnvironment("WORKER_COMMIT_SHA");

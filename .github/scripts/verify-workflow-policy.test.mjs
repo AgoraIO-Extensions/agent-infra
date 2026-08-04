@@ -73,6 +73,44 @@ test("keeps the Codex API key only in the official model Action", async () => {
       error.includes("CODEX_API_KEY"),
     ),
   );
+
+  const duplicatedSecret = await actualWorkflows();
+  const action = duplicatedSecret["codex-worker.yml"].jobs.implement.steps.find(
+    (step) => step.uses?.startsWith("openai/codex-action@"),
+  );
+  action.env = { BAD: "${{ secrets.CODEX_API_KEY }}" };
+  assert.ok(
+    validateWorkflowDocuments(duplicatedSecret).some((error) =>
+      error.includes("CODEX_API_KEY"),
+    ),
+  );
+});
+
+test("keeps Codex model configuration in fixed Secret inputs", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  const prepare = worker.jobs.implement.steps.find(
+    (step) => step.name === "Prepare trusted Worker plan",
+  );
+  const action = worker.jobs.implement.steps.find((step) =>
+    step.uses?.startsWith("openai/codex-action@"),
+  );
+  for (const [name, reference] of [
+    [
+      "CODEX_RESPONSES_API_ENDPOINT",
+      "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
+    ],
+    ["CODEX_MODEL", "${{ secrets.CODEX_MODEL }}"],
+    ["CODEX_EFFORT", "${{ secrets.CODEX_EFFORT }}"],
+  ]) {
+    assert.equal(prepare.env[name], reference);
+  }
+  assert.equal(
+    action.with["responses-api-endpoint"],
+    "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
+  );
+  assert.equal(action.with.model, "${{ secrets.CODEX_MODEL }}");
+  assert.equal(action.with.effort, "${{ secrets.CODEX_EFFORT }}");
 });
 
 test("keeps the publisher PAT out of the model job", async () => {
@@ -163,6 +201,28 @@ test("keeps trusted and recorded Worker checkouts separate", async () => {
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("recorded checkout must use workspace"),
+    ),
+  );
+});
+
+test("pins the Worker default branch outside the model Artifact", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  delete worker.jobs.implement.outputs.default_branch;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("trusted default branch output"),
+    ),
+  );
+
+  const invalidPreflight = await actualWorkflows();
+  const preflight = invalidPreflight["codex-worker.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Validate Artifact before publisher credential exposure",
+  );
+  delete preflight.env.WORKER_DEFAULT_BRANCH;
+  assert.ok(
+    validateWorkflowDocuments(invalidPreflight).some((error) =>
+      error.includes("trusted default branch input"),
     ),
   );
 });

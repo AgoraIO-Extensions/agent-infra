@@ -43,6 +43,7 @@ jobs:
       reason: ${{ steps.prepare.outputs.reason }}
       issue_number: ${{ steps.prepare.outputs.issue_number }}
       start_sha: ${{ steps.prepare.outputs.start_sha }}
+      default_branch: ${{ steps.prepare.outputs.default_branch }}
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,9 +62,9 @@ jobs:
         id: prepare
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          CODEX_RESPONSES_API_ENDPOINT: ${{ vars.CODEX_RESPONSES_API_ENDPOINT }}
-          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
-          CODEX_EFFORT: ${{ vars.CODEX_EFFORT }}
+          CODEX_RESPONSES_API_ENDPOINT: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
+          CODEX_MODEL: ${{ secrets.CODEX_MODEL }}
+          CODEX_EFFORT: ${{ secrets.CODEX_EFFORT }}
           CODEX_WORKER_TIMEOUT_MINUTES: ${{ vars.CODEX_WORKER_TIMEOUT_MINUTES || '60' }}
           WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
         run: node trusted/.github/scripts/codex-worker.mjs prepare
@@ -98,7 +99,7 @@ jobs:
         uses: openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9
         with:
           openai-api-key: ${{ secrets.CODEX_API_KEY }}
-          responses-api-endpoint: ${{ vars.CODEX_RESPONSES_API_ENDPOINT }}
+          responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
           prompt-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/prompt.md
           output-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json
           output-schema-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/result.schema.json
@@ -106,8 +107,8 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home
           permission-profile: github-worker
           codex-version: 0.146.0
-          model: ${{ vars.CODEX_MODEL }}
-          effort: ${{ vars.CODEX_EFFORT }}
+          model: ${{ secrets.CODEX_MODEL }}
+          effort: ${{ secrets.CODEX_EFFORT }}
           safety-strategy: drop-sudo
 
       - name: Upload fixed Worker Artifact
@@ -188,6 +189,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
           WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
           WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
           WORKER_PATCH_PATH: ${{ runner.temp }}/codex-worker-artifact/output/change.patch
           WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
@@ -216,6 +218,7 @@ jobs:
           CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
           WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
           WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
           WORKER_COMMIT_SHA: ${{ steps.preflight.outputs.commit_sha }}
           WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
           WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json

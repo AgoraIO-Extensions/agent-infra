@@ -37,11 +37,14 @@ function referencedSecrets(value) {
 
 function validateStepSecrets(errors, workflowName, jobName, step) {
   for (const secret of referencedSecrets(step)) {
+    const occurrences = referencedSecrets(step).filter(
+      (reference) => reference === secret,
+    ).length;
     if (secret === "ANTHROPIC_API_KEY") {
       if (
         !step.uses?.startsWith(CLAUDE_ACTION) ||
         step.with?.anthropic_api_key !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
-        referencedSecrets(step).length !== 1
+        occurrences !== 1
       ) {
         errors.push(
           `${workflowName}/${jobName}: ANTHROPIC_API_KEY is allowed only in the official Claude Action`,
@@ -55,10 +58,41 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         jobName !== "implement" ||
         step.uses !== CODEX_ACTION ||
         step.with?.["openai-api-key"] !== "${{ secrets.CODEX_API_KEY }}" ||
-        referencedSecrets(step).length !== 1
+        occurrences !== 1
       ) {
         errors.push(
           `${workflowName}/${jobName}: CODEX_API_KEY is allowed only in the pinned official Codex Action`,
+        );
+      }
+      continue;
+    }
+    if (
+      ["CODEX_RESPONSES_API_ENDPOINT", "CODEX_MODEL", "CODEX_EFFORT"].includes(
+        secret,
+      )
+    ) {
+      const reference = `\${{ secrets.${secret} }}`;
+      const actionInput = {
+        CODEX_RESPONSES_API_ENDPOINT: "responses-api-endpoint",
+        CODEX_MODEL: "model",
+        CODEX_EFFORT: "effort",
+      }[secret];
+      const allowedPrepare =
+        workflowName === "codex-worker.yml" &&
+        jobName === "implement" &&
+        step.name === "Prepare trusted Worker plan" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs prepare" &&
+        step.env?.[secret] === reference &&
+        occurrences === 1;
+      const allowedAction =
+        workflowName === "codex-worker.yml" &&
+        jobName === "implement" &&
+        step.uses === CODEX_ACTION &&
+        step.with?.[actionInput] === reference &&
+        occurrences === 1;
+      if (!allowedPrepare && !allowedAction) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in fixed Codex Worker inputs`,
         );
       }
       continue;
@@ -70,7 +104,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         step.name !== "Publish fixed branch and Draft PR" ||
         step.run !== "node trusted/.github/scripts/codex-worker.mjs publish" ||
         step.env?.CODEX_GITHUB_TOKEN !== "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
-        referencedSecrets(step).length !== 1
+        occurrences !== 1
       ) {
         errors.push(
           `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in the fixed Worker publication step`,
@@ -180,6 +214,26 @@ export function validateWorkflowDocuments(workflows) {
   if (JSON.stringify(publish ?? {}).includes("CODEX_API_KEY")) {
     errors.push("Codex Worker publisher must not contain CODEX_API_KEY");
   }
+  if (
+    implement?.outputs?.default_branch !==
+    "${{ steps.prepare.outputs.default_branch }}"
+  ) {
+    errors.push("Codex Worker must expose a trusted default branch output");
+  }
+
+  const publishSteps = publish?.steps ?? [];
+  for (const stepName of [
+    "Validate Artifact before publisher credential exposure",
+    "Publish fixed branch and Draft PR",
+  ]) {
+    const step = publishSteps.find((candidate) => candidate.name === stepName);
+    if (
+      step?.env?.WORKER_DEFAULT_BRANCH !==
+      "${{ needs.implement.outputs.default_branch }}"
+    ) {
+      errors.push(`${stepName} must receive the trusted default branch input`);
+    }
+  }
 
   const implementSteps = implement?.steps ?? [];
   const codexIndex = implementSteps.findIndex((step) =>
@@ -192,7 +246,7 @@ export function validateWorkflowDocuments(workflows) {
     if (
       !sameObject(codexInputs, {
         "openai-api-key": "${{ secrets.CODEX_API_KEY }}",
-        "responses-api-endpoint": "${{ vars.CODEX_RESPONSES_API_ENDPOINT }}",
+        "responses-api-endpoint": "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
         "prompt-file":
           "${{ github.workspace }}/workspace/.codex-worker-artifact/prompt.md",
         "output-file":
@@ -203,8 +257,8 @@ export function validateWorkflowDocuments(workflows) {
         "codex-home": "${{ runner.temp }}/codex-home",
         "permission-profile": "github-worker",
         "codex-version": "0.146.0",
-        model: "${{ vars.CODEX_MODEL }}",
-        effort: "${{ vars.CODEX_EFFORT }}",
+        model: "${{ secrets.CODEX_MODEL }}",
+        effort: "${{ secrets.CODEX_EFFORT }}",
         "safety-strategy": "drop-sudo",
       })
     ) {
