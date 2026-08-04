@@ -115,7 +115,7 @@ Agent Brief、`to-spec` 和 `to-tickets` 能力，不重复建设同类流程。
 Codex 只领取同时满足以下条件的 Issue：
 
 - Issue 处于打开状态并带有 `ready-for-agent`。
-- 不带 `ready-for-human` 或 `wontfix`。
+- 不带 `ready-for-human`、`needs-triage` 或 `wontfix`。
 - 存在 `## Blocked by` 时，其中只包含 `- #<issue-number>` 格式的依赖且均已关闭；章节缺失
   或只写 `None` 表示没有 blocker，其他格式视为需要重新梳理。
 - 当前没有该 Issue 的其他活动执行；固定 branch 和现有 PR 只能属于同一个 Issue 并可被复用。
@@ -138,8 +138,9 @@ Codex 只领取同时满足以下条件的 Issue：
 
 移除 `ready-for-agent` 会取消当前运行，但保留 branch 和 PR。`publish` 在每次远端写入前重新
 校验 Issue 状态；重新添加后继续使用原 branch 和 PR。Issue 被关闭或添加 `wontfix` 后，自动
-关闭该 Issue 的所有未合并 Worker PR。PR 未合并而被关闭，或发布校验失败时，平台移除
-`ready-for-agent`、添加 `needs-triage`，并用固定格式评论说明可公开的失败原因。
+关闭该 Issue 的所有未合并 Worker PR。PR 未合并而被关闭，或发布校验失败时，Worker 保留
+`ready-for-agent`、添加 `needs-triage`，并用固定格式评论说明可公开的失败原因；移除
+`needs-triage` 后才能重新执行。
 
 ### 6.2 执行环境与权限
 
@@ -148,6 +149,8 @@ Codex 只领取同时满足以下条件的 Issue：
   `:workspace`，只允许写入 checkout workspace，允许完整公网访问，禁止本地和私有网络访问。
 - 官方 Codex Action 固定到完整 commit SHA，Codex CLI 固定到支持 permission profile 的明确
   版本，且不得低于 `0.138.0`；同时使用 `safety-strategy: drop-sudo`。
+- `implement` job checkout 可信默认分支时必须设置 `persist-credentials: false`，job 权限仅为
+  `contents: read`，不得把 `GITHUB_TOKEN` 或其他仓库凭证写入 workspace、Git 配置或模型环境。
 - 模型只获得完成实现所需的代码工作区和工具，不获得用于发布 GitHub 变更的 PAT。
 - 模型/API Secret 和 fine-grained GitHub PAT 分开配置。
 - `CODEX_API_KEY` 只传给 `implement` job 中的官方 Codex Action；该 Action 之后只允许固定
@@ -176,7 +179,8 @@ Codex 只领取同时满足以下条件的 Issue：
 `publish` job 在新的 Runner 上重新 checkout 起始版本，在获得 GitHub PAT 前完成以下校验：
 
 - Issue 仍满足 frontier 条件，目标 branch 和 PR 属于当前 Issue。已有 branch 的远端 head 必须
-  等于起始 commit；首次发布时默认分支 head 必须等于起始 commit。
+  等于起始 commit；首次发布时固定 branch 必须尚不存在。模型运行期间默认分支可以前进，
+  合并冲突和兼容性由新 PR 上的现有门禁处理。
 - Patch 不超过 400 KiB，不包含二进制内容、路径穿越、符号链接、gitlink/submodule、可执行位
   或其他文件模式变更。
 - Patch 不修改 `.github/`、`.codex/`、`.agents/skills/`、`AGENTS.md`、`.gitattributes`、
@@ -221,7 +225,8 @@ Issue Gate 是 required check，并在每个 PR head 上校验：
   且对应 Issue 仍带有 `ready-for-agent`。
 
 Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR 规则。校验失败时阻止合并，
-不由模型解释或覆盖。
+不由模型解释或覆盖。人移除 `ready-for-agent` 表示暂停，保留的 Worker PR 因此不能继续合并；
+发布校验失败只添加 `needs-triage`，不会让已经发布且仍带 `ready-for-agent` 的 PR 失去合并资格。
 
 ### 7.3 Claude PR Review
 
@@ -326,6 +331,7 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 ### Stage 2：Codex Worker
 
 - 以 `ready-for-agent` 驱动 Codex Worker。
+- 提供包含 `## Blocked by` 的 Issue 模板，使 blocker 使用确定性格式声明。
 - 实现 frontier Issue 校验、Issue 级并发、固定 branch/PR 和暂停恢复。
 - 从固定的 mattpocock/skills revision 接入项目级 `implement`、`tdd` 和 `code-review` Skill。
 - 使用独立模型 job、固定 Artifact 和可信发布 job 维护 branch、PR 正文与标签。
