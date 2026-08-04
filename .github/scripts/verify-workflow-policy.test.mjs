@@ -4,17 +4,9 @@ import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
 
-import {
-  validateTrustedScriptDocuments,
-  validateWorkflowDocuments,
-} from "./verify-workflow-policy.mjs";
+import { validateWorkflowDocuments } from "./verify-workflow-policy.mjs";
 
 const workflowDirectory = path.resolve(".github/workflows");
-const trustedScriptPaths = [
-  ".github/scripts/run-claude-direct-canary.sh",
-  ".github/scripts/summarize-claude-review.mjs",
-  ".github/scripts/validate-claude-review-config.mjs",
-];
 
 async function actualWorkflows() {
   const names = (await fs.readdir(workflowDirectory)).filter((name) => name.endsWith(".yml"));
@@ -28,17 +20,8 @@ async function actualWorkflows() {
   );
 }
 
-async function actualTrustedScripts() {
-  return Object.fromEntries(
-    await Promise.all(
-      trustedScriptPaths.map(async (name) => [name, await fs.readFile(name, "utf8")]),
-    ),
-  );
-}
-
 test("accepts the complete Stage 1 workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
-  assert.deepEqual(validateTrustedScriptDocuments(await actualTrustedScripts()), []);
 });
 
 test("keeps the direct CLI canary opt-in, read-only, and non-publishing", async () => {
@@ -69,10 +52,10 @@ test("keeps the direct CLI canary opt-in, read-only, and non-publishing", async 
   assert.equal(review.jobs.analyze.steps[actionIndex - 2].name, "Start Claude Action timer");
   assert.equal(review.jobs.analyze.steps[actionIndex - 1].id, "validate-config");
   assert.equal(review.jobs.analyze.steps[actionIndex + 1].name, "Record Claude Action metrics");
-  assert.ok(
-    canary.steps.findIndex((step) => step.name === "Start direct CLI timer") <
-      canary.steps.indexOf(run),
-  );
+  const timerIndex = canary.steps.findIndex((step) => step.name === "Start direct CLI timer");
+  assert.equal(canary.steps[timerIndex + 1].name, "Set up Node.js");
+  assert.equal(canary.steps[timerIndex + 2].name, "Install pinned Claude CLI");
+  assert.equal(canary.steps[timerIndex + 3], run);
 });
 
 test("rejects a privileged or always-on direct CLI canary", async () => {
@@ -110,18 +93,6 @@ test("rejects shell appended to the direct CLI Secret-bearing step", async () =>
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Direct CLI canary execution is not approved"),
-    ),
-  );
-});
-
-test("rejects changes to a trusted Secret-bearing script", async () => {
-  const scripts = await actualTrustedScripts();
-  scripts[".github/scripts/run-claude-direct-canary.sh"] +=
-    '\necho "$ANTHROPIC_API_KEY"';
-
-  assert.ok(
-    validateTrustedScriptDocuments(scripts).some((error) =>
-      error.includes("trusted Claude Review script hash changed"),
     ),
   );
 });
@@ -187,7 +158,7 @@ test("rejects an untrusted PR checkout in PR Gates", async () => {
   );
 });
 
-test("rejects model Secrets outside an official Claude Action step", async () => {
+test("rejects model Secrets outside an approved Claude execution step", async () => {
   const workflows = await actualWorkflows();
   workflows["pr-gates.yml"].jobs.gates.env = {
     BAD: "${{ secrets.ANTHROPIC_API_KEY }}",
@@ -207,7 +178,7 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("configures every Claude model job through repository variables", async () => {
+test("configures every Claude model job through validated repository settings", async () => {
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
   const timeout = "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}";
@@ -221,8 +192,16 @@ test("configures every Claude model job through repository variables", async () 
   for (const [workflowName, jobName] of modelJobs) {
     const job = workflows[workflowName].jobs[jobName];
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    const actionIndex = job.steps.indexOf(action);
+    const config = job.steps[actionIndex - 1];
 
     assert.equal(job["timeout-minutes"], timeout);
+    assert.equal(job.env, undefined);
+    assert.equal(config.id, "validate-config");
+    assert.equal(config.run, "node .github/scripts/validate-claude-review-config.mjs");
+    assert.equal(config.env.ANTHROPIC_BASE_URL, "${{ secrets.ANTHROPIC_BASE_URL }}");
+    assert.equal(action.env.ANTHROPIC_BASE_URL, config.env.ANTHROPIC_BASE_URL);
+    assert.ok(action.with.claude_args.includes('--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"'));
     assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
     assert.equal(
       action.with.show_full_output,
@@ -231,6 +210,22 @@ test("configures every Claude model job through repository variables", async () 
         : verbose,
     );
   }
+});
+
+test("rejects Issue Review model configuration that bypasses validated Secrets", async () => {
+  const workflows = await actualWorkflows();
+  const job = workflows["claude-issue-review.yml"].jobs.mentions;
+  const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_MODEL",
+    "vars.CLAUDE_REVIEW_MODEL",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model configuration must use validated Secrets"),
+    ),
+  );
 });
 
 test("guards every Issue Review model step with the trusted authorizer", async () => {

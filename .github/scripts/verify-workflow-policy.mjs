@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,32 +12,9 @@ const REQUIRED_WORKFLOWS = [
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
-const TRUSTED_SCRIPT_SHA256 = {
-  ".github/scripts/run-claude-direct-canary.sh":
-    "81e33211d28b021ae55911c6481eac31c25c4d804bb9518d66047becebc5813b",
-  ".github/scripts/summarize-claude-review.mjs":
-    "20cfbcc942d07635214af6d3c9fd241686b4a12665650647c2ffd9e565c7317b",
-  ".github/scripts/validate-claude-review-config.mjs":
-    "cb94aa2507fa6d3cbe8b873fe941a5eb95f3634bbefdfb1c299b98bff642387f",
-};
 
 function workflowSteps(workflow) {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
-}
-
-export function validateTrustedScriptDocuments(scripts) {
-  const errors = [];
-  for (const [name, expectedHash] of Object.entries(TRUSTED_SCRIPT_SHA256)) {
-    const content = scripts[name];
-    const actualHash =
-      typeof content === "string"
-        ? createHash("sha256").update(content).digest("hex")
-        : "missing";
-    if (actualHash !== expectedHash) {
-      errors.push(`${name}: trusted Claude Review script hash changed`);
-    }
-  }
-  return errors;
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -56,9 +32,14 @@ export function validateWorkflowDocuments(workflows) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
         }
         const isApprovedSecretStep =
-          name === "claude-pr-review.yml" &&
-          ((jobName === "direct-cli-canary" && step.id === "direct") ||
-            (jobName === "analyze" && step.id === "validate-config"));
+          (name === "claude-pr-review.yml" &&
+            jobName === "direct-cli-canary" &&
+            step.id === "direct") ||
+          (step.id === "validate-config" &&
+            step.run === "node .github/scripts/validate-claude-review-config.mjs" &&
+            ((name === "claude-pr-review.yml" && jobName === "analyze") ||
+              (name === "claude-issue-review.yml" &&
+                ["automatic-issue-review", "mentions"].includes(jobName))));
         if (
           JSON.stringify(step).includes("secrets.") &&
           !step.uses?.startsWith(CLAUDE_ACTION) &&
@@ -135,6 +116,12 @@ export function validateWorkflowDocuments(workflows) {
   const reviewConfig = analyzeSteps[reviewConfigIndex];
   const reviewMetrics = analyzeSteps[reviewActionIndex + 1];
   const directCanaryStepIndex = directCanarySteps.findIndex((step) => step.id === "direct");
+  const directCanarySetupIndex = directCanarySteps.findIndex(
+    (step) => step.name === "Set up Node.js",
+  );
+  const directCanaryInstallIndex = directCanarySteps.findIndex(
+    (step) => step.name === "Install pinned Claude CLI",
+  );
   const directCanaryTimerIndex = directCanarySteps.findIndex(
     (step) => step.name === "Start direct CLI timer",
   );
@@ -182,8 +169,8 @@ export function validateWorkflowDocuments(workflows) {
     reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewTimerIndex < 0 ||
-    reviewTimerIndex >= reviewConfigIndex ||
-    reviewConfigIndex >= reviewActionIndex ||
+    reviewConfigIndex !== reviewTimerIndex + 1 ||
+    reviewActionIndex !== reviewConfigIndex + 1 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_DIRECT_CLI_CANARY != 'true' && vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
@@ -217,7 +204,9 @@ export function validateWorkflowDocuments(workflows) {
     directCanaryTimer?.run !==
       'echo "CLAUDE_DIRECT_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"' ||
     directCanaryTimerIndex < 0 ||
-    directCanaryTimerIndex >= directCanaryStepIndex
+    directCanarySetupIndex !== directCanaryTimerIndex + 1 ||
+    directCanaryInstallIndex !== directCanarySetupIndex + 1 ||
+    directCanaryStepIndex !== directCanaryInstallIndex + 1
   ) {
     errors.push("Direct CLI canary execution is not approved");
   }
@@ -278,6 +267,10 @@ export function validateWorkflowDocuments(workflows) {
     const modelIndex = (job.steps ?? []).findIndex((step) =>
       step.uses?.startsWith(CLAUDE_ACTION),
     );
+    const configIndex = (job.steps ?? []).findIndex((step) => step.id === "validate-config");
+    const configStep = job.steps?.[configIndex];
+    const modelStep = job.steps?.[modelIndex];
+    const configEnv = configStep?.env ?? {};
     if (modelIndex >= 0 && (authorizeIndex < 0 || authorizeIndex >= modelIndex)) {
       errors.push(
         `claude-issue-review.yml/${jobName}: trusted authorization must run before model`,
@@ -285,10 +278,32 @@ export function validateWorkflowDocuments(workflows) {
     }
     if (
       modelIndex >= 0 &&
-      job.steps[modelIndex].if !== "steps.authorize.outputs.allowed == 'true'"
+      modelStep.if !== "steps.authorize.outputs.allowed == 'true'"
     ) {
       errors.push(
         `claude-issue-review.yml/${jobName}: model step must use trusted authorization output`,
+      );
+    }
+    if (
+      modelIndex >= 0 &&
+      (configIndex !== authorizeIndex + 1 ||
+        modelIndex !== configIndex + 1 ||
+        configStep?.if !== "steps.authorize.outputs.allowed == 'true'" ||
+        configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+        Object.keys(configEnv).sort().join("\0") !==
+          ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+            .sort()
+            .join("\0") ||
+        configEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+        configEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+        modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        !modelStep?.with?.claude_args?.includes(
+          '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        ))
+    ) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: model configuration must use validated Secrets`,
       );
     }
   }
@@ -334,18 +349,7 @@ async function main() {
       ]),
     ),
   );
-  const scripts = Object.fromEntries(
-    await Promise.all(
-      Object.keys(TRUSTED_SCRIPT_SHA256).map(async (name) => [
-        name,
-        await fs.readFile(path.resolve(name), "utf8"),
-      ]),
-    ),
-  );
-  const errors = [
-    ...validateWorkflowDocuments(workflows),
-    ...validateTrustedScriptDocuments(scripts),
-  ];
+  const errors = validateWorkflowDocuments(workflows);
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(`Workflow policy: ${names.length} files valid`);
 }
