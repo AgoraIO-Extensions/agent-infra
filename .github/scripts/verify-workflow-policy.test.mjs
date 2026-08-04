@@ -24,6 +24,109 @@ test("accepts the complete Stage 1 workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
 });
 
+test("keeps the direct CLI canary opt-in, read-only, and non-publishing", async () => {
+  const workflows = await actualWorkflows();
+  const review = workflows["claude-pr-review.yml"];
+  const canary = review.jobs["direct-cli-canary"];
+
+  assert.ok(canary, "direct CLI canary job is required");
+  assert.match(canary.if, /vars\.CLAUDE_DIRECT_CLI_CANARY == 'true'/);
+  assert.equal(canary["continue-on-error"], true);
+  assert.deepEqual(canary.permissions, {
+    contents: "read",
+    "pull-requests": "read",
+  });
+  assert.equal(review.jobs.publish.needs, "analyze");
+
+  const action = review.jobs.analyze.steps.find((step) => step.id === "claude");
+  const run = canary.steps.find((step) => step.id === "direct");
+  assert.ok(run, "direct Claude CLI step is required");
+  const actionSchema = action.with.claude_args.match(/--json-schema '(.+)'/s)?.[1];
+  assert.equal(run.env.CLAUDE_REVIEW_PROMPT, action.with.prompt);
+  assert.equal(run.env.CLAUDE_REVIEW_SCHEMA, actionSchema);
+  assert.equal(run.env.ANTHROPIC_BASE_URL, action.env.ANTHROPIC_BASE_URL);
+  assert.ok(action.with.claude_args.includes(`--model "${run.env.CLAUDE_REVIEW_MODEL}"`));
+  assert.equal(run.run, "bash .github/scripts/run-claude-direct-canary.sh");
+
+  const actionIndex = review.jobs.analyze.steps.indexOf(action);
+  assert.equal(review.jobs.analyze.steps[actionIndex - 1].name, "Start Claude Action timer");
+  assert.equal(review.jobs.analyze.steps[actionIndex + 1].name, "Record Claude Action metrics");
+  assert.ok(
+    canary.steps.findIndex((step) => step.name === "Start direct CLI timer") <
+      canary.steps.indexOf(run),
+  );
+});
+
+test("rejects a privileged or always-on direct CLI canary", async () => {
+  const workflows = await actualWorkflows();
+  const canary = workflows["claude-pr-review.yml"].jobs["direct-cli-canary"];
+  canary.if = "github.event.workflow_run.conclusion == 'success'";
+  canary["continue-on-error"] = false;
+  canary.permissions["pull-requests"] = "write";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary must stay opt-in, non-blocking, and read-only"),
+    ),
+  );
+});
+
+test("rejects a direct CLI canary step that does not run the bounded review", async () => {
+  const workflows = await actualWorkflows();
+  const canary = workflows["claude-pr-review.yml"].jobs["direct-cli-canary"];
+  canary.steps.find((step) => step.id === "direct").run = "env";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary execution is not approved"),
+    ),
+  );
+});
+
+test("rejects shell appended to the direct CLI Secret-bearing step", async () => {
+  const workflows = await actualWorkflows();
+  const canary = workflows["claude-pr-review.yml"].jobs["direct-cli-canary"];
+  const direct = canary.steps.find((step) => step.id === "direct");
+  direct.run += '\necho "$ANTHROPIC_API_KEY"';
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary execution is not approved"),
+    ),
+  );
+});
+
+test("rejects divergent Action and direct CLI model configuration", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_MODEL",
+    "vars.CLAUDE_REVIEW_MODEL",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary execution is not approved"),
+    ),
+  );
+});
+
+test("forces full model output off while the direct CLI canary is enabled", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  action.with.show_full_output = "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary execution is not approved"),
+    ),
+  );
+});
+
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
@@ -78,7 +181,12 @@ test("configures every Claude model job through repository variables", async () 
 
     assert.equal(job["timeout-minutes"], timeout);
     assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
-    assert.equal(action.with.show_full_output, verbose);
+    assert.equal(
+      action.with.show_full_output,
+      jobName === "analyze"
+        ? "${{ vars.CLAUDE_DIRECT_CLI_CANARY != 'true' && vars.CLAUDE_REVIEW_VERBOSE == 'true' }}"
+        : verbose,
+    );
   }
 });
 

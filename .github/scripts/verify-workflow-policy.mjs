@@ -26,18 +26,25 @@ export function validateWorkflowDocuments(workflows) {
 
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
-    for (const step of workflowSteps(workflow)) {
-      if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
-        errors.push(`${name}: third-party Actions must use a full commit SHA`);
-      }
-      if (
-        JSON.stringify(step).includes("secrets.") &&
-        !step.uses?.startsWith(CLAUDE_ACTION)
-      ) {
-        errors.push(`${name}: model Secret is allowed only in an official Claude Action step`);
-      }
-    }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      for (const step of job.steps ?? []) {
+        if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
+          errors.push(`${name}: third-party Actions must use a full commit SHA`);
+        }
+        const isDirectCanary =
+          name === "claude-pr-review.yml" &&
+          jobName === "direct-cli-canary" &&
+          step.id === "direct";
+        if (
+          JSON.stringify(step).includes("secrets.") &&
+          !step.uses?.startsWith(CLAUDE_ACTION) &&
+          !isDirectCanary
+        ) {
+          errors.push(
+            `${name}: model Secret is allowed only in an approved Claude execution step`,
+          );
+        }
+      }
       if (JSON.stringify(job.env ?? {}).includes("secrets.")) {
         errors.push(`${name}/${jobName}: model Secret is not allowed in job environment`);
       }
@@ -70,6 +77,87 @@ export function validateWorkflowDocuments(workflows) {
   const review = workflows["claude-pr-review.yml"];
   if (!review?.on?.workflow_run?.workflows?.includes("Docs CI")) {
     errors.push("Claude PR Review must run only after Docs CI");
+  }
+  const directCanary = review?.jobs?.["direct-cli-canary"];
+  const directCanaryPermissions = directCanary?.permissions ?? {};
+  if (
+    typeof directCanary?.if !== "string" ||
+    !directCanary.if.includes("vars.CLAUDE_DIRECT_CLI_CANARY == 'true'") ||
+    directCanary["continue-on-error"] !== true ||
+    directCanary["timeout-minutes"] !==
+      "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}" ||
+    Object.keys(directCanaryPermissions).sort().join("\0") !==
+      ["contents", "pull-requests"].sort().join("\0") ||
+    directCanaryPermissions.contents !== "read" ||
+    directCanaryPermissions["pull-requests"] !== "read"
+  ) {
+    errors.push("Direct CLI canary must stay opt-in, non-blocking, and read-only");
+  }
+  const directCanaryInstall = directCanary?.steps?.find(
+    (step) => step.name === "Install pinned Claude CLI",
+  );
+  const directCanaryStep = directCanary?.steps?.find((step) => step.id === "direct");
+  const directCanaryRun = directCanaryStep?.run ?? "";
+  const directCanaryEnv = directCanaryStep?.env ?? {};
+  const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
+  const directCanarySteps = directCanary?.steps ?? [];
+  const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
+  const reviewAction = analyzeSteps[reviewActionIndex];
+  const reviewTimer = analyzeSteps[reviewActionIndex - 1];
+  const reviewMetrics = analyzeSteps[reviewActionIndex + 1];
+  const directCanaryStepIndex = directCanarySteps.findIndex((step) => step.id === "direct");
+  const directCanaryTimerIndex = directCanarySteps.findIndex(
+    (step) => step.name === "Start direct CLI timer",
+  );
+  const directCanaryTimer = directCanarySteps[directCanaryTimerIndex];
+  const reviewSchema = reviewAction?.with?.claude_args?.match(
+    /--json-schema '(.+)'/s,
+  )?.[1];
+  const directCanaryEnvKeys = Object.keys(directCanaryEnv).sort();
+  if (
+    directCanaryInstall?.run !==
+      "npm install --global @anthropic-ai/claude-code@2.1.220" ||
+    directCanaryStep?.uses ||
+    directCanaryRun !== "bash .github/scripts/run-claude-direct-canary.sh" ||
+    directCanaryEnvKeys.join("\0") !==
+      [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_REVIEW_MAX_TURNS",
+        "CLAUDE_REVIEW_MODEL",
+        "CLAUDE_REVIEW_PROMPT",
+        "CLAUDE_REVIEW_SCHEMA",
+        "EXPECTED_HEAD_SHA",
+        "GH_TOKEN",
+      ]
+        .sort()
+        .join("\0") ||
+    directCanaryEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+    directCanaryEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    directCanaryEnv.CLAUDE_REVIEW_MAX_TURNS !==
+      "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}" ||
+    directCanaryEnv.CLAUDE_REVIEW_PROMPT !== reviewAction?.with?.prompt ||
+    directCanaryEnv.CLAUDE_REVIEW_SCHEMA !== reviewSchema ||
+    directCanaryEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+    directCanaryEnv.GH_TOKEN !== "${{ github.token }}" ||
+    reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewAction?.with?.show_full_output !==
+      "${{ vars.CLAUDE_DIRECT_CLI_CANARY != 'true' && vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
+    !reviewAction?.with?.claude_args?.includes(
+      '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+    ) ||
+    reviewTimer?.run !==
+      'echo "CLAUDE_ACTION_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"' ||
+    reviewMetrics?.name !== "Record Claude Action metrics" ||
+    reviewMetrics?.if !== "always()" ||
+    reviewMetrics?.["continue-on-error"] !== true ||
+    reviewMetrics?.run !== "node .github/scripts/summarize-claude-review.mjs" ||
+    directCanaryTimer?.run !==
+      'echo "CLAUDE_DIRECT_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"' ||
+    directCanaryTimerIndex < 0 ||
+    directCanaryTimerIndex >= directCanaryStepIndex
+  ) {
+    errors.push("Direct CLI canary execution is not approved");
   }
   if (JSON.stringify(review?.jobs?.publish ?? {}).includes("secrets.")) {
     errors.push("Claude Review publisher must not receive a model Secret");
