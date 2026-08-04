@@ -44,6 +44,14 @@ jobs:
       - name: Start Claude Action timer
         run: echo "CLAUDE_ACTION_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
+      - name: Validate Claude Review configuration
+        id: validate-config
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_REVIEW_MODEL: ${{ secrets.CLAUDE_REVIEW_MODEL }}
+        run: node .github/scripts/validate-claude-review-config.mjs
+
       - name: Run read-only Claude Review
         id: claude
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183

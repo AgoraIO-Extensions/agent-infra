@@ -4,9 +4,17 @@ import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
 
-import { validateWorkflowDocuments } from "./verify-workflow-policy.mjs";
+import {
+  validateTrustedScriptDocuments,
+  validateWorkflowDocuments,
+} from "./verify-workflow-policy.mjs";
 
 const workflowDirectory = path.resolve(".github/workflows");
+const trustedScriptPaths = [
+  ".github/scripts/run-claude-direct-canary.sh",
+  ".github/scripts/summarize-claude-review.mjs",
+  ".github/scripts/validate-claude-review-config.mjs",
+];
 
 async function actualWorkflows() {
   const names = (await fs.readdir(workflowDirectory)).filter((name) => name.endsWith(".yml"));
@@ -20,8 +28,17 @@ async function actualWorkflows() {
   );
 }
 
+async function actualTrustedScripts() {
+  return Object.fromEntries(
+    await Promise.all(
+      trustedScriptPaths.map(async (name) => [name, await fs.readFile(name, "utf8")]),
+    ),
+  );
+}
+
 test("accepts the complete Stage 1 workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+  assert.deepEqual(validateTrustedScriptDocuments(await actualTrustedScripts()), []);
 });
 
 test("keeps the direct CLI canary opt-in, read-only, and non-publishing", async () => {
@@ -49,7 +66,8 @@ test("keeps the direct CLI canary opt-in, read-only, and non-publishing", async 
   assert.equal(run.run, "bash .github/scripts/run-claude-direct-canary.sh");
 
   const actionIndex = review.jobs.analyze.steps.indexOf(action);
-  assert.equal(review.jobs.analyze.steps[actionIndex - 1].name, "Start Claude Action timer");
+  assert.equal(review.jobs.analyze.steps[actionIndex - 2].name, "Start Claude Action timer");
+  assert.equal(review.jobs.analyze.steps[actionIndex - 1].id, "validate-config");
   assert.equal(review.jobs.analyze.steps[actionIndex + 1].name, "Record Claude Action metrics");
   assert.ok(
     canary.steps.findIndex((step) => step.name === "Start direct CLI timer") <
@@ -88,6 +106,31 @@ test("rejects shell appended to the direct CLI Secret-bearing step", async () =>
   const canary = workflows["claude-pr-review.yml"].jobs["direct-cli-canary"];
   const direct = canary.steps.find((step) => step.id === "direct");
   direct.run += '\necho "$ANTHROPIC_API_KEY"';
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Direct CLI canary execution is not approved"),
+    ),
+  );
+});
+
+test("rejects changes to a trusted Secret-bearing script", async () => {
+  const scripts = await actualTrustedScripts();
+  scripts[".github/scripts/run-claude-direct-canary.sh"] +=
+    '\necho "$ANTHROPIC_API_KEY"';
+
+  assert.ok(
+    validateTrustedScriptDocuments(scripts).some((error) =>
+      error.includes("trusted Claude Review script hash changed"),
+    ),
+  );
+});
+
+test("rejects a divergent expected PR head", async () => {
+  const workflows = await actualWorkflows();
+  const canary = workflows["claude-pr-review.yml"].jobs["direct-cli-canary"];
+  canary.steps.find((step) => step.id === "direct").env.EXPECTED_HEAD_SHA =
+    "${{ github.event.workflow_run.head_commit.id }}";
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>

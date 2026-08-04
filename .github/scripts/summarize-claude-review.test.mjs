@@ -8,17 +8,20 @@ import test from "node:test";
 const script = path.resolve(".github/scripts/summarize-claude-review.mjs");
 const head = "a".repeat(40);
 
-async function runSummary({ format, result, status, requireValid = false }) {
+async function runSummary({ format, result, status, requireValid = false, error = "" }) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "claude-review-metrics-"));
   const resultFile = path.join(directory, "result.json");
+  const errorFile = path.join(directory, "error.log");
   const summaryFile = path.join(directory, "summary.md");
   await fs.writeFile(resultFile, JSON.stringify(result));
+  await fs.writeFile(errorFile, error);
 
   const execution = spawnSync(process.execPath, [script], {
     encoding: "utf8",
     env: {
       ...process.env,
       CLAUDE_METRICS_FORMAT: format,
+      CLAUDE_METRICS_ERROR_FILE: errorFile,
       CLAUDE_METRICS_RESULT_FILE: resultFile,
       CLAUDE_METRICS_REQUIRE_VALID: String(requireValid),
       CLAUDE_METRICS_STARTED_MS: String(Date.now() - 500),
@@ -50,6 +53,7 @@ test("summarizes direct CLI metrics without exposing model text", async () => {
   assert.match(summary, /Model duration: 321 ms/);
   assert.match(summary, /Turns: 4/);
   assert.match(summary, /Structured output valid: true/);
+  assert.match(summary, /Error category: none/);
   assert.doesNotMatch(summary, /sensitive model text/);
 });
 
@@ -79,11 +83,14 @@ test("reads the Action result message with the same metric fields", async () => 
 test("fails a required direct CLI metric check for invalid structured output", async () => {
   const { execution, summary } = await runSummary({
     format: "cli",
-    status: "0",
+    status: "1",
     requireValid: true,
+    error: "network failure with sensitive model text",
     result: { duration_ms: 12, num_turns: 1, structured_output: {} },
   });
 
   assert.equal(execution.status, 1);
+  assert.match(summary, /Error category: network/);
   assert.match(summary, /Structured output valid: false/);
+  assert.doesNotMatch(summary, /sensitive model text/);
 });

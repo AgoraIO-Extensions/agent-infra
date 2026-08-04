@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,9 +13,32 @@ const REQUIRED_WORKFLOWS = [
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
+const TRUSTED_SCRIPT_SHA256 = {
+  ".github/scripts/run-claude-direct-canary.sh":
+    "81e33211d28b021ae55911c6481eac31c25c4d804bb9518d66047becebc5813b",
+  ".github/scripts/summarize-claude-review.mjs":
+    "20cfbcc942d07635214af6d3c9fd241686b4a12665650647c2ffd9e565c7317b",
+  ".github/scripts/validate-claude-review-config.mjs":
+    "cb94aa2507fa6d3cbe8b873fe941a5eb95f3634bbefdfb1c299b98bff642387f",
+};
 
 function workflowSteps(workflow) {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
+}
+
+export function validateTrustedScriptDocuments(scripts) {
+  const errors = [];
+  for (const [name, expectedHash] of Object.entries(TRUSTED_SCRIPT_SHA256)) {
+    const content = scripts[name];
+    const actualHash =
+      typeof content === "string"
+        ? createHash("sha256").update(content).digest("hex")
+        : "missing";
+    if (actualHash !== expectedHash) {
+      errors.push(`${name}: trusted Claude Review script hash changed`);
+    }
+  }
+  return errors;
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -31,14 +55,14 @@ export function validateWorkflowDocuments(workflows) {
         if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
         }
-        const isDirectCanary =
+        const isApprovedSecretStep =
           name === "claude-pr-review.yml" &&
-          jobName === "direct-cli-canary" &&
-          step.id === "direct";
+          ((jobName === "direct-cli-canary" && step.id === "direct") ||
+            (jobName === "analyze" && step.id === "validate-config"));
         if (
           JSON.stringify(step).includes("secrets.") &&
           !step.uses?.startsWith(CLAUDE_ACTION) &&
-          !isDirectCanary
+          !isApprovedSecretStep
         ) {
           errors.push(
             `${name}: model Secret is allowed only in an approved Claude execution step`,
@@ -103,7 +127,12 @@ export function validateWorkflowDocuments(workflows) {
   const directCanarySteps = directCanary?.steps ?? [];
   const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
   const reviewAction = analyzeSteps[reviewActionIndex];
-  const reviewTimer = analyzeSteps[reviewActionIndex - 1];
+  const reviewTimerIndex = analyzeSteps.findIndex(
+    (step) => step.name === "Start Claude Action timer",
+  );
+  const reviewTimer = analyzeSteps[reviewTimerIndex];
+  const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
+  const reviewConfig = analyzeSteps[reviewConfigIndex];
   const reviewMetrics = analyzeSteps[reviewActionIndex + 1];
   const directCanaryStepIndex = directCanarySteps.findIndex((step) => step.id === "direct");
   const directCanaryTimerIndex = directCanarySteps.findIndex(
@@ -114,6 +143,8 @@ export function validateWorkflowDocuments(workflows) {
     /--json-schema '(.+)'/s,
   )?.[1];
   const directCanaryEnvKeys = Object.keys(directCanaryEnv).sort();
+  const reviewConfigEnv = reviewConfig?.env ?? {};
+  const reviewMetricsEnv = reviewMetrics?.env ?? {};
   if (
     directCanaryInstall?.run !==
       "npm install --global @anthropic-ai/claude-code@2.1.220" ||
@@ -139,7 +170,20 @@ export function validateWorkflowDocuments(workflows) {
     directCanaryEnv.CLAUDE_REVIEW_PROMPT !== reviewAction?.with?.prompt ||
     directCanaryEnv.CLAUDE_REVIEW_SCHEMA !== reviewSchema ||
     directCanaryEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+    directCanaryEnv.EXPECTED_HEAD_SHA !==
+      "${{ github.event.workflow_run.head_sha }}" ||
     directCanaryEnv.GH_TOKEN !== "${{ github.token }}" ||
+    reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+    Object.keys(reviewConfigEnv).sort().join("\0") !==
+      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+        .sort()
+        .join("\0") ||
+    reviewConfigEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+    reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+    reviewTimerIndex < 0 ||
+    reviewTimerIndex >= reviewConfigIndex ||
+    reviewConfigIndex >= reviewActionIndex ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_DIRECT_CLI_CANARY != 'true' && vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
@@ -152,6 +196,24 @@ export function validateWorkflowDocuments(workflows) {
     reviewMetrics?.if !== "always()" ||
     reviewMetrics?.["continue-on-error"] !== true ||
     reviewMetrics?.run !== "node .github/scripts/summarize-claude-review.mjs" ||
+    Object.keys(reviewMetricsEnv).sort().join("\0") !==
+      [
+        "CLAUDE_METRICS_FORMAT",
+        "CLAUDE_METRICS_RESULT_FILE",
+        "CLAUDE_METRICS_STARTED_MS",
+        "CLAUDE_METRICS_STATUS",
+        "EXPECTED_HEAD_SHA",
+      ]
+        .sort()
+        .join("\0") ||
+    reviewMetricsEnv.CLAUDE_METRICS_FORMAT !== "action" ||
+    reviewMetricsEnv.CLAUDE_METRICS_RESULT_FILE !==
+      "${{ steps.claude.outputs.execution_file }}" ||
+    reviewMetricsEnv.CLAUDE_METRICS_STARTED_MS !==
+      "${{ env.CLAUDE_ACTION_STARTED_MS }}" ||
+    reviewMetricsEnv.CLAUDE_METRICS_STATUS !== "${{ steps.claude.outcome }}" ||
+    reviewMetricsEnv.EXPECTED_HEAD_SHA !==
+      "${{ github.event.workflow_run.head_sha }}" ||
     directCanaryTimer?.run !==
       'echo "CLAUDE_DIRECT_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"' ||
     directCanaryTimerIndex < 0 ||
@@ -272,7 +334,18 @@ async function main() {
       ]),
     ),
   );
-  const errors = validateWorkflowDocuments(workflows);
+  const scripts = Object.fromEntries(
+    await Promise.all(
+      Object.keys(TRUSTED_SCRIPT_SHA256).map(async (name) => [
+        name,
+        await fs.readFile(path.resolve(name), "utf8"),
+      ]),
+    ),
+  );
+  const errors = [
+    ...validateWorkflowDocuments(workflows),
+    ...validateTrustedScriptDocuments(scripts),
+  ];
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(`Workflow policy: ${names.length} files valid`);
 }

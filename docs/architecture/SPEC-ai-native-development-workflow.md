@@ -247,8 +247,8 @@ Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR �
   `CLAUDE_DIRECT_CLI_CANARY` 临时启用直接 Claude CLI canary。canary 必须与正式 Review 使用
   相同的 PR head、Prompt、Schema、模型、思考等级、Base URL、轮数和超时，只能读取 PR，不能
   发布结果或获得 GitHub 写权限；它不是 required check，失败不阻塞合并，默认关闭。日志只记录
-  总耗时、模型耗时、轮数、退出状态和结构化输出有效性，不输出模型正文；canary 启用期间强制
-  关闭 `CLAUDE_REVIEW_VERBOSE` 的完整输出，完成 A/B 后删除 canary。
+  总耗时、模型耗时、轮数、退出状态、固定错误类别和结构化输出有效性，不输出模型正文或原始
+  stderr；canary 启用期间强制关闭 `CLAUDE_REVIEW_VERBOSE` 的完整输出，完成 A/B 后删除 canary。
 - 模型执行轮数通过仓库变量 `CLAUDE_REVIEW_MAX_TURNS` 配置，默认值为 `30`；模型 job 的
   超时时间通过仓库变量 `CLAUDE_REVIEW_TIMEOUT_MINUTES` 配置，默认值为 `30`。两个变量均须
   配置为正整数，且仅作用于调用 Claude 的模型 job。
