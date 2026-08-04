@@ -190,8 +190,12 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
 - Patch 不超过 400 KiB，不包含二进制内容、路径穿越、符号链接、gitlink/submodule、可执行位
   或其他文件模式变更。
 - Patch 不修改 `.github/`、`.codex/`、`.claude/`、`.agents/skills/`、任意层级的 `AGENTS.md`
-  或 `CLAUDE.md`、`.mcp.json`、`.gitattributes`、`.markdownlint-cli2.jsonc`、
-  `.markdown-link-check.json` 或本文；这些信任边界只能由人创建的 PR 修改。
+  或 `CLAUDE.md`、`.mcp.json`、`.gitattributes`、`.markdownlint-cli2.jsonc` 和
+  `.markdown-link-check.json`。
+- Patch 不修改任意层级的 `.npmrc` 或 `package.json`，也不修改 `pnpm-workspace.yaml`、
+  `pnpm-lock.yaml`、`package-lock.json` 或 `npm-shrinkwrap.json` 等决定依赖与 CI 工具解析的文件。
+- Patch 不修改 `docs/prd/` 或 `docs/architecture/` 中的权威产品与架构文档。
+- 上述信任边界只能由人创建的 PR 修改。
 - Patch 能在干净工作区完整应用，结果 JSON 字段、长度和枚举值符合 Schema。
 
 发布 job 不执行 Patch 引入的代码、脚本或测试。Patch 应用后只调用固定的 Git 和 PR 操作；
