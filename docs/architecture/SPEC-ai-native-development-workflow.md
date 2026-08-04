@@ -141,9 +141,9 @@ Codex 只领取同时满足以下条件的 Issue：
 移除 `ready-for-agent` 会取消当前运行，但保留 branch 和 PR。`publish` 在每次远端写入前重新
 校验 Issue 状态；重新添加后，仅在没有 PR 或现有 PR 仍为 Draft 时恢复执行，已进入 Ready for
 review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关闭或添加 `wontfix` 后，自动
-关闭该 Issue 的所有未合并 Worker PR。PR 未合并而被关闭，或发布校验失败时，Worker 保留
-`ready-for-agent`、添加 `needs-triage`，并用固定格式评论说明可公开的失败原因；移除
-`needs-triage` 后才能重新执行。
+关闭该 Issue 的所有未合并 Worker PR，且不再添加 `needs-triage` 或失败评论。除此情形外，PR
+未合并而被关闭，或发布校验失败时，Worker 保留 `ready-for-agent`、添加 `needs-triage`，并用
+固定格式评论说明可公开的失败原因；移除 `needs-triage` 后才能重新执行。
 
 ### 6.2 执行环境与权限
 
@@ -186,9 +186,9 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
   合并冲突和兼容性由新 PR 上的现有门禁处理。
 - Patch 不超过 400 KiB，不包含二进制内容、路径穿越、符号链接、gitlink/submodule、可执行位
   或其他文件模式变更。
-- Patch 不修改 `.github/`、`.codex/`、`.agents/skills/`、任意层级的 `AGENTS.md`、`.gitattributes`、
-  `.markdownlint-cli2.jsonc`、`.markdown-link-check.json` 或本文；这些信任边界只能由人创建的
-  PR 修改。
+- Patch 不修改 `.github/`、`.codex/`、`.claude/`、`.agents/skills/`、任意层级的 `AGENTS.md`
+  或 `CLAUDE.md`、`.mcp.json`、`.gitattributes`、`.markdownlint-cli2.jsonc`、
+  `.markdown-link-check.json` 或本文；这些信任边界只能由人创建的 PR 修改。
 - Patch 能在干净工作区完整应用，结果 JSON 字段、长度和枚举值符合 Schema。
 
 发布 job 不执行 Patch 引入的代码、脚本或测试。Patch 应用后只调用固定的 Git 和 PR 操作；
