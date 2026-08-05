@@ -14,7 +14,7 @@
 		"build": "turbo run build",
 		"check": "biome check .",
 		"check-types": "turbo run check-types",
-		"test": "node --test .github/scripts/*.test.mjs && turbo run test",
+		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test",
 		"smoke": "node tests/smoke.mjs",
 		"format": "biome check --write .",
 		"dev:web": "turbo run dev -F @agent-infra/web",
