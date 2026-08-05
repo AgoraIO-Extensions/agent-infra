@@ -36,5 +36,5 @@ jobs:
 
       - name: Enable native Squash auto-merge
         env:
-          GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: node .github/scripts/auto-merge.mjs

@@ -142,7 +142,7 @@ test("keeps the publisher PAT out of the model job", async () => {
   );
 });
 
-test("allows the repository PAT only in fixed GitHub write steps", async () => {
+test("allows the publisher PAT only in the fixed publication step", async () => {
   const workflows = await actualWorkflows();
   const step = workflows["codex-worker.yml"].jobs.publish.steps.find(
     (candidate) => candidate.name === "Handle rejected publication",
@@ -150,7 +150,7 @@ test("allows the repository PAT only in fixed GitHub write steps", async () => {
   step.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("approved GitHub write step"),
+      error.includes("fixed Worker publication step"),
     ),
   );
 });
@@ -418,9 +418,22 @@ test("defines the minimal native auto-merge enrollment workflow", async () => {
   const enrollment = workflow.jobs.enroll.steps.find(
     (step) => step.name === "Enable native Squash auto-merge",
   );
-  assert.equal(enrollment.env.GITHUB_TOKEN, "${{ secrets.CODEX_GITHUB_TOKEN }}");
+  assert.equal(enrollment.env.GITHUB_TOKEN, "${{ secrets.GH_TOKEN }}");
   assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
   assert.match(workflow.jobs.enroll.if, /repository\.default_branch/);
+});
+
+test("allows the organization token only in auto-merge enrollment", async () => {
+  const workflows = await actualWorkflows();
+  const setup = workflows["auto-merge.yml"].jobs.enroll.steps.find(
+    (step) => step.name === "Set up Node.js",
+  );
+  setup.env = { GH_TOKEN: "${{ secrets.GH_TOKEN }}" };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed Auto-merge Enrollment step"),
+    ),
+  );
 });
 
 test("rejects the default workflow token for auto-merge enrollment", async () => {
