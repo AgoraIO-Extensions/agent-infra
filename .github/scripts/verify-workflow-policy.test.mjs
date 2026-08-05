@@ -414,6 +414,7 @@ test("defines the minimal native auto-merge enrollment workflow", async () => {
   });
   assert.deepEqual(workflow.jobs.enroll.permissions, {
     contents: "write",
+    issues: "write",
     "pull-requests": "write",
   });
   assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
@@ -435,7 +436,7 @@ test("rejects PR-head execution in every pull-request-target workflow", async ()
 
 test("rejects expanded auto-merge permissions", async () => {
   const workflows = await actualWorkflows();
-  workflows["auto-merge.yml"].jobs.enroll.permissions.issues = "write";
+  workflows["auto-merge.yml"].jobs.enroll.permissions.checks = "write";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Auto-merge Enrollment permissions"),

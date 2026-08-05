@@ -322,7 +322,8 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 - 第三方 Actions 固定到完整 commit SHA，不使用浮动 tag。
 - `pull_request_target` 只用于默认分支中的元数据门禁，不 checkout 或执行 PR 内容。
 - Auto-merge enrollment 使用单独的 PR 级并发组，只获得启用原生 auto-merge 所需的
-  `contents: write` 和 `pull-requests: write`，不能调用直接合并或管理员绕过接口。
+  `contents: write`、`issues: write` 和 `pull-requests: write`，不能调用直接合并或管理员
+  绕过接口。
 - Codex Worker 的模型 job 与发布 job 使用不同 Runner；模型 job 不获得仓库写凭证，发布
   job 只接受经过校验的固定 Artifact，且不执行其中的代码。
 - Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
