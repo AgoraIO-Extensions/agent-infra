@@ -45,15 +45,26 @@ test("rejects stale, incomplete, extended, or malformed Review output", () => {
   );
 });
 
-test("rejects more findings than the Review schema permits", () => {
-  const findings = Array.from({ length: 11 }, (_, index) => ({
+test("accepts at most the number of findings permitted by the Review schema", () => {
+  const findings = Array.from({ length: 10 }, (_, index) => ({
     severity: "P2",
     title: `Finding ${index}`,
     body: "Impact",
     path: "a.ts",
     line: index + 1,
   }));
-  assert.throws(() => parseReviewOutput(validOutput({ findings }), head));
+  assert.doesNotThrow(() => parseReviewOutput(validOutput({ findings }), head));
+  assert.throws(() =>
+    parseReviewOutput(
+      validOutput({
+        findings: [
+          ...findings,
+          { severity: "P2", title: "Extra", body: "Impact", path: "a.ts", line: 11 },
+        ],
+      }),
+      head,
+    ),
+  );
 });
 
 test("collects only added RIGHT-side lines from a unified patch", () => {

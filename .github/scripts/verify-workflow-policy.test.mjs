@@ -51,6 +51,31 @@ test("rejects PR Review model configuration that bypasses validated Secrets", as
   );
 });
 
+test("locks Claude PR Review to bounded read-only tools", async () => {
+  const mutations = [
+    (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
+    (args) => `${args}\n--allowedTools "Bash"`,
+    (args) => args.replace(
+      '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+      "",
+    ),
+  ];
+
+  for (const mutate of mutations) {
+    const workflows = await actualWorkflows();
+    const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+      (step) => step.id === "claude",
+    );
+    action.with.claude_args = mutate(action.with.claude_args);
+
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("Claude PR Review model must use bounded read-only tools"),
+      ),
+    );
+  }
+});
+
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
