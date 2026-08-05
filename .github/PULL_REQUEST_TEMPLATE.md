@@ -24,3 +24,5 @@ Closes #
 
 - 已知风险：
 - 回退方式：
+
+<!-- Temporary Claude Review v1.0.185 post-merge smoke; do not merge. -->
