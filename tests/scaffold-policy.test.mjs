@@ -99,4 +99,11 @@ test("Compose runs every deployment image with a read-only root filesystem", asy
 		compose.services.web.tmpfs.some((mount) => mount.startsWith("/tmp:")),
 		"web must declare an explicit writable tmpfs for nginx runtime files",
 	);
+	assert.deepEqual(compose.services.web.healthcheck.test, [
+		"CMD",
+		"wget",
+		"-q",
+		"--spider",
+		"http://127.0.0.1:8080/",
+	]);
 });
