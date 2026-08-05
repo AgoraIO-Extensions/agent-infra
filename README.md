@@ -1,5 +1,7 @@
 # agent-infra
 
+[![Docs CI](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml/badge.svg?branch=main&event=push)](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml?query=branch%3Amain+event%3Apush)
+
 企业级 Agent 平台 M1 的产品与工程设计文档。
 
 ## 文档
