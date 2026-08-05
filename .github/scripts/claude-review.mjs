@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 
 const SUMMARY_MARKER = "<!-- agent-infra-claude-review-summary -->";
 const FINDING_KEYS = ["body", "line", "path", "severity", "title"];
+const MAX_FINDINGS = 10;
 const OUTPUT_KEYS = ["completed", "findings", "head_sha", "summary"];
 
 function exactKeys(value, keys) {
@@ -31,7 +32,7 @@ export function parseReviewOutput(raw, expectedHead) {
   if (!boundedString(result.summary, 4_000) || !Array.isArray(result.findings)) {
     throw new Error("Claude Review summary or findings are invalid");
   }
-  if (result.findings.length > 100) {
+  if (result.findings.length > MAX_FINDINGS) {
     throw new Error("Claude Review returned too many findings");
   }
 

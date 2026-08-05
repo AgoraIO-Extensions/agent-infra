@@ -85,8 +85,9 @@ jobs:
             incorrect behavior, compatibility breakage, or invalid critical tests.
             P2 is a smaller concrete defect. Every finding must identify an added
             RIGHT-side diff line. If the PR introduces no concrete defect, return
-            an empty findings array. Return at most 10 findings and only the
-            required JSON object.
+            an empty findings array. Return at most 10 findings, prioritizing P0,
+            then P1, then P2 when more candidates exist. Return only the required
+            JSON object.
           claude_args: |
             --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
