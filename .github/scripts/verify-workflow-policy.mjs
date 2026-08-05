@@ -149,6 +149,12 @@ export function validateWorkflowDocuments(workflows) {
 
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
+    if (JSON.stringify(workflow).includes("vars.ANTHROPIC_BASE_URL")) {
+      errors.push(`${name}: ANTHROPIC_BASE_URL must use Actions Secrets`);
+    }
+    if (JSON.stringify(workflow).includes("vars.CLAUDE_REVIEW_MODEL")) {
+      errors.push(`${name}: CLAUDE_REVIEW_MODEL must use Actions Secrets`);
+    }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       for (const secret of referencedSecrets(job.env)) {
         errors.push(`${name}/${jobName}: ${secret} is not allowed in job environment`);
