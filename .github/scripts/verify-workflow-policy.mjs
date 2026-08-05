@@ -400,6 +400,17 @@ export function validateWorkflowDocuments(workflows) {
   if (JSON.stringify(review?.jobs?.publish ?? {}).includes("secrets.")) {
     errors.push("Claude Review publisher must not receive a model Secret");
   }
+  const reviewPrompt = reviewAction?.with?.prompt ?? "";
+  const reviewPromptRequirements = [
+    "Before returning each finding, verify that it:",
+    "is introduced by this PR on an added RIGHT-side diff line;",
+    "does not depend on an unverified assumption.",
+    "Do not report pre-existing issues, style or nitpicks, issues fully",
+    "Discard every candidate that fails any check.",
+  ];
+  if (reviewPromptRequirements.some((requirement) => !reviewPrompt.includes(requirement))) {
+    errors.push("Claude PR Review must validate and filter candidate findings");
+  }
   const reviewArgs = reviewAction?.with?.claude_args ?? "";
   const allowedToolFlags = reviewArgs.match(/--allowedTools\s+"[^"]*"/g) ?? [];
   const allowedToolOptions =

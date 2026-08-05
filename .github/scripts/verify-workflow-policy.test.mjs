@@ -80,6 +80,23 @@ test("locks Claude PR Review to bounded read-only tools", async () => {
   }
 });
 
+test("requires Claude PR Review to validate and filter candidate findings", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  action.with.prompt = action.with.prompt.replace(
+    "Discard every candidate that fails any check.",
+    "Report every candidate.",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review must validate and filter candidate findings"),
+    ),
+  );
+});
+
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
