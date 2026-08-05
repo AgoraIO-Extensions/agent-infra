@@ -402,6 +402,7 @@ export function validateWorkflowDocuments(workflows) {
     JSON.stringify(enrollmentPermissions) !==
     JSON.stringify([
       ["contents", "write"],
+      ["issues", "write"],
       ["pull-requests", "write"],
     ])
   ) {
