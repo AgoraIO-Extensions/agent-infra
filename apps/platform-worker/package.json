@@ -2,7 +2,10 @@
 	"name": "@agent-infra/platform-worker",
 	"private": true,
 	"type": "module",
-	"main": "src/index.ts",
+	"main": "dist/index.mjs",
+	"files": [
+		"dist"
+	],
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",

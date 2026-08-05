@@ -52,6 +52,38 @@ test("deployment images select an explicit non-root runtime user", async () => {
 	}
 });
 
+test("Node runtime images contain only production deployment artifacts", async () => {
+	for (const service of ["platform-api", "platform-worker", "connection-api"]) {
+		const path = dockerfiles.get(service);
+		const dockerfile = await readFile(path, "utf8");
+		const manifest = JSON.parse(
+			await readFile(`apps/${service}/package.json`, "utf8"),
+		);
+		const runtimeStage = dockerfile.slice(
+			dockerfile.lastIndexOf("\nFROM ") + 1,
+		);
+
+		assert.equal(manifest.main, "dist/index.mjs");
+		assert.deepEqual(manifest.files, ["dist"]);
+		assert.match(
+			dockerfile,
+			new RegExp(
+				`pnpm --filter @agent-infra/${service} deploy --prod --legacy /prod/${service}`,
+			),
+			`${service} must prepare a production-only deployment`,
+		);
+		assert.match(
+			runtimeStage,
+			new RegExp(
+				`^COPY --from=builder --chown=node:node /prod/${service}/ \\./$`,
+				"m",
+			),
+			`${service} must copy only its deployment into the runtime stage`,
+		);
+		assert.doesNotMatch(runtimeStage, /^COPY \. \.$/m);
+	}
+});
+
 test("Compose runs every deployment image with a read-only root filesystem", async () => {
 	const compose = parse(await readFile("docker-compose.yml", "utf8"));
 
