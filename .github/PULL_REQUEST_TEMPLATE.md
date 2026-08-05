@@ -6,9 +6,13 @@ Closes #
 
 -
 
-## 验收标准
+## Acceptance evidence
 
-- [ ]
+<!-- 每个来源 Issue 的 AC-N 恰好一行；Status 只使用 pass 或 not_applicable。 -->
+
+| AC | Status | Evidence |
+| --- | --- | --- |
+| AC-1 | pass | 填写测试、文件、Check 或真实环境结果。 |
 
 ## 自动验证
 

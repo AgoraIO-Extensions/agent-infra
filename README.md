@@ -15,4 +15,9 @@
 
 仓库当前处于 M1 设计评审阶段，尚未提交工程脚手架或业务代码。
 
+## 开发工作流
+
+开发流转、角色权限、Worker 授权、门禁、失败恢复和通知规则见
+[AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)。
+
 开始工作前请阅读 [AGENTS.md](AGENTS.md)。

@@ -2,21 +2,26 @@
 
 ## 1. 文档目的
 
-本文定义 agent-infra 的开发流转、AI Agent 分工、人工检查点和自动化边界。它适用于产品、
-架构、代码、测试、迁移和 CI 变更，不改变 Agent 平台 M1 的产品范围或运行时架构。
+本文定义 agent-infra 的开发流转、AI Agent 分工、人工检查点、信任边界和自动化恢复规则。
+它适用于产品、架构、代码、测试、迁移和 CI 变更，不改变 Agent 平台 M1 的产品范围或运行时
+架构。
 
-本文同时描述目标流程和分阶段实施顺序。只有已经合并到默认分支并完成验证的自动化能力，
-才视为仓库当前能力。
+本文同时定义目标契约和分阶段实施顺序。只有已经合并到默认分支、完成仓库验证并通过真实
+GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或后续 Stage 的条款不能被描述为
+已经上线。
 
 ## 2. 基本原则
 
-- 所有开发工作从 GitHub Issue 开始，并通过一个主要 Issue、一个实现 PR 完成追踪。
-- AI 负责需求梳理、实现、自检和独立评审；人负责确认需求、必要的真实测试和最终批准。
-- GitHub Issue、PR、Check、Review 和分支保护是流程状态的权威来源。
+- 所有开发工作从 GitHub Issue 开始，并通过一个 primary Issue、一个实现 PR 完成追踪。
+- AI 负责需求梳理、实现、自检和独立评审；人负责确认授权、必要的真实测试和最终批准。
+- GitHub Issue、PR、Check Run、Review、事件时间线和分支保护是流程状态的权威来源。
 - 确定性检查优先于模型判断。AI 不能覆盖 CI、人工批准或分支保护结果。
-- 自动化失败必须停止或转人工处理，不能无限重试。
-- 所有人和 AI 创建的 PR 使用相同的合并门禁。
-- 当前不建设独立的 Loop Engine、Graph Engine 或通用开发调度平台。
+- 所有门禁、确认和 waiver 都绑定明确的 Issue cycle 或 PR head SHA，不能跨版本复用。
+- 自动化失败必须有限重试、明确终止或转人工处理，不能静默成功或形成无上界循环。
+- 所有人和 AI 创建的 PR 使用相同的合并门禁；Worker 专属检查可以对人工 PR 返回明确的
+  `not_applicable`，不能降低通用门禁。
+- 仓库只建设本仓库所需的有界 Issue 依赖图、状态决策函数和幂等 Reconciler，不建设通用
+  Loop Engine、Graph Engine 或开发调度平台。
 
 ## 3. 权威依据
 
@@ -26,360 +31,389 @@
    [Connection M1 PRD](../prd/PRD-connection-M1.md) 为准。
 2. 运行架构和模块边界以
    [M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) 为准。
-3. 开发流转和自动化边界以本文为准。
+3. 开发流转、Agent 权限和自动化边界以本文为准。
 4. 已确认的 Issue、ADR 和接口契约只能细化上级文档，不能隐式修改上级结论。
-5. `AGENTS.md` 和 Skills 提供执行方法，不是产品或架构事实源。
+5. `AGENTS.md` 和 Skills 提供执行方法，不是产品、架构或工作流状态事实源。
 
-发现冲突或验收标准无法确定时，AI 停止实现并在 Issue 中说明需要确认的内容。
+发现冲突、缺少稳定 AC ID 或无法确定验收结果时，Agent 停止实现并将 Issue 转入
+`needs-triage`，不能自行选择有利于继续执行的解释。
 
-## 4. 参与方与职责
+## 4. 参与方与权限
 
-### 4.1 人
+### 4.1 身份与职责矩阵
 
-- 创建或确认 Issue 的目标、范围和验收标准。
-- 在本地 Codex 梳理完成后，决定 Issue 是否进入自动实现。
-- 评审设计、代码和 AI findings。
-- 执行不能由自动化测试充分覆盖的真实环境验证。
-- 提交至少一个符合分支保护要求的 Approve。
+| 参与方 | 可信身份 | 可以执行 | 禁止执行 |
+| --- | --- | --- | --- |
+| Repository human | GitHub User 及仓库权限 | 创建/编辑/关闭/重开 Issue、选择本地实现、提交 PR、移除标签以暂停执行 | 非 Team 成员不能创建/恢复 Worker 授权、确认验证或 waiver |
+| CODEOWNERS Team 成员 | Organization Team 中的非 Bot 人员 | 确认 Issue、创建/暂停/恢复/终止 cycle、关闭/重开 triage、Approve、确认人工验证、创建受限 waiver | 以 Bot 身份替代人工确认、复用已消费 cycle 或旧 head 确认 |
+| 本地 Codex | 当前操作者的 GitHub 身份 | 需求 grilling、本地 `implement`、提交人工 PR、协助操作者执行授权动作 | 独立获得人工权限、把本地辅助描述为无人值守授权、绕过 Review |
+| authorization recorder | 受策略限制的 GitHub Actions App | 校验 labeled event/Team/hash，记录授权、暂停、恢复、消费和失效 | 生成原始人工意图、替人授权、修改 execution content |
+| Codex implement job | 只读 GitHub Token 和隔离工作区 | 读取授权范围、生成受限文本 Patch、AC evidence 和 blocker proposal | 获得发布凭证、调用任意 GitHub 写 API、Approve、Merge、创建授权 |
+| trusted Publisher | 受策略限制的 GitHub 写身份 | 校验 Artifact、维护 Worker branch/PR、添加 `ready-for-human`、创建未授权 blocker、写审计记录 | 扩大模型输出权限、创建 `ready-for-agent`、移除 `ready-for-human`、Approve、waive、直接 Merge |
+| Claude | 只读模型步骤及隔离 Publisher | Review Issue/PR、发布 findings、建议人工验证 | 修改代码或标签、创建授权、Approve、Merge、waive、解决自己的阻塞线程 |
+| Reconciler | 受策略限制的 GitHub Actions App | 重算派生状态、补偿漏事件、唤醒有效 frontier、写幂等 triage 记录 | 创建或续期授权、确认人工验证、改变产品范围、直接 Merge |
+| Check publisher | 预期 GitHub Actions App | 为精确 head 创建/完成门禁 Check Run，记录派生状态 | 提交 human Approve、把旧 head 结果复制到新 head、修改 branch protection |
+| Auto-merge enrollment | 专用组织身份 | 为合格的同仓库非 Draft PR 启用 GitHub 原生 Squash Auto-merge | 自定义 Merge、管理员绕过、重复实现门禁判断 |
+| GitHub 分支保护 | GitHub 托管控制面 | 强制 required checks、CODEOWNER Approve 和 conversation resolution | 接受不绑定当前 head 的外部成功状态 |
 
-### 4.2 本地 Codex
+### 4.2 配置前置
 
-- 使用项目 Skills 对 Issue 进行 triage、追问、形成 Agent Brief、Spec 和 tickets。
-- 在人确认后，使用当前操作者的 GitHub 身份为 Issue 添加 `ready-for-agent`。
-- 不在无人监督的 GitHub Actions 中执行需求 grilling。
+以下是目标流程的配置前置，不代表当前仓库已经具备：
 
-### 4.3 GitHub Actions 中的 Codex
+- Organization Team `@AgoraIO-Extensions/agent-infra-owners` 至少包含两名成员，仓库
+  `CODEOWNERS` 指向该 Team。Approve、Worker 授权、人工验证和 waiver 都使用实时 Team
+  membership，不维护个人 allowlist。
+- `main` 分支保护把 required Check Run 绑定到预期 GitHub Actions App，不接受同名但来源不明
+  的 legacy status。
+- 开发流程企微机器人使用轮换后的 GitHub Actions Secret `WECOM_BOT_WEBHOOK_URL`。该通知
+  通道与产品 PRD 中的企微 Channel 无关。
 
-- 领取符合条件的 `ready-for-agent` Issue。
-- 在隔离工作区完成实现和自检，向可信发布 job 提供固定 Patch Artifact，不直接写入远端
-  branch 或 PR。
-- 按授权触发修复，不批准或绕过自己的 PR。
-- 通过结构化输出向可信发布 job 提供变更摘要和验证结果。
+Team 查询、Check Run 发布或配置读取失败时一律 fail closed。网络 allowlist 和模型配置版本
+追踪不属于当前目标流程。
 
-### 4.4 Claude
-
-- 自动给新 Issue 提供需求完整性建议。
-- 在确定性 CI 通过后独立 Review PR。
-- 可以报告问题和建议人工验证，不能 Approve、Merge、修改代码或直接改变流程标签。
-
-### 4.5 确定性系统
-
-- CI 执行格式、静态检查、测试、构建和工作流策略检查。
-- Issue Gate 校验 PR 与来源 Issue 的关系和状态。
-- Human Validation Gate 校验是否仍有待完成的人工验证。
-- GitHub 分支保护校验 Approve、required checks 和评论解决状态。
-
-## 5. Issue 流程
+## 5. Issue 契约与授权周期
 
 ### 5.1 Issue 创建与 Claude Review
 
-- 仓库成员创建 Issue 后，Claude 自动进行一次只读 Review 并评论建议。
-- 外部用户创建的 Issue 不自动调用模型；仓库成员添加 `claude` 标签后才触发 Review。
-- Issue 中的 `@claude` 可以请求补充分析。
-- Claude Issue Review 只提供建议，不改变 Issue 状态，也不是进入实现的门禁。
-- Issue 事件先由默认分支中的可信步骤判断成员身份或 `claude` 标签授权；只有授权通过的
-  模型步骤才能读取 Claude Secret。外部 Issue 内容不能参与授权判断或组成可执行命令。
-- 新建 Issue 事件未提供可信成员关系时，可信步骤通过 GitHub API 回读作者对仓库的权限。
-  只有 `triage`、`write`、`maintain` 或 `admin` 权限可以触发自动 Review；公开仓库默认的
-  `read` 权限不属于可信成员。查询失败时不执行模型步骤。查询使用的 GitHub Token 只进入
-  可信步骤，且请求目标和授权判断不受 Issue 内容控制。
+- Implementation Issue 必须包含唯一的 `Problem`、`Scope`、`Acceptance criteria`、`Validation`
+  和 `Blocked by` 二级标题。
+- 每条验收标准使用稳定且唯一的 `AC-N`；编辑顺序时不能复用旧 ID 表达不同要求。
+- 仓库成员创建 Issue 后，Claude 自动进行只读 advisory Review。外部用户创建的 Issue 只有在
+  成员添加 `claude` 标签后才调用模型；Issue 中的 `@claude` 可以请求补充分析。
+- Claude Issue Review 不修改文件、标签、授权、Issue 状态、branch 或 PR。模型成功结束但未
+  发布最终评论时不能被记录为“Review 已完成”。
+- 事件先由默认分支的可信步骤回读 actor association 或仓库权限。只有 `triage`、`write`、
+  `maintain` 或 `admin` 权限可以触发成员 Review；查询失败时不执行模型步骤。
 
-### 5.2 本地需求梳理
-
-需求梳理由成员在本地 Codex 中完成。优先复用
-[mattpocock/skills](https://github.com/mattpocock/skills/tree/2ab958093e83e0ec752e6c1c5932da465bf23e0c)
-commit `2ab958093e83e0ec752e6c1c5932da465bf23e0c` 中适用的 `triage`、`grilling`、
-Agent Brief、`to-spec` 和 `to-tickets` 能力，不重复建设同类流程。
-
-进入实现前，Issue 至少要明确：
-
-- 要解决的问题和不在范围内的内容。
-- 可观察的验收标准。
-- 已知依赖和阻塞关系。
-- 预期验证方式。
-
-### 5.3 实现标签
+### 5.2 实现标签
 
 | 标签 | 用于 Issue 时的含义 |
 | --- | --- |
-| `ready-for-agent` | 需求已由人确认，可以由 Codex 自动实现 |
-| `ready-for-human` | 该 Issue 由人实现，不进入 Codex 自动领取流程 |
-| `needs-triage` | 需要重新梳理需求或处理状态 |
-| `wontfix` | 不再实施，并终止对应的自动执行 |
-| `claude` | 由成员授权 Claude 分析外部用户创建的 Issue |
+| `ready-for-agent` | CODEOWNERS Team 成员确认当前 execution content，可以进入 Worker cycle |
+| `ready-for-human` | 该 Issue 由人或本地受监督 Codex 实现，不进入 Worker 自动领取流程 |
+| `needs-triage` | 契约、授权、依赖或执行状态需要人处理 |
+| `wontfix` | 不再实施，并终止对应自动执行 |
+| `claude` | 成员授权 Claude 分析外部用户创建的 Issue |
 
-`ready-for-agent` 只能由人或由人监督的本地 Codex 添加。无人值守的 GitHub Actions 不能
-自行添加该标签。
+`ready-for-agent` 标签只是授权入口，不是可复用的永久权限。只有 CODEOWNERS Team 中的非 Bot
+人员可以创建有效授权；Codex implement job、trusted Publisher、Claude、Reconciler 和其他 Bot
+不能创建、续期或代理该授权。由人监督的本地 Codex 可以使用当前操作者身份执行标签操作，
+授权责任仍归属于该人。
 
-### 5.4 可执行 Issue
+### 5.3 Canonical execution-content hash
 
-Codex 只领取同时满足以下条件的 Issue：
+Worker 授权绑定 `execution-content-v1` SHA-256。可信步骤从 GitHub API 回读 Issue 当前标题和正文，
+构造以下固定 JSON 字段：
 
-- Issue 处于打开状态并带有 `ready-for-agent`。
-- 不带 `ready-for-human`、`needs-triage` 或 `wontfix`。
-- 必须存在 `## Blocked by`；其中只包含 `- #<issue-number>` 格式的依赖且均已关闭，或只写
-  `None` 表示没有 blocker。章节缺失或使用其他格式时视为需要重新梳理。
-- 当前没有该 Issue 的其他活动执行，也没有已进入 Ready for review 的未合并 Worker PR；固定
-  branch 和现有 Draft PR 只能属于同一个 Issue 并可被复用。
+1. `version`：固定值 `execution-content-v1`。
+2. `title`。
+3. `problem`：唯一 `## Problem` 的内容。
+4. `scope`：唯一 `## Scope` 的内容。
+5. `acceptance_criteria`：唯一 `## Acceptance criteria` 的内容。
+6. `validation`：唯一 `## Validation` 的内容。
 
-满足这些条件的 Issue 称为 frontier Issue。多个互不阻塞的 frontier Issue 可以并行执行。
+规范化只执行 Unicode NFC、CRLF 到 LF、删除行尾空白、删除各字段首尾空行，以及把 AC checkbox
+的 `[x]`、`[X]` 归一为 `[ ]`。不折叠内部空行、不改写 Markdown 内容或 AC ID。
 
-## 6. Codex 实现流程
+Preimage 是字段按上述顺序、使用 RFC 8259 escaping、无额外空白序列化的 JSON UTF-8 bytes；
+不包含 BOM 或末尾换行。最终 hash 是这些 bytes 的 SHA-256 小写十六进制表示。Recorder、Worker、
+Gate 和 Reconciler 必须复用同一实现和固定 fixture，不能各自重新解释 canonicalization。
 
-### 6.1 执行方式
+`## Blocked by`、标签、评论、assignee 和 checkbox 完成状态不进入 hash。`Blocked by` 是由独立
+DAG 规则保护的执行元数据，不能扩大 Problem、Scope、AC 或 Validation；checkbox 只表达进度，
+不能改变已授权要求。缺失或重复受保护标题、重复 AC ID 或非法 AC 格式时不能计算有效 hash，
+Issue 进入 `needs-triage`。
 
-- 使用官方 [`openai/codex-action`](https://github.com/openai/codex-action)。
-- 直接调用项目级 `implement` Skill，不额外包装一套重复的实现方法。
-- Codex Worker 使用一个 workflow，内部包含相互隔离的 `implement` 和 `publish` job。
-- 每个 Issue 使用 `codex/issue-<number>` 固定 branch、一个并发组和最多一个未合并 PR。
-- 首次执行以当时的默认分支 head 为起始 commit；已有固定 branch 时以该 branch head 为起始
-  commit。发布只允许在该起始 commit 上增加普通 commit 并 fast-forward，不使用 force push。
-- `implement` job checkout 记录的起始 commit；恢复执行时，该 commit 即发布前校验通过的固定
-  branch head。无论起始 commit 来自默认分支还是固定 branch，checkout 都不保留凭证，工作区
-  内容都按不可信代码处理。
-- `implement` job 在只读 GitHub 权限下完成实现、自检和结果导出，不提交远端变更。
-- `publish` job 在新的 Runner 上校验实现结果，创建或复用 Draft PR，并在发布完成后标记为
-  Ready for review。
+### 5.4 授权记录与 cycle
 
-移除 `ready-for-agent` 会取消当前运行，但保留 branch 和 PR。`publish` 在每次远端写入前重新
-校验 Issue 状态；重新添加后，仅在没有 PR 或现有 PR 仍为 Draft 时恢复执行，已进入 Ready for
-review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关闭或添加 `wontfix` 后，自动
-关闭该 Issue 的所有未合并 Worker PR，且不再添加 `needs-triage` 或失败评论。除此情形外，PR
-未合并而被关闭，或发布校验失败时，Worker 保留 `ready-for-agent`、添加 `needs-triage`，并用
-固定格式评论说明可公开的失败原因；移除 `needs-triage` 后才能重新执行。
+- 有效 `ready-for-agent` labeled timeline event 是人工授权事实。可信 recorder 校验 actor 的实时
+  Team membership，并发布由 GitHub Actions App 创建的审计记录；记录至少包含 Issue、actor、
+  timeline event、cycle、execution-content hash 和时间。Recorder 记录授权，不创造授权。
+- 每个新的有效授权周期获得单调 `cycle`。Worker branch 使用
+  `codex/issue-<number>-cycle-<cycle>`，每个 cycle 最多一个未合并 PR。
+- 移除 `ready-for-agent` 会暂停未消费且 hash 未变化的 cycle，保留 branch 和 Draft PR。原授权
+  人或其他 Team 成员重新添加标签时，可以显式恢复同一 cycle；execution content 已变化时旧
+  cycle 永久失效，必须创建新 cycle、branch 和 PR。
+- Issue 关闭或 Worker PR 合并会消费当前 cycle。已完成 Issue 重新打开后，即使遗留标签仍在，
+  也不能恢复旧授权、旧 branch 或旧 PR；必须由 Team 成员创建新的有效授权。
+- 对存量无审计记录的 `ready-for-agent` Issue fail closed，移除执行资格并进入 `needs-triage`，
+  不能自动补写历史授权。
 
-### 6.2 执行环境与权限
+### 5.5 Blocker DAG
 
-- 可信默认分支的 `.codex/config.toml` 定义名为 `github-worker` 的 permission profile。Worker
-  通过官方 Action 的 `codex-home` 和 `permission-profile` 输入选择它；该 profile 继承
-  `:workspace`，只允许写入 checkout workspace，允许完整公网访问，禁止本地和私有网络访问。
-- 官方 Codex Action 固定到完整 commit SHA，Codex CLI 固定到支持 permission profile 的明确
-  版本，且不得低于 `0.138.0`；同时使用 `safety-strategy: drop-sudo`。
-- `implement` job checkout 起始 commit 时必须设置 `persist-credentials: false`，job 权限仅为
-  `contents: read`，不得把 `GITHUB_TOKEN` 或其他仓库凭证写入 workspace、Git 配置或模型环境。
-- 模型只获得完成实现所需的代码工作区和工具，不获得用于发布 GitHub 变更的 PAT。
-- API Key、Responses endpoint、模型和 effort 使用 GitHub Actions Secrets 配置，并与
-  fine-grained GitHub PAT 分开保存。
-- `CODEX_API_KEY` 只传给 `implement` job 中的官方 Codex Action；该 Action 之后只允许固定
-  commit SHA 的 Artifact Action 上传固定路径，不运行 shell 命令，也不引入仓库写凭证。
-- `CODEX_GITHUB_TOKEN` 只传给 `publish` job 中固定的 Git push 和 PR 发布步骤，不进入 job
-  级环境、不写入 remote URL 或命令参数。使用该 PAT 是为了让自动创建的 PR 正常触发现有
-  GitHub Actions。
-- 组织级 `GH_TOKEN` 只传给 Auto-merge enrollment 中固定的原生 auto-merge 启用步骤，不进入
-  job 级环境、模型环境或其他 workflow 步骤。使用该 Token 是为了让自动合并正常触发 Issue
-  关闭和默认分支 workflow；由 `GITHUB_TOKEN` 执行的变更不会触发所需的后续 workflow。
-- workflow policy 按 Secret 名称和 job/Action 身份分别维护允许位置，并验证模型 job 不包含
-  `CODEX_GITHUB_TOKEN`、发布 job 不包含 `CODEX_API_KEY`，不能放宽为允许任意固定 SHA Action。
-- Issue 标题、正文等不可信内容只能经 `env` 或固定输入文件传递，不能插入 `run:` 或参与
-  endpoint、模型、permission profile、分支名和命令的生成。
-- Codex 模型 job 只有超时使用仓库变量 `CODEX_WORKER_TIMEOUT_MINUTES` 配置，默认 `60` 分钟。
-  endpoint、模型、effort 和超时在调用前按固定类型、枚举和格式校验，不能由 Issue 内容覆盖。
-- 当前不处理来自外部 fork 的 PR。
+`## Blocked by` 只接受 `None`，或一行一个唯一的 `- #<issue-number>`。依赖必须属于同一仓库，
+不能指向 PR、自身或形成直接/间接环。格式非法、查询失败、图超限或更新未原子收敛时 fail closed
+并进入 `needs-triage`。
 
-### 6.3 实现结果交接
+- Worker 只能在结构化结果中提出有界 blocker proposal。trusted Publisher 校验并创建完整的
+  Implementation Issue，再以确定性格式登记依赖边。
+- 新 blocker 不带 `ready-for-agent`、`ready-for-human` 或等价授权。由受信 Publisher 身份创建
+  的 blocker 必须显式触发正常 advisory Claude Issue Review，但 Review 不能授予执行权限。
+- blocker 打开或重新打开时，所有 reverse dependents 立即不再是 frontier；正在执行的 dependent
+  停止发布，已存在 branch/Draft PR 保留。
+- blocker 以 `state_reason=completed` 关闭时，事件处理器重新计算所有 reverse dependents；仍
+  具有有效 cycle 且成为 frontier 的 Issue 自动恢复。
+- blocker 以 `state_reason=not_planned` 关闭或带有 `wontfix` 时，不解除 dependent 的执行阻塞，
+  而是添加 `needs-triage` 并留下稳定原因。
+- 每 15 分钟运行的 Reconciler 与事件处理器复用同一状态决策函数。相同状态签名重复执行不能
+  重复创建 Issue、边、评论、标签变化、Worker run 或通知。
 
-`implement` job 输出固定名称的 Patch Artifact 和 Schema 校验后的结果 JSON。JSON 不超过
-256 KiB，各文本字段设置独立长度上限；结果至少包含：
+### 5.6 派生执行状态
 
-- Issue 编号、起始 commit SHA 和固定 branch。
-- 变更摘要与验收标准完成情况。
-- 已执行和未执行的检查。
-- 是否需要人工验证及验证内容。
+| 状态 | 判定 | 自动动作 |
+| --- | --- | --- |
+| Human implementation | `ready-for-human` | Worker 不领取，等待人工 PR |
+| Needs triage | `needs-triage`、契约非法、授权失效或依赖异常 | 停止模型和发布，通知责任人 |
+| Authorized blocked | 有效 cycle，但存在未完成 blocker | 保留授权和可恢复草稿，不调用模型 |
+| Frontier | 有效 cycle、无冲突标签、所有 blocker completed、无冲突执行 | 进入 Worker 队列 |
+| Executing | 当前 cycle 有唯一活动 Worker run | 受 Issue/cycle 并发和全局模型并发限制 |
+| Ready for review | 当前 cycle 有同仓库非 Draft PR | 不启动重复首次实现，只运行当前-head 门禁或 repair |
+| Completed | primary PR 合并，Issue 以 completed 关闭 | 消费 cycle，唤醒 dependents |
+| Not planned | Issue 以 not planned 关闭或带 `wontfix` | 终止 cycle，dependent 转 triage |
 
-`publish` job 在新的 Runner 上重新 checkout 起始版本，在获得 GitHub PAT 前完成以下校验：
+首次执行返回 `no-change` 时不创建空 commit/PR，也不关闭 Issue；系统记录稳定原因并进入
+`needs-triage`。已有 Draft PR 的 `no-change` 可以幂等复用该 PR，不生成额外 branch 或 PR。
 
-- Issue 仍满足 frontier 条件，目标 branch 和 PR 属于当前 Issue。已有 branch 的远端 head 必须
-  等于起始 commit；首次发布时固定 branch 必须尚不存在。模型运行期间默认分支可以前进，
-  合并冲突由 GitHub PR 检测；Stage 2 不自动验证 Worker PR 与最新默认分支的兼容性。
-- Patch 不超过 400 KiB，不包含二进制内容、路径穿越、符号链接、gitlink/submodule、可执行位
-  或其他文件模式变更。
+## 6. Codex Worker 执行
+
+### 6.1 执行方式与所有权
+
+- 使用固定完整 commit SHA 的官方 [`openai/codex-action`](https://github.com/openai/codex-action)
+  和仓库级 `implement` Skill。
+- Actions 使用官方 Action 的非交互执行契约，不依赖 `/goal`、可恢复 session ID 或 Goal DB。
+  当前固定 Action 内部使用 `codex exec`，但 workflow 只依赖经策略验证的 Action 输入，不依赖
+  可漂移的内部命令行实现。
+- `implement` 与 `publish` 在不同 Runner。模型 job 只有 `contents: read`，不保留 checkout
+  凭证，不获得 GitHub 写 Token；Publisher 只接受固定 Artifact，不执行 Patch 引入的代码。
+- 每个 Issue/cycle 使用唯一并发组、branch 和至多一个未合并 PR。全仓同时进入模型调用阶段的
+  Worker 不超过 `2`；Publisher 和纯确定性检查不占模型 slot。
+
+### 6.2 Model attempt 与 Patch checkpoint
+
+- 单个 Worker run 最多包含三次 model attempt，即首次 attempt 加最多两次恢复 attempt。
+- 后续 attempt 只从上一 attempt 生成且通过可信校验的文本 Patch checkpoint 和剩余 AC 状态
+  继续；每次使用干净 Runner 和固定 base checkout。
+- checkpoint 只包含有界文本 Patch、base SHA、Issue/cycle/attempt identity、AC 状态和错误分类。
+  禁止持久化完整 `CODEX_HOME`、transcript、Goal/session DB、凭证、Git credential 或完整工作区。
+- checkpoint 必须校验格式、大小、路径、base SHA、可应用性、受保护路径、binary、secret-like
+  内容和身份绑定。校验失败属于不可重试错误，直接转 `needs-triage`。
+- attempt 在模型调用前持久化并计数；模型已经开始后发生取消或 timeout 仍消费该 attempt。
+  下一 attempt 只使用取消前已经持久化且验证成功的 checkpoint，partial/unvalidated Patch 丢弃。
+- 容量不足、限流、网关 5xx、模型无完整结果、Runner/Action 基础设施错误或 timeout 属于可恢复
+  中断；预算仍有剩余时从最后一个有效 checkpoint（没有时从固定 base）进入下一 attempt。
+- Schema/身份/base 不匹配、受保护路径、binary、secret-like 内容、Patch 越界或不可应用属于
+  不可重试错误，立即进入 `needs-triage`，不能让另一次模型调用绕过可信校验。
+- 因移除授权标签、关闭 Issue、`wontfix` 或 cycle 失效而取消时，停止且不自动 triage；只保留
+  取消前的有效 checkpoint。恢复同一 cycle 时继续使用剩余 attempt，不重置预算。
+- 三次 attempt 后仍无完整合格结果时进入 `needs-triage`，发布 `attempts_exhausted` 终态并通知
+  人工接管。所有成功、失败、取消、timeout 和 Runner 异常路径都必须释放全局模型 slot。
+
+### 6.3 执行环境与 Secret 隔离
+
+- 可信默认分支的 `.codex/config.toml` 定义 `github-worker` permission profile。官方 Action、
+  Codex CLI、Artifact Action 和 checkout Action 都固定到完整 commit SHA 或明确版本。
+- `CODEX_API_KEY` 只进入 implement job 中固定的官方 Codex Action；模型步骤之后只允许固定
+  Artifact 上传，不运行仓库脚本或引入发布凭证。
+- `CODEX_GITHUB_TOKEN` 只进入 Publisher 的固定 Git/PR 发布步骤，不进入 job 级环境、模型环境、
+  remote URL、命令参数或 Artifact。
+- `GH_TOKEN` 只进入 Auto-merge enrollment 的固定步骤。任何新的 Secret 必须在 workflow policy
+  中按 workflow、job、step 和用途建立 allowlist，不能允许任意固定 SHA Action 使用。
+- Issue/PR 内容只经 `env` 或固定输入文件进入程序，不能组成 `run:`、endpoint、模型、permission
+  profile、branch 名、`run-name` 或命令。
+
+### 6.4 Publisher 校验
+
+Publisher 在获得写凭证前，从 GitHub API 重算 Issue、授权、DAG、branch、PR 和 base 状态，并
+验证 Artifact：
+
+- Issue/cycle 仍有效且属于当前 execution-content hash，目标 branch/PR 由该 cycle 独占。
+- Patch 不超过固定上限，不含二进制、路径穿越、符号链接、gitlink/submodule、可执行位或其他
+  文件模式变更。
 - Patch 不修改 `.github/`、`.codex/`、`.claude/`、`.agents/skills/`、任意层级的 `AGENTS.md`
-  或 `CLAUDE.md`、`.mcp.json`、`.gitattributes`、`.markdownlint-cli2.jsonc` 和
-  `.markdown-link-check.json`。
-- Patch 不修改任意层级的 `.npmrc` 或 `package.json`，也不修改 `pnpm-workspace.yaml`、
-  `pnpm-lock.yaml`、`package-lock.json` 或 `npm-shrinkwrap.json` 等决定依赖与 CI 工具解析的文件。
-- Patch 不修改 `docs/prd/` 或 `docs/architecture/` 中的权威产品与架构文档。
-- 上述信任边界只能由人创建的 PR 修改。
-- Patch 能在干净工作区完整应用，结果 JSON 字段、长度和枚举值符合 Schema。
+  或 `CLAUDE.md`、依赖/lockfile、Markdown policy 文件，以及 `docs/prd/`、`docs/architecture/`
+  中的权威文档；这些信任边界只能由人创建的 PR 修改。
+- Patch 能在干净工作区完整应用，checkpoint、结果 JSON、字段长度和枚举符合 Schema。
 
-发布 job 不执行 Patch 引入的代码、脚本或测试。Patch 应用后只调用固定的 Git 和 PR 操作；
-真正的构建、测试和 Review 由新 PR 上的现有门禁执行。校验失败时不发布新的 commit 或 PR，
-只执行前述固定的转人工状态更新。
+校验失败时不发布 commit 或 PR，只写固定的 triage 状态和脱敏原因。Publisher 可以添加
+`ready-for-human`，不能因为模型输出 `ready_for_human=false` 而移除已存在标签。
 
-### 6.4 PR 内容
+### 6.5 Base 更新与暂停
 
-可信发布 job 生成固定结构的 PR 正文，至少包含：
+- 默认分支前进时，系统只在能确定性干净更新 Worker branch 的情况下自动更新，并为新 head
+  重新运行全部门禁；不 force push。
+- 出现冲突时停止自动更新并进入 `needs-triage`，不能让模型猜测或自动解决控制面冲突。
+- Issue 关闭、`wontfix`、授权失效或标签暂停会在每次远端写入前被重新检查。已进入 Ready for
+  review 的 PR 不重复运行首次实现，只能进入明确授权的 repair 流程。
 
-- `Closes #<primary-issue>`。
-- 变更摘要。
-- 验收标准完成情况。
-- 已执行测试。
-- 是否需要人工验证及验证内容。
-- 未执行检查、风险和限制。
+### 6.6 结果与 PR AC evidence
 
-每个 PR 必须且只能声明一个 primary Issue。可以引用其他 Issue 作为上下文，但不能再使用
-会自动关闭 Issue 的关键字。模型提供的所有文本在进入 PR 正文或评论前统一净化：关闭关键字、
-`@` mention、HTML comment 和 Markdown fence 不能改变 primary Issue、触发其他 Agent 或隐藏
-额外内容。`ready-for-human` 只接受 Schema 中的布尔值，模型不能提供任意标签名。
+Worker 结果 Schema 对来源 Issue 的每个 `AC-N` 恰好输出一项：
 
-## 7. PR 检查与 Claude Review
+- `id`：与 Issue 中的稳定 AC ID 完全一致。
+- `status`：只允许 `pass` 或 `not_applicable`；`not_applicable` 必须说明为何不需要实现。
+- `evidence`：非空、可回读的测试、文件、Check、真实环境结果或限制说明。
+
+缺项、重复项、未知 ID、非法状态或空 evidence 都使发布失败。trusted Publisher 把经校验的结构
+渲染到 PR 正文的 `## Acceptance evidence`；PR body 是 Gate 的长期回读来源，临时 Artifact 不是
+Gate 的唯一事实源。
+
+## 7. PR 检查与 Review
 
 ### 7.1 确定性 CI
 
-PR 首先运行仓库定义的确定性 CI。Claude 只 Review 当前 head 上 CI 已通过的 PR。Runner、
-Action 或网关基础设施失败时，不触发 Codex 修改代码。
+PR 首先运行仓库定义的格式、静态检查、测试、构建和 workflow policy。所有结果绑定精确 PR
+head SHA。Runner、Action、网关或第三方服务故障属于基础设施失败，不能触发代码修改。
 
-### 7.2 Issue Gate
+同一 head 的首次 CI failure 只执行一次 no-code retry。只有相同失败在 retry 后仍能确定性复现，
+才可以触发 Codex repair；通过 retry 的 flake 不消费 repair round。
 
-Issue Gate 是 required check，并在每个 PR head 上校验：
+### 7.2 Current-head Check Runs
 
-- PR 只关联一个 primary Issue。
-- primary Issue 存在、仍处于打开状态且不带 `wontfix`。
-- head branch 符合 `codex/issue-<number>` 的 Worker PR，其 branch 编号必须等于 primary Issue，
-  且对应 Issue 仍带有 `ready-for-agent`。
+以下 Check Run 都由预期 GitHub Actions App 发布到精确 head SHA，并由 branch protection 锁定
+来源：
 
-Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR 规则。校验失败时阻止合并，
-不由模型解释或覆盖。人移除 `ready-for-agent` 表示暂停，保留的 Worker PR 因此不能继续合并；
-发布校验失败只添加 `needs-triage`，不会让已经发布且仍带 `ready-for-agent` 的 PR 失去合并资格。
+| Check | 适用范围 | 校验内容 |
+| --- | --- | --- |
+| `Docs CI` | 所有 PR | 确定性仓库检查 |
+| `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，且不带 `wontfix` |
+| `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、frontier 和 AC evidence |
+| `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
+| `Claude Review Gate` | 所有 PR | 当前 head Review 是否成功完成或具有合法基础设施 waiver |
+
+head 更新后，旧 head 的 Check Run、Claude Review、CODEOWNER Approve、人工验证和 waiver 都
+不能让新 head 通过。Gate 未创建、pending、运行中、失败、取消或输出未发布时都不能合并。
 
 ### 7.3 Claude PR Review
 
-- 使用官方
-  [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)。
-- API Key、Base URL 和模型通过 Actions Secret 配置并传入模型 step，不进入 job 级环境。
-- 模型执行轮数通过仓库变量 `CLAUDE_REVIEW_MAX_TURNS` 配置，默认值为 `30`；模型 job 的
-  超时时间通过仓库变量 `CLAUDE_REVIEW_TIMEOUT_MINUTES` 配置，默认值为 `30`。两个变量均须
-  配置为正整数，且仅作用于调用 Claude 的模型 job。
-- 仓库变量 `CLAUDE_REVIEW_VERBOSE` 的值与 `true` 比较时不区分大小写；匹配时输出完整 Claude
-  SDK 消息，其他值均保持关闭。完整输出可能包含 Prompt、工具参数和读取内容，只用于临时
-  排障。
-- 每次 Review 最多返回 `10` 个 findings；候选问题超过上限时按 `P0`、`P1`、`P2` 顺序保留，
-  没有证据明确的缺陷时返回空数组。
-- 自动 Review 只在确定性 CI 通过后执行，也可以由 `claude` 标签或 `@claude` 触发。
-- Claude 把 PR 内容、评论、diff 和外部文本视为不可信数据，只进行只读分析。
-- `P0`、`P1` findings 创建阻塞性的 Review 线程；`P2` 只进入 Review 摘要。
-- `Claude Review` 是建议性检查，不加入分支保护的 required checks。模型调用、输出校验或发布
-  失败时 Check 可以失败，但不直接阻止合并；已经发布的阻塞性 Review 线程仍须解决。
-- Claude 不提交 Approve、不 Merge、不修改分支，也不自行解决 Review 线程。
+- 每个新 PR head 的确定性 CI 成功后自动启动一次 Claude Review。较新的 head 取消同一 PR 的
+  stale run；stale/cancelled 结果不能发布到新 head 或更新当前结论。
+- Claude 只读分析 PR diff 和必要上下文。finding 可以定位 GitHub diff 的 LEFT 或 RIGHT 行；
+  Publisher 验证 path、side、line 和 reviewed head 后发布。
+- `P0`、`P1` finding 创建阻塞 Review thread，必须通过代码修复和正常 conversation resolution
+  闭环；`P2` 只进入 Review 摘要。
+- Review 模型调用、结构化输出或 Publisher 基础设施失败时 `Claude Review Gate` 失败。只有
+  CODEOWNERS Team 中的非 Bot 人员能为当前 head 创建带非空原因的基础设施 waiver。
+- waiver 不能覆盖已经发布的 P0/P1 finding、未解决阻塞线程、确定性 CI failure 或无效输出；
+  新 commit 自动使 waiver 失效。
+- Claude 不 Approve、不 Merge、不修改 branch/label、不创建 waiver，也不解决自己的线程。
 
-`P0` 表示可能造成越权、凭证泄露、数据损坏或大范围不可用的问题；`P1` 表示会导致错误
-行为、兼容性破坏或关键测试失真的问题；`P2` 表示影响较小但证据明确的问题。
+### 7.4 人工验证
 
-## 8. 修复循环
+自动化不能充分覆盖真实环境、视觉、权限或外部系统验证时，PR 必须带 `ready-for-human` 并在
+PR 正文列出验证内容。
 
-本节属于 Stage 3，Stage 2 不实现自动修复。Stage 3 开发前必须另行定义修复运行的授权、发布
-校验和状态机；对 Ready for review Worker PR 的修复不以来源 Issue 仍满足 frontier 条件为前提。
+- Codex 可以添加 `ready-for-human`，不能移除；Claude 只能建议。
+- 只有 CODEOWNERS Team 中的非 Bot 人员可以确认完成。可信记录绑定当前 head、actor、时间和
+  验证说明；单纯由 Bot 或非成员移除标签不能通过 Gate。
+- 新 commit 会使确认失效并自动恢复待验证状态。
+- Approve 表示代码评审完成，人工验证表示外部验收完成，两者不能互相替代。
 
-- Codex 创建的 PR 出现确定性 CI 失败或 Claude `P0`、`P1` finding 时，可以在原 PR 自动
-  修复。
-- 每个 PR 最多执行两轮无人值守修复，CI 和 Claude 触发的修复共同计数。
-- 两轮后仍未通过时停止自动修复，由人决定下一步。
-- 人提交 `Request changes` 或明确使用 `@codex` 时，视为新的人工授权并重置两轮预算。
-- Codex 创建的 PR 收到人的 `Request changes` 后自动触发 Codex。
-- 人创建的 PR 只有明确使用 `@codex` 才允许 Codex 修改。
-- 人直接 push 的修复只重新运行 CI 和 Claude，不自动触发 Codex。
-- Codex 不能自行解决 Review 线程；线程由评论者或有权限的人确认处理后解决。
+## 8. Repair 循环
 
-## 9. 人工验证
+- 每个 PR 最多两轮无人值守 code-repair；CI deterministic failure 和 Claude P0/P1 共享预算。
+- 三类预算由可信系统分别持久化，模型不能自报或重置：model attempt 绑定
+  `(Issue, cycle, Worker run, base SHA)`；no-code retry 绑定 `(PR, head SHA, failing check fingerprint)`；
+  code-repair round 绑定 `(PR, authorization cycle)` 并跨 repair 产生的新 head 累计。
+- 基础设施失败、CI flake、P2 finding 和普通评论不触发 code repair。
+- 两轮后仍未通过、输出不完整或发生冲突时停止并进入 `needs-triage`，发送终态通知。
+- CODEOWNERS Team 成员提交 `Request changes` 或明确使用 `@codex` 是新的人工 repair 授权，
+  可以开始新的两轮预算。普通清除 `needs-triage` 不重置预算。
+- 人创建的 PR 只有明确使用 `@codex` 才允许 Codex 修改；人直接 push 只重新运行当前-head CI
+  和 Claude Review。
+- Codex 不能自行解决 Review thread；thread 由评论者或有权限的人确认处理后解决。
 
-AI 根据验收标准判断自动化 UT、集成测试或 smoke 是否已经充分覆盖。不能充分覆盖时，PR
-必须添加 `ready-for-human` 标签，并在 PR 正文中列出验证内容。
+## 9. 合并与 post-merge
 
-| 标签 | 用于 PR 时的含义 |
-| --- | --- |
-| `ready-for-human` | 仍有必要的人工验证未完成 |
+所有 PR 必须同时满足：
 
-- Codex 可以添加该标签，不能移除。
-- Claude 可以建议添加，不能直接修改标签。
-- 只有人完成验证后可以移除该标签。
-- 对已经要求人工验证的 PR，出现新 commit 后必须自动重新添加该标签。
-- Approve 表示代码评审完成；移除 `ready-for-human` 表示人工验证完成，两者不能互相替代。
+- 当前 head 的 `Docs CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
+  `Claude Review Gate` 通过。
+- 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
+- 所有阻塞 Review thread 已解决。
 
-Human Validation Gate 是 required check。标签存在时失败，标签不存在时通过。手工移除标签
-是允许的人工确认方式，但不会跳过 CI、Approve、阻塞性 Review 线程或其他分支保护规则。
+同仓库、目标为默认分支的非 Draft PR 自动幂等启用 GitHub 原生 Squash Auto-merge。自动化只
+负责 enrollment，不重复判断门禁，不调用直接 Merge 或管理员绕过接口。人工关闭 PR 后，新增
+commit 不自动重新启用已明确取消的 auto-merge。
 
-## 10. 合并规则
+合并后 `main` 检查失败时，系统关联最近合并 PR 和 primary Issue，必要时重新打开 Issue、添加
+`needs-triage` 并记录 failing SHA/run。系统发送一次通知但不自动 revert；后续修复必须创建新的
+人工授权 cycle，不能复活已消费授权。
 
-所有 PR，不区分由人还是 AI 创建，必须同时满足：
+## 10. 可观测性与企微通知
 
-- Issue Gate 通过。
-- 当前 head 的确定性 CI 通过。
-- Human Validation Gate 通过。
-- 至少一名符合分支保护要求的人提交 Approve。
-- 所有阻塞性的 Review 线程已解决。
+### 10.1 Actions 可追溯性
 
-满足门禁后使用 GitHub 原生 Squash Auto-merge。仓库不实现自定义 Merge job，AI 不能批准
-自己的 PR，也不能绕过 required checks 或分支保护。
+- 每个 workflow 定义顶层 `run-name`，只使用稳定的 Issue/PR 编号、固定操作、event action、
+  source run ID 或 branch/reconcile 类型。
+- Issue/PR 标题、正文、评论、commit message、模型输出和 Secret 不得进入 `run-name`。
+- 每次运行的 Job Summary 提供可点击的 Issue/PR/source run、head SHA、event/action、cycle/attempt、
+  terminal outcome 和下一步责任人。只有运行后才能确定的字段不伪装成启动时已知的名称。
+- 成功、失败、取消、跳过和重放的运行都必须能从 Actions 列表与 Summary 识别目标和终态。
 
-`main` 分支保护必须将 `Docs CI`、`Issue Gate`、`Human Validation Gate`、至少一名人工
-Approve 和评论解决同时设为合并门禁。Auto-merge 自动化只负责为 PR 启用 GitHub 原生
-Squash Auto-merge，不重复判断或替代这些门禁。
+### 10.2 通知范围
 
-Auto-merge enrollment 使用独立的 `pull_request_target` workflow，并只处理打开、重新打开或
-转为 Ready 的 PR。PR 必须处于打开、非 Draft 状态，目标为默认分支，且 head 属于当前仓库；
-PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读取或执行 PR head。已经
-启用 auto-merge 时按成功处理；人手工关闭后，后续 commit 不会自动重新启用。Squash 标题和
-提交信息沿用仓库默认配置。
+企微只发送可行动或终态事件：
+
+- 新 blocker 等待人工授权。
+- blocker `not_planned`/`wontfix` 导致 dependent triage。
+- blocker completed 后 dependent 恢复或关闭闭环。
+- 当前 head 等待人工验证或使用了基础设施 waiver。
+- Worker/repair 最终失败、预算耗尽或输出不完整。
+- PR/Issue 完成。
+- post-merge `main` failure。
+
+started、queued、attempt 内部 retry、CI 首次 no-code retry 和最终成功前的中间状态不通知。同一
+event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状态、稳定原因码和 URL，不包含
+正文、diff、日志、prompt、transcript、模型输出或凭证。
+
+每条企微通知最多尝试三次。Secret 未配置、timeout、限流、HTTP 错误或企微非零业务码只记录
+脱敏 warning/summary，永远不能改变 Gate、Worker、Reconciler、Auto-merge 或 Issue 状态结果。
 
 ## 11. 安全边界
 
-- GitHub Actions 默认使用只读 `GITHUB_TOKEN`，写权限按 job 明确声明。
+- GitHub Actions 默认使用只读 `GITHUB_TOKEN`，写权限按 job 和固定 step 明确声明。
 - 第三方 Actions 固定到完整 commit SHA，不使用浮动 tag。
-- `pull_request_target` 只用于默认分支中的元数据门禁，不 checkout 或执行 PR 内容。
-- Auto-merge enrollment 使用单独的 PR 级并发组，job 的默认 `GITHUB_TOKEN` 只有可信
-  checkout 所需的 `contents: read`；固定启用步骤使用组织级 `GH_TOKEN` 调用原生
-  auto-merge，不能调用直接合并或管理员绕过接口。
-- Codex Worker 的模型 job 与发布 job 使用不同 Runner；模型 job 不获得仓库写凭证，发布
-  job 只接受经过校验的固定 Artifact，且不执行其中的代码。
-- Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
-- Issue 建议和 `@claude` 回复复用官方 Action 的评论机制，禁止模型使用文件写入和 Bash，
-  只保留官方 Action 对当前评论的受控更新。
-- 模型输出必须经过 Schema 和目标状态校验，不能直接组成任意 GitHub API 请求。
-- Actions 不能提交 Approve，不能修改分支保护，也不能获取生产凭证。
-- Secrets 不写入日志、评论、PR 正文、测试 fixture 或模型结构化输出。
+- `pull_request_target` 只读取默认分支可信代码和 PR 元数据，不 checkout 或执行 PR head。
+- 模型分析 job 与持有 GitHub 写凭证的 Publisher 分离；Publisher 不执行模型 Patch 引入的代码。
+- 模型输出必须经过 Schema、身份、head/cycle、路径和目标状态校验，不能直接组成任意 GitHub
+  API 请求。
+- Actions App、PAT 自动化和 Bot 不能满足 human Approve、Worker 授权、人工验证或 waiver。
+- Actions 不能修改 branch protection，也不能获取产品或生产凭证。
+- Secrets 不写入日志、Summary、Artifact、Issue/PR、Review、测试 fixture 或模型结构化输出。
+- 所有跨 actor、跨 Issue/PR、跨 cycle 和跨 branch 的访问都必须有 fail-closed 负向测试。
 
 ## 12. 分阶段实施
 
-### Stage 1：Issue 与 Review 基线
+| Stage | 交付内容 | 配置前置 |
+| --- | --- | --- |
+| Stage 1 | Issue/PR 模板、基础 Gate、Claude Issue/PR Review、原生 Auto-merge enrollment | 现有 branch protection |
+| Stage 2 | 初版 Codex Worker、Artifact/Publisher 隔离、固定 branch/Draft PR、受保护路径 | Codex 与 Publisher Secret |
+| Stage 3A（`#50`） | 本文目标契约、稳定 AC ID、模板与导航同步 | 无外部配置 |
+| Stage 3B（`#51`） | App-bound current-head gates、Claude Review gate/waiver、CODEOWNERS Team | Team、CODEOWNERS、branch protection |
+| Stage 3C（`#52`） | authorization record、cycle branch、execution hash、Issue Readiness/AC evidence | Stage 3B Team identity |
+| Stage 3D（`#53`） | blocker proposal、同仓库 DAG、completed/not planned 语义、15 分钟 Reconciler | Stage 3C cycle |
+| Stage 3E（`#54`） | 三次 attempt、Patch checkpoint、全局并发 2、CI retry、两轮 repair、base update | Stage 3C cycle |
+| Stage 3F（`#55`） | terminal outcome、Actions 可追溯性、企微、post-merge triage | 轮换后的企微 Secret |
 
-- 创建标准标签。
-- 实现 Issue Gate 和 Human Validation Gate。
-- 实现 Claude Issue Review 和 CI 后的 Claude PR Review。
-- 将确定性 CI、Issue Gate、Human Validation Gate 和评论解决设为合并门禁。
-- 启用 GitHub 原生 Squash Auto-merge enrollment，不新增自定义 Merge 实现。
-
-### Stage 2：Codex Worker
-
-- 以 `ready-for-agent` 驱动 Codex Worker。
-- 提供包含 `## Blocked by` 的 Issue 模板，使 blocker 使用确定性格式声明。
-- 实现 frontier Issue 校验、Issue 级并发、固定 branch/PR 和暂停恢复。
-- 从固定的 mattpocock/skills revision 接入项目级 `implement`、`tdd` 和 `code-review` Skill。
-- 使用独立模型 job、固定 Artifact 和可信发布 job 维护 branch、PR 正文与标签。
-- 首版只支持不超过 400 KiB 的文本 Patch；二进制和信任边界变更转人工处理。
-- 扩展 Issue Gate、required workflow 清单和按 Secret 身份隔离的 workflow policy 测试。
-
-### Stage 3：修复循环
-
-- 实现 CI 和 Claude finding 驱动的两轮自动修复。
-- 实现人工重新授权、失败停止和 Issue/PR 状态回写。
-
-每个 Stage 独立通过 PR 评审和真实 GitHub 冒烟验证。只有前一阶段在默认分支稳定运行后，
-才启用下一阶段。
+每个 Stage 独立通过 PR 评审和真实 GitHub 冒烟。前置 Stage 未合并并稳定运行时，不启用依赖它
+的无人值守行为。Stage 3D 和 3E 在依赖图上都只依赖 3C，但因修改同一 Worker 控制面，实施时
+优先顺序交付以降低冲突。
 
 ## 13. 验收标准
 
-- 新的成员 Issue 自动收到 Claude 建议；外部用户 Issue 只有成员添加 `claude` 后调用模型。
-- 未经人确认的 Issue 不能被无人值守流程标记为 `ready-for-agent`。
-- Codex 只领取无未关闭 blocker 的 frontier Issue，同一 Issue 不产生并发执行或多个活动 PR。
-- 每个 PR 只有一个有效且打开的 primary Issue，关系异常时 Issue Gate 阻止合并。
-- Claude 只 Review CI 通过的当前 PR head；Review check 本身不阻塞合并，成功发布的 `P0`、
-  `P1` 线程阻塞合并，`P2` 不阻塞。
-- 需要人工验证的 PR 在标签被人移除前不能合并；新增 commit 后标签重新出现。
-- 人工 Approve 和人工验证是两个独立门禁，任何标签操作都不能跳过 required checks。
-- Stage 3 启用后，无人值守修复最多两轮；人工重新授权后才能开始新的两轮。
-- Codex、Claude 和发布 job 均不能 Approve、绕过门禁或直接修改分支保护。
-- 同仓库、非 Draft、目标为默认分支的 PR 可以启用原生 Squash Auto-merge；人工关闭后，
-  新增 commit 不会自动重新启用。
-- 所有门禁通过后，GitHub 原生 Squash Auto-merge 完成合并，并正常触发默认分支 CI。
-- 新增或修改 `pull_request_target` workflow 后，使用合入后的默认分支和后续 PR 完成真实
-  冒烟验证，不能用实现 PR 自证其写权限行为。
+- 新成员 Issue 自动收到最终 Claude 建议；外部用户 Issue 只有成员授权后调用模型。
+- 未经 Team 人员确认且没有匹配 content hash/cycle 的 Issue 不能被 Worker 执行。
+- blocker 是同仓库 DAG；completed 唤醒有效 dependent，not planned/wontfix 转人工 triage。
+- 同一 Issue/cycle 不产生并发执行或多个活动 PR，全仓模型调用并发不超过 `2`。
+- Worker run 最多三次 model attempt；CI 首次失败只 no-code retry；PR 最多两轮 code repair。
+- 每个 PR 只有一个 open primary Issue，并对每个稳定 `AC-N` 提供唯一 `status/evidence`。
+- 每个 required Check Run、人工验证和 waiver 都绑定当前 head；旧 SHA 不能满足新 head 门禁。
+- 每个成功 CI 的新 head 自动触发 Claude Review；LEFT/RIGHT finding 都能发布，P0/P1 不可 waiver。
+- 需要人工验证的 PR 在 Team 人员完成当前-head 确认前不能合并；Approve 与验证互不替代。
+- 所有门禁通过后只由 GitHub 原生 Squash Auto-merge 合并；AI 不能 Approve、直接 Merge 或绕过。
+- 失败、取消、跳过和异常中断都有可回读 terminal outcome；企微失败永远不阻塞 GitHub 流程。
+- Actions 列表能从 `run-name` 识别目标 Issue/PR，Job Summary 能追溯 source run、head、cycle 和
+  attempt，且不暴露不可信正文或 Secret。
+- post-merge failure 重新进入 triage 并通知，但不自动 revert 或复活旧授权。
+- 新增或修改 `pull_request_target`、App Check Run、Team 授权或 Secret 路径后，必须使用合入后
+  的默认分支和后续测试对象完成真实 GitHub 冒烟，不能由实现 PR 自证写权限行为。

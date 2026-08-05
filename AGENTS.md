@@ -21,6 +21,7 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 
 - `docs/prd/`：正式产品需求，只写已确认的产品结论。
 - `docs/architecture/`：工程架构和跨模块技术决策。
+- `docs/agents/`：Agent 操作入口，只引用正式工作流，不重复定义流程状态。
 - `README.md`：面向团队的仓库入口和文档导航。
 - `AGENTS.md`：编码 Agent 的全仓工作规则。
 
