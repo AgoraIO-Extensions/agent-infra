@@ -51,7 +51,7 @@ jobs:
 
       - name: Run read-only Claude Review
         id: claude
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
         with:
@@ -80,14 +80,24 @@ jobs:
             each changed file once. Do not edit files, execute project code,
             publish comments, approve, merge, or call GitHub write APIs.
 
+            Before returning each finding, verify that it:
+            - is introduced by this PR on an added RIGHT-side diff line;
+            - is a concrete functional, security, compatibility, or critical-test
+              defect;
+            - is directly supported by the cited line and its surrounding context;
+            - does not depend on an unverified assumption.
+
+            Do not report pre-existing issues, style or nitpicks, issues fully
+            caught by deterministic CI or a linter, or general improvement
+            suggestions. Discard every candidate that fails any check.
+
             Report only evidence-backed defects. P0 is privilege escalation,
             credential disclosure, data corruption, or broad outage risk. P1 is
             incorrect behavior, compatibility breakage, or invalid critical tests.
-            P2 is a smaller concrete defect. Every finding must identify an added
-            RIGHT-side diff line. If the PR introduces no concrete defect, return
-            an empty findings array. Return at most 10 findings, prioritizing P0,
-            then P1, then P2 when more candidates exist. Return only the required
-            JSON object.
+            P2 is a smaller concrete defect. If the PR introduces no concrete
+            defect, return an empty findings array. Return at most 10 findings,
+            prioritizing P0, then P1, then P2 when more candidates exist. Return
+            only the required JSON object.
           claude_args: |
             --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
