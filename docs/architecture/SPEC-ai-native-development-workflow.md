@@ -165,7 +165,7 @@ Issue 进入 `needs-triage`。
 | Human implementation | `ready-for-human` | Worker 不领取，等待人工 PR |
 | Needs triage | `needs-triage`、契约非法、授权失效或依赖异常 | 停止模型和发布，通知责任人 |
 | Authorized blocked | 有效 cycle，但存在未完成 blocker | 保留授权和可恢复草稿，不调用模型 |
-| Frontier | 有效 cycle、无冲突标签、所有 blocker completed、无冲突执行 | 进入 Worker 队列 |
+| Frontier | 有效 cycle、无冲突标签、所有 blocker completed、无当前 Worker run 或活动 PR | 进入 Worker 队列 |
 | Executing | 当前 cycle 有唯一活动 Worker run | 受 Issue/cycle 并发和全局模型并发限制 |
 | Ready for review | 当前 cycle 有同仓库非 Draft PR | 不启动重复首次实现，只运行当前-head 门禁或 repair |
 | Completed | primary PR 合并，Issue 以 completed 关闭 | 消费 cycle，唤醒 dependents |
@@ -226,7 +226,9 @@ Issue 进入 `needs-triage`。
 Publisher 在获得写凭证前，从 GitHub API 重算 Issue、授权、DAG、branch、PR 和 base 状态，并
 验证 Artifact：
 
-- Issue/cycle 仍有效且属于当前 execution-content hash，目标 branch/PR 由该 cycle 独占。
+- Issue/cycle 仍有效且属于当前 execution-content hash，目标 branch/PR 由该 cycle 独占。发布代码
+  或 PR 前不存在未完成 blocker 或未关闭 triage；已经发布的 PR 处于 Ready for review 是预期
+  状态，不按缺少 Frontier 资格拒绝 current-head gate 或已授权 repair。
 - Patch 不超过固定上限，不含二进制、路径穿越、符号链接、gitlink/submodule、可执行位或其他
   文件模式变更。
 - Patch 不修改 `.github/`、`.codex/`、`.claude/`、`.agents/skills/`、任意层级的 `AGENTS.md`
@@ -254,7 +256,7 @@ Worker 结果 Schema 对来源 Issue 的每个 `AC-N` 恰好输出一项：
 - `evidence`：非空、可回读的测试、文件、Check、真实环境结果或限制说明。
 
 缺项、重复项、未知 ID、非法状态或空 evidence 都使发布失败。trusted Publisher 把经校验的结构
-渲染到 PR 正文的 `## Acceptance evidence`；PR body 是 Gate 的长期回读来源，临时 Artifact 不是
+渲染到 PR 正文的 `## 验收标准`；PR body 是 Gate 的长期回读来源，临时 Artifact 不是
 Gate 的唯一事实源。
 
 ## 7. PR 检查与 Review
@@ -276,12 +278,17 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 | --- | --- | --- |
 | `Docs CI` | 所有 PR | 确定性仓库检查 |
 | `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，且不带 `wontfix` |
-| `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、frontier 和 AC evidence |
+| `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
 | `Claude Review Gate` | 所有 PR | 当前 head Review 是否成功完成或具有合法基础设施 waiver |
 
 head 更新后，旧 head 的 Check Run、Claude Review、CODEOWNER Approve、人工验证和 waiver 都
 不能让新 head 通过。Gate 未创建、pending、运行中、失败、取消或输出未发布时都不能合并。
+
+Worker PR 有活动 PR 时处于 Ready for review，而不是 Frontier；`Issue Readiness Gate` 直接重算
+cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处于互斥的 Frontier 派生状态。
+未关闭的 `needs-triage` 会阻塞 Gate；确定性原因消失后，由 CODEOWNERS Team 成员或只处理系统
+派生状态的 Reconciler 记录关闭，不自动消费仍有效的 cycle，也不重置 attempt 或 repair 预算。
 
 ### 7.3 Claude PR Review
 
@@ -320,6 +327,8 @@ PR 正文列出验证内容。
   可以开始新的两轮预算。普通清除 `needs-triage` 不重置预算。
 - 人创建的 PR 只有明确使用 `@codex` 才允许 Codex 修改；人直接 push 只重新运行当前-head CI
   和 Claude Review。
+- Ready for review Worker PR 的 repair 以当前 cycle 和本节授权为前提，不要求来源 Issue 重新
+  成为只适用于首次实现排队的 Frontier。
 - Codex 不能自行解决 Review thread；thread 由评论者或有权限的人确认处理后解决。
 
 ## 9. 合并与 post-merge

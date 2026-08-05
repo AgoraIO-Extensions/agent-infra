@@ -6,7 +6,7 @@ Closes #
 
 -
 
-## Acceptance evidence
+## 验收标准
 
 <!-- 每个来源 Issue 的 AC-N 恰好一行；Status 只使用 pass 或 not_applicable。 -->
 
