@@ -402,16 +402,22 @@ export function validateWorkflowDocuments(workflows) {
   }
   const reviewArgs = reviewAction?.with?.claude_args ?? "";
   const allowedToolFlags = reviewArgs.match(/--allowedTools\s+"[^"]*"/g) ?? [];
+  const allowedToolOptions =
+    reviewArgs.match(/--(?:allowedTools|allowed-tools)(?=\s|=|$)/g) ?? [];
   const disallowedToolFlags = reviewArgs.match(/--disallowedTools\s+"[^"]*"/g) ?? [];
+  const disallowedToolOptions =
+    reviewArgs.match(/--(?:disallowedTools|disallowed-tools)(?=\s|=|$)/g) ?? [];
   if (
     JSON.stringify(allowedToolFlags) !==
       JSON.stringify([
         '--allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"',
       ]) ||
+    JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
     JSON.stringify(disallowedToolFlags) !==
       JSON.stringify([
         '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
-      ])
+      ]) ||
+    JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
   ) {
     errors.push("Claude PR Review model must use bounded read-only tools");
   }

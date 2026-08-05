@@ -55,6 +55,10 @@ test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
     (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
     (args) => `${args}\n--allowedTools "Bash"`,
+    (args) => `${args}\n--allowedTools="Bash"`,
+    (args) => `${args}\n--allowed-tools=Bash`,
+    (args) => `${args}\n--disallowedTools=""`,
+    (args) => `${args}\n--disallowed-tools=`,
     (args) => args.replace(
       '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
       "",
