@@ -393,6 +393,55 @@ function workerResult(overrides = {}) {
   });
 }
 
+function jsonScalarType(value) {
+  if (value === null || !["boolean", "number", "string"].includes(typeof value)) {
+    throw new TypeError("Expected a scalar JSON Schema value");
+  }
+  return typeof value;
+}
+
+function assertExplicitScalarTypes(schema, location = "schema") {
+  if (Array.isArray(schema)) {
+    schema.forEach((value, index) =>
+      assertExplicitScalarTypes(value, `${location}[${index}]`),
+    );
+    return;
+  }
+  if (!schema || typeof schema !== "object") return;
+
+  if (Object.hasOwn(schema, "const")) {
+    assert.equal(
+      schema.type,
+      jsonScalarType(schema.const),
+      `${location} must declare the scalar type used by const`,
+    );
+  }
+  if (Array.isArray(schema.enum)) {
+    const enumTypes = new Set(schema.enum.map(jsonScalarType));
+    assert.equal(enumTypes.size, 1, `${location} enum must use one scalar type`);
+    assert.equal(
+      schema.type,
+      [...enumTypes][0],
+      `${location} must declare the scalar type used by enum`,
+    );
+  }
+
+  for (const [key, value] of Object.entries(schema)) {
+    assertExplicitScalarTypes(value, `${location}.${key}`);
+  }
+}
+
+test("declares explicit scalar types throughout the Codex output schema", () => {
+  const schemaPath = path.join(
+    import.meta.dirname,
+    "..",
+    "codex-worker-result.schema.json",
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+
+  assertExplicitScalarTypes(schema);
+});
+
 test("accepts only bounded Worker results for the recorded Issue and start commit", () => {
   const result = validateWorkerResult(workerResult(), workerPlan);
   assert.equal(result.issue_number, 42);

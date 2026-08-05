@@ -17,6 +17,7 @@
   ],
   "properties": {
     "completed": {
+      "type": "boolean",
       "const": true
     },
     "issue_number": {
