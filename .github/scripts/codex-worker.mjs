@@ -949,6 +949,11 @@ async function requirePublishAuthorization(repository, issueNumber, token) {
   }
 }
 
+export function isExpectedPublicationRemote(remoteUrl, repository) {
+  const checkoutRemote = `https://github.com/${repository}`;
+  return remoteUrl === checkoutRemote || remoteUrl === `${checkoutRemote}.git`;
+}
+
 async function publishCommand() {
   const token = requiredEnvironment("CODEX_GITHUB_TOKEN");
   const workspace = requiredEnvironment("WORKER_WORKSPACE");
@@ -987,9 +992,8 @@ async function publishCommand() {
 
   if (commitSha !== plan.startSha) {
     await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
-    const remoteUrl = `https://github.com/${plan.repository}.git`;
     const currentRemote = runGit(workspace, ["remote", "get-url", "origin"]).stdout.trim();
-    if (currentRemote !== remoteUrl) {
+    if (!isExpectedPublicationRemote(currentRemote, plan.repository)) {
       throw new Error("Worker publication remote is unexpected");
     }
     const askPassPath = path.join(requiredEnvironment("RUNNER_TEMP"), "codex-askpass.sh");

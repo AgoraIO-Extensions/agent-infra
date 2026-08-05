@@ -305,6 +305,34 @@ test("publication requires the recorded branch and Draft PR state", () => {
   );
 });
 
+test("accepts only official checkout HTTPS remotes for Worker publication", () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+
+  assert.equal(
+    worker.isExpectedPublicationRemote(
+      "https://github.com/AgoraIO-Extensions/agent-infra",
+      repository,
+    ),
+    true,
+  );
+  assert.equal(
+    worker.isExpectedPublicationRemote(
+      "https://github.com/AgoraIO-Extensions/agent-infra.git",
+      repository,
+    ),
+    true,
+  );
+  for (const remote of [
+    "https://github.com/AgoraIO-Extensions/agent-infra/",
+    "https://github.com/AgoraIO-Extensions/agent-infra-other",
+    "https://user@github.com/AgoraIO-Extensions/agent-infra",
+    "git@github.com:AgoraIO-Extensions/agent-infra.git",
+    "https://example.com/AgoraIO-Extensions/agent-infra",
+  ]) {
+    assert.equal(worker.isExpectedPublicationRemote(remote, repository), false);
+  }
+});
+
 const workerPlan = {
   version: 1,
   repository: "AgoraIO-Extensions/agent-infra",
