@@ -18,6 +18,10 @@ const CLAUDE_SECRETS = [
   "ANTHROPIC_BASE_URL",
   "CLAUDE_REVIEW_MODEL",
 ];
+const VISIBLE_CLAUDE_CONFIG_VARIABLES = [
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_REVIEW_MODEL",
+];
 const CODEX_ACTION =
   "openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9";
 const UPLOAD_ARTIFACT_ACTION =
@@ -38,6 +42,24 @@ function referencedSecrets(value) {
   return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(
     (match) => match[1],
   );
+}
+
+function referencesRepositoryVariable(value, name) {
+  if (typeof value === "string") {
+    const compact = value.replaceAll(/\s/g, "");
+    return [
+      `vars.${name}`,
+      `vars['${name}']`,
+      `vars["${name}"]`,
+    ].some((reference) => compact.includes(reference));
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => referencesRepositoryVariable(item, name));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((item) => referencesRepositoryVariable(item, name));
+  }
+  return false;
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
@@ -149,11 +171,10 @@ export function validateWorkflowDocuments(workflows) {
 
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
-    if (JSON.stringify(workflow).includes("vars.ANTHROPIC_BASE_URL")) {
-      errors.push(`${name}: ANTHROPIC_BASE_URL must use Actions Secrets`);
-    }
-    if (JSON.stringify(workflow).includes("vars.CLAUDE_REVIEW_MODEL")) {
-      errors.push(`${name}: CLAUDE_REVIEW_MODEL must use Actions Secrets`);
+    for (const variable of VISIBLE_CLAUDE_CONFIG_VARIABLES) {
+      if (referencesRepositoryVariable(workflow, variable)) {
+        errors.push(`${name}: ${variable} must use Actions Secrets`);
+      }
     }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       for (const secret of referencedSecrets(job.env)) {

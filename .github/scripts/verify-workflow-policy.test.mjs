@@ -51,30 +51,24 @@ test("rejects PR Review model configuration that bypasses validated Secrets", as
   );
 });
 
-test("rejects visible Anthropic Base URL variables anywhere in workflows", async () => {
-  const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.env = {
-    ANTHROPIC_BASE_URL: "${{ vars.ANTHROPIC_BASE_URL }}",
-  };
+test("rejects visible Claude configuration variables anywhere in workflows", async () => {
+  for (const name of ["ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]) {
+    for (const reference of [
+      `\${{ vars.${name} }}`,
+      `\${{ vars['${name}'] }}`,
+      `\${{ vars["${name}"] }}`,
+    ]) {
+      const workflows = await actualWorkflows();
+      workflows["docs-ci.yml"].jobs.docs.env = { [name]: reference };
 
-  assert.ok(
-    validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("ANTHROPIC_BASE_URL must use Actions Secrets"),
-    ),
-  );
-});
-
-test("rejects visible Claude Review model variables anywhere in workflows", async () => {
-  const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.env = {
-    CLAUDE_REVIEW_MODEL: "${{ vars.CLAUDE_REVIEW_MODEL }}",
-  };
-
-  assert.ok(
-    validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("CLAUDE_REVIEW_MODEL must use Actions Secrets"),
-    ),
-  );
+      assert.ok(
+        validateWorkflowDocuments(workflows).some((error) =>
+          error.includes(`${name} must use Actions Secrets`),
+        ),
+        reference,
+      );
+    }
+  }
 });
 
 test("rejects floating third-party Action references", async () => {
