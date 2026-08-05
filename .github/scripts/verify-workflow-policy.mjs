@@ -122,16 +122,24 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       continue;
     }
     if (secret === "CODEX_GITHUB_TOKEN") {
-      if (
-        workflowName !== "codex-worker.yml" ||
-        jobName !== "publish" ||
-        step.name !== "Publish fixed branch and Draft PR" ||
-        step.run !== "node trusted/.github/scripts/codex-worker.mjs publish" ||
-        step.env?.CODEX_GITHUB_TOKEN !== "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
-        occurrences !== 1
-      ) {
+      const reference = "${{ secrets.CODEX_GITHUB_TOKEN }}";
+      const allowedWorkerPublication =
+        workflowName === "codex-worker.yml" &&
+        jobName === "publish" &&
+        step.name === "Publish fixed branch and Draft PR" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs publish" &&
+        step.env?.CODEX_GITHUB_TOKEN === reference &&
+        occurrences === 1;
+      const allowedAutoMergeEnrollment =
+        workflowName === "auto-merge.yml" &&
+        jobName === "enroll" &&
+        step.name === "Enable native Squash auto-merge" &&
+        step.run === "node .github/scripts/auto-merge.mjs" &&
+        step.env?.GITHUB_TOKEN === reference &&
+        occurrences === 1;
+      if (!allowedWorkerPublication && !allowedAutoMergeEnrollment) {
         errors.push(
-          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in the fixed Worker publication step`,
+          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in an approved GitHub write step`,
         );
       }
       continue;
@@ -401,9 +409,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(enrollmentPermissions) !==
     JSON.stringify([
-      ["contents", "write"],
-      ["issues", "write"],
-      ["pull-requests", "write"],
+      ["contents", "read"],
     ])
   ) {
     errors.push("Auto-merge Enrollment permissions must stay minimal");
@@ -418,6 +424,17 @@ export function validateWorkflowDocuments(workflows) {
     !enrollmentText.includes("node .github/scripts/auto-merge.mjs")
   ) {
     errors.push("Auto-merge Enrollment must restrict eligibility and use the fixed script");
+  }
+  const enrollmentStep = (enrollment?.steps ?? []).find(
+    (step) => step.name === "Enable native Squash auto-merge",
+  );
+  if (
+    enrollmentStep?.run !== "node .github/scripts/auto-merge.mjs" ||
+    !sameObject(enrollmentStep?.env, {
+      GITHUB_TOKEN: "${{ secrets.CODEX_GITHUB_TOKEN }}",
+    })
+  ) {
+    errors.push("Auto-merge Enrollment must use the fixed repository Secret");
   }
 
   const issueReview = workflows["claude-issue-review.yml"];

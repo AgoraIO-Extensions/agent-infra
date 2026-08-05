@@ -142,7 +142,7 @@ test("keeps the publisher PAT out of the model job", async () => {
   );
 });
 
-test("allows the publisher PAT only in the fixed publication step", async () => {
+test("allows the repository PAT only in fixed GitHub write steps", async () => {
   const workflows = await actualWorkflows();
   const step = workflows["codex-worker.yml"].jobs.publish.steps.find(
     (candidate) => candidate.name === "Handle rejected publication",
@@ -150,7 +150,7 @@ test("allows the publisher PAT only in the fixed publication step", async () => 
   step.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("fixed Worker publication step"),
+      error.includes("approved GitHub write step"),
     ),
   );
 });
@@ -413,12 +413,27 @@ test("defines the minimal native auto-merge enrollment workflow", async () => {
     "cancel-in-progress": true,
   });
   assert.deepEqual(workflow.jobs.enroll.permissions, {
-    contents: "write",
-    issues: "write",
-    "pull-requests": "write",
+    contents: "read",
   });
+  const enrollment = workflow.jobs.enroll.steps.find(
+    (step) => step.name === "Enable native Squash auto-merge",
+  );
+  assert.equal(enrollment.env.GITHUB_TOKEN, "${{ secrets.CODEX_GITHUB_TOKEN }}");
   assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
   assert.match(workflow.jobs.enroll.if, /repository\.default_branch/);
+});
+
+test("rejects the default workflow token for auto-merge enrollment", async () => {
+  const workflows = await actualWorkflows();
+  const enrollment = workflows["auto-merge.yml"].jobs.enroll.steps.find(
+    (step) => step.name === "Enable native Squash auto-merge",
+  );
+  enrollment.env.GITHUB_TOKEN = "${{ github.token }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must use the fixed repository Secret"),
+    ),
+  );
 });
 
 test("rejects PR-head execution in every pull-request-target workflow", async () => {

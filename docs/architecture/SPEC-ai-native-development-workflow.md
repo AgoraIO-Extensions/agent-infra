@@ -162,9 +162,10 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
   fine-grained GitHub PAT 分开保存。
 - `CODEX_API_KEY` 只传给 `implement` job 中的官方 Codex Action；该 Action 之后只允许固定
   commit SHA 的 Artifact Action 上传固定路径，不运行 shell 命令，也不引入仓库写凭证。
-- `CODEX_GITHUB_TOKEN` 只传给 `publish` job 中固定的 Git push 和 PR 发布步骤，不进入 job
-  级环境、不写入 remote URL 或命令参数。使用该 PAT 是为了让自动创建的 PR 正常触发现有
-  GitHub Actions；由 `GITHUB_TOKEN` 创建或推送的变更不会触发所需的后续 workflow。
+- `CODEX_GITHUB_TOKEN` 只传给 `publish` job 中固定的 Git push 和 PR 发布步骤，以及
+  Auto-merge enrollment 中固定的原生 auto-merge 启用步骤；不进入 job 级环境、模型环境，
+  也不写入 remote URL 或命令参数。使用该 PAT 是为了让自动创建、推送或合并的变更正常触发
+  现有 GitHub Actions；由 `GITHUB_TOKEN` 执行的变更不会触发所需的后续 workflow。
 - workflow policy 按 Secret 名称和 job/Action 身份分别维护允许位置，并验证模型 job 不包含
   `CODEX_GITHUB_TOKEN`、发布 job 不包含 `CODEX_API_KEY`，不能放宽为允许任意固定 SHA Action。
 - Issue 标题、正文等不可信内容只能经 `env` 或固定输入文件传递，不能插入 `run:` 或参与
@@ -321,9 +322,9 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 - GitHub Actions 默认使用只读 `GITHUB_TOKEN`，写权限按 job 明确声明。
 - 第三方 Actions 固定到完整 commit SHA，不使用浮动 tag。
 - `pull_request_target` 只用于默认分支中的元数据门禁，不 checkout 或执行 PR 内容。
-- Auto-merge enrollment 使用单独的 PR 级并发组，只获得启用原生 auto-merge 所需的
-  `contents: write`、`issues: write` 和 `pull-requests: write`，不能调用直接合并或管理员
-  绕过接口。
+- Auto-merge enrollment 使用单独的 PR 级并发组，job 的默认 `GITHUB_TOKEN` 只有可信
+  checkout 所需的 `contents: read`；固定启用步骤使用 `CODEX_GITHUB_TOKEN` 调用原生
+  auto-merge，不能调用直接合并或管理员绕过接口。
 - Codex Worker 的模型 job 与发布 job 使用不同 Runner；模型 job 不获得仓库写凭证，发布
   job 只接受经过校验的固定 Artifact，且不执行其中的代码。
 - Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
