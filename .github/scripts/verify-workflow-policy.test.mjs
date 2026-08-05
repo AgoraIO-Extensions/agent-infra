@@ -413,12 +413,40 @@ test("defines the minimal native auto-merge enrollment workflow", async () => {
     "cancel-in-progress": true,
   });
   assert.deepEqual(workflow.jobs.enroll.permissions, {
-    contents: "write",
-    issues: "write",
-    "pull-requests": "write",
+    contents: "read",
   });
+  const enrollment = workflow.jobs.enroll.steps.find(
+    (step) => step.name === "Enable native Squash auto-merge",
+  );
+  assert.equal(enrollment.env.GITHUB_TOKEN, "${{ secrets.GH_TOKEN }}");
   assert.match(workflow.jobs.enroll.if, /head\.repo\.full_name/);
   assert.match(workflow.jobs.enroll.if, /repository\.default_branch/);
+});
+
+test("allows the organization token only in auto-merge enrollment", async () => {
+  const workflows = await actualWorkflows();
+  const setup = workflows["auto-merge.yml"].jobs.enroll.steps.find(
+    (step) => step.name === "Set up Node.js",
+  );
+  setup.env = { GH_TOKEN: "${{ secrets.GH_TOKEN }}" };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed Auto-merge Enrollment step"),
+    ),
+  );
+});
+
+test("rejects the default workflow token for auto-merge enrollment", async () => {
+  const workflows = await actualWorkflows();
+  const enrollment = workflows["auto-merge.yml"].jobs.enroll.steps.find(
+    (step) => step.name === "Enable native Squash auto-merge",
+  );
+  enrollment.env.GITHUB_TOKEN = "${{ github.token }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("must use the fixed repository Secret"),
+    ),
+  );
 });
 
 test("rejects PR-head execution in every pull-request-target workflow", async () => {
