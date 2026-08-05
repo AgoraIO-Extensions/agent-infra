@@ -672,10 +672,14 @@ async function githubRequest(apiPath, { token, allowNotFound = false, ...options
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const method = options.method ?? "GET";
+  const url =
+    apiPath === "/graphql"
+      ? "https://api.github.com/graphql"
+      : `https://api.github.com${apiPath}`;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let response;
     try {
-      response = await fetch(`https://api.github.com${apiPath}`, {
+      response = await fetch(url, {
         ...options,
         headers,
       });
@@ -685,7 +689,14 @@ async function githubRequest(apiPath, { token, allowNotFound = false, ...options
       continue;
     }
     if (allowNotFound && response.status === 404) return null;
-    if (response.ok) return response.status === 204 ? null : response.json();
+    if (response.ok) {
+      if (response.status === 204) return null;
+      const payload = await response.json();
+      if (apiPath === "/graphql" && payload.errors?.length) {
+        throw new Error("GitHub GraphQL request failed");
+      }
+      return payload;
+    }
     if (
       method !== "GET" ||
       attempt === 3 ||
@@ -954,6 +965,38 @@ export function isExpectedPublicationRemote(remoteUrl, repository) {
   return remoteUrl === checkoutRemote || remoteUrl === `${checkoutRemote}.git`;
 }
 
+const MARK_PULL_REQUEST_READY_MUTATION = `
+  mutation MarkPullRequestReadyForReview($pullRequestId: ID!) {
+    markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+      pullRequest {
+        number
+        isDraft
+      }
+    }
+  }
+`;
+
+export async function markPullRequestReadyForReview({
+  pullRequest,
+  token,
+  request = githubRequest,
+}) {
+  if (!pullRequest.node_id) throw new Error("Pull request node_id is required");
+  const response = await request("/graphql", {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: MARK_PULL_REQUEST_READY_MUTATION,
+      variables: { pullRequestId: pullRequest.node_id },
+    }),
+  });
+  if (!response.data?.markPullRequestReadyForReview?.pullRequest) {
+    throw new Error("GitHub did not confirm the Worker PR is ready");
+  }
+  return "ready";
+}
+
 async function publishCommand() {
   const token = requiredEnvironment("CODEX_GITHUB_TOKEN");
   const workspace = requiredEnvironment("WORKER_WORKSPACE");
@@ -1073,10 +1116,7 @@ async function publishCommand() {
   }
 
   await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
-  await githubRequest(
-    `/repos/${plan.repository}/pulls/${pullRequest.number}/ready_for_review`,
-    { token, method: "POST" },
-  );
+  await markPullRequestReadyForReview({ pullRequest, token });
 }
 
 const FAILURE_MESSAGES = {

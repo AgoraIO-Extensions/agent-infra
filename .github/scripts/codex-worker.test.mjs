@@ -333,6 +333,42 @@ test("accepts only official checkout HTTPS remotes for Worker publication", () =
   }
 });
 
+test("marks the Worker PR ready through the fixed GraphQL mutation", async () => {
+  const calls = [];
+  const result = await worker.markPullRequestReadyForReview({
+    pullRequest: { number: 41, node_id: "PR_node_id" },
+    token: "test-token",
+    request: async (apiPath, options) => {
+      calls.push({ apiPath, options });
+      return {
+        data: {
+          markPullRequestReadyForReview: {
+            pullRequest: { number: 41, isDraft: false },
+          },
+        },
+      };
+    },
+  });
+
+  assert.equal(result, "ready");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].apiPath, "/graphql");
+  assert.equal(calls[0].options.token, "test-token");
+  const payload = JSON.parse(calls[0].options.body);
+  assert.match(payload.query, /markPullRequestReadyForReview/);
+  assert.doesNotMatch(payload.query, /\bmergePullRequest\b/);
+  assert.deepEqual(payload.variables, { pullRequestId: "PR_node_id" });
+  await assert.rejects(
+    () =>
+      worker.markPullRequestReadyForReview({
+        pullRequest: { number: 41 },
+        token: "test-token",
+        request: async () => ({}),
+      }),
+    /node_id/,
+  );
+});
+
 const workerPlan = {
   version: 1,
   repository: "AgoraIO-Extensions/agent-infra",
