@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "completed",
+    "issue_number",
+    "start_sha",
+    "branch",
+    "summary",
+    "acceptance_criteria",
+    "tests",
+    "not_run",
+    "human_validation_required",
+    "human_validation",
+    "risks"
+  ],
+  "properties": {
+    "completed": {
+      "const": true
+    },
+    "issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "start_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^codex/issue-[1-9][0-9]*$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "acceptance_criteria": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "tests": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "not_run": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "human_validation_required": {
+      "type": "boolean"
+    },
+    "human_validation": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "risks": {
+      "$ref": "#/$defs/boundedList"
+    }
+  },
+  "$defs": {
+    "boundedList": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    }
+  }
+}

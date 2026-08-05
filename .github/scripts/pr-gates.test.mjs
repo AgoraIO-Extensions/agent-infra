@@ -55,6 +55,53 @@ test("Issue Gate rejects a closed or wontfix Issue", () => {
   );
 });
 
+test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
+  assert.deepEqual(
+    evaluateIssueGate({
+      issueNumbers: [42],
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      headRef: "codex/issue-42",
+    }),
+    { ok: true, description: "Worker Issue #42 is ready for Agent" },
+  );
+  assert.equal(
+    evaluateIssueGate({
+      issueNumbers: [42],
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      headRef: "codex/issue-7",
+    }).ok,
+    false,
+  );
+  assert.equal(
+    evaluateIssueGate({
+      issueNumbers: [42],
+      issue: { number: 42, state: "open", labels: [] },
+      headRef: "codex/issue-42",
+    }).ok,
+    false,
+  );
+  assert.equal(
+    evaluateIssueGate({
+      issueNumbers: [42],
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      headRef: "codex/issue-not-a-number",
+    }).ok,
+    false,
+  );
+});
+
 test("Human Validation Gate fails only while ready-for-human is present", () => {
   assert.equal(evaluateHumanValidationGate([{ name: "ready-for-human" }]).ok, false);
   assert.equal(evaluateHumanValidationGate([{ name: "bug" }]).ok, true);

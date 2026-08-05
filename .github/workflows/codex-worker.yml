@@ -1,0 +1,238 @@
+name: Codex Worker
+
+on:
+  issues:
+    types: [closed, reopened, labeled, unlabeled]
+  pull_request_target:
+    types: [closed]
+
+permissions: {}
+
+concurrency:
+  group: >-
+    ${{
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      format('codex-worker-ignored-pr-{0}', github.event.pull_request.number) ||
+      format(
+        'codex-worker-{0}',
+        github.event.pull_request.head.ref || format('codex/issue-{0}', github.event.issue.number)
+      )
+    }}
+  cancel-in-progress: >-
+    ${{
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        !github.event.pull_request.merged) ||
+      (github.event_name == 'issues' && github.event.action == 'closed') ||
+      (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'ready-for-agent') ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'ready-for-human') ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'needs-triage') ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'wontfix')
+    }}
+
+jobs:
+  implement:
+    name: Implement frontier Issue
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(vars.CODEX_WORKER_TIMEOUT_MINUTES || '60') }}
+    permissions:
+      contents: read
+    outputs:
+      operation: ${{ steps.prepare.outputs.operation }}
+      reason: ${{ steps.prepare.outputs.reason }}
+      issue_number: ${{ steps.prepare.outputs.issue_number }}
+      start_sha: ${{ steps.prepare.outputs.start_sha }}
+      default_branch: ${{ steps.prepare.outputs.default_branch }}
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Prepare trusted Worker plan
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CODEX_RESPONSES_API_ENDPOINT: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
+          CODEX_MODEL: ${{ secrets.CODEX_MODEL }}
+          CODEX_EFFORT: ${{ secrets.CODEX_EFFORT }}
+          CODEX_WORKER_TIMEOUT_MINUTES: ${{ vars.CODEX_WORKER_TIMEOUT_MINUTES || '60' }}
+          WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+        run: node trusted/.github/scripts/codex-worker.mjs prepare
+
+      - name: Checkout recorded start commit
+        if: steps.prepare.outputs.operation == 'implement'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.prepare.outputs.start_sha }}
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stage trusted Worker inputs
+        if: steps.prepare.outputs.operation == 'implement'
+        env:
+          WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+          WORKER_ARTIFACT_DIR: ${{ github.workspace }}/workspace/.codex-worker-artifact
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORKER_ARTIFACT_DIR/output"
+          install -m 0444 "$WORKER_PREPARE_DIR/plan.json" "$WORKER_ARTIFACT_DIR/plan.json"
+          install -m 0444 "$WORKER_PREPARE_DIR/prompt.md" "$WORKER_ARTIFACT_DIR/prompt.md"
+          install -m 0444 trusted/.github/codex-worker-result.schema.json \
+            "$WORKER_ARTIFACT_DIR/result.schema.json"
+          cp -R trusted/.codex "$CODEX_HOME"
+
+      - name: Run Codex implementation
+        if: steps.prepare.outputs.operation == 'implement'
+        uses: openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9
+        with:
+          openai-api-key: ${{ secrets.CODEX_API_KEY }}
+          responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
+          prompt-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/prompt.md
+          output-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json
+          output-schema-file: ${{ github.workspace }}/workspace/.codex-worker-artifact/result.schema.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home
+          permission-profile: github-worker
+          codex-version: 0.146.0
+          model: ${{ secrets.CODEX_MODEL }}
+          effort: ${{ secrets.CODEX_EFFORT }}
+          safety-strategy: drop-sudo
+
+      - name: Upload fixed Worker Artifact
+        if: steps.prepare.outputs.operation == 'implement' && success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-worker-output
+          path: |
+            ${{ github.workspace }}/workspace/.codex-worker-artifact/plan.json
+            ${{ github.workspace }}/workspace/.codex-worker-artifact/output/change.patch
+            ${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+  publish:
+    name: Validate and publish Worker result
+    needs: implement
+    if: always() && needs.implement.outputs.operation != '' && needs.implement.outputs.operation != 'noop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Handle Worker control event
+        if: needs.implement.outputs.operation != 'implement'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_OPERATION: ${{ needs.implement.outputs.operation }}
+          WORKER_REASON: ${{ needs.implement.outputs.reason }}
+        run: node trusted/.github/scripts/codex-worker.mjs handle
+
+      - name: Handle failed model job
+        if: needs.implement.outputs.operation == 'implement' && needs.implement.result != 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_OPERATION: triage
+          WORKER_REASON: model-failed
+        run: node trusted/.github/scripts/codex-worker.mjs handle
+
+      - name: Download fixed Worker Artifact
+        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-worker-output
+          path: ${{ runner.temp }}/codex-worker-artifact
+
+      - name: Checkout recorded start commit
+        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.implement.outputs.start_sha }}
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate Artifact before publisher credential exposure
+        id: preflight
+        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
+          WORKER_PATCH_PATH: ${{ runner.temp }}/codex-worker-artifact/output/change.patch
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_WORKSPACE: ${{ github.workspace }}/workspace
+        run: node trusted/.github/scripts/codex-worker.mjs preflight
+
+      - name: Handle rejected publication
+        if: steps.preflight.outputs.valid == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_OPERATION: ${{ steps.preflight.outputs.operation }}
+          WORKER_REASON: ${{ steps.preflight.outputs.reason }}
+        shell: bash
+        run: |
+          node trusted/.github/scripts/codex-worker.mjs handle
+          if [[ "$WORKER_OPERATION" == "triage" ]]; then
+            exit 1
+          fi
+
+      - name: Publish fixed branch and Draft PR
+        id: publish
+        if: steps.preflight.outputs.valid == 'true'
+        continue-on-error: true
+        env:
+          CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
+          WORKER_COMMIT_SHA: ${{ steps.preflight.outputs.commit_sha }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_WORKSPACE: ${{ github.workspace }}/workspace
+        run: node trusted/.github/scripts/codex-worker.mjs publish
+
+      - name: Escalate publisher failure
+        if: steps.publish.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_OPERATION: triage
+          WORKER_REASON: publish-failed
+        shell: bash
+        run: |
+          node trusted/.github/scripts/codex-worker.mjs handle
+          exit 1

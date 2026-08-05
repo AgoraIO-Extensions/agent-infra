@@ -158,7 +158,8 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
 - `implement` job checkout 起始 commit 时必须设置 `persist-credentials: false`，job 权限仅为
   `contents: read`，不得把 `GITHUB_TOKEN` 或其他仓库凭证写入 workspace、Git 配置或模型环境。
 - 模型只获得完成实现所需的代码工作区和工具，不获得用于发布 GitHub 变更的 PAT。
-- 模型/API Secret 和 fine-grained GitHub PAT 分开配置。
+- API Key、Responses endpoint、模型和 effort 使用 GitHub Actions Secrets 配置，并与
+  fine-grained GitHub PAT 分开保存。
 - `CODEX_API_KEY` 只传给 `implement` job 中的官方 Codex Action；该 Action 之后只允许固定
   commit SHA 的 Artifact Action 上传固定路径，不运行 shell 命令，也不引入仓库写凭证。
 - `CODEX_GITHUB_TOKEN` 只传给 `publish` job 中固定的 Git push 和 PR 发布步骤，不进入 job
@@ -168,7 +169,7 @@ review 的 PR 只恢复 Issue Gate，不启动新的模型运行。Issue 被关�
   `CODEX_GITHUB_TOKEN`、发布 job 不包含 `CODEX_API_KEY`，不能放宽为允许任意固定 SHA Action。
 - Issue 标题、正文等不可信内容只能经 `env` 或固定输入文件传递，不能插入 `run:` 或参与
   endpoint、模型、permission profile、分支名和命令的生成。
-- Codex 模型 job 使用仓库变量 `CODEX_WORKER_TIMEOUT_MINUTES` 配置超时，默认 `60` 分钟。
+- Codex 模型 job 只有超时使用仓库变量 `CODEX_WORKER_TIMEOUT_MINUTES` 配置，默认 `60` 分钟。
   endpoint、模型、effort 和超时在调用前按固定类型、枚举和格式校验，不能由 Issue 内容覆盖。
 - 当前不处理来自外部 fork 的 PR。
 

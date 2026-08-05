@@ -20,8 +20,18 @@ async function actualWorkflows() {
   );
 }
 
-test("accepts the complete Stage 1 workflow set", async () => {
+test("accepts the complete Stage 2 workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("requires the Codex Worker workflow", async () => {
+  const workflows = await actualWorkflows();
+  delete workflows["codex-worker.yml"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("codex-worker.yml"),
+    ),
+  );
 });
 
 test("rejects PR Review model configuration that bypasses validated Secrets", async () => {
@@ -64,7 +74,193 @@ test("rejects model Secrets outside an approved Claude execution step", async ()
     BAD: "${{ secrets.ANTHROPIC_API_KEY }}",
   };
   assert.ok(
-    validateWorkflowDocuments(workflows).some((error) => error.includes("model Secret")),
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("ANTHROPIC_API_KEY"),
+    ),
+  );
+});
+
+test("keeps the Codex API key only in the official model Action", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].jobs.publish.steps[0].env = {
+    BAD: "${{ secrets.CODEX_API_KEY }}",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("CODEX_API_KEY"),
+    ),
+  );
+
+  const duplicatedSecret = await actualWorkflows();
+  const action = duplicatedSecret["codex-worker.yml"].jobs.implement.steps.find(
+    (step) => step.uses?.startsWith("openai/codex-action@"),
+  );
+  action.env = { BAD: "${{ secrets.CODEX_API_KEY }}" };
+  assert.ok(
+    validateWorkflowDocuments(duplicatedSecret).some((error) =>
+      error.includes("CODEX_API_KEY"),
+    ),
+  );
+});
+
+test("keeps Codex model configuration in fixed Secret inputs", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  const prepare = worker.jobs.implement.steps.find(
+    (step) => step.name === "Prepare trusted Worker plan",
+  );
+  const action = worker.jobs.implement.steps.find((step) =>
+    step.uses?.startsWith("openai/codex-action@"),
+  );
+  for (const [name, reference] of [
+    [
+      "CODEX_RESPONSES_API_ENDPOINT",
+      "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
+    ],
+    ["CODEX_MODEL", "${{ secrets.CODEX_MODEL }}"],
+    ["CODEX_EFFORT", "${{ secrets.CODEX_EFFORT }}"],
+  ]) {
+    assert.equal(prepare.env[name], reference);
+  }
+  assert.equal(
+    action.with["responses-api-endpoint"],
+    "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
+  );
+  assert.equal(action.with.model, "${{ secrets.CODEX_MODEL }}");
+  assert.equal(action.with.effort, "${{ secrets.CODEX_EFFORT }}");
+});
+
+test("keeps the publisher PAT out of the model job", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].jobs.implement.env = {
+    BAD: "${{ secrets.CODEX_GITHUB_TOKEN }}",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("CODEX_GITHUB_TOKEN"),
+    ),
+  );
+});
+
+test("allows the publisher PAT only in the fixed publication step", async () => {
+  const workflows = await actualWorkflows();
+  const step = workflows["codex-worker.yml"].jobs.publish.steps.find(
+    (candidate) => candidate.name === "Handle rejected publication",
+  );
+  step.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed Worker publication step"),
+    ),
+  );
+});
+
+test("requires the pinned official Codex and Artifact Actions", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["codex-worker.yml"].jobs.implement.steps.find(
+    (step) => step.uses?.startsWith("openai/codex-action@"),
+  );
+  action.uses = `attacker/example@${"a".repeat(40)}`;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("pinned official Codex Action"),
+    ),
+  );
+});
+
+test("locks the Codex permission profile and safety strategy", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["codex-worker.yml"].jobs.implement.steps.find(
+    (step) => step.uses?.startsWith("openai/codex-action@"),
+  );
+  action.with["permission-profile"] = ":workspace";
+  action.with["safety-strategy"] = "unsafe";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Codex Action inputs"),
+    ),
+  );
+});
+
+test("locks the Worker Artifact paths and name", async () => {
+  const workflows = await actualWorkflows();
+  const upload = workflows["codex-worker.yml"].jobs.implement.steps.find(
+    (step) => step.name === "Upload fixed Worker Artifact",
+  );
+  upload.with.path += "\n${{ github.workspace }}/workspace/secrets.txt";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Artifact upload contract"),
+    ),
+  );
+});
+
+test("allows only the fixed Artifact upload after Codex", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].jobs.implement.steps.push({
+    name: "Run generated script",
+    run: "./generated.sh",
+  });
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("only upload the fixed Artifact after Codex"),
+    ),
+  );
+});
+
+test("keeps trusted and recorded Worker checkouts separate", async () => {
+  const workflows = await actualWorkflows();
+  const checkout = workflows["codex-worker.yml"].jobs.publish.steps.find(
+    (step) =>
+      step.name === "Checkout recorded start commit",
+  );
+  checkout.with.path = "trusted";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("recorded checkout must use workspace"),
+    ),
+  );
+});
+
+test("pins the Worker default branch outside the model Artifact", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  delete worker.jobs.implement.outputs.default_branch;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("trusted default branch output"),
+    ),
+  );
+
+  const invalidPreflight = await actualWorkflows();
+  const preflight = invalidPreflight["codex-worker.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Validate Artifact before publisher credential exposure",
+  );
+  delete preflight.env.WORKER_DEFAULT_BRANCH;
+  assert.ok(
+    validateWorkflowDocuments(invalidPreflight).some((error) =>
+      error.includes("trusted default branch input"),
+    ),
+  );
+});
+
+test("does not let an external fork cancel a Worker run", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].concurrency["cancel-in-progress"] =
+    "${{ github.event_name == 'pull_request_target' }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("same-repository PR"),
+    ),
+  );
+
+  const vulnerableWorkflows = await actualWorkflows();
+  vulnerableWorkflows["codex-worker.yml"].concurrency.group =
+    "codex-worker-${{ github.event.pull_request.head.ref || github.event.issue.number }}";
+  assert.ok(
+    validateWorkflowDocuments(vulnerableWorkflows).some((error) =>
+      error.includes("isolate external fork PRs"),
+    ),
   );
 });
 
