@@ -2,7 +2,7 @@
 
 [![Docs CI](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml/badge.svg?branch=main&event=push)](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml?query=branch%3Amain+event%3Apush)
 
-企业级 Agent 平台 M1 的产品与工程设计文档。
+企业级 Agent 平台 M1 的产品、工程设计与单仓库实现。
 
 ## 文档
 
@@ -13,7 +13,32 @@
 
 ## 当前状态
 
-仓库当前处于 M1 设计评审阶段，尚未提交工程脚手架或业务代码。
+仓库已进入 M1 工程底座阶段。当前提交提供可安装、构建、测试和独立生成镜像的工程骨架，
+尚未实现领域功能。
+
+| 部署单元 | 目录 | 当前能力 |
+| --- | --- | --- |
+| Web | `apps/web` | React、TanStack Router、Vite 与最小启动页 |
+| Platform API | `apps/platform-api` | Hono 进程与健康检查 |
+| Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
+| Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
+
+Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
+工程架构 Spec 保持独立部署、运行身份和数据边界。
+
+## 本地验证
+
+使用 Node.js 24 和 pnpm 11：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm check
+pnpm check-types
+pnpm test
+pnpm build
+pnpm smoke
+pnpm docker:build
+```
 
 ## 开发工作流
 

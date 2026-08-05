@@ -28,7 +28,7 @@ M1 采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程�
 
 | 层次 | 选型 | M1 用法 |
 | --- | --- | --- |
-| 语言 | TypeScript 7 | Web、平台后端、调谐进程、Connection 统一使用 |
+| 语言 | TypeScript 6 | Web、平台后端、调谐进程、Connection 统一使用 |
 | Web | React 19 + TanStack Router + Vite | 登录后的内部 SPA，不使用 SSR |
 | Web 数据 | TanStack Query | 管理服务端状态、缓存和请求失效 |
 | UI | Tailwind CSS + shadcn/ui | 构建平台工作台、表单、对话和管理页面 |
@@ -43,7 +43,7 @@ M1 采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程�
 | 可观测性 | OpenTelemetry + Pino | Trace、Metric 和结构化日志 |
 | 部署 | Docker + Helm + Kubernetes | 所有平台部署单元进入公司集群 |
 
-具体依赖版本在初始化时写入 lockfile。Node.js 使用公司支持的 LTS 版本；Kubernetes JavaScript Client 与目标集群版本配套，不使用浮动 `latest`。
+初始化依赖以固定版本 Better-T-Stack 的生成结果为基线，并写入 lockfile。Node.js 使用公司支持的 LTS 版本；Kubernetes JavaScript Client 与目标集群版本配套，不使用浮动 `latest`。
 
 ### 2.2 Better-T-Stack 初始化基线
 
@@ -65,7 +65,7 @@ server-deploy: docker
 
 选择 `auth=none` 是因为公司账户和组织体系是唯一身份来源。选择 `api=none` 是为了避免同时维护 tRPC/oRPC 与 OpenAPI 两套契约；M1 的浏览器接口、内部接口和 Agent Runtime Contract 统一以 HTTP/OpenAPI 为主，SSE 事件单独定义 Schema。
 
-脚手架版本固定为 `create-better-t-stack@3.38.0`。生成后代码归本项目维护，不通过重复运行脚手架升级项目。
+脚手架版本固定为 `create-better-t-stack@3.38.1`。生成依赖作为项目初始化基线；生成后代码归本项目维护，不通过重复运行脚手架升级项目，也不在初始化过程中主动升级生成依赖。
 
 ## 3. 架构原则
 
