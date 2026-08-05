@@ -253,7 +253,8 @@ Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR �
 - 自动 Review 只在确定性 CI 通过后执行，也可以由 `claude` 标签或 `@claude` 触发。
 - Claude 把 PR 内容、评论、diff 和外部文本视为不可信数据，只进行只读分析。
 - `P0`、`P1` findings 创建阻塞性的 Review 线程；`P2` 只进入 Review 摘要。
-- `Claude Review` 是 required check。模型调用、输出校验或发布失败时，Check 失败。
+- `Claude Review` 是建议性检查，不加入分支保护的 required checks。模型调用、输出校验或发布
+  失败时 Check 可以失败，但不直接阻止合并；已经发布的阻塞性 Review 线程仍须解决。
 - Claude 不提交 Approve、不 Merge、不修改分支，也不自行解决 Review 线程。
 
 `P0` 表示可能造成越权、凭证泄露、数据损坏或大范围不可用的问题；`P1` 表示会导致错误
@@ -290,7 +291,7 @@ AI 根据验收标准判断自动化 UT、集成测试或 smoke 是否已经充�
 - Approve 表示代码评审完成；移除 `ready-for-human` 表示人工验证完成，两者不能互相替代。
 
 Human Validation Gate 是 required check。标签存在时失败，标签不存在时通过。手工移除标签
-是允许的人工确认方式，但不会跳过 CI、Claude Review、Approve 或其他分支保护规则。
+是允许的人工确认方式，但不会跳过 CI、Approve、阻塞性 Review 线程或其他分支保护规则。
 
 ## 10. 合并规则
 
@@ -298,7 +299,6 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 
 - Issue Gate 通过。
 - 当前 head 的确定性 CI 通过。
-- 当前 head 的 Claude Review 通过。
 - Human Validation Gate 通过。
 - 至少一名符合分支保护要求的人提交 Approve。
 - 所有阻塞性的 Review 线程已解决。
@@ -306,9 +306,9 @@ Human Validation Gate 是 required check。标签存在时失败，标签不存�
 满足门禁后使用 GitHub 原生 Squash Auto-merge。仓库不实现自定义 Merge job，AI 不能批准
 自己的 PR，也不能绕过 required checks 或分支保护。
 
-`main` 分支保护必须将 `Docs CI`、`Issue Gate`、`Claude Review`、
-`Human Validation Gate`、至少一名人工 Approve 和评论解决同时设为合并门禁。Auto-merge
-自动化只负责为 PR 启用 GitHub 原生 Squash Auto-merge，不重复判断或替代这些门禁。
+`main` 分支保护必须将 `Docs CI`、`Issue Gate`、`Human Validation Gate`、至少一名人工
+Approve 和评论解决同时设为合并门禁。Auto-merge 自动化只负责为 PR 启用 GitHub 原生
+Squash Auto-merge，不重复判断或替代这些门禁。
 
 Auto-merge enrollment 使用独立的 `pull_request_target` workflow，并只处理打开、重新打开或
 转为 Ready 的 PR。PR 必须处于打开、非 Draft 状态，目标为默认分支，且 head 属于当前仓库；
@@ -325,7 +325,7 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
   `contents: write` 和 `pull-requests: write`，不能调用直接合并或管理员绕过接口。
 - Codex Worker 的模型 job 与发布 job 使用不同 Runner；模型 job 不获得仓库写凭证，发布
   job 只接受经过校验的固定 Artifact，且不执行其中的代码。
-- required Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
+- Claude PR Review 的模型分析 job 与持有 GitHub 写凭证的发布 job 分离。
 - Issue 建议和 `@claude` 回复复用官方 Action 的评论机制，禁止模型使用文件写入和 Bash，
   只保留官方 Action 对当前评论的受控更新。
 - 模型输出必须经过 Schema 和目标状态校验，不能直接组成任意 GitHub API 请求。
@@ -339,7 +339,7 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 - 创建标准标签。
 - 实现 Issue Gate 和 Human Validation Gate。
 - 实现 Claude Issue Review 和 CI 后的 Claude PR Review。
-- 将确定性 CI、Issue Gate、Claude Review、Human Validation Gate 和评论解决设为合并门禁。
+- 将确定性 CI、Issue Gate、Human Validation Gate 和评论解决设为合并门禁。
 - 启用 GitHub 原生 Squash Auto-merge enrollment，不新增自定义 Merge 实现。
 
 ### Stage 2：Codex Worker
@@ -366,7 +366,8 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 - 未经人确认的 Issue 不能被无人值守流程标记为 `ready-for-agent`。
 - Codex 只领取无未关闭 blocker 的 frontier Issue，同一 Issue 不产生并发执行或多个活动 PR。
 - 每个 PR 只有一个有效且打开的 primary Issue，关系异常时 Issue Gate 阻止合并。
-- Claude 只 Review CI 通过的当前 PR head，`P0`、`P1` 阻塞合并，`P2` 不阻塞。
+- Claude 只 Review CI 通过的当前 PR head；Review check 本身不阻塞合并，成功发布的 `P0`、
+  `P1` 线程阻塞合并，`P2` 不阻塞。
 - 需要人工验证的 PR 在标签被人移除前不能合并；新增 commit 后标签重新出现。
 - 人工 Approve 和人工验证是两个独立门禁，任何标签操作都不能跳过 required checks。
 - Stage 3 启用后，无人值守修复最多两轮；人工重新授权后才能开始新的两轮。
