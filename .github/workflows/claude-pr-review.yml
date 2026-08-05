@@ -23,8 +23,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    env:
-      ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
     outputs:
       structured_output: ${{ steps.claude.outputs.structured_output }}
     steps:
@@ -43,9 +41,19 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Validate Claude Review configuration
+        id: validate-config
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_REVIEW_MODEL: ${{ secrets.CLAUDE_REVIEW_MODEL }}
+        run: node .github/scripts/validate-claude-review-config.mjs
+
       - name: Run read-only Claude Review
         id: claude
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
@@ -72,7 +80,7 @@ jobs:
             P2 is a smaller concrete defect. Every finding must identify an added
             RIGHT-side diff line. Return only the required JSON object.
           claude_args: |
-            --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
+            --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --add-dir pr-head
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*)"

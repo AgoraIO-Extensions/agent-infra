@@ -243,7 +243,7 @@ Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR �
 
 - 使用官方
   [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)。
-- API Key 通过 Actions Secret 配置；Base URL 和模型通过仓库配置传入。
+- API Key、Base URL 和模型通过 Actions Secret 配置并传入模型 step，不进入 job 级环境。
 - 模型执行轮数通过仓库变量 `CLAUDE_REVIEW_MAX_TURNS` 配置，默认值为 `30`；模型 job 的
   超时时间通过仓库变量 `CLAUDE_REVIEW_TIMEOUT_MINUTES` 配置，默认值为 `30`。两个变量均须
   配置为正整数，且仅作用于调用 Claude 的模型 job。

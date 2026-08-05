@@ -25,8 +25,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-    env:
-      ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,9 +39,20 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/claude-event-authorization.mjs
 
+      - name: Validate Claude Review configuration
+        id: validate-config
+        if: steps.authorize.outputs.allowed == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_REVIEW_MODEL: ${{ secrets.CLAUDE_REVIEW_MODEL }}
+        run: node .github/scripts/validate-claude-review-config.mjs
+
       - name: Review Issue
         if: steps.authorize.outputs.allowed == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
@@ -59,7 +68,7 @@ jobs:
             security implications, and test gaps. Give concise, actionable suggestions.
             Do not modify files, labels, Issue state, branches, or pull requests.
           claude_args: |
-            --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
+            --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --allowedTools "Read,Grep,Glob"
             --disallowedTools "Edit,Write,MultiEdit,Bash"
@@ -77,8 +86,6 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    env:
-      ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,9 +98,20 @@ jobs:
         id: authorize
         run: node .github/scripts/claude-event-authorization.mjs
 
+      - name: Validate Claude Review configuration
+        id: validate-config
+        if: steps.authorize.outputs.allowed == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_REVIEW_MODEL: ${{ secrets.CLAUDE_REVIEW_MODEL }}
+        run: node .github/scripts/validate-claude-review-config.mjs
+
       - name: Answer mention
         if: steps.authorize.outputs.allowed == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
@@ -101,7 +119,7 @@ jobs:
           display_report: "false"
           show_full_output: ${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}
           claude_args: |
-            --model "${{ vars.CLAUDE_REVIEW_MODEL }}"
+            --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --allowedTools "Read,Grep,Glob"
             --disallowedTools "Edit,Write,MultiEdit,Bash"

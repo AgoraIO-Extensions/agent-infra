@@ -34,6 +34,23 @@ test("requires the Codex Worker workflow", async () => {
   );
 });
 
+test("rejects PR Review model configuration that bypasses validated Secrets", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_MODEL",
+    "vars.CLAUDE_REVIEW_MODEL",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review model configuration must use validated Secrets"),
+    ),
+  );
+});
+
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
@@ -51,7 +68,7 @@ test("rejects an untrusted PR checkout in PR Gates", async () => {
   );
 });
 
-test("rejects model Secrets outside an official Claude Action step", async () => {
+test("rejects model Secrets outside an approved Claude execution step", async () => {
   const workflows = await actualWorkflows();
   workflows["pr-gates.yml"].jobs.gates.env = {
     BAD: "${{ secrets.ANTHROPIC_API_KEY }}",
@@ -257,7 +274,7 @@ test("requires the trusted Claude publisher to stay credential-free", async () =
   );
 });
 
-test("configures every Claude model job through repository variables", async () => {
+test("configures every Claude model job through validated repository settings", async () => {
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
   const timeout = "${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}";
@@ -271,11 +288,35 @@ test("configures every Claude model job through repository variables", async () 
   for (const [workflowName, jobName] of modelJobs) {
     const job = workflows[workflowName].jobs[jobName];
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    const actionIndex = job.steps.indexOf(action);
+    const config = job.steps[actionIndex - 1];
 
     assert.equal(job["timeout-minutes"], timeout);
+    assert.equal(job.env, undefined);
+    assert.equal(config.id, "validate-config");
+    assert.equal(config.run, "node .github/scripts/validate-claude-review-config.mjs");
+    assert.equal(config.env.ANTHROPIC_BASE_URL, "${{ secrets.ANTHROPIC_BASE_URL }}");
+    assert.equal(action.env.ANTHROPIC_BASE_URL, config.env.ANTHROPIC_BASE_URL);
+    assert.ok(action.with.claude_args.includes('--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"'));
     assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
     assert.equal(action.with.show_full_output, verbose);
   }
+});
+
+test("rejects Issue Review model configuration that bypasses validated Secrets", async () => {
+  const workflows = await actualWorkflows();
+  const job = workflows["claude-issue-review.yml"].jobs.mentions;
+  const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_MODEL",
+    "vars.CLAUDE_REVIEW_MODEL",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model configuration must use validated Secrets"),
+    ),
+  );
 });
 
 test("guards every Issue Review model step with the trusted authorizer", async () => {

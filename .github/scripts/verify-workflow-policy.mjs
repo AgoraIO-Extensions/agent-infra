@@ -13,6 +13,11 @@ const REQUIRED_WORKFLOWS = [
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
+const CLAUDE_SECRETS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_REVIEW_MODEL",
+];
 const CODEX_ACTION =
   "openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9";
 const UPLOAD_ARTIFACT_ACTION =
@@ -35,19 +40,38 @@ function referencedSecrets(value) {
   );
 }
 
+function isApprovedClaudeConfigStep(workflowName, jobName, step) {
+  return (
+    step.id === "validate-config" &&
+    step.run === "node .github/scripts/validate-claude-review-config.mjs" &&
+    ((workflowName === "claude-pr-review.yml" && jobName === "analyze") ||
+      (workflowName === "claude-issue-review.yml" &&
+        ["automatic-issue-review", "mentions"].includes(jobName)))
+  );
+}
+
 function validateStepSecrets(errors, workflowName, jobName, step) {
   for (const secret of referencedSecrets(step)) {
     const occurrences = referencedSecrets(step).filter(
       (reference) => reference === secret,
     ).length;
-    if (secret === "ANTHROPIC_API_KEY") {
-      if (
-        !step.uses?.startsWith(CLAUDE_ACTION) ||
-        step.with?.anthropic_api_key !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
-        occurrences !== 1
-      ) {
+    if (CLAUDE_SECRETS.includes(secret)) {
+      const reference = `\${{ secrets.${secret} }}`;
+      const allowedConfig =
+        isApprovedClaudeConfigStep(workflowName, jobName, step) &&
+        step.env?.[secret] === reference &&
+        occurrences === 1;
+      const allowedAction =
+        step.uses?.startsWith(CLAUDE_ACTION) &&
+        occurrences === 1 &&
+        ((secret === "ANTHROPIC_API_KEY" &&
+          step.with?.anthropic_api_key === reference) ||
+          (secret === "ANTHROPIC_BASE_URL" && step.env?.ANTHROPIC_BASE_URL === reference) ||
+          (secret === "CLAUDE_REVIEW_MODEL" &&
+            step.with?.claude_args?.includes(`--model "${reference}"`)));
+      if (!allowedConfig && !allowedAction) {
         errors.push(
-          `${workflowName}/${jobName}: ANTHROPIC_API_KEY is allowed only in the official Claude Action`,
+          `${workflowName}/${jobName}: ${secret} is allowed only in approved Claude configuration or Action inputs`,
         );
       }
       continue;
@@ -333,6 +357,31 @@ export function validateWorkflowDocuments(workflows) {
   if (!review?.on?.workflow_run?.workflows?.includes("Docs CI")) {
     errors.push("Claude PR Review must run only after Docs CI");
   }
+  const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
+  const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
+  const reviewAction = analyzeSteps[reviewActionIndex];
+  const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
+  const reviewConfig = analyzeSteps[reviewConfigIndex];
+  const reviewConfigEnv = reviewConfig?.env ?? {};
+  if (
+    reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+    Object.keys(reviewConfigEnv).sort().join("\0") !==
+      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+        .sort()
+        .join("\0") ||
+    reviewConfigEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+    reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+    reviewActionIndex !== reviewConfigIndex + 1 ||
+    reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewAction?.with?.show_full_output !==
+      "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
+    !reviewAction?.with?.claude_args?.includes(
+      '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+    )
+  ) {
+    errors.push("Claude PR Review model configuration must use validated Secrets");
+  }
   if (JSON.stringify(review?.jobs?.publish ?? {}).includes("secrets.")) {
     errors.push("Claude Review publisher must not receive a model Secret");
   }
@@ -390,6 +439,10 @@ export function validateWorkflowDocuments(workflows) {
     const modelIndex = (job.steps ?? []).findIndex((step) =>
       step.uses?.startsWith(CLAUDE_ACTION),
     );
+    const configIndex = (job.steps ?? []).findIndex((step) => step.id === "validate-config");
+    const configStep = job.steps?.[configIndex];
+    const modelStep = job.steps?.[modelIndex];
+    const configEnv = configStep?.env ?? {};
     if (modelIndex >= 0 && (authorizeIndex < 0 || authorizeIndex >= modelIndex)) {
       errors.push(
         `claude-issue-review.yml/${jobName}: trusted authorization must run before model`,
@@ -397,10 +450,32 @@ export function validateWorkflowDocuments(workflows) {
     }
     if (
       modelIndex >= 0 &&
-      job.steps[modelIndex].if !== "steps.authorize.outputs.allowed == 'true'"
+      modelStep.if !== "steps.authorize.outputs.allowed == 'true'"
     ) {
       errors.push(
         `claude-issue-review.yml/${jobName}: model step must use trusted authorization output`,
+      );
+    }
+    if (
+      modelIndex >= 0 &&
+      (configIndex !== authorizeIndex + 1 ||
+        modelIndex !== configIndex + 1 ||
+        configStep?.if !== "steps.authorize.outputs.allowed == 'true'" ||
+        configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+        Object.keys(configEnv).sort().join("\0") !==
+          ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+            .sort()
+            .join("\0") ||
+        configEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
+        configEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
+        modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        !modelStep?.with?.claude_args?.includes(
+          '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        ))
+    ) {
+      errors.push(
+        `claude-issue-review.yml/${jobName}: model configuration must use validated Secrets`,
       );
     }
   }
