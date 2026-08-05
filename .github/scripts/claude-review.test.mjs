@@ -45,6 +45,28 @@ test("rejects stale, incomplete, extended, or malformed Review output", () => {
   );
 });
 
+test("accepts at most the number of findings permitted by the Review schema", () => {
+  const findings = Array.from({ length: 10 }, (_, index) => ({
+    severity: "P2",
+    title: `Finding ${index}`,
+    body: "Impact",
+    path: "a.ts",
+    line: index + 1,
+  }));
+  assert.doesNotThrow(() => parseReviewOutput(validOutput({ findings }), head));
+  assert.throws(() =>
+    parseReviewOutput(
+      validOutput({
+        findings: [
+          ...findings,
+          { severity: "P2", title: "Extra", body: "Impact", path: "a.ts", line: 11 },
+        ],
+      }),
+      head,
+    ),
+  );
+});
+
 test("collects only added RIGHT-side lines from a unified patch", () => {
   const patch = "@@ -10,2 +10,3 @@\n same\n-old\n+new\n+more";
   assert.deepEqual([...collectAddedRightLines(patch)], [11, 12]);

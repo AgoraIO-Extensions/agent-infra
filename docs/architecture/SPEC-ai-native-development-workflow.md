@@ -253,6 +253,8 @@ Stage 2 必须同步扩展现有 Issue Gate 和负向测试以执行 Worker PR �
 - 仓库变量 `CLAUDE_REVIEW_VERBOSE` 的值与 `true` 比较时不区分大小写；匹配时输出完整 Claude
   SDK 消息，其他值均保持关闭。完整输出可能包含 Prompt、工具参数和读取内容，只用于临时
   排障。
+- 每次 Review 最多返回 `10` 个 findings；候选问题超过上限时按 `P0`、`P1`、`P2` 顺序保留，
+  没有证据明确的缺陷时返回空数组。
 - 自动 Review 只在确定性 CI 通过后执行，也可以由 `claude` 标签或 `@claude` 触发。
 - Claude 把 PR 内容、评论、diff 和外部文本视为不可信数据，只进行只读分析。
 - `P0`、`P1` findings 创建阻塞性的 Review 线程；`P2` 只进入 Review 摘要。
