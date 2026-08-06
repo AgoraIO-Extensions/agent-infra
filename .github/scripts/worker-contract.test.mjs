@@ -5,6 +5,7 @@ import {
   activeAuthorization,
   authorizeCycle,
   blockedByChanged,
+  blockedByStateHash,
   buildAcceptanceCriteriaEvidenceMarker,
   buildAuthorizationRecordComment,
   executionContent,
@@ -76,6 +77,11 @@ test("canonicalizes protected execution content and stable AC checkboxes", () =>
   assert.equal(first.hash, second.hash);
   assert.match(first.preimage, /"version":"execution-content-v1"/);
   assert.doesNotMatch(first.preimage, /Blocked by/);
+  assert.equal(
+    executionContent(issue({ body: issueBody.replace("None", "- #7") })).blockedByHash,
+    blockedByStateHash([7]),
+  );
+  assert.throws(() => blockedByStateHash([7, 7]), /invalid Issue numbers/);
 
   const changed = executionContent(
     issue({ body: issueBody.replace("Keep the contract bounded.", "Expand scope.") }),

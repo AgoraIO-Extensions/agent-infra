@@ -11,6 +11,7 @@
     "branch",
     "summary",
     "acceptance_criteria",
+    "blocker_proposals",
     "tests",
     "not_run",
     "human_validation_required",
@@ -19,8 +20,7 @@
   ],
   "properties": {
     "completed": {
-      "type": "boolean",
-      "const": true
+      "type": "boolean"
     },
     "issue_number": {
       "type": "integer",
@@ -67,7 +67,8 @@
             "type": "string",
             "enum": [
               "pass",
-              "not_applicable"
+              "not_applicable",
+              "blocked"
             ]
           },
           "evidence": {
@@ -76,6 +77,13 @@
             "maxLength": 4000
           }
         }
+      }
+    },
+    "blocker_proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/blockerProposal"
       }
     },
     "tests": {
@@ -94,10 +102,133 @@
       "$ref": "#/$defs/boundedList"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "blocker_proposals": {
+            "type": "array",
+            "maxItems": 0
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "not_applicable"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "blocker_proposals": {
+            "type": "array",
+            "minItems": 1
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "const": "blocked"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "blockerProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "title",
+        "problem",
+        "scope",
+        "acceptance_criteria",
+        "validation"
+      ],
+      "properties": {
+        "proposal_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "problem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "scope": {
+          "$ref": "#/$defs/nonEmptyBoundedList"
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "validation": {
+          "$ref": "#/$defs/nonEmptyBoundedList"
+        }
+      }
+    },
     "boundedList": {
       "type": "array",
       "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "nonEmptyBoundedList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
       "items": {
         "type": "string",
         "minLength": 1,

@@ -31,6 +31,12 @@ import {
   validateWorkerResult,
 } from "./codex-worker.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
+import {
+  buildBlockerIssue,
+  buildBlockerStateComment,
+  classifyDependentBlockers,
+  inspectBlockerGraph,
+} from "./blocker-contract.mjs";
 
 test("parses deterministic Blocked by declarations", () => {
   assert.deepEqual(parseBlockedBy("## Blocked by\n\nNone\n"), []);
@@ -49,6 +55,20 @@ test("rejects missing, duplicated, self-referential, or free-form blockers", () 
 });
 
 test("classifies only explicit Worker control and execution events", () => {
+  assert.equal(
+    classifyWorkerEvent({
+      eventName: "repository_dispatch",
+      dispatchOperation: "evaluate",
+    }),
+    "evaluate",
+  );
+  assert.equal(
+    classifyWorkerEvent({
+      eventName: "repository_dispatch",
+      dispatchOperation: "delete",
+    }),
+    "noop",
+  );
   assert.equal(
     classifyWorkerEvent({ eventName: "issues", action: "labeled", label: "bug" }),
     "noop",
@@ -267,6 +287,116 @@ test("does not execute blocked or Ready-for-review Issues", () => {
       pullRequestNumber: 9,
     },
   );
+});
+
+test("requires completed state_reason and no wontfix label for every blocker", () => {
+  assert.deepEqual(
+    frontier({
+      blockers: [{ number: 12, state: "closed", state_reason: "not_planned" }],
+    }),
+    { operation: "triage", reason: "blocker-not-planned" },
+  );
+  assert.deepEqual(
+    frontier({ blockers: [{ number: 12, state: "closed", state_reason: null }] }),
+    { operation: "triage", reason: "invalid-blocker-state" },
+  );
+  assert.equal(
+    frontier({
+      blockers: [
+        {
+          number: 12,
+          state: "closed",
+          state_reason: "completed",
+          labels: [{ name: "wontfix" }],
+        },
+      ],
+    }).reason,
+    "blocker-not-planned",
+  );
+  assert.equal(
+    frontier({
+      blockers: [{ number: 12, state: "closed", state_reason: "completed" }],
+    }).operation,
+    "implement",
+  );
+});
+
+test("accepts each reconciler dispatch signature only once", async () => {
+  const source = {
+    number: 42,
+    state: "open",
+    labels: [{ name: "ready-for-agent" }],
+  };
+  const blocker = { number: 43, state: "closed", state_reason: "completed" };
+  const state = classifyDependentBlockers(
+    inspectBlockerGraph([
+      {
+        ...source,
+        body: "## Blocked by\n\n- #43\n",
+      },
+      { ...blocker, body: "## Blocked by\n\nNone\n" },
+    ]),
+    42,
+  );
+  let nextCommentId = 2;
+  const comments = [
+    {
+      id: 1,
+      body: buildBlockerStateComment(state),
+      user: { login: "github-actions[bot]", type: "Bot" },
+      performed_via_github_app: { id: 15368 },
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:00:00Z",
+    },
+  ];
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/42") && !options.method) return source;
+    if (apiPath.endsWith("/issues/42/comments") && options.method === "POST") {
+      const body = JSON.parse(options.body).body;
+      comments.push({
+        id: nextCommentId,
+        body,
+        user: { login: "github-actions[bot]", type: "Bot" },
+        performed_via_github_app: { id: 15368 },
+        created_at: "2026-08-06T00:00:01Z",
+        updated_at: "2026-08-06T00:00:01Z",
+      });
+      nextCommentId += 1;
+      return comments.at(-1);
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  const paginate = async () => comments;
+  const event = {
+    action: "codex-worker",
+    client_payload: {
+      issue_number: 42,
+      operation: "evaluate",
+      reason: state.reason,
+      blocker_state_signature: state.signature,
+    },
+  };
+  assert.equal(
+    await worker.authorizeReconcilerDispatch({
+      repository: "example/agent-infra",
+      event,
+      token: "test-token",
+      request,
+      paginate,
+    }),
+    true,
+  );
+  assert.equal(
+    await worker.authorizeReconcilerDispatch({
+      repository: "example/agent-infra",
+      event,
+      token: "test-token",
+      request,
+      paginate,
+    }),
+    false,
+  );
+  assert.equal(comments.length, 2);
 });
 
 test("routes inconsistent branch and PR state to triage without duplication", () => {
@@ -609,6 +739,7 @@ function workerResult(overrides = {}) {
     start_sha: "a".repeat(40),
     branch: "codex/issue-42-cycle-1",
     summary: "Implemented the requested behavior.",
+    blocker_proposals: [],
     acceptance_criteria: [
       { id: "AC-1", status: "pass", evidence: "The behavior is covered." },
     ],
@@ -620,6 +751,17 @@ function workerResult(overrides = {}) {
     ...overrides,
   });
 }
+
+const blockerProposal = {
+  proposal_id: "missing-migration",
+  title: "add the required migration",
+  problem: "The requested implementation depends on a missing database table.",
+  scope: ["Add the missing migration."],
+  acceptance_criteria: [
+    { id: "AC-1", text: "The migration applies cleanly." },
+  ],
+  validation: ["Run the migration test."],
+};
 
 function jsonScalarType(value) {
   if (value === null || !["boolean", "number", "string"].includes(typeof value)) {
@@ -728,6 +870,96 @@ test("accepts only bounded Worker results for the recorded Issue and start commi
       workerResult({ human_validation_required: true, human_validation: [] }),
       workerPlan,
     ),
+  );
+});
+
+test("accepts a blocker-only result and rejects mixed completion states", () => {
+  const blocked = validateWorkerResult(
+    workerResult({
+      completed: false,
+      blocker_proposals: [blockerProposal],
+      acceptance_criteria: [
+        { id: "AC-1", status: "blocked", evidence: "Missing migration." },
+      ],
+    }),
+    workerPlan,
+  );
+  assert.equal(blocked.completed, false);
+  assert.equal(blocked.blocker_proposals[0].proposal_id, "missing-migration");
+
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({ blocker_proposals: [blockerProposal] }),
+        workerPlan,
+      ),
+    /Completed Worker result cannot propose blockers/,
+  );
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({ completed: false, blocker_proposals: [] }),
+        workerPlan,
+      ),
+    /must propose a blocker/,
+  );
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({
+          completed: false,
+          blocker_proposals: [blockerProposal],
+        }),
+        workerPlan,
+      ),
+    /mark every AC as blocked/,
+  );
+});
+
+test("reuses one trusted blocker proposal and rejects duplicate trusted Issues", () => {
+  const rendered = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 1,
+    executionContentHash: workerContract.hash,
+    proposal: blockerProposal,
+  });
+  const trusted = {
+    number: 90,
+    title: rendered.title,
+    body: rendered.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    blockerComments: [
+      {
+        body: rendered.identityComment,
+        user: { login: "github-actions[bot]", type: "Bot" },
+        performed_via_github_app: { id: 15368 },
+        created_at: "2026-08-06T00:00:00Z",
+        updated_at: "2026-08-06T00:00:00Z",
+      },
+    ],
+  };
+  assert.equal(worker.findExistingBlockerIssue([trusted], rendered.record).number, 90);
+  assert.equal(
+    worker.findExistingBlockerIssue(
+      [
+        {
+          ...trusted,
+          user: { login: "forger", type: "User" },
+          performed_via_github_app: undefined,
+        },
+      ],
+      rendered.record,
+    ),
+    null,
+  );
+  assert.throws(
+    () =>
+      worker.findExistingBlockerIssue(
+        [trusted, { ...trusted, number: 91 }],
+        rendered.record,
+      ),
+    /multiple trusted Issues/,
   );
 });
 
@@ -844,6 +1076,41 @@ test("allows an empty Patch only when resuming an existing fixed branch", async 
       plan: { ...firstRun.plan, branchExisted: false },
     }),
     /first publication Patch is empty/,
+  );
+});
+
+test("requires blocker-only results to publish an empty Patch", async (t) => {
+  const blocked = artifactFixture(t);
+  const emptyPatch = path.join(blocked.root, "blocked.patch");
+  writeFileSync(emptyPatch, "");
+  writeFileSync(
+    blocked.resultPath,
+    workerResult({
+      completed: false,
+      blocker_proposals: [blockerProposal],
+      start_sha: blocked.plan.startSha,
+      acceptance_criteria: [
+        { id: "AC-1", status: "blocked", evidence: "Missing migration." },
+      ],
+    }),
+  );
+  const validated = await worker.validateAndApplyWorkerArtifact({
+    workspace: blocked.publish,
+    patchPath: emptyPatch,
+    resultPath: blocked.resultPath,
+    plan: { ...blocked.plan, branchExisted: false },
+  });
+  assert.deepEqual(validated.changedPaths, []);
+
+  writeFileSync(path.join(blocked.model, "partial.txt"), "partial\n");
+  await assert.rejects(
+    worker.validateAndApplyWorkerArtifact({
+      workspace: blocked.publish,
+      patchPath: writePatch(blocked),
+      resultPath: blocked.resultPath,
+      plan: blocked.plan,
+    }),
+    /cannot publish a partial Patch/,
   );
 });
 

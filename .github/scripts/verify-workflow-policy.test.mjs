@@ -27,7 +27,11 @@ async function actualTrustedScriptSources() {
   return Object.fromEntries(
     await Promise.all(
       [
+        "blocker-contract.mjs",
+        "blocker-reconciler.mjs",
         "check-run-contract.mjs",
+        "claude-event-authorization.mjs",
+        "claude-blocker-review.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
         "pr-gates.mjs",
@@ -42,8 +46,73 @@ async function actualTrustedScriptSources() {
   );
 }
 
-test("accepts the complete Stage 2 workflow set", async () => {
+test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("requires the serialized Blocker Reconciler workflow", async () => {
+  const workflows = await actualWorkflows();
+  const reconciler = workflows["blocker-reconciler.yml"];
+  assert.deepEqual(reconciler.on.schedule, [{ cron: "*/15 * * * *" }]);
+  assert.deepEqual(reconciler.concurrency, {
+    group: "blocker-graph-${{ github.repository }}",
+    "cancel-in-progress": false,
+  });
+  delete workflows["blocker-reconciler.yml"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("blocker-reconciler.yml"),
+    ),
+  );
+});
+
+test("grants contents write only to trusted repository dispatch publishers", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(
+    workflows["blocker-reconciler.yml"].jobs.reconcile.permissions.contents,
+    "write",
+  );
+  assert.equal(
+    workflows["codex-worker.yml"].jobs.publish.permissions.contents,
+    "write",
+  );
+  assert.equal(
+    workflows["codex-worker.yml"].jobs.implement.permissions.contents,
+    "read",
+  );
+  workflows["blocker-reconciler.yml"].jobs.reconcile.permissions.contents = "read";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Blocker Reconciler"),
+    ),
+  );
+});
+
+test("keeps blocker publication off the Publisher PAT", async () => {
+  const workflows = await actualWorkflows();
+  const blocker = workflows["codex-worker.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Publish unprivileged blocker proposals",
+  );
+  assert.equal(blocker.env.GITHUB_TOKEN, "${{ github.token }}");
+  blocker.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("CODEX_GITHUB_TOKEN"),
+    ),
+  );
+});
+
+test("requires bounded blocker and reconciliation sources", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["blocker-reconciler.mjs"] = sources["blocker-reconciler.mjs"].replace(
+    'event_type: "codex-worker"',
+    'event_type: "untrusted"',
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("bounded proposals and signed reconciliation"),
+    ),
+  );
 });
 
 test("requires the Codex Worker workflow", async () => {
@@ -63,7 +132,7 @@ test("requires the isolated Worker authorization recorder before the model", asy
   assert.equal(worker.jobs.implement.needs, "authorization");
   assert.equal(
     worker.jobs.implement.if,
-    "always() && needs.authorization.result == 'success'",
+    "always() && needs.authorization.result == 'success' && needs.authorization.outputs.allowed != 'false'",
   );
 
   delete worker.jobs.authorization;
@@ -451,6 +520,7 @@ test("configures every Claude model job through validated repository settings", 
   const modelJobs = [
     ["claude-issue-review.yml", "automatic-issue-review"],
     ["claude-issue-review.yml", "mentions"],
+    ["claude-issue-review.yml", "analyze-blocker-review"],
     ["claude-pr-review.yml", "analyze"],
   ];
 
@@ -492,10 +562,19 @@ test("guards every Issue Review model step with the trusted authorizer", async (
   const workflows = await actualWorkflows();
   const workflow = workflows["claude-issue-review.yml"];
   for (const job of Object.values(workflow.jobs)) {
-    assert.doesNotMatch(job.if, /author_association/);
+    assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    if (!action) continue;
+    if (job === workflow.jobs["analyze-blocker-review"]) {
+      assert.equal(job.needs, "authorize-blocker-review");
+      assert.equal(
+        job.if,
+        "needs.authorize-blocker-review.outputs.allowed == 'true'",
+      );
+      continue;
+    }
     const authorize = job.steps.find((step) => step.id === "authorize");
     assert.equal(authorize.run, "node .github/scripts/claude-event-authorization.mjs");
-    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
     assert.equal(action.if, "steps.authorize.outputs.allowed == 'true'");
   }
 });
@@ -893,13 +972,16 @@ test("grants PR write permission before restoring human validation labels", asyn
 test("keeps the official Issue Review model on read-only tools", async () => {
   const workflows = await actualWorkflows();
   const issueWorkflow = workflows["claude-issue-review.yml"];
-  for (const job of Object.values(issueWorkflow.jobs)) {
+  for (const [jobName, job] of Object.entries(issueWorkflow.jobs)) {
     const action = job.steps.find((candidate) =>
       candidate.uses?.startsWith("anthropics/"),
     );
+    if (!action) continue;
     assert.match(
       action.with.claude_args,
-      /--disallowedTools "Edit,Write,MultiEdit,Bash"/,
+      jobName === "analyze-blocker-review"
+        ? /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/
+        : /--disallowedTools "Edit,Write,MultiEdit,Bash"/,
     );
   }
   const step = issueWorkflow.jobs["automatic-issue-review"].steps.find((candidate) =>

@@ -5,6 +5,8 @@ on:
     types: [closed, edited, reopened, labeled, unlabeled]
   pull_request_target:
     types: [closed]
+  repository_dispatch:
+    types: [codex-worker]
 
 permissions: {}
 
@@ -16,7 +18,11 @@ concurrency:
       format('codex-worker-ignored-pr-{0}', github.event.pull_request.number) ||
       format(
         'codex-worker-{0}',
-        github.event.pull_request.head.ref || format('codex/issue-{0}', github.event.issue.number)
+        github.event.pull_request.head.ref ||
+        format(
+          'codex/issue-{0}',
+          github.event.issue.number || github.event.client_payload.issue_number
+        )
       )
     }}
   cancel-in-progress: >-
@@ -28,7 +34,10 @@ concurrency:
       (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'ready-for-agent') ||
       (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'ready-for-human') ||
       (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'needs-triage') ||
-      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'wontfix')
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'wontfix') ||
+      (github.event_name == 'repository_dispatch' &&
+        (github.event.client_payload.operation == 'pause' ||
+          github.event.client_payload.operation == 'triage'))
     }}
 
 jobs:
@@ -42,6 +51,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+    outputs:
+      allowed: ${{ steps.authorize.outputs.allowed }}
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +82,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Record trusted authorization transition
+        id: authorize
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
@@ -79,7 +91,10 @@ jobs:
   implement:
     name: Implement frontier Issue
     needs: authorization
-    if: always() && needs.authorization.result == 'success'
+    if: >-
+      always() &&
+      needs.authorization.result == 'success' &&
+      needs.authorization.outputs.allowed != 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(vars.CODEX_WORKER_TIMEOUT_MINUTES || '60') }}
     permissions:
@@ -174,10 +189,13 @@ jobs:
     name: Validate and publish Worker result
     needs: implement
     if: always() && needs.implement.outputs.operation != '' && needs.implement.outputs.operation != 'noop'
+    concurrency:
+      group: blocker-graph-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
     steps:
@@ -258,7 +276,9 @@ jobs:
 
       - name: Publish fixed branch and Draft PR
         id: publish
-        if: steps.preflight.outputs.valid == 'true'
+        if: >-
+          steps.preflight.outputs.valid == 'true' &&
+          steps.preflight.outputs.operation == 'publish'
         continue-on-error: true
         env:
           CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
@@ -271,13 +291,28 @@ jobs:
           WORKER_WORKSPACE: ${{ github.workspace }}/workspace
         run: node trusted/.github/scripts/codex-worker.mjs publish
 
+      - name: Publish unprivileged blocker proposals
+        id: blockers
+        if: >-
+          steps.preflight.outputs.valid == 'true' &&
+          steps.preflight.outputs.operation == 'block'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+        run: node trusted/.github/scripts/codex-worker.mjs blockers
+
       - name: Escalate publisher failure
-        if: steps.publish.outcome == 'failure'
+        if: steps.publish.outcome == 'failure' || steps.blockers.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
           WORKER_OPERATION: triage
-          WORKER_REASON: publish-failed
+          WORKER_REASON: ${{ steps.blockers.outcome == 'failure' && 'blocker-publish-failed' || 'publish-failed' }}
         shell: bash
         run: |
           node trusted/.github/scripts/codex-worker.mjs handle

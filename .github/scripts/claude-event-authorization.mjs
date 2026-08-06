@@ -1,6 +1,13 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
+import {
+  buildBlockerReviewAck,
+  hasTrustedBlockerReviewAck,
+  isTrustedBlockerReviewComment,
+  parseBlockerProposalRecord,
+} from "./blocker-contract.mjs";
+
 const TRUSTED_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"]);
 const TRUSTED_REPOSITORY_PERMISSIONS = new Set([
   "admin",
@@ -19,8 +26,11 @@ function isTrustedMention(value) {
 export function authorizeClaudeEvent(
   eventName,
   event,
-  { verifiedRepositoryPermission } = {},
+  { verifiedRepositoryPermission, verifiedBlockerReview = false } = {},
 ) {
+  if (eventName === "repository_dispatch") {
+    return event.action === "claude-blocker-review" && verifiedBlockerReview;
+  }
   if (eventName === "issues") {
     if (event.action === "opened") {
       return (
@@ -38,6 +48,69 @@ export function authorizeClaudeEvent(
     return isTrustedMention(event.review);
   }
   return false;
+}
+
+async function githubJson(apiPath, { token, method = "GET", body } = {}) {
+  const response = await fetch(`https://api.github.com${apiPath}`, {
+    method,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub blocker review lookup failed: ${response.status}`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+async function githubPaginate(apiPath, { token, request = githubJson } = {}) {
+  const values = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const separator = apiPath.includes("?") ? "&" : "?";
+    const batch = await request(
+      `${apiPath}${separator}per_page=100&page=${page}`,
+      { token },
+    );
+    values.push(...batch);
+    if (batch.length < 100) return values;
+  }
+  throw new Error("GitHub blocker review pagination limit exceeded");
+}
+
+export async function authorizeBlockerReviewDispatch({
+  repository,
+  issueNumber,
+  token,
+  request = githubJson,
+  paginate = githubPaginate,
+}) {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
+    throw new Error("Blocker review Issue is invalid");
+  }
+  const issue = await request(`/repos/${repository}/issues/${issueNumber}`, { token });
+  const comments = await paginate(
+    `/repos/${repository}/issues/${issueNumber}/comments`,
+    { token, request },
+  );
+  const record = parseBlockerProposalRecord(issue, { comments });
+  if (
+    !record ||
+    !comments.some((comment) => isTrustedBlockerReviewComment(comment)) ||
+    hasTrustedBlockerReviewAck(comments, issueNumber, record)
+  ) {
+    return false;
+  }
+  await request(`/repos/${repository}/issues/${issueNumber}/comments`, {
+    token,
+    method: "POST",
+    body: JSON.stringify({ body: buildBlockerReviewAck(issueNumber, record) }),
+  });
+  return true;
 }
 
 export async function fetchRepositoryPermission({
@@ -87,6 +160,7 @@ async function main() {
   );
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
   let verifiedRepositoryPermission;
+  let verifiedBlockerReview = false;
   if (
     eventName === "issues" &&
     event.action === "opened" &&
@@ -98,8 +172,19 @@ async function main() {
       token: requiredEnvironment("GITHUB_TOKEN"),
     });
   }
+  if (
+    eventName === "repository_dispatch" &&
+    event.action === "claude-blocker-review"
+  ) {
+    verifiedBlockerReview = await authorizeBlockerReviewDispatch({
+      repository: requiredEnvironment("GITHUB_REPOSITORY"),
+      issueNumber: event.client_payload?.issue_number,
+      token: requiredEnvironment("GITHUB_TOKEN"),
+    });
+  }
   const allowed = authorizeClaudeEvent(eventName, event, {
     verifiedRepositoryPermission,
+    verifiedBlockerReview,
   });
   await fs.appendFile(requiredEnvironment("GITHUB_OUTPUT"), `allowed=${allowed}\n`);
   console.log(allowed ? "Claude event authorized" : "Claude event not authorized");

@@ -146,9 +146,18 @@ Issue 进入 `needs-triage`。
 并进入 `needs-triage`。
 
 - Worker 只能在结构化结果中提出有界 blocker proposal。trusted Publisher 校验并创建完整的
-  Implementation Issue，再以确定性格式登记依赖边。
+  Implementation Issue，再以确定性格式登记依赖边；阻塞结果不得发布 partial Patch、branch
+  或 PR。
 - 新 blocker 不带 `ready-for-agent`、`ready-for-human` 或等价授权。由受信 Publisher 身份创建
-  的 blocker 必须显式触发正常 advisory Claude Issue Review，但 Review 不能授予执行权限。
+  的固定 marker comment 才能触发正常 advisory Claude Issue Review，其他 Bot mention 不得调用
+  模型，Review 也不能授予执行权限。因为默认 `GITHUB_TOKEN` 创建的评论不会触发下游 workflow，
+  Publisher 在 marker 落盘后发送固定 `repository_dispatch`；Review workflow 必须实时回读不可编辑
+  的 App identity、marker 与一次性 acknowledgement，再把只读模型输出交给隔离 Publisher。
+- Publisher 登记可信依赖边时同步追加当前 cycle 的 `frontier-updated` 授权审计；Reconciler 只能在
+  旧 `blockedByHash` 与移除可信 proposal 后的前缀完全匹配时补写漏失记录，不能借修复扩大授权。
+- 正文 `Blocked by` 是权威边，GitHub native dependency 只是 UI 镜像。正文存在但原生边缺失时，
+  Publisher 或 Reconciler 使用 blocker 的 GitHub `issue_id` 补齐；原生边多于正文、查询失败或更新
+  失败时进入 `needs-triage`，不能自动删除原生边或选择任一版本覆盖另一版本。
 - blocker 打开或重新打开时，所有 reverse dependents 立即不再是 frontier；正在执行的 dependent
   停止发布，已存在 branch/Draft PR 保留。
 - blocker 以 `state_reason=completed` 关闭时，事件处理器重新计算所有 reverse dependents；仍
@@ -156,7 +165,9 @@ Issue 进入 `needs-triage`。
 - blocker 以 `state_reason=not_planned` 关闭或带有 `wontfix` 时，不解除 dependent 的执行阻塞，
   而是添加 `needs-triage` 并留下稳定原因。
 - 每 15 分钟运行的 Reconciler 与事件处理器复用同一状态决策函数。相同状态签名重复执行不能
-  重复创建 Issue、边、评论、标签变化、Worker run 或通知。
+  重复创建 Issue、边、评论、标签变化、Worker run 或通知。Reconciler 必须先持久化状态 intent，
+  再发送固定 `repository_dispatch`；Worker 以同一状态签名写一次 acknowledgement，缺少 ack 的
+  intent 才能重试，重复或乱序 dispatch 不得再次进入模型步骤。
 
 ### 5.6 派生执行状态
 

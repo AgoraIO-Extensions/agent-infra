@@ -165,10 +165,23 @@ export function executionContent(issue) {
     hash: createHash("sha256").update(preimage, "utf8").digest("hex"),
     acceptanceCriteriaIds,
     blockerNumbers,
-    blockedByHash: createHash("sha256")
-      .update(JSON.stringify({ version: "blocked-by-v1", blockerNumbers }), "utf8")
-      .digest("hex"),
+    blockedByHash: blockedByStateHash(blockerNumbers),
   };
+}
+
+export function blockedByStateHash(blockerNumbers) {
+  if (
+    !Array.isArray(blockerNumbers) ||
+    blockerNumbers.some(
+      (number) => !Number.isSafeInteger(number) || number < 1,
+    ) ||
+    new Set(blockerNumbers).size !== blockerNumbers.length
+  ) {
+    throw new Error("Blocked by state contains invalid Issue numbers");
+  }
+  return createHash("sha256")
+    .update(JSON.stringify({ version: "blocked-by-v1", blockerNumbers }), "utf8")
+    .digest("hex");
 }
 
 export function parseBlockedBy(body, { issueNumber } = {}) {
