@@ -170,6 +170,28 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
     }),
     null,
   );
+  assert.equal(
+    parseBlockerProposalRecord(
+      {
+        title: rendered.title,
+        body: rendered.body,
+        user: { login: "github-actions[bot]", type: "Bot" },
+        performed_via_github_app: { id: 15368 },
+      },
+      {
+        comments: [
+          {
+            body: rendered.identityComment,
+            user: { login: "github-actions[bot]", type: "Bot" },
+            performed_via_github_app: { id: 15368 },
+            created_at: "2026-08-06T00:00:00Z",
+            updated_at: "2026-08-06T00:01:00Z",
+          },
+        ],
+      },
+    ),
+    null,
+  );
 });
 
 test("replaces only the deterministic Blocked by section", () => {
@@ -276,6 +298,22 @@ test("classifies open, completed, and not-planned blocker frontiers", () => {
       1,
     ).state,
     "triage",
+  );
+  const multiple = classifyDependentBlockers(
+    inspectBlockerGraph([
+      issue(1, [2, 3]),
+      issue(2, [], { state: "closed", state_reason: "completed" }),
+      issue(3),
+    ]),
+    1,
+  );
+  assert.equal(multiple.state, "blocked");
+  assert.deepEqual(
+    multiple.blockers.map(({ number, status }) => ({ number, status })),
+    [
+      { number: 2, status: "completed" },
+      { number: 3, status: "open" },
+    ],
   );
 });
 

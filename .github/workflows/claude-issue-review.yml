@@ -152,6 +152,7 @@ jobs:
           github_token: ${{ github.token }}
           display_report: "false"
           show_full_output: ${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}
+          track_progress: "false"
           prompt: |
             Review only blocker Issue #${{ github.event.client_payload.issue_number }}
             in ${{ github.repository }} as an advisory product and engineering triage pass.

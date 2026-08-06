@@ -916,6 +916,9 @@ export function validateWorkflowDocuments(workflows) {
   const blockerAuthorize = issueReview?.jobs?.["authorize-blocker-review"];
   const blockerAnalyze = issueReview?.jobs?.["analyze-blocker-review"];
   const blockerPublish = issueReview?.jobs?.["publish-blocker-review"];
+  const blockerReviewAction = (blockerAnalyze?.steps ?? []).find((step) =>
+    step.uses?.startsWith(CLAUDE_ACTION),
+  );
   const blockerPublisher = (blockerPublish?.steps ?? []).find(
     (step) => step.name === "Publish validated blocker Review",
   );
@@ -937,6 +940,7 @@ export function validateWorkflowDocuments(workflows) {
       contents: "read",
       issues: "read",
     }) ||
+    blockerReviewAction?.with?.track_progress !== "false" ||
     JSON.stringify(blockerPublish?.needs) !==
       JSON.stringify(["authorize-blocker-review", "analyze-blocker-review"]) ||
     !sameObject(blockerPublish?.permissions, {

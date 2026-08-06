@@ -399,6 +399,79 @@ test("accepts each reconciler dispatch signature only once", async () => {
   assert.equal(comments.length, 2);
 });
 
+test("rejects an out-of-order dispatch after a newer blocker state audit", async () => {
+  const completed = classifyDependentBlockers(
+    inspectBlockerGraph([
+      {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+        body: "## Blocked by\n\n- #43\n",
+      },
+      {
+        number: 43,
+        state: "closed",
+        state_reason: "completed",
+        body: "## Blocked by\n\nNone\n",
+      },
+    ]),
+    42,
+  );
+  const blocked = classifyDependentBlockers(
+    inspectBlockerGraph([
+      {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+        body: "## Blocked by\n\n- #43\n",
+      },
+      {
+        number: 43,
+        state: "open",
+        state_reason: null,
+        body: "## Blocked by\n\nNone\n",
+      },
+    ]),
+    42,
+  );
+  const appComment = (id, body) => ({
+    id,
+    body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    created_at: `2026-08-06T00:00:0${id}Z`,
+    updated_at: `2026-08-06T00:00:0${id}Z`,
+  });
+  const comments = [
+    appComment(1, buildBlockerStateComment(completed)),
+    appComment(2, buildBlockerStateComment(blocked)),
+  ];
+  let mutations = 0;
+  assert.equal(
+    await worker.authorizeReconcilerDispatch({
+      repository: "example/agent-infra",
+      event: {
+        action: "codex-worker",
+        client_payload: {
+          issue_number: 42,
+          operation: "evaluate",
+          reason: completed.reason,
+          blocker_state_signature: completed.signature,
+        },
+      },
+      token: "test-token",
+      request: async (apiPath, options = {}) => {
+        if (!options.method) return { number: 42, state: "open" };
+        mutations += 1;
+        throw new Error(`Unexpected mutation: ${apiPath}`);
+      },
+      paginate: async () => comments,
+    }),
+    false,
+  );
+  assert.equal(mutations, 0);
+});
+
 test("routes inconsistent branch and PR state to triage without duplication", () => {
   assert.equal(
     frontier({
