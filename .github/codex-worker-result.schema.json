@@ -5,6 +5,8 @@
   "required": [
     "completed",
     "issue_number",
+    "cycle",
+    "execution_content_hash",
     "start_sha",
     "branch",
     "summary",
@@ -24,13 +26,21 @@
       "type": "integer",
       "minimum": 1
     },
+    "cycle": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "execution_content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "start_sha": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
     "branch": {
       "type": "string",
-      "pattern": "^codex/issue-[1-9][0-9]*$"
+      "pattern": "^codex/issue-[1-9][0-9]*-cycle-[1-9][0-9]*$"
     },
     "summary": {
       "type": "string",
@@ -38,7 +48,35 @@
       "maxLength": 4000
     },
     "acceptance_criteria": {
-      "$ref": "#/$defs/boundedList"
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-[1-9][0-9]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "not_applicable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        }
+      }
     },
     "tests": {
       "$ref": "#/$defs/boundedList"

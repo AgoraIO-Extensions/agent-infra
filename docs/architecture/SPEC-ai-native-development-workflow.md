@@ -386,7 +386,10 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 - 模型分析 job 与持有 GitHub 写凭证的 Publisher 分离；Publisher 不执行模型 Patch 引入的代码。
 - 模型输出必须经过 Schema、身份、head/cycle、路径和目标状态校验，不能直接组成任意 GitHub
   API 请求。
-- Actions App、PAT 自动化和 Bot 不能满足 human Approve、Worker 授权、人工验证或 waiver。
+- Actions App、Bot 和非 Team 自动化身份不能满足 human Approve、Worker 授权、人工验证或
+  waiver。GitHub timeline 不区分 Team 成员的网页操作与该成员 PAT；因此无人值守自动化不得持有
+  Team 成员凭证，仓库把此类身份事件审计到对应成员。由该成员实时监督的本地 Codex 仍按
+  [§5.2](#52-实现标签) 归责于当前操作者。
 - Actions 不能修改 branch protection，也不能获取产品或生产凭证。
 - Secrets 不写入日志、Summary、Artifact、Issue/PR、Review、测试 fixture 或模型结构化输出。
 - 所有跨 actor、跨 Issue/PR、跨 cycle 和跨 branch 的访问都必须有 fail-closed 负向测试。

@@ -167,9 +167,11 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         TEAM_MEMBERSHIP_APP_ID: "app-id",
         TEAM_MEMBERSHIP_APP_PRIVATE_KEY: "private-key",
       }[secret];
+      const allowedLocation =
+        (workflowName === "pr-gates.yml" && jobName === "gates") ||
+        (workflowName === "codex-worker.yml" && jobName === "authorization");
       if (
-        workflowName !== "pr-gates.yml" ||
-        jobName !== "gates" ||
+        !allowedLocation ||
         step.id !== "team-membership-token" ||
         step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
         step.with?.[input] !== reference ||
@@ -195,10 +197,13 @@ export function validateTrustedScriptSources(sources) {
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
+  const workerSource = sources?.["codex-worker.mjs"] ?? "";
+  const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const gateRequirements = [
     "/check-runs",
     "headSha: pr.head.sha",
     '"Issue Gate"',
+    '"Issue Readiness Gate"',
     '"Human Validation Gate"',
     '"Claude Review Gate"',
   ];
@@ -220,6 +225,30 @@ export function validateTrustedScriptSources(sources) {
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
   }
+  const workerAuthorizationRequirements = [
+    "authorizeCycle({",
+    "parseAuthorizationRecords(",
+    'if (command === "authorize") return authorizeCommand();',
+    "codex/issue-${issueNumber}-cycle-${issueState.authorizationRecord.cycle}",
+  ];
+  const workerContractRequirements = [
+    'EXECUTION_CONTENT_VERSION = "execution-content-v1"',
+    'hash: createHash("sha256").update(preimage, "utf8").digest("hex")',
+    'version: "blocked-by-v1"',
+    "blockedByHash",
+    "performed_via_github_app?.id === GITHUB_ACTIONS_APP_ID",
+    "validateAcceptanceCriteriaEvidence",
+  ];
+  if (
+    workerAuthorizationRequirements.some(
+      (requirement) => !workerSource.includes(requirement),
+    ) ||
+    workerContractRequirements.some(
+      (requirement) => !workerContractSource.includes(requirement),
+    )
+  ) {
+    errors.push("Codex Worker must bind authorization, cycle, hash, and AC evidence");
+  }
   const reviewHeadRechecks =
     reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
   if (
@@ -237,9 +266,13 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Issue dispatch must not orphan pending Check Runs");
   }
   if (
-    !/const checks = await setPendingChecks\(repository, pr\);\s+requiredEnvironment\("TEAM_MEMBERSHIP_TOKEN"\);/.test(
+    !/const checks = await setPendingChecks\(repository, pr\);\s+try\s*\{\s+await evaluatePullRequestWithChecks/.test(
       gateSource,
-    )
+    ) ||
+    !/evaluatePullRequestWithChecks\([\s\S]{0,200}requiredEnvironment\("TEAM_MEMBERSHIP_TOKEN"\);/.test(
+      gateSource,
+    ) ||
+    !gateSource.includes('"PR Gate evaluation failed closed"')
   ) {
     errors.push("PR Gates must fail closed when Team membership is unavailable");
   }
@@ -271,13 +304,17 @@ export function validateWorkflowDocuments(workflows) {
         validateStepSecrets(errors, name, jobName, step);
         const tokenReferences = teamMembershipTokenReferences(step);
         const allowedTeamMembershipToken =
-          name === "pr-gates.yml" &&
-          jobName === "gates" &&
-          step.name === "Evaluate Issue and human validation gates" &&
-          step.run === "node .github/scripts/pr-gates.mjs" &&
+          tokenReferences.length === 1 &&
           step.env?.TEAM_MEMBERSHIP_TOKEN ===
             "${{ steps.team-membership-token.outputs.token }}" &&
-          tokenReferences.length === 1;
+          ((name === "pr-gates.yml" &&
+            jobName === "gates" &&
+            step.name === "Evaluate Issue, readiness, and human validation gates" &&
+            step.run === "node .github/scripts/pr-gates.mjs") ||
+            (name === "codex-worker.yml" &&
+              jobName === "authorization" &&
+              step.name === "Record trusted authorization transition" &&
+              step.run === "node trusted/.github/scripts/codex-worker.mjs authorize"));
         if (tokenReferences.length > 0 && !allowedTeamMembershipToken) {
           errors.push(
             `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
@@ -327,11 +364,19 @@ export function validateWorkflowDocuments(workflows) {
   const prGates = workflows["pr-gates.yml"];
   if (
     JSON.stringify(prGates?.on?.issue_comment?.types) !==
-    JSON.stringify(["created", "edited", "deleted"])
+      JSON.stringify(["created", "edited", "deleted"])
   ) {
     errors.push("PR Gates must reevaluate created, edited, and deleted audit commands");
   }
   const dispatchGates = prGates?.jobs?.["dispatch-issue-update"];
+  if (
+    JSON.stringify(prGates?.on?.issues?.types) !==
+      JSON.stringify(["closed", "edited", "reopened", "labeled", "unlabeled"]) ||
+    !String(dispatchGates?.if ?? "").includes("github.event_name == 'issue_comment'") ||
+    !String(dispatchGates?.if ?? "").includes("!github.event.issue.pull_request")
+  ) {
+    errors.push("PR Gates must immediately reevaluate Issue content and authorization records");
+  }
   if (
     JSON.stringify(prGates?.on?.schedule) !==
       JSON.stringify([{ cron: "*/15 * * * *" }]) ||
@@ -362,7 +407,7 @@ export function validateWorkflowDocuments(workflows) {
     (step) => step.id === "team-membership-token",
   );
   const evaluateGatesStep = gateSteps.find(
-    (step) => step.name === "Evaluate Issue and human validation gates",
+    (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
   );
   const gatesCondition = String(gates?.if ?? "");
   if (
@@ -390,10 +435,61 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const worker = workflows["codex-worker.yml"];
+  const authorization = worker?.jobs?.authorization;
   const implement = worker?.jobs?.implement;
   const publish = worker?.jobs?.publish;
   const workerGroup = String(worker?.concurrency?.group ?? "");
   const workerCancellation = String(worker?.concurrency?.["cancel-in-progress"] ?? "");
+  if (
+    JSON.stringify(worker?.on?.issues?.types) !==
+      JSON.stringify(["closed", "edited", "reopened", "labeled", "unlabeled"])
+  ) {
+    errors.push("Codex Worker must record authorization-invalidating Issue edits");
+  }
+  if (
+    !sameObject(authorization?.permissions, {
+      contents: "read",
+      issues: "write",
+    }) ||
+    !sameObject(authorization?.concurrency, {
+      group: "worker-authorization-${{ github.repository }}",
+      "cancel-in-progress": false,
+    }) ||
+    implement?.needs !== "authorization" ||
+    implement?.if !== "always() && needs.authorization.result == 'success'"
+  ) {
+    errors.push("Codex Worker authorization must be isolated before the model job");
+  }
+  const authorizationSteps = authorization?.steps ?? [];
+  const authorizationToken = authorizationSteps.find(
+    (step) => step.id === "team-membership-token",
+  );
+  const authorizationRecorder = authorizationSteps.find(
+    (step) => step.name === "Record trusted authorization transition",
+  );
+  const authorizationTokenCondition = String(authorizationToken?.if ?? "");
+  if (
+    authorizationToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    authorizationToken?.["continue-on-error"] !== true ||
+    !authorizationTokenCondition.includes("github.event_name == 'issues'") ||
+    !authorizationTokenCondition.includes("github.event.action == 'labeled'") ||
+    !authorizationTokenCondition.includes("github.event.label.name == 'ready-for-agent'") ||
+    !sameObject(authorizationToken?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      "permission-members": "read",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+      owner: "${{ github.repository_owner }}",
+    }) ||
+    authorizationRecorder?.run !==
+      "node trusted/.github/scripts/codex-worker.mjs authorize" ||
+    !sameObject(authorizationRecorder?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
+    }) ||
+    teamMembershipTokenReferences(worker).length !== 1
+  ) {
+    errors.push("Codex Worker must mint and isolate the authorization Team token");
+  }
   if (
     !workerGroup.includes("github.event.pull_request.head.repo.full_name != github.repository") ||
     !workerGroup.includes("github.event.pull_request.number") ||
@@ -519,6 +615,7 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   for (const [jobName, job, expectedRef] of [
+    ["authorization", authorization, null],
     ["implement", implement, "${{ steps.prepare.outputs.start_sha }}"],
     ["publish", publish, "${{ needs.implement.outputs.start_sha }}"],
   ]) {
@@ -536,9 +633,11 @@ export function validateWorkflowDocuments(workflows) {
       (step) => step.name === "Checkout recorded start commit",
     );
     if (
+      expectedRef !== null &&
       recordedCheckout?.with?.ref !== expectedRef ||
-      recordedCheckout?.with?.path !== "workspace" ||
-      recordedCheckout?.with?.["persist-credentials"] !== false
+      (expectedRef !== null && recordedCheckout?.with?.path !== "workspace") ||
+      (expectedRef !== null &&
+        recordedCheckout?.with?.["persist-credentials"] !== false)
     ) {
       errors.push(`Codex Worker ${jobName} recorded checkout must use workspace`);
     }
@@ -809,7 +908,13 @@ async function main() {
   const scriptDirectory = path.resolve(".github/scripts");
   const scriptSources = Object.fromEntries(
     await Promise.all(
-      ["check-run-contract.mjs", "claude-review.mjs", "pr-gates.mjs"].map(async (name) => [
+      [
+        "check-run-contract.mjs",
+        "claude-review.mjs",
+        "codex-worker.mjs",
+        "pr-gates.mjs",
+        "worker-contract.mjs",
+      ].map(async (name) => [
         name,
         await fs.readFile(path.join(scriptDirectory, name), "utf8"),
       ]),

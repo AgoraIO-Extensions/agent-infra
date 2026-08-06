@@ -2,7 +2,7 @@ name: Codex Worker
 
 on:
   issues:
-    types: [closed, reopened, labeled, unlabeled]
+    types: [closed, edited, reopened, labeled, unlabeled]
   pull_request_target:
     types: [closed]
 
@@ -32,8 +32,54 @@ concurrency:
     }}
 
 jobs:
+  authorization:
+    name: Record Worker authorization
+    concurrency:
+      group: worker-authorization-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Mint Team membership token
+        id: team-membership-token
+        if: >-
+          github.event_name == 'issues' &&
+          github.event.action == 'labeled' &&
+          github.event.label.name == 'ready-for-agent'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.TEAM_MEMBERSHIP_APP_ID }}
+          permission-members: read
+          private-key: ${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Record trusted authorization transition
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
+        run: node trusted/.github/scripts/codex-worker.mjs authorize
+
   implement:
     name: Implement frontier Issue
+    needs: authorization
+    if: always() && needs.authorization.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(vars.CODEX_WORKER_TIMEOUT_MINUTES || '60') }}
     permissions:
