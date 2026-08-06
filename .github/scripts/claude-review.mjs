@@ -10,6 +10,19 @@ const FINDING_KEYS = ["body", "line", "path", "severity", "side", "title"];
 const MAX_FINDINGS = 10;
 const OUTPUT_KEYS = ["completed", "findings", "head_sha", "summary"];
 
+export class ReviewOutputError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "ReviewOutputError";
+  }
+}
+
+export function reviewFailureKind(error) {
+  return error instanceof ReviewOutputError
+    ? "invalid_output"
+    : "infrastructure_failure";
+}
+
 function exactKeys(value, keys) {
   return (
     value &&
@@ -25,20 +38,27 @@ function boundedString(value, maxLength) {
 
 export function parseReviewOutput(raw, expectedHead) {
   if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 256 * 1024) {
-    throw new Error("Claude Review output is missing or too large");
+    throw new ReviewOutputError("Claude Review output is missing or too large");
   }
-  const result = JSON.parse(raw);
+  let result;
+  try {
+    result = JSON.parse(raw);
+  } catch (error) {
+    throw new ReviewOutputError("Claude Review output is not valid JSON", {
+      cause: error,
+    });
+  }
   if (!exactKeys(result, OUTPUT_KEYS) || result.completed !== true) {
-    throw new Error("Claude Review output has an invalid shape");
+    throw new ReviewOutputError("Claude Review output has an invalid shape");
   }
   if (result.head_sha !== expectedHead || !/^[0-9a-f]{40}$/.test(result.head_sha)) {
-    throw new Error("Claude Review output is stale");
+    throw new ReviewOutputError("Claude Review output is stale");
   }
   if (!boundedString(result.summary, 4_000) || !Array.isArray(result.findings)) {
-    throw new Error("Claude Review summary or findings are invalid");
+    throw new ReviewOutputError("Claude Review summary or findings are invalid");
   }
   if (result.findings.length > MAX_FINDINGS) {
-    throw new Error("Claude Review returned too many findings");
+    throw new ReviewOutputError("Claude Review returned too many findings");
   }
 
   for (const finding of result.findings) {
@@ -52,7 +72,7 @@ export function parseReviewOutput(raw, expectedHead) {
       !Number.isSafeInteger(finding.line) ||
       finding.line < 1
     ) {
-      throw new Error("Claude Review finding is invalid");
+      throw new ReviewOutputError("Claude Review finding is invalid");
     }
   }
   return result;
@@ -147,7 +167,7 @@ export function validateFindingLocations(findings, files) {
   );
   for (const finding of findings) {
     if (!locations.get(finding.path)?.[finding.side]?.has(finding.line)) {
-      throw new Error(
+      throw new ReviewOutputError(
         `Claude Review finding is outside the changed diff: ${finding.path}:${finding.line}:${finding.side}`,
       );
     }
@@ -308,17 +328,17 @@ async function main() {
     `https://github.com/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`,
   );
 
-  let failureKind = "invalid_output";
   try {
     if (requiredEnvironment("ANALYSIS_RESULT") !== "success") {
-      failureKind = "infrastructure_failure";
       throw new Error("Claude Review analysis did not complete successfully");
     }
-    const result = parseReviewOutput(requiredEnvironment("STRUCTURED_OUTPUT"), expectedHead);
+    const result = parseReviewOutput(
+      process.env.STRUCTURED_OUTPUT ?? "",
+      expectedHead,
+    );
     const files = await paginate(`/repos/${repository}/pulls/${prNumber}/files`);
     validateFindingLocations(result.findings, files);
 
-    failureKind = "infrastructure_failure";
     const existingComments = await paginate(
       `/repos/${repository}/pulls/${prNumber}/comments`,
     );
@@ -382,7 +402,7 @@ async function main() {
       body: JSON.stringify({
         status: "completed",
         conclusion: "failure",
-        output: buildReviewCheckOutput("failure", failureKind),
+        output: buildReviewCheckOutput("failure", reviewFailureKind(error)),
       }),
     });
     throw error;

@@ -361,6 +361,9 @@ export function claudeReviewGateUpdate({ result, review }) {
       conclusion: "success",
       description: result.description,
       reasonCode: "success",
+      ...(Number.isSafeInteger(review?.blockingFindingCount)
+        ? { blockingFindingCount: review.blockingFindingCount }
+        : {}),
     };
   }
   return null;

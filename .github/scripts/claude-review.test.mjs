@@ -9,6 +9,7 @@ import {
   isTrustedReviewComment,
   parseReviewOutput,
   requireCurrentReviewTarget,
+  reviewFailureKind,
   reviewGateOutcome,
   sanitizeMarkdown,
   selectReviewGateCheck,
@@ -34,6 +35,37 @@ test("parses a bounded Review result for the expected head", () => {
     summary: "Review completed.",
     findings: [],
   });
+});
+
+test("marks only parsed or validated Review output defects as invalid output", () => {
+  let malformedOutputError;
+  try {
+    parseReviewOutput("{", head);
+  } catch (error) {
+    malformedOutputError = error;
+  }
+  assert.equal(reviewFailureKind(malformedOutputError), "invalid_output");
+  assert.throws(
+    () =>
+      validateFindingLocations(
+        [
+          {
+            severity: "P1",
+            title: "Bug",
+            body: "Impact",
+            path: "a.ts",
+            line: 9,
+            side: "RIGHT",
+          },
+        ],
+        [{ filename: "a.ts", patch: "@@ -1 +1 @@\n-old\n+new" }],
+      ),
+    { name: "ReviewOutputError" },
+  );
+  assert.equal(
+    reviewFailureKind(new Error("GitHub API GET /pulls/1/files: 502")),
+    "infrastructure_failure",
+  );
 });
 
 test("selects only the latest current-head GitHub Actions Review Gate", () => {

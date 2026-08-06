@@ -727,12 +727,13 @@ test("writes blocking Review thread state to the Gate and restores Review succes
   assert.deepEqual(
     claudeReviewGateUpdate({
       result: { ok: true, waived: false, description: "Claude Review passed" },
-      review: { reasonCode: "unresolved_thread" },
+      review: { reasonCode: "unresolved_thread", blockingFindingCount: 2 },
     }),
     {
       conclusion: "success",
       description: "Claude Review passed",
       reasonCode: "success",
+      blockingFindingCount: 2,
     },
   );
   assert.equal(
