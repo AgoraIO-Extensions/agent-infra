@@ -66,16 +66,26 @@ export function selectReviewGateCheck(checkRuns, expectedHead, prNumber) {
   });
 }
 
-export function buildReviewCheckOutput(conclusion, reasonCode) {
+export function buildReviewCheckOutput(
+  conclusion,
+  reasonCode,
+  blockingFindingCount = 0,
+) {
   const success = conclusion === "success" && reasonCode === "success";
   const blockingFinding =
     conclusion === "failure" && reasonCode === "blocking_finding";
+  const blockingFindingCountLine =
+    blockingFinding &&
+    Number.isSafeInteger(blockingFindingCount) &&
+    blockingFindingCount > 0
+      ? `\nblocking_finding_count: ${blockingFindingCount}`
+      : "";
   return {
     title: `Claude Review Gate: ${conclusion}`,
     summary: success
       ? "reason_code: success\n\nReview completed for the current head."
       : blockingFinding
-        ? "reason_code: blocking_finding\n\nReview completed with blocking P0/P1 findings."
+        ? `reason_code: blocking_finding${blockingFindingCountLine}\n\nReview completed with blocking P0/P1 findings.`
         : `reason_code: ${reasonCode}\n\nThe trusted Review workflow did not produce a publishable result.`,
   };
 }
@@ -361,6 +371,7 @@ async function main() {
         output: buildReviewCheckOutput(
           gateOutcome.conclusion,
           gateOutcome.reasonCode,
+          blocking.length,
         ),
       }),
     });

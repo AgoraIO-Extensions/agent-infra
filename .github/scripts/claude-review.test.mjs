@@ -108,6 +108,14 @@ test("publishes stable Review Gate success and failure reason codes", () => {
   });
 });
 
+test("records the trusted blocking finding count in the Review Gate", () => {
+  assert.deepEqual(buildReviewCheckOutput("failure", "blocking_finding", 2), {
+    title: "Claude Review Gate: failure",
+    summary:
+      "reason_code: blocking_finding\nblocking_finding_count: 2\n\nReview completed with blocking P0/P1 findings.",
+  });
+});
+
 test("rejects stale, incomplete, extended, or malformed Review output", () => {
   assert.throws(() => parseReviewOutput(validOutput({ head_sha: "b".repeat(40) }), head));
   assert.throws(() => parseReviewOutput(validOutput({ completed: false }), head));

@@ -302,16 +302,28 @@ test("Claude Review Gate accepts only current-head success or a bounded infrastr
     evaluateClaudeReviewGate({ currentHead, review, waivers: [] }),
     { ok: true, waived: false, description: "Claude Review passed for current head" },
   );
-  for (const reasonCode of ["blocking_finding", "unresolved_thread"]) {
-    assert.deepEqual(
-      evaluateClaudeReviewGate({
-        currentHead,
-        review: { ...review, conclusion: "failure", reasonCode },
-        waivers: [],
-      }),
-      { ok: true, waived: false, description: "Claude Review passed for current head" },
-    );
-  }
+  assert.deepEqual(
+    evaluateClaudeReviewGate({
+      currentHead,
+      review: {
+        ...review,
+        conclusion: "failure",
+        reasonCode: "blocking_finding",
+        blockingFindingCount: 1,
+      },
+      publishedBlockingFindingCount: 1,
+      waivers: [],
+    }),
+    { ok: true, waived: false, description: "Claude Review passed for current head" },
+  );
+  assert.deepEqual(
+    evaluateClaudeReviewGate({
+      currentHead,
+      review: { ...review, conclusion: "failure", reasonCode: "unresolved_thread" },
+      waivers: [],
+    }),
+    { ok: true, waived: false, description: "Claude Review passed for current head" },
+  );
   for (const invalidReview of [
     undefined,
     { ...review, headSha: "b".repeat(40) },
@@ -494,7 +506,9 @@ test("preserves the trusted Review result beneath derived thread failures", () =
         external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
         status: "completed",
         conclusion: "failure",
-        output: { summary: "reason_code: blocking_finding" },
+        output: {
+          summary: "reason_code: blocking_finding\nblocking_finding_count: 1",
+        },
       },
     ],
     threads: [
@@ -525,8 +539,54 @@ test("preserves the trusted Review result beneath derived thread failures", () =
       review: state.review,
       hasPublishedBlockingFinding: state.hasPublishedBlockingFinding,
       hasUnresolvedThread: state.hasUnresolvedThread,
+      publishedBlockingFindingCount: state.publishedBlockingFindingCount,
     }).ok,
     true,
+  );
+});
+
+test("keeps a blocking Review failed when its trusted finding comment is deleted", () => {
+  const currentHead = "a".repeat(40);
+  const state = buildReviewState({
+    checkRuns: [
+      {
+        id: 6,
+        name: "Claude Review Gate",
+        head_sha: currentHead,
+        app: { id: 15368 },
+        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
+        status: "completed",
+        conclusion: "failure",
+        output: {
+          summary: "reason_code: unresolved_thread\nblocking_finding_count: 2",
+        },
+      },
+    ],
+    threads: [
+      {
+        isResolved: true,
+        comments: {
+          nodes: [
+            {
+              author: { login: "github-actions" },
+              body: `**P1: Fixed**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
+            },
+          ],
+        },
+      },
+    ],
+    currentHead,
+    prNumber: 42,
+  });
+
+  assert.deepEqual(
+    evaluateClaudeReviewGate({ currentHead, ...state }),
+    {
+      ok: false,
+      waived: false,
+      reasonCode: "blocking_finding",
+      description: "Blocking Review finding evidence is incomplete",
+    },
   );
 });
 
@@ -655,12 +715,13 @@ test("writes blocking Review thread state to the Gate and restores Review succes
         reasonCode: "unresolved_thread",
         description: "Blocking Review thread is unresolved",
       },
-      review: { reasonCode: "blocking_finding" },
+      review: { reasonCode: "blocking_finding", blockingFindingCount: 2 },
     }),
     {
       conclusion: "failure",
       description: "Blocking Review thread is unresolved",
       reasonCode: "unresolved_thread",
+      blockingFindingCount: 2,
     },
   );
   assert.deepEqual(

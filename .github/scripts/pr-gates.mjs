@@ -169,6 +169,7 @@ export function evaluateClaudeReviewGate({
   waivers = [],
   hasPublishedBlockingFinding = false,
   hasUnresolvedThread = false,
+  publishedBlockingFindingCount = 0,
 }) {
   if (hasPublishedBlockingFinding) {
     return {
@@ -196,6 +197,22 @@ export function evaluateClaudeReviewGate({
       ok: false,
       waived: false,
       description: "Current-head Claude Review has not completed",
+    };
+  }
+  const hasRecordedBlockingFindings =
+    review.reasonCode === "blocking_finding" ||
+    review.blockingFindingCount !== undefined;
+  if (
+    hasRecordedBlockingFindings &&
+    (!Number.isSafeInteger(review.blockingFindingCount) ||
+      review.blockingFindingCount < 1 ||
+      publishedBlockingFindingCount !== review.blockingFindingCount)
+  ) {
+    return {
+      ok: false,
+      waived: false,
+      reasonCode: "blocking_finding",
+      description: "Blocking Review finding evidence is incomplete",
     };
   }
   const reviewSucceededBeforeThreadState =
@@ -257,15 +274,19 @@ export function buildReviewState({
     /(?:^|\n)reason_code: (success|infrastructure_failure|invalid_output|waived_infrastructure_failure|blocking_finding|unresolved_thread)(?:\n|$)/,
   )?.[1];
   const marker = `<!-- agent-infra-claude-review:${currentHead}:`;
-  const hasPublishedBlockingFinding = threads.some(
-    (thread) =>
-      !thread.isResolved &&
-      (thread.comments?.nodes ?? []).some(
-        (comment) =>
-          /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
-          /^\*\*P[01]:/.test(comment.body ?? "") &&
-          comment.body?.includes(marker),
-      ),
+  const blockingFindingCountText = check?.output?.summary?.match(
+    /(?:^|\n)blocking_finding_count: ([1-9][0-9]*)(?:\n|$)/,
+  )?.[1];
+  const blockingFindingCount = blockingFindingCountText
+    ? Number(blockingFindingCountText)
+    : null;
+  const publishedBlockingFindingThreads = threads.filter((thread) =>
+    (thread.comments?.nodes ?? []).some(
+      (comment) =>
+        /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
+        /^\*\*P[01]:/.test(comment.body ?? "") &&
+        comment.body?.includes(marker),
+    ),
   );
   return {
     review: check
@@ -283,10 +304,18 @@ export function buildReviewState({
           headSha: check.head_sha,
           reasonCode: reasonCode ?? null,
           status: check.status,
+          ...(blockingFindingCountText
+            ? { blockingFindingCount }
+            : {}),
         }
       : undefined,
-    hasPublishedBlockingFinding,
+    hasPublishedBlockingFinding: publishedBlockingFindingThreads.some(
+      (thread) => !thread.isResolved,
+    ),
     hasUnresolvedThread: threads.some((thread) => !thread.isResolved),
+    ...(blockingFindingCountText
+      ? { publishedBlockingFindingCount: publishedBlockingFindingThreads.length }
+      : {}),
   };
 }
 
@@ -319,6 +348,9 @@ export function claudeReviewGateUpdate({ result, review }) {
       conclusion: "failure",
       description: result.description,
       reasonCode: threadFailureReason,
+      ...(Number.isSafeInteger(review?.blockingFindingCount)
+        ? { blockingFindingCount: review.blockingFindingCount }
+        : {}),
     };
   }
   if (
@@ -461,7 +493,12 @@ async function completeCheckRun(
   conclusion,
   description,
   reasonCode,
+  blockingFindingCount,
 ) {
+  const blockingFindingCountLine =
+    Number.isSafeInteger(blockingFindingCount) && blockingFindingCount > 0
+      ? `\nblocking_finding_count: ${blockingFindingCount}`
+      : "";
   await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -470,7 +507,9 @@ async function completeCheckRun(
       conclusion,
       output: {
         title: `${check.name}: ${conclusion}`,
-        summary: reasonCode ? `reason_code: ${reasonCode}\n\n${description}` : description,
+        summary: reasonCode
+          ? `reason_code: ${reasonCode}${blockingFindingCountLine}\n\n${description}`
+          : description,
       },
     }),
   });
@@ -666,6 +705,7 @@ async function evaluatePullRequest(repository, number, action) {
     waivers: records.waivers,
     hasPublishedBlockingFinding: reviewState.hasPublishedBlockingFinding,
     hasUnresolvedThread: reviewState.hasUnresolvedThread,
+    publishedBlockingFindingCount: reviewState.publishedBlockingFindingCount,
   });
 
   await Promise.all([
@@ -695,6 +735,7 @@ async function evaluatePullRequest(repository, number, action) {
         ? auditDescription(claudeResult, records, "claude-review-waiver")
         : reviewUpdate.description,
       reviewUpdate.reasonCode,
+      reviewUpdate.blockingFindingCount,
     );
   }
 }
