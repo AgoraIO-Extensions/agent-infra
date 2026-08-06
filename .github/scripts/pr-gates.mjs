@@ -6,9 +6,17 @@ import {
   gateExternalId,
   selectCurrentGateCheck,
 } from "./check-run-contract.mjs";
+import {
+  activeAuthorization,
+  executionContent,
+  latestAuthorizationRecord,
+  parseAcceptanceCriteriaEvidence,
+  parseAuthorizationRecords,
+  parseBlockedBy,
+  WORKER_OWNERS_TEAM_SLUG,
+} from "./worker-contract.mjs";
 
 const HUMAN_LABEL = "ready-for-human";
-const OWNERS_TEAM_SLUG = "agent-infra-owners";
 const CLOSE_KEYWORD = /^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gim;
 
 function labelNames(labels = []) {
@@ -22,7 +30,7 @@ export function extractPrimaryIssueNumbers(body = "") {
 
 export function affectedPullRequests({ eventName, issueNumber, pulls = [] }) {
   if (eventName === "schedule") return pulls;
-  if (eventName === "issues") {
+  if (["issues", "issue_comment"].includes(eventName)) {
     return pulls.filter((pr) =>
       extractPrimaryIssueNumbers(pr.body ?? "").includes(issueNumber),
     );
@@ -52,7 +60,7 @@ export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
     return { ok: false, description: `Primary Issue #${number} is marked wontfix` };
   }
 
-  const workerBranch = /^codex\/issue-(\d+)$/.exec(headRef ?? "");
+  const workerBranch = /^codex\/issue-(\d+)-cycle-(\d+)$/.exec(headRef ?? "");
   if ((headRef ?? "").startsWith("codex/issue-") && !workerBranch) {
     return { ok: false, description: "Worker branch name is invalid" };
   }
@@ -75,6 +83,99 @@ export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
     };
   }
   return { ok: true, description: `Primary Issue #${number} is open` };
+}
+
+export function evaluateIssueReadinessGate({
+  repository,
+  defaultBranch,
+  pullRequest,
+  issue,
+  blockers = [],
+  workerPullRequests = [],
+  contract,
+  authorizationRecord,
+}) {
+  const headRef = pullRequest?.head?.ref ?? "";
+  if (!headRef.startsWith("codex/issue-")) {
+    return {
+      ok: true,
+      applicable: false,
+      description: "not_applicable: human-authored PR",
+    };
+  }
+  const branch = /^codex\/issue-(\d+)-cycle-(\d+)$/.exec(headRef);
+  if (!branch) {
+    return { ok: false, applicable: true, description: "Worker branch name is invalid" };
+  }
+  const issueNumber = Number(branch[1]);
+  const cycle = Number(branch[2]);
+  if (issue?.number !== issueNumber || issue?.state !== "open") {
+    return {
+      ok: false,
+      applicable: true,
+      description: `Worker primary Issue #${issueNumber} is not open`,
+    };
+  }
+  const authorization = activeAuthorization({
+    issue,
+    contract,
+    record: authorizationRecord,
+  });
+  if (!authorization.ok || authorization.cycle !== cycle) {
+    return {
+      ok: false,
+      applicable: true,
+      description: `Worker authorization is invalid: ${authorization.reason}`,
+    };
+  }
+  if (blockers.some((blocker) => blocker.state !== "closed")) {
+    return {
+      ok: false,
+      applicable: true,
+      description: "Worker Issue has an unfinished blocker",
+    };
+  }
+  if (
+    pullRequest.head?.repo?.full_name?.toLowerCase() !== repository.toLowerCase() ||
+    pullRequest.base?.ref !== defaultBranch
+  ) {
+    return {
+      ok: false,
+      applicable: true,
+      description: "Worker PR ownership is invalid",
+    };
+  }
+  const activePullRequests = workerPullRequests.filter(
+    (candidate) => candidate.state === "open" && !candidate.merged_at,
+  );
+  if (
+    activePullRequests.length !== 1 ||
+    activePullRequests[0].number !== pullRequest.number ||
+    activePullRequests[0].head?.ref !== headRef
+  ) {
+    return {
+      ok: false,
+      applicable: true,
+      description: "Worker cycle must own exactly one active PR",
+    };
+  }
+  try {
+    parseAcceptanceCriteriaEvidence(
+      pullRequest.body ?? "",
+      contract.acceptanceCriteriaIds,
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      applicable: true,
+      description: error instanceof Error ? error.message : "Worker AC evidence is invalid",
+    };
+  }
+  return {
+    ok: true,
+    applicable: true,
+    description: `Worker Issue #${issueNumber} cycle ${cycle} is ready for review`,
+  };
 }
 
 export function parseGateCommand(body = "") {
@@ -537,12 +638,44 @@ async function readGateRecords(repository, prNumber, currentHead) {
       [...logins].map(async (login) => [
         login,
         await teamRequest(
-          `/orgs/${encodeURIComponent(owner)}/teams/${OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
+          `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
         ),
       ]),
     ),
   );
   return buildGateRecords({ comments, currentHead, memberships });
+}
+
+async function readIssueReadinessState(repository, pullRequest, issue) {
+  if (!pullRequest.head?.ref?.startsWith("codex/issue-")) return {};
+  const contract = executionContent(issue);
+  const blockerNumbers = parseBlockedBy(issue.body, { issueNumber: issue.number });
+  const [comments, timelineEvents, blockers, pullRequests] = await Promise.all([
+    paginate(`/repos/${repository}/issues/${issue.number}/comments`),
+    paginate(`/repos/${repository}/issues/${issue.number}/events`),
+    Promise.all(
+      blockerNumbers.map((number) =>
+        githubRequest(`/repos/${repository}/issues/${number}`),
+      ),
+    ),
+    paginate(`/repos/${repository}/pulls?state=all`),
+  ]);
+  const records = parseAuthorizationRecords(
+    comments,
+    issue.number,
+    timelineEvents,
+  );
+  const pattern = new RegExp(
+    `^codex/issue-${issue.number}-cycle-[1-9][0-9]*$`,
+  );
+  return {
+    contract,
+    blockers,
+    authorizationRecord: latestAuthorizationRecord(records),
+    workerPullRequests: pullRequests.filter((candidate) =>
+      pattern.test(candidate.head?.ref ?? ""),
+    ),
+  };
 }
 
 const REVIEW_THREADS_QUERY = `
@@ -629,7 +762,7 @@ export function auditDescription(result, records, type) {
 }
 
 export function pendingGateNames() {
-  return ["Issue Gate", "Human Validation Gate"];
+  return ["Issue Gate", "Issue Readiness Gate", "Human Validation Gate"];
 }
 
 async function setPendingChecks(repository, pr) {
@@ -652,9 +785,7 @@ async function setPendingChecks(repository, pr) {
   return Object.fromEntries(checks.map((check) => [check.name, check]));
 }
 
-async function evaluatePullRequest(repository, number, action) {
-  const pr = await githubRequest(`/repos/${repository}/pulls/${number}`);
-  const checks = await setPendingChecks(repository, pr);
+async function evaluatePullRequestWithChecks(repository, number, action, pr, checks) {
   requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");
   let labels = pr.labels;
   const events = await paginate(`/repos/${repository}/issues/${number}/events`);
@@ -680,6 +811,25 @@ async function evaluatePullRequest(repository, number, action) {
     issue,
     headRef: pr.head.ref,
   });
+  let issueReadinessResult;
+  try {
+    const readinessState = issue
+      ? await readIssueReadinessState(repository, pr, issue)
+      : {};
+    issueReadinessResult = evaluateIssueReadinessGate({
+      repository,
+      defaultBranch: pr.base.ref,
+      pullRequest: pr,
+      issue,
+      ...readinessState,
+    });
+  } catch {
+    issueReadinessResult = {
+      ok: false,
+      applicable: pr.head.ref.startsWith("codex/issue-"),
+      description: "Issue Readiness evaluation failed closed",
+    };
+  }
   const records = await readGateRecords(repository, number, pr.head.sha);
   const humanResult = evaluateHumanValidationGate({
     labels,
@@ -724,6 +874,12 @@ async function evaluatePullRequest(repository, number, action) {
     ),
     completeCheckRun(
       repository,
+      checks["Issue Readiness Gate"],
+      issueReadinessResult.ok ? "success" : "failure",
+      issueReadinessResult.description,
+    ),
+    completeCheckRun(
+      repository,
       checks["Human Validation Gate"],
       humanResult.ok ? "success" : "failure",
       auditDescription(humanResult, records, "human-validation"),
@@ -747,6 +903,26 @@ async function evaluatePullRequest(repository, number, action) {
   }
 }
 
+async function evaluatePullRequest(repository, number, action) {
+  const pr = await githubRequest(`/repos/${repository}/pulls/${number}`);
+  const checks = await setPendingChecks(repository, pr);
+  try {
+    await evaluatePullRequestWithChecks(repository, number, action, pr, checks);
+  } catch (error) {
+    await Promise.allSettled(
+      pendingGateNames().map((name) =>
+        completeCheckRun(
+          repository,
+          checks[name],
+          "failure",
+          "PR Gate evaluation failed closed",
+        ),
+      ),
+    );
+    throw error;
+  }
+}
+
 async function main() {
   const event = JSON.parse(await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"));
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
@@ -762,7 +938,11 @@ async function main() {
     return;
   }
 
-  if (eventName === "issues" || eventName === "schedule") {
+  if (
+    eventName === "issues" ||
+    eventName === "schedule" ||
+    (eventName === "issue_comment" && !event.issue?.pull_request)
+  ) {
     const pulls = await paginate(`/repos/${repository}/pulls?state=open`);
     const affected = affectedPullRequests({
       eventName,

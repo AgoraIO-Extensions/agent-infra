@@ -11,12 +11,14 @@ import {
   evaluateClaudeReviewGate,
   evaluateHumanValidationGate,
   evaluateIssueGate,
+  evaluateIssueReadinessGate,
   extractPrimaryIssueNumbers,
   githubRequest,
   parseGateCommand,
   pendingGateNames,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
+import { buildAcceptanceCriteriaEvidenceMarker } from "./worker-contract.mjs";
 
 test("extracts one canonical primary Issue reference", () => {
   assert.deepEqual(
@@ -37,6 +39,10 @@ test("scheduled membership reconciliation reevaluates every open PR", () => {
   assert.deepEqual(
     affectedPullRequests({ eventName: "issues", issueNumber: 20, pulls }),
     [pulls[1]],
+  );
+  assert.deepEqual(
+    affectedPullRequests({ eventName: "issue_comment", issueNumber: 10, pulls }),
+    [pulls[0]],
   );
   assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
 });
@@ -115,7 +121,7 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         state: "open",
         labels: [{ name: "ready-for-agent" }],
       },
-      headRef: "codex/issue-42",
+      headRef: "codex/issue-42-cycle-1",
     }),
     { ok: true, description: "Worker Issue #42 is ready for Agent" },
   );
@@ -127,7 +133,7 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         state: "open",
         labels: [{ name: "ready-for-agent" }],
       },
-      headRef: "codex/issue-7",
+      headRef: "codex/issue-7-cycle-1",
     }).ok,
     false,
   );
@@ -135,7 +141,7 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
     evaluateIssueGate({
       issueNumbers: [42],
       issue: { number: 42, state: "open", labels: [] },
-      headRef: "codex/issue-42",
+      headRef: "codex/issue-42-cycle-1",
     }).ok,
     false,
   );
@@ -148,6 +154,114 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         labels: [{ name: "ready-for-agent" }],
       },
       headRef: "codex/issue-not-a-number",
+    }).ok,
+    false,
+  );
+});
+
+test("Issue Readiness Gate is not applicable to human PRs", () => {
+  assert.deepEqual(
+    evaluateIssueReadinessGate({
+      repository: "AgoraIO-Extensions/agent-infra",
+      defaultBranch: "main",
+      pullRequest: { head: { ref: "feat/human" } },
+    }),
+    {
+      ok: true,
+      applicable: false,
+      description: "not_applicable: human-authored PR",
+    },
+  );
+});
+
+test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evidence", () => {
+  const contract = {
+    hash: "d".repeat(64),
+    blockedByHash: "b".repeat(64),
+    acceptanceCriteriaIds: ["AC-1", "AC-2"],
+  };
+  const authorizationRecord = {
+    issueNumber: 42,
+    cycle: 3,
+    state: "active",
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+  };
+  const marker = buildAcceptanceCriteriaEvidenceMarker(
+    [
+      { id: "AC-1", status: "pass", evidence: "unit test" },
+      { id: "AC-2", status: "not_applicable", evidence: "no runtime dependency" },
+    ],
+    contract.acceptanceCriteriaIds,
+  );
+  const pullRequest = {
+    number: 9,
+    body: `Closes #42\n\n## 验收标准\n\n${marker}`,
+    head: {
+      ref: "codex/issue-42-cycle-3",
+      repo: { full_name: "AgoraIO-Extensions/agent-infra" },
+    },
+    base: { ref: "main" },
+  };
+  const issue = {
+    number: 42,
+    state: "open",
+    labels: [{ name: "ready-for-agent" }],
+  };
+  const workerPullRequests = [
+    {
+      number: 9,
+      state: "open",
+      merged_at: null,
+      head: { ref: "codex/issue-42-cycle-3" },
+    },
+  ];
+  const input = {
+    repository: "AgoraIO-Extensions/agent-infra",
+    defaultBranch: "main",
+    pullRequest,
+    issue,
+    blockers: [],
+    workerPullRequests,
+    contract,
+    authorizationRecord,
+  };
+  assert.deepEqual(evaluateIssueReadinessGate(input), {
+    ok: true,
+    applicable: true,
+    description: "Worker Issue #42 cycle 3 is ready for review",
+  });
+  assert.equal(
+    evaluateIssueReadinessGate({
+      ...input,
+      authorizationRecord: {
+        ...authorizationRecord,
+        executionContentHash: "e".repeat(64),
+      },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    evaluateIssueReadinessGate({
+      ...input,
+      authorizationRecord: {
+        ...authorizationRecord,
+        blockedByHash: "c".repeat(64),
+      },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    evaluateIssueReadinessGate({
+      ...input,
+      blockers: [{ number: 7, state: "open" }],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    evaluateIssueReadinessGate({
+      ...input,
+      pullRequest: { ...pullRequest, body: "Closes #42" },
     }).ok,
     false,
   );
@@ -682,7 +796,11 @@ test("gate Check Runs bind the expected App result to the current head", () => {
 });
 
 test("PR Gates never creates a competing Claude Review Gate", () => {
-  assert.deepEqual(pendingGateNames(), ["Issue Gate", "Human Validation Gate"]);
+  assert.deepEqual(pendingGateNames(), [
+    "Issue Gate",
+    "Issue Readiness Gate",
+    "Human Validation Gate",
+  ]);
 });
 
 test("revokes an applied waiver when its current audit record becomes invalid", () => {

@@ -3,42 +3,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export function parseBlockedBy(body, { issueNumber } = {}) {
-  const lines = String(body ?? "").split(/\r?\n/);
-  const headings = lines.flatMap((line, index) =>
-    line.trim() === "## Blocked by" ? [index] : [],
-  );
-  if (headings.length !== 1) {
-    throw new Error("Issue must contain exactly one ## Blocked by section");
-  }
+import {
+  activeAuthorization,
+  authorizeCycle,
+  blockedByChanged,
+  buildAcceptanceCriteriaEvidenceMarker,
+  buildAuthorizationRecordComment,
+  executionContent,
+  latestAuthorizationRecord,
+  latestAuthorizationTimelineEvent,
+  parseAuthorizationRecords,
+  parseBlockedBy,
+  transitionAuthorization,
+  validateAcceptanceCriteriaEvidence,
+  WORKER_OWNERS_TEAM_SLUG,
+} from "./worker-contract.mjs";
 
-  const start = headings[0] + 1;
-  const nextHeading = lines.findIndex(
-    (line, index) => index >= start && /^##\s+\S/.test(line.trim()),
-  );
-  const section = lines
-    .slice(start, nextHeading === -1 ? lines.length : nextHeading)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (section.length === 1 && section[0] === "None") return [];
-  if (section.length === 0) throw new Error("Blocked by section is empty");
-
-  const blockers = section.map((line) => {
-    const match = /^- #(\d+)$/.exec(line);
-    if (!match || Number(match[1]) < 1) {
-      throw new Error("Blocked by entries must use - #<issue-number>");
-    }
-    return Number(match[1]);
-  });
-  if (new Set(blockers).size !== blockers.length) {
-    throw new Error("Blocked by entries must be unique");
-  }
-  if (issueNumber && blockers.includes(issueNumber)) {
-    throw new Error("Issue cannot block itself");
-  }
-  return blockers;
-}
+export { parseBlockedBy } from "./worker-contract.mjs";
 
 function labelsOf(issue) {
   return (issue?.labels ?? []).map((label) =>
@@ -62,7 +43,7 @@ export function classifyWorkerEvent({
     return action === "closed" &&
       !merged &&
       sameRepository === true &&
-      /^codex\/issue-\d+$/.test(headRef ?? "")
+      /^codex\/issue-\d+-cycle-\d+$/.test(headRef ?? "")
       ? "closed-pr"
       : "noop";
   }
@@ -79,6 +60,7 @@ export function classifyWorkerEvent({
   }
   if (
     action === "reopened" ||
+    action === "edited" ||
     (action === "labeled" && label === "ready-for-agent") ||
     (action === "unlabeled" &&
       ["ready-for-human", "needs-triage", "wontfix"].includes(label))
@@ -88,14 +70,46 @@ export function classifyWorkerEvent({
   return "noop";
 }
 
+export function authorizationEditInvalidation({
+  executionContentMatches,
+  contractValid,
+  bodyWasEdited,
+  currentBody,
+  previousBody,
+  issueNumber,
+  actor,
+}) {
+  if (!executionContentMatches) {
+    return contractValid ? "content-changed" : "contract-invalid";
+  }
+  if (
+    !bodyWasEdited ||
+    !blockedByChanged(currentBody, previousBody, { issueNumber })
+  ) {
+    return null;
+  }
+  return actor?.login === "github-actions[bot]" && actor?.type === "Bot"
+    ? "trusted-blocker-edit"
+    : "untrusted-blocker-edit";
+}
+
+export function shouldConsumeAuthorization(current, { cycle } = {}) {
+  return Boolean(
+    current &&
+      current.state !== "consumed" &&
+      (cycle === undefined || current.cycle === cycle),
+  );
+}
+
 export function evaluateFrontierIssue({
   issue,
+  contract,
+  authorizationRecord,
   blockers,
   workerPullRequests,
   branchSha,
   defaultSha,
 }) {
-  const branch = `codex/issue-${issue.number}`;
   const labels = labelsOf(issue);
   if (issue.state !== "open" || labels.includes("wontfix")) {
     return { operation: "close", reason: "issue-closed" };
@@ -106,6 +120,15 @@ export function evaluateFrontierIssue({
   ) {
     return { operation: "noop", reason: "issue-not-frontier" };
   }
+  const authorization = activeAuthorization({
+    issue,
+    contract,
+    record: authorizationRecord,
+  });
+  if (!authorization.ok) {
+    return { operation: "triage", reason: authorization.reason };
+  }
+  const branch = `codex/issue-${issue.number}-cycle-${authorization.cycle}`;
   if (blockers.some((blocker) => blocker.state !== "closed")) {
     return { operation: "noop", reason: "open-blockers" };
   }
@@ -154,11 +177,34 @@ export function createWorkerPlan({
   repository,
   defaultBranch,
   issue,
+  contract,
+  authorizationRecord,
   blockers,
   workerPullRequests,
+  allWorkerPullRequests = workerPullRequests,
   branchSha,
   defaultSha,
 }) {
+  const decision = evaluateFrontierIssue({
+    issue,
+    contract,
+    authorizationRecord,
+    blockers,
+    workerPullRequests,
+    branchSha,
+    defaultSha,
+  });
+  if (decision.operation !== "implement") return decision;
+  if (
+    allWorkerPullRequests.some(
+      (pullRequest) =>
+        pullRequest.state === "open" &&
+        !pullRequest.merged_at &&
+        pullRequest.head?.ref !== decision.branch,
+    )
+  ) {
+    return { operation: "triage", reason: "conflicting-worker-pr" };
+  }
   if (
     workerPullRequests
       .filter((pullRequest) => !pullRequest.merged_at)
@@ -167,25 +213,21 @@ export function createWorkerPlan({
           !isOwnedWorkerPullRequest(pullRequest, {
             repository,
             defaultBranch,
-            branch: `codex/issue-${issue.number}`,
+            branch: decision.branch,
           }),
       )
   ) {
     return { operation: "triage", reason: "foreign-worker-pr" };
   }
-  const decision = evaluateFrontierIssue({
-    issue,
-    blockers,
-    workerPullRequests,
-    branchSha,
-    defaultSha,
-  });
-  if (decision.operation !== "implement") return decision;
   const plan = {
-    version: 1,
+    version: 2,
     repository,
     defaultBranch,
     issueNumber: issue.number,
+    cycle: authorizationRecord.cycle,
+    executionContentHash: contract.hash,
+    authorizationEventId: authorizationRecord.authorizationEventId,
+    acceptanceCriteriaIds: contract.acceptanceCriteriaIds,
     startSha: decision.startSha,
     branch: decision.branch,
     branchExisted: branchSha !== null,
@@ -198,8 +240,11 @@ export function createWorkerPlan({
 export function evaluatePublicationState({
   plan,
   issue,
+  contract,
+  authorizationRecord,
   blockers,
   workerPullRequests,
+  allWorkerPullRequests = workerPullRequests,
   branchSha,
 }) {
   validateWorkerPlan(plan);
@@ -213,6 +258,32 @@ export function evaluatePublicationState({
     blockers.some((blocker) => blocker.state !== "closed")
   ) {
     return { operation: "pause", reason: "issue-not-frontier" };
+  }
+  if (
+    allWorkerPullRequests.some(
+      (pullRequest) =>
+        pullRequest.state === "open" &&
+        !pullRequest.merged_at &&
+        pullRequest.head?.ref !== plan.branch,
+    )
+  ) {
+    return { operation: "triage", reason: "conflicting-worker-pr" };
+  }
+  const authorization = activeAuthorization({
+    issue,
+    contract,
+    record: authorizationRecord,
+  });
+  if (
+    !authorization.ok ||
+    authorization.cycle !== plan.cycle ||
+    contract.hash !== plan.executionContentHash ||
+    authorizationRecord.authorizationEventId !== plan.authorizationEventId
+  ) {
+    return {
+      operation: "triage",
+      reason: authorization.ok ? "stale-worker-authorization" : authorization.reason,
+    };
   }
 
   const pullRequests = workerPullRequests.filter((pullRequest) => !pullRequest.merged_at);
@@ -252,9 +323,13 @@ function isOwnedWorkerPullRequest(pullRequest, { repository, defaultBranch, bran
 }
 
 const PLAN_KEYS = [
+  "acceptanceCriteriaIds",
+  "authorizationEventId",
   "branch",
   "branchExisted",
+  "cycle",
   "defaultBranch",
+  "executionContentHash",
   "issueNumber",
   "pullRequestNumber",
   "repository",
@@ -275,7 +350,7 @@ export function validateWorkerPlan(plan, expected = {}) {
   if (Object.keys(plan).sort().join("\0") !== PLAN_KEYS.join("\0")) {
     throw new Error("Worker plan contains missing or unexpected fields");
   }
-  if (plan.version !== 1) throw new Error("Worker plan version is unsupported");
+  if (plan.version !== 2) throw new Error("Worker plan version is unsupported");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(plan.repository)) {
     throw new Error("Worker plan repository is invalid");
   }
@@ -283,8 +358,22 @@ export function validateWorkerPlan(plan, expected = {}) {
     throw new Error("Worker plan default branch is invalid");
   }
   assertPositiveInteger(plan.issueNumber, "Worker plan Issue");
-  if (plan.branch !== `codex/issue-${plan.issueNumber}`) {
+  assertPositiveInteger(plan.cycle, "Worker plan cycle");
+  assertPositiveInteger(plan.authorizationEventId, "Worker plan authorization event");
+  if (plan.branch !== `codex/issue-${plan.issueNumber}-cycle-${plan.cycle}`) {
     throw new Error("Worker plan branch does not match its Issue");
+  }
+  if (!/^[0-9a-f]{64}$/.test(plan.executionContentHash)) {
+    throw new Error("Worker plan execution-content hash is invalid");
+  }
+  if (
+    !Array.isArray(plan.acceptanceCriteriaIds) ||
+    plan.acceptanceCriteriaIds.length === 0 ||
+    plan.acceptanceCriteriaIds.length > 50 ||
+    new Set(plan.acceptanceCriteriaIds).size !== plan.acceptanceCriteriaIds.length ||
+    plan.acceptanceCriteriaIds.some((id) => !/^AC-[1-9][0-9]*$/.test(id))
+  ) {
+    throw new Error("Worker plan acceptance criteria IDs are invalid");
   }
   if (!/^[0-9a-f]{40}$/.test(plan.startSha)) {
     throw new Error("Worker plan start commit is invalid");
@@ -356,6 +445,7 @@ export function buildWorkerPrompt({ issue, plan }) {
     "- Do not modify protected workflow, Agent, dependency-resolution, PRD, or architecture files.",
     "- Work only from the recorded start commit and fixed Issue scope.",
     "- Run appropriate repository validation before reporting completion.",
+    "- Return exactly one acceptance_criteria item for every recorded AC ID, in order, with status pass or not_applicable and non-empty evidence.",
     "- Decide whether real human validation is required. Unit and smoke coverage may be sufficient for simple changes.",
     "",
     "Before the final response, create `.codex-worker-artifact/output/change.patch` with:",
@@ -375,6 +465,9 @@ export function buildWorkerPrompt({ issue, plan }) {
     "",
     `Recorded start commit: ${plan.startSha}`,
     `Fixed branch: ${plan.branch}`,
+    `Authorization cycle: ${plan.cycle}`,
+    `Execution-content hash: ${plan.executionContentHash}`,
+    `Required AC IDs: ${plan.acceptanceCriteriaIds.join(", ")}`,
     `Recorded branch existed: ${plan.branchExisted ? "yes" : "no"}`,
   ].join("\n");
 }
@@ -383,6 +476,8 @@ const RESULT_KEYS = [
   "acceptance_criteria",
   "branch",
   "completed",
+  "cycle",
+  "execution_content_hash",
   "human_validation",
   "human_validation_required",
   "issue_number",
@@ -434,17 +529,21 @@ export function validateWorkerResult(raw, plan) {
   if (result.branch !== plan.branch) {
     throw new Error("Worker result branch does not match the plan");
   }
+  if (result.cycle !== plan.cycle) {
+    throw new Error("Worker result cycle does not match the plan");
+  }
+  if (result.execution_content_hash !== plan.executionContentHash) {
+    throw new Error("Worker result execution-content hash does not match the plan");
+  }
   if (typeof result.human_validation_required !== "boolean") {
     throw new Error("human_validation_required must be boolean");
   }
   assertBoundedString(result.summary, "summary", 4000);
-  for (const name of [
-    "acceptance_criteria",
-    "tests",
-    "not_run",
-    "human_validation",
-    "risks",
-  ]) {
+  validateAcceptanceCriteriaEvidence(
+    result.acceptance_criteria,
+    plan.acceptanceCriteriaIds,
+  );
+  for (const name of ["tests", "not_run", "human_validation", "risks"]) {
     assertStringList(result[name], name);
   }
   if (result.human_validation_required && result.human_validation.length === 0) {
@@ -470,7 +569,26 @@ function renderWorkerList(values) {
     : "- 无";
 }
 
-export function buildWorkerPullRequestBody(result, issueNumber) {
+function renderAcceptanceCriteriaEvidence(items, expectedIds) {
+  const sanitized = items.map((item) => ({
+    id: item.id,
+    status: item.status,
+    evidence: sanitizeWorkerMarkdown(item.evidence).replace(/\r?\n/g, " "),
+  }));
+  const marker = buildAcceptanceCriteriaEvidenceMarker(sanitized, expectedIds);
+  return [
+    marker,
+    ...sanitized.map(
+      (item) => `- **${item.id}** — \`${item.status}\`\n  - Evidence: ${item.evidence}`,
+    ),
+  ].join("\n");
+}
+
+export function buildWorkerPullRequestBody(
+  result,
+  issueNumber,
+  expectedIds = result.acceptance_criteria.map((item) => item.id),
+) {
   const humanValidation = result.human_validation_required
     ? renderWorkerList(result.human_validation)
     : "- 自动验证已充分";
@@ -483,7 +601,7 @@ export function buildWorkerPullRequestBody(result, issueNumber) {
     "",
     "## 验收标准",
     "",
-    renderWorkerList(result.acceptance_criteria),
+    renderAcceptanceCriteriaEvidence(result.acceptance_criteria, expectedIds),
     "",
     "## 自动验证",
     "",
@@ -713,6 +831,20 @@ async function githubRequest(apiPath, { token, allowNotFound = false, ...options
   throw new Error(`GitHub API ${method} request failed`);
 }
 
+async function githubPaginate(apiPath, { token } = {}) {
+  const values = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const separator = apiPath.includes("?") ? "&" : "?";
+    const batch = await githubRequest(
+      `${apiPath}${separator}per_page=100&page=${page}`,
+      { token },
+    );
+    values.push(...batch);
+    if (batch.length < 100) return values;
+  }
+  throw new Error(`GitHub API pagination limit exceeded for ${apiPath}`);
+}
+
 async function fetchBranchSha(repository, branch, token) {
   const ref = await githubRequest(
     `/repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`,
@@ -721,42 +853,425 @@ async function fetchBranchSha(repository, branch, token) {
   return ref?.object?.sha ?? null;
 }
 
-async function fetchWorkerPullRequests(repository, branch, token) {
-  const owner = repository.split("/")[0];
-  const head = encodeURIComponent(`${owner}:${branch}`);
-  return githubRequest(`/repos/${repository}/pulls?state=all&head=${head}&per_page=100`, {
-    token,
-  });
+async function fetchWorkerPullRequests(repository, issueNumber, token) {
+  const pattern = new RegExp(`^codex/issue-${issueNumber}-cycle-[1-9][0-9]*$`);
+  const pullRequests = await githubPaginate(
+    `/repos/${repository}/pulls?state=all`,
+    { token },
+  );
+  return pullRequests.filter((pullRequest) => pattern.test(pullRequest.head?.ref ?? ""));
 }
 
 async function fetchIssueState(repository, issueNumber, token) {
   const issue = await githubRequest(`/repos/${repository}/issues/${issueNumber}`, {
     token,
   });
-  const blockerNumbers = parseBlockedBy(issue.body, { issueNumber });
-  const blockers = await Promise.all(
-    blockerNumbers.map((number) =>
-      githubRequest(`/repos/${repository}/issues/${number}`, { token }),
+  if (issue.pull_request) throw new Error("Worker target is not an Issue");
+  const contract = executionContent(issue);
+  const blockerNumbers = contract.blockerNumbers;
+  const [blockers, comments, timelineEvents] = await Promise.all([
+    Promise.all(
+      blockerNumbers.map((number) =>
+        githubRequest(`/repos/${repository}/issues/${number}`, { token }),
+      ),
     ),
+    githubPaginate(`/repos/${repository}/issues/${issueNumber}/comments`, { token }),
+    githubPaginate(`/repos/${repository}/issues/${issueNumber}/events`, { token }),
+  ]);
+  const authorizationRecords = parseAuthorizationRecords(
+    comments,
+    issueNumber,
+    timelineEvents,
   );
-  return { issue, blockers };
+  return {
+    issue,
+    blockers,
+    contract,
+    authorizationRecords,
+    authorizationRecord: latestAuthorizationRecord(authorizationRecords),
+    timelineEvents,
+  };
 }
 
 async function fetchWorkerState({ repository, issueNumber, defaultBranch, token }) {
-  const branch = `codex/issue-${issueNumber}`;
-  const [{ issue, blockers }, workerPullRequests, branchSha, defaultSha] =
-    await Promise.all([
-      fetchIssueState(repository, issueNumber, token),
-      fetchWorkerPullRequests(repository, branch, token),
-      fetchBranchSha(repository, branch, token),
-      fetchBranchSha(repository, defaultBranch, token),
-    ]);
-  return { issue, blockers, workerPullRequests, branchSha, defaultSha };
+  const issueState = await fetchIssueState(repository, issueNumber, token);
+  const branch = issueState.authorizationRecord
+    ? `codex/issue-${issueNumber}-cycle-${issueState.authorizationRecord.cycle}`
+    : null;
+  const [allWorkerPullRequests, branchSha, defaultSha] = await Promise.all([
+    fetchWorkerPullRequests(repository, issueNumber, token),
+    branch ? fetchBranchSha(repository, branch, token) : null,
+    fetchBranchSha(repository, defaultBranch, token),
+  ]);
+  const workerPullRequests = branch
+    ? allWorkerPullRequests.filter((pullRequest) => pullRequest.head?.ref === branch)
+    : [];
+  return {
+    ...issueState,
+    workerPullRequests,
+    allWorkerPullRequests,
+    branchSha,
+    defaultSha,
+  };
+}
+
+async function fetchAuthorizationContext(repository, issueNumber, token) {
+  const [issue, comments, timelineEvents] = await Promise.all([
+    githubRequest(`/repos/${repository}/issues/${issueNumber}`, { token }),
+    githubPaginate(`/repos/${repository}/issues/${issueNumber}/comments`, { token }),
+    githubPaginate(`/repos/${repository}/issues/${issueNumber}/events`, { token }),
+  ]);
+  if (issue.pull_request) throw new Error("Worker target is not an Issue");
+  const records = parseAuthorizationRecords(comments, issueNumber, timelineEvents);
+  let contract;
+  let contractError;
+  try {
+    contract = executionContent(issue);
+  } catch (error) {
+    contractError = error;
+  }
+  return {
+    issue,
+    records,
+    current: latestAuthorizationRecord(records),
+    contract,
+    contractError,
+    timelineEvents,
+  };
+}
+
+function findIssueTimelineEvent({
+  events,
+  eventName,
+  actorLogin,
+  label,
+}) {
+  return events
+    .filter(
+      (event) =>
+        event.event === eventName &&
+        (actorLogin === undefined || event.actor?.login === actorLogin) &&
+        (label === undefined || event.label?.name === label),
+    )
+    .sort((left, right) => left.id - right.id)
+    .at(-1);
+}
+
+async function fetchTeamMembership(repository, login, token) {
+  const owner = repository.split("/")[0];
+  return githubRequest(
+    `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
+    { token, allowNotFound: true },
+  );
+}
+
+async function addIssueLabel(repository, issueNumber, label, token) {
+  await githubRequest(`/repos/${repository}/issues/${issueNumber}/labels`, {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ labels: [label] }),
+  });
+}
+
+async function removeIssueLabel(repository, issueNumber, label, token) {
+  await githubRequest(
+    `/repos/${repository}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+    { token, method: "DELETE", allowNotFound: true },
+  );
+}
+
+async function publishAuthorizationRecord(repository, issueNumber, record, token) {
+  await githubRequest(`/repos/${repository}/issues/${issueNumber}/comments`, {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body: buildAuthorizationRecordComment(record) }),
+  });
+}
+
+async function rejectAuthorization(repository, issueNumber, token) {
+  await Promise.all([
+    removeIssueLabel(repository, issueNumber, "ready-for-agent", token),
+    addIssueLabel(repository, issueNumber, "needs-triage", token),
+  ]);
+}
+
+function transitionActor(event) {
+  const actor = event.sender ?? event.issue?.user ?? event.pull_request?.user;
+  if (!actor?.login || !["User", "Bot"].includes(actor.type)) {
+    throw new Error("Worker authorization transition actor is invalid");
+  }
+  return { login: actor.login, type: actor.type };
+}
+
+async function recordIssueAuthorizationEvent({
+  repository,
+  event,
+  token,
+  teamToken,
+}) {
+  const issueNumber = event.issue?.number;
+  assertPositiveInteger(issueNumber, "Worker authorization Issue");
+  const context = await fetchAuthorizationContext(repository, issueNumber, token);
+  const labels = labelsOf(context.issue);
+  const recordedAt = new Date().toISOString();
+  const action = event.action;
+  const label = event.label?.name;
+
+  if (action === "labeled" && label === "ready-for-agent") {
+    if (context.issue.state !== "open" || !labels.includes("ready-for-agent")) {
+      return;
+    }
+    try {
+      if (context.contractError) throw context.contractError;
+      const timelineEvent = latestAuthorizationTimelineEvent(
+        context.timelineEvents,
+      );
+      if (!timelineEvent) throw new Error("Worker authorization timeline event is missing");
+      if (!teamToken) throw new Error("TEAM_MEMBERSHIP_TOKEN is required");
+      const membership = await fetchTeamMembership(
+        repository,
+        timelineEvent.actor.login,
+        teamToken,
+      );
+      const record = authorizeCycle({
+        issueNumber,
+        executionContentHash: context.contract.hash,
+        blockedByHash: context.contract.blockedByHash,
+        records: context.records,
+        timelineEvent,
+        membership,
+        recordedAt,
+        forceNewCycle: context.timelineEvents.some(
+          (timelineEntry) =>
+            ["closed", "reopened"].includes(timelineEntry.event) &&
+            timelineEntry.id > (context.current?.authorizationEventId ?? 0) &&
+            timelineEntry.id < timelineEvent.id,
+        ),
+      });
+      if (record) await publishAuthorizationRecord(repository, issueNumber, record, token);
+      return;
+    } catch (error) {
+      await rejectAuthorization(repository, issueNumber, token);
+      throw error;
+    }
+  }
+
+  if (action === "unlabeled" && label === "ready-for-agent") {
+    if (labels.includes("ready-for-agent")) return;
+    if (!context.current || !["active", "paused"].includes(context.current.state)) {
+      return;
+    }
+    const timelineEvent = findIssueTimelineEvent({
+      events: context.timelineEvents,
+      eventName: "unlabeled",
+      label: "ready-for-agent",
+    });
+    if (
+      !timelineEvent ||
+      timelineEvent.id <= context.current.authorizationEventId ||
+      String(timelineEvent.id) === context.current.transitionEventId
+    ) {
+      return;
+    }
+    const unchanged =
+      context.contract &&
+      context.current.executionContentHash === context.contract.hash;
+    const record = transitionAuthorization({
+      current: context.current,
+      state: unchanged ? "paused" : "invalidated",
+      transition: unchanged ? "paused" : "invalidated",
+      reason: unchanged ? "label-removed" : "content-changed",
+      actor: timelineEvent.actor,
+      eventId: timelineEvent.id,
+      eventAt: timelineEvent.created_at,
+      eventUrl: timelineEvent.url,
+      recordedAt,
+    });
+    await publishAuthorizationRecord(repository, issueNumber, record, token);
+    if (!unchanged) await addIssueLabel(repository, issueNumber, "needs-triage", token);
+    return;
+  }
+
+  if (action === "edited") {
+    if (!context.current) {
+      if (labels.includes("ready-for-agent")) {
+        await rejectAuthorization(repository, issueNumber, token);
+      }
+      return;
+    }
+    if (!["active", "paused"].includes(context.current.state)) return;
+    if (
+      Date.parse(event.issue.updated_at) <
+      Date.parse(context.current.authorizationEventCreatedAt)
+    ) {
+      return;
+    }
+    const unchanged =
+      context.contract &&
+      context.current.executionContentHash === context.contract.hash;
+    const invalidationReason = authorizationEditInvalidation({
+      executionContentMatches: Boolean(unchanged),
+      contractValid: Boolean(context.contract),
+      bodyWasEdited: Object.hasOwn(event.changes ?? {}, "body"),
+      currentBody: context.issue.body,
+      previousBody: event.changes?.body?.from,
+      issueNumber,
+      actor: event.sender,
+    });
+    if (!invalidationReason) return;
+    if (invalidationReason === "trusted-blocker-edit") {
+      const record = transitionAuthorization({
+        current: context.current,
+        state: context.current.state,
+        transition: "frontier-updated",
+        reason: invalidationReason,
+        actor: transitionActor(event),
+        eventId: `run-${requiredEnvironment("GITHUB_RUN_ID")}`,
+        eventAt: event.issue.updated_at,
+        eventUrl: event.issue.html_url,
+        recordedAt,
+        blockedByHash: context.contract.blockedByHash,
+      });
+      await publishAuthorizationRecord(repository, issueNumber, record, token);
+      return;
+    }
+    const record = transitionAuthorization({
+      current: context.current,
+      state: "invalidated",
+      transition: "invalidated",
+      reason: invalidationReason,
+      actor: transitionActor(event),
+      eventId: `run-${requiredEnvironment("GITHUB_RUN_ID")}`,
+      eventAt: event.issue.updated_at,
+      eventUrl: event.issue.html_url,
+      recordedAt,
+    });
+    await publishAuthorizationRecord(repository, issueNumber, record, token);
+    await rejectAuthorization(repository, issueNumber, token);
+    return;
+  }
+
+  if (action === "closed") {
+    if (context.issue.state !== "closed") return;
+    if (!shouldConsumeAuthorization(context.current)) return;
+    const timelineEvent = findIssueTimelineEvent({
+      events: context.timelineEvents,
+      eventName: "closed",
+    });
+    if (!timelineEvent) throw new Error("Issue close timeline event is missing");
+    if (timelineEvent.id <= context.current.authorizationEventId) return;
+    const record = transitionAuthorization({
+      current: context.current,
+      state: "consumed",
+      transition: "consumed",
+      reason: "issue-closed",
+      actor: timelineEvent.actor,
+      eventId: timelineEvent.id,
+      eventAt: timelineEvent.created_at,
+      eventUrl: timelineEvent.url,
+      recordedAt,
+    });
+    await publishAuthorizationRecord(repository, issueNumber, record, token);
+    return;
+  }
+
+  if (action === "reopened") {
+    if (context.issue.state !== "open") return;
+    const timelineEvent = findIssueTimelineEvent({
+      events: context.timelineEvents,
+      eventName: "reopened",
+    });
+    if (!timelineEvent) throw new Error("Issue reopen timeline event is missing");
+    if (
+      shouldConsumeAuthorization(context.current) &&
+      context.current.authorizationEventId < timelineEvent.id
+    ) {
+      const record = transitionAuthorization({
+        current: context.current,
+        state: "consumed",
+        transition: "consumed",
+        reason: "issue-reopened",
+        actor: timelineEvent.actor,
+        eventId: timelineEvent.id,
+        eventAt: timelineEvent.created_at,
+        eventUrl: timelineEvent.url,
+        recordedAt,
+      });
+      await publishAuthorizationRecord(repository, issueNumber, record, token);
+    }
+    if (
+      labels.includes("ready-for-agent") &&
+      (!context.current || context.current.authorizationEventId < timelineEvent.id)
+    ) {
+      await rejectAuthorization(repository, issueNumber, token);
+    }
+  }
+}
+
+async function recordPullRequestAuthorizationEvent({ repository, event, token }) {
+  const pullRequest = event.pull_request;
+  const match = /^codex\/issue-(\d+)-cycle-(\d+)$/.exec(
+    pullRequest?.head?.ref ?? "",
+  );
+  if (
+    event.action !== "closed" ||
+    pullRequest?.merged !== true ||
+    pullRequest?.head?.repo?.full_name?.toLowerCase() !== repository.toLowerCase() ||
+    !match
+  ) {
+    return;
+  }
+  const issueNumber = Number(match[1]);
+  const cycle = Number(match[2]);
+  const context = await fetchAuthorizationContext(repository, issueNumber, token);
+  if (
+    !shouldConsumeAuthorization(context.current, { cycle })
+  ) {
+    return;
+  }
+  const record = transitionAuthorization({
+    current: context.current,
+    state: "consumed",
+    transition: "consumed",
+    reason: "worker-pr-merged",
+    actor: transitionActor(event),
+    eventId: `pull-request-${pullRequest.number}-${pullRequest.merge_commit_sha}`,
+    eventAt: pullRequest.merged_at,
+    eventUrl: pullRequest.html_url,
+    recordedAt: new Date().toISOString(),
+  });
+  await publishAuthorizationRecord(repository, issueNumber, record, token);
+}
+
+async function authorizeCommand() {
+  const event = JSON.parse(
+    await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"),
+  );
+  const repository = requiredEnvironment("GITHUB_REPOSITORY");
+  const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
+  const token = requiredEnvironment("GITHUB_TOKEN");
+  if (eventName === "issues") {
+    await recordIssueAuthorizationEvent({
+      repository,
+      event,
+      token,
+      teamToken: process.env.TEAM_MEMBERSHIP_TOKEN,
+    });
+    return;
+  }
+  if (eventName === "pull_request_target") {
+    await recordPullRequestAuthorizationEvent({ repository, event, token });
+    return;
+  }
 }
 
 function issueNumberFromEvent(event, eventName) {
   if (eventName === "issues") return event.issue?.number;
-  const match = /^codex\/issue-(\d+)$/.exec(event.pull_request?.head?.ref ?? "");
+  const match = /^codex\/issue-(\d+)-cycle-\d+$/.exec(
+    event.pull_request?.head?.ref ?? "",
+  );
   return match ? Number(match[1]) : null;
 }
 
@@ -943,24 +1458,21 @@ async function preflightCommand() {
   }
 }
 
-function issueAuthorization(issue, blockers) {
-  const labels = labelsOf(issue);
-  if (issue.state !== "open" || labels.includes("wontfix")) return "close";
+async function requirePublishAuthorization(plan, token) {
+  const state = await fetchIssueState(plan.repository, plan.issueNumber, token);
+  const authorization = activeAuthorization({
+    issue: state.issue,
+    contract: state.contract,
+    record: state.authorizationRecord,
+  });
   if (
-    !labels.includes("ready-for-agent") ||
-    labels.some((label) => ["ready-for-human", "needs-triage"].includes(label)) ||
-    blockers.some((blocker) => blocker.state !== "closed")
+    !authorization.ok ||
+    authorization.cycle !== plan.cycle ||
+    state.contract.hash !== plan.executionContentHash ||
+    state.authorizationRecord.authorizationEventId !== plan.authorizationEventId ||
+    state.blockers.some((blocker) => blocker.state !== "closed")
   ) {
-    return "pause";
-  }
-  return "authorized";
-}
-
-async function requirePublishAuthorization(repository, issueNumber, token) {
-  const state = await fetchIssueState(repository, issueNumber, token);
-  const authorization = issueAuthorization(state.issue, state.blockers);
-  if (authorization !== "authorized") {
-    throw new Error(`Worker publication stopped: ${authorization}`);
+    throw new Error("Worker publication stopped: stale authorization");
   }
 }
 
@@ -1038,7 +1550,7 @@ async function publishCommand() {
   }
 
   if (commitSha !== plan.startSha) {
-    await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
+    await requirePublishAuthorization(plan, token);
     const currentRemote = runGit(workspace, ["remote", "get-url", "origin"]).stdout.trim();
     if (!isExpectedPublicationRemote(currentRemote, plan.repository)) {
       throw new Error("Worker publication remote is unexpected");
@@ -1073,8 +1585,12 @@ async function publishCommand() {
     if (push.status !== 0) throw new Error("Worker branch push failed");
   }
 
-  await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
-  const pullRequestBody = buildWorkerPullRequestBody(result, plan.issueNumber);
+  await requirePublishAuthorization(plan, token);
+  const pullRequestBody = buildWorkerPullRequestBody(
+    result,
+    plan.issueNumber,
+    plan.acceptanceCriteriaIds,
+  );
   const pullRequest = plan.pullRequestNumber
     ? await githubRequest(
         `/repos/${plan.repository}/pulls/${plan.pullRequestNumber}`,
@@ -1101,7 +1617,7 @@ async function publishCommand() {
         }),
       });
 
-  await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
+  await requirePublishAuthorization(plan, token);
   if (
     humanValidationLabelAction(
       result.human_validation_required,
@@ -1119,7 +1635,7 @@ async function publishCommand() {
     );
   }
 
-  await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
+  await requirePublishAuthorization(plan, token);
   await markPullRequestReadyForReview({ pullRequest, token });
 }
 
@@ -1130,6 +1646,11 @@ const FAILURE_MESSAGES = {
   "invalid-result": "The Worker returned an invalid structured result.",
   "invalid-start-sha": "The Worker start commit could not be validated.",
   "invalid-worker-configuration": "The Codex Worker repository configuration is invalid.",
+  "missing-active-authorization": "The Issue has no active trusted Worker authorization record.",
+  "authorization-content-mismatch": "The Issue execution content changed after authorization.",
+  "authorization-blocker-mismatch": "The Issue blocker metadata changed without a trusted audit transition.",
+  "conflicting-worker-pr": "Another Worker cycle already has an active PR for this Issue.",
+  "stale-worker-authorization": "The Worker authorization cycle changed while implementation was running.",
   "model-failed": "The Codex model job failed or timed out before producing an Artifact.",
   "multiple-worker-prs": "More than one unmerged Worker PR exists for this Issue.",
   "prepare-failed": "The Worker could not validate the Issue frontier.",
@@ -1142,8 +1663,7 @@ const FAILURE_MESSAGES = {
 };
 
 async function closeWorkerPullRequests(repository, issueNumber, token) {
-  const branch = `codex/issue-${issueNumber}`;
-  const pullRequests = await fetchWorkerPullRequests(repository, branch, token);
+  const pullRequests = await fetchWorkerPullRequests(repository, issueNumber, token);
   await Promise.all(
     pullRequests
       .filter((pullRequest) => pullRequest.state === "open" && !pullRequest.merged_at)
@@ -1203,11 +1723,12 @@ async function handleCommand() {
 
 async function main() {
   const command = process.argv[2];
+  if (command === "authorize") return authorizeCommand();
   if (command === "prepare") return prepareCommand();
   if (command === "preflight") return preflightCommand();
   if (command === "publish") return publishCommand();
   if (command === "handle") return handleCommand();
-  throw new Error("Expected prepare, preflight, publish, or handle command");
+  throw new Error("Expected authorize, prepare, preflight, publish, or handle command");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -15,6 +15,7 @@ import test from "node:test";
 
 import * as worker from "./codex-worker.mjs";
 import {
+  authorizationEditInvalidation,
   buildWorkerPullRequestBody,
   buildWorkerPrompt,
   classifyWorkerEvent,
@@ -24,6 +25,7 @@ import {
   humanValidationLabelAction,
   parseBlockedBy,
   sanitizeWorkerMarkdown,
+  shouldConsumeAuthorization,
   validateWorkerConfiguration,
   validateWorkerPlan,
   validateWorkerResult,
@@ -50,6 +52,10 @@ test("classifies only explicit Worker control and execution events", () => {
   assert.equal(
     classifyWorkerEvent({ eventName: "issues", action: "labeled", label: "bug" }),
     "noop",
+  );
+  assert.equal(
+    classifyWorkerEvent({ eventName: "issues", action: "edited" }),
+    "evaluate",
   );
   assert.equal(
     classifyWorkerEvent({
@@ -83,7 +89,7 @@ test("classifies only explicit Worker control and execution events", () => {
     classifyWorkerEvent({
       eventName: "pull_request_target",
       action: "closed",
-      headRef: "codex/issue-42",
+      headRef: "codex/issue-42-cycle-1",
       merged: false,
       sameRepository: true,
     }),
@@ -93,12 +99,81 @@ test("classifies only explicit Worker control and execution events", () => {
     classifyWorkerEvent({
       eventName: "pull_request_target",
       action: "closed",
-      headRef: "codex/issue-42",
+      headRef: "codex/issue-42-cycle-1",
       merged: false,
       sameRepository: false,
     }),
     "noop",
   );
+});
+
+test("invalidates protected or untrusted blocker edits but permits checkbox and trusted metadata edits", () => {
+  const body = "## Blocked by\n\nNone\n";
+  const blocked = "## Blocked by\n\n- #7\n";
+  assert.equal(
+    authorizationEditInvalidation({
+      executionContentMatches: true,
+      contractValid: true,
+      bodyWasEdited: true,
+      currentBody: blocked,
+      previousBody: body,
+      issueNumber: 42,
+      actor: { login: "issue-author", type: "User" },
+    }),
+    "untrusted-blocker-edit",
+  );
+  assert.equal(
+    authorizationEditInvalidation({
+      executionContentMatches: true,
+      contractValid: true,
+      bodyWasEdited: true,
+      currentBody: blocked,
+      previousBody: body,
+      issueNumber: 42,
+      actor: { login: "github-actions[bot]", type: "Bot" },
+    }),
+    "trusted-blocker-edit",
+  );
+  assert.equal(
+    authorizationEditInvalidation({
+      executionContentMatches: true,
+      contractValid: true,
+      bodyWasEdited: true,
+      currentBody: body,
+      previousBody: body,
+      issueNumber: 42,
+      actor: { login: "owner", type: "User" },
+    }),
+    null,
+  );
+  assert.equal(
+    authorizationEditInvalidation({
+      executionContentMatches: false,
+      contractValid: true,
+      bodyWasEdited: true,
+      currentBody: body,
+      previousBody: body,
+      issueNumber: 42,
+      actor: { login: "github-actions[bot]", type: "Bot" },
+    }),
+    "content-changed",
+  );
+});
+
+test("consumes every non-consumed authorization state for the matching cycle", () => {
+  for (const state of ["active", "paused", "invalidated"]) {
+    assert.equal(shouldConsumeAuthorization({ state, cycle: 3 }), true);
+    assert.equal(
+      shouldConsumeAuthorization({ state, cycle: 3 }, { cycle: 3 }),
+      true,
+    );
+  }
+  assert.equal(shouldConsumeAuthorization({ state: "consumed", cycle: 3 }), false);
+  assert.equal(
+    shouldConsumeAuthorization({ state: "active", cycle: 3 }, { cycle: 4 }),
+    false,
+  );
+  assert.equal(shouldConsumeAuthorization(null), false);
 });
 
 test("Worker Publisher can add but never remove ready-for-human", () => {
@@ -108,6 +183,20 @@ test("Worker Publisher can add but never remove ready-for-human", () => {
   assert.equal(humanValidationLabelAction(false, []), "noop");
 });
 
+const workerContract = {
+  hash: "c".repeat(64),
+  blockedByHash: "d".repeat(64),
+  acceptanceCriteriaIds: ["AC-1"],
+};
+const workerAuthorization = {
+  issueNumber: 42,
+  cycle: 1,
+  state: "active",
+  executionContentHash: workerContract.hash,
+  blockedByHash: workerContract.blockedByHash,
+  authorizationEventId: 1234,
+};
+
 function frontier(overrides = {}) {
   return evaluateFrontierIssue({
     issue: {
@@ -115,6 +204,8 @@ function frontier(overrides = {}) {
       state: "open",
       labels: [{ name: "ready-for-agent" }],
     },
+    contract: workerContract,
+    authorizationRecord: workerAuthorization,
     blockers: [],
     workerPullRequests: [],
     branchSha: null,
@@ -128,7 +219,7 @@ test("starts from default branch or resumes the fixed branch and Draft PR", () =
     operation: "implement",
     reason: "frontier",
     startSha: "a".repeat(40),
-    branch: "codex/issue-42",
+    branch: "codex/issue-42-cycle-1",
     pullRequestNumber: null,
   });
   assert.deepEqual(
@@ -141,7 +232,7 @@ test("starts from default branch or resumes the fixed branch and Draft PR", () =
           draft: true,
           merged_at: null,
           head: {
-            ref: "codex/issue-42",
+            ref: "codex/issue-42-cycle-1",
             repo: { full_name: "AgoraIO-Extensions/agent-infra" },
           },
           base: { ref: "main" },
@@ -152,7 +243,7 @@ test("starts from default branch or resumes the fixed branch and Draft PR", () =
       operation: "implement",
       reason: "frontier",
       startSha: "b".repeat(40),
-      branch: "codex/issue-42",
+      branch: "codex/issue-42-cycle-1",
       pullRequestNumber: 9,
     },
   );
@@ -218,6 +309,8 @@ test("creates one immutable plan from a frontier Issue", () => {
         state: "open",
         labels: [{ name: "ready-for-agent" }],
       },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [],
       branchSha: null,
@@ -231,6 +324,51 @@ test("creates one immutable plan from a frontier Issue", () => {
   );
 });
 
+test("refuses to start or publish beside an active PR from another cycle", () => {
+  const conflictingPullRequest = {
+    number: 8,
+    state: "open",
+    merged_at: null,
+    head: { ref: "codex/issue-42-cycle-7" },
+  };
+  assert.deepEqual(
+    createWorkerPlan({
+      repository: "AgoraIO-Extensions/agent-infra",
+      defaultBranch: "main",
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
+      blockers: [],
+      workerPullRequests: [],
+      allWorkerPullRequests: [conflictingPullRequest],
+      branchSha: null,
+      defaultSha: "a".repeat(40),
+    }),
+    { operation: "triage", reason: "conflicting-worker-pr" },
+  );
+  assert.deepEqual(
+    evaluatePublicationState({
+      plan: workerPlan,
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
+      blockers: [],
+      workerPullRequests: [],
+      allWorkerPullRequests: [conflictingPullRequest],
+      branchSha: null,
+    }),
+    { operation: "triage", reason: "conflicting-worker-pr" },
+  );
+});
+
 test("publication requires the recorded branch and Draft PR state", () => {
   const issue = {
     number: 42,
@@ -241,6 +379,8 @@ test("publication requires the recorded branch and Draft PR state", () => {
     evaluatePublicationState({
       plan: workerPlan,
       issue,
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [],
       branchSha: null,
@@ -251,6 +391,8 @@ test("publication requires the recorded branch and Draft PR state", () => {
     evaluatePublicationState({
       plan: workerPlan,
       issue,
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [],
       branchSha: "b".repeat(40),
@@ -261,6 +403,8 @@ test("publication requires the recorded branch and Draft PR state", () => {
     evaluatePublicationState({
       plan: { ...workerPlan, branchExisted: true, pullRequestNumber: 9 },
       issue,
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [
         {
@@ -269,7 +413,7 @@ test("publication requires the recorded branch and Draft PR state", () => {
           draft: true,
           merged_at: null,
           head: {
-            ref: "codex/issue-42",
+            ref: "codex/issue-42-cycle-1",
             repo: { full_name: "AgoraIO-Extensions/agent-infra" },
           },
           base: { ref: "main" },
@@ -283,6 +427,8 @@ test("publication requires the recorded branch and Draft PR state", () => {
     evaluatePublicationState({
       plan: { ...workerPlan, branchExisted: true, pullRequestNumber: 9 },
       issue,
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [
         {
@@ -291,7 +437,7 @@ test("publication requires the recorded branch and Draft PR state", () => {
           draft: true,
           merged_at: null,
           head: {
-            ref: "codex/issue-42",
+            ref: "codex/issue-42-cycle-1",
             repo: { full_name: "someone/fork" },
           },
           base: { ref: "main" },
@@ -305,6 +451,8 @@ test("publication requires the recorded branch and Draft PR state", () => {
     evaluatePublicationState({
       plan: workerPlan,
       issue: { ...issue, labels: [] },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
       blockers: [],
       workerPullRequests: [],
       branchSha: null,
@@ -378,12 +526,16 @@ test("marks the Worker PR ready through the fixed GraphQL mutation", async () =>
 });
 
 const workerPlan = {
-  version: 1,
+  version: 2,
   repository: "AgoraIO-Extensions/agent-infra",
   defaultBranch: "main",
   issueNumber: 42,
+  cycle: 1,
+  executionContentHash: workerContract.hash,
+  authorizationEventId: 1234,
+  acceptanceCriteriaIds: ["AC-1"],
   startSha: "a".repeat(40),
-  branch: "codex/issue-42",
+  branch: "codex/issue-42-cycle-1",
   branchExisted: false,
   pullRequestNumber: null,
 };
@@ -431,7 +583,7 @@ test("binds a Worker plan and file-based prompt to one fixed Issue branch", () =
     workerPlan,
   );
   assert.throws(() =>
-    validateWorkerPlan({ ...workerPlan, branch: "codex/issue-7" }),
+    validateWorkerPlan({ ...workerPlan, branch: "codex/issue-7-cycle-1" }),
   );
   assert.throws(() =>
     validateWorkerPlan({ ...workerPlan, unexpected: true }),
@@ -452,10 +604,14 @@ function workerResult(overrides = {}) {
   return JSON.stringify({
     completed: true,
     issue_number: 42,
+    cycle: 1,
+    execution_content_hash: workerContract.hash,
     start_sha: "a".repeat(40),
-    branch: "codex/issue-42",
+    branch: "codex/issue-42-cycle-1",
     summary: "Implemented the requested behavior.",
-    acceptance_criteria: ["The behavior is covered."],
+    acceptance_criteria: [
+      { id: "AC-1", status: "pass", evidence: "The behavior is covered." },
+    ],
     tests: ["node --test"],
     not_run: [],
     human_validation_required: false,
@@ -535,6 +691,39 @@ test("accepts only bounded Worker results for the recorded Issue and start commi
     validateWorkerResult(workerResult({ tests: ["x".repeat(1001)] }), workerPlan),
   );
   assert.throws(() =>
+    validateWorkerResult(workerResult({ acceptance_criteria: [] }), workerPlan),
+  );
+  assert.throws(() =>
+    validateWorkerResult(
+      workerResult({
+        acceptance_criteria: [
+          { id: "AC-2", status: "pass", evidence: "Wrong ID." },
+        ],
+      }),
+      workerPlan,
+    ),
+  );
+  assert.throws(() =>
+    validateWorkerResult(
+      workerResult({
+        acceptance_criteria: [
+          { id: "AC-1", status: "pending", evidence: "Not complete." },
+        ],
+      }),
+      workerPlan,
+    ),
+  );
+  assert.throws(() =>
+    validateWorkerResult(
+      workerResult({
+        acceptance_criteria: [
+          { id: "AC-1", status: "pass", evidence: "" },
+        ],
+      }),
+      workerPlan,
+    ),
+  );
+  assert.throws(() =>
     validateWorkerResult(
       workerResult({ human_validation_required: true, human_validation: [] }),
       workerPlan,
@@ -556,7 +745,9 @@ test("sanitizes model text before building one trusted primary Issue reference",
   const body = buildWorkerPullRequestBody(
     JSON.parse(workerResult({
       summary: unsafe,
-      acceptance_criteria: ["Fixes #8"],
+      acceptance_criteria: [
+        { id: "AC-1", status: "pass", evidence: "Fixes #8" },
+      ],
       human_validation_required: true,
       human_validation: ["Ask @release-team"],
     })),
@@ -590,11 +781,7 @@ function artifactFixture(t) {
   git(root, ["clone", "-q", origin, model]);
   git(root, ["clone", "-q", origin, publish]);
   const startSha = git(origin, ["rev-parse", "HEAD"]).trim();
-  const plan = {
-    issueNumber: 42,
-    startSha,
-    branch: "codex/issue-42",
-  };
+  const plan = { ...workerPlan, startSha };
   const resultPath = path.join(root, "result.json");
   writeFileSync(
     resultPath,

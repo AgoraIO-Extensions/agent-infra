@@ -26,7 +26,13 @@ async function actualWorkflows() {
 async function actualTrustedScriptSources() {
   return Object.fromEntries(
     await Promise.all(
-      ["check-run-contract.mjs", "claude-review.mjs", "pr-gates.mjs"].map(
+      [
+        "check-run-contract.mjs",
+        "claude-review.mjs",
+        "codex-worker.mjs",
+        "pr-gates.mjs",
+        "worker-contract.mjs",
+      ].map(
         async (name) => [
           name,
           await fs.readFile(path.resolve(".github/scripts", name), "utf8"),
@@ -46,6 +52,56 @@ test("requires the Codex Worker workflow", async () => {
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("codex-worker.yml"),
+    ),
+  );
+});
+
+test("requires the isolated Worker authorization recorder before the model", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  assert.ok(worker.on.issues.types.includes("edited"));
+  assert.equal(worker.jobs.implement.needs, "authorization");
+  assert.equal(
+    worker.jobs.implement.if,
+    "always() && needs.authorization.result == 'success'",
+  );
+
+  delete worker.jobs.authorization;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("authorization must be isolated before the model job"),
+    ),
+  );
+});
+
+test("locks the Worker authorization Team token to the recorder", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  const recorder = worker.jobs.authorization.steps.find(
+    (step) => step.name === "Record trusted authorization transition",
+  );
+  assert.equal(
+    recorder.env.TEAM_MEMBERSHIP_TOKEN,
+    "${{ steps.team-membership-token.outputs.token }}",
+  );
+  recorder.run = "node untrusted.mjs";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("authorization Team token"),
+    ),
+  );
+});
+
+test("requires Worker authorization, cycle, content hash, and AC evidence sources", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  sources["worker-contract.mjs"] = sources["worker-contract.mjs"].replace(
+    'createHash("sha256")',
+    'createHash("sha1")',
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("bind authorization, cycle, hash, and AC evidence"),
     ),
   );
 });
@@ -531,6 +587,21 @@ test("reevaluates PR Gates when an audit command changes", async () => {
     "edited",
     "deleted",
   ]);
+  assert.deepEqual(workflows["pr-gates.yml"].on.issues.types, [
+    "closed",
+    "edited",
+    "reopened",
+    "labeled",
+    "unlabeled",
+  ]);
+  assert.match(
+    workflows["pr-gates.yml"].jobs["dispatch-issue-update"].if,
+    /github\.event_name == 'issue_comment'/,
+  );
+  assert.match(
+    workflows["pr-gates.yml"].jobs["dispatch-issue-update"].if,
+    /!github\.event\.issue\.pull_request/,
+  );
 });
 
 test("ignores non-PR Issue comments before minting a Team token", async () => {
@@ -611,7 +682,7 @@ test("fails closed when Team membership configuration is unavailable", async () 
   const steps = workflows["pr-gates.yml"].jobs.gates.steps;
   const mint = steps.find((step) => step.id === "team-membership-token");
   const evaluate = steps.find(
-    (step) => step.name === "Evaluate Issue and human validation gates",
+    (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
   );
   assert.equal(mint["continue-on-error"], true);
   assert.equal(evaluate.if, "always()");
@@ -636,7 +707,7 @@ test("exposes a short-lived Team membership token only to Gate evaluation", asyn
   const steps = workflows["pr-gates.yml"].jobs.gates.steps;
   const mint = steps.find((step) => step.id === "team-membership-token");
   const evaluate = steps.find(
-    (step) => step.name === "Evaluate Issue and human validation gates",
+    (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
   );
 
   assert.equal(
@@ -688,6 +759,17 @@ test("policy requires PR Gate audit-command reevaluation", async () => {
   );
 });
 
+test("policy requires immediate source Issue and authorization-record reevaluation", async () => {
+  const workflows = await actualWorkflows();
+  workflows["pr-gates.yml"].on.issues.types = ["closed"];
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Issue content and authorization records"),
+    ),
+  );
+});
+
 test("policy rejects legacy PR Gate status permissions", async () => {
   for (const jobName of ["dispatch-issue-update", "gates"]) {
     const workflows = await actualWorkflows();
@@ -706,7 +788,7 @@ test("policy rejects legacy PR Gate status permissions", async () => {
 test("policy requires the fixed Team membership token chain", async () => {
   const workflows = await actualWorkflows();
   const evaluate = workflows["pr-gates.yml"].jobs.gates.steps.find(
-    (step) => step.name === "Evaluate Issue and human validation gates",
+    (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
   );
   delete evaluate.env.TEAM_MEMBERSHIP_TOKEN;
 
