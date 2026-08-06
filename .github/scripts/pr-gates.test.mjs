@@ -141,6 +141,14 @@ test("parses current-head validation and waiver commands with non-empty reasons"
       reason: "Provider timeout.",
     },
   );
+  assert.deepEqual(
+    parseGateCommand(`/human-validation ${headSha}\r\nVerified in the browser.`),
+    {
+      type: "human-validation",
+      headSha,
+      reason: "Verified in the browser.",
+    },
+  );
   assert.equal(parseGateCommand(`/human-validation ${headSha}`), null);
   assert.equal(parseGateCommand("looks good"), null);
 });
@@ -294,6 +302,16 @@ test("Claude Review Gate accepts only current-head success or a bounded infrastr
     evaluateClaudeReviewGate({ currentHead, review, waivers: [] }),
     { ok: true, waived: false, description: "Claude Review passed for current head" },
   );
+  for (const reasonCode of ["blocking_finding", "unresolved_thread"]) {
+    assert.deepEqual(
+      evaluateClaudeReviewGate({
+        currentHead,
+        review: { ...review, conclusion: "failure", reasonCode },
+        waivers: [],
+      }),
+      { ok: true, waived: false, description: "Claude Review passed for current head" },
+    );
+  }
   for (const invalidReview of [
     undefined,
     { ...review, headSha: "b".repeat(40) },
@@ -464,6 +482,54 @@ test("normalizes only current-head App Review state and blocking thread evidence
   );
 });
 
+test("preserves the trusted Review result beneath derived thread failures", () => {
+  const currentHead = "a".repeat(40);
+  const state = buildReviewState({
+    checkRuns: [
+      {
+        id: 5,
+        name: "Claude Review Gate",
+        head_sha: currentHead,
+        app: { id: 15368 },
+        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
+        status: "completed",
+        conclusion: "failure",
+        output: { summary: "reason_code: blocking_finding" },
+      },
+    ],
+    threads: [
+      {
+        isResolved: true,
+        comments: {
+          nodes: [
+            {
+              author: { login: "github-actions" },
+              body: `**P1: Fixed**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
+            },
+          ],
+        },
+      },
+    ],
+    currentHead,
+    prNumber: 42,
+  });
+  assert.equal(
+    state.review.reasonCode,
+    "blocking_finding",
+  );
+  assert.equal(state.hasPublishedBlockingFinding, false);
+  assert.equal(state.hasUnresolvedThread, false);
+  assert.equal(
+    evaluateClaudeReviewGate({
+      currentHead,
+      review: state.review,
+      hasPublishedBlockingFinding: state.hasPublishedBlockingFinding,
+      hasUnresolvedThread: state.hasUnresolvedThread,
+    }).ok,
+    true,
+  );
+});
+
 test("a new commit restores a previously required human validation label", () => {
   assert.equal(
     shouldReapplyHumanValidation({
@@ -559,6 +625,64 @@ test("revokes an applied waiver when its current audit record becomes invalid", 
     claudeReviewGateUpdate({
       result: { ok: true, waived: false, description: "Review passed" },
       review: { reasonCode: "success" },
+    }),
+    null,
+  );
+});
+
+test("writes blocking Review thread state to the Gate and restores Review success", () => {
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: {
+        ok: false,
+        waived: false,
+        reasonCode: "blocking_finding",
+        description: "P0/P1 finding cannot be waived",
+      },
+      review: { reasonCode: "success" },
+    }),
+    {
+      conclusion: "failure",
+      description: "P0/P1 finding cannot be waived",
+      reasonCode: "blocking_finding",
+    },
+  );
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: {
+        ok: false,
+        waived: false,
+        reasonCode: "unresolved_thread",
+        description: "Blocking Review thread is unresolved",
+      },
+      review: { reasonCode: "blocking_finding" },
+    }),
+    {
+      conclusion: "failure",
+      description: "Blocking Review thread is unresolved",
+      reasonCode: "unresolved_thread",
+    },
+  );
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: { ok: true, waived: false, description: "Claude Review passed" },
+      review: { reasonCode: "unresolved_thread" },
+    }),
+    {
+      conclusion: "success",
+      description: "Claude Review passed",
+      reasonCode: "success",
+    },
+  );
+  assert.equal(
+    claudeReviewGateUpdate({
+      result: {
+        ok: false,
+        waived: false,
+        reasonCode: "blocking_finding",
+        description: "P0/P1 finding cannot be waived",
+      },
+      review: { reasonCode: "infrastructure_failure" },
     }),
     null,
   );

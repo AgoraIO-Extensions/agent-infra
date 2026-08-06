@@ -9,6 +9,7 @@ import {
   isTrustedReviewComment,
   parseReviewOutput,
   requireCurrentReviewTarget,
+  reviewGateOutcome,
   sanitizeMarkdown,
   selectReviewGateCheck,
   validateFindingLocations,
@@ -91,6 +92,19 @@ test("publishes stable Review Gate success and failure reason codes", () => {
     title: "Claude Review Gate: failure",
     summary:
       "reason_code: infrastructure_failure\n\nThe trusted Review workflow did not produce a publishable result.",
+  });
+  assert.deepEqual(buildReviewCheckOutput("failure", "blocking_finding"), {
+    title: "Claude Review Gate: failure",
+    summary:
+      "reason_code: blocking_finding\n\nReview completed with blocking P0/P1 findings.",
+  });
+  assert.deepEqual(reviewGateOutcome([]), {
+    conclusion: "success",
+    reasonCode: "success",
+  });
+  assert.deepEqual(reviewGateOutcome([{ severity: "P1" }]), {
+    conclusion: "failure",
+    reasonCode: "blocking_finding",
   });
 });
 

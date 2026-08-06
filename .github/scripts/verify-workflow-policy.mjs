@@ -206,6 +206,7 @@ export function validateTrustedScriptSources(sources) {
     "/check-runs",
     "head_sha: expectedHead",
     "assertCurrentReviewTarget(pr, expectedHead)",
+    "reviewGateOutcome(blocking)",
   ];
   const contractRequirements = [
     "GITHUB_ACTIONS_APP_ID",

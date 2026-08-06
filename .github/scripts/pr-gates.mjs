@@ -82,7 +82,7 @@ export function parseGateCommand(body = "") {
   const match = body
     .trim()
     .match(
-      /^\/(human-validation|claude-review-waiver) ([0-9a-f]{40})\n([^\u0000]{1,4000})$/,
+      /^\/(human-validation|claude-review-waiver) ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/,
     );
   if (!match) return null;
   const reason = match[3].trim();
@@ -171,10 +171,20 @@ export function evaluateClaudeReviewGate({
   hasUnresolvedThread = false,
 }) {
   if (hasPublishedBlockingFinding) {
-    return { ok: false, waived: false, description: "P0/P1 finding cannot be waived" };
+    return {
+      ok: false,
+      waived: false,
+      reasonCode: "blocking_finding",
+      description: "P0/P1 finding cannot be waived",
+    };
   }
   if (hasUnresolvedThread) {
-    return { ok: false, waived: false, description: "Blocking Review thread is unresolved" };
+    return {
+      ok: false,
+      waived: false,
+      reasonCode: "unresolved_thread",
+      description: "Blocking Review thread is unresolved",
+    };
   }
   if (
     !review ||
@@ -188,7 +198,11 @@ export function evaluateClaudeReviewGate({
       description: "Current-head Claude Review has not completed",
     };
   }
-  if (review.conclusion === "success" && review.reasonCode === "success") {
+  const reviewSucceededBeforeThreadState =
+    (review.conclusion === "success" && review.reasonCode === "success") ||
+    (review.conclusion === "failure" &&
+      ["blocking_finding", "unresolved_thread"].includes(review.reasonCode));
+  if (reviewSucceededBeforeThreadState) {
     return {
       ok: true,
       waived: false,
@@ -240,16 +254,18 @@ export function buildReviewState({
     prNumber,
   });
   const reasonCode = check?.output?.summary?.match(
-    /(?:^|\n)reason_code: (success|infrastructure_failure|invalid_output|waived_infrastructure_failure)(?:\n|$)/,
+    /(?:^|\n)reason_code: (success|infrastructure_failure|invalid_output|waived_infrastructure_failure|blocking_finding|unresolved_thread)(?:\n|$)/,
   )?.[1];
   const marker = `<!-- agent-infra-claude-review:${currentHead}:`;
-  const hasPublishedBlockingFinding = threads.some((thread) =>
-    (thread.comments?.nodes ?? []).some(
-      (comment) =>
-        /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
-        /^\*\*P[01]:/.test(comment.body ?? "") &&
-        comment.body?.includes(marker),
-    ),
+  const hasPublishedBlockingFinding = threads.some(
+    (thread) =>
+      !thread.isResolved &&
+      (thread.comments?.nodes ?? []).some(
+        (comment) =>
+          /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
+          /^\*\*P[01]:/.test(comment.body ?? "") &&
+          comment.body?.includes(marker),
+      ),
   );
   return {
     review: check
@@ -287,6 +303,32 @@ export function claudeReviewGateUpdate({ result, review }) {
       conclusion: "failure",
       description: result.description,
       reasonCode: "infrastructure_failure",
+    };
+  }
+  const threadFailureReason = ["blocking_finding", "unresolved_thread"].includes(
+    result?.reasonCode,
+  )
+    ? result.reasonCode
+    : null;
+  if (
+    !result?.ok &&
+    threadFailureReason &&
+    ["success", "blocking_finding", "unresolved_thread"].includes(review?.reasonCode)
+  ) {
+    return {
+      conclusion: "failure",
+      description: result.description,
+      reasonCode: threadFailureReason,
+    };
+  }
+  if (
+    result?.ok &&
+    ["blocking_finding", "unresolved_thread"].includes(review?.reasonCode)
+  ) {
+    return {
+      conclusion: "success",
+      description: result.description,
+      reasonCode: "success",
     };
   }
   return null;

@@ -68,12 +68,22 @@ export function selectReviewGateCheck(checkRuns, expectedHead, prNumber) {
 
 export function buildReviewCheckOutput(conclusion, reasonCode) {
   const success = conclusion === "success" && reasonCode === "success";
+  const blockingFinding =
+    conclusion === "failure" && reasonCode === "blocking_finding";
   return {
     title: `Claude Review Gate: ${conclusion}`,
     summary: success
       ? "reason_code: success\n\nReview completed for the current head."
-      : `reason_code: ${reasonCode}\n\nThe trusted Review workflow did not produce a publishable result.`,
+      : blockingFinding
+        ? "reason_code: blocking_finding\n\nReview completed with blocking P0/P1 findings."
+        : `reason_code: ${reasonCode}\n\nThe trusted Review workflow did not produce a publishable result.`,
   };
+}
+
+export function reviewGateOutcome(blockingFindings) {
+  return blockingFindings.length > 0
+    ? { conclusion: "failure", reasonCode: "blocking_finding" }
+    : { conclusion: "success", reasonCode: "success" };
 }
 
 export function assertCurrentReviewTarget(pr, expectedHead) {
@@ -341,13 +351,17 @@ async function main() {
       expectedHead,
       request: githubRequest,
     });
+    const gateOutcome = reviewGateOutcome(blocking);
     await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status: "completed",
-        conclusion: "success",
-        output: buildReviewCheckOutput("success", "success"),
+        conclusion: gateOutcome.conclusion,
+        output: buildReviewCheckOutput(
+          gateOutcome.conclusion,
+          gateOutcome.reasonCode,
+        ),
       }),
     });
   } catch (error) {
