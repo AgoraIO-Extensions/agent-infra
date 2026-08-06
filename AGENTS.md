@@ -17,6 +17,26 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 
 本地 `archive/` 与 `research/` 已被 Git 忽略，只用于保留历史和调研证据，不是当前需求或架构依据。不要把其中的旧结论恢复到正式文档。
 
+## Agent skills
+
+### Issue tracker
+
+实现工作使用 `AgoraIO-Extensions/agent-infra` GitHub Issues 跟踪；正式 PRD 和工程 Spec
+仍以仓库文档为准，PR 不作为需求入口。参见
+[Issue Tracker](docs/agents/issue-tracker.md)。
+
+### Triage labels
+
+Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human` 和
+`wontfix`；执行授权和人工验证的正式语义仍以开发工作流 Spec 为准。参见
+[Triage Labels](docs/agents/triage-labels.md)。
+
+### Domain docs
+
+采用 single-context 布局；稳定的领域词汇进入根 `CONTEXT.md`，跨模块技术决策进入
+`docs/adr/`，两者只补充而不覆盖 PRD 和工程 Spec。参见
+[Domain Docs](docs/agents/domain.md)。
+
 ## Repository Layout
 
 - `docs/prd/`：正式产品需求，只写已确认的产品结论。
