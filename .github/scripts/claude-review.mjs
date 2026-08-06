@@ -1,9 +1,27 @@
 import { pathToFileURL } from "node:url";
 
-const SUMMARY_MARKER = "<!-- agent-infra-claude-review-summary -->";
-const FINDING_KEYS = ["body", "line", "path", "severity", "title"];
+import {
+  gateExternalId,
+  selectCurrentGateCheck,
+} from "./check-run-contract.mjs";
+
+const SUMMARY_MARKER_PREFIX = "agent-infra-claude-review-summary";
+const FINDING_KEYS = ["body", "line", "path", "severity", "side", "title"];
 const MAX_FINDINGS = 10;
 const OUTPUT_KEYS = ["completed", "findings", "head_sha", "summary"];
+
+export class ReviewOutputError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "ReviewOutputError";
+  }
+}
+
+export function reviewFailureKind(error) {
+  return error instanceof ReviewOutputError
+    ? "invalid_output"
+    : "infrastructure_failure";
+}
 
 function exactKeys(value, keys) {
   return (
@@ -19,21 +37,31 @@ function boundedString(value, maxLength) {
 }
 
 export function parseReviewOutput(raw, expectedHead) {
-  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 256 * 1024) {
-    throw new Error("Claude Review output is missing or too large");
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new Error("Claude Review output is missing");
   }
-  const result = JSON.parse(raw);
+  if (Buffer.byteLength(raw, "utf8") > 256 * 1024) {
+    throw new ReviewOutputError("Claude Review output is too large");
+  }
+  let result;
+  try {
+    result = JSON.parse(raw);
+  } catch (error) {
+    throw new ReviewOutputError("Claude Review output is not valid JSON", {
+      cause: error,
+    });
+  }
   if (!exactKeys(result, OUTPUT_KEYS) || result.completed !== true) {
-    throw new Error("Claude Review output has an invalid shape");
+    throw new ReviewOutputError("Claude Review output has an invalid shape");
   }
   if (result.head_sha !== expectedHead || !/^[0-9a-f]{40}$/.test(result.head_sha)) {
-    throw new Error("Claude Review output is stale");
+    throw new ReviewOutputError("Claude Review output is stale");
   }
   if (!boundedString(result.summary, 4_000) || !Array.isArray(result.findings)) {
-    throw new Error("Claude Review summary or findings are invalid");
+    throw new ReviewOutputError("Claude Review summary or findings are invalid");
   }
   if (result.findings.length > MAX_FINDINGS) {
-    throw new Error("Claude Review returned too many findings");
+    throw new ReviewOutputError("Claude Review returned too many findings");
   }
 
   for (const finding of result.findings) {
@@ -43,43 +71,107 @@ export function parseReviewOutput(raw, expectedHead) {
       !boundedString(finding.title, 200) ||
       !boundedString(finding.body, 4_000) ||
       !boundedString(finding.path, 1_024) ||
+      !["LEFT", "RIGHT"].includes(finding.side) ||
       !Number.isSafeInteger(finding.line) ||
       finding.line < 1
     ) {
-      throw new Error("Claude Review finding is invalid");
+      throw new ReviewOutputError("Claude Review finding is invalid");
     }
   }
   return result;
 }
 
-export function collectAddedRightLines(patch = "") {
-  const lines = new Set();
+export function selectReviewGateCheck(checkRuns, expectedHead, prNumber) {
+  return selectCurrentGateCheck(checkRuns, {
+    name: "Claude Review Gate",
+    headSha: expectedHead,
+    prNumber,
+  });
+}
+
+export function buildReviewCheckOutput(
+  conclusion,
+  reasonCode,
+  blockingFindingCount = 0,
+) {
+  const success = conclusion === "success" && reasonCode === "success";
+  const blockingFinding =
+    conclusion === "failure" && reasonCode === "blocking_finding";
+  const blockingFindingCountLine =
+    blockingFinding &&
+    Number.isSafeInteger(blockingFindingCount) &&
+    blockingFindingCount > 0
+      ? `\nblocking_finding_count: ${blockingFindingCount}`
+      : "";
+  return {
+    title: `Claude Review Gate: ${conclusion}`,
+    summary: success
+      ? "reason_code: success\n\nReview completed for the current head."
+      : blockingFinding
+        ? `reason_code: blocking_finding${blockingFindingCountLine}\n\nReview completed with blocking P0/P1 findings.`
+        : `reason_code: ${reasonCode}\n\nThe trusted Review workflow did not produce a publishable result.`,
+  };
+}
+
+export function reviewGateOutcome(blockingFindings) {
+  return blockingFindings.length > 0
+    ? { conclusion: "failure", reasonCode: "blocking_finding" }
+    : { conclusion: "success", reasonCode: "success" };
+}
+
+export function assertCurrentReviewTarget(pr, expectedHead) {
+  if (pr?.state !== "open" || pr?.head?.sha !== expectedHead) {
+    throw new Error("PR is closed or its head changed before Claude Review publication");
+  }
+}
+
+export async function requireCurrentReviewTarget({
+  repository,
+  prNumber,
+  expectedHead,
+  request,
+}) {
+  const pr = await request(`/repos/${repository}/pulls/${prNumber}`);
+  assertCurrentReviewTarget(pr, expectedHead);
+  return pr;
+}
+
+export function collectChangedDiffLines(patch = "") {
+  const changed = { LEFT: new Set(), RIGHT: new Set() };
+  let leftLine;
   let rightLine;
   for (const text of patch.split("\n")) {
-    const hunk = text.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    const hunk = text.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
-      rightLine = Number(hunk[1]);
+      leftLine = Number(hunk[1]);
+      rightLine = Number(hunk[2]);
       continue;
     }
-    if (rightLine === undefined || text.startsWith("\\")) continue;
+    if (leftLine === undefined || rightLine === undefined || text.startsWith("\\")) {
+      continue;
+    }
     if (text.startsWith("+")) {
-      lines.add(rightLine);
+      changed.RIGHT.add(rightLine);
       rightLine += 1;
+    } else if (text.startsWith("-")) {
+      changed.LEFT.add(leftLine);
+      leftLine += 1;
     } else if (!text.startsWith("-")) {
+      leftLine += 1;
       rightLine += 1;
     }
   }
-  return lines;
+  return changed;
 }
 
 export function validateFindingLocations(findings, files) {
   const locations = new Map(
-    files.map((file) => [file.filename, collectAddedRightLines(file.patch)]),
+    files.map((file) => [file.filename, collectChangedDiffLines(file.patch)]),
   );
   for (const finding of findings) {
-    if (!locations.get(finding.path)?.has(finding.line)) {
-      throw new Error(
-        `Claude Review finding is outside the added diff: ${finding.path}:${finding.line}`,
+    if (!locations.get(finding.path)?.[finding.side]?.has(finding.line)) {
+      throw new ReviewOutputError(
+        `Claude Review finding is outside the changed diff: ${finding.path}:${finding.line}:${finding.side}`,
       );
     }
   }
@@ -91,6 +183,10 @@ export function sanitizeMarkdown(value) {
     .replaceAll("<!--", "&lt;!--")
     .replaceAll("-->", "--&gt;")
     .replaceAll("@", "@\u200b");
+}
+
+export function reviewSummaryMarker(head) {
+  return `<!-- ${SUMMARY_MARKER_PREFIX}:${head} -->`;
 }
 
 export function isTrustedReviewComment(comment, marker) {
@@ -110,7 +206,7 @@ export function buildReviewSummary(result) {
           (finding) =>
             `- **P2 ${sanitizeMarkdown(finding.title)}** at \`${sanitizeMarkdown(
               finding.path,
-            )}:${finding.line}\`: ${sanitizeMarkdown(finding.body)}`,
+            )}:${finding.line}:${finding.side}\`: ${sanitizeMarkdown(finding.body)}`,
         )
         .join("\n")
     : "No P2 findings.";
@@ -118,7 +214,7 @@ export function buildReviewSummary(result) {
   return {
     blocking,
     markdown: [
-      SUMMARY_MARKER,
+      reviewSummaryMarker(result.head_sha),
       "## Claude Review",
       "",
       sanitizeMarkdown(result.summary),
@@ -167,15 +263,16 @@ async function paginate(path) {
 
 function findingMarker(head, finding) {
   const key = Buffer.from(
-    `${finding.severity}\0${finding.path}\0${finding.line}`,
+    `${finding.severity}\0${finding.path}\0${finding.line}\0${finding.side}`,
   ).toString("base64url");
   return `<!-- agent-infra-claude-review:${head}:${key} -->`;
 }
 
-async function publishSummary(repository, prNumber, markdown) {
+async function publishSummary(repository, prNumber, expectedHead, markdown) {
   const comments = await paginate(`/repos/${repository}/issues/${prNumber}/comments`);
+  const marker = reviewSummaryMarker(expectedHead);
   const existing = comments.find(
-    (comment) => comment.user?.type === "Bot" && comment.body?.includes(SUMMARY_MARKER),
+    (comment) => comment.user?.type === "Bot" && comment.body?.includes(marker),
   );
   const request = {
     method: existing ? "PATCH" : "POST",
@@ -188,31 +285,60 @@ async function publishSummary(repository, prNumber, markdown) {
   await githubRequest(path, request);
 }
 
+async function getOrCreateReviewGate(repository, prNumber, expectedHead, targetUrl) {
+  const checkName = encodeURIComponent("Claude Review Gate");
+  const response = await githubRequest(
+    `/repos/${repository}/commits/${expectedHead}/check-runs?check_name=${checkName}&filter=latest&per_page=100`,
+  );
+  const existing = selectReviewGateCheck(response.check_runs, expectedHead, prNumber);
+  if (existing) return existing;
+  return githubRequest(`/repos/${repository}/check-runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: "Claude Review Gate",
+      head_sha: expectedHead,
+      status: "in_progress",
+      details_url: targetUrl,
+      external_id: gateExternalId({
+        name: "Claude Review Gate",
+        headSha: expectedHead,
+        prNumber,
+      }),
+      output: {
+        title: "Claude Review Gate: in_progress",
+        summary: "Waiting for a publishable current-head Review result.",
+      },
+    }),
+  });
+}
+
 async function main() {
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const prNumber = Number(requiredEnvironment("PR_NUMBER"));
   const expectedHead = requiredEnvironment("EXPECTED_HEAD_SHA");
-  const pr = await githubRequest(`/repos/${repository}/pulls/${prNumber}`);
-  if (pr.state !== "open" || pr.head.sha !== expectedHead) {
-    throw new Error("PR is closed or its head changed before Claude Review publication");
-  }
-
-  const check = await githubRequest(`/repos/${repository}/check-runs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: "Claude Review",
-      head_sha: expectedHead,
-      status: "in_progress",
-      details_url: `https://github.com/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-    }),
+  await requireCurrentReviewTarget({
+    repository,
+    prNumber,
+    expectedHead,
+    request: githubRequest,
   });
+
+  const check = await getOrCreateReviewGate(
+    repository,
+    prNumber,
+    expectedHead,
+    `https://github.com/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+  );
 
   try {
     if (requiredEnvironment("ANALYSIS_RESULT") !== "success") {
       throw new Error("Claude Review analysis did not complete successfully");
     }
-    const result = parseReviewOutput(requiredEnvironment("STRUCTURED_OUTPUT"), expectedHead);
+    const result = parseReviewOutput(
+      process.env.STRUCTURED_OUTPUT ?? "",
+      expectedHead,
+    );
     const files = await paginate(`/repos/${repository}/pulls/${prNumber}/files`);
     validateFindingLocations(result.findings, files);
 
@@ -225,6 +351,12 @@ async function main() {
       if (existingComments.some((comment) => isTrustedReviewComment(comment, marker))) {
         continue;
       }
+      await requireCurrentReviewTarget({
+        repository,
+        prNumber,
+        expectedHead,
+        request: githubRequest,
+      });
       await githubRequest(`/repos/${repository}/pulls/${prNumber}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -235,15 +367,36 @@ async function main() {
           commit_id: expectedHead,
           path: finding.path,
           line: finding.line,
-          side: "RIGHT",
+          side: finding.side,
         }),
       });
     }
-    await publishSummary(repository, prNumber, markdown);
+    await requireCurrentReviewTarget({
+      repository,
+      prNumber,
+      expectedHead,
+      request: githubRequest,
+    });
+    await publishSummary(repository, prNumber, expectedHead, markdown);
+    await requireCurrentReviewTarget({
+      repository,
+      prNumber,
+      expectedHead,
+      request: githubRequest,
+    });
+    const gateOutcome = reviewGateOutcome(blocking);
     await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "completed", conclusion: "success" }),
+      body: JSON.stringify({
+        status: "completed",
+        conclusion: gateOutcome.conclusion,
+        output: buildReviewCheckOutput(
+          gateOutcome.conclusion,
+          gateOutcome.reasonCode,
+          blocking.length,
+        ),
+      }),
     });
   } catch (error) {
     await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
@@ -252,10 +405,7 @@ async function main() {
       body: JSON.stringify({
         status: "completed",
         conclusion: "failure",
-        output: {
-          title: "Claude Review failed",
-          summary: "The trusted Review workflow did not produce a publishable result.",
-        },
+        output: buildReviewCheckOutput("failure", reviewFailureKind(error)),
       }),
     });
     throw error;

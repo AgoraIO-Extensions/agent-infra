@@ -4,7 +4,10 @@ import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
 
-import { validateWorkflowDocuments } from "./verify-workflow-policy.mjs";
+import {
+  validateTrustedScriptSources,
+  validateWorkflowDocuments,
+} from "./verify-workflow-policy.mjs";
 
 const workflowDirectory = path.resolve(".github/workflows");
 
@@ -16,6 +19,19 @@ async function actualWorkflows() {
         name,
         YAML.parse(await fs.readFile(path.join(workflowDirectory, name), "utf8")),
       ]),
+    ),
+  );
+}
+
+async function actualTrustedScriptSources() {
+  return Object.fromEntries(
+    await Promise.all(
+      ["check-run-contract.mjs", "claude-review.mjs", "pr-gates.mjs"].map(
+        async (name) => [
+          name,
+          await fs.readFile(path.resolve(".github/scripts", name), "utf8"),
+        ],
+      ),
     ),
   );
 }
@@ -93,6 +109,57 @@ test("requires Claude PR Review to validate and filter candidate findings", asyn
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Claude PR Review must validate and filter candidate findings"),
+    ),
+  );
+});
+
+test("requires Claude PR Review to emit validated LEFT and RIGHT locations", async () => {
+  for (const mutate of [
+    (action) => {
+      action.with.prompt = action.with.prompt.replace(" or deleted LEFT-side", "");
+    },
+    (action) => {
+      action.with.claude_args = action.with.claude_args.replace(
+        '"side":{"enum":["LEFT","RIGHT"]}',
+        '"side":{"const":"RIGHT"}',
+      );
+    },
+  ]) {
+    const workflows = await actualWorkflows();
+    const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+      (step) => step.id === "claude",
+    );
+    mutate(action);
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("Claude PR Review must bind findings to LEFT or RIGHT diff lines"),
+      ),
+    );
+  }
+});
+
+test("cancels stale Claude Review runs by PR while reviewing every successful CI head", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-pr-review.yml"].concurrency.group =
+    "claude-review-${{ github.run_id }}";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review trigger and concurrency must stay current-head bound"),
+    ),
+  );
+});
+
+test("binds Claude Review analysis and publication to the completed CI head", async () => {
+  const workflows = await actualWorkflows();
+  const publish = workflows["claude-pr-review.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Publish validated Review result",
+  );
+  publish.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review must publish only the completed CI head"),
     ),
   );
 });
@@ -441,9 +508,213 @@ test("serializes every PR Gate event by authoritative PR number", async () => {
   const workflows = await actualWorkflows();
   assert.deepEqual(workflows["pr-gates.yml"].concurrency, {
     group:
-      "pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || format('issue-{0}', github.event.issue.number) }}",
+      "pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.issue.number) || (github.event_name == 'schedule' && 'membership-reconcile') || format('issue-{0}', github.event.issue.number) }}",
     "cancel-in-progress": true,
   });
+});
+
+test("reconciles live Team membership for every open PR", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["pr-gates.yml"];
+  assert.deepEqual(workflow.on.schedule, [{ cron: "*/15 * * * *" }]);
+  assert.match(
+    workflow.jobs["dispatch-issue-update"].if,
+    /github\.event_name == 'schedule'/,
+  );
+  assert.match(workflow.jobs.gates.if, /github\.event_name != 'schedule'/);
+});
+
+test("reevaluates PR Gates when an audit command changes", async () => {
+  const workflows = await actualWorkflows();
+  assert.deepEqual(workflows["pr-gates.yml"].on.issue_comment.types, [
+    "created",
+    "edited",
+    "deleted",
+  ]);
+});
+
+test("ignores non-PR Issue comments before minting a Team token", async () => {
+  const workflows = await actualWorkflows();
+  const condition = workflows["pr-gates.yml"].jobs.gates.if;
+  assert.match(condition, /github\.event_name != 'issue_comment'/);
+  assert.match(condition, /github\.event\.issue\.pull_request/);
+});
+
+test("writes PR Gate results through Check Runs instead of legacy statuses", async () => {
+  const workflows = await actualWorkflows();
+  const gateJobs = workflows["pr-gates.yml"].jobs;
+  assert.deepEqual(gateJobs["dispatch-issue-update"].permissions, {
+    contents: "write",
+    "pull-requests": "read",
+  });
+  assert.deepEqual(gateJobs.gates.permissions, {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+    checks: "write",
+  });
+  assert.doesNotMatch(JSON.stringify(workflows["pr-gates.yml"]), /statuses/);
+});
+
+test("rejects legacy status publication in trusted Gate scripts", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["pr-gates.mjs"] += '\nconst legacy = "/statuses/";\n';
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Gate publishers must not use legacy statuses"),
+    ),
+  );
+});
+
+test("requires all Gate Check Runs to stay bound to current PR heads", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replace(
+    "headSha: pr.head.sha",
+    "headSha: pr.base.sha",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Gate publishers must bind Check Runs to current heads"),
+    ),
+  );
+});
+
+test("requires stale Claude runs to recheck heads and isolate summaries", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["claude-review.mjs"] = sources["claude-review.mjs"].replace(
+    "await requireCurrentReviewTarget({",
+    "await Promise.resolve({",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Claude publisher must isolate and recheck each Review head"),
+    ),
+  );
+});
+
+test("fails closed when Team membership configuration is unavailable", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replace(
+    'requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");',
+    "",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("fail closed when Team membership is unavailable"),
+    ),
+  );
+
+  const workflows = await actualWorkflows();
+  const steps = workflows["pr-gates.yml"].jobs.gates.steps;
+  const mint = steps.find((step) => step.id === "team-membership-token");
+  const evaluate = steps.find(
+    (step) => step.name === "Evaluate Issue and human validation gates",
+  );
+  assert.equal(mint["continue-on-error"], true);
+  assert.equal(evaluate.if, "always()");
+});
+
+test("rejects orphaned pending checks in Issue dispatch", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replace(
+    "affected.map(async (pr) => {",
+    "affected.map(async (pr) => {\n        await setPendingChecks(repository, pr);",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Issue dispatch must not orphan pending Check Runs"),
+    ),
+  );
+});
+
+test("exposes a short-lived Team membership token only to Gate evaluation", async () => {
+  const workflows = await actualWorkflows();
+  const steps = workflows["pr-gates.yml"].jobs.gates.steps;
+  const mint = steps.find((step) => step.id === "team-membership-token");
+  const evaluate = steps.find(
+    (step) => step.name === "Evaluate Issue and human validation gates",
+  );
+
+  assert.equal(
+    mint.uses,
+    "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+  );
+  assert.deepEqual(mint.with, {
+    "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+    "permission-members": "read",
+    "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+    owner: "${{ github.repository_owner }}",
+  });
+  assert.equal(
+    evaluate.env.TEAM_MEMBERSHIP_TOKEN,
+    "${{ steps.team-membership-token.outputs.token }}",
+  );
+  assert.equal(
+    JSON.stringify(workflows["pr-gates.yml"]).match(
+      /steps\.team-membership-token\.outputs\.token/g,
+    )?.length,
+    1,
+  );
+});
+
+test("rejects the Team membership token outside fixed Gate steps", async () => {
+  const workflows = await actualWorkflows();
+  const setup = workflows["pr-gates.yml"].jobs.gates.steps.find(
+    (step) => step.name === "Set up Node.js",
+  );
+  setup.env = {
+    LEAK: "${{ steps.team-membership-token.outputs.token }}",
+  };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Team membership token is allowed only in fixed Gate steps"),
+    ),
+  );
+});
+
+test("policy requires PR Gate audit-command reevaluation", async () => {
+  const workflows = await actualWorkflows();
+  delete workflows["pr-gates.yml"].on.issue_comment;
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("PR Gates must reevaluate created, edited, and deleted audit commands"),
+    ),
+  );
+});
+
+test("policy rejects legacy PR Gate status permissions", async () => {
+  for (const jobName of ["dispatch-issue-update", "gates"]) {
+    const workflows = await actualWorkflows();
+    const permissions = workflows["pr-gates.yml"].jobs[jobName].permissions;
+    delete permissions.checks;
+    permissions.statuses = "write";
+
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("PR Gates must use minimal Check Run permissions"),
+      ),
+    );
+  }
+});
+
+test("policy requires the fixed Team membership token chain", async () => {
+  const workflows = await actualWorkflows();
+  const evaluate = workflows["pr-gates.yml"].jobs.gates.steps.find(
+    (step) => step.name === "Evaluate Issue and human validation gates",
+  );
+  delete evaluate.env.TEAM_MEMBERSHIP_TOKEN;
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("PR Gates must mint and isolate a Team membership token"),
+    ),
+  );
 });
 
 test("defines the minimal native auto-merge enrollment workflow", async () => {

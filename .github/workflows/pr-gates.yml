@@ -5,25 +5,28 @@ on:
     types: [opened, reopened, synchronize, edited, labeled, unlabeled, ready_for_review]
   issues:
     types: [closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
   repository_dispatch:
     types: [pr-gates]
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions: {}
 
 concurrency:
-  group: pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || format('issue-{0}', github.event.issue.number) }}
+  group: pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.issue.number) || (github.event_name == 'schedule' && 'membership-reconcile') || format('issue-{0}', github.event.issue.number) }}
   cancel-in-progress: true
 
 jobs:
   dispatch-issue-update:
     name: Dispatch affected PR Gates
-    if: github.event_name == 'issues'
+    if: github.event_name == 'issues' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write
       pull-requests: read
-      statuses: write
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,14 +47,17 @@ jobs:
 
   gates:
     name: Evaluate PR Gates
-    if: github.event_name != 'issues'
+    if: >-
+      github.event_name != 'issues' &&
+      github.event_name != 'schedule' &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      checks: write
       contents: read
       issues: write
       pull-requests: write
-      statuses: write
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,7 +71,19 @@ jobs:
         with:
           node-version: 24
 
+      - name: Mint Team membership token
+        id: team-membership-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.TEAM_MEMBERSHIP_APP_ID }}
+          permission-members: read
+          private-key: ${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Evaluate Issue and human validation gates
+        if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
         run: node .github/scripts/pr-gates.mjs

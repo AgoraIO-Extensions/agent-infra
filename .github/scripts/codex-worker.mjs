@@ -46,6 +46,10 @@ function labelsOf(issue) {
   );
 }
 
+export function humanValidationLabelAction(required, labels) {
+  return required && !labels.includes("ready-for-human") ? "add" : "noop";
+}
+
 export function classifyWorkerEvent({
   eventName,
   action,
@@ -1098,7 +1102,12 @@ async function publishCommand() {
       });
 
   await requirePublishAuthorization(plan.repository, plan.issueNumber, token);
-  if (result.human_validation_required) {
+  if (
+    humanValidationLabelAction(
+      result.human_validation_required,
+      labelsOf(pullRequest),
+    ) === "add"
+  ) {
     await githubRequest(
       `/repos/${plan.repository}/issues/${pullRequest.number}/labels`,
       {
@@ -1107,11 +1116,6 @@ async function publishCommand() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ labels: ["ready-for-human"] }),
       },
-    );
-  } else if (labelsOf(pullRequest).includes("ready-for-human")) {
-    await githubRequest(
-      `/repos/${plan.repository}/issues/${pullRequest.number}/labels/ready-for-human`,
-      { token, method: "DELETE", allowNotFound: true },
     );
   }
 
