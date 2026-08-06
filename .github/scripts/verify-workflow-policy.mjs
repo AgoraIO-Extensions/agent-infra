@@ -24,6 +24,8 @@ const UPLOAD_ARTIFACT_ACTION =
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const TEAM_MEMBERSHIP_TOKEN_ACTION =
+  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 
 function workflowSteps(workflow) {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
@@ -38,6 +40,12 @@ function referencedSecrets(value) {
   return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(
     (match) => match[1],
   );
+}
+
+function teamMembershipTokenReferences(value) {
+  return JSON.stringify(value ?? {}).match(
+    /steps\.team-membership-token\.outputs\.token/g,
+  ) ?? [];
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
@@ -151,8 +159,90 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (
+      ["TEAM_MEMBERSHIP_APP_ID", "TEAM_MEMBERSHIP_APP_PRIVATE_KEY"].includes(secret)
+    ) {
+      const reference = `\${{ secrets.${secret} }}`;
+      const input = {
+        TEAM_MEMBERSHIP_APP_ID: "app-id",
+        TEAM_MEMBERSHIP_APP_PRIVATE_KEY: "private-key",
+      }[secret];
+      if (
+        workflowName !== "pr-gates.yml" ||
+        jobName !== "gates" ||
+        step.id !== "team-membership-token" ||
+        step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+        step.with?.[input] !== reference ||
+        step.with?.owner !== "${{ github.repository_owner }}" ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in the fixed Team membership token step`,
+        );
+      }
+      continue;
+    }
     errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
   }
+}
+
+export function validateTrustedScriptSources(sources) {
+  const errors = [];
+  const combined = Object.values(sources ?? {}).join("\n");
+  if (combined.includes("/statuses/")) {
+    errors.push("Gate publishers must not use legacy statuses");
+  }
+  const gateSource = sources?.["pr-gates.mjs"] ?? "";
+  const reviewSource = sources?.["claude-review.mjs"] ?? "";
+  const contractSource = sources?.["check-run-contract.mjs"] ?? "";
+  const gateRequirements = [
+    "/check-runs",
+    "headSha: pr.head.sha",
+    '"Issue Gate"',
+    '"Human Validation Gate"',
+    '"Claude Review Gate"',
+  ];
+  const reviewRequirements = [
+    "/check-runs",
+    "head_sha: expectedHead",
+    "assertCurrentReviewTarget(pr, expectedHead)",
+  ];
+  const contractRequirements = [
+    "GITHUB_ACTIONS_APP_ID",
+    "check.head_sha === headSha",
+    "check.external_id === externalId",
+  ];
+  if (
+    gateRequirements.some((requirement) => !gateSource.includes(requirement)) ||
+    reviewRequirements.some((requirement) => !reviewSource.includes(requirement)) ||
+    contractRequirements.some((requirement) => !contractSource.includes(requirement))
+  ) {
+    errors.push("Gate publishers must bind Check Runs to current heads");
+  }
+  const reviewHeadRechecks =
+    reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
+  if (
+    reviewHeadRechecks.length < 4 ||
+    !reviewSource.includes("reviewSummaryMarker(result.head_sha)") ||
+    !reviewSource.includes("reviewSummaryMarker(expectedHead)")
+  ) {
+    errors.push("Claude publisher must isolate and recheck each Review head");
+  }
+  if (
+    /affected\.map\(async \(pr\) => \{[\s\S]{0,500}setPendingChecks\(repository, pr\)[\s\S]{0,500}\/dispatches/.test(
+      gateSource,
+    )
+  ) {
+    errors.push("Issue dispatch must not orphan pending Check Runs");
+  }
+  if (
+    !/const checks = await setPendingChecks\(repository, pr\);\s+requiredEnvironment\("TEAM_MEMBERSHIP_TOKEN"\);/.test(
+      gateSource,
+    )
+  ) {
+    errors.push("PR Gates must fail closed when Team membership is unavailable");
+  }
+  return errors;
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -168,15 +258,37 @@ export function validateWorkflowDocuments(workflows) {
       for (const secret of referencedSecrets(job.env)) {
         errors.push(`${name}/${jobName}: ${secret} is not allowed in job environment`);
       }
+      if (teamMembershipTokenReferences(job.env).length > 0) {
+        errors.push(
+          `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
+        );
+      }
       for (const step of job.steps ?? []) {
         if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
         }
         validateStepSecrets(errors, name, jobName, step);
+        const tokenReferences = teamMembershipTokenReferences(step);
+        const allowedTeamMembershipToken =
+          name === "pr-gates.yml" &&
+          jobName === "gates" &&
+          step.name === "Evaluate Issue and human validation gates" &&
+          step.run === "node .github/scripts/pr-gates.mjs" &&
+          step.env?.TEAM_MEMBERSHIP_TOKEN ===
+            "${{ steps.team-membership-token.outputs.token }}" &&
+          tokenReferences.length === 1;
+        if (tokenReferences.length > 0 && !allowedTeamMembershipToken) {
+          errors.push(
+            `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
+          );
+        }
       }
     }
     for (const secret of referencedSecrets(workflow.env)) {
       errors.push(`${name}: ${secret} is not allowed in workflow environment`);
+    }
+    if (teamMembershipTokenReferences(workflow.env).length > 0) {
+      errors.push(`${name}: Team membership token is allowed only in fixed Gate steps`);
     }
   }
 
@@ -211,7 +323,70 @@ export function validateWorkflowDocuments(workflows) {
     }
   }
 
-  const gates = workflows["pr-gates.yml"]?.jobs?.gates;
+  const prGates = workflows["pr-gates.yml"];
+  if (
+    JSON.stringify(prGates?.on?.issue_comment?.types) !==
+    JSON.stringify(["created", "edited", "deleted"])
+  ) {
+    errors.push("PR Gates must reevaluate created, edited, and deleted audit commands");
+  }
+  const dispatchGates = prGates?.jobs?.["dispatch-issue-update"];
+  if (
+    JSON.stringify(prGates?.on?.schedule) !==
+      JSON.stringify([{ cron: "*/15 * * * *" }]) ||
+    !String(dispatchGates?.if ?? "").includes("github.event_name == 'schedule'")
+  ) {
+    errors.push("PR Gates must reconcile live Team membership every 15 minutes");
+  }
+  const expectedGatePermissions = {
+    "dispatch-issue-update": {
+      contents: "write",
+      "pull-requests": "read",
+    },
+    gates: {
+      checks: "write",
+      contents: "read",
+      issues: "write",
+      "pull-requests": "write",
+    },
+  };
+  for (const [jobName, permissions] of Object.entries(expectedGatePermissions)) {
+    if (!sameObject(prGates?.jobs?.[jobName]?.permissions, permissions)) {
+      errors.push("PR Gates must use minimal Check Run permissions");
+    }
+  }
+  const gates = prGates?.jobs?.gates;
+  const gateSteps = gates?.steps ?? [];
+  const membershipTokenStep = gateSteps.find(
+    (step) => step.id === "team-membership-token",
+  );
+  const evaluateGatesStep = gateSteps.find(
+    (step) => step.name === "Evaluate Issue and human validation gates",
+  );
+  const gatesCondition = String(gates?.if ?? "");
+  if (
+    !gatesCondition.includes("github.event_name != 'issues'") ||
+    !gatesCondition.includes("github.event_name != 'schedule'") ||
+    !gatesCondition.includes("github.event_name != 'issue_comment'") ||
+    !gatesCondition.includes("github.event.issue.pull_request") ||
+    membershipTokenStep?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    membershipTokenStep?.["continue-on-error"] !== true ||
+    !sameObject(membershipTokenStep?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      "permission-members": "read",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+      owner: "${{ github.repository_owner }}",
+    }) ||
+    evaluateGatesStep?.run !== "node .github/scripts/pr-gates.mjs" ||
+    evaluateGatesStep?.if !== "always()" ||
+    !sameObject(evaluateGatesStep?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
+    }) ||
+    teamMembershipTokenReferences(prGates).length !== 1
+  ) {
+    errors.push("PR Gates must mint and isolate a Team membership token");
+  }
 
   const worker = workflows["codex-worker.yml"];
   const implement = worker?.jobs?.implement;
@@ -369,12 +544,57 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const review = workflows["claude-pr-review.yml"];
-  if (!review?.on?.workflow_run?.workflows?.includes("Docs CI")) {
-    errors.push("Claude PR Review must run only after Docs CI");
+  const reviewTrigger = review?.on?.workflow_run;
+  const reviewConcurrency = review?.concurrency;
+  const reviewJobConditions = [review?.jobs?.analyze?.if, review?.jobs?.publish?.if].map(
+    (condition) => String(condition ?? ""),
+  );
+  if (
+    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["Docs CI"]) ||
+    JSON.stringify(reviewTrigger?.types) !== JSON.stringify(["completed"]) ||
+    reviewConcurrency?.group !==
+      "claude-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}" ||
+    reviewConcurrency?.["cancel-in-progress"] !== true ||
+    reviewJobConditions.some(
+      (condition) =>
+        !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
+        !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
+        !condition.includes("github.event.workflow_run.pull_requests[0]"),
+    )
+  ) {
+    errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
   }
   const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
   const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
   const reviewAction = analyzeSteps[reviewActionIndex];
+  const reviewDataCheckout = analyzeSteps.find(
+    (step) => step.name === "Checkout untrusted PR head as review data",
+  );
+  const reviewPublishSteps = review?.jobs?.publish?.steps ?? [];
+  const reviewPublish = reviewPublishSteps.find(
+    (step) => step.name === "Publish validated Review result",
+  );
+  if (
+    reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||
+    reviewDataCheckout?.with?.path !== "pr-head" ||
+    reviewDataCheckout?.with?.["persist-credentials"] !== false ||
+    reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
+    !sameObject(reviewPublish?.env, {
+      ANALYSIS_RESULT: "${{ needs.analyze.result }}",
+      EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+      STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
+    }) ||
+    !sameObject(review?.jobs?.publish?.permissions, {
+      checks: "write",
+      contents: "read",
+      issues: "write",
+      "pull-requests": "write",
+    })
+  ) {
+    errors.push("Claude PR Review must publish only the completed CI head");
+  }
   const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
   const reviewConfig = analyzeSteps[reviewConfigIndex];
   const reviewConfigEnv = reviewConfig?.env ?? {};
@@ -403,7 +623,7 @@ export function validateWorkflowDocuments(workflows) {
   const reviewPrompt = reviewAction?.with?.prompt ?? "";
   const reviewPromptRequirements = [
     "Before returning each finding, verify that it:",
-    "is introduced by this PR on an added RIGHT-side diff line;",
+    "is introduced by this PR on an added RIGHT-side or deleted LEFT-side diff line;",
     "does not depend on an unverified assumption.",
     "Do not report pre-existing issues, style or nitpicks, issues fully",
     "Discard every candidate that fails any check.",
@@ -412,6 +632,13 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Claude PR Review must validate and filter candidate findings");
   }
   const reviewArgs = reviewAction?.with?.claude_args ?? "";
+  if (
+    !reviewPrompt.includes("added RIGHT-side or deleted LEFT-side diff line") ||
+    !reviewArgs.includes('"side":{"enum":["LEFT","RIGHT"]}') ||
+    !reviewArgs.includes('"required":["severity","title","body","path","line","side"]')
+  ) {
+    errors.push("Claude PR Review must bind findings to LEFT or RIGHT diff lines");
+  }
   const allowedToolFlags = reviewArgs.match(/--allowedTools\s+"[^"]*"/g) ?? [];
   const allowedToolOptions =
     reviewArgs.match(/--(?:allowedTools|allowed-tools)(?=\s|=|$)/g) ?? [];
@@ -578,7 +805,19 @@ async function main() {
       ]),
     ),
   );
-  const errors = validateWorkflowDocuments(workflows);
+  const scriptDirectory = path.resolve(".github/scripts");
+  const scriptSources = Object.fromEntries(
+    await Promise.all(
+      ["check-run-contract.mjs", "claude-review.mjs", "pr-gates.mjs"].map(async (name) => [
+        name,
+        await fs.readFile(path.join(scriptDirectory, name), "utf8"),
+      ]),
+    ),
+  );
+  const errors = [
+    ...validateWorkflowDocuments(workflows),
+    ...validateTrustedScriptSources(scriptSources),
+  ];
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(`Workflow policy: ${names.length} files valid`);
 }

@@ -1,7 +1,14 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
+import {
+  GITHUB_ACTIONS_APP_ID,
+  gateExternalId,
+  selectCurrentGateCheck,
+} from "./check-run-contract.mjs";
+
 const HUMAN_LABEL = "ready-for-human";
+const OWNERS_TEAM_SLUG = "agent-infra-owners";
 const CLOSE_KEYWORD = /^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gim;
 
 function labelNames(labels = []) {
@@ -11,6 +18,16 @@ function labelNames(labels = []) {
 export function extractPrimaryIssueNumbers(body = "") {
   const withoutFences = body.replace(/```[\s\S]*?```/g, "");
   return [...withoutFences.matchAll(CLOSE_KEYWORD)].map((match) => Number(match[1]));
+}
+
+export function affectedPullRequests({ eventName, issueNumber, pulls = [] }) {
+  if (eventName === "schedule") return pulls;
+  if (eventName === "issues") {
+    return pulls.filter((pr) =>
+      extractPrimaryIssueNumbers(pr.body ?? "").includes(issueNumber),
+    );
+  }
+  throw new Error(`Unsupported PR Gate dispatch event: ${eventName}`);
 }
 
 export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
@@ -60,11 +77,219 @@ export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
   return { ok: true, description: `Primary Issue #${number} is open` };
 }
 
-export function evaluateHumanValidationGate(labels) {
-  const pending = labelNames(labels).includes(HUMAN_LABEL);
-  return pending
-    ? { ok: false, description: "Human validation is still required" }
-    : { ok: true, description: "No pending human validation" };
+export function parseGateCommand(body = "") {
+  if (typeof body !== "string" || Buffer.byteLength(body, "utf8") > 8 * 1024) return null;
+  const match = body
+    .trim()
+    .match(
+      /^\/(human-validation|claude-review-waiver) ([0-9a-f]{40})\n([^\u0000]{1,4000})$/,
+    );
+  if (!match) return null;
+  const reason = match[3].trim();
+  if (!reason) return null;
+  return { type: match[1], headSha: match[2], reason };
+}
+
+export function buildGateRecords({ comments = [], currentHead, memberships = new Map() }) {
+  const records = { confirmations: [], waivers: [] };
+  for (const comment of comments) {
+    const command = parseGateCommand(comment.body);
+    const login = comment.user?.login;
+    if (!command || command.headSha !== currentHead || !login) continue;
+    const record = {
+      actor: { login, type: comment.user?.type },
+      headSha: command.headSha,
+      membership: memberships.get(login),
+      reason: command.reason,
+      recordedAt: comment.updated_at ?? comment.created_at,
+      url: comment.html_url,
+    };
+    if (command.type === "human-validation") records.confirmations.push(record);
+    if (command.type === "claude-review-waiver") records.waivers.push(record);
+  }
+  return records;
+}
+
+function isActiveTeamMember(record) {
+  return (
+    record?.actor?.type === "User" &&
+    !record.actor.login?.endsWith("[bot]") &&
+    record.membership?.state === "active" &&
+    ["member", "maintainer"].includes(record.membership.role) &&
+    validAuditTimestamp(record.recordedAt) &&
+    boundedCheckValue(record.url, 2_048)
+  );
+}
+
+function validAuditTimestamp(value) {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+export function evaluateHumanValidationGate({
+  labels = [],
+  validationWasRequired = false,
+  currentHead,
+  confirmations = [],
+}) {
+  const required = validationWasRequired || labelNames(labels).includes(HUMAN_LABEL);
+  if (!required) {
+    return {
+      ok: true,
+      removeLabel: false,
+      description: "Human validation is not required",
+    };
+  }
+  const confirmation = confirmations.find(
+    (candidate) =>
+      candidate.headSha === currentHead &&
+      boundedCheckValue(candidate.reason, 4_000) &&
+      isActiveTeamMember(candidate),
+  );
+  if (!confirmation) {
+    return {
+      ok: false,
+      removeLabel: false,
+      description: "Current-head Team validation confirmation is required",
+    };
+  }
+  return {
+    ok: true,
+    removeLabel: labelNames(labels).includes(HUMAN_LABEL),
+    description: `Human validation confirmed by ${confirmation.actor.login} for current head`,
+  };
+}
+
+export function evaluateClaudeReviewGate({
+  currentHead,
+  review,
+  waivers = [],
+  hasPublishedBlockingFinding = false,
+  hasUnresolvedThread = false,
+}) {
+  if (hasPublishedBlockingFinding) {
+    return { ok: false, waived: false, description: "P0/P1 finding cannot be waived" };
+  }
+  if (hasUnresolvedThread) {
+    return { ok: false, waived: false, description: "Blocking Review thread is unresolved" };
+  }
+  if (
+    !review ||
+    review.headSha !== currentHead ||
+    review.appId !== GITHUB_ACTIONS_APP_ID ||
+    review.status !== "completed"
+  ) {
+    return {
+      ok: false,
+      waived: false,
+      description: "Current-head Claude Review has not completed",
+    };
+  }
+  if (review.conclusion === "success" && review.reasonCode === "success") {
+    return {
+      ok: true,
+      waived: false,
+      description: "Claude Review passed for current head",
+    };
+  }
+  const waivableInfrastructureFailure =
+    review.failureKind === "infrastructure_failure" &&
+    ((review.conclusion === "failure" &&
+      review.reasonCode === "infrastructure_failure") ||
+      (review.conclusion === "success" &&
+        review.reasonCode === "waived_infrastructure_failure"));
+  if (!waivableInfrastructureFailure) {
+    return {
+      ok: false,
+      waived: false,
+      description: "Claude Review failure is not waivable",
+    };
+  }
+  const waiver = waivers.find(
+    (candidate) =>
+      candidate.headSha === currentHead &&
+      boundedCheckValue(candidate.reason, 4_000) &&
+      isActiveTeamMember(candidate),
+  );
+  if (!waiver) {
+    return {
+      ok: false,
+      waived: false,
+      description: "Current-head Team infrastructure waiver is required",
+    };
+  }
+  return {
+    ok: true,
+    waived: true,
+    description: `Claude Review infrastructure failure waived by ${waiver.actor.login} for current head`,
+  };
+}
+
+export function buildReviewState({
+  checkRuns = [],
+  threads = [],
+  currentHead,
+  prNumber,
+}) {
+  const check = selectCurrentGateCheck(checkRuns, {
+    name: "Claude Review Gate",
+    headSha: currentHead,
+    prNumber,
+  });
+  const reasonCode = check?.output?.summary?.match(
+    /(?:^|\n)reason_code: (success|infrastructure_failure|invalid_output|waived_infrastructure_failure)(?:\n|$)/,
+  )?.[1];
+  const marker = `<!-- agent-infra-claude-review:${currentHead}:`;
+  const hasPublishedBlockingFinding = threads.some((thread) =>
+    (thread.comments?.nodes ?? []).some(
+      (comment) =>
+        /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
+        /^\*\*P[01]:/.test(comment.body ?? "") &&
+        comment.body?.includes(marker),
+    ),
+  );
+  return {
+    review: check
+      ? {
+          appId: check.app.id,
+          checkRunId: check.id,
+          conclusion: check.conclusion,
+          failureKind: ["infrastructure_failure", "waived_infrastructure_failure"].includes(
+            reasonCode,
+          )
+            ? "infrastructure_failure"
+            : reasonCode === "invalid_output"
+              ? "invalid_output"
+              : null,
+          headSha: check.head_sha,
+          reasonCode: reasonCode ?? null,
+          status: check.status,
+        }
+      : undefined,
+    hasPublishedBlockingFinding,
+    hasUnresolvedThread: threads.some((thread) => !thread.isResolved),
+  };
+}
+
+export function claudeReviewGateUpdate({ result, review }) {
+  if (result?.waived) {
+    return {
+      conclusion: "success",
+      description: result.description,
+      reasonCode: "waived_infrastructure_failure",
+    };
+  }
+  if (!result?.ok && review?.reasonCode === "waived_infrastructure_failure") {
+    return {
+      conclusion: "failure",
+      description: result.description,
+      reasonCode: "infrastructure_failure",
+    };
+  }
+  return null;
 }
 
 export function shouldReapplyHumanValidation({ action, labels, events }) {
@@ -76,13 +301,44 @@ export function shouldReapplyHumanValidation({ action, labels, events }) {
   );
 }
 
-export function buildStatusPayload({ state, context, description, targetUrl }) {
+export function buildCheckRunPayload({
+  name,
+  headSha,
+  prNumber,
+  status,
+  conclusion,
+  description,
+  targetUrl,
+}) {
+  if (!/^[0-9a-f]{40}$/.test(headSha)) throw new Error("Check Run head SHA is invalid");
+  if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new Error("Check Run PR number is invalid");
+  }
+  if (!boundedCheckValue(name, 100) || !boundedCheckValue(description, 65_535)) {
+    throw new Error("Check Run output is invalid");
+  }
+  if (!["queued", "in_progress", "completed"].includes(status)) {
+    throw new Error("Check Run status is invalid");
+  }
+  if ((status === "completed") !== Boolean(conclusion)) {
+    throw new Error("Check Run conclusion does not match status");
+  }
   return {
-    state,
-    context,
-    description: description.slice(0, 140),
-    target_url: targetUrl,
+    name,
+    head_sha: headSha,
+    status,
+    ...(conclusion ? { conclusion } : {}),
+    details_url: targetUrl,
+    external_id: gateExternalId({ name, headSha, prNumber }),
+    output: {
+      title: `${name}: ${conclusion ?? status}`,
+      summary: description,
+    },
   };
+}
+
+function boundedCheckValue(value, maxLength) {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
 function requiredEnvironment(name) {
@@ -107,6 +363,37 @@ async function githubRequest(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+async function teamRequest(path) {
+  const response = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${requiredEnvironment("TEAM_MEMBERSHIP_TOKEN")}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`GitHub Team API GET ${path}: ${response.status}`);
+  return response.json();
+}
+
+async function githubGraphql(query, variables) {
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.errors?.length) {
+    throw new Error(`GitHub GraphQL request failed: ${response.status}`);
+  }
+  return payload.data;
+}
+
 async function paginate(path) {
   const values = [];
   for (let page = 1; page <= 20; page += 1) {
@@ -118,38 +405,172 @@ async function paginate(path) {
   throw new Error(`GitHub API pagination limit exceeded for ${path}`);
 }
 
-async function setStatus(repository, sha, payload) {
-  await githubRequest(`/repos/${repository}/statuses/${sha}`, {
+async function createCheckRun(repository, payload) {
+  return githubRequest(`/repos/${repository}/check-runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 }
 
-async function setPendingStatuses(repository, pr) {
-  await Promise.all(
-    ["Issue Gate", "Human Validation Gate"].map((context) =>
-      setStatus(
+async function completeCheckRun(
+  repository,
+  check,
+  conclusion,
+  description,
+  reasonCode,
+) {
+  await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status: "completed",
+      conclusion,
+      output: {
+        title: `${check.name}: ${conclusion}`,
+        summary: reasonCode ? `reason_code: ${reasonCode}\n\n${description}` : description,
+      },
+    }),
+  });
+}
+
+async function readGateRecords(repository, prNumber, currentHead) {
+  const comments = await paginate(`/repos/${repository}/issues/${prNumber}/comments`);
+  const logins = new Set();
+  for (const comment of comments) {
+    const command = parseGateCommand(comment.body);
+    if (command?.headSha === currentHead && comment.user?.login) {
+      logins.add(comment.user.login);
+    }
+  }
+  const [owner] = repository.split("/");
+  const memberships = new Map(
+    await Promise.all(
+      [...logins].map(async (login) => [
+        login,
+        await teamRequest(
+          `/orgs/${encodeURIComponent(owner)}/teams/${OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
+        ),
+      ]),
+    ),
+  );
+  return buildGateRecords({ comments, currentHead, memberships });
+}
+
+const REVIEW_THREADS_QUERY = `
+  query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          nodes {
+            isResolved
+            comments(first: 100) {
+              nodes {
+                author { login }
+                body
+              }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+async function readReviewState(repository, prNumber, currentHead) {
+  const encodedName = encodeURIComponent("Claude Review Gate");
+  const checks = await githubRequest(
+    `/repos/${repository}/commits/${currentHead}/check-runs?check_name=${encodedName}&filter=latest&per_page=100`,
+  );
+  const [owner, name] = repository.split("/");
+  const threads = [];
+  let after = null;
+  for (let page = 0; page < 20; page += 1) {
+    const data = await githubGraphql(REVIEW_THREADS_QUERY, {
+      owner,
+      name,
+      number: prNumber,
+      after,
+    });
+    const connection = data.repository?.pullRequest?.reviewThreads;
+    if (!connection) throw new Error("Pull Request Review threads are unavailable");
+    threads.push(...connection.nodes);
+    if (!connection.pageInfo.hasNextPage) {
+      return buildReviewState({
+        checkRuns: checks.check_runs,
+        threads,
+        currentHead,
+        prNumber,
+      });
+    }
+    after = connection.pageInfo.endCursor;
+  }
+  throw new Error("Review thread pagination limit exceeded");
+}
+
+function validationWasRequired(labels, events) {
+  return (
+    labelNames(labels).includes(HUMAN_LABEL) ||
+    events.some((event) => event.event === "labeled" && event.label?.name === HUMAN_LABEL)
+  );
+}
+
+export function auditDescription(result, records, type) {
+  if (!result.ok) return result.description;
+  const candidates = type === "human-validation" ? records.confirmations : records.waivers;
+  const expectedDescription = (login) =>
+    type === "human-validation"
+      ? `Human validation confirmed by ${login} for current head`
+      : `Claude Review infrastructure failure waived by ${login} for current head`;
+  const record = candidates.find(
+    (candidate) =>
+      candidate.headSha && result.description === expectedDescription(candidate.actor.login),
+  );
+  if (!record) return result.description;
+  const reason = record.reason
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replaceAll("<!--", "&lt;!--")
+    .replaceAll("-->", "--&gt;")
+    .replaceAll("@", "@\u200b")
+    .slice(0, 4_000);
+  return (
+    `${result.description}\n\nReason: ${reason}\n\n` +
+    `Recorded at: ${record.recordedAt}\n\nEvidence: ${record.url}`
+  );
+}
+
+export function pendingGateNames() {
+  return ["Issue Gate", "Human Validation Gate"];
+}
+
+async function setPendingChecks(repository, pr) {
+  const names = pendingGateNames();
+  const checks = await Promise.all(
+    names.map((name) =>
+      createCheckRun(
         repository,
-        pr.head.sha,
-        buildStatusPayload({
-          state: "pending",
-          context,
-          description: "Re-evaluating PR metadata",
+        buildCheckRunPayload({
+          name,
+          headSha: pr.head.sha,
+          prNumber: pr.number,
+          status: "in_progress",
+          description: "Re-evaluating current-head gate",
           targetUrl: pr.html_url,
         }),
       ),
     ),
   );
+  return Object.fromEntries(checks.map((check) => [check.name, check]));
 }
 
 async function evaluatePullRequest(repository, number, action) {
   const pr = await githubRequest(`/repos/${repository}/pulls/${number}`);
-  await setPendingStatuses(repository, pr);
+  const checks = await setPendingChecks(repository, pr);
+  requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");
   let labels = pr.labels;
-
+  const events = await paginate(`/repos/${repository}/issues/${number}/events`);
   if (action === "synchronize" && !labelNames(labels).includes(HUMAN_LABEL)) {
-    const events = await paginate(`/repos/${repository}/issues/${number}/events`);
     if (shouldReapplyHumanValidation({ action, labels, events })) {
       await githubRequest(`/repos/${repository}/issues/${number}/labels`, {
         method: "POST",
@@ -171,30 +592,69 @@ async function evaluatePullRequest(repository, number, action) {
     issue,
     headRef: pr.head.ref,
   });
-  const humanResult = evaluateHumanValidationGate(labels);
+  const records = await readGateRecords(repository, number, pr.head.sha);
+  const humanResult = evaluateHumanValidationGate({
+    labels,
+    validationWasRequired: validationWasRequired(labels, events),
+    currentHead: pr.head.sha,
+    confirmations: records.confirmations,
+  });
+  if (humanResult.ok && humanResult.removeLabel) {
+    await githubRequest(
+      `/repos/${repository}/issues/${number}/labels/${encodeURIComponent(HUMAN_LABEL)}`,
+      { method: "DELETE" },
+    );
+    labels = labels.filter((label) => label.name !== HUMAN_LABEL);
+  } else if (
+    !humanResult.ok &&
+    validationWasRequired(labels, events) &&
+    !labelNames(labels).includes(HUMAN_LABEL)
+  ) {
+    await githubRequest(`/repos/${repository}/issues/${number}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ labels: [HUMAN_LABEL] }),
+    });
+    labels = [...labels, { name: HUMAN_LABEL }];
+  }
+  const reviewState = await readReviewState(repository, number, pr.head.sha);
+  const claudeResult = evaluateClaudeReviewGate({
+    currentHead: pr.head.sha,
+    review: reviewState.review,
+    waivers: records.waivers,
+    hasPublishedBlockingFinding: reviewState.hasPublishedBlockingFinding,
+    hasUnresolvedThread: reviewState.hasUnresolvedThread,
+  });
 
   await Promise.all([
-    setStatus(
+    completeCheckRun(
       repository,
-      pr.head.sha,
-      buildStatusPayload({
-        state: issueResult.ok ? "success" : "failure",
-        context: "Issue Gate",
-        description: issueResult.description,
-        targetUrl,
-      }),
+      checks["Issue Gate"],
+      issueResult.ok ? "success" : "failure",
+      issueResult.description,
     ),
-    setStatus(
+    completeCheckRun(
       repository,
-      pr.head.sha,
-      buildStatusPayload({
-        state: humanResult.ok ? "success" : "failure",
-        context: "Human Validation Gate",
-        description: humanResult.description,
-        targetUrl,
-      }),
+      checks["Human Validation Gate"],
+      humanResult.ok ? "success" : "failure",
+      auditDescription(humanResult, records, "human-validation"),
     ),
   ]);
+  const reviewUpdate = claudeReviewGateUpdate({
+    result: claudeResult,
+    review: reviewState.review,
+  });
+  if (reviewUpdate && reviewState.review?.checkRunId) {
+    await completeCheckRun(
+      repository,
+      { id: reviewState.review.checkRunId, name: "Claude Review Gate" },
+      reviewUpdate.conclusion,
+      reviewUpdate.conclusion === "success"
+        ? auditDescription(claudeResult, records, "claude-review-waiver")
+        : reviewUpdate.description,
+      reviewUpdate.reasonCode,
+    );
+  }
 }
 
 async function main() {
@@ -207,14 +667,20 @@ async function main() {
     return;
   }
 
-  if (eventName === "issues") {
+  if (eventName === "issue_comment" && event.issue?.pull_request) {
+    await evaluatePullRequest(repository, event.issue.number, "comment-updated");
+    return;
+  }
+
+  if (eventName === "issues" || eventName === "schedule") {
     const pulls = await paginate(`/repos/${repository}/pulls?state=open`);
-    const affected = pulls.filter((pr) =>
-      extractPrimaryIssueNumbers(pr.body ?? "").includes(event.issue.number),
-    );
+    const affected = affectedPullRequests({
+      eventName,
+      issueNumber: event.issue?.number,
+      pulls,
+    });
     await Promise.all(
       affected.map(async (pr) => {
-        await setPendingStatuses(repository, pr);
         await githubRequest(`/repos/${repository}/dispatches`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

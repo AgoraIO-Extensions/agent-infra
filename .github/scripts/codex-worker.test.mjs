@@ -21,6 +21,7 @@ import {
   createWorkerPlan,
   evaluateFrontierIssue,
   evaluatePublicationState,
+  humanValidationLabelAction,
   parseBlockedBy,
   sanitizeWorkerMarkdown,
   validateWorkerConfiguration,
@@ -98,6 +99,13 @@ test("classifies only explicit Worker control and execution events", () => {
     }),
     "noop",
   );
+});
+
+test("Worker Publisher can add but never remove ready-for-human", () => {
+  assert.equal(humanValidationLabelAction(true, []), "add");
+  assert.equal(humanValidationLabelAction(true, ["ready-for-human"]), "noop");
+  assert.equal(humanValidationLabelAction(false, ["ready-for-human"]), "noop");
+  assert.equal(humanValidationLabelAction(false, []), "noop");
 });
 
 function frontier(overrides = {}) {

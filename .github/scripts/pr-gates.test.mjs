@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildStatusPayload,
+  affectedPullRequests,
+  auditDescription,
+  buildCheckRunPayload,
+  buildGateRecords,
+  buildReviewState,
+  claudeReviewGateUpdate,
+  evaluateClaudeReviewGate,
   evaluateHumanValidationGate,
   evaluateIssueGate,
   extractPrimaryIssueNumbers,
+  parseGateCommand,
+  pendingGateNames,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
 
@@ -14,6 +22,22 @@ test("extracts one canonical primary Issue reference", () => {
     extractPrimaryIssueNumbers("Summary\n\nCloses #42\n\nRelated to #7"),
     [42],
   );
+});
+
+test("scheduled membership reconciliation reevaluates every open PR", () => {
+  const pulls = [
+    { number: 1, body: "Closes #10" },
+    { number: 2, body: "Closes #20" },
+  ];
+  assert.deepEqual(
+    affectedPullRequests({ eventName: "schedule", pulls }),
+    pulls,
+  );
+  assert.deepEqual(
+    affectedPullRequests({ eventName: "issues", issueNumber: 20, pulls }),
+    [pulls[1]],
+  );
+  assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
 });
 
 test("ignores closing keywords inside fenced examples", () => {
@@ -102,9 +126,342 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
   );
 });
 
-test("Human Validation Gate fails only while ready-for-human is present", () => {
-  assert.equal(evaluateHumanValidationGate([{ name: "ready-for-human" }]).ok, false);
-  assert.equal(evaluateHumanValidationGate([{ name: "bug" }]).ok, true);
+test("parses current-head validation and waiver commands with non-empty reasons", () => {
+  const headSha = "a".repeat(40);
+  assert.deepEqual(parseGateCommand(`/human-validation ${headSha}\nTested in staging.`), {
+    type: "human-validation",
+    headSha,
+    reason: "Tested in staging.",
+  });
+  assert.deepEqual(
+    parseGateCommand(`/claude-review-waiver ${headSha}\nProvider timeout.`),
+    {
+      type: "claude-review-waiver",
+      headSha,
+      reason: "Provider timeout.",
+    },
+  );
+  assert.equal(parseGateCommand(`/human-validation ${headSha}`), null);
+  assert.equal(parseGateCommand("looks good"), null);
+});
+
+test("builds auditable gate records only for current-head comment commands", () => {
+  const currentHead = "a".repeat(40);
+  const oldHead = "b".repeat(40);
+  const records = buildGateRecords({
+    comments: [
+      {
+        body: `/human-validation ${currentHead}\nTested in staging.`,
+        created_at: "2026-08-06T00:00:00Z",
+        html_url: "https://github.com/example/repo/pull/1#issuecomment-1",
+        user: { login: "owner", type: "User" },
+      },
+      {
+        body: `/claude-review-waiver ${oldHead}\nOld failure.`,
+        html_url: "https://github.com/example/repo/pull/1#issuecomment-2",
+        user: { login: "owner", type: "User" },
+      },
+      {
+        body: "looks good",
+        html_url: "https://github.com/example/repo/pull/1#issuecomment-3",
+        user: { login: "owner", type: "User" },
+      },
+    ],
+    currentHead,
+    memberships: new Map([["owner", { state: "active", role: "member" }]]),
+  });
+  assert.deepEqual(records, {
+    confirmations: [
+      {
+        actor: { login: "owner", type: "User" },
+        headSha: currentHead,
+        membership: { state: "active", role: "member" },
+        reason: "Tested in staging.",
+        recordedAt: "2026-08-06T00:00:00Z",
+        url: "https://github.com/example/repo/pull/1#issuecomment-1",
+      },
+    ],
+    waivers: [],
+  });
+});
+
+test("binds audit evidence to the exact actor selected by the Gate", () => {
+  const records = {
+    confirmations: [
+      {
+        actor: { login: "alice" },
+        headSha: "a".repeat(40),
+        reason: "Wrong record",
+        recordedAt: "2026-08-06T00:00:00Z",
+        url: "https://example.test/alice",
+      },
+      {
+        actor: { login: "malice" },
+        headSha: "a".repeat(40),
+        reason: "Right record",
+        recordedAt: "2026-08-06T00:01:00Z",
+        url: "https://example.test/malice",
+      },
+    ],
+    waivers: [],
+  };
+  assert.equal(
+    auditDescription(
+      {
+        ok: true,
+        description: "Human validation confirmed by malice for current head",
+      },
+      records,
+      "human-validation",
+    ),
+    "Human validation confirmed by malice for current head\n\n" +
+      "Reason: Right record\n\n" +
+      "Recorded at: 2026-08-06T00:01:00Z\n\n" +
+      "Evidence: https://example.test/malice",
+  );
+});
+
+test("Human Validation Gate requires a current-head active Team member record", () => {
+  const currentHead = "a".repeat(40);
+  const valid = {
+    actor: { login: "owner", type: "User" },
+    headSha: currentHead,
+    membership: { state: "active", role: "member" },
+    reason: "Tested in staging.",
+    recordedAt: "2026-08-06T00:00:00Z",
+    url: "https://github.com/example/repo/pull/1#issuecomment-1",
+  };
+  assert.deepEqual(
+    evaluateHumanValidationGate({
+      labels: [{ name: "ready-for-human" }],
+      validationWasRequired: true,
+      currentHead,
+      confirmations: [valid],
+    }),
+    {
+      ok: true,
+      removeLabel: true,
+      description: "Human validation confirmed by owner for current head",
+    },
+  );
+  for (const invalid of [
+    { ...valid, headSha: "b".repeat(40) },
+    { ...valid, actor: { login: "owner[bot]", type: "Bot" } },
+    { ...valid, membership: { state: "pending", role: "member" } },
+    { ...valid, membership: undefined },
+    { ...valid, recordedAt: undefined },
+  ]) {
+    assert.equal(
+      evaluateHumanValidationGate({
+        labels: [],
+        validationWasRequired: true,
+        currentHead,
+        confirmations: [invalid],
+      }).ok,
+      false,
+    );
+  }
+  assert.deepEqual(
+    evaluateHumanValidationGate({
+      labels: [],
+      validationWasRequired: false,
+      currentHead,
+      confirmations: [],
+    }),
+    { ok: true, removeLabel: false, description: "Human validation is not required" },
+  );
+});
+
+test("Claude Review Gate accepts only current-head success or a bounded infrastructure waiver", () => {
+  const currentHead = "a".repeat(40);
+  const review = {
+    appId: 15368,
+    conclusion: "success",
+    failureKind: null,
+    headSha: currentHead,
+    reasonCode: "success",
+    status: "completed",
+  };
+  const waiver = {
+    actor: { login: "owner", type: "User" },
+    headSha: currentHead,
+    membership: { state: "active", role: "member" },
+    reason: "Provider timeout.",
+    recordedAt: "2026-08-06T00:00:00Z",
+    url: "https://github.com/example/repo/pull/1#issuecomment-2",
+  };
+  assert.deepEqual(
+    evaluateClaudeReviewGate({ currentHead, review, waivers: [] }),
+    { ok: true, waived: false, description: "Claude Review passed for current head" },
+  );
+  for (const invalidReview of [
+    undefined,
+    { ...review, headSha: "b".repeat(40) },
+    { ...review, status: "in_progress", conclusion: null },
+    { ...review, appId: null },
+  ]) {
+    assert.equal(
+      evaluateClaudeReviewGate({ currentHead, review: invalidReview, waivers: [] }).ok,
+      false,
+    );
+  }
+  assert.deepEqual(
+    evaluateClaudeReviewGate({
+      currentHead,
+      review: {
+        ...review,
+        conclusion: "failure",
+        failureKind: "infrastructure_failure",
+        reasonCode: "infrastructure_failure",
+      },
+      waivers: [waiver],
+    }),
+    {
+      ok: true,
+      waived: true,
+      description: "Claude Review infrastructure failure waived by owner for current head",
+    },
+  );
+  const appliedWaiver = {
+    ...review,
+    conclusion: "success",
+    failureKind: "infrastructure_failure",
+    reasonCode: "waived_infrastructure_failure",
+  };
+  assert.equal(
+    evaluateClaudeReviewGate({ currentHead, review: appliedWaiver, waivers: [] }).ok,
+    false,
+  );
+  assert.deepEqual(
+    evaluateClaudeReviewGate({ currentHead, review: appliedWaiver, waivers: [waiver] }),
+    {
+      ok: true,
+      waived: true,
+      description: "Claude Review infrastructure failure waived by owner for current head",
+    },
+  );
+  for (const blocked of [
+    {
+      review: {
+        ...review,
+        conclusion: "failure",
+        failureKind: "invalid_output",
+        reasonCode: "invalid_output",
+      },
+      waivers: [waiver],
+    },
+    {
+      review: {
+        ...review,
+        conclusion: "failure",
+        failureKind: "infrastructure_failure",
+        reasonCode: "infrastructure_failure",
+      },
+      waivers: [{ ...waiver, actor: { login: "owner[bot]", type: "Bot" } }],
+    },
+    {
+      review: {
+        ...review,
+        conclusion: "failure",
+        failureKind: "infrastructure_failure",
+        reasonCode: "infrastructure_failure",
+      },
+      waivers: [waiver],
+      hasPublishedBlockingFinding: true,
+    },
+    {
+      review: {
+        ...review,
+        conclusion: "failure",
+        failureKind: "infrastructure_failure",
+        reasonCode: "infrastructure_failure",
+      },
+      waivers: [waiver],
+      hasUnresolvedThread: true,
+    },
+  ]) {
+    assert.equal(evaluateClaudeReviewGate({ currentHead, ...blocked }).ok, false);
+  }
+});
+
+test("normalizes only current-head App Review state and blocking thread evidence", () => {
+  const currentHead = "a".repeat(40);
+  const oldHead = "b".repeat(40);
+  const expectedExternalId = `agent-infra:pr:42:claude-review-gate:${currentHead}`;
+  assert.deepEqual(
+    buildReviewState({
+      checkRuns: [
+        {
+          id: 1,
+          name: "Claude Review Gate",
+          head_sha: oldHead,
+          app: { id: 15368 },
+          external_id: expectedExternalId,
+          status: "completed",
+          conclusion: "success",
+          output: { summary: "reason_code: success" },
+        },
+        {
+          id: 2,
+          name: "Claude Review Gate",
+          head_sha: currentHead,
+          app: { id: 15368 },
+          external_id: expectedExternalId,
+          status: "completed",
+          conclusion: "failure",
+          output: { summary: "reason_code: infrastructure_failure" },
+        },
+        {
+          id: 3,
+          name: "Claude Review Gate",
+          head_sha: currentHead,
+          app: { id: 999 },
+          external_id: expectedExternalId,
+          status: "completed",
+          conclusion: "success",
+          output: { summary: "reason_code: success" },
+        },
+        {
+          id: 4,
+          name: "Claude Review Gate",
+          head_sha: currentHead,
+          app: { id: 15368 },
+          external_id: `agent-infra:pr:99:claude-review-gate:${currentHead}`,
+          status: "completed",
+          conclusion: "success",
+          output: { summary: "reason_code: success" },
+        },
+      ],
+      threads: [
+        {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: "github-actions" },
+                body: `**P1: Bug**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
+              },
+            ],
+          },
+        },
+      ],
+      currentHead,
+      prNumber: 42,
+    }),
+    {
+      review: {
+        appId: 15368,
+        checkRunId: 2,
+        conclusion: "failure",
+        failureKind: "infrastructure_failure",
+        headSha: currentHead,
+        reasonCode: "infrastructure_failure",
+        status: "completed",
+      },
+      hasPublishedBlockingFinding: true,
+      hasUnresolvedThread: true,
+    },
+  );
 });
 
 test("a new commit restores a previously required human validation label", () => {
@@ -134,19 +491,75 @@ test("label removal can complete validation until another commit", () => {
   );
 });
 
-test("metadata changes reset both merge gates to pending before evaluation", () => {
+test("gate Check Runs bind the expected App result to the current head", () => {
+  const headSha = "a".repeat(40);
   assert.deepEqual(
-    buildStatusPayload({
-      state: "pending",
-      context: "Issue Gate",
+    buildCheckRunPayload({
+      name: "Issue Gate",
+      headSha,
+      prNumber: 42,
+      status: "completed",
+      conclusion: "success",
       description: "Re-evaluating PR metadata",
       targetUrl: "https://github.com/example/repo/pull/1",
     }),
     {
-      state: "pending",
-      context: "Issue Gate",
-      description: "Re-evaluating PR metadata",
-      target_url: "https://github.com/example/repo/pull/1",
+      name: "Issue Gate",
+      head_sha: headSha,
+      status: "completed",
+      conclusion: "success",
+      details_url: "https://github.com/example/repo/pull/1",
+      external_id: `agent-infra:pr:42:issue-gate:${headSha}`,
+      output: {
+        title: "Issue Gate: success",
+        summary: "Re-evaluating PR metadata",
+      },
     },
+  );
+  assert.throws(() =>
+    buildCheckRunPayload({
+      name: "Issue Gate",
+      headSha: "stale",
+      prNumber: 42,
+      status: "in_progress",
+      description: "Re-evaluating PR metadata",
+      targetUrl: "https://github.com/example/repo/pull/1",
+    }),
+  );
+});
+
+test("PR Gates never creates a competing Claude Review Gate", () => {
+  assert.deepEqual(pendingGateNames(), ["Issue Gate", "Human Validation Gate"]);
+});
+
+test("revokes an applied waiver when its current audit record becomes invalid", () => {
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: { ok: true, waived: true, description: "Approved waiver" },
+      review: { reasonCode: "infrastructure_failure" },
+    }),
+    {
+      conclusion: "success",
+      description: "Approved waiver",
+      reasonCode: "waived_infrastructure_failure",
+    },
+  );
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: { ok: false, waived: false, description: "Waiver is invalid" },
+      review: { reasonCode: "waived_infrastructure_failure" },
+    }),
+    {
+      conclusion: "failure",
+      description: "Waiver is invalid",
+      reasonCode: "infrastructure_failure",
+    },
+  );
+  assert.equal(
+    claudeReviewGateUpdate({
+      result: { ok: true, waived: false, description: "Review passed" },
+      review: { reasonCode: "success" },
+    }),
+    null,
   );
 });
