@@ -12,6 +12,7 @@ import {
   evaluateHumanValidationGate,
   evaluateIssueGate,
   extractPrimaryIssueNumbers,
+  githubRequest,
   parseGateCommand,
   pendingGateNames,
   shouldReapplyHumanValidation,
@@ -38,6 +39,32 @@ test("scheduled membership reconciliation reevaluates every open PR", () => {
     [pulls[1]],
   );
   assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
+});
+
+test("allows idempotent GitHub DELETE requests to ignore a missing target", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "test-token";
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  try {
+    assert.equal(
+      await githubRequest("/repos/example/repo/issues/1/labels/ready-for-human", {
+        method: "DELETE",
+        allowNotFound: true,
+      }),
+      null,
+    );
+    await assert.rejects(
+      githubRequest("/repos/example/repo/issues/1/labels/ready-for-human", {
+        method: "DELETE",
+      }),
+      /GitHub API DELETE .*: 404/,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousToken;
+  }
 });
 
 test("ignores closing keywords inside fenced examples", () => {

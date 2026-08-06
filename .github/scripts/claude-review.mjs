@@ -37,8 +37,11 @@ function boundedString(value, maxLength) {
 }
 
 export function parseReviewOutput(raw, expectedHead) {
-  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 256 * 1024) {
-    throw new ReviewOutputError("Claude Review output is missing or too large");
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new Error("Claude Review output is missing");
+  }
+  if (Buffer.byteLength(raw, "utf8") > 256 * 1024) {
+    throw new ReviewOutputError("Claude Review output is too large");
   }
   let result;
   try {

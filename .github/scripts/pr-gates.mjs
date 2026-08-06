@@ -424,7 +424,10 @@ function requiredEnvironment(name) {
   return value;
 }
 
-async function githubRequest(path, options = {}) {
+export async function githubRequest(
+  path,
+  { allowNotFound = false, ...options } = {},
+) {
   const response = await fetch(`https://api.github.com${path}`, {
     ...options,
     headers: {
@@ -434,6 +437,7 @@ async function githubRequest(path, options = {}) {
       ...options.headers,
     },
   });
+  if (allowNotFound && response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
   }
@@ -686,7 +690,7 @@ async function evaluatePullRequest(repository, number, action) {
   if (humanResult.ok && humanResult.removeLabel) {
     await githubRequest(
       `/repos/${repository}/issues/${number}/labels/${encodeURIComponent(HUMAN_LABEL)}`,
-      { method: "DELETE" },
+      { method: "DELETE", allowNotFound: true },
     );
     labels = labels.filter((label) => label.name !== HUMAN_LABEL);
   } else if (

@@ -38,6 +38,14 @@ test("parses a bounded Review result for the expected head", () => {
 });
 
 test("marks only parsed or validated Review output defects as invalid output", () => {
+  let missingOutputError;
+  try {
+    parseReviewOutput("", head);
+  } catch (error) {
+    missingOutputError = error;
+  }
+  assert.equal(reviewFailureKind(missingOutputError), "infrastructure_failure");
+
   let malformedOutputError;
   try {
     parseReviewOutput("{", head);
