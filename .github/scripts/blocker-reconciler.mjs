@@ -632,7 +632,7 @@ async function repairProposalState({
     await publishComment(
       repository,
       issue.number,
-      buildBlockerIdentityComment(record),
+      buildBlockerIdentityComment(record, issue),
       token,
       request,
     );
