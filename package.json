@@ -1,0 +1,39 @@
+{
+	"name": "agent-infra",
+	"private": true,
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"type": "module",
+	"engines": {
+		"node": ">=24 <25"
+	},
+	"scripts": {
+		"dev": "turbo run dev",
+		"build": "turbo run build",
+		"check": "biome check .",
+		"check-types": "turbo run check-types",
+		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test",
+		"smoke": "node tests/smoke.mjs",
+		"format": "biome check --write .",
+		"dev:web": "turbo run dev -F @agent-infra/web",
+		"dev:platform-api": "turbo run dev -F @agent-infra/platform-api",
+		"dev:platform-worker": "turbo run dev -F @agent-infra/platform-worker",
+		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
+		"docker:build": "docker compose build",
+		"docker:up": "docker compose up -d --build",
+		"docker:down": "docker compose down",
+		"docker:logs": "docker compose logs -f"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.6",
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"turbo": "^2.10.7",
+		"typescript": "catalog:",
+		"vitest": "catalog:",
+		"yaml": "2.8.3"
+	},
+	"packageManager": "pnpm@11.20.0"
+}

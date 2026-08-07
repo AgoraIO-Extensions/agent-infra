@@ -2,7 +2,7 @@
 
 ## Project Context
 
-`agent-infra` 是企业级 Agent 平台。仓库当前处于 M1 设计评审阶段，尚未生成工程脚手架或业务代码。
+`agent-infra` 是企业级 Agent 平台。仓库已进入 M1 工程底座阶段，脚手架已生成，领域功能尚未实现。
 
 ## Source Of Truth
 
@@ -39,13 +39,16 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Repository Layout
 
+- `apps/`：Web、Platform API、Platform Worker 与 Connection API 的进程入口。
+- `packages/`：被多个真实调用方复用的配置、领域或 Adapter 模块。
+- `tests/`：跨应用 smoke、契约、集成、端到端和负载测试入口。
 - `docs/prd/`：正式产品需求，只写已确认的产品结论。
 - `docs/architecture/`：工程架构和跨模块技术决策。
 - `docs/agents/`：Agent 操作入口，只引用正式工作流，不重复定义流程状态。
 - `README.md`：面向团队的仓库入口和文档导航。
 - `AGENTS.md`：编码 Agent 的全仓工作规则。
 
-工程初始化后，代码目录遵循架构 Spec 中定义的 `apps/`、`packages/`、`migrations/`、`deploy/` 和 `tests/` 边界。不要在脚手架生成前创建占位目录。
+新增代码目录遵循架构 Spec 中定义的 `apps/`、`packages/`、`migrations/`、`deploy/` 和 `tests/` 边界。不要创建没有实际实现的占位目录。
 
 只有某个子项目出现稳定且不同的命令、语言或安全约束时，才在该目录增加嵌套 `AGENTS.md`。嵌套文件只写差异，不复制根文件。
 
@@ -88,21 +91,24 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Current Validation Commands
 
-仓库仍是文档阶段。修改仓库内容后，从仓库根目录执行：
+修改仓库内容后，从仓库根目录按顺序执行：
 
 ```bash
+pnpm install --frozen-lockfile
+pnpm check
+pnpm check-types
+pnpm test
+pnpm build
+pnpm smoke
+pnpm docker:build
 npx --yes markdownlint-cli2@0.23.2 README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
 find README.md AGENTS.md .github docs -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
   npx --yes markdown-link-check@3.15.0 --config .markdown-link-check.json "$file"
 done
-npm install --no-save --ignore-scripts --package-lock=false yaml@2.8.1
-node --test .github/scripts/*.test.mjs
 node .github/scripts/verify-workflow-policy.mjs
 .github/scripts/run-actionlint.sh
 git diff --check
 ```
-
-工程脚手架生成后，用真实的 `package.json` 脚本替换本节，不提前编造应用安装、构建或测试命令。
 
 ## Security
 

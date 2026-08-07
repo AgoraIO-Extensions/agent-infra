@@ -1,0 +1,31 @@
+{
+	"name": "@agent-infra/web",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"serve": "vite preview",
+		"start": "vite",
+		"check-types": "vite build && tsc --noEmit"
+	},
+	"dependencies": {
+		"@tailwindcss/vite": "^4.3.3",
+		"@tanstack/react-router": "^1.170.18",
+		"react": "catalog:",
+		"react-dom": "catalog:"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@tanstack/router-plugin": "^1.168.23",
+		"@types/node": "catalog:",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:",
+		"@vitejs/plugin-react": "^6.0.4",
+		"shadcn": "^4.16.0",
+		"tailwindcss": "catalog:",
+		"typescript": "catalog:",
+		"vite": "^8.1.5"
+	}
+}

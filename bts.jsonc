@@ -1,0 +1,26 @@
+// Better-T-Stack project metadata
+//
+// This records the one-time generator input. Do not rerun it to upgrade the project.
+//
+// Docs: https://better-t-stack.dev/docs
+// Stack Builder: https://better-t-stack.dev/new
+
+{
+  "$schema": "https://r2.better-t-stack.dev/schema.json",
+  "version": "3.38.1",
+  "reproducibleCommand": "pnpm dlx create-better-t-stack@3.38.1 create . --frontend tanstack-router --backend hono --runtime node --database postgres --orm drizzle --api none --auth none --payments none --addons turborepo biome --examples none --db-setup none --web-deploy docker --server-deploy docker --no-git --package-manager pnpm --no-install --directory-conflict merge --disable-analytics",
+  "database": "postgres",
+  "orm": "drizzle",
+  "backend": "hono",
+  "runtime": "node",
+  "frontend": ["tanstack-router"],
+  "addons": ["turborepo", "biome"],
+  "examples": [],
+  "auth": "none",
+  "payments": "none",
+  "packageManager": "pnpm",
+  "dbSetup": "none",
+  "api": "none",
+  "webDeploy": "docker",
+  "serverDeploy": "docker",
+}
