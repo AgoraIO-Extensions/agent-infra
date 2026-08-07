@@ -258,6 +258,28 @@ test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evi
     }).ok,
     false,
   );
+  for (const blocker of [
+    { number: 7, state: "closed", state_reason: "not_planned" },
+    { number: 7, state: "closed", state_reason: null },
+    {
+      number: 7,
+      state: "closed",
+      state_reason: "completed",
+      labels: [{ name: "wontfix" }],
+    },
+  ]) {
+    assert.equal(
+      evaluateIssueReadinessGate({ ...input, blockers: [blocker] }).ok,
+      false,
+    );
+  }
+  assert.equal(
+    evaluateIssueReadinessGate({
+      ...input,
+      blockers: [{ number: 7, state: "closed", state_reason: "completed" }],
+    }).ok,
+    true,
+  );
   assert.equal(
     evaluateIssueReadinessGate({
       ...input,

@@ -6,6 +6,7 @@ import {
   gateExternalId,
   selectCurrentGateCheck,
 } from "./check-run-contract.mjs";
+import { blockerStatus } from "./blocker-contract.mjs";
 import {
   activeAuthorization,
   executionContent,
@@ -128,7 +129,7 @@ export function evaluateIssueReadinessGate({
       description: `Worker authorization is invalid: ${authorization.reason}`,
     };
   }
-  if (blockers.some((blocker) => blocker.state !== "closed")) {
+  if (blockers.some((blocker) => blockerStatus(blocker) !== "completed")) {
     return {
       ok: false,
       applicable: true,

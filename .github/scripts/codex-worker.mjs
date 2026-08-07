@@ -4,6 +4,24 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  assertCanAddBlockers,
+  BLOCKER_REVIEW_COMMENT,
+  blockerStatus,
+  buildBlockerIssue,
+  buildWorkerDispatchAck,
+  hasTrustedBlockerReviewAck,
+  hasTrustedWorkerDispatchAck,
+  inspectBlockerGraph,
+  isTrustedActionsObject,
+  isTrustedBlockerReviewComment,
+  latestBlockerStateRecord,
+  nativeDependencyDecision,
+  parseBlockerProposalRecord,
+  replaceBlockedBy,
+  sameBlockerProposalRecord,
+  validateBlockerProposals,
+} from "./blocker-contract.mjs";
+import {
   activeAuthorization,
   authorizeCycle,
   blockedByChanged,
@@ -38,7 +56,13 @@ export function classifyWorkerEvent({
   headRef,
   merged,
   sameRepository,
+  dispatchOperation,
 }) {
+  if (eventName === "repository_dispatch") {
+    return ["evaluate", "pause", "triage"].includes(dispatchOperation)
+      ? dispatchOperation
+      : "noop";
+  }
   if (eventName === "pull_request_target") {
     return action === "closed" &&
       !merged &&
@@ -101,6 +125,20 @@ export function shouldConsumeAuthorization(current, { cycle } = {}) {
   );
 }
 
+export function workerBlockerDecision(blockers) {
+  const statuses = (blockers ?? []).map((blocker) => blockerStatus(blocker));
+  if (statuses.includes("not_planned")) {
+    return { state: "triage", reason: "blocker-not-planned" };
+  }
+  if (statuses.some((status) => ["missing", "invalid"].includes(status))) {
+    return { state: "triage", reason: "invalid-blocker-state" };
+  }
+  if (statuses.includes("open")) {
+    return { state: "blocked", reason: "open-blockers" };
+  }
+  return { state: "frontier", reason: "blockers-completed" };
+}
+
 export function evaluateFrontierIssue({
   issue,
   contract,
@@ -129,8 +167,12 @@ export function evaluateFrontierIssue({
     return { operation: "triage", reason: authorization.reason };
   }
   const branch = `codex/issue-${issue.number}-cycle-${authorization.cycle}`;
-  if (blockers.some((blocker) => blocker.state !== "closed")) {
-    return { operation: "noop", reason: "open-blockers" };
+  const blockerDecision = workerBlockerDecision(blockers);
+  if (blockerDecision.state === "triage") {
+    return { operation: "triage", reason: blockerDecision.reason };
+  }
+  if (blockerDecision.state === "blocked") {
+    return { operation: "noop", reason: blockerDecision.reason };
   }
 
   const pullRequests = workerPullRequests.filter((pullRequest) => !pullRequest.merged_at);
@@ -254,10 +296,16 @@ export function evaluatePublicationState({
   }
   if (
     !labels.includes("ready-for-agent") ||
-    labels.some((label) => ["ready-for-human", "needs-triage"].includes(label)) ||
-    blockers.some((blocker) => blocker.state !== "closed")
+    labels.some((label) => ["ready-for-human", "needs-triage"].includes(label))
   ) {
     return { operation: "pause", reason: "issue-not-frontier" };
+  }
+  const blockerDecision = workerBlockerDecision(blockers);
+  if (blockerDecision.state === "triage") {
+    return { operation: "triage", reason: blockerDecision.reason };
+  }
+  if (blockerDecision.state === "blocked") {
+    return { operation: "pause", reason: blockerDecision.reason };
   }
   if (
     allWorkerPullRequests.some(
@@ -445,7 +493,10 @@ export function buildWorkerPrompt({ issue, plan }) {
     "- Do not modify protected workflow, Agent, dependency-resolution, PRD, or architecture files.",
     "- Work only from the recorded start commit and fixed Issue scope.",
     "- Run appropriate repository validation before reporting completion.",
-    "- Return exactly one acceptance_criteria item for every recorded AC ID, in order, with status pass or not_applicable and non-empty evidence.",
+    "- Return exactly one acceptance_criteria item for every recorded AC ID, in order, with non-empty evidence.",
+    "- If implementation is complete, set completed=true, use only pass/not_applicable AC states, return no blocker proposals, and create the full Patch.",
+    "- If a prerequisite makes safe completion impossible, set completed=false, use blocked for every AC, return one or more strictly bounded blocker_proposals, and create an empty Patch.",
+    "- Blocker proposals are untrusted data: never call GitHub, choose labels or repositories, or include Issue numbers as control fields.",
     "- Decide whether real human validation is required. Unit and smoke coverage may be sufficient for simple changes.",
     "",
     "Before the final response, create `.codex-worker-artifact/output/change.patch` with:",
@@ -474,6 +525,7 @@ export function buildWorkerPrompt({ issue, plan }) {
 
 const RESULT_KEYS = [
   "acceptance_criteria",
+  "blocker_proposals",
   "branch",
   "completed",
   "cycle",
@@ -519,7 +571,9 @@ export function validateWorkerResult(raw, plan) {
   if (keys.join("\0") !== RESULT_KEYS.join("\0")) {
     throw new Error("Worker result contains missing or unexpected fields");
   }
-  if (result.completed !== true) throw new Error("Worker result is incomplete");
+  if (typeof result.completed !== "boolean") {
+    throw new Error("Worker result completed state must be boolean");
+  }
   if (result.issue_number !== plan.issueNumber) {
     throw new Error("Worker result Issue does not match the plan");
   }
@@ -539,10 +593,30 @@ export function validateWorkerResult(raw, plan) {
     throw new Error("human_validation_required must be boolean");
   }
   assertBoundedString(result.summary, "summary", 4000);
-  validateAcceptanceCriteriaEvidence(
-    result.acceptance_criteria,
-    plan.acceptanceCriteriaIds,
-  );
+  const blockerProposals = validateBlockerProposals(result.blocker_proposals);
+  if (result.completed) {
+    if (blockerProposals.length > 0) {
+      throw new Error("Completed Worker result cannot propose blockers");
+    }
+    validateAcceptanceCriteriaEvidence(
+      result.acceptance_criteria,
+      plan.acceptanceCriteriaIds,
+    );
+  } else {
+    if (blockerProposals.length === 0) {
+      throw new Error("Blocked Worker result must propose a blocker");
+    }
+    if (
+      !Array.isArray(result.acceptance_criteria) ||
+      result.acceptance_criteria.some((item) => item?.status !== "blocked")
+    ) {
+      throw new Error("Blocked Worker result must mark every AC as blocked");
+    }
+    validateAcceptanceCriteriaEvidence(
+      result.acceptance_criteria.map((item) => ({ ...item, status: "pass" })),
+      plan.acceptanceCriteriaIds,
+    );
+  }
   for (const name of ["tests", "not_run", "human_validation", "risks"]) {
     assertStringList(result[name], name);
   }
@@ -589,6 +663,9 @@ export function buildWorkerPullRequestBody(
   issueNumber,
   expectedIds = result.acceptance_criteria.map((item) => item.id),
 ) {
+  if (result.completed !== true || result.blocker_proposals?.length) {
+    throw new Error("Only a completed Worker result can build a pull request body");
+  }
   const humanValidation = result.human_validation_required
     ? renderWorkerList(result.human_validation)
     : "- 自动验证已充分";
@@ -748,11 +825,14 @@ export async function validateAndApplyWorkerArtifact({
     throw new Error("Worker publish workspace is not at the recorded start commit");
   }
 
+  const result = validateWorkerResult(await fs.readFile(resultPath, "utf8"), plan);
   const changedPaths = patchStat.size === 0 ? [] : changedPathsFromPatch(workspace, patchPath);
-  if (changedPaths.length === 0 && !plan.branchExisted) {
+  if (!result.completed && changedPaths.length > 0) {
+    throw new Error("Blocked Worker result cannot publish a partial Patch");
+  }
+  if (result.completed && changedPaths.length === 0 && !plan.branchExisted) {
     throw new Error("Worker first publication Patch is empty");
   }
-  const result = validateWorkerResult(await fs.readFile(resultPath, "utf8"), plan);
   if (changedPaths.length > 0) {
     runGit(workspace, [
       "apply",
@@ -843,6 +923,10 @@ async function githubPaginate(apiPath, { token } = {}) {
     if (batch.length < 100) return values;
   }
   throw new Error(`GitHub API pagination limit exceeded for ${apiPath}`);
+}
+
+async function fetchRepositoryIssues(repository, token) {
+  return githubPaginate(`/repos/${repository}/issues?state=all`, { token });
 }
 
 async function fetchBranchSha(repository, branch, token) {
@@ -1111,6 +1195,12 @@ async function recordIssueAuthorizationEvent({
     const unchanged =
       context.contract &&
       context.current.executionContentHash === context.contract.hash;
+    if (
+      unchanged &&
+      context.current.blockedByHash === context.contract.blockedByHash
+    ) {
+      return;
+    }
     const invalidationReason = authorizationEditInvalidation({
       executionContentMatches: Boolean(unchanged),
       contractValid: Boolean(context.contract),
@@ -1245,6 +1335,60 @@ async function recordPullRequestAuthorizationEvent({ repository, event, token })
   await publishAuthorizationRecord(repository, issueNumber, record, token);
 }
 
+export async function authorizeReconcilerDispatch({
+  repository,
+  event,
+  token,
+  request = githubRequest,
+  paginate = githubPaginate,
+}) {
+  const payload = event?.client_payload;
+  const issueNumber = payload?.issue_number;
+  const operation = payload?.operation;
+  const signature = payload?.blocker_state_signature;
+  if (
+    event?.action !== "codex-worker" ||
+    !Number.isSafeInteger(issueNumber) ||
+    issueNumber < 1 ||
+    !["evaluate", "pause", "triage"].includes(operation) ||
+    !/^[0-9a-f]{64}$/.test(signature ?? "")
+  ) {
+    return false;
+  }
+  const issue = await request(`/repos/${repository}/issues/${issueNumber}`, { token });
+  if (issue?.pull_request || issue?.state !== "open") return false;
+  const comments = await paginate(
+    `/repos/${repository}/issues/${issueNumber}/comments`,
+    { token, request },
+  );
+  const state = latestBlockerStateRecord(comments, issueNumber);
+  const expectedOperation =
+    state?.state === "frontier"
+      ? "evaluate"
+      : state?.state === "blocked"
+        ? "pause"
+        : state?.state === "triage"
+          ? "triage"
+          : null;
+  if (
+    state?.signature !== signature ||
+    state.reason !== payload.reason ||
+    expectedOperation !== operation ||
+    hasTrustedWorkerDispatchAck(comments, issueNumber, signature, operation)
+  ) {
+    return false;
+  }
+  await request(`/repos/${repository}/issues/${issueNumber}/comments`, {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      body: buildWorkerDispatchAck(issueNumber, signature, operation),
+    }),
+  });
+  return true;
+}
+
 async function authorizeCommand() {
   const event = JSON.parse(
     await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"),
@@ -1252,6 +1396,15 @@ async function authorizeCommand() {
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
   const token = requiredEnvironment("GITHUB_TOKEN");
+  if (eventName === "repository_dispatch") {
+    const allowed = await authorizeReconcilerDispatch({
+      repository,
+      event,
+      token,
+    });
+    await writeOutput("allowed", allowed);
+    return;
+  }
   if (eventName === "issues") {
     await recordIssueAuthorizationEvent({
       repository,
@@ -1259,16 +1412,25 @@ async function authorizeCommand() {
       token,
       teamToken: process.env.TEAM_MEMBERSHIP_TOKEN,
     });
+    await writeOutput("allowed", true);
     return;
   }
   if (eventName === "pull_request_target") {
     await recordPullRequestAuthorizationEvent({ repository, event, token });
+    await writeOutput("allowed", true);
     return;
   }
+  await writeOutput("allowed", false);
 }
 
 function issueNumberFromEvent(event, eventName) {
   if (eventName === "issues") return event.issue?.number;
+  if (eventName === "repository_dispatch") {
+    const issueNumber = event.client_payload?.issue_number;
+    return Number.isSafeInteger(issueNumber) && issueNumber > 0
+      ? issueNumber
+      : null;
+  }
   const match = /^codex\/issue-(\d+)-cycle-\d+$/.exec(
     event.pull_request?.head?.ref ?? "",
   );
@@ -1298,6 +1460,7 @@ async function prepareCommand() {
     sameRepository:
       event.pull_request?.head?.repo?.full_name?.toLowerCase() ===
       repository.toLowerCase(),
+    dispatchOperation: event.client_payload?.operation,
   });
   const issueNumber = issueNumberFromEvent(event, eventName);
   if (!issueNumber) {
@@ -1308,7 +1471,19 @@ async function prepareCommand() {
     await writePrepareOutputs({
       operation: action,
       reason:
-        action === "noop"
+        eventName === "repository_dispatch" && action === "triage"
+          ? [
+              "blocker-not-planned",
+              "invalid-blocker-state",
+              "invalid-graph",
+              "native-dependency-mismatch",
+              "native-dependency-response-invalid",
+              "native-dependency-sync-failed",
+              "native-dependency-target-invalid",
+            ].includes(event.client_payload?.reason)
+            ? event.client_payload.reason
+            : "invalid-blocker-state"
+          : action === "noop"
           ? "unrelated-event"
           : action === "closed-pr"
             ? "closed-worker-pr"
@@ -1448,8 +1623,11 @@ async function preflightCommand() {
       "HEAD",
     ]).stdout.trim();
     await writeOutput("valid", "true");
-    await writeOutput("operation", "publish");
-    await writeOutput("reason", "authorized");
+    await writeOutput("operation", validated.result.completed ? "publish" : "block");
+    await writeOutput(
+      "reason",
+      validated.result.completed ? "authorized" : "blocker-proposed",
+    );
     await writeOutput("commit_sha", commitSha);
   } catch (error) {
     await writeOutput("valid", "false");
@@ -1470,7 +1648,7 @@ async function requirePublishAuthorization(plan, token) {
     authorization.cycle !== plan.cycle ||
     state.contract.hash !== plan.executionContentHash ||
     state.authorizationRecord.authorizationEventId !== plan.authorizationEventId ||
-    state.blockers.some((blocker) => blocker.state !== "closed")
+    workerBlockerDecision(state.blockers).state !== "frontier"
   ) {
     throw new Error("Worker publication stopped: stale authorization");
   }
@@ -1639,16 +1817,366 @@ async function publishCommand() {
   await markPullRequestReadyForReview({ pullRequest, token });
 }
 
+export function findExistingBlockerIssue(issues, expectedRecord) {
+  const matches = [];
+  for (const issue of issues) {
+    const record = parseBlockerProposalRecord(issue, {
+      comments: issue.blockerComments,
+    });
+    if (record && sameBlockerProposalRecord(record, expectedRecord)) {
+      matches.push(issue);
+    }
+  }
+  if (matches.length > 1) {
+    throw new Error("Blocker proposal has multiple trusted Issues");
+  }
+  return matches[0] ?? null;
+}
+
+async function blockerCandidateIssues(repository, issues, rendereds, token) {
+  const candidates = [];
+  for (const issue of issues) {
+    let record;
+    try {
+      record = parseBlockerProposalRecord(issue, { trusted: false });
+    } catch {
+      continue;
+    }
+    const rendered = rendereds.find((expected) =>
+      sameBlockerProposalRecord(record, expected.record),
+    );
+    if (!record || !rendered) {
+      continue;
+    }
+    const blockerComments = await ensureBlockerIdentityComment({
+      repository,
+      issue,
+      rendered,
+      token,
+    });
+    candidates.push({ ...issue, blockerComments });
+  }
+  return candidates;
+}
+
+async function ensureBlockerIdentityComment({
+  repository,
+  issue,
+  rendered,
+  token,
+}) {
+  const comments =
+    issue.blockerComments ??
+    (await githubPaginate(
+      `/repos/${repository}/issues/${issue.number}/comments`,
+      { token },
+    ));
+  if (parseBlockerProposalRecord(issue, { comments })) return comments;
+  const raw = parseBlockerProposalRecord(issue, { trusted: false });
+  if (
+    !isTrustedActionsObject(issue) ||
+    !sameBlockerProposalRecord(raw, rendered.record) ||
+    issue.title !== rendered.title ||
+    issue.body !== rendered.body
+  ) {
+    throw new Error("Blocker proposal identity cannot be repaired safely");
+  }
+  const identity = await githubRequest(`/repos/${repository}/issues/${issue.number}/comments`, {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body: rendered.identityComment }),
+  });
+  return [...comments, identity];
+}
+
+async function ensureBlockerReviewComment(repository, issue, token) {
+  let comments = await githubPaginate(
+    `/repos/${repository}/issues/${issue.number}/comments`,
+    { token },
+  );
+  const existing = comments.some(
+    (comment) => isTrustedBlockerReviewComment(comment),
+  );
+  if (!existing) {
+    const comment = await githubRequest(
+      `/repos/${repository}/issues/${issue.number}/comments`,
+      {
+        token,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: BLOCKER_REVIEW_COMMENT }),
+      },
+    );
+    comments = [...comments, comment];
+  }
+  const record = parseBlockerProposalRecord(issue, { comments });
+  if (!record) throw new Error("Blocker Review request has no trusted identity");
+  if (hasTrustedBlockerReviewAck(comments, issue.number, record)) return;
+  await githubRequest(`/repos/${repository}/dispatches`, {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event_type: "claude-blocker-review",
+      client_payload: { issue_number: issue.number },
+    }),
+  });
+}
+
+async function ensureNativeDependencyMirror({
+  repository,
+  issueNumber,
+  blockerNumbers,
+  graph,
+  token,
+}) {
+  const nativeBlockers = await githubPaginate(
+    `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
+    { token },
+  );
+  const decision = nativeDependencyDecision(
+    blockerNumbers,
+    nativeBlockers,
+    graph.issuesByNumber,
+  );
+  if (decision.status !== "sync") {
+    throw new Error(`Native blocked-by relation is inconsistent: ${decision.reason}`);
+  }
+  for (const dependency of decision.add) {
+    await githubRequest(
+      `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
+      {
+        token,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_id: dependency.issueId }),
+      },
+    );
+  }
+}
+
+async function recordPublishedBlockerTransition({
+  plan,
+  previousSource,
+  nextBody,
+  token,
+}) {
+  const context = await fetchAuthorizationContext(
+    plan.repository,
+    plan.issueNumber,
+    token,
+  );
+  const previousContract = executionContent(previousSource);
+  const nextContract = executionContent({ ...previousSource, body: nextBody });
+  const current = context.current;
+  if (
+    !current ||
+    !["active", "paused"].includes(current.state) ||
+    current.cycle !== plan.cycle ||
+    current.executionContentHash !== plan.executionContentHash ||
+    current.executionContentHash !== nextContract.hash
+  ) {
+    throw new Error("Blocker publication authorization changed before audit");
+  }
+  if (current.blockedByHash === nextContract.blockedByHash) return;
+  if (current.blockedByHash !== previousContract.blockedByHash) {
+    throw new Error("Blocker publication previous state is stale");
+  }
+  const recordedAt = new Date().toISOString();
+  const record = transitionAuthorization({
+    current,
+    state: current.state,
+    transition: "frontier-updated",
+    reason: "trusted-blocker-publisher",
+    actor: { login: "github-actions[bot]", type: "Bot" },
+    eventId: `run-${requiredEnvironment("GITHUB_RUN_ID")}-blocker-publisher`,
+    eventAt: recordedAt,
+    eventUrl: previousSource.html_url,
+    recordedAt,
+    blockedByHash: nextContract.blockedByHash,
+  });
+  await publishAuthorizationRecord(
+    plan.repository,
+    plan.issueNumber,
+    record,
+    token,
+  );
+}
+
+async function publishBlockerProposals({ plan, result, token }) {
+  if (result.completed || result.blocker_proposals.length === 0) {
+    throw new Error("Blocker publication requires an incomplete Worker result");
+  }
+  let issues = await fetchRepositoryIssues(plan.repository, token);
+  const source = issues.find(
+    (candidate) => candidate.number === plan.issueNumber && !candidate.pull_request,
+  );
+  if (!source) throw new Error("Blocker source Issue is missing");
+  const currentBlockers = parseBlockedBy(source.body, {
+    issueNumber: plan.issueNumber,
+  });
+  const rendered = result.blocker_proposals.map((proposal) =>
+    buildBlockerIssue({
+      sourceIssue: plan.issueNumber,
+      sourceCycle: plan.cycle,
+      executionContentHash: plan.executionContentHash,
+      proposal,
+    }),
+  );
+  const candidates = await blockerCandidateIssues(
+    plan.repository,
+    issues,
+    rendered,
+    token,
+  );
+  const existingIssues = rendered.map(({ record }) =>
+    findExistingBlockerIssue(candidates, record),
+  );
+  const replay =
+    existingIssues.every(Boolean) &&
+    existingIssues.every((issue) => currentBlockers.includes(issue.number));
+
+  const initialGraph = inspectBlockerGraph(issues);
+  if (initialGraph.errors.size > 0) {
+    throw new Error("Existing Blocked by graph is invalid");
+  }
+  await requirePublishAuthorization(plan, token);
+  await ensureNativeDependencyMirror({
+    repository: plan.repository,
+    issueNumber: plan.issueNumber,
+    blockerNumbers: currentBlockers,
+    graph: initialGraph,
+    token,
+  });
+  if (replay) {
+    for (const issue of existingIssues) {
+      await ensureBlockerReviewComment(plan.repository, issue, token);
+    }
+    return { blockerNumbers: existingIssues.map((issue) => issue.number), replay: true };
+  }
+
+  const blockerIssues = [];
+  for (let index = 0; index < rendered.length; index += 1) {
+    let blockerIssue = existingIssues[index];
+    if (!blockerIssue) {
+      await requirePublishAuthorization(plan, token);
+      blockerIssue = await githubRequest(`/repos/${plan.repository}/issues`, {
+        token,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: rendered[index].title,
+          body: rendered[index].body,
+        }),
+      });
+      if (
+        !Number.isSafeInteger(blockerIssue?.number) ||
+        blockerIssue.number < 1 ||
+        blockerIssue.pull_request
+      ) {
+        throw new Error("GitHub did not return a valid blocker Issue");
+      }
+      issues = [...issues, blockerIssue];
+    }
+    await ensureBlockerIdentityComment({
+      repository: plan.repository,
+      issue: blockerIssue,
+      rendered: rendered[index],
+      token,
+    });
+    await requirePublishAuthorization(plan, token);
+    await ensureBlockerReviewComment(plan.repository, blockerIssue, token);
+    blockerIssues.push(blockerIssue);
+  }
+
+  const liveSource = await githubRequest(
+    `/repos/${plan.repository}/issues/${plan.issueNumber}`,
+    { token },
+  );
+  const liveBlockers = parseBlockedBy(liveSource.body, {
+    issueNumber: plan.issueNumber,
+  });
+  const newEdges = blockerIssues
+    .map((issue) => issue.number)
+    .filter((number) => !liveBlockers.includes(number));
+  if (newEdges.length === 0) {
+    const graph = inspectBlockerGraph(issues);
+    await ensureNativeDependencyMirror({
+      repository: plan.repository,
+      issueNumber: plan.issueNumber,
+      blockerNumbers: liveBlockers,
+      graph,
+      token,
+    });
+    return { blockerNumbers: blockerIssues.map((issue) => issue.number), replay: true };
+  }
+  issues = await fetchRepositoryIssues(plan.repository, token);
+  const graph = inspectBlockerGraph(issues);
+  const nextBlockers = assertCanAddBlockers(graph, plan.issueNumber, newEdges);
+  await requirePublishAuthorization(plan, token);
+  const nextBody = replaceBlockedBy(liveSource.body, nextBlockers, {
+    issueNumber: plan.issueNumber,
+  });
+  await githubRequest(`/repos/${plan.repository}/issues/${plan.issueNumber}`, {
+    token,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      body: nextBody,
+    }),
+  });
+  await recordPublishedBlockerTransition({
+    plan,
+    previousSource: liveSource,
+    nextBody,
+    token,
+  });
+  const nextIssues = await fetchRepositoryIssues(plan.repository, token);
+  await ensureNativeDependencyMirror({
+    repository: plan.repository,
+    issueNumber: plan.issueNumber,
+    blockerNumbers: nextBlockers,
+    graph: inspectBlockerGraph(nextIssues),
+    token,
+  });
+  return { blockerNumbers: blockerIssues.map((issue) => issue.number), replay: false };
+}
+
+async function blockersCommand() {
+  const token = requiredEnvironment("GITHUB_TOKEN");
+  const expected = {
+    repository: requiredEnvironment("GITHUB_REPOSITORY"),
+    issueNumber: Number(requiredEnvironment("WORKER_ISSUE_NUMBER")),
+    startSha: requiredEnvironment("WORKER_START_SHA"),
+    defaultBranch: requiredEnvironment("WORKER_DEFAULT_BRANCH"),
+  };
+  const plan = await readWorkerPlan(requiredEnvironment("WORKER_PLAN_PATH"), expected);
+  const result = validateWorkerResult(
+    await fs.readFile(requiredEnvironment("WORKER_RESULT_PATH"), "utf8"),
+    plan,
+  );
+  await publishBlockerProposals({ plan, result, token });
+}
+
 const FAILURE_MESSAGES = {
+  "authorization-blocker-mismatch": "The Issue blocker metadata changed without a trusted audit transition.",
+  "authorization-content-mismatch": "The Issue execution content changed after authorization.",
+  "blocker-not-planned": "A required blocker was closed as not planned or marked wontfix.",
+  "native-dependency-mismatch": "The authoritative Blocked by body and GitHub native dependency mirror disagree.",
+  "native-dependency-response-invalid": "GitHub returned an invalid native dependency response.",
+  "native-dependency-sync-failed": "The native dependency mirror could not be read or updated.",
+  "native-dependency-target-invalid": "A blocker has no valid GitHub issue_id for native dependency mirroring.",
+  "blocker-publish-failed": "The trusted Publisher could not create or register the proposed blocker.",
   "closed-worker-pr": "The Worker PR was closed without merging.",
   "foreign-worker-pr": "The fixed Worker branch or PR is not owned by this repository.",
   "invalid-default-branch": "The repository default branch could not be validated.",
+  "invalid-blocker-state": "The Issue blocker state could not be reconciled safely.",
+  "invalid-graph": "The repository Blocked by graph is invalid.",
   "invalid-result": "The Worker returned an invalid structured result.",
   "invalid-start-sha": "The Worker start commit could not be validated.",
   "invalid-worker-configuration": "The Codex Worker repository configuration is invalid.",
   "missing-active-authorization": "The Issue has no active trusted Worker authorization record.",
-  "authorization-content-mismatch": "The Issue execution content changed after authorization.",
-  "authorization-blocker-mismatch": "The Issue blocker metadata changed without a trusted audit transition.",
   "conflicting-worker-pr": "Another Worker cycle already has an active PR for this Issue.",
   "stale-worker-authorization": "The Worker authorization cycle changed while implementation was running.",
   "model-failed": "The Codex model job failed or timed out before producing an Artifact.",
@@ -1727,8 +2255,11 @@ async function main() {
   if (command === "prepare") return prepareCommand();
   if (command === "preflight") return preflightCommand();
   if (command === "publish") return publishCommand();
+  if (command === "blockers") return blockersCommand();
   if (command === "handle") return handleCommand();
-  throw new Error("Expected authorize, prepare, preflight, publish, or handle command");
+  throw new Error(
+    "Expected authorize, prepare, preflight, publish, blockers, or handle command",
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

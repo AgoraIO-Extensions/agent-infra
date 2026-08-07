@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import * as authorization from "./claude-event-authorization.mjs";
+import {
+  BLOCKER_REVIEW_COMMENT,
+  buildBlockerIssue,
+} from "./blocker-contract.mjs";
 
 const { authorizeClaudeEvent } = authorization;
 
@@ -170,4 +174,94 @@ test("rejects untrusted or absent mentions", () => {
     false,
   );
   assert.equal(authorizeClaudeEvent("workflow_dispatch", {}), false);
+});
+
+test("authorizes one live-verified blocker review repository dispatch", async () => {
+  const blocker = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 3,
+    executionContentHash: "a".repeat(64),
+    proposal: {
+      proposal_id: "missing-migration",
+      title: "add the missing migration",
+      problem: "The required table does not exist.",
+      scope: ["Add the migration."],
+      acceptance_criteria: [{ id: "AC-1", text: "Migration applies." }],
+      validation: ["Run migration tests."],
+    },
+  });
+  const issue = {
+    number: 90,
+    title: blocker.title,
+    body: blocker.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  };
+  const comments = [
+    {
+      body: blocker.identityComment,
+      user: { login: "github-actions[bot]", type: "Bot" },
+      performed_via_github_app: { id: 15368 },
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:00:00Z",
+    },
+    {
+      body: BLOCKER_REVIEW_COMMENT,
+      author_association: "NONE",
+      user: { login: "github-actions[bot]", type: "Bot" },
+      performed_via_github_app: { id: 15368 },
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:00:00Z",
+    },
+  ];
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/90")) return issue;
+    if (apiPath.includes("/issues/90/comments?") && !options.method) return comments;
+    if (apiPath.endsWith("/issues/90/comments") && options.method === "POST") {
+      comments.push({
+        body: JSON.parse(options.body).body,
+        user: { login: "github-actions[bot]", type: "Bot" },
+        performed_via_github_app: { id: 15368 },
+        created_at: "2026-08-06T00:00:01Z",
+        updated_at: "2026-08-06T00:00:01Z",
+      });
+      return comments.at(-1);
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  assert.equal(
+    authorizeClaudeEvent(
+      "repository_dispatch",
+      { action: "claude-blocker-review" },
+      { verifiedBlockerReview: true },
+    ),
+    true,
+  );
+  assert.equal(
+    authorizeClaudeEvent(
+      "repository_dispatch",
+      { action: "claude-blocker-review" },
+      { verifiedBlockerReview: false },
+    ),
+    false,
+  );
+  assert.equal(
+    await authorization.authorizeBlockerReviewDispatch({
+      repository: "example/agent-infra",
+      issueNumber: 90,
+      token: "test-token",
+      request,
+    }),
+    true,
+  );
+  assert.equal(
+    await authorization.authorizeBlockerReviewDispatch({
+      repository: "example/agent-infra",
+      issueNumber: 90,
+      token: "test-token",
+      request,
+    }),
+    false,
+  );
+  assert.equal(comments.length, 3);
 });

@@ -5,6 +5,7 @@ import YAML from "yaml";
 
 const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
+  "blocker-reconciler.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
@@ -54,7 +55,11 @@ function isApprovedClaudeConfigStep(workflowName, jobName, step) {
     step.run === "node .github/scripts/validate-claude-review-config.mjs" &&
     ((workflowName === "claude-pr-review.yml" && jobName === "analyze") ||
       (workflowName === "claude-issue-review.yml" &&
-        ["automatic-issue-review", "mentions"].includes(jobName)))
+        [
+          "automatic-issue-review",
+          "mentions",
+          "analyze-blocker-review",
+        ].includes(jobName)))
   );
 }
 
@@ -199,6 +204,10 @@ export function validateTrustedScriptSources(sources) {
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
+  const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
+  const blockerReconcilerSource = sources?.["blocker-reconciler.mjs"] ?? "";
+  const claudeAuthorizationSource =
+    sources?.["claude-event-authorization.mjs"] ?? "";
   const gateRequirements = [
     "/check-runs",
     "headSha: pr.head.sha",
@@ -206,6 +215,7 @@ export function validateTrustedScriptSources(sources) {
     '"Issue Readiness Gate"',
     '"Human Validation Gate"',
     '"Claude Review Gate"',
+    'blockerStatus(blocker) !== "completed"',
   ];
   const reviewRequirements = [
     "/check-runs",
@@ -248,6 +258,37 @@ export function validateTrustedScriptSources(sources) {
     )
   ) {
     errors.push("Codex Worker must bind authorization, cycle, hash, and AC evidence");
+  }
+  const blockerContractRequirements = [
+    "validateBlockerProposals",
+    "assertCanAddBlockers",
+    "latestBlockerStateRecord",
+    "isTrustedBlockerReviewComment",
+  ];
+  const blockerReconcilerRequirements = [
+    "reconciliationIssueNumbers(graph)",
+    "classifyDependentBlockers(graph, issueNumber)",
+    'event_type: "codex-worker"',
+    "blocker_state_signature: state.signature",
+  ];
+  const blockerWorkerRequirements = [
+    'validated.result.completed ? "publish" : "block"',
+    'if (command === "blockers") return blockersCommand();',
+  ];
+  if (
+    blockerContractRequirements.some(
+      (requirement) => !blockerContractSource.includes(requirement),
+    ) ||
+    blockerReconcilerRequirements.some(
+      (requirement) => !blockerReconcilerSource.includes(requirement),
+    ) ||
+    blockerWorkerRequirements.some(
+      (requirement) => !workerSource.includes(requirement),
+    ) ||
+    !claudeAuthorizationSource.includes("authorizeBlockerReviewDispatch") ||
+    !claudeAuthorizationSource.includes("hasTrustedBlockerReviewAck")
+  ) {
+    errors.push("Blocker automation must preserve bounded proposals and signed reconciliation");
   }
   const reviewHeadRechecks =
     reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
@@ -447,6 +488,12 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Codex Worker must record authorization-invalidating Issue edits");
   }
   if (
+    JSON.stringify(worker?.on?.repository_dispatch?.types) !==
+      JSON.stringify(["codex-worker"])
+  ) {
+    errors.push("Codex Worker must accept only the fixed Reconciler dispatch event");
+  }
+  if (
     !sameObject(authorization?.permissions, {
       contents: "read",
       issues: "write",
@@ -456,7 +503,9 @@ export function validateWorkflowDocuments(workflows) {
       "cancel-in-progress": false,
     }) ||
     implement?.needs !== "authorization" ||
-    implement?.if !== "always() && needs.authorization.result == 'success'"
+    implement?.if !==
+      "always() && needs.authorization.result == 'success' && needs.authorization.outputs.allowed != 'false'" ||
+    authorization?.outputs?.allowed !== "${{ steps.authorize.outputs.allowed }}"
   ) {
     errors.push("Codex Worker authorization must be isolated before the model job");
   }
@@ -494,13 +543,15 @@ export function validateWorkflowDocuments(workflows) {
     !workerGroup.includes("github.event.pull_request.head.repo.full_name != github.repository") ||
     !workerGroup.includes("github.event.pull_request.number") ||
     !workerGroup.includes("github.event.pull_request.head.ref") ||
-    !workerGroup.includes("github.event.issue.number")
+    !workerGroup.includes("github.event.issue.number") ||
+    !workerGroup.includes("github.event.client_payload.issue_number")
   ) {
     errors.push("Codex Worker concurrency must isolate external fork PRs");
   }
   if (
     !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
-    !workerCancellation.includes("github.repository")
+    !workerCancellation.includes("github.repository") ||
+    !workerCancellation.includes("github.event.client_payload.operation")
   ) {
     errors.push("Codex Worker cancellation must require a same-repository PR");
   }
@@ -512,7 +563,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(publish?.permissions) !==
     JSON.stringify({
-      contents: "read",
+      contents: "write",
       issues: "write",
       "pull-requests": "write",
     })
@@ -544,6 +595,33 @@ export function validateWorkflowDocuments(workflows) {
     ) {
       errors.push(`${stepName} must receive the trusted default branch input`);
     }
+  }
+  const publishStep = publishSteps.find(
+    (step) => step.name === "Publish fixed branch and Draft PR",
+  );
+  const blockerStep = publishSteps.find(
+    (step) => step.name === "Publish unprivileged blocker proposals",
+  );
+  const escalationStep = publishSteps.find(
+    (step) => step.name === "Escalate publisher failure",
+  );
+  if (
+    !sameObject(publish?.concurrency, {
+      group: "blocker-graph-${{ github.repository }}",
+      "cancel-in-progress": false,
+    }) ||
+    !String(publishStep?.if ?? "").includes(
+      "steps.preflight.outputs.operation == 'publish'",
+    ) ||
+    blockerStep?.run !== "node trusted/.github/scripts/codex-worker.mjs blockers" ||
+    !String(blockerStep?.if ?? "").includes(
+      "steps.preflight.outputs.operation == 'block'",
+    ) ||
+    blockerStep?.env?.GITHUB_TOKEN !== "${{ github.token }}" ||
+    JSON.stringify(blockerStep ?? {}).includes("CODEX_GITHUB_TOKEN") ||
+    !String(escalationStep?.if ?? "").includes("steps.blockers.outcome == 'failure'")
+  ) {
+    errors.push("Codex Worker blocker publication must stay unprivileged and serialized");
   }
 
   const implementSteps = implement?.steps ?? [];
@@ -641,6 +719,37 @@ export function validateWorkflowDocuments(workflows) {
     ) {
       errors.push(`Codex Worker ${jobName} recorded checkout must use workspace`);
     }
+  }
+
+  const blockerReconciler = workflows["blocker-reconciler.yml"];
+  const reconcileJob = blockerReconciler?.jobs?.reconcile;
+  const reconcileSteps = reconcileJob?.steps ?? [];
+  const reconcileCheckout = reconcileSteps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const reconcileStep = reconcileSteps.find(
+    (step) => step.name === "Reconcile trusted blocker state",
+  );
+  if (
+    JSON.stringify(blockerReconciler?.on?.issues?.types) !==
+      JSON.stringify(["opened", "edited", "closed", "reopened", "labeled", "unlabeled"]) ||
+    JSON.stringify(blockerReconciler?.on?.schedule) !==
+      JSON.stringify([{ cron: "*/15 * * * *" }]) ||
+    !Object.hasOwn(blockerReconciler?.on ?? {}, "workflow_dispatch") ||
+    !sameObject(blockerReconciler?.concurrency, {
+      group: "blocker-graph-${{ github.repository }}",
+      "cancel-in-progress": false,
+    }) ||
+    !sameObject(reconcileJob?.permissions, {
+      contents: "write",
+      issues: "write",
+    }) ||
+    reconcileCheckout?.with?.ref !== "${{ github.event.repository.default_branch }}" ||
+    reconcileCheckout?.with?.["persist-credentials"] !== false ||
+    reconcileStep?.run !== "node .github/scripts/blocker-reconciler.mjs" ||
+    !sameObject(reconcileStep?.env, { GITHUB_TOKEN: "${{ github.token }}" })
+  ) {
+    errors.push("Blocker Reconciler must use fixed events, permissions, and serialization");
   }
 
   const review = workflows["claude-pr-review.yml"];
@@ -804,7 +913,57 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const issueReview = workflows["claude-issue-review.yml"];
+  const blockerAuthorize = issueReview?.jobs?.["authorize-blocker-review"];
+  const blockerAnalyze = issueReview?.jobs?.["analyze-blocker-review"];
+  const blockerPublish = issueReview?.jobs?.["publish-blocker-review"];
+  const blockerReviewAction = (blockerAnalyze?.steps ?? []).find((step) =>
+    step.uses?.startsWith(CLAUDE_ACTION),
+  );
+  const blockerPublisher = (blockerPublish?.steps ?? []).find(
+    (step) => step.name === "Publish validated blocker Review",
+  );
+  if (
+    JSON.stringify(issueReview?.on?.repository_dispatch?.types) !==
+      JSON.stringify(["claude-blocker-review"]) ||
+    !String(issueReview?.concurrency?.group ?? "").includes(
+      "github.event.client_payload.issue_number",
+    ) ||
+    issueReview?.concurrency?.["cancel-in-progress"] !== false ||
+    !sameObject(blockerAuthorize?.permissions, {
+      contents: "read",
+      issues: "write",
+    }) ||
+    blockerAnalyze?.needs !== "authorize-blocker-review" ||
+    blockerAnalyze?.if !==
+      "needs.authorize-blocker-review.outputs.allowed == 'true'" ||
+    !sameObject(blockerAnalyze?.permissions, {
+      contents: "read",
+      issues: "read",
+    }) ||
+    blockerReviewAction?.with?.track_progress !== "false" ||
+    JSON.stringify(blockerPublish?.needs) !==
+      JSON.stringify(["authorize-blocker-review", "analyze-blocker-review"]) ||
+    !sameObject(blockerPublish?.permissions, {
+      contents: "read",
+      issues: "write",
+    }) ||
+    blockerPublisher?.run !== "node .github/scripts/claude-blocker-review.mjs" ||
+    !sameObject(blockerPublisher?.env, {
+      ANALYSIS_RESULT: "${{ needs.analyze-blocker-review.result }}",
+      BLOCKER_ISSUE_NUMBER: "${{ github.event.client_payload.issue_number }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      STRUCTURED_OUTPUT:
+        "${{ needs.analyze-blocker-review.outputs.structured_output }}",
+    })
+  ) {
+    errors.push("Claude blocker Review must isolate authorization, analysis, and publication");
+  }
   for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
+    if (jobName === "mentions" && String(job.if ?? "").includes("endsWith")) {
+      errors.push(
+        "claude-issue-review.yml/mentions: App blocker review must reach the trusted authorizer",
+      );
+    }
     if (/contains\s*\(\s*fromJSON\([\s\S]*?author_association\s*\)/.test(job.if ?? "")) {
       errors.push(
         `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
@@ -827,13 +986,19 @@ export function validateWorkflowDocuments(workflows) {
     const configStep = job.steps?.[configIndex];
     const modelStep = job.steps?.[modelIndex];
     const configEnv = configStep?.env ?? {};
-    if (modelIndex >= 0 && (authorizeIndex < 0 || authorizeIndex >= modelIndex)) {
+    const splitBlockerReview = jobName === "analyze-blocker-review";
+    if (
+      modelIndex >= 0 &&
+      !splitBlockerReview &&
+      (authorizeIndex < 0 || authorizeIndex >= modelIndex)
+    ) {
       errors.push(
         `claude-issue-review.yml/${jobName}: trusted authorization must run before model`,
       );
     }
     if (
       modelIndex >= 0 &&
+      !splitBlockerReview &&
       modelStep.if !== "steps.authorize.outputs.allowed == 'true'"
     ) {
       errors.push(
@@ -842,9 +1007,10 @@ export function validateWorkflowDocuments(workflows) {
     }
     if (
       modelIndex >= 0 &&
-      (configIndex !== authorizeIndex + 1 ||
-        modelIndex !== configIndex + 1 ||
-        configStep?.if !== "steps.authorize.outputs.allowed == 'true'" ||
+      (modelIndex !== configIndex + 1 ||
+        (!splitBlockerReview && configIndex !== authorizeIndex + 1) ||
+        (!splitBlockerReview &&
+          configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
         configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
         Object.keys(configEnv).sort().join("\0") !==
           ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
@@ -880,15 +1046,30 @@ export function validateWorkflowDocuments(workflows) {
     }
   }
 
-  for (const step of workflowSteps(issueReview ?? {})) {
-    if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
-    const args = step.with?.claude_args ?? "";
-    if (
-      !args.includes('--allowedTools "Read,Grep,Glob"') ||
-      !args.includes('--disallowedTools "Edit,Write,MultiEdit,Bash"') ||
-      /--allowedTools\s+"[^"]*\b(?:Bash|Edit|Write)\b/.test(args)
-    ) {
-      errors.push("Issue Review model must stay read-only");
+  for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
+    for (const step of job.steps ?? []) {
+      if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
+      const args = step.with?.claude_args ?? "";
+      const expectedAllowed =
+        jobName === "analyze-blocker-review"
+          ? '--allowedTools "Read,Grep,Glob,Bash(gh issue view:*)"'
+          : '--allowedTools "Read,Grep,Glob"';
+      const expectedDisallowed =
+        jobName === "analyze-blocker-review"
+          ? '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"'
+          : '--disallowedTools "Edit,Write,MultiEdit,Bash"';
+      const unsafeBash =
+        jobName === "analyze-blocker-review"
+          ? /--allowedTools\s+"[^"]*\bBash(?!\(gh issue view:\*\))/.test(args)
+          : /--allowedTools\s+"[^"]*\bBash\b/.test(args);
+      if (
+        !args.includes(expectedAllowed) ||
+        !args.includes(expectedDisallowed) ||
+        unsafeBash ||
+        /--allowedTools\s+"[^"]*\b(?:Edit|Write)\b/.test(args)
+      ) {
+        errors.push("Issue Review model must stay read-only");
+      }
     }
   }
   return errors;
@@ -909,7 +1090,10 @@ async function main() {
   const scriptSources = Object.fromEntries(
     await Promise.all(
       [
+        "blocker-contract.mjs",
+        "blocker-reconciler.mjs",
         "check-run-contract.mjs",
+        "claude-event-authorization.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
         "pr-gates.mjs",
