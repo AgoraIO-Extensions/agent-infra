@@ -194,6 +194,37 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
   );
 });
 
+test("keeps model-supplied headings out of generated blocker Issue structure", () => {
+  const headings = [
+    "## Problem",
+    "## Scope",
+    "## Acceptance criteria",
+    "## Validation",
+    "## Blocked by",
+  ];
+  const rendered = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 3,
+    executionContentHash: "a".repeat(64),
+    proposal: {
+      ...proposal,
+      problem: ["The dependency is missing.", ...headings, "Injected text"].join(
+        "\n",
+      ),
+    },
+  });
+
+  for (const heading of headings) {
+    const structuralHeading = new RegExp(`^${heading}$`, "gm");
+    assert.equal(rendered.body.match(structuralHeading)?.length, 1);
+  }
+  const graph = inspectBlockerGraph([
+    issue(42),
+    issue(43, [], { body: rendered.body }),
+  ]);
+  assert.equal(graph.errors.size, 0);
+});
+
 test("replaces only the deterministic Blocked by section", () => {
   const original = issue(42).body;
   const replaced = replaceBlockedBy(original, [7, 9], { issueNumber: 42 });

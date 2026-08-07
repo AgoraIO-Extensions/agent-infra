@@ -66,7 +66,10 @@ function appComment(id, body) {
   };
 }
 
-function mockGitHub(issues) {
+function mockGitHub(
+  issues,
+  { pullRequests = [], branchRefs = new Map() } = {},
+) {
   const comments = new Map();
   const events = new Map();
   const nativeDependencies = new Map();
@@ -88,6 +91,11 @@ function mockGitHub(issues) {
   let commentId = 100;
   const paginate = async (apiPath) => {
     if (apiPath.includes("/issues?state=all")) return issues;
+    if (apiPath.includes("/pulls?state=all")) return pullRequests;
+    const branchMatch = /\/git\/matching-refs\/heads\/codex\/issue-(\d+)-cycle-/.exec(
+      apiPath,
+    );
+    if (branchMatch) return branchRefs.get(Number(branchMatch[1])) ?? [];
     const match = /\/issues\/(\d+)\/comments/.exec(apiPath);
     if (match) return comments.get(Number(match[1])) ?? [];
     const eventMatch = /\/issues\/(\d+)\/events/.exec(apiPath);
@@ -168,7 +176,16 @@ function mockGitHub(issues) {
     }
     throw new Error(`Unexpected request: ${options.method} ${apiPath}`);
   };
-  return { calls, comments, events, nativeDependencies, paginate, request };
+  return {
+    branchRefs,
+    calls,
+    comments,
+    events,
+    nativeDependencies,
+    paginate,
+    pullRequests,
+    request,
+  };
 }
 
 test("derives blocked, frontier, and triage actions without creating authorization", () => {
@@ -246,6 +263,85 @@ test("reconciles a two-level DAG once and suppresses a second identical run", as
   });
   assert.deepEqual(github.calls.slice(before), []);
   assert.equal(second.outcomes.every(({ decision }) => !decision.comment), true);
+});
+
+test("rechecks Worker topology once when a Draft PR becomes ready", async () => {
+  const issues = [
+    issue(1, [2]),
+    issue(2, [], { state: "closed", state_reason: "completed" }),
+  ];
+  const pullRequest = {
+    number: 10,
+    state: "open",
+    draft: true,
+    merged_at: null,
+    head: {
+      ref: "codex/issue-1-cycle-1",
+      sha: "a".repeat(40),
+      repo: { full_name: "example/agent-infra" },
+    },
+    base: { ref: "main" },
+  };
+  const github = mockGitHub(issues, {
+    pullRequests: [pullRequest],
+    branchRefs: new Map([
+      [
+        1,
+        [
+          {
+            ref: "refs/heads/codex/issue-1-cycle-1",
+            object: { sha: "a".repeat(40) },
+          },
+        ],
+      ],
+    ]),
+  });
+
+  await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+  const firstDispatches = github.calls.filter((call) =>
+    call.apiPath.endsWith("/dispatches"),
+  ).length;
+  const firstState = github.comments
+    .get(1)
+    .find((comment) => comment.body.includes("agent-infra-blocker-state"));
+  assert.doesNotMatch(firstState.body, /codex\/issue-1-cycle-1/);
+  assert.doesNotMatch(firstState.body, new RegExp("a{40}"));
+  const firstDispatch = github.calls.find((call) =>
+    call.apiPath.endsWith("/dispatches"),
+  );
+  assert.doesNotMatch(JSON.stringify(firstDispatch.body), /codex\/issue-1-cycle-1/);
+  assert.doesNotMatch(JSON.stringify(firstDispatch.body), new RegExp("a{40}"));
+
+  pullRequest.draft = false;
+  await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+  const stateAudits = github.comments
+    .get(1)
+    .filter((comment) => comment.body.includes("agent-infra-blocker-state"));
+  assert.equal(stateAudits.length, 2);
+  assert.notEqual(stateAudits[1].body, firstState.body);
+  assert.equal(
+    github.calls.filter((call) => call.apiPath.endsWith("/dispatches")).length,
+    firstDispatches + 1,
+  );
+
+  const beforeStableReplay = github.calls.length;
+  await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+  assert.equal(github.calls.length, beforeStableReplay);
 });
 
 test("not-planned and wontfix blockers triage dependents idempotently", async () => {

@@ -128,6 +128,7 @@ function sanitizeMarkdown(value) {
     .replace(/-->/g, "--&gt;")
     .replace(/```/g, "`\u200b``")
     .replace(/\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b/gi, "$1\u200b")
+    .replace(/^([ \t]*)(?=#{1,6}(?:[ \t]+|$))/gm, "$1\\")
     .replace(/#(?=[1-9][0-9]*\b)/g, "\\#");
 }
 

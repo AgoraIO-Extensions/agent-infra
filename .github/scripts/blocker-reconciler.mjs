@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -29,6 +30,47 @@ function labelsOf(issue) {
   return (issue?.labels ?? []).map((label) =>
     typeof label === "string" ? label : label.name,
   );
+}
+
+function bindWorkerTopology(state, repository, issueNumber, pullRequests, branchRefs) {
+  const branchPrefix = `codex/issue-${issueNumber}-cycle-`;
+  const canonical = {
+    branches: branchRefs
+      .filter((ref) => String(ref?.ref ?? "").startsWith(`refs/heads/${branchPrefix}`))
+      .map((ref) => ({
+        ref: ref.ref,
+        sha: typeof ref.object?.sha === "string" ? ref.object.sha : null,
+      }))
+      .sort((left, right) => left.ref.localeCompare(right.ref)),
+    pullRequests: pullRequests
+      .filter((pullRequest) =>
+        String(pullRequest?.head?.ref ?? "").startsWith(branchPrefix),
+      )
+      .map((pullRequest) => ({
+        baseRef: pullRequest.base?.ref ?? null,
+        draft: pullRequest.draft === true,
+        headRef: pullRequest.head?.ref ?? null,
+        headRepository: pullRequest.head?.repo?.full_name ?? null,
+        headSha: pullRequest.head?.sha ?? null,
+        mergedAt: pullRequest.merged_at ?? null,
+        number: pullRequest.number,
+        state: pullRequest.state ?? null,
+      }))
+      .sort((left, right) => left.number - right.number),
+    repository,
+  };
+  return {
+    ...state,
+    signature: createHash("sha256")
+      .update(
+        JSON.stringify({
+          blockerStateSignature: state.signature,
+          workerTopology: canonical,
+        }),
+        "utf8",
+      )
+      .digest("hex"),
+  };
 }
 
 function proposalIdentity(record) {
@@ -587,6 +629,10 @@ export async function reconcileRepository({
   }
 
   const graph = inspectBlockerGraph(issues, graphOptions);
+  const workerPullRequests = await paginate(
+    `/repos/${repository}/pulls?state=all`,
+    { token, request },
+  );
   const nativeDependencies = await reconcileNativeDependencies({
     repository,
     graph,
@@ -598,7 +644,17 @@ export async function reconcileRepository({
   for (const issueNumber of reconciliationIssueNumbers(graph)) {
     const issue = graph.issuesByNumber.get(issueNumber);
     if (!issue || issue.state !== "open") continue;
-    const state = classifyDependentBlockers(graph, issueNumber);
+    const branchRefs = await paginate(
+      `/repos/${repository}/git/matching-refs/heads/codex/issue-${issueNumber}-cycle-`,
+      { token, request },
+    );
+    const state = bindWorkerTopology(
+      classifyDependentBlockers(graph, issueNumber),
+      repository,
+      issueNumber,
+      workerPullRequests,
+      branchRefs,
+    );
     const comments = await paginate(
       `/repos/${repository}/issues/${issueNumber}/comments`,
       { token, request },
