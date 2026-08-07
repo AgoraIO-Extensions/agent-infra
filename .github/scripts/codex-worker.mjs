@@ -6,9 +6,11 @@ import { pathToFileURL } from "node:url";
 import {
   assertCanAddBlockers,
   BLOCKER_REVIEW_COMMENT,
+  BLOCKER_PUBLISH_FAILURE_MESSAGE,
   blockerStatus,
   buildBlockerIssue,
   buildWorkerDispatchAck,
+  canRegisterBlockerIdentity,
   hasTrustedBlockerReviewAck,
   hasTrustedWorkerDispatchAck,
   inspectBlockerGraph,
@@ -1872,13 +1874,7 @@ async function ensureBlockerIdentityComment({
       { token },
     ));
   if (parseBlockerProposalRecord(issue, { comments })) return comments;
-  const raw = parseBlockerProposalRecord(issue, { trusted: false });
-  if (
-    !isTrustedActionsObject(issue) ||
-    !sameBlockerProposalRecord(raw, rendered.record) ||
-    issue.title !== rendered.title ||
-    issue.body !== rendered.body
-  ) {
+  if (!canRegisterBlockerIdentity(issue, rendered)) {
     throw new Error("Blocker proposal identity cannot be repaired safely");
   }
   const identity = await githubRequest(`/repos/${repository}/issues/${issue.number}/comments`, {
@@ -2167,7 +2163,7 @@ const FAILURE_MESSAGES = {
   "native-dependency-response-invalid": "GitHub returned an invalid native dependency response.",
   "native-dependency-sync-failed": "The native dependency mirror could not be read or updated.",
   "native-dependency-target-invalid": "A blocker has no valid GitHub issue_id for native dependency mirroring.",
-  "blocker-publish-failed": "The trusted Publisher could not create or register the proposed blocker.",
+  "blocker-publish-failed": BLOCKER_PUBLISH_FAILURE_MESSAGE,
   "closed-worker-pr": "The Worker PR was closed without merging.",
   "foreign-worker-pr": "The fixed Worker branch or PR is not owned by this repository.",
   "invalid-default-branch": "The repository default branch could not be validated.",

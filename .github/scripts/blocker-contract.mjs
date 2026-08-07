@@ -14,6 +14,15 @@ export const BLOCKER_REVIEW_COMMENT = [
   "",
   "<!-- agent-infra-blocker-review -->",
 ].join("\n");
+export const BLOCKER_PUBLISH_FAILURE_MESSAGE =
+  "The trusted Publisher could not create or register the proposed blocker.";
+export const BLOCKER_PUBLISH_TRIAGE_COMMENT = [
+  "Codex Worker stopped and requires human triage.",
+  "",
+  `Reason: ${BLOCKER_PUBLISH_FAILURE_MESSAGE}`,
+].join("\n");
+
+const GITHUB_ACTIONS_BOT_ID = 41898282;
 
 const PROPOSAL_KEYS = [
   "acceptance_criteria",
@@ -101,6 +110,35 @@ export function isTrustedActionsObject(value, { appendOnly = false } = {}) {
         (typeof value.created_at === "string" &&
           value.created_at === value.updated_at)),
   );
+}
+
+export function isActionsCreatedBlockerIssue(value) {
+  return Boolean(
+    isTrustedActionsObject(value) ||
+      (isGitHubActionsBot(value?.user) &&
+        value.performed_via_github_app === null),
+  );
+}
+
+export function isGitHubActionsBot(value) {
+  return Boolean(
+    value?.id === GITHUB_ACTIONS_BOT_ID &&
+      value.login === "github-actions[bot]" &&
+      value.type === "Bot",
+  );
+}
+
+export function hasTrustedBlockerIdentityAudit(comments) {
+  return (comments ?? []).some((comment) => {
+    if (!isTrustedActionsObject(comment, { appendOnly: true })) return false;
+    try {
+      return Boolean(
+        decodeMarker(comment.body, BLOCKER_IDENTITY_MARKER, "Blocker identity"),
+      );
+    } catch {
+      return true;
+    }
+  });
 }
 
 function encodeMarker(prefix, value) {
@@ -282,6 +320,22 @@ export function sameBlockerProposalRecord(left, right) {
   return PROPOSAL_RECORD_KEYS.every((key) => left?.[key] === right?.[key]);
 }
 
+export function canRegisterBlockerIdentity(issue, rendered) {
+  if (!isActionsCreatedBlockerIssue(issue)) return false;
+  let record;
+  try {
+    record = parseBlockerProposalRecord(issue, { trusted: false });
+  } catch {
+    return false;
+  }
+  return Boolean(
+    record &&
+      sameBlockerProposalRecord(record, rendered?.record) &&
+      issue.title === rendered?.title &&
+      issue.body === rendered?.body,
+  );
+}
+
 export function buildBlockerIdentityComment(record) {
   validateBlockerProposalRecord(record);
   return [
@@ -307,7 +361,7 @@ export function parseBlockerProposalRecord(
   if (!record) return null;
   validateBlockerProposalRecord(record);
   if (!trusted) return record;
-  if (!isTrustedActionsObject(issue)) return null;
+  if (!isActionsCreatedBlockerIssue(issue)) return null;
   const identities = [];
   for (const comment of comments) {
     if (!isTrustedActionsObject(comment, { appendOnly: true })) continue;
