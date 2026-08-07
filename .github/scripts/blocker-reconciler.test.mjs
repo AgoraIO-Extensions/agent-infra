@@ -3,9 +3,13 @@ import test from "node:test";
 
 import {
   dependentReconciliationDecision,
+  hasSystemTriageEvidence,
+  isUneditedActionsBlockerSnapshot,
+  matchesRecoveryAuthorization,
   reconcileRepository,
 } from "./blocker-reconciler.mjs";
 import {
+  BLOCKER_PUBLISH_TRIAGE_COMMENT,
   buildBlockerIssue,
   buildBlockerReviewAck,
   buildBlockerStateComment,
@@ -66,9 +70,132 @@ function appComment(id, body) {
   };
 }
 
+function actionsLabelEvent(id, createdAt) {
+  return {
+    id,
+    event: "labeled",
+    label: { name: "needs-triage" },
+    actor: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    created_at: createdAt,
+  };
+}
+
+test("rejects edited blocker snapshots and stale recovery authorization", () => {
+  const issueSnapshot = {
+    node_id: "I_blocker_2",
+    number: 2,
+    title: "blocker: bounded change",
+    body: "proposal body",
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+  };
+  const liveSnapshot = {
+    id: issueSnapshot.node_id,
+    title: issueSnapshot.title,
+    body: issueSnapshot.body,
+    lastEditedAt: null,
+    author: { login: "github-actions" },
+  };
+  assert.equal(isUneditedActionsBlockerSnapshot(issueSnapshot, liveSnapshot), true);
+  assert.equal(
+    isUneditedActionsBlockerSnapshot(issueSnapshot, {
+      ...liveSnapshot,
+      lastEditedAt: "2026-08-07T00:02:00Z",
+    }),
+    false,
+  );
+
+  const record = { sourceCycle: 1, executionContentHash: "a".repeat(64) };
+  const authorization = {
+    current: {
+      state: "active",
+      cycle: 1,
+      executionContentHash: record.executionContentHash,
+      blockedByHash: "b".repeat(64),
+    },
+    contract: {
+      hash: record.executionContentHash,
+      blockedByHash: "b".repeat(64),
+    },
+  };
+  assert.equal(matchesRecoveryAuthorization(record, authorization), true);
+  assert.equal(
+    matchesRecoveryAuthorization(
+      { ...record, sourceCycle: 2 },
+      authorization,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesRecoveryAuthorization(
+      { ...record, executionContentHash: "c".repeat(64) },
+      authorization,
+    ),
+    false,
+  );
+});
+
+test("clears only triage state derived from the matching Publisher failure", () => {
+  const labeledAt = "2026-08-07T00:01:00Z";
+  const failure = {
+    ...appComment(10, BLOCKER_PUBLISH_TRIAGE_COMMENT),
+    created_at: "2026-08-07T00:01:01Z",
+    updated_at: "2026-08-07T00:01:01Z",
+  };
+  const actionsEvent = actionsLabelEvent(11, labeledAt);
+
+  assert.equal(
+    hasSystemTriageEvidence({
+      comments: [failure],
+      events: [actionsEvent],
+      requirePublisherFailure: true,
+    }),
+    true,
+  );
+  assert.equal(
+    hasSystemTriageEvidence({
+      comments: [{ ...failure, body: "Another failure" }],
+      events: [actionsEvent],
+      requirePublisherFailure: true,
+    }),
+    false,
+  );
+  assert.equal(
+    hasSystemTriageEvidence({
+      comments: [failure],
+      events: [
+        {
+          ...actionsEvent,
+          actor: { id: 1, login: "maintainer", type: "User" },
+        },
+      ],
+      requirePublisherFailure: true,
+    }),
+    false,
+  );
+  assert.equal(
+    hasSystemTriageEvidence({
+      comments: [
+        {
+          ...failure,
+          created_at: "2026-08-07T00:00:59Z",
+          updated_at: "2026-08-07T00:00:59Z",
+        },
+      ],
+      events: [actionsEvent],
+      requirePublisherFailure: true,
+    }),
+    false,
+  );
+});
+
 function mockGitHub(
   issues,
-  { pullRequests = [], branchRefs = new Map() } = {},
+  {
+    pullRequests = [],
+    branchRefs = new Map(),
+    lastEditedAt = new Map(),
+  } = {},
 ) {
   const comments = new Map();
   const events = new Map();
@@ -107,6 +234,26 @@ function mockGitHub(
   const request = async (apiPath, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ apiPath, method: options.method ?? "GET", body });
+    if (apiPath === "/graphql" && options.method === "POST") {
+      const target = issues.find(
+        (entry) => entry.number === body.variables.number,
+      );
+      return {
+        data: {
+          repository: {
+            issue: target
+              ? {
+                  id: target.node_id,
+                  title: target.title,
+                  body: target.body,
+                  lastEditedAt: lastEditedAt.get(target.number) ?? null,
+                  author: { login: "github-actions" },
+                }
+              : null,
+          },
+        },
+      };
+    }
     const commentMatch = /\/issues\/(\d+)\/comments$/.exec(apiPath);
     if (commentMatch && options.method === "POST") {
       const issueNumber = Number(commentMatch[1]);
@@ -125,6 +272,17 @@ function mockGitHub(
         }
       }
       return target.labels;
+    }
+    const removeLabelMatch =
+      /\/issues\/(\d+)\/labels\/needs-triage$/.exec(apiPath);
+    if (removeLabelMatch && options.method === "DELETE") {
+      const target = issues.find(
+        (entry) => entry.number === Number(removeLabelMatch[1]),
+      );
+      target.labels = target.labels.filter(
+        (label) => label.name !== "needs-triage",
+      );
+      return null;
     }
     const nativeMatch = /\/issues\/(\d+)\/dependencies\/blocked_by$/.exec(apiPath);
     if (nativeMatch && options.method === "POST") {
@@ -659,4 +817,181 @@ test("repairs one orphan trusted proposal edge and review marker idempotently", 
   });
   assert.equal(second.repairedEdges, false);
   assert.deepEqual(github.calls.slice(before), []);
+});
+
+test("recovers one Actions-created blocker missing its identity audit", async () => {
+  const source = issue(1, [], { labels: [
+    { name: "ready-for-agent" },
+    { name: "needs-triage" },
+  ] });
+  const contract = executionContent({ ...source, title: "Source Issue" });
+  source.title = "Source Issue";
+  const timelineEvent = {
+    id: 201,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-07T00:00:00Z",
+    url: "https://api.github.test/issues/events/201",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-07T00:00:01Z",
+  });
+  const rendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 1,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "workflow-authorization",
+      title: "authorize the workflow change",
+      problem: "The protected workflow is outside the Worker write boundary.",
+      scope: ["Authorize only the required workflow files."],
+      acceptance_criteria: [{ id: "AC-1", text: "The authorization is bounded." }],
+      validation: ["Run workflow policy tests."],
+    },
+  });
+  const blocker = {
+    ...issue(2, [], { labels: [{ name: "needs-triage" }] }),
+    node_id: "I_blocker_2",
+    title: rendered.title,
+    body: rendered.body,
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+  };
+  const github = mockGitHub([source, blocker]);
+  github.comments.set(1, [
+    {
+      ...appComment(50, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/50",
+    },
+    {
+      ...appComment(51, BLOCKER_PUBLISH_TRIAGE_COMMENT),
+      created_at: "2026-08-07T00:01:01Z",
+      updated_at: "2026-08-07T00:01:01Z",
+    },
+  ]);
+  github.events.set(1, [
+    timelineEvent,
+    actionsLabelEvent(202, "2026-08-07T00:01:00Z"),
+  ]);
+  github.events.set(2, [
+    actionsLabelEvent(203, "2026-08-07T00:01:01Z"),
+  ]);
+
+  const first = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(first.repairedIdentities, 1);
+  assert.equal(first.repairedEdges, true);
+  assert.equal(first.clearedTriage, 2);
+  assert.match(github.comments.get(2)[0].body, /agent-infra-blocker-identity/);
+  assert.match(source.body, /## Blocked by\n\n- #2/);
+  assert.equal(
+    source.labels.some((label) => label.name === "needs-triage"),
+    false,
+  );
+  assert.equal(
+    blocker.labels.some((label) => label.name === "needs-triage"),
+    false,
+  );
+  assert.deepEqual(
+    github.nativeDependencies.get(1).map(({ number }) => number),
+    [2],
+  );
+
+  const beforeReplay = github.calls.length;
+  const second = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+  assert.equal(second.repairedIdentities, 0);
+  assert.equal(second.repairedEdges, false);
+  assert.equal(
+    github.calls.slice(beforeReplay).every((call) =>
+      call.apiPath === "/graphql" && call.method === "POST"
+    ),
+    true,
+  );
+});
+
+test("fails closed when concurrent replay leaves duplicate orphan blockers", async () => {
+  const source = issue(1, [], {
+    title: "Source Issue",
+    labels: [{ name: "ready-for-agent" }, { name: "needs-triage" }],
+  });
+  const contract = executionContent(source);
+  const timelineEvent = {
+    id: 301,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-07T00:00:00Z",
+    url: "https://api.github.test/issues/events/301",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-07T00:00:01Z",
+  });
+  const rendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 1,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "workflow-authorization",
+      title: "authorize the workflow change",
+      problem: "The protected workflow is outside the Worker write boundary.",
+      scope: ["Authorize only the required workflow files."],
+      acceptance_criteria: [{ id: "AC-1", text: "The authorization is bounded." }],
+      validation: ["Run workflow policy tests."],
+    },
+  });
+  const orphan = (number) => ({
+    ...issue(number, [], { labels: [{ name: "needs-triage" }] }),
+    node_id: "I_blocker_" + number,
+    title: rendered.title,
+    body: rendered.body,
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+  });
+  const firstOrphan = orphan(2);
+  const secondOrphan = orphan(3);
+  const github = mockGitHub([source, firstOrphan, secondOrphan]);
+  github.comments.set(1, [
+    {
+      ...appComment(60, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/60",
+    },
+  ]);
+  github.events.set(1, [timelineEvent]);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(result.repairedIdentities, 0);
+  assert.deepEqual(result.triage, [1, 2, 3]);
+  assert.equal(github.comments.get(2)?.length ?? 0, 0);
+  assert.equal(github.comments.get(3)?.length ?? 0, 0);
+  assert.deepEqual(parseBlockedBy(source.body, { issueNumber: 1 }), []);
+  assert.deepEqual(github.nativeDependencies.get(1), []);
 });

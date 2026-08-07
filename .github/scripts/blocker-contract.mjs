@@ -14,6 +14,15 @@ export const BLOCKER_REVIEW_COMMENT = [
   "",
   "<!-- agent-infra-blocker-review -->",
 ].join("\n");
+export const BLOCKER_PUBLISH_FAILURE_MESSAGE =
+  "The trusted Publisher could not create or register the proposed blocker.";
+export const BLOCKER_PUBLISH_TRIAGE_COMMENT = [
+  "Codex Worker stopped and requires human triage.",
+  "",
+  `Reason: ${BLOCKER_PUBLISH_FAILURE_MESSAGE}`,
+].join("\n");
+
+const GITHUB_ACTIONS_BOT_ID = 41898282;
 
 const PROPOSAL_KEYS = [
   "acceptance_criteria",
@@ -32,6 +41,7 @@ const PROPOSAL_RECORD_KEYS = [
   "sourceIssue",
   "version",
 ];
+const IDENTITY_RECORD_KEYS = ["contentHash", "proposal", "version"];
 const STATE_RECORD_KEYS = [
   "blockers",
   "issueNumber",
@@ -101,6 +111,35 @@ export function isTrustedActionsObject(value, { appendOnly = false } = {}) {
         (typeof value.created_at === "string" &&
           value.created_at === value.updated_at)),
   );
+}
+
+export function isActionsCreatedBlockerIssue(value) {
+  return Boolean(
+    isTrustedActionsObject(value) ||
+      (isGitHubActionsBot(value?.user) &&
+        value.performed_via_github_app === null),
+  );
+}
+
+export function isGitHubActionsBot(value) {
+  return Boolean(
+    value?.id === GITHUB_ACTIONS_BOT_ID &&
+      value.login === "github-actions[bot]" &&
+      value.type === "Bot",
+  );
+}
+
+export function hasTrustedBlockerIdentityAudit(comments) {
+  return (comments ?? []).some((comment) => {
+    if (!isTrustedActionsObject(comment, { appendOnly: true })) return false;
+    try {
+      return Boolean(
+        decodeMarker(comment.body, BLOCKER_IDENTITY_MARKER, "Blocker identity"),
+      );
+    } catch {
+      return true;
+    }
+  });
 }
 
 function encodeMarker(prefix, value) {
@@ -255,7 +294,7 @@ export function buildBlockerIssue({
   return {
     title,
     body,
-    identityComment: buildBlockerIdentityComment(record),
+    identityComment: buildBlockerIdentityComment(record, { title, body }),
     record,
   };
 }
@@ -282,10 +321,38 @@ export function sameBlockerProposalRecord(left, right) {
   return PROPOSAL_RECORD_KEYS.every((key) => left?.[key] === right?.[key]);
 }
 
-export function buildBlockerIdentityComment(record) {
+export function canRegisterBlockerIdentity(issue, rendered) {
+  if (!isActionsCreatedBlockerIssue(issue)) return false;
+  let record;
+  try {
+    record = parseBlockerProposalRecord(issue, { trusted: false });
+  } catch {
+    return false;
+  }
+  return Boolean(
+    record &&
+      sameBlockerProposalRecord(record, rendered?.record) &&
+      issue.title === rendered?.title &&
+      issue.body === rendered?.body,
+  );
+}
+
+function blockerIssueContentHash(issue) {
+  return sha256(JSON.stringify({ title: issue?.title, body: issue?.body }));
+}
+
+export function buildBlockerIdentityComment(record, issue) {
   validateBlockerProposalRecord(record);
+  if (typeof issue?.title !== "string" || typeof issue?.body !== "string") {
+    throw new Error("Blocker identity Issue content is invalid");
+  }
+  const identity = {
+    version: 1,
+    proposal: record,
+    contentHash: blockerIssueContentHash(issue),
+  };
   return [
-    encodeMarker(BLOCKER_IDENTITY_MARKER, record),
+    encodeMarker(BLOCKER_IDENTITY_MARKER, identity),
     "## Blocker proposal identity audit",
     "",
     `- Source Issue: #${record.sourceIssue}`,
@@ -307,7 +374,7 @@ export function parseBlockerProposalRecord(
   if (!record) return null;
   validateBlockerProposalRecord(record);
   if (!trusted) return record;
-  if (!isTrustedActionsObject(issue)) return null;
+  if (!isActionsCreatedBlockerIssue(issue)) return null;
   const identities = [];
   for (const comment of comments) {
     if (!isTrustedActionsObject(comment, { appendOnly: true })) continue;
@@ -317,8 +384,30 @@ export function parseBlockerProposalRecord(
       "Blocker identity",
     );
     if (!identity) continue;
+    if (Object.hasOwn(identity, "proposal")) {
+      exactKeys(identity, IDENTITY_RECORD_KEYS, "Blocker identity");
+      if (
+        identity.version !== 1 ||
+        !/^[0-9a-f]{64}$/.test(identity.contentHash ?? "")
+      ) {
+        throw new Error("Blocker identity is invalid");
+      }
+      validateBlockerProposalRecord(identity.proposal);
+      if (
+        sameBlockerProposalRecord(identity.proposal, record) &&
+        identity.contentHash === blockerIssueContentHash(issue)
+      ) {
+        identities.push(identity.proposal);
+      }
+      continue;
+    }
     validateBlockerProposalRecord(identity);
-    if (sameBlockerProposalRecord(identity, record)) identities.push(identity);
+    if (
+      isTrustedActionsObject(issue) &&
+      sameBlockerProposalRecord(identity, record)
+    ) {
+      identities.push(identity);
+    }
   }
   if (identities.length > 1) {
     throw new Error("Blocker proposal has multiple trusted identity audits");
