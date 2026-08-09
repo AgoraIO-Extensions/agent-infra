@@ -5,6 +5,7 @@ import {
   dependentReconciliationDecision,
   hasSystemTriageEvidence,
   isUneditedActionsBlockerSnapshot,
+  isRetiredBlockerProposal,
   matchesRecoveryAuthorization,
   reconcileRepository,
 } from "./blocker-reconciler.mjs";
@@ -131,6 +132,71 @@ test("rejects edited blocker snapshots and stale recovery authorization", () => 
       { ...record, executionContentHash: "c".repeat(64) },
       authorization,
     ),
+    false,
+  );
+});
+
+test("retires only closed older-cycle proposals authorized absent", () => {
+  const record = { sourceCycle: 1 };
+  const blocker = {
+    number: 2,
+    state: "closed",
+    state_reason: "not_planned",
+    labels: [],
+  };
+  const authorization = {
+    current: {
+      state: "active",
+      cycle: 2,
+      executionContentHash: "a".repeat(64),
+      blockedByHash: "b".repeat(64),
+    },
+    contract: {
+      hash: "a".repeat(64),
+      blockedByHash: "b".repeat(64),
+      blockerNumbers: [],
+    },
+  };
+
+  assert.equal(isRetiredBlockerProposal(record, blocker, authorization), true);
+  assert.equal(
+    isRetiredBlockerProposal(record, { ...blocker, state: "open" }, authorization),
+    false,
+  );
+  assert.equal(
+    isRetiredBlockerProposal(
+      record,
+      { ...blocker, state_reason: "completed" },
+      authorization,
+    ),
+    false,
+  );
+  assert.equal(
+    isRetiredBlockerProposal(record, blocker, {
+      ...authorization,
+      current: { ...authorization.current, cycle: 1 },
+    }),
+    false,
+  );
+  assert.equal(
+    isRetiredBlockerProposal(record, blocker, {
+      ...authorization,
+      current: { ...authorization.current, state: "consumed" },
+    }),
+    false,
+  );
+  assert.equal(
+    isRetiredBlockerProposal(record, blocker, {
+      ...authorization,
+      current: { ...authorization.current, blockedByHash: "c".repeat(64) },
+    }),
+    false,
+  );
+  assert.equal(
+    isRetiredBlockerProposal(record, blocker, {
+      ...authorization,
+      contract: { ...authorization.contract, blockerNumbers: [2] },
+    }),
     false,
   );
 });
@@ -818,6 +884,295 @@ test("repairs one orphan trusted proposal edge and review marker idempotently", 
   });
   assert.equal(second.repairedEdges, false);
   assert.deepEqual(github.calls.slice(before), []);
+});
+
+test("retires a not-planned older-cycle proposal after new authorization", async () => {
+  const source = issue(1, [], { title: "Source Issue" });
+  const contract = executionContent(source);
+  const timelineEvent = {
+    id: 201,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-09T00:00:00Z",
+    url: "https://api.github.test/issues/events/201",
+    authorizationCycle: 2,
+  };
+  const priorTimelineEvent = {
+    ...timelineEvent,
+    id: 101,
+    created_at: "2026-08-06T00:00:00Z",
+    url: "https://api.github.test/issues/events/101",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-09T00:00:01Z",
+  });
+  const rendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 1,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "retired-workflow-change",
+      title: "authorize the retired workflow change",
+      problem: "The old cycle proposed a protected workflow change.",
+      deliverable: "A bounded workflow authorization record.",
+      scope: ["Authorize only the old workflow change."],
+      acceptance_criteria: [
+        { id: "AC-1", text: "The authorization is bounded." },
+      ],
+      validation: ["Run workflow policy tests."],
+    },
+  });
+  const blocker = {
+    ...issue(2, [], {
+      labels: [],
+      state: "closed",
+      state_reason: "not_planned",
+    }),
+    title: rendered.title,
+    body: rendered.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  };
+  const github = mockGitHub([source, blocker]);
+  const proposalRecord = parseBlockerProposalRecord(blocker, { trusted: false });
+  github.comments.set(1, [
+    {
+      ...appComment(40, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/40",
+    },
+  ]);
+  github.comments.set(2, [
+    appComment(41, rendered.identityComment),
+    appComment(42, buildBlockerReviewAck(2, proposalRecord)),
+  ]);
+  assert.ok(
+    parseBlockerProposalRecord(blocker, { comments: github.comments.get(2) }),
+  );
+  github.events.set(1, [priorTimelineEvent, timelineEvent]);
+
+  const first = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.deepEqual(first.triage, []);
+  assert.equal(
+    source.labels.some((label) => label.name === "needs-triage"),
+    false,
+  );
+  assert.deepEqual(parseBlockedBy(source.body, { issueNumber: 1 }), []);
+  assert.deepEqual(github.nativeDependencies.get(1), []);
+
+  const beforeReplay = github.calls.length;
+  const second = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+  assert.deepEqual(second.triage, []);
+  assert.deepEqual(github.calls.slice(beforeReplay), []);
+});
+
+test("keeps same-cycle not-planned orphan recovery fail closed", async () => {
+  const source = issue(1, [], { title: "Source Issue" });
+  const contract = executionContent(source);
+  const timelineEvent = {
+    id: 101,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-06T00:00:00Z",
+    url: "https://api.github.test/issues/events/101",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-06T00:00:01Z",
+  });
+  const rendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 1,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "same-cycle-workflow-change",
+      title: "authorize the same-cycle workflow change",
+      problem: "The current cycle proposed a protected workflow change.",
+      deliverable: "A bounded workflow authorization record.",
+      scope: ["Authorize only the current workflow change."],
+      acceptance_criteria: [
+        { id: "AC-1", text: "The authorization is bounded." },
+      ],
+      validation: ["Run workflow policy tests."],
+    },
+  });
+  const blocker = {
+    ...issue(2, [], {
+      labels: [],
+      state: "closed",
+      state_reason: "not_planned",
+    }),
+    title: rendered.title,
+    body: rendered.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  };
+  const github = mockGitHub([source, blocker]);
+  const proposalRecord = parseBlockerProposalRecord(blocker, { trusted: false });
+  github.comments.set(1, [
+    {
+      ...appComment(40, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/40",
+    },
+  ]);
+  github.comments.set(2, [
+    appComment(41, rendered.identityComment),
+    appComment(42, buildBlockerReviewAck(2, proposalRecord)),
+  ]);
+  github.events.set(1, [timelineEvent]);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(result.repairedEdges, true);
+  assert.deepEqual(parseBlockedBy(source.body, { issueNumber: 1 }), [2]);
+  assert.deepEqual(
+    github.nativeDependencies.get(1).map(({ number }) => number),
+    [2],
+  );
+  assert.equal(
+    source.labels.some((label) => label.name === "needs-triage"),
+    true,
+  );
+});
+
+test("restores only current-cycle proposals from a mixed missing set", async () => {
+  const source = issue(1, [], { title: "Source Issue" });
+  const contract = executionContent(source);
+  const timelineEvent = {
+    id: 201,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-09T00:00:00Z",
+    url: "https://api.github.test/issues/events/201",
+    authorizationCycle: 2,
+  };
+  const priorTimelineEvent = {
+    ...timelineEvent,
+    id: 101,
+    created_at: "2026-08-06T00:00:00Z",
+    url: "https://api.github.test/issues/events/101",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-09T00:00:01Z",
+  });
+  const retiredRendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 1,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "retired-workflow-change",
+      title: "authorize the retired workflow change",
+      problem: "The old cycle proposed a protected workflow change.",
+      deliverable: "A bounded retired workflow authorization record.",
+      scope: ["Authorize only the retired workflow change."],
+      acceptance_criteria: [
+        { id: "AC-1", text: "The retired authorization is bounded." },
+      ],
+      validation: ["Run workflow policy tests."],
+    },
+  });
+  const currentRendered = buildBlockerIssue({
+    sourceIssue: 1,
+    sourceCycle: 2,
+    executionContentHash: contract.hash,
+    proposal: {
+      proposal_id: "current-database-change",
+      title: "deliver the current database change",
+      problem: "The current cycle requires a database change.",
+      deliverable: "A versioned database migration.",
+      scope: ["Add only the current migration."],
+      acceptance_criteria: [
+        { id: "AC-1", text: "The current migration applies cleanly." },
+      ],
+      validation: ["Run migration tests."],
+    },
+  });
+  const retired = {
+    ...issue(2, [], {
+      labels: [],
+      state: "closed",
+      state_reason: "not_planned",
+    }),
+    title: retiredRendered.title,
+    body: retiredRendered.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  };
+  const current = {
+    ...issue(3, [], { labels: [] }),
+    title: currentRendered.title,
+    body: currentRendered.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  };
+  const github = mockGitHub([source, retired, current]);
+  const currentRecord = parseBlockerProposalRecord(current, { trusted: false });
+  github.comments.set(1, [
+    {
+      ...appComment(40, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/40",
+    },
+  ]);
+  github.comments.set(2, [appComment(41, retiredRendered.identityComment)]);
+  github.comments.set(3, [
+    appComment(42, currentRendered.identityComment),
+    appComment(43, buildBlockerReviewAck(3, currentRecord)),
+  ]);
+  github.events.set(1, [priorTimelineEvent, timelineEvent]);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(result.repairedEdges, true);
+  assert.deepEqual(parseBlockedBy(source.body, { issueNumber: 1 }), [3]);
+  assert.deepEqual(
+    github.nativeDependencies.get(1).map(({ number }) => number),
+    [3],
+  );
+  assert.equal(github.comments.get(2).length, 1);
+  assert.equal(
+    source.labels.some((label) => label.name === "needs-triage"),
+    false,
+  );
 });
 
 test("recovers one Actions-created blocker missing its identity audit", async () => {

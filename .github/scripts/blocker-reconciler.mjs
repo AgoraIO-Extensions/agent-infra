@@ -5,6 +5,7 @@ import {
   assertCanAddBlockers,
   BLOCKER_PUBLISH_TRIAGE_COMMENT,
   BLOCKER_REVIEW_COMMENT,
+  blockerStatus,
   buildBlockerIdentityComment,
   buildBlockerStateComment,
   classifyDependentBlockers,
@@ -94,6 +95,21 @@ function sameProposalSource(left, right) {
     left.sourceIssue === right.sourceIssue &&
     left.sourceCycle === right.sourceCycle &&
     left.executionContentHash === right.executionContentHash
+  );
+}
+
+export function isRetiredBlockerProposal(record, blocker, authorization) {
+  const current = authorization?.current;
+  const contract = authorization?.contract;
+  return Boolean(
+    blocker?.state === "closed" &&
+      blockerStatus(blocker) === "not_planned" &&
+      current &&
+      ["active", "paused"].includes(current.state) &&
+      current.cycle > record?.sourceCycle &&
+      current.executionContentHash === contract?.hash &&
+      current.blockedByHash === contract?.blockedByHash &&
+      !contract?.blockerNumbers?.includes(blocker.number),
   );
 }
 
@@ -659,8 +675,32 @@ async function repairProposalState({
     changed = true;
   }
 
-  for (const entries of groups.values()) {
+  const sourceAuthorizations = new Map();
+  for (const sourceIssue of groups.keys()) {
+    const source = issues.find(
+      (issue) => issue.number === sourceIssue && !issue.pull_request,
+    );
+    if (!source) continue;
+    try {
+      sourceAuthorizations.set(
+        sourceIssue,
+        await sourceAuthorization({
+          repository,
+          source,
+          token,
+          request,
+          paginate,
+        }),
+      );
+    } catch {
+      // The group remains fail closed below.
+    }
+  }
+
+  for (const [sourceIssue, entries] of groups) {
+    const authorization = sourceAuthorizations.get(sourceIssue);
     for (const { issue, record } of entries) {
+      if (isRetiredBlockerProposal(record, issue, authorization)) continue;
       await ensureReviewComment({
         repository,
         issueNumber: issue.number,
@@ -680,22 +720,20 @@ async function repairProposalState({
       entries.forEach(({ issue }) => triage.add(issue.number));
       continue;
     }
-    const identities = entries.map(({ record }) => proposalIdentity(record));
+    const authorization = sourceAuthorizations.get(sourceIssue);
+    const activeEntries = authorization
+      ? entries.filter(
+          ({ issue, record }) =>
+            !isRetiredBlockerProposal(record, issue, authorization),
+        )
+      : entries;
+    const identities = activeEntries.map(({ record }) => proposalIdentity(record));
     if (new Set(identities).size !== identities.length) {
       triage.add(sourceIssue);
-      entries.forEach(({ issue }) => triage.add(issue.number));
+      activeEntries.forEach(({ issue }) => triage.add(issue.number));
       continue;
     }
-    let authorization;
-    try {
-      authorization = await sourceAuthorization({
-        repository,
-        source,
-        token,
-        request,
-        paginate,
-      });
-    } catch {
+    if (!authorization) {
       triage.add(sourceIssue);
       continue;
     }
@@ -703,7 +741,7 @@ async function repairProposalState({
     const currentBlockers = parseBlockedBy(source.body, {
       issueNumber: sourceIssue,
     });
-    const missing = entries.filter(
+    const missing = activeEntries.filter(
       ({ issue }) => !currentBlockers.includes(issue.number),
     );
     if (missing.length === 0) {
@@ -713,7 +751,7 @@ async function repairProposalState({
           source,
           contract,
           current,
-          proposalEntries: entries,
+          proposalEntries: activeEntries,
           token,
           request,
         })
@@ -723,7 +761,11 @@ async function repairProposalState({
       continue;
     }
     const first = missing[0].record;
-    if (missing.some(({ record }) => !sameProposalSource(record, first))) {
+    if (
+      missing.some(
+        ({ record }) => !sameProposalSource(record, first),
+      )
+    ) {
       triage.add(sourceIssue);
       continue;
     }
@@ -770,7 +812,7 @@ async function repairProposalState({
         source: nextSource,
         contract: nextContract,
         current,
-        proposalEntries: entries,
+        proposalEntries: activeEntries,
         token,
         request,
       })
@@ -790,15 +832,20 @@ async function repairProposalState({
     changed,
     repairedAuthorizations,
     repairedIdentities,
-    recoveryPairs: [...groups.entries()].flatMap(([sourceIssue, entries]) =>
-      entries
-        .filter(({ issue }) => issue.performed_via_github_app === null)
+    recoveryPairs: [...groups.entries()].flatMap(([sourceIssue, entries]) => {
+      const authorization = sourceAuthorizations.get(sourceIssue);
+      return entries
+        .filter(
+          ({ issue, record }) =>
+            issue.performed_via_github_app === null &&
+            !isRetiredBlockerProposal(record, issue, authorization),
+        )
         .map(({ issue, record }) => ({
           blockerIssue: issue.number,
           record,
           sourceIssue,
-        })),
-    ),
+        }));
+    }),
     triage: [...triage].sort((left, right) => left - right),
   };
 }

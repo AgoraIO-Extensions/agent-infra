@@ -164,6 +164,11 @@ Issue 进入 `needs-triage`。
   的 App identity、marker 与一次性 acknowledgement，再把只读模型输出交给隔离 Publisher。
 - Publisher 登记可信依赖边时同步追加当前 cycle 的 `frontier-updated` 授权审计；Reconciler 只能在
   旧 `blockedByHash` 与移除可信 proposal 后的前缀完全匹配时补写漏失记录，不能借修复扩大授权。
+- 可信 proposal 以 `not_planned` 关闭或带有 `wontfix`、已从权威 `Blocked by` 删除，且更高 cycle
+  的有效 Team 授权精确绑定当前 execution content 与 `blockedByHash` 时，视为已由人工退役；
+  Reconciler 不恢复该边，也不再因此给来源 Issue 添加 `needs-triage`。同 cycle 的漏边、未关闭
+  proposal 或授权不匹配仍按 fail closed 处理。退役判定只使用 identity-audited proposal、GitHub
+  API 当前状态与 append-only 授权记录，不读取 blocker prose 或普通评论。
 - 正文 `Blocked by` 是权威边，GitHub native dependency 只是 UI 镜像。正文存在但原生边缺失时，
   Publisher 或 Reconciler 使用 blocker 的 GitHub `issue_id` 补齐；原生边多于正文、查询失败或更新
   失败时进入 `needs-triage`，不能自动删除原生边或选择任一版本覆盖另一版本。
