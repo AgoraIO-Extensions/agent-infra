@@ -185,6 +185,7 @@ test("authorizes one live-verified blocker review repository dispatch", async ()
       proposal_id: "missing-migration",
       title: "add the missing migration",
       problem: "The required table does not exist.",
+      deliverable: "A versioned migration that creates the missing table.",
       scope: ["Add the migration."],
       acceptance_criteria: [{ id: "AC-1", text: "Migration applies." }],
       validation: ["Run migration tests."],

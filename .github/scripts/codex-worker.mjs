@@ -9,6 +9,7 @@ import {
   BLOCKER_PUBLISH_FAILURE_MESSAGE,
   blockerStatus,
   buildBlockerIssue,
+  buildHumanHandoffComment,
   buildWorkerDispatchAck,
   canRegisterBlockerIdentity,
   hasTrustedBlockerReviewAck,
@@ -19,9 +20,11 @@ import {
   latestBlockerStateRecord,
   nativeDependencyDecision,
   parseBlockerProposalRecord,
+  parseHumanHandoffComment,
   replaceBlockedBy,
   sameBlockerProposalRecord,
   validateBlockerProposals,
+  validateHumanHandoffs,
 } from "./blocker-contract.mjs";
 import {
   activeAuthorization,
@@ -496,9 +499,10 @@ export function buildWorkerPrompt({ issue, plan }) {
     "- Work only from the recorded start commit and fixed Issue scope.",
     "- Run appropriate repository validation before reporting completion.",
     "- Return exactly one acceptance_criteria item for every recorded AC ID, in order, with non-empty evidence.",
-    "- If implementation is complete, set completed=true, use only pass/not_applicable AC states, return no blocker proposals, and create the full Patch.",
-    "- If a prerequisite makes safe completion impossible, set completed=false, use blocked for every AC, return one or more strictly bounded blocker_proposals, and create an empty Patch.",
-    "- Blocker proposals are untrusted data: never call GitHub, choose labels or repositories, or include Issue numbers as control fields.",
+    "- If implementation is complete, set completed=true, use only pass/not_applicable AC states, return empty blocker_proposals and human_handoffs, and create the full Patch.",
+    "- If independently deliverable implementation work is missing, set completed=false, use blocked for every AC, return only blocker_proposals with an explicit deliverable, and create an empty Patch.",
+    "- If permission, protected path, requirement conflict, credential, or architecture input requires a person, set completed=false, use blocked for every AC, return only human_handoffs, and create an empty Patch.",
+    "- Never mix blocker_proposals and human_handoffs. They are untrusted data: never call GitHub, choose labels or repositories, or include Issue numbers as control fields.",
     "- Decide whether real human validation is required. Unit and smoke coverage may be sufficient for simple changes.",
     "",
     "Before the final response, create `.codex-worker-artifact/output/change.patch` with:",
@@ -532,6 +536,7 @@ const RESULT_KEYS = [
   "completed",
   "cycle",
   "execution_content_hash",
+  "human_handoffs",
   "human_validation",
   "human_validation_required",
   "issue_number",
@@ -596,17 +601,18 @@ export function validateWorkerResult(raw, plan) {
   }
   assertBoundedString(result.summary, "summary", 4000);
   const blockerProposals = validateBlockerProposals(result.blocker_proposals);
+  const humanHandoffs = validateHumanHandoffs(result.human_handoffs);
   if (result.completed) {
-    if (blockerProposals.length > 0) {
-      throw new Error("Completed Worker result cannot propose blockers");
+    if (blockerProposals.length > 0 || humanHandoffs.length > 0) {
+      throw new Error("Completed Worker result cannot contain incomplete work");
     }
     validateAcceptanceCriteriaEvidence(
       result.acceptance_criteria,
       plan.acceptanceCriteriaIds,
     );
   } else {
-    if (blockerProposals.length === 0) {
-      throw new Error("Blocked Worker result must propose a blocker");
+    if ((blockerProposals.length > 0) === (humanHandoffs.length > 0)) {
+      throw new Error("Blocked Worker result must select exactly one incomplete mode");
     }
     if (
       !Array.isArray(result.acceptance_criteria) ||
@@ -625,7 +631,19 @@ export function validateWorkerResult(raw, plan) {
   if (result.human_validation_required && result.human_validation.length === 0) {
     throw new Error("Worker result must describe required human validation");
   }
-  return result;
+  return {
+    ...result,
+    blocker_proposals: blockerProposals,
+    human_handoffs: humanHandoffs,
+  };
+}
+
+export function workerResultOperation(result) {
+  if (result.completed) return { operation: "publish", reason: "authorized" };
+  if (result.blocker_proposals.length > 0) {
+    return { operation: "block", reason: "blocker-proposed" };
+  }
+  return { operation: "handoff", reason: "human-handoff" };
 }
 
 export function sanitizeWorkerMarkdown(value) {
@@ -665,7 +683,11 @@ export function buildWorkerPullRequestBody(
   issueNumber,
   expectedIds = result.acceptance_criteria.map((item) => item.id),
 ) {
-  if (result.completed !== true || result.blocker_proposals?.length) {
+  if (
+    result.completed !== true ||
+    result.blocker_proposals?.length ||
+    result.human_handoffs?.length
+  ) {
     throw new Error("Only a completed Worker result can build a pull request body");
   }
   const humanValidation = result.human_validation_required
@@ -1624,12 +1646,10 @@ async function preflightCommand() {
       "rev-parse",
       "HEAD",
     ]).stdout.trim();
+    const resultOperation = workerResultOperation(validated.result);
     await writeOutput("valid", "true");
-    await writeOutput("operation", validated.result.completed ? "publish" : "block");
-    await writeOutput(
-      "reason",
-      validated.result.completed ? "authorized" : "blocker-proposed",
-    );
+    await writeOutput("operation", resultOperation.operation);
+    await writeOutput("reason", resultOperation.reason);
     await writeOutput("commit_sha", commitSha);
   } catch (error) {
     await writeOutput("valid", "false");
@@ -2000,6 +2020,89 @@ async function recordPublishedBlockerTransition({
   );
 }
 
+function sameHumanHandoffRecord(actual, expected) {
+  return Boolean(
+    actual &&
+      actual.version === expected.version &&
+      actual.sourceIssue === expected.sourceIssue &&
+      actual.sourceCycle === expected.sourceCycle &&
+      actual.executionContentHash === expected.executionContentHash &&
+      actual.handoffId === expected.handoffId &&
+      actual.reason === expected.reason &&
+      actual.digest === expected.digest,
+  );
+}
+
+export async function publishHumanHandoffs({
+  plan,
+  result,
+  token,
+  request = githubRequest,
+  paginate = githubPaginate,
+  authorize = requirePublishAuthorization,
+}) {
+  if (
+    result.completed ||
+    result.blocker_proposals.length > 0 ||
+    result.human_handoffs.length === 0
+  ) {
+    throw new Error("Human handoff publication requires a handoff-only result");
+  }
+  const rendereds = result.human_handoffs.map((handoff) =>
+    buildHumanHandoffComment({
+      sourceIssue: plan.issueNumber,
+      sourceCycle: plan.cycle,
+      executionContentHash: plan.executionContentHash,
+      handoff,
+    }),
+  );
+  const issuePath = `/repos/${plan.repository}/issues/${plan.issueNumber}`;
+  const source = await request(issuePath, { token });
+  if (source?.pull_request || source?.number !== plan.issueNumber) {
+    throw new Error("Human handoff source Issue is missing");
+  }
+  const comments = await paginate(`${issuePath}/comments`, { token });
+  const existingRecords = comments
+    .map((comment) => parseHumanHandoffComment(comment))
+    .filter(Boolean);
+  const missing = rendereds.filter(
+    ({ record }) =>
+      !existingRecords.some((existing) =>
+        sameHumanHandoffRecord(existing, record),
+      ),
+  );
+  const hasTriage = labelsOf(source).includes("needs-triage");
+  if (missing.length === 0 && hasTriage) {
+    return {
+      handoffIds: rendereds.map(({ record }) => record.handoffId),
+      replay: true,
+    };
+  }
+
+  for (const rendered of missing) {
+    await authorize(plan, token);
+    await request(`${issuePath}/comments`, {
+      token,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: rendered.body }),
+    });
+  }
+  if (!hasTriage) {
+    await authorize(plan, token);
+    await request(`${issuePath}/labels`, {
+      token,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ labels: ["needs-triage"] }),
+    });
+  }
+  return {
+    handoffIds: rendereds.map(({ record }) => record.handoffId),
+    replay: false,
+  };
+}
+
 async function publishBlockerProposals({ plan, result, token }) {
   if (result.completed || result.blocker_proposals.length === 0) {
     throw new Error("Blocker publication requires an incomplete Worker result");
@@ -2155,6 +2258,22 @@ async function blockersCommand() {
   await publishBlockerProposals({ plan, result, token });
 }
 
+async function handoffsCommand() {
+  const token = requiredEnvironment("GITHUB_TOKEN");
+  const expected = {
+    repository: requiredEnvironment("GITHUB_REPOSITORY"),
+    issueNumber: Number(requiredEnvironment("WORKER_ISSUE_NUMBER")),
+    startSha: requiredEnvironment("WORKER_START_SHA"),
+    defaultBranch: requiredEnvironment("WORKER_DEFAULT_BRANCH"),
+  };
+  const plan = await readWorkerPlan(requiredEnvironment("WORKER_PLAN_PATH"), expected);
+  const result = validateWorkerResult(
+    await fs.readFile(requiredEnvironment("WORKER_RESULT_PATH"), "utf8"),
+    plan,
+  );
+  await publishHumanHandoffs({ plan, result, token });
+}
+
 const FAILURE_MESSAGES = {
   "authorization-blocker-mismatch": "The Issue blocker metadata changed without a trusted audit transition.",
   "authorization-content-mismatch": "The Issue execution content changed after authorization.",
@@ -2166,6 +2285,7 @@ const FAILURE_MESSAGES = {
   "blocker-publish-failed": BLOCKER_PUBLISH_FAILURE_MESSAGE,
   "closed-worker-pr": "The Worker PR was closed without merging.",
   "foreign-worker-pr": "The fixed Worker branch or PR is not owned by this repository.",
+  "handoff-publish-failed": "The trusted Publisher could not register the human handoff.",
   "invalid-default-branch": "The repository default branch could not be validated.",
   "invalid-blocker-state": "The Issue blocker state could not be reconciled safely.",
   "invalid-graph": "The repository Blocked by graph is invalid.",
@@ -2252,9 +2372,10 @@ async function main() {
   if (command === "preflight") return preflightCommand();
   if (command === "publish") return publishCommand();
   if (command === "blockers") return blockersCommand();
+  if (command === "handoffs") return handoffsCommand();
   if (command === "handle") return handleCommand();
   throw new Error(
-    "Expected authorize, prepare, preflight, publish, blockers, or handle command",
+    "Expected authorize, prepare, preflight, publish, blockers, handoffs, or handle command",
   );
 }
 

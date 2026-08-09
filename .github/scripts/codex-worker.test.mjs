@@ -800,6 +800,8 @@ test("binds a Worker plan and file-based prompt to one fixed Issue branch", () =
   assert.match(prompt, /\.codex-worker-artifact\/output\/change\.patch/);
   assert.match(prompt, /Issue #42/);
   assert.match(prompt, /## Scope\nShip it/);
+  assert.match(prompt, /human_handoffs/);
+  assert.match(prompt, /protected path/);
   assert.doesNotMatch(prompt, /Closes #42/);
 });
 
@@ -813,6 +815,7 @@ function workerResult(overrides = {}) {
     branch: "codex/issue-42-cycle-1",
     summary: "Implemented the requested behavior.",
     blocker_proposals: [],
+    human_handoffs: [],
     acceptance_criteria: [
       { id: "AC-1", status: "pass", evidence: "The behavior is covered." },
     ],
@@ -829,11 +832,18 @@ const blockerProposal = {
   proposal_id: "missing-migration",
   title: "add the required migration",
   problem: "The requested implementation depends on a missing database table.",
+  deliverable: "A migration that creates the required database table.",
   scope: ["Add the missing migration."],
   acceptance_criteria: [
     { id: "AC-1", text: "The migration applies cleanly." },
   ],
   validation: ["Run the migration test."],
+};
+
+const humanHandoff = {
+  handoff_id: "protected-workflow-change",
+  reason: "protected_path_change",
+  required_action: "Model-authored action delta must be reviewed by a person.",
 };
 
 function jsonScalarType(value) {
@@ -913,6 +923,18 @@ test("keeps the Codex output schema within the OpenAI strict subset", () => {
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
 
   assertOpenAiStrictSchemaSubset(schema);
+  assert.ok(schema.required.includes("human_handoffs"));
+  assert.deepEqual(schema.properties.human_handoffs.items, {
+    $ref: "#/$defs/humanHandoff",
+  });
+  assert.ok(schema.$defs.blockerProposal.required.includes("deliverable"));
+  assert.deepEqual(schema.$defs.humanHandoff.properties.reason.enum, [
+    "permission_required",
+    "protected_path_change",
+    "requirements_conflict",
+    "credential_required",
+    "architecture_decision",
+  ]);
 });
 
 test("accepts only bounded Worker results for the recorded Issue and start commit", () => {
@@ -928,6 +950,11 @@ test("accepts only bounded Worker results for the recorded Issue and start commi
   );
   assert.throws(() =>
     validateWorkerResult(workerResult({ unexpected: true }), workerPlan),
+  );
+  const missingHandoffs = JSON.parse(workerResult());
+  delete missingHandoffs.human_handoffs;
+  assert.throws(() =>
+    validateWorkerResult(JSON.stringify(missingHandoffs), workerPlan),
   );
   assert.throws(() =>
     validateWorkerResult(workerResult({ summary: "x".repeat(4001) }), workerPlan),
@@ -976,7 +1003,7 @@ test("accepts only bounded Worker results for the recorded Issue and start commi
   );
 });
 
-test("accepts a blocker-only result and rejects mixed completion states", () => {
+test("accepts exactly one incomplete result mode and rejects mixed states", () => {
   const blocked = validateWorkerResult(
     workerResult({
       completed: false,
@@ -990,13 +1017,25 @@ test("accepts a blocker-only result and rejects mixed completion states", () => 
   assert.equal(blocked.completed, false);
   assert.equal(blocked.blocker_proposals[0].proposal_id, "missing-migration");
 
+  const handedOff = validateWorkerResult(
+    workerResult({
+      completed: false,
+      human_handoffs: [humanHandoff],
+      acceptance_criteria: [
+        { id: "AC-1", status: "blocked", evidence: "Protected workflow path." },
+      ],
+    }),
+    workerPlan,
+  );
+  assert.equal(handedOff.human_handoffs[0].reason, "protected_path_change");
+
   assert.throws(
     () =>
       validateWorkerResult(
         workerResult({ blocker_proposals: [blockerProposal] }),
         workerPlan,
       ),
-    /Completed Worker result cannot propose blockers/,
+    /Completed Worker result cannot contain incomplete work/,
   );
   assert.throws(
     () =>
@@ -1004,7 +1043,30 @@ test("accepts a blocker-only result and rejects mixed completion states", () => 
         workerResult({ completed: false, blocker_proposals: [] }),
         workerPlan,
       ),
-    /must propose a blocker/,
+    /exactly one incomplete mode/,
+  );
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({
+          completed: false,
+          blocker_proposals: [blockerProposal],
+          human_handoffs: [humanHandoff],
+          acceptance_criteria: [
+            { id: "AC-1", status: "blocked", evidence: "Mixed result." },
+          ],
+        }),
+        workerPlan,
+      ),
+    /exactly one incomplete mode/,
+  );
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({ human_handoffs: [humanHandoff] }),
+        workerPlan,
+      ),
+    /Completed Worker result cannot contain incomplete work/,
   );
   assert.throws(
     () =>
@@ -1017,6 +1079,119 @@ test("accepts a blocker-only result and rejects mixed completion states", () => 
       ),
     /mark every AC as blocked/,
   );
+});
+
+test("maps completed, blocker, and handoff results to explicit operations", () => {
+  assert.deepEqual(worker.workerResultOperation(JSON.parse(workerResult())), {
+    operation: "publish",
+    reason: "authorized",
+  });
+  assert.deepEqual(
+    worker.workerResultOperation(
+      JSON.parse(
+        workerResult({ completed: false, blocker_proposals: [blockerProposal] }),
+      ),
+    ),
+    { operation: "block", reason: "blocker-proposed" },
+  );
+  assert.deepEqual(
+    worker.workerResultOperation(
+      JSON.parse(
+        workerResult({ completed: false, human_handoffs: [humanHandoff] }),
+      ),
+    ),
+    { operation: "handoff", reason: "human-handoff" },
+  );
+});
+
+test("publishes a human handoff once without creating a blocker Issue", async () => {
+  let source = {
+    number: 42,
+    state: "open",
+    labels: [{ name: "ready-for-agent" }],
+  };
+  const comments = [];
+  const writes = [];
+  let authorizationChecks = 0;
+  const request = async (apiPath, options = {}) => {
+    if (apiPath === "/repos/AgoraIO-Extensions/agent-infra/issues/42") {
+      return source;
+    }
+    writes.push({ apiPath, options });
+    if (apiPath.endsWith("/comments")) {
+      const comment = {
+        body: JSON.parse(options.body).body,
+        user: { login: "github-actions[bot]", type: "Bot" },
+        performed_via_github_app: { id: 15368 },
+        created_at: "2026-08-09T00:00:00Z",
+        updated_at: "2026-08-09T00:00:00Z",
+      };
+      comments.push(comment);
+      return comment;
+    }
+    if (apiPath.endsWith("/labels")) {
+      source = { ...source, labels: [...source.labels, { name: "needs-triage" }] };
+      return source.labels;
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  const paginate = async (apiPath) => {
+    assert.match(apiPath, /\/issues\/42\/comments$/);
+    return comments;
+  };
+  const authorize = async () => {
+    authorizationChecks += 1;
+  };
+  const result = validateWorkerResult(
+    workerResult({
+      completed: false,
+      human_handoffs: [humanHandoff],
+      acceptance_criteria: [
+        { id: "AC-1", status: "blocked", evidence: "Protected workflow path." },
+      ],
+    }),
+    workerPlan,
+  );
+
+  assert.deepEqual(
+    await worker.publishHumanHandoffs({
+      plan: workerPlan,
+      result,
+      token: "token",
+      request,
+      paginate,
+      authorize,
+    }),
+    { handoffIds: ["protected-workflow-change"], replay: false },
+  );
+  assert.deepEqual(
+    writes.map(({ apiPath }) => apiPath),
+    [
+      "/repos/AgoraIO-Extensions/agent-infra/issues/42/comments",
+      "/repos/AgoraIO-Extensions/agent-infra/issues/42/labels",
+    ],
+  );
+  assert.match(comments[0].body, /Reason code: protected_path_change/);
+  assert.doesNotMatch(comments[0].body, /Model-authored action delta/);
+  assert.deepEqual(JSON.parse(writes[1].options.body), {
+    labels: ["needs-triage"],
+  });
+
+  const writesBeforeReplay = writes.length;
+  const checksBeforeReplay = authorizationChecks;
+  assert.deepEqual(
+    await worker.publishHumanHandoffs({
+      plan: workerPlan,
+      result,
+      token: "token",
+      request,
+      paginate,
+      authorize,
+    }),
+    { handoffIds: ["protected-workflow-change"], replay: true },
+  );
+  assert.equal(writes.length, writesBeforeReplay);
+  assert.equal(authorizationChecks, checksBeforeReplay);
 });
 
 test("reuses one trusted blocker proposal and rejects duplicate trusted Issues", () => {
@@ -1212,6 +1387,42 @@ test("requires blocker-only results to publish an empty Patch", async (t) => {
       patchPath: writePatch(blocked),
       resultPath: blocked.resultPath,
       plan: blocked.plan,
+    }),
+    /cannot publish a partial Patch/,
+  );
+});
+
+test("requires #67-equivalent human handoffs to publish an empty Patch", async (t) => {
+  const handedOff = artifactFixture(t);
+  const emptyPatch = path.join(handedOff.root, "handoff.patch");
+  writeFileSync(emptyPatch, "");
+  writeFileSync(
+    handedOff.resultPath,
+    workerResult({
+      completed: false,
+      human_handoffs: [humanHandoff],
+      start_sha: handedOff.plan.startSha,
+      acceptance_criteria: [
+        { id: "AC-1", status: "blocked", evidence: "Protected workflow path." },
+      ],
+    }),
+  );
+  const validated = await worker.validateAndApplyWorkerArtifact({
+    workspace: handedOff.publish,
+    patchPath: emptyPatch,
+    resultPath: handedOff.resultPath,
+    plan: handedOff.plan,
+  });
+  assert.deepEqual(validated.changedPaths, []);
+  assert.equal(validated.result.human_handoffs[0].reason, "protected_path_change");
+
+  writeFileSync(path.join(handedOff.model, "partial.txt"), "partial\n");
+  await assert.rejects(
+    worker.validateAndApplyWorkerArtifact({
+      workspace: handedOff.publish,
+      patchPath: writePatch(handedOff),
+      resultPath: handedOff.resultPath,
+      plan: handedOff.plan,
     }),
     /cannot publish a partial Patch/,
   );

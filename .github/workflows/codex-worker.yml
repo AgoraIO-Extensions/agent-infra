@@ -306,13 +306,36 @@ jobs:
           WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
         run: node trusted/.github/scripts/codex-worker.mjs blockers
 
+      - name: Publish human handoff
+        id: handoff
+        if: >-
+          steps.preflight.outputs.valid == 'true' &&
+          steps.preflight.outputs.operation == 'handoff'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+        run: node trusted/.github/scripts/codex-worker.mjs handoffs
+
       - name: Escalate publisher failure
-        if: steps.publish.outcome == 'failure' || steps.blockers.outcome == 'failure'
+        if: >-
+          steps.publish.outcome == 'failure' ||
+          steps.blockers.outcome == 'failure' ||
+          steps.handoff.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
           WORKER_OPERATION: triage
-          WORKER_REASON: ${{ steps.blockers.outcome == 'failure' && 'blocker-publish-failed' || 'publish-failed' }}
+          WORKER_REASON: >-
+            ${{
+              steps.blockers.outcome == 'failure' && 'blocker-publish-failed' ||
+              steps.handoff.outcome == 'failure' && 'handoff-publish-failed' ||
+              'publish-failed'
+            }}
         shell: bash
         run: |
           node trusted/.github/scripts/codex-worker.mjs handle
