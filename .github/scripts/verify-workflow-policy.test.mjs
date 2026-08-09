@@ -542,6 +542,47 @@ test("configures every Claude model job through validated repository settings", 
   }
 });
 
+test("allows only the trusted github-actions actor for blocker Review dispatch", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-issue-review.yml"].jobs[
+    "analyze-blocker-review"
+  ].steps.find((step) => step.uses?.startsWith("anthropics/"));
+
+  assert.equal(action.with.allowed_bots, "github-actions");
+
+  for (const invalidAllowedBots of [undefined, "*", "github-actions,dependabot"]) {
+    const invalidWorkflows = await actualWorkflows();
+    const invalidAction = invalidWorkflows["claude-issue-review.yml"].jobs[
+      "analyze-blocker-review"
+    ].steps.find((step) => step.uses?.startsWith("anthropics/"));
+    if (invalidAllowedBots === undefined) {
+      delete invalidAction.with.allowed_bots;
+    } else {
+      invalidAction.with.allowed_bots = invalidAllowedBots;
+    }
+
+    assert.ok(
+      validateWorkflowDocuments(invalidWorkflows).some((error) =>
+        error.includes("trusted github-actions dispatch actor"),
+      ),
+    );
+  }
+});
+
+test("rejects Bot allowlists outside the trusted blocker Review dispatch", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-issue-review.yml"].jobs[
+    "automatic-issue-review"
+  ].steps.find((step) => step.uses?.startsWith("anthropics/"));
+  action.with.allowed_bots = "github-actions";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Bot allowlists are restricted to blocker Review dispatch"),
+    ),
+  );
+});
+
 test("rejects Issue Review model configuration that bypasses validated Secrets", async () => {
   const workflows = await actualWorkflows();
   const job = workflows["claude-issue-review.yml"].jobs.mentions;

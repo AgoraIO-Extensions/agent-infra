@@ -958,6 +958,9 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Claude blocker Review must isolate authorization, analysis, and publication");
   }
+  if (blockerReviewAction?.with?.allowed_bots !== "github-actions") {
+    errors.push("Claude blocker Review must allow only the trusted github-actions dispatch actor");
+  }
   for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
     if (jobName === "mentions" && String(job.if ?? "").includes("endsWith")) {
       errors.push(
@@ -1042,6 +1045,15 @@ export function validateWorkflowDocuments(workflows) {
         );
       if (claudeSteps.length && scrubbingEnabled) {
         errors.push(`${name}/${jobName}: must not enable subprocess env scrubbing`);
+      }
+      if (
+        (name !== "claude-issue-review.yml" ||
+          jobName !== "analyze-blocker-review") &&
+        claudeSteps.some((step) => step.with?.allowed_bots !== undefined)
+      ) {
+        errors.push(
+          `${name}/${jobName}: Bot allowlists are restricted to blocker Review dispatch`,
+        );
       }
     }
   }
