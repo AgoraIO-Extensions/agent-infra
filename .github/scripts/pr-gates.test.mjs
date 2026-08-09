@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import * as checkRunContract from "./check-run-contract.mjs";
+import * as prGates from "./pr-gates.mjs";
 import {
   affectedPullRequests,
   auditDescription,
@@ -446,7 +448,7 @@ test("Human Validation Gate requires a current-head active Team member record", 
 test("Claude Review Gate accepts only current-head success or a bounded infrastructure waiver", () => {
   const currentHead = "a".repeat(40);
   const review = {
-    appId: 15368,
+    appId: 4503079,
     conclusion: "success",
     failureKind: null,
     headSha: currentHead,
@@ -588,7 +590,7 @@ test("normalizes only current-head App Review state and blocking thread evidence
           id: 1,
           name: "Claude Review Gate",
           head_sha: oldHead,
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: expectedExternalId,
           status: "completed",
           conclusion: "success",
@@ -598,7 +600,7 @@ test("normalizes only current-head App Review state and blocking thread evidence
           id: 2,
           name: "Claude Review Gate",
           head_sha: currentHead,
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: expectedExternalId,
           status: "completed",
           conclusion: "failure",
@@ -618,7 +620,7 @@ test("normalizes only current-head App Review state and blocking thread evidence
           id: 4,
           name: "Claude Review Gate",
           head_sha: currentHead,
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: `agent-infra:pr:99:claude-review-gate:${currentHead}`,
           status: "completed",
           conclusion: "success",
@@ -643,7 +645,7 @@ test("normalizes only current-head App Review state and blocking thread evidence
     }),
     {
       review: {
-        appId: 15368,
+        appId: 4503079,
         checkRunId: 2,
         conclusion: "failure",
         failureKind: "infrastructure_failure",
@@ -665,7 +667,7 @@ test("preserves the trusted Review result beneath derived thread failures", () =
         id: 5,
         name: "Claude Review Gate",
         head_sha: currentHead,
-        app: { id: 15368 },
+        app: { id: 4503079 },
         external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
         status: "completed",
         conclusion: "failure",
@@ -716,7 +718,7 @@ test("keeps a blocking Review failed when its trusted finding comment is deleted
         id: 6,
         name: "Claude Review Gate",
         head_sha: currentHead,
-        app: { id: 15368 },
+        app: { id: 4503079 },
         external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
         status: "completed",
         conclusion: "failure",
@@ -815,6 +817,60 @@ test("gate Check Runs bind the expected App result to the current head", () => {
       targetUrl: "https://github.com/example/repo/pull/1",
     }),
   );
+});
+
+test("gate Check Runs trust only the dedicated publisher App", () => {
+  const headSha = "a".repeat(40);
+  const externalId = `agent-infra:pr:42:issue-gate:${headSha}`;
+  assert.equal(checkRunContract.GATE_PUBLISHER_APP_ID, 4_503_079);
+  assert.equal(typeof prGates.gateCheckRequest, "function");
+  assert.equal(
+    checkRunContract.selectCurrentGateCheck(
+      [
+        {
+          id: 1,
+          name: "Issue Gate",
+          head_sha: headSha,
+          app: { id: checkRunContract.GITHUB_ACTIONS_APP_ID },
+          external_id: externalId,
+        },
+        {
+          id: 2,
+          name: "Issue Gate",
+          head_sha: headSha,
+          app: { id: 4_503_079 },
+          external_id: externalId,
+        },
+      ],
+      { name: "Issue Gate", headSha, prNumber: 42 },
+    )?.id,
+    2,
+  );
+});
+
+test("Gate publication authenticates only with the check-only token", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousGateToken = process.env.GATE_CHECK_TOKEN;
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  let authorization;
+  process.env.GATE_CHECK_TOKEN = "gate-token";
+  process.env.GITHUB_TOKEN = "workflow-token";
+  globalThis.fetch = async (_url, options) => {
+    authorization = options.headers.Authorization;
+    return { ok: true, status: 204 };
+  };
+  try {
+    await prGates.gateCheckRequest("/repos/example/repo/check-runs", {
+      method: "POST",
+    });
+    assert.equal(authorization, "Bearer gate-token");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousGateToken === undefined) delete process.env.GATE_CHECK_TOKEN;
+    else process.env.GATE_CHECK_TOKEN = previousGateToken;
+    if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousGitHubToken;
+  }
 });
 
 test("PR Gates never creates a competing Claude Review Gate", () => {

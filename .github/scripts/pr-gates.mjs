@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
-  GITHUB_ACTIONS_APP_ID,
+  GATE_PUBLISHER_APP_ID,
   gateExternalId,
   selectCurrentGateCheck,
 } from "./check-run-contract.mjs";
@@ -292,7 +292,7 @@ export function evaluateClaudeReviewGate({
   if (
     !review ||
     review.headSha !== currentHead ||
-    review.appId !== GITHUB_ACTIONS_APP_ID ||
+    review.appId !== GATE_PUBLISHER_APP_ID ||
     review.status !== "completed"
   ) {
     return {
@@ -528,13 +528,13 @@ function requiredEnvironment(name) {
 
 export async function githubRequest(
   path,
-  { allowNotFound = false, ...options } = {},
+  { allowNotFound = false, tokenEnvironment = "GITHUB_TOKEN", ...options } = {},
 ) {
   const response = await fetch(`https://api.github.com${path}`, {
     ...options,
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
+      Authorization: `Bearer ${requiredEnvironment(tokenEnvironment)}`,
       "X-GitHub-Api-Version": "2022-11-28",
       ...options.headers,
     },
@@ -544,6 +544,13 @@ export async function githubRequest(
     throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
   }
   return response.status === 204 ? null : response.json();
+}
+
+export async function gateCheckRequest(path, options = {}) {
+  return githubRequest(path, {
+    ...options,
+    tokenEnvironment: "GATE_CHECK_TOKEN",
+  });
 }
 
 async function teamRequest(path) {
@@ -589,7 +596,7 @@ async function paginate(path) {
 }
 
 async function createCheckRun(repository, payload) {
-  return githubRequest(`/repos/${repository}/check-runs`, {
+  return gateCheckRequest(`/repos/${repository}/check-runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -608,7 +615,7 @@ async function completeCheckRun(
     Number.isSafeInteger(blockingFindingCount) && blockingFindingCount > 0
       ? `\nblocking_finding_count: ${blockingFindingCount}`
       : "";
-  await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
+  await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

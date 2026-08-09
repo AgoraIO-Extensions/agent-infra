@@ -519,7 +519,7 @@ test("does not let an external fork cancel a Worker run", async () => {
   );
 });
 
-test("requires the trusted Claude publisher to stay credential-free", async () => {
+test("keeps model Secrets out of the trusted Claude publisher", async () => {
   const workflows = await actualWorkflows();
   workflows["claude-pr-review.yml"].jobs.publish.env = {
     BAD: "${{ secrets.ANTHROPIC_API_KEY }}",
@@ -759,7 +759,7 @@ test("writes PR Gate results through Check Runs instead of legacy statuses", asy
     contents: "read",
     issues: "write",
     "pull-requests": "write",
-    checks: "write",
+    checks: "read",
   });
   assert.doesNotMatch(JSON.stringify(workflows["pr-gates.yml"]), /statuses/);
 });
@@ -866,6 +866,82 @@ test("exposes a short-lived Team membership token only to Gate evaluation", asyn
       /steps\.team-membership-token\.outputs\.token/g,
     )?.length,
     1,
+  );
+});
+
+test("mints isolated check-only Gate publisher tokens", async () => {
+  const workflows = await actualWorkflows();
+  const tokenAction =
+    "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+  const expectedInputs = {
+    "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+    "permission-checks": "write",
+    "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+    owner: "${{ github.repository_owner }}",
+  };
+
+  const gateSteps = workflows["pr-gates.yml"].jobs.gates.steps;
+  const gateToken = gateSteps.find((step) => step.id === "gate-publisher-token");
+  const evaluate = gateSteps.find(
+    (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
+  );
+  assert.equal(gateToken?.uses, tokenAction);
+  assert.deepEqual(gateToken?.with, expectedInputs);
+  assert.equal(
+    evaluate.env.GATE_CHECK_TOKEN,
+    "${{ steps.gate-publisher-token.outputs.token }}",
+  );
+
+  const reviewSteps = workflows["claude-pr-review.yml"].jobs.publish.steps;
+  const reviewToken = reviewSteps.find((step) => step.id === "gate-publisher-token");
+  const publish = reviewSteps.find((step) => step.name === "Publish validated Review result");
+  assert.equal(reviewToken?.uses, tokenAction);
+  assert.deepEqual(reviewToken?.with, expectedInputs);
+  assert.equal(
+    publish.env.GATE_CHECK_TOKEN,
+    "${{ steps.gate-publisher-token.outputs.token }}",
+  );
+
+  assert.equal(workflows["pr-gates.yml"].jobs.gates.permissions.checks, "read");
+  assert.equal(workflows["claude-pr-review.yml"].jobs.publish.permissions.checks, "read");
+});
+
+test("rejects workflow-token Gate publication and the wrong publisher App", async () => {
+  for (const scriptName of ["pr-gates.mjs", "claude-review.mjs"]) {
+    const sources = await actualTrustedScriptSources();
+    sources[scriptName] = sources[scriptName].replace(
+      "return gateCheckRequest(`/repos/${repository}/check-runs`,",
+      "return githubRequest(`/repos/${repository}/check-runs`,",
+    );
+    assert.ok(
+      validateTrustedScriptSources(sources).some((error) =>
+        error.includes("Gate publishers must bind Check Runs to current heads"),
+      ),
+    );
+  }
+
+  const sources = await actualTrustedScriptSources();
+  sources["check-run-contract.mjs"] = sources["check-run-contract.mjs"].replace(
+    "GATE_PUBLISHER_APP_ID = 4_503_079",
+    "GATE_PUBLISHER_APP_ID = 15_368",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Gate publishers must bind Check Runs to current heads"),
+    ),
+  );
+});
+
+test("rejects the Gate publisher token in a model step", async () => {
+  const workflows = await actualWorkflows();
+  const model = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  model.env.GATE_CHECK_TOKEN = "${{ steps.gate-publisher-token.outputs.token }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Gate publisher token is allowed only in fixed Check Run steps"),
+    ),
   );
 });
 

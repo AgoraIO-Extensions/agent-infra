@@ -52,7 +52,7 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 | trusted Publisher | 受策略限制的 GitHub 写身份 | 校验 Artifact、维护 Worker branch/PR、添加 `ready-for-human`、创建未授权 blocker、登记 human handoff、写审计记录 | 扩大模型输出权限、创建 `ready-for-agent`、移除 `ready-for-human`、Approve、waive、直接 Merge |
 | Claude | 只读模型步骤及隔离 Publisher | Review Issue/PR、发布 findings、建议人工验证 | 修改代码或标签、创建授权、Approve、Merge、waive、解决自己的阻塞线程 |
 | Reconciler | 受策略限制的 GitHub Actions App | 重算派生状态、补偿漏事件、唤醒有效 frontier、写幂等 triage 记录 | 创建或续期授权、确认人工验证、改变产品范围、直接 Merge |
-| Check publisher | 预期 GitHub Actions App | 为精确 head 创建/完成门禁 Check Run，记录派生状态 | 提交 human Approve、把旧 head 结果复制到新 head、修改 branch protection |
+| Check publisher | 选定仓库的专用 GitHub App | 为精确 head 创建/完成门禁 Check Run，记录派生状态 | 读取 Team membership、提交 human Approve、把旧 head 结果复制到新 head、修改 branch protection |
 | Auto-merge enrollment | 专用组织身份 | 为合格的同仓库非 Draft PR 启用 GitHub 原生 Squash Auto-merge | 自定义 Merge、管理员绕过、重复实现门禁判断 |
 | GitHub 分支保护 | GitHub 托管控制面 | 强制 required checks、CODEOWNER Approve 和 conversation resolution | 接受不绑定当前 head 的外部成功状态 |
 
@@ -63,8 +63,11 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 - Organization Team `@AgoraIO-Extensions/agent-infra-owners` 至少包含两名成员，仓库
   `CODEOWNERS` 指向该 Team。Approve、Worker 授权、人工验证和 waiver 都使用实时 Team
   membership，不维护个人 allowlist。
-- `main` 分支保护把 required Check Run 绑定到预期 GitHub Actions App，不接受同名但来源不明
-  的 legacy status。
+- 选定仓库的控制 App `agora-agent-infra-team-membership` 具有 Organization
+  `members:read` 和仓库 `checks:write`。可信 workflow 分别 mint membership-only token 与
+  check-only token；任何单个 token 都不能同时获得两种能力，模型步骤不能获得任一 token。
+- `main` 分支保护将 `Docs CI` 绑定 GitHub Actions App `15368`，将四个自定义 Gate 绑定控制
+  App `4503079`，不接受同名但来源不明的 Check Run 或 legacy status。
 - 开发流程企微机器人使用轮换后的 GitHub Actions Secret `WECOM_BOT_WEBHOOK_URL`。该通知
   通道与产品 PRD 中的企微 Channel 无关。
 
@@ -303,8 +306,8 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 ### 7.2 Current-head Check Runs
 
-以下 Check Run 都由预期 GitHub Actions App 发布到精确 head SHA，并由 branch protection 锁定
-来源：
+`Docs CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
+所有 Check Run 都绑定精确 head SHA、由 branch protection 锁定来源：
 
 | Check | 适用范围 | 校验内容 |
 | --- | --- | --- |

@@ -49,6 +49,12 @@ function teamMembershipTokenReferences(value) {
   ) ?? [];
 }
 
+function gatePublisherTokenReferences(value) {
+  return JSON.stringify(value ?? {}).match(
+    /steps\.gate-publisher-token\.outputs\.token/g,
+  ) ?? [];
+}
+
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
   return (
     step.id === "validate-config" &&
@@ -172,19 +178,23 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         TEAM_MEMBERSHIP_APP_ID: "app-id",
         TEAM_MEMBERSHIP_APP_PRIVATE_KEY: "private-key",
       }[secret];
-      const allowedLocation =
-        (workflowName === "pr-gates.yml" && jobName === "gates") ||
-        (workflowName === "codex-worker.yml" && jobName === "authorization");
+      const allowedMembershipLocation =
+        step.id === "team-membership-token" &&
+        ((workflowName === "pr-gates.yml" && jobName === "gates") ||
+          (workflowName === "codex-worker.yml" && jobName === "authorization"));
+      const allowedGatePublisherLocation =
+        step.id === "gate-publisher-token" &&
+        ((workflowName === "pr-gates.yml" && jobName === "gates") ||
+          (workflowName === "claude-pr-review.yml" && jobName === "publish"));
       if (
-        !allowedLocation ||
-        step.id !== "team-membership-token" ||
+        (!allowedMembershipLocation && !allowedGatePublisherLocation) ||
         step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
         step.with?.[input] !== reference ||
         step.with?.owner !== "${{ github.repository_owner }}" ||
         occurrences !== 1
       ) {
         errors.push(
-          `${workflowName}/${jobName}: ${secret} is allowed only in the fixed Team membership token step`,
+          `${workflowName}/${jobName}: ${secret} is allowed only in fixed control App token steps`,
         );
       }
       continue;
@@ -210,6 +220,9 @@ export function validateTrustedScriptSources(sources) {
     sources?.["claude-event-authorization.mjs"] ?? "";
   const gateRequirements = [
     "/check-runs",
+    'tokenEnvironment: "GATE_CHECK_TOKEN"',
+    "return gateCheckRequest(`/repos/${repository}/check-runs`,",
+    "await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`,",
     "headSha: pr.head.sha",
     '"Issue Gate"',
     '"Issue Readiness Gate"',
@@ -219,12 +232,16 @@ export function validateTrustedScriptSources(sources) {
   ];
   const reviewRequirements = [
     "/check-runs",
+    'tokenEnvironment: "GATE_CHECK_TOKEN"',
+    "return gateCheckRequest(`/repos/${repository}/check-runs`,",
+    "await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`,",
     "head_sha: expectedHead",
     "assertCurrentReviewTarget(pr, expectedHead)",
     "reviewGateOutcome(blocking)",
   ];
   const contractRequirements = [
     "GITHUB_ACTIONS_APP_ID",
+    "GATE_PUBLISHER_APP_ID = 4_503_079",
     "check.head_sha === headSha",
     "check.external_id === externalId",
   ];
@@ -340,6 +357,11 @@ export function validateWorkflowDocuments(workflows) {
           `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
         );
       }
+      if (gatePublisherTokenReferences(job.env).length > 0) {
+        errors.push(
+          `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
+        );
+      }
       for (const step of job.steps ?? []) {
         if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
@@ -363,6 +385,24 @@ export function validateWorkflowDocuments(workflows) {
             `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
           );
         }
+        const gateTokenReferences = gatePublisherTokenReferences(step);
+        const allowedGatePublisherToken =
+          gateTokenReferences.length === 1 &&
+          step.env?.GATE_CHECK_TOKEN ===
+            "${{ steps.gate-publisher-token.outputs.token }}" &&
+          ((name === "pr-gates.yml" &&
+            jobName === "gates" &&
+            step.name === "Evaluate Issue, readiness, and human validation gates" &&
+            step.run === "node .github/scripts/pr-gates.mjs") ||
+            (name === "claude-pr-review.yml" &&
+              jobName === "publish" &&
+              step.name === "Publish validated Review result" &&
+              step.run === "node .github/scripts/claude-review.mjs"));
+        if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
+          errors.push(
+            `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
+          );
+        }
       }
     }
     for (const secret of referencedSecrets(workflow.env)) {
@@ -370,6 +410,9 @@ export function validateWorkflowDocuments(workflows) {
     }
     if (teamMembershipTokenReferences(workflow.env).length > 0) {
       errors.push(`${name}: Team membership token is allowed only in fixed Gate steps`);
+    }
+    if (gatePublisherTokenReferences(workflow.env).length > 0) {
+      errors.push(`${name}: Gate publisher token is allowed only in fixed Check Run steps`);
     }
   }
 
@@ -433,7 +476,7 @@ export function validateWorkflowDocuments(workflows) {
       "pull-requests": "read",
     },
     gates: {
-      checks: "write",
+      checks: "read",
       contents: "read",
       issues: "write",
       "pull-requests": "write",
@@ -448,6 +491,9 @@ export function validateWorkflowDocuments(workflows) {
   const gateSteps = gates?.steps ?? [];
   const membershipTokenStep = gateSteps.find(
     (step) => step.id === "team-membership-token",
+  );
+  const gatePublisherTokenStep = gateSteps.find(
+    (step) => step.id === "gate-publisher-token",
   );
   const evaluateGatesStep = gateSteps.find(
     (step) => step.name === "Evaluate Issue, readiness, and human validation gates",
@@ -466,13 +512,23 @@ export function validateWorkflowDocuments(workflows) {
       "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
       owner: "${{ github.repository_owner }}",
     }) ||
+    gatePublisherTokenStep?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    gatePublisherTokenStep?.["continue-on-error"] !== true ||
+    !sameObject(gatePublisherTokenStep?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      "permission-checks": "write",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+      owner: "${{ github.repository_owner }}",
+    }) ||
     evaluateGatesStep?.run !== "node .github/scripts/pr-gates.mjs" ||
     evaluateGatesStep?.if !== "always()" ||
     !sameObject(evaluateGatesStep?.env, {
+      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
       GITHUB_TOKEN: "${{ github.token }}",
       TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
     }) ||
-    teamMembershipTokenReferences(prGates).length !== 1
+    teamMembershipTokenReferences(prGates).length !== 1 ||
+    gatePublisherTokenReferences(prGates).length !== 1
   ) {
     errors.push("PR Gates must mint and isolate a Team membership token");
   }
@@ -801,24 +857,37 @@ export function validateWorkflowDocuments(workflows) {
   const reviewPublish = reviewPublishSteps.find(
     (step) => step.name === "Publish validated Review result",
   );
+  const reviewGatePublisherToken = reviewPublishSteps.find(
+    (step) => step.id === "gate-publisher-token",
+  );
   if (
     reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||
     reviewDataCheckout?.with?.path !== "pr-head" ||
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
     reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
+    reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    reviewGatePublisherToken?.["continue-on-error"] !== true ||
+    !sameObject(reviewGatePublisherToken?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      "permission-checks": "write",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+      owner: "${{ github.repository_owner }}",
+    }) ||
     !sameObject(reviewPublish?.env, {
       ANALYSIS_RESULT: "${{ needs.analyze.result }}",
       EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
       STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     }) ||
     !sameObject(review?.jobs?.publish?.permissions, {
-      checks: "write",
+      checks: "read",
       contents: "read",
       issues: "write",
       "pull-requests": "write",
-    })
+    }) ||
+    gatePublisherTokenReferences(review).length !== 1
   ) {
     errors.push("Claude PR Review must publish only the completed CI head");
   }
@@ -844,7 +913,11 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Claude PR Review model configuration must use validated Secrets");
   }
-  if (JSON.stringify(review?.jobs?.publish ?? {}).includes("secrets.")) {
+  if (
+    referencedSecrets(review?.jobs?.publish).some((secret) =>
+      CLAUDE_SECRETS.includes(secret),
+    )
+  ) {
     errors.push("Claude Review publisher must not receive a model Secret");
   }
   const reviewPrompt = reviewAction?.with?.prompt ?? "";
