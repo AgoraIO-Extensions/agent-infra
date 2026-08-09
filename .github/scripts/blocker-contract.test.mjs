@@ -19,12 +19,14 @@ import {
   reconciliationIssueNumbers,
   replaceBlockedBy,
   validateBlockerProposals,
+  validateHumanHandoffs,
 } from "./blocker-contract.mjs";
 
 const proposal = {
   proposal_id: "database-migration",
   title: "prepare the database migration",
   problem: "The required table does not exist.",
+  deliverable: "A versioned migration that creates the required table.",
   scope: ["Add the missing migration."],
   acceptance_criteria: [{ id: "AC-1", text: "The migration applies cleanly." }],
   validation: ["Run the migration test."],
@@ -88,6 +90,27 @@ test("validates bounded blocker proposals and rejects extra GitHub controls", ()
   );
 });
 
+test("validates explicit human handoffs without GitHub controls", () => {
+  const handoff = {
+    handoff_id: "protected-workflow-change",
+    reason: "protected_path_change",
+    required_action: "A maintainer must review the protected change.",
+  };
+  assert.deepEqual(validateHumanHandoffs([handoff]), [handoff]);
+  assert.throws(
+    () => validateHumanHandoffs([{ ...handoff, reason: "other" }]),
+    /reason is invalid/,
+  );
+  assert.throws(
+    () => validateHumanHandoffs([{ ...handoff, labels: ["ready-for-human"] }]),
+    /unexpected fields/,
+  );
+  assert.throws(
+    () => validateHumanHandoffs([handoff, handoff]),
+    /IDs must be unique/,
+  );
+});
+
 test("renders a complete sanitized Implementation Issue with a trusted identity marker", () => {
   const rendered = buildBlockerIssue({
     sourceIssue: 42,
@@ -101,6 +124,7 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
   assert.match(rendered.body, /^<!-- agent-infra-blocker-proposal:/);
   for (const heading of [
     "## Problem",
+    "## Deliverable",
     "## Scope",
     "## Acceptance criteria",
     "## Validation",
@@ -313,6 +337,7 @@ test("keeps blocker identity trusted after an authoritative dependency update", 
 test("keeps model-supplied headings out of generated blocker Issue structure", () => {
   const headings = [
     "## Problem",
+    "## Deliverable",
     "## Scope",
     "## Acceptance criteria",
     "## Validation",

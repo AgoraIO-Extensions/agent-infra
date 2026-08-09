@@ -272,8 +272,10 @@ export function validateTrustedScriptSources(sources) {
     "blocker_state_signature: state.signature",
   ];
   const blockerWorkerRequirements = [
-    'validated.result.completed ? "publish" : "block"',
+    "workerResultOperation(validated.result)",
     'if (command === "blockers") return blockersCommand();',
+    'if (command === "handoffs") return handoffsCommand();',
+    "publishHumanHandoffs({ plan, result, token })",
   ];
   if (
     blockerContractRequirements.some(
@@ -602,6 +604,9 @@ export function validateWorkflowDocuments(workflows) {
   const blockerStep = publishSteps.find(
     (step) => step.name === "Publish unprivileged blocker proposals",
   );
+  const handoffStep = publishSteps.find(
+    (step) => step.name === "Publish human handoff",
+  );
   const escalationStep = publishSteps.find(
     (step) => step.name === "Escalate publisher failure",
   );
@@ -622,6 +627,19 @@ export function validateWorkflowDocuments(workflows) {
     !String(escalationStep?.if ?? "").includes("steps.blockers.outcome == 'failure'")
   ) {
     errors.push("Codex Worker blocker publication must stay unprivileged and serialized");
+  }
+  if (
+    handoffStep?.run !== "node trusted/.github/scripts/codex-worker.mjs handoffs" ||
+    !String(handoffStep?.if ?? "").includes(
+      "steps.preflight.outputs.operation == 'handoff'",
+    ) ||
+    handoffStep?.env?.GITHUB_TOKEN !== "${{ github.token }}" ||
+    JSON.stringify(handoffStep ?? {}).includes("CODEX_GITHUB_TOKEN") ||
+    !String(escalationStep?.if ?? "").includes("steps.handoff.outcome == 'failure'")
+  ) {
+    errors.push(
+      "Codex Worker human handoff publication must stay unprivileged and policy-locked",
+    );
   }
 
   const implementSteps = implement?.steps ?? [];

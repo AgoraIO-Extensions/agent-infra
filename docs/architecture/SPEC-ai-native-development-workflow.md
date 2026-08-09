@@ -48,8 +48,8 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 | CODEOWNERS Team 成员 | Organization Team 中的非 Bot 人员 | 确认 Issue、创建/暂停/恢复/终止 cycle、关闭/重开 triage、Approve、确认人工验证、创建受限 waiver | 以 Bot 身份替代人工确认、复用已消费 cycle 或旧 head 确认 |
 | 本地 Codex | 当前操作者的 GitHub 身份 | 需求 grilling、本地 `implement`、提交人工 PR、协助操作者执行授权动作 | 独立获得人工权限、把本地辅助描述为无人值守授权、绕过 Review |
 | authorization recorder | 受策略限制的 GitHub Actions App | 校验 labeled event/Team/hash，记录授权、暂停、恢复、消费和失效 | 生成原始人工意图、替人授权、修改 execution content |
-| Codex implement job | 只读 GitHub Token 和隔离工作区 | 读取授权范围、生成受限文本 Patch、AC evidence 和 blocker proposal | 获得发布凭证、调用任意 GitHub 写 API、Approve、Merge、创建授权 |
-| trusted Publisher | 受策略限制的 GitHub 写身份 | 校验 Artifact、维护 Worker branch/PR、添加 `ready-for-human`、创建未授权 blocker、写审计记录 | 扩大模型输出权限、创建 `ready-for-agent`、移除 `ready-for-human`、Approve、waive、直接 Merge |
+| Codex implement job | 只读 GitHub Token 和隔离工作区 | 读取授权范围、生成受限文本 Patch、AC evidence、implementation blocker proposal 或 human handoff | 获得发布凭证、调用任意 GitHub 写 API、Approve、Merge、创建授权 |
+| trusted Publisher | 受策略限制的 GitHub 写身份 | 校验 Artifact、维护 Worker branch/PR、添加 `ready-for-human`、创建未授权 blocker、登记 human handoff、写审计记录 | 扩大模型输出权限、创建 `ready-for-agent`、移除 `ready-for-human`、Approve、waive、直接 Merge |
 | Claude | 只读模型步骤及隔离 Publisher | Review Issue/PR、发布 findings、建议人工验证 | 修改代码或标签、创建授权、Approve、Merge、waive、解决自己的阻塞线程 |
 | Reconciler | 受策略限制的 GitHub Actions App | 重算派生状态、补偿漏事件、唤醒有效 frontier、写幂等 triage 记录 | 创建或续期授权、确认人工验证、改变产品范围、直接 Merge |
 | Check publisher | 预期 GitHub Actions App | 为精确 head 创建/完成门禁 Check Run，记录派生状态 | 提交 human Approve、把旧 head 结果复制到新 head、修改 branch protection |
@@ -145,9 +145,18 @@ Issue 进入 `needs-triage`。
 不能指向 PR、自身或形成直接/间接环。格式非法、查询失败、图超限或更新未原子收敛时 fail closed
 并进入 `needs-triage`。
 
-- Worker 只能在结构化结果中提出有界 blocker proposal。trusted Publisher 校验并创建完整的
-  Implementation Issue，再以确定性格式登记依赖边；阻塞结果不得发布 partial Patch、branch
-  或 PR。
+- Worker 的未完成结果必须显式且互斥地选择一种有界模式：`blocker_proposals` 表达可独立交付
+  和验证的 implementation blocker，`human_handoffs` 表达权限、受保护路径、需求冲突、凭证或
+  架构决策等需要人工处理的事项。两种列表混用或同时为空时 fail closed；trusted Publisher 不从
+  任意 prose 猜测 vertical slice 或人工意图。
+- 每个 blocker proposal 必须提供单一 `deliverable`，并满足 Implementation Issue 的固定章节、
+  连续唯一 `AC-N` 和有界 validation 契约。trusted Publisher 校验后创建完整 Issue，再以确定性
+  格式登记依赖边；该结果不得发布 partial Patch、branch 或 PR。
+- 每个 human handoff 只包含唯一 `handoff_id`、有界 `reason` 枚举和 `required_action`。合法 reason
+  仅包括 `permission_required`、`protected_path_change`、`requirements_conflict`、
+  `credential_required` 和 `architecture_decision`。Publisher 不创建 Issue 或依赖边，只对来源
+  Issue 幂等添加 `needs-triage` 和按 reason 映射的固定评论；评论不得插入模型 prose，也不得添加
+  `ready-for-agent`、`ready-for-human` 或其他执行授权。
 - 新 blocker 不带 `ready-for-agent`、`ready-for-human` 或等价授权。由受信 Publisher 身份创建
   的固定 marker comment 才能触发正常 advisory Claude Issue Review，其他 Bot mention 不得调用
   模型，Review 也不能授予执行权限。因为默认 `GITHUB_TOKEN` 创建的评论不会触发下游 workflow，
@@ -208,6 +217,9 @@ Issue 进入 `needs-triage`。
   禁止持久化完整 `CODEX_HOME`、transcript、Goal/session DB、凭证、Git credential 或完整工作区。
 - checkpoint 必须校验格式、大小、路径、base SHA、可应用性、受保护路径、binary、secret-like
   内容和身份绑定。校验失败属于不可重试错误，直接转 `needs-triage`。
+- 完成结果必须包含完整合格 Patch 且 blocker/handoff 均为空。未完成结果必须输出空 Patch，且只
+  能包含非空 blocker proposals 或非空 human handoffs；completed 与任一未完成模式并存、空的
+  未完成结果或两种模式混用都属于不可重试的 Schema 失败。
 - attempt 在模型调用前持久化并计数；模型已经开始后发生取消或 timeout 仍消费该 attempt。
   下一 attempt 只使用取消前已经持久化且验证成功的 checkpoint，partial/unvalidated Patch 丢弃。
 - 容量不足、限流、网关 5xx、模型无完整结果、Runner/Action 基础设施错误或 timeout 属于可恢复
@@ -246,6 +258,9 @@ Publisher 在获得写凭证前，从 GitHub API 重算 Issue、授权、DAG、b
   或 `CLAUDE.md`、依赖/lockfile、Markdown policy 文件，以及 `docs/prd/`、`docs/architecture/`
   中的权威文档；这些信任边界只能由人创建的 PR 修改。
 - Patch 能在干净工作区完整应用，checkpoint、结果 JSON、字段长度和枚举符合 Schema。
+- Publisher preflight 将合法结果归一为 `publish`、`block` 或 `handoff` operation。`handoff` 只可
+  使用当前 workflow 的 `github.token` 更新来源 Issue；模型发布 Token 不得进入该步骤，且该路径
+  不能创建 branch、commit、PR、blocker Issue 或依赖边。
 
 校验失败时不发布 commit 或 PR，只写固定的 triage 状态和脱敏原因。Publisher 可以添加
 `ready-for-human`，不能因为模型输出 `ready_for_human=false` 而移除已存在标签。
@@ -260,7 +275,8 @@ Publisher 在获得写凭证前，从 GitHub API 重算 Issue、授权、DAG、b
 
 ### 6.6 结果与 PR AC evidence
 
-Worker 结果 Schema 对来源 Issue 的每个 `AC-N` 恰好输出一项：
+Worker 结果 Schema 要求根级 `blocker_proposals` 与 `human_handoffs` 始终存在，并对来源 Issue 的
+每个 `AC-N` 恰好输出一项：
 
 - `id`：与 Issue 中的稳定 AC ID 完全一致。
 - `status`：只允许 `pass` 或 `not_applicable`；`not_applicable` 必须说明为何不需要实现。
@@ -426,7 +442,8 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 
 - 新成员 Issue 自动收到最终 Claude 建议；外部用户 Issue 只有成员授权后调用模型。
 - 未经 Team 人员确认且没有匹配 content hash/cycle 的 Issue 不能被 Worker 执行。
-- blocker 是同仓库 DAG；completed 唤醒有效 dependent，not planned/wontfix 转人工 triage。
+- implementation blocker 是同仓库 DAG；human handoff 只 triage 来源 Issue，不创建伪 blocker；
+  blocker completed 唤醒有效 dependent，not planned/wontfix 转人工 triage。
 - 同一 Issue/cycle 不产生并发执行或多个活动 PR，全仓模型调用并发不超过 `2`。
 - Worker run 最多三次 model attempt；CI 首次失败只 no-code retry；PR 最多两轮 code repair。
 - 每个 PR 只有一个 open primary Issue，并对每个稳定 `AC-N` 提供唯一 `status/evidence`。

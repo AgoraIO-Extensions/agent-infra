@@ -102,6 +102,23 @@ test("keeps blocker publication off the Publisher PAT", async () => {
   );
 });
 
+test("keeps human handoff publication on github.token and policy-locked", async () => {
+  const workflows = await actualWorkflows();
+  const handoff = workflows["codex-worker.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Publish human handoff",
+  );
+  assert.ok(handoff);
+  assert.equal(handoff.env.GITHUB_TOKEN, "${{ github.token }}");
+  assert.equal(JSON.stringify(handoff).includes("CODEX_GITHUB_TOKEN"), false);
+
+  handoff.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("human handoff publication"),
+    ),
+  );
+});
+
 test("requires bounded blocker and reconciliation sources", async () => {
   const sources = await actualTrustedScriptSources();
   sources["blocker-reconciler.mjs"] = sources["blocker-reconciler.mjs"].replace(

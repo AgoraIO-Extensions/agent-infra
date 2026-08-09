@@ -12,6 +12,7 @@
     "summary",
     "acceptance_criteria",
     "blocker_proposals",
+    "human_handoffs",
     "tests",
     "not_run",
     "human_validation_required",
@@ -86,6 +87,13 @@
         "$ref": "#/$defs/blockerProposal"
       }
     },
+    "human_handoffs": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/humanHandoff"
+      }
+    },
     "tests": {
       "$ref": "#/$defs/boundedList"
     },
@@ -110,6 +118,7 @@
         "proposal_id",
         "title",
         "problem",
+        "deliverable",
         "scope",
         "acceptance_criteria",
         "validation"
@@ -128,6 +137,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4000
+        },
+        "deliverable": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
         },
         "scope": {
           "$ref": "#/$defs/nonEmptyBoundedList"
@@ -158,6 +172,36 @@
         },
         "validation": {
           "$ref": "#/$defs/nonEmptyBoundedList"
+        }
+      }
+    },
+    "humanHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handoff_id",
+        "reason",
+        "required_action"
+      ],
+      "properties": {
+        "handoff_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "permission_required",
+            "protected_path_change",
+            "requirements_conflict",
+            "credential_required",
+            "architecture_decision"
+          ]
+        },
+        "required_action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
         }
       }
     },

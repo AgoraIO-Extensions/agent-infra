@@ -9,6 +9,7 @@ export const BLOCKER_STATE_MARKER = "agent-infra-blocker-state";
 export const BLOCKER_REVIEW_ACK_MARKER = "agent-infra-blocker-review-ack";
 export const BLOCKER_WORKER_DISPATCH_ACK_MARKER =
   "agent-infra-blocker-worker-dispatch-ack";
+export const HUMAN_HANDOFF_MARKER = "agent-infra-human-handoff";
 export const BLOCKER_REVIEW_COMMENT = [
   "@claude Review this newly created unprivileged blocker proposal.",
   "",
@@ -26,12 +27,42 @@ const GITHUB_ACTIONS_BOT_ID = 41898282;
 
 const PROPOSAL_KEYS = [
   "acceptance_criteria",
+  "deliverable",
   "problem",
   "proposal_id",
   "scope",
   "title",
   "validation",
 ];
+const HUMAN_HANDOFF_KEYS = ["handoff_id", "reason", "required_action"];
+const HUMAN_HANDOFF_RECORD_KEYS = [
+  "digest",
+  "executionContentHash",
+  "handoffId",
+  "reason",
+  "sourceCycle",
+  "sourceIssue",
+  "version",
+];
+const HUMAN_HANDOFF_REASONS = new Set([
+  "permission_required",
+  "protected_path_change",
+  "requirements_conflict",
+  "credential_required",
+  "architecture_decision",
+]);
+const HUMAN_HANDOFF_ACTIONS = {
+  permission_required:
+    "A repository owner must review and grant or decline the required permission.",
+  protected_path_change:
+    "A repository maintainer must implement the protected-boundary change in a human-authored PR.",
+  requirements_conflict:
+    "The Issue owner must resolve the conflicting requirements before a new Worker cycle.",
+  credential_required:
+    "A repository owner must provide the required credential through an approved secret channel.",
+  architecture_decision:
+    "The architecture owner must record the required decision before implementation resumes.",
+};
 const ACCEPTANCE_CRITERION_KEYS = ["id", "text"];
 const PROPOSAL_RECORD_KEYS = [
   "digest",
@@ -227,6 +258,12 @@ export function validateBlockerProposals(proposals) {
         singleLine: true,
       }),
       problem: boundedText(proposal.problem, `Blocker proposal[${index}].problem`, 4_000),
+      deliverable: boundedText(
+        proposal.deliverable,
+        `Blocker proposal[${index}].deliverable`,
+        1_000,
+        { singleLine: true },
+      ),
       scope: boundedTextList(proposal.scope, `Blocker proposal[${index}].scope`),
       acceptance_criteria: normalizedCriteria,
       validation: boundedTextList(
@@ -242,6 +279,114 @@ export function validateBlockerProposals(proposals) {
     throw new Error("Blocker proposals exceed 64 KiB");
   }
   return validated;
+}
+
+export function validateHumanHandoffs(handoffs) {
+  if (!Array.isArray(handoffs) || handoffs.length > 5) {
+    throw new Error("Human handoffs must be an array with at most 5 entries");
+  }
+  const ids = [];
+  const validated = handoffs.map((handoff, index) => {
+    exactKeys(handoff, HUMAN_HANDOFF_KEYS, `Human handoff[${index}]`);
+    const handoffId = boundedText(
+      handoff.handoff_id,
+      `Human handoff[${index}].handoff_id`,
+      64,
+      { singleLine: true },
+    );
+    if (!/^[a-z][a-z0-9-]*$/.test(handoffId)) {
+      throw new Error(`Human handoff[${index}].handoff_id is invalid`);
+    }
+    if (!HUMAN_HANDOFF_REASONS.has(handoff.reason)) {
+      throw new Error(`Human handoff[${index}].reason is invalid`);
+    }
+    ids.push(handoffId);
+    return {
+      handoff_id: handoffId,
+      reason: handoff.reason,
+      required_action: boundedText(
+        handoff.required_action,
+        `Human handoff[${index}].required_action`,
+        1_000,
+        { singleLine: true },
+      ),
+    };
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("Human handoff IDs must be unique");
+  }
+  if (Buffer.byteLength(JSON.stringify(validated), "utf8") > 32 * 1024) {
+    throw new Error("Human handoffs exceed 32 KiB");
+  }
+  return validated;
+}
+
+function validateHumanHandoffRecord(record) {
+  exactKeys(record, HUMAN_HANDOFF_RECORD_KEYS, "Human handoff record");
+  if (record.version !== 1) throw new Error("Human handoff record version is invalid");
+  positiveInteger(record.sourceIssue, "Human handoff source Issue");
+  positiveInteger(record.sourceCycle, "Human handoff source cycle");
+  if (!/^[0-9a-f]{64}$/.test(record.executionContentHash ?? "")) {
+    throw new Error("Human handoff execution-content hash is invalid");
+  }
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(record.handoffId ?? "")) {
+    throw new Error("Human handoff record ID is invalid");
+  }
+  if (!HUMAN_HANDOFF_REASONS.has(record.reason)) {
+    throw new Error("Human handoff record reason is invalid");
+  }
+  if (!/^[0-9a-f]{64}$/.test(record.digest ?? "")) {
+    throw new Error("Human handoff record digest is invalid");
+  }
+  return record;
+}
+
+function humanHandoffCommentBody(record) {
+  return [
+    encodeMarker(HUMAN_HANDOFF_MARKER, record),
+    "",
+    "Codex Worker stopped and requires human triage.",
+    "",
+    `Reason code: ${record.reason}`,
+    "",
+    `Required action: ${HUMAN_HANDOFF_ACTIONS[record.reason]}`,
+  ].join("\n");
+}
+
+export function buildHumanHandoffComment({
+  sourceIssue,
+  sourceCycle,
+  executionContentHash,
+  handoff,
+}) {
+  positiveInteger(sourceIssue, "Human handoff source Issue");
+  positiveInteger(sourceCycle, "Human handoff source cycle");
+  if (!/^[0-9a-f]{64}$/.test(executionContentHash ?? "")) {
+    throw new Error("Human handoff execution-content hash is invalid");
+  }
+  const validated = validateHumanHandoffs([handoff])[0];
+  const record = {
+    version: 1,
+    sourceIssue,
+    sourceCycle,
+    executionContentHash,
+    handoffId: validated.handoff_id,
+    reason: validated.reason,
+    digest: sha256(JSON.stringify(validated)),
+  };
+  return { body: humanHandoffCommentBody(record), record };
+}
+
+export function parseHumanHandoffComment(comment) {
+  if (!isTrustedActionsObject(comment, { appendOnly: true })) return null;
+  const record = decodeMarker(
+    comment.body,
+    HUMAN_HANDOFF_MARKER,
+    "Human handoff",
+  );
+  if (!record) return null;
+  validateHumanHandoffRecord(record);
+  return comment.body === humanHandoffCommentBody(record) ? record : null;
 }
 
 export function buildBlockerIssue({
@@ -262,6 +407,10 @@ export function buildBlockerIssue({
     "## Problem",
     "",
     sanitizeMarkdown(validated.problem),
+    "",
+    "## Deliverable",
+    "",
+    sanitizeMarkdown(validated.deliverable),
     "",
     "## Scope",
     "",
