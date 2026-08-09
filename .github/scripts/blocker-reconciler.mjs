@@ -97,6 +97,21 @@ function sameProposalSource(left, right) {
   );
 }
 
+function isRetiredProposal({ issue, record, authorization }) {
+  const current = authorization?.current;
+  const contract = authorization?.contract;
+  return Boolean(
+    issue?.state === "closed" &&
+      (issue.state_reason === "not_planned" ||
+        labelsOf(issue).includes("wontfix")) &&
+      current &&
+      ["active", "paused"].includes(current.state) &&
+      current.cycle > record.sourceCycle &&
+      current.executionContentHash === contract?.hash &&
+      current.blockedByHash === contract?.blockedByHash,
+  );
+}
+
 const UNEDITED_BLOCKER_QUERY = `
   query UneditedBlocker($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
@@ -706,7 +721,11 @@ async function repairProposalState({
     const missing = entries.filter(
       ({ issue }) => !currentBlockers.includes(issue.number),
     );
-    if (missing.length === 0) {
+    const recoverableMissing = missing.filter(
+      ({ issue, record }) =>
+        !isRetiredProposal({ issue, record, authorization }),
+    );
+    if (recoverableMissing.length === 0) {
       if (
         await repairAuthorizationRecord({
           repository,
@@ -722,8 +741,12 @@ async function repairProposalState({
       }
       continue;
     }
-    const first = missing[0].record;
-    if (missing.some(({ record }) => !sameProposalSource(record, first))) {
+    const first = recoverableMissing[0].record;
+    if (
+      recoverableMissing.some(
+        ({ record }) => !sameProposalSource(record, first),
+      )
+    ) {
       triage.add(sourceIssue);
       continue;
     }
@@ -745,7 +768,7 @@ async function repairProposalState({
       nextBlockers = assertCanAddBlockers(
         graph,
         sourceIssue,
-        missing.map(({ issue }) => issue.number),
+        recoverableMissing.map(({ issue }) => issue.number),
       );
     } catch {
       triage.add(sourceIssue);
