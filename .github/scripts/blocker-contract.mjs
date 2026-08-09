@@ -337,8 +337,31 @@ export function canRegisterBlockerIdentity(issue, rendered) {
   );
 }
 
+function immutableBlockerIssueBody(body) {
+  if (typeof body !== "string") return body;
+  try {
+    parseBlockedBy(body);
+  } catch {
+    return body;
+  }
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const heading = lines.findIndex((line) => line.trim() === "## Blocked by");
+  const next = lines.findIndex(
+    (line, index) => index > heading && /^##\s+\S/.test(line.trim()),
+  );
+  return [
+    ...lines.slice(0, heading + 1),
+    ...lines.slice(next === -1 ? lines.length : next),
+  ].join("\n");
+}
+
 function blockerIssueContentHash(issue) {
-  return sha256(JSON.stringify({ title: issue?.title, body: issue?.body }));
+  return sha256(
+    JSON.stringify({
+      title: issue?.title,
+      body: immutableBlockerIssueBody(issue?.body),
+    }),
+  );
 }
 
 export function buildBlockerIdentityComment(record, issue) {

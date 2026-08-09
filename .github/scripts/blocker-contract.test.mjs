@@ -282,6 +282,34 @@ test("trusts an Actions-created blocker after an App identity audit", () => {
   );
 });
 
+test("keeps blocker identity trusted after an authoritative dependency update", () => {
+  const rendered = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 3,
+    executionContentHash: "a".repeat(64),
+    proposal,
+  });
+  const identity = {
+    body: rendered.identityComment,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    created_at: "2026-08-07T07:56:37Z",
+    updated_at: "2026-08-07T07:56:37Z",
+  };
+  const nestedBlockerIssue = {
+    number: 99,
+    title: rendered.title,
+    body: replaceBlockedBy(rendered.body, [7], { issueNumber: 99 }),
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+  };
+
+  assert.deepEqual(
+    parseBlockerProposalRecord(nestedBlockerIssue, { comments: [identity] }),
+    rendered.record,
+  );
+});
+
 test("keeps model-supplied headings out of generated blocker Issue structure", () => {
   const headings = [
     "## Problem",
