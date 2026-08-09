@@ -3,12 +3,18 @@ import { pathToFileURL } from "node:url";
 
 import {
   assertCanAddBlockers,
+  BLOCKER_PUBLISH_TRIAGE_COMMENT,
   BLOCKER_REVIEW_COMMENT,
+  buildBlockerIdentityComment,
   buildBlockerStateComment,
   classifyDependentBlockers,
   hasTrustedBlockerReviewAck,
+  hasTrustedBlockerIdentityAudit,
   hasTrustedWorkerDispatchAck,
   inspectBlockerGraph,
+  isActionsCreatedBlockerIssue,
+  isGitHubActionsBot,
+  isTrustedActionsObject,
   isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
   nativeDependencyDecision,
@@ -88,6 +94,63 @@ function sameProposalSource(left, right) {
     left.sourceIssue === right.sourceIssue &&
     left.sourceCycle === right.sourceCycle &&
     left.executionContentHash === right.executionContentHash
+  );
+}
+
+const UNEDITED_BLOCKER_QUERY = `
+  query UneditedBlocker($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        id
+        title
+        body
+        lastEditedAt
+        author { login }
+      }
+    }
+  }
+`;
+
+export function isUneditedActionsBlockerSnapshot(issue, live) {
+  return Boolean(
+    isActionsCreatedBlockerIssue(issue) &&
+      issue.node_id &&
+      live?.id === issue.node_id &&
+      live.title === issue.title &&
+      live.body === issue.body &&
+      live.lastEditedAt === null &&
+      live.author?.login === "github-actions",
+  );
+}
+
+export function matchesRecoveryAuthorization(record, authorization) {
+  const current = authorization?.current;
+  const contract = authorization?.contract;
+  return Boolean(
+    current &&
+      ["active", "paused"].includes(current.state) &&
+      current.cycle === record?.sourceCycle &&
+      current.executionContentHash === record?.executionContentHash &&
+      current.executionContentHash === contract?.hash &&
+      current.blockedByHash === contract?.blockedByHash,
+  );
+}
+
+async function isUneditedActionsBlocker({ repository, issue, token, request }) {
+  if (!isActionsCreatedBlockerIssue(issue) || !issue.node_id) return false;
+  const [owner, name] = repository.split("/");
+  const response = await request("/graphql", {
+    token,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: UNEDITED_BLOCKER_QUERY,
+      variables: { owner, name, number: issue.number },
+    }),
+  });
+  return isUneditedActionsBlockerSnapshot(
+    issue,
+    response?.data?.repository?.issue,
   );
 }
 
@@ -190,6 +253,34 @@ async function addTriageLabel(repository, issueNumber, token, request) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ labels: ["needs-triage"] }),
   });
+}
+
+async function removeTriageLabel(repository, issueNumber, token, request) {
+  await request(
+    `/repos/${repository}/issues/${issueNumber}/labels/needs-triage`,
+    { token, method: "DELETE", allowNotFound: true },
+  );
+}
+
+export function hasSystemTriageEvidence({
+  comments = [],
+  events = [],
+  requirePublisherFailure = false,
+}) {
+  const labelEvents = events
+    .filter((event) => event?.label?.name === "needs-triage")
+    .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)));
+  const latest = labelEvents.at(-1);
+  if (latest?.event !== "labeled" || !isGitHubActionsBot(latest.actor)) {
+    return false;
+  }
+  if (!requirePublisherFailure) return true;
+  return comments.some(
+    (comment) =>
+      isTrustedActionsObject(comment, { appendOnly: true }) &&
+      comment.body === BLOCKER_PUBLISH_TRIAGE_COMMENT &&
+      String(comment.created_at) >= String(latest.created_at),
+  );
 }
 
 async function publishComment(repository, issueNumber, body, token, request) {
@@ -414,6 +505,7 @@ async function trustedProposalGroups({
 }) {
   const groups = new Map();
   const invalidIssues = [];
+  const recoveryCandidates = [];
   for (const issue of issues) {
     if (issue.pull_request) continue;
     let rawRecord;
@@ -437,14 +529,24 @@ async function trustedProposalGroups({
       continue;
     }
     if (!record) {
-      invalidIssues.push(issue.number);
+      if (
+        isActionsCreatedBlockerIssue(issue) &&
+        !hasTrustedBlockerIdentityAudit(blockerComments)
+      ) {
+        recoveryCandidates.push({
+          issue: { ...issue, blockerComments },
+          record: rawRecord,
+        });
+      } else {
+        invalidIssues.push(issue.number);
+      }
       continue;
     }
     const entries = groups.get(record.sourceIssue) ?? [];
     entries.push({ issue: { ...issue, blockerComments }, record });
     groups.set(record.sourceIssue, entries);
   }
-  return { groups, invalidIssues };
+  return { groups, invalidIssues, recoveryCandidates };
 }
 
 async function repairProposalState({
@@ -454,7 +556,7 @@ async function repairProposalState({
   request,
   paginate,
 }) {
-  const { groups, invalidIssues } = await trustedProposalGroups({
+  const { groups, invalidIssues, recoveryCandidates } = await trustedProposalGroups({
     repository,
     issues,
     token,
@@ -464,6 +566,98 @@ async function repairProposalState({
   const triage = new Set(invalidIssues);
   let changed = false;
   let repairedAuthorizations = 0;
+  let repairedIdentities = 0;
+
+  const trustedIdentityCounts = new Map();
+  for (const entries of groups.values()) {
+    for (const { record } of entries) {
+      const identity = proposalIdentity(record);
+      trustedIdentityCounts.set(identity, (trustedIdentityCounts.get(identity) ?? 0) + 1);
+    }
+  }
+  const recoveryIdentityCounts = new Map();
+  for (const { record } of recoveryCandidates) {
+    const identity = proposalIdentity(record);
+    recoveryIdentityCounts.set(identity, (recoveryIdentityCounts.get(identity) ?? 0) + 1);
+  }
+  const uniqueRecoveryCandidates = recoveryCandidates.filter(({ issue, record }) => {
+    const identity = proposalIdentity(record);
+    const count =
+      (trustedIdentityCounts.get(identity) ?? 0) +
+      (recoveryIdentityCounts.get(identity) ?? 0);
+    if (count === 1) return true;
+    triage.add(record.sourceIssue);
+    triage.add(issue.number);
+    return false;
+  });
+
+  for (const candidate of uniqueRecoveryCandidates) {
+    const { issue, record } = candidate;
+    const source = issues.find(
+      (entry) => entry.number === record.sourceIssue && !entry.pull_request,
+    );
+    let authorization;
+    try {
+      authorization = source
+        ? await sourceAuthorization({
+            repository,
+            source,
+            token,
+            request,
+            paginate,
+          })
+        : null;
+    } catch {
+      authorization = null;
+    }
+    let unedited = false;
+    try {
+      unedited = await isUneditedActionsBlocker({
+        repository,
+        issue,
+        token,
+        request,
+      });
+    } catch {
+      unedited = false;
+    }
+    if (
+      !unedited ||
+      !matchesRecoveryAuthorization(record, authorization)
+    ) {
+      triage.add(issue.number);
+      if (source) triage.add(source.number);
+      continue;
+    }
+    await publishComment(
+      repository,
+      issue.number,
+      buildBlockerIdentityComment(record, issue),
+      token,
+      request,
+    );
+    const blockerComments = [
+      ...issue.blockerComments,
+      ...(await paginate(
+        `/repos/${repository}/issues/${issue.number}/comments`,
+        { token, request },
+      )),
+    ].filter(
+      (comment, index, values) =>
+        values.findIndex((candidate) => candidate.id === comment.id) === index,
+    );
+    const trusted = parseBlockerProposalRecord(issue, { comments: blockerComments });
+    if (!trusted) {
+      triage.add(issue.number);
+      triage.add(source.number);
+      continue;
+    }
+    const entries = groups.get(record.sourceIssue) ?? [];
+    entries.push({ issue: { ...issue, blockerComments }, record: trusted });
+    groups.set(record.sourceIssue, entries);
+    repairedIdentities += 1;
+    changed = true;
+  }
 
   for (const entries of groups.values()) {
     for (const { issue, record } of entries) {
@@ -595,6 +789,16 @@ async function repairProposalState({
   return {
     changed,
     repairedAuthorizations,
+    repairedIdentities,
+    recoveryPairs: [...groups.entries()].flatMap(([sourceIssue, entries]) =>
+      entries
+        .filter(({ issue }) => issue.performed_via_github_app === null)
+        .map(({ issue, record }) => ({
+          blockerIssue: issue.number,
+          record,
+          sourceIssue,
+        })),
+    ),
     triage: [...triage].sort((left, right) => left - right),
   };
 }
@@ -640,6 +844,87 @@ export async function reconcileRepository({
     request,
     paginate,
   });
+  let clearedTriage = 0;
+  if (nativeDependencies.triage.length === 0 && graph.errors.size === 0) {
+    for (const { blockerIssue, record, sourceIssue } of repair.recoveryPairs) {
+      const source = issues.find((issue) => issue.number === sourceIssue);
+      const blocker = issues.find((issue) => issue.number === blockerIssue);
+      if (
+        !source ||
+        !blocker ||
+        repair.triage.includes(sourceIssue) ||
+        repair.triage.includes(blockerIssue)
+      ) {
+        continue;
+      }
+      let authorization;
+      let unedited = false;
+      try {
+        [authorization, unedited] = await Promise.all([
+          sourceAuthorization({
+            repository,
+            source,
+            token,
+            request,
+            paginate,
+          }),
+          isUneditedActionsBlocker({
+            repository,
+            issue: blocker,
+            token,
+            request,
+          }),
+        ]);
+      } catch {
+        continue;
+      }
+      if (
+        !unedited ||
+        !matchesRecoveryAuthorization(record, authorization) ||
+        !authorization.contract.blockerNumbers.includes(blockerIssue)
+      ) {
+        continue;
+      }
+      const [sourceComments, sourceEvents, blockerEvents] = await Promise.all([
+        paginate(`/repos/${repository}/issues/${sourceIssue}/comments`, {
+          token,
+          request,
+        }),
+        paginate(`/repos/${repository}/issues/${sourceIssue}/events`, {
+          token,
+          request,
+        }),
+        paginate(`/repos/${repository}/issues/${blockerIssue}/events`, {
+          token,
+          request,
+        }),
+      ]);
+      if (
+        labelsOf(source).includes("needs-triage") &&
+        hasSystemTriageEvidence({
+          comments: sourceComments,
+          events: sourceEvents,
+          requirePublisherFailure: true,
+        })
+      ) {
+        await removeTriageLabel(repository, sourceIssue, token, request);
+        source.labels = (source.labels ?? []).filter(
+          (label) => (typeof label === "string" ? label : label.name) !== "needs-triage",
+        );
+        clearedTriage += 1;
+      }
+      if (
+        labelsOf(blocker).includes("needs-triage") &&
+        hasSystemTriageEvidence({ events: blockerEvents })
+      ) {
+        await removeTriageLabel(repository, blockerIssue, token, request);
+        blocker.labels = (blocker.labels ?? []).filter(
+          (label) => (typeof label === "string" ? label : label.name) !== "needs-triage",
+        );
+        clearedTriage += 1;
+      }
+    }
+  }
   const outcomes = [];
   for (const issueNumber of reconciliationIssueNumbers(graph)) {
     const issue = graph.issuesByNumber.get(issueNumber);
@@ -704,8 +989,10 @@ export async function reconcileRepository({
   return {
     outcomes,
     repairedAuthorizations: repair.repairedAuthorizations,
+    repairedIdentities: repair.repairedIdentities,
     repairedEdges: repair.changed,
     repairedNativeDependencies: nativeDependencies.added,
+    clearedTriage,
     nativeDependencyTriage: nativeDependencies.triage,
     triage: repair.triage,
   };

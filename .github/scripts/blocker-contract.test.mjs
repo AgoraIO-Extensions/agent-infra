@@ -8,6 +8,7 @@ import {
   buildBlockerIssue,
   buildBlockerStateComment,
   buildWorkerDispatchAck,
+  canRegisterBlockerIdentity,
   classifyDependentBlockers,
   hasTrustedWorkerDispatchAck,
   inspectBlockerGraph,
@@ -140,28 +141,32 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
   );
   assert.equal(parsed.sourceIssue, 42);
   assert.equal(parsed.sourceCycle, 3);
-  assert.equal(
-    parseBlockerProposalRecord(
-      {
-        title: rendered.title,
-        body: rendered.body.replace("asked to", "told us to"),
-        user: { login: "github-actions[bot]", type: "Bot" },
-        performed_via_github_app: { id: 15368 },
-      },
-      {
-        comments: [
-          {
-            body: rendered.identityComment,
-            user: { login: "github-actions[bot]", type: "Bot" },
-            performed_via_github_app: { id: 15368 },
-            created_at: "2026-08-06T00:00:00Z",
-            updated_at: "2026-08-06T00:00:00Z",
-          },
-        ],
-      },
-    )?.sourceIssue,
-    42,
-  );
+  const identityComments = [
+    {
+      body: rendered.identityComment,
+      user: { login: "github-actions[bot]", type: "Bot" },
+      performed_via_github_app: { id: 15368 },
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:00:00Z",
+    },
+  ];
+  for (const edited of [
+    { ...rendered, title: `${rendered.title} edited` },
+    { ...rendered, body: rendered.body.replace("asked to", "told us to") },
+  ]) {
+    assert.equal(
+      parseBlockerProposalRecord(
+        {
+          title: edited.title,
+          body: edited.body,
+          user: { login: "github-actions[bot]", type: "Bot" },
+          performed_via_github_app: { id: 15368 },
+        },
+        { comments: identityComments },
+      ),
+      null,
+    );
+  }
   assert.equal(
     parseBlockerProposalRecord({
       title: rendered.title,
@@ -191,6 +196,117 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
       },
     ),
     null,
+  );
+});
+
+test("trusts an Actions-created blocker after an App identity audit", () => {
+  const rendered = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 3,
+    executionContentHash: "a".repeat(64),
+    proposal,
+  });
+  const actionsIssue = {
+    title: rendered.title,
+    body: rendered.body,
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+    created_at: "2026-08-07T07:56:36Z",
+    updated_at: "2026-08-07T07:56:36Z",
+  };
+  const identity = {
+    body: rendered.identityComment,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    created_at: "2026-08-07T07:56:37Z",
+    updated_at: "2026-08-07T07:56:37Z",
+  };
+
+  assert.deepEqual(
+    parseBlockerProposalRecord(actionsIssue, { comments: [identity] }),
+    rendered.record,
+  );
+  for (const edited of [
+    { ...actionsIssue, title: `${actionsIssue.title} edited` },
+    { ...actionsIssue, body: `${actionsIssue.body}\nedited` },
+  ]) {
+    assert.equal(
+      parseBlockerProposalRecord(edited, { comments: [identity] }),
+      null,
+    );
+  }
+  assert.equal(canRegisterBlockerIdentity(actionsIssue, rendered), true);
+  assert.equal(
+    canRegisterBlockerIdentity(
+      { ...actionsIssue, title: `${actionsIssue.title} edited` },
+      rendered,
+    ),
+    false,
+  );
+  assert.equal(
+    canRegisterBlockerIdentity(
+      { ...actionsIssue, body: `${actionsIssue.body}\nedited` },
+      rendered,
+    ),
+    false,
+  );
+  assert.equal(
+    canRegisterBlockerIdentity(
+      actionsIssue,
+      {
+        ...rendered,
+        record: { ...rendered.record, digest: "0".repeat(64) },
+      },
+    ),
+    false,
+  );
+  assert.equal(
+    parseBlockerProposalRecord(
+      {
+        ...actionsIssue,
+        user: { ...actionsIssue.user, id: 1 },
+      },
+      { comments: [identity] },
+    ),
+    null,
+  );
+  assert.equal(
+    parseBlockerProposalRecord(
+      {
+        ...actionsIssue,
+        user: { id: 41898282, login: "forger", type: "User" },
+      },
+      { comments: [identity] },
+    ),
+    null,
+  );
+});
+
+test("keeps blocker identity trusted after an authoritative dependency update", () => {
+  const rendered = buildBlockerIssue({
+    sourceIssue: 42,
+    sourceCycle: 3,
+    executionContentHash: "a".repeat(64),
+    proposal,
+  });
+  const identity = {
+    body: rendered.identityComment,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    created_at: "2026-08-07T07:56:37Z",
+    updated_at: "2026-08-07T07:56:37Z",
+  };
+  const nestedBlockerIssue = {
+    number: 99,
+    title: rendered.title,
+    body: replaceBlockedBy(rendered.body, [7], { issueNumber: 99 }),
+    user: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: null,
+  };
+
+  assert.deepEqual(
+    parseBlockerProposalRecord(nestedBlockerIssue, { comments: [identity] }),
+    rendered.record,
   );
 });
 
