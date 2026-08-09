@@ -885,6 +885,36 @@ test("declares explicit scalar types throughout the Codex output schema", () => 
   assertExplicitScalarTypes(schema);
 });
 
+function assertOpenAiStrictSchemaSubset(schema, location = "schema") {
+  if (Array.isArray(schema)) {
+    schema.forEach((value, index) =>
+      assertOpenAiStrictSchemaSubset(value, `${location}[${index}]`),
+    );
+    return;
+  }
+  if (!schema || typeof schema !== "object") return;
+
+  for (const [key, value] of Object.entries(schema)) {
+    assert.equal(
+      ["allOf", "if", "then", "else"].includes(key),
+      false,
+      `${location}.${key} is not accepted by the OpenAI strict schema subset`,
+    );
+    assertOpenAiStrictSchemaSubset(value, `${location}.${key}`);
+  }
+}
+
+test("keeps the Codex output schema within the OpenAI strict subset", () => {
+  const schemaPath = path.join(
+    import.meta.dirname,
+    "..",
+    "codex-worker-result.schema.json",
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+
+  assertOpenAiStrictSchemaSubset(schema);
+});
+
 test("accepts only bounded Worker results for the recorded Issue and start commit", () => {
   const result = validateWorkerResult(workerResult(), workerPlan);
   assert.equal(result.issue_number, 42);
