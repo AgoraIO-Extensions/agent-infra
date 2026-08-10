@@ -543,6 +543,17 @@ test("keeps unapproved job-level Secrets out of the trusted Claude publisher", a
   );
 });
 
+test("keeps lowercase Secret references out of the trusted Claude publisher", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-pr-review.yml"].jobs.publish.env = {
+    BAD: "${{ secrets.anthropic_api_key }}",
+  };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) => error.includes("publisher")),
+  );
+});
+
 test("configures every Claude model job through validated repository settings", async () => {
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";

@@ -38,7 +38,7 @@ function sameObject(actual, expected) {
 }
 
 function referencedSecrets(value) {
-  return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(
+  return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/gi)].map(
     (match) => match[1],
   );
 }
