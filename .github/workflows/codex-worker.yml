@@ -461,7 +461,7 @@ jobs:
       - name: Dispatch next model attempt
         if: steps.preflight.outputs.operation == 'retry'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
           WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
           WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
           WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}

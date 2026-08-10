@@ -151,13 +151,18 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         jobName === "base-update" &&
         step.name === "Update clean Worker PR branches" &&
         step.run === "node trusted/.github/scripts/codex-worker.mjs update-bases";
+      const allowedRetryDispatch =
+        workflowName === "codex-worker.yml" &&
+        jobName === "publish" &&
+        step.name === "Dispatch next model attempt" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs dispatch-retry";
       if (
-        (!allowedPublication && !allowedBaseUpdate) ||
+        (!allowedPublication && !allowedBaseUpdate && !allowedRetryDispatch) ||
         step.env?.CODEX_GITHUB_TOKEN !== "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
         occurrences !== 1
       ) {
         errors.push(
-          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in the fixed Worker publication step`,
+          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in fixed Worker publisher steps`,
         );
       }
       continue;
@@ -738,7 +743,10 @@ export function validateWorkflowDocuments(workflows) {
   if (
     implement?.needs !== "prepare" ||
     retryStep?.run !== "node trusted/.github/scripts/codex-worker.mjs dispatch-retry" ||
-    retryStep?.if !== "steps.preflight.outputs.operation == 'retry'"
+    retryStep?.if !== "steps.preflight.outputs.operation == 'retry'" ||
+    retryStep?.env?.CODEX_GITHUB_TOKEN !==
+      "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
+    retryStep?.env?.GITHUB_TOKEN !== undefined
   ) {
     errors.push("Codex Worker retries must dispatch a fresh workflow run");
   }

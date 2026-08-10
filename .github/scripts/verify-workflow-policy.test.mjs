@@ -398,7 +398,7 @@ test("keeps the publisher PAT out of the model job", async () => {
   );
 });
 
-test("allows the publisher PAT only in fixed publication and base-update steps", async () => {
+test("allows the publisher PAT only in fixed publication, retry, and base-update steps", async () => {
   const workflows = await actualWorkflows();
   const step = workflows["codex-worker.yml"].jobs.publish.steps.find(
     (candidate) => candidate.name === "Handle Worker control event",
@@ -406,7 +406,7 @@ test("allows the publisher PAT only in fixed publication and base-update steps",
   step.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("fixed Worker publication step"),
+      error.includes("fixed Worker publisher steps"),
     ),
   );
 });
@@ -544,6 +544,11 @@ test("dispatches every model retry to a fresh workflow run", async () => {
   );
   assert.equal(worker.jobs.implement.needs, "prepare");
   assert.equal(retry.run, "node trusted/.github/scripts/codex-worker.mjs dispatch-retry");
+  assert.equal(
+    retry.env.CODEX_GITHUB_TOKEN,
+    "${{ secrets.CODEX_GITHUB_TOKEN }}",
+  );
+  assert.equal(retry.env.GITHUB_TOKEN, undefined);
 
   retry.run = "node trusted/.github/scripts/codex-worker.mjs prepare";
   assert.ok(

@@ -2708,7 +2708,7 @@ async function dispatchRetryCommand() {
     issueNumber: Number(requiredEnvironment("WORKER_ISSUE_NUMBER")),
     startSha: requiredEnvironment("WORKER_START_SHA"),
   });
-  const token = requiredEnvironment("GITHUB_TOKEN");
+  const token = requiredEnvironment("CODEX_GITHUB_TOKEN");
   const state = await fetchIssueState(plan.repository, plan.issueNumber, token);
   const attempts = parseWorkerAttemptRecords(state.comments, {
     issueNumber: plan.issueNumber,
