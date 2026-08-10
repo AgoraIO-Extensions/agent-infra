@@ -624,6 +624,19 @@ test("binds checkpoint recovery to the trusted source run and Artifact name", as
   }
 });
 
+test("applies a trusted checkpoint before staging model-only files", async () => {
+  const workflows = await actualWorkflows();
+  const steps = workflows["codex-worker.yml"].jobs.implement.steps;
+  const applyIndex = steps.findIndex(
+    (step) => step.name === "Apply previous trusted checkpoint",
+  );
+  const stageIndex = steps.findIndex(
+    (step) => step.name === "Stage trusted Worker inputs",
+  );
+
+  assert.ok(applyIndex >= 0 && applyIndex < stageIndex);
+});
+
 test("keeps the model job read-only and isolated from publisher credentials", async () => {
   for (const mutate of [
     (implement) => {

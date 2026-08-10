@@ -888,6 +888,73 @@ test("creates a bounded repair plan for the current ready Worker PR", () => {
   );
 });
 
+test("preserves repair mode when retrying a recoverable repair attempt", () => {
+  const headSha = "f".repeat(40);
+  const pullRequest = {
+    number: 90,
+    state: "open",
+    draft: false,
+    merged_at: null,
+    head: {
+      ref: "codex/issue-42-cycle-1",
+      sha: headSha,
+      repo: { full_name: "AgoraIO-Extensions/agent-infra" },
+    },
+    base: { ref: "main" },
+  };
+  const state = {
+    repository: "AgoraIO-Extensions/agent-infra",
+    defaultBranch: "main",
+    issue: {
+      number: 42,
+      state: "open",
+      labels: [{ name: "ready-for-agent" }],
+    },
+    contract: workerContract,
+    authorizationRecord: workerAuthorization,
+    blockers: [],
+    workerPullRequests: [pullRequest],
+    branchSha: headSha,
+    defaultSha: "a".repeat(40),
+  };
+  const first = createWorkerPlan({
+    ...state,
+    mode: "repair",
+    repairRound: 1,
+    repairPullRequest: pullRequest,
+  });
+  const checkpoint = {
+    issueNumber: 42,
+    cycle: 1,
+    workerRunId: first.plan.workerRunId,
+    baseSha: headSha,
+    sourceAttempt: 1,
+    patchSha256: "b".repeat(64),
+    artifactRunId: 123,
+    artifactName: `codex-worker-checkpoint-${first.plan.workerRunId}-attempt-1`,
+    remainingAcceptanceCriteria: ["AC-1"],
+  };
+
+  const retry = createWorkerPlan({
+    ...state,
+    attempts: [{ attempt: 1, outcome: "recoverable", checkpoint }],
+    retryIdentity: {
+      issue_number: 42,
+      cycle: 1,
+      worker_run_id: first.plan.workerRunId,
+      base_sha: headSha,
+      attempt: 1,
+    },
+  });
+
+  assert.equal(retry.operation, "implement");
+  assert.equal(retry.plan.mode, "repair");
+  assert.equal(retry.plan.repairRound, 1);
+  assert.equal(retry.plan.attempt, 2);
+  assert.equal(retry.plan.workerRunId, first.plan.workerRunId);
+  assert.equal(retry.plan.pullRequestNumber, 90);
+});
+
 test("validates bounded repository configuration before invoking Codex", () => {
   assert.deepEqual(
     validateWorkerConfiguration({

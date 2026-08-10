@@ -232,6 +232,29 @@ export function evaluateFrontierIssue({
   };
 }
 
+function workerRunIdFor({
+  repository,
+  issueNumber,
+  cycle,
+  startSha,
+  mode,
+  repairRound,
+}) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        repository,
+        issueNumber,
+        cycle,
+        startSha,
+        mode,
+        repairRound,
+      ]),
+      "utf8",
+    )
+    .digest("hex");
+}
+
 export function createWorkerPlan({
   repository,
   defaultBranch,
@@ -248,9 +271,60 @@ export function createWorkerPlan({
   mode = "implement",
   repairRound = null,
   repairPullRequest = null,
+  retryIdentity = null,
 }) {
+  let planMode = mode;
+  let planRepairRound = repairRound;
+  let planRepairPullRequest = repairPullRequest;
+  if (retryIdentity) {
+    if (
+      retryIdentity.issue_number !== issue.number ||
+      retryIdentity.cycle !== authorizationRecord?.cycle ||
+      !Number.isSafeInteger(retryIdentity.attempt) ||
+      retryIdentity.attempt < 1 ||
+      retryIdentity.attempt >= 3 ||
+      !/^[0-9a-f]{64}$/.test(retryIdentity.worker_run_id ?? "") ||
+      !/^[0-9a-f]{40}$/.test(retryIdentity.base_sha ?? "")
+    ) {
+      return { operation: "triage", reason: "invalid-checkpoint" };
+    }
+    const retryContext = [
+      { mode: "implement", repairRound: null },
+      { mode: "repair", repairRound: 1 },
+      { mode: "repair", repairRound: 2 },
+    ].find(
+      (candidate) =>
+        workerRunIdFor({
+          repository,
+          issueNumber: issue.number,
+          cycle: authorizationRecord.cycle,
+          startSha: retryIdentity.base_sha,
+          ...candidate,
+        }) === retryIdentity.worker_run_id,
+    );
+    if (!retryContext) {
+      return { operation: "triage", reason: "invalid-checkpoint" };
+    }
+    planMode = retryContext.mode;
+    planRepairRound = retryContext.repairRound;
+    if (planMode === "repair") {
+      const candidates = workerPullRequests.filter(
+        (pullRequest) =>
+          pullRequest.state === "open" &&
+          !pullRequest.draft &&
+          !pullRequest.merged_at &&
+          pullRequest.head?.sha === retryIdentity.base_sha,
+      );
+      if (candidates.length !== 1) {
+        return { operation: "triage", reason: "stale-worker-pr" };
+      }
+      planRepairPullRequest = candidates[0];
+    } else {
+      planRepairPullRequest = null;
+    }
+  }
   let decision;
-  if (mode === "repair") {
+  if (planMode === "repair") {
     const authorization = activeAuthorization({
       issue,
       contract,
@@ -268,12 +342,12 @@ export function createWorkerPlan({
       };
     }
     if (
-      !repairPullRequest ||
-      repairPullRequest.state !== "open" ||
-      repairPullRequest.draft ||
-      repairPullRequest.number < 1 ||
-      repairPullRequest.head?.sha !== branchSha ||
-      !isOwnedWorkerPullRequest(repairPullRequest, {
+      !planRepairPullRequest ||
+      planRepairPullRequest.state !== "open" ||
+      planRepairPullRequest.draft ||
+      planRepairPullRequest.number < 1 ||
+      planRepairPullRequest.head?.sha !== branchSha ||
+      !isOwnedWorkerPullRequest(planRepairPullRequest, {
         repository,
         defaultBranch,
         branch,
@@ -286,7 +360,7 @@ export function createWorkerPlan({
       reason: "repair",
       startSha: branchSha,
       branch,
-      pullRequestNumber: repairPullRequest.number,
+      pullRequestNumber: planRepairPullRequest.number,
     };
   } else {
     decision = evaluateFrontierIssue({
@@ -296,10 +370,16 @@ export function createWorkerPlan({
       blockers,
       workerPullRequests,
       branchSha,
-      defaultSha,
+      defaultSha:
+        retryIdentity && branchSha === null
+          ? retryIdentity.base_sha
+          : defaultSha,
     });
   }
   if (decision.operation !== "implement") return decision;
+  if (retryIdentity && decision.startSha !== retryIdentity.base_sha) {
+    return { operation: "triage", reason: "stale-worker-branch" };
+  }
   if (
     allWorkerPullRequests.some(
       (pullRequest) =>
@@ -324,19 +404,14 @@ export function createWorkerPlan({
   ) {
     return { operation: "triage", reason: "foreign-worker-pr" };
   }
-  const workerRunId = createHash("sha256")
-    .update(
-      JSON.stringify([
-        repository,
-        issue.number,
-        authorizationRecord.cycle,
-        decision.startSha,
-        mode,
-        repairRound,
-      ]),
-      "utf8",
-    )
-    .digest("hex");
+  const workerRunId = workerRunIdFor({
+    repository,
+    issueNumber: issue.number,
+    cycle: authorizationRecord.cycle,
+    startSha: decision.startSha,
+    mode: planMode,
+    repairRound: planRepairRound,
+  });
   const identity = {
     issueNumber: issue.number,
     cycle: authorizationRecord.cycle,
@@ -355,6 +430,13 @@ export function createWorkerPlan({
       reason: attemptDecision.reason,
     };
   }
+  if (
+    retryIdentity &&
+    (workerRunId !== retryIdentity.worker_run_id ||
+      attemptDecision.attempt !== retryIdentity.attempt + 1)
+  ) {
+    return { operation: "triage", reason: "invalid-checkpoint" };
+  }
   const checkpoint = attemptDecision.checkpoint;
   const plan = {
     version: 3,
@@ -369,8 +451,8 @@ export function createWorkerPlan({
     branch: decision.branch,
     branchExisted: branchSha !== null,
     pullRequestNumber: decision.pullRequestNumber,
-    mode,
-    repairRound,
+    mode: planMode,
+    repairRound: planRepairRound,
     workerRunId,
     attempt: attemptDecision.attempt,
     modelSlot: (issue.number % 2) + 1,
@@ -2416,6 +2498,11 @@ async function prepareCommand() {
     repository,
     defaultBranch,
     ...state,
+    retryIdentity:
+      eventName === "repository_dispatch" &&
+      event.client_payload?.operation === "retry-attempt"
+        ? event.client_payload
+        : null,
   });
   if (decision.operation !== "implement") {
     await writePrepareOutputs({ ...decision, issueNumber });

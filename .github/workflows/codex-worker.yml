@@ -270,6 +270,18 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ needs.prepare.outputs.checkpoint_run_id }}
 
+      - name: Apply previous trusted checkpoint
+        if: needs.prepare.outputs.checkpoint_run_id != ''
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKER_CHECKPOINT_PATCH_PATH: ${{ runner.temp }}/codex-worker-checkpoint/change.patch
+          WORKER_CHECKPOINT_PATH: ${{ runner.temp }}/codex-worker-checkpoint/checkpoint.json
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_WORKSPACE: ${{ github.workspace }}/workspace
+        run: node trusted/.github/scripts/codex-worker.mjs resume
+
       - name: Stage trusted Worker inputs
         env:
           WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-plan
@@ -285,18 +297,6 @@ jobs:
           install -m 0444 "$WORKER_PREPARE_DIR/result.schema.json" \
             "$WORKER_ARTIFACT_DIR/result.schema.json"
           cp -R trusted/.codex "$CODEX_HOME"
-
-      - name: Apply previous trusted checkpoint
-        if: needs.prepare.outputs.checkpoint_run_id != ''
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          WORKER_CHECKPOINT_PATCH_PATH: ${{ runner.temp }}/codex-worker-checkpoint/change.patch
-          WORKER_CHECKPOINT_PATH: ${{ runner.temp }}/codex-worker-checkpoint/checkpoint.json
-          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
-          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
-          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
-          WORKER_WORKSPACE: ${{ github.workspace }}/workspace
-        run: node trusted/.github/scripts/codex-worker.mjs resume
 
       - name: Run Codex implementation
         id: codex
