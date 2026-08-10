@@ -6,6 +6,7 @@ import {
   buildReviewSummary,
   buildReviewCheckOutput,
   collectChangedDiffLines,
+  gateCheckRequest,
   isTrustedReviewComment,
   parseReviewOutput,
   requireCurrentReviewTarget,
@@ -76,7 +77,7 @@ test("marks only parsed or validated Review output defects as invalid output", (
   );
 });
 
-test("selects only the latest current-head GitHub Actions Review Gate", () => {
+test("selects only the latest current-head dedicated App Review Gate", () => {
   const expectedExternalId = `agent-infra:pr:42:claude-review-gate:${head}`;
   assert.deepEqual(
     selectReviewGateCheck(
@@ -85,7 +86,7 @@ test("selects only the latest current-head GitHub Actions Review Gate", () => {
           id: 1,
           name: "Claude Review Gate",
           head_sha: head,
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: expectedExternalId,
         },
         {
@@ -99,14 +100,14 @@ test("selects only the latest current-head GitHub Actions Review Gate", () => {
           id: 3,
           name: "Claude Review Gate",
           head_sha: "b".repeat(40),
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: expectedExternalId,
         },
         {
           id: 4,
           name: "Claude Review Gate",
           head_sha: head,
-          app: { id: 15368 },
+          app: { id: 4503079 },
           external_id: `agent-infra:pr:99:claude-review-gate:${head}`,
         },
       ],
@@ -117,10 +118,35 @@ test("selects only the latest current-head GitHub Actions Review Gate", () => {
       id: 1,
       name: "Claude Review Gate",
       head_sha: head,
-      app: { id: 15368 },
+      app: { id: 4503079 },
       external_id: expectedExternalId,
     },
   );
+});
+
+test("Review Gate publication uses the check-only token", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousGateToken = process.env.GATE_CHECK_TOKEN;
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  let authorization;
+  process.env.GATE_CHECK_TOKEN = "gate-token";
+  process.env.GITHUB_TOKEN = "workflow-token";
+  globalThis.fetch = async (_url, options) => {
+    authorization = options.headers.Authorization;
+    return { ok: true, status: 204 };
+  };
+  try {
+    await gateCheckRequest("/repos/example/repo/check-runs/1", {
+      method: "PATCH",
+    });
+    assert.equal(authorization, "Bearer gate-token");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousGateToken === undefined) delete process.env.GATE_CHECK_TOKEN;
+    else process.env.GATE_CHECK_TOKEN = previousGateToken;
+    if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousGitHubToken;
+  }
 });
 
 test("publishes stable Review Gate success and failure reason codes", () => {

@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      checks: write
+      checks: read
       contents: read
       issues: write
       pull-requests: write
@@ -134,10 +134,21 @@ jobs:
         with:
           node-version: 24
 
+      - name: Mint Gate publisher token
+        id: gate-publisher-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.TEAM_MEMBERSHIP_APP_ID }}
+          permission-checks: write
+          private-key: ${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Publish validated Review result
         env:
           ANALYSIS_RESULT: ${{ needs.analyze.result }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATE_CHECK_TOKEN: ${{ steps.gate-publisher-token.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}

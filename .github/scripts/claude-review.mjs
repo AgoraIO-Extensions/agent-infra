@@ -234,12 +234,15 @@ function requiredEnvironment(name) {
   return value;
 }
 
-async function githubRequest(path, options = {}) {
+async function githubRequest(
+  path,
+  { tokenEnvironment = "GITHUB_TOKEN", ...options } = {},
+) {
   const response = await fetch(`https://api.github.com${path}`, {
     ...options,
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
+      Authorization: `Bearer ${requiredEnvironment(tokenEnvironment)}`,
       "X-GitHub-Api-Version": "2022-11-28",
       ...options.headers,
     },
@@ -248,6 +251,13 @@ async function githubRequest(path, options = {}) {
     throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
   }
   return response.status === 204 ? null : response.json();
+}
+
+export async function gateCheckRequest(path, options = {}) {
+  return githubRequest(path, {
+    ...options,
+    tokenEnvironment: "GATE_CHECK_TOKEN",
+  });
 }
 
 async function paginate(path) {
@@ -292,7 +302,7 @@ async function getOrCreateReviewGate(repository, prNumber, expectedHead, targetU
   );
   const existing = selectReviewGateCheck(response.check_runs, expectedHead, prNumber);
   if (existing) return existing;
-  return githubRequest(`/repos/${repository}/check-runs`, {
+  return gateCheckRequest(`/repos/${repository}/check-runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -385,7 +395,7 @@ async function main() {
       request: githubRequest,
     });
     const gateOutcome = reviewGateOutcome(blocking);
-    await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
+    await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -399,7 +409,7 @@ async function main() {
       }),
     });
   } catch (error) {
-    await githubRequest(`/repos/${repository}/check-runs/${check.id}`, {
+    await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
