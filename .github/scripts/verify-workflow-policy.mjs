@@ -6,6 +6,7 @@ import YAML from "yaml";
 const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "blocker-reconciler.yml",
+  "claude-effort-canary.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
@@ -18,6 +19,7 @@ const CLAUDE_ACTION = "anthropics/claude-code-action@";
 const CLAUDE_SECRETS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
+  "CLAUDE_REVIEW_CANARY_MODEL",
   "CLAUDE_REVIEW_EFFORT",
   "CLAUDE_REVIEW_MODEL",
 ];
@@ -97,6 +99,10 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
           (secret === "ANTHROPIC_BASE_URL" && step.env?.ANTHROPIC_BASE_URL === reference) ||
           (secret === "CLAUDE_REVIEW_EFFORT" &&
             step.with?.claude_args?.includes(`--effort "${reference}"`)) ||
+          (secret === "CLAUDE_REVIEW_CANARY_MODEL" &&
+            workflowName === "claude-effort-canary.yml" &&
+            jobName === "benchmark" &&
+            step.with?.claude_args?.includes(`--model "${reference}"`)) ||
           (secret === "CLAUDE_REVIEW_MODEL" &&
             step.with?.claude_args?.includes(`--model "${reference}"`)));
       if (!allowedConfig && !allowedAction) {
