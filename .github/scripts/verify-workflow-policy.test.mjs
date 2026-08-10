@@ -36,6 +36,7 @@ async function actualTrustedScriptSources() {
         "codex-worker.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
+        "worker-resilience.mjs",
       ].map(
         async (name) => [
           name,
@@ -146,9 +147,9 @@ test("requires the isolated Worker authorization recorder before the model", asy
   const workflows = await actualWorkflows();
   const worker = workflows["codex-worker.yml"];
   assert.ok(worker.on.issues.types.includes("edited"));
-  assert.equal(worker.jobs.implement.needs, "authorization");
+  assert.equal(worker.jobs.prepare.needs, "authorization");
   assert.equal(
-    worker.jobs.implement.if,
+    worker.jobs.prepare.if,
     "always() && needs.authorization.result == 'success' && needs.authorization.outputs.allowed != 'false'",
   );
 
@@ -361,7 +362,7 @@ test("keeps the Codex API key only in the official model Action", async () => {
 test("keeps Codex model configuration in fixed Secret inputs", async () => {
   const workflows = await actualWorkflows();
   const worker = workflows["codex-worker.yml"];
-  const prepare = worker.jobs.implement.steps.find(
+  const prepare = worker.jobs.prepare.steps.find(
     (step) => step.name === "Prepare trusted Worker plan",
   );
   const action = worker.jobs.implement.steps.find((step) =>
@@ -397,10 +398,10 @@ test("keeps the publisher PAT out of the model job", async () => {
   );
 });
 
-test("allows the publisher PAT only in the fixed publication step", async () => {
+test("allows the publisher PAT only in fixed publication and base-update steps", async () => {
   const workflows = await actualWorkflows();
   const step = workflows["codex-worker.yml"].jobs.publish.steps.find(
-    (candidate) => candidate.name === "Handle rejected publication",
+    (candidate) => candidate.name === "Handle Worker control event",
   );
   step.env.CODEX_GITHUB_TOKEN = "${{ secrets.CODEX_GITHUB_TOKEN }}";
   assert.ok(
@@ -445,7 +446,7 @@ test("locks the Worker Artifact paths and name", async () => {
   upload.with.path += "\n${{ github.workspace }}/workspace/secrets.txt";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("Artifact upload contract"),
+      error.includes("Artifact allowlist"),
     ),
   );
 });
@@ -480,7 +481,7 @@ test("keeps trusted and recorded Worker checkouts separate", async () => {
 test("pins the Worker default branch outside the model Artifact", async () => {
   const workflows = await actualWorkflows();
   const worker = workflows["codex-worker.yml"];
-  delete worker.jobs.implement.outputs.default_branch;
+  delete worker.jobs.prepare.outputs.default_branch;
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("trusted default branch output"),
@@ -517,6 +518,263 @@ test("does not let an external fork cancel a Worker run", async () => {
       error.includes("isolate external fork PRs"),
     ),
   );
+});
+
+test("limits model execution to two fixed repository-wide slots", async () => {
+  const workflows = await actualWorkflows();
+  const implement = workflows["codex-worker.yml"].jobs.implement;
+  assert.deepEqual(implement.concurrency, {
+    group: "codex-worker-model-slot-${{ needs.prepare.outputs.model_slot }}",
+    "cancel-in-progress": false,
+  });
+
+  implement.concurrency.group = "codex-worker-model-slot-${{ github.run_id }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model concurrency must use one of two fixed slots"),
+    ),
+  );
+});
+
+test("dispatches every model retry to a fresh workflow run", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  const retry = worker.jobs.publish.steps.find(
+    (step) => step.name === "Dispatch next model attempt",
+  );
+  assert.equal(worker.jobs.implement.needs, "prepare");
+  assert.equal(retry.run, "node trusted/.github/scripts/codex-worker.mjs dispatch-retry");
+
+  retry.run = "node trusted/.github/scripts/codex-worker.mjs prepare";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("retries must dispatch a fresh workflow run"),
+    ),
+  );
+});
+
+test("locks every Worker Artifact to an explicit file allowlist", async () => {
+  const mutations = [
+    ["prepare", "Upload trusted Worker plan", "${{ runner.temp }}/unexpected.txt"],
+    [
+      "implement",
+      "Upload fixed Worker Artifact",
+      "${{ github.workspace }}/workspace/unexpected.txt",
+    ],
+    ["publish", "Upload trusted Patch checkpoint", "${{ runner.temp }}/unexpected.txt"],
+  ];
+
+  for (const [jobName, stepName, extraPath] of mutations) {
+    const workflows = await actualWorkflows();
+    const upload = workflows["codex-worker.yml"].jobs[jobName].steps.find(
+      (step) => step.name === stepName,
+    );
+    upload.with.path = `${upload.with.path}\n${extraPath}`;
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("Artifact allowlist must stay fixed"),
+      ),
+    );
+  }
+});
+
+test("rejects session, credential, and workspace persistence in Worker Artifacts", async () => {
+  for (const forbiddenPath of [
+    "${{ runner.temp }}/codex-home/",
+    "${{ github.workspace }}/workspace/",
+    "${{ runner.temp }}/transcript.jsonl",
+    "${{ runner.temp }}/goal-session.sqlite",
+    "${{ runner.temp }}/git-credentials",
+  ]) {
+    const workflows = await actualWorkflows();
+    const upload = workflows["codex-worker.yml"].jobs.publish.steps.find(
+      (step) => step.name === "Upload trusted Patch checkpoint",
+    );
+    upload.with.path = forbiddenPath;
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("must not persist session or workspace state"),
+      ),
+    );
+  }
+});
+
+test("binds checkpoint recovery to the trusted source run and Artifact name", async () => {
+  for (const mutate of [
+    (download) => {
+      download.with["run-id"] = "${{ github.run_id }}";
+    },
+    (download) => {
+      download.with.name = "checkpoint";
+    },
+    (download) => {
+      delete download.with.repository;
+    },
+  ]) {
+    const workflows = await actualWorkflows();
+    const download = workflows["codex-worker.yml"].jobs.implement.steps.find(
+      (step) => step.name === "Download previous trusted checkpoint",
+    );
+    mutate(download);
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("checkpoint download must bind the trusted source run and name"),
+      ),
+    );
+  }
+});
+
+test("keeps the model job read-only and isolated from publisher credentials", async () => {
+  for (const mutate of [
+    (implement) => {
+      implement.permissions.contents = "write";
+    },
+    (implement) => {
+      implement.permissions.issues = "write";
+    },
+    (implement) => {
+      implement.env = { CODEX_GITHUB_TOKEN: "${{ secrets.CODEX_GITHUB_TOKEN }}" };
+    },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["codex-worker.yml"].jobs.implement);
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("model job must stay read-only and isolated"),
+      ),
+    );
+  }
+});
+
+test("locks CI repair, Review repair, and base-update triggers and permissions", async () => {
+  const mutations = [
+    (worker) => {
+      worker.on.workflow_run.workflows = ["Docs CI"];
+    },
+    (worker) => {
+      worker.on.push.branches = ["release"];
+    },
+    (worker) => {
+      worker.jobs["base-update"].permissions.contents = "write";
+    },
+    (worker) => {
+      worker.jobs.publish.permissions.actions = "read";
+    },
+  ];
+
+  for (const mutate of mutations) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["codex-worker.yml"]);
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("recovery triggers and permissions must stay fixed"),
+      ),
+    );
+  }
+});
+
+test("allows trusted completed-workflow recovery to reach preparation", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
+    'if (eventName === "workflow_run") {',
+    'if (eventName === "never") {',
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("workflow recovery must pass authorization"),
+    ),
+  );
+});
+
+test("binds Claude repair recovery to a trusted source-run target Artifact", async () => {
+  const workflows = await actualWorkflows();
+  const reviewUpload = workflows["claude-pr-review.yml"].jobs.publish.steps.find(
+    (step) => step.name === "Upload trusted Review recovery target",
+  );
+  const workerDownload = workflows["codex-worker.yml"].jobs.prepare.steps.find(
+    (step) => step.name === "Download trusted Review recovery target",
+  );
+  assert.ok(reviewUpload);
+  assert.ok(workerDownload);
+
+  workerDownload.with["run-id"] = "${{ github.run_id }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude recovery target Artifact must stay source-run bound"),
+    ),
+  );
+});
+
+test("serializes Claude recovery runs without cross-PR cancellation", async () => {
+  const workflows = await actualWorkflows();
+  const worker = workflows["codex-worker.yml"];
+  assert.ok(
+    String(worker.concurrency.group).includes("codex-worker-review-recovery"),
+  );
+  assert.doesNotMatch(
+    String(worker.concurrency["cancel-in-progress"]),
+    /github\.event_name == 'workflow_run'/,
+  );
+
+  worker.concurrency["cancel-in-progress"] = "${{ github.event_name == 'workflow_run' }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude recovery concurrency must not cancel another PR"),
+    ),
+  );
+});
+
+test("requires source-head GitHub Actions Claude findings for repair context", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  for (const requirement of [
+    "comment.user?.id !== GITHUB_ACTIONS_BOT_ID",
+    "comment.original_commit_id !== headSha",
+  ]) {
+    const changed = {
+      ...sources,
+      "worker-resilience.mjs": sources["worker-resilience.mjs"].replace(
+        requirement,
+        "false",
+      ),
+    };
+    assert.ok(
+      validateTrustedScriptSources(changed).some((error) =>
+        error.includes(
+          "Claude recovery context must stay source-head and GitHub-Actions-authored",
+        ),
+      ),
+    );
+  }
+});
+
+test("persists the CI retry audit before dispatching the rerun", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
+    "await publishPullRequestRecoveryRecord({ record, repository, token });",
+    "await Promise.resolve(record);",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("CI retry audit must precede rerun dispatch"),
+    ),
+  );
+});
+
+test("rejects force-push and direct merge operations in the Worker workflow", async () => {
+  for (const command of ["git push --force origin HEAD", "gh pr merge --admin"]) {
+    const workflows = await actualWorkflows();
+    workflows["codex-worker.yml"].jobs.publish.steps.push({
+      name: "Unsafe recovery",
+      run: command,
+    });
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("must not force-push or directly merge"),
+      ),
+    );
+  }
 });
 
 test("keeps model Secrets out of the trusted Claude publisher", async () => {

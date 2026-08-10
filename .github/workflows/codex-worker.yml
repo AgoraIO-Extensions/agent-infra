@@ -1,12 +1,17 @@
 name: Codex Worker
 
 on:
+  push:
+    branches: [main]
   issues:
     types: [closed, edited, reopened, labeled, unlabeled]
   pull_request_target:
     types: [closed]
   repository_dispatch:
     types: [codex-worker]
+  workflow_run:
+    workflows: [Docs CI, Claude PR Review]
+    types: [completed]
 
 permissions: {}
 
@@ -16,8 +21,12 @@ concurrency:
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.head.repo.full_name != github.repository &&
       format('codex-worker-ignored-pr-{0}', github.event.pull_request.number) ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.name == 'Claude PR Review' &&
+        format('codex-worker-review-recovery-{0}', github.repository)) ||
       format(
         'codex-worker-{0}',
+        github.event.workflow_run.head_branch ||
         github.event.pull_request.head.ref ||
         format(
           'codex/issue-{0}',
@@ -41,6 +50,37 @@ concurrency:
     }}
 
 jobs:
+  base-update:
+    name: Update Worker PRs from default branch
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Update clean Worker PR branches
+        env:
+          CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKER_DEFAULT_SHA: ${{ github.sha }}
+        run: node trusted/.github/scripts/codex-worker.mjs update-bases
+
   authorization:
     name: Record Worker authorization
     concurrency:
@@ -88,23 +128,36 @@ jobs:
           TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
         run: node trusted/.github/scripts/codex-worker.mjs authorize
 
-  implement:
-    name: Implement frontier Issue
+  prepare:
+    name: Prepare Worker attempt
     needs: authorization
     if: >-
       always() &&
       needs.authorization.result == 'success' &&
       needs.authorization.outputs.allowed != 'false'
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ fromJSON(vars.CODEX_WORKER_TIMEOUT_MINUTES || '60') }}
+    timeout-minutes: 5
     permissions:
+      actions: read
+      checks: read
       contents: read
+      issues: write
+      pull-requests: read
     outputs:
       operation: ${{ steps.prepare.outputs.operation }}
       reason: ${{ steps.prepare.outputs.reason }}
       issue_number: ${{ steps.prepare.outputs.issue_number }}
       start_sha: ${{ steps.prepare.outputs.start_sha }}
       default_branch: ${{ steps.prepare.outputs.default_branch }}
+      attempt: ${{ steps.prepare.outputs.attempt }}
+      model_slot: ${{ steps.prepare.outputs.model_slot }}
+      worker_run_id: ${{ steps.prepare.outputs.worker_run_id }}
+      checkpoint_run_id: ${{ steps.prepare.outputs.checkpoint_run_id }}
+      checkpoint_artifact_name: ${{ steps.prepare.outputs.checkpoint_artifact_name }}
+      pull_request_number: ${{ steps.prepare.outputs.pull_request_number }}
+      source_run_id: ${{ steps.prepare.outputs.source_run_id }}
+      failure_fingerprint: ${{ steps.prepare.outputs.failure_fingerprint }}
+      head_sha: ${{ steps.prepare.outputs.head_sha }}
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,6 +172,19 @@ jobs:
         with:
           node-version: 24
 
+      - name: Download trusted Review recovery target
+        if: >-
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.name == 'Claude PR Review' &&
+          github.event.workflow_run.conclusion == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: claude-review-recovery-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/claude-review-recovery
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
       - name: Prepare trusted Worker plan
         id: prepare
         env:
@@ -128,35 +194,113 @@ jobs:
           CODEX_EFFORT: ${{ secrets.CODEX_EFFORT }}
           CODEX_WORKER_TIMEOUT_MINUTES: ${{ vars.CODEX_WORKER_TIMEOUT_MINUTES || '60' }}
           WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+          WORKER_REVIEW_RECOVERY_PATH: ${{ runner.temp }}/claude-review-recovery/claude-review-recovery.json
         run: node trusted/.github/scripts/codex-worker.mjs prepare
 
-      - name: Checkout recorded start commit
+      - name: Stage trusted Worker schema
         if: steps.prepare.outputs.operation == 'implement'
+        env:
+          WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+        run: >-
+          install -m 0444 trusted/.github/codex-worker-result.schema.json
+          "$WORKER_PREPARE_DIR/result.schema.json"
+
+      - name: Upload trusted Worker plan
+        if: steps.prepare.outputs.operation == 'implement'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-worker-plan-${{ steps.prepare.outputs.worker_run_id }}-attempt-${{ steps.prepare.outputs.attempt }}
+          path: |
+            ${{ runner.temp }}/codex-worker-prepare/plan.json
+            ${{ runner.temp }}/codex-worker-prepare/prompt.md
+            ${{ runner.temp }}/codex-worker-prepare/result.schema.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+  implement:
+    name: Run Worker model attempt
+    needs: prepare
+    if: needs.prepare.outputs.operation == 'implement'
+    concurrency:
+      group: codex-worker-model-slot-${{ needs.prepare.outputs.model_slot }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(vars.CODEX_WORKER_TIMEOUT_MINUTES || '60') }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      model_outcome: ${{ steps.codex.outcome }}
+    steps:
+      - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.prepare.outputs.start_sha }}
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Checkout recorded start commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.start_sha }}
           path: workspace
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Download trusted Worker plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-worker-plan-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}
+          path: ${{ runner.temp }}/codex-worker-plan
+
+      - name: Download previous trusted checkpoint
+        if: needs.prepare.outputs.checkpoint_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.prepare.outputs.checkpoint_artifact_name }}
+          path: ${{ runner.temp }}/codex-worker-checkpoint
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.prepare.outputs.checkpoint_run_id }}
+
       - name: Stage trusted Worker inputs
-        if: steps.prepare.outputs.operation == 'implement'
         env:
-          WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+          WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-plan
           WORKER_ARTIFACT_DIR: ${{ github.workspace }}/workspace/.codex-worker-artifact
           CODEX_HOME: ${{ runner.temp }}/codex-home
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$WORKER_ARTIFACT_DIR/output"
+          : > "$WORKER_ARTIFACT_DIR/output/change.patch"
           install -m 0444 "$WORKER_PREPARE_DIR/plan.json" "$WORKER_ARTIFACT_DIR/plan.json"
           install -m 0444 "$WORKER_PREPARE_DIR/prompt.md" "$WORKER_ARTIFACT_DIR/prompt.md"
-          install -m 0444 trusted/.github/codex-worker-result.schema.json \
+          install -m 0444 "$WORKER_PREPARE_DIR/result.schema.json" \
             "$WORKER_ARTIFACT_DIR/result.schema.json"
           cp -R trusted/.codex "$CODEX_HOME"
 
+      - name: Apply previous trusted checkpoint
+        if: needs.prepare.outputs.checkpoint_run_id != ''
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKER_CHECKPOINT_PATCH_PATH: ${{ runner.temp }}/codex-worker-checkpoint/change.patch
+          WORKER_CHECKPOINT_PATH: ${{ runner.temp }}/codex-worker-checkpoint/checkpoint.json
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_WORKSPACE: ${{ github.workspace }}/workspace
+        run: node trusted/.github/scripts/codex-worker.mjs resume
+
       - name: Run Codex implementation
-        if: steps.prepare.outputs.operation == 'implement'
+        id: codex
+        continue-on-error: true
         uses: openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9
         with:
           openai-api-key: ${{ secrets.CODEX_API_KEY }}
@@ -173,12 +317,11 @@ jobs:
           safety-strategy: drop-sudo
 
       - name: Upload fixed Worker Artifact
-        if: steps.prepare.outputs.operation == 'implement' && success()
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: codex-worker-output
+          name: codex-worker-output-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}
           path: |
-            ${{ github.workspace }}/workspace/.codex-worker-artifact/plan.json
             ${{ github.workspace }}/workspace/.codex-worker-artifact/output/change.patch
             ${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json
           if-no-files-found: error
@@ -187,14 +330,16 @@ jobs:
 
   publish:
     name: Validate and publish Worker result
-    needs: implement
-    if: always() && needs.implement.outputs.operation != '' && needs.implement.outputs.operation != 'noop'
+    needs: [prepare, implement]
+    if: always() && needs.prepare.outputs.operation != '' && needs.prepare.outputs.operation != 'noop'
     concurrency:
       group: blocker-graph-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
+      actions: write
+      checks: read
       contents: write
       issues: write
       pull-requests: write
@@ -213,66 +358,126 @@ jobs:
           node-version: 24
 
       - name: Handle Worker control event
-        if: needs.implement.outputs.operation != 'implement'
+        if: >-
+          needs.prepare.outputs.operation != 'implement' &&
+          needs.prepare.outputs.operation != 'retry_ci'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_OPERATION: ${{ needs.implement.outputs.operation }}
-          WORKER_REASON: ${{ needs.implement.outputs.reason }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_OPERATION: ${{ needs.prepare.outputs.operation }}
+          WORKER_REASON: ${{ needs.prepare.outputs.reason }}
         run: node trusted/.github/scripts/codex-worker.mjs handle
 
-      - name: Handle failed model job
-        if: needs.implement.outputs.operation == 'implement' && needs.implement.result != 'success'
+      - name: Retry failed CI without code changes
+        if: needs.prepare.outputs.operation == 'retry_ci'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_OPERATION: triage
-          WORKER_REASON: model-failed
-        run: node trusted/.github/scripts/codex-worker.mjs handle
+          WORKER_FAILURE_FINGERPRINT: ${{ needs.prepare.outputs.failure_fingerprint }}
+          WORKER_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_PULL_REQUEST_NUMBER: ${{ needs.prepare.outputs.pull_request_number }}
+          WORKER_SOURCE_RUN_ID: ${{ needs.prepare.outputs.source_run_id }}
+        run: node trusted/.github/scripts/codex-worker.mjs retry-ci
 
-      - name: Download fixed Worker Artifact
-        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+      - name: Download trusted Worker plan
+        if: needs.prepare.outputs.operation == 'implement'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: codex-worker-output
-          path: ${{ runner.temp }}/codex-worker-artifact
+          name: codex-worker-plan-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}
+          path: ${{ runner.temp }}/codex-worker-plan
+
+      - name: Download fixed Worker Artifact
+        id: download-output
+        if: needs.prepare.outputs.operation == 'implement'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-worker-output-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}
+          path: ${{ runner.temp }}/codex-worker-output
 
       - name: Checkout recorded start commit
-        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+        if: needs.prepare.outputs.operation == 'implement'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.implement.outputs.start_sha }}
+          ref: ${{ needs.prepare.outputs.start_sha }}
           path: workspace
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Stage recoverable empty Artifact
+        if: needs.prepare.outputs.operation == 'implement'
+        env:
+          WORKER_OUTPUT_DIR: ${{ runner.temp }}/codex-worker-output
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORKER_OUTPUT_DIR"
+          if [[ ! -f "$WORKER_OUTPUT_DIR/change.patch" ]]; then
+            : > "$WORKER_OUTPUT_DIR/change.patch"
+          fi
+
       - name: Validate Artifact before publisher credential exposure
         id: preflight
-        if: needs.implement.outputs.operation == 'implement' && needs.implement.result == 'success'
+        if: needs.prepare.outputs.operation == 'implement'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
-          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
-          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
-          WORKER_PATCH_PATH: ${{ runner.temp }}/codex-worker-artifact/output/change.patch
-          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_CHECKPOINT_DIR: ${{ runner.temp }}/trusted-checkpoint
+          WORKER_ERROR_CLASSIFICATION: ${{ needs.implement.result == 'success' && 'action' || 'runner' }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_MODEL_OUTCOME: ${{ needs.implement.outputs.model_outcome || needs.implement.result }}
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_PATCH_PATH: ${{ runner.temp }}/codex-worker-output/change.patch
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-output/result.json
           WORKER_WORKSPACE: ${{ github.workspace }}/workspace
         run: node trusted/.github/scripts/codex-worker.mjs preflight
 
-      - name: Handle rejected publication
-        if: steps.preflight.outputs.valid == 'false'
+      - name: Upload trusted Patch checkpoint
+        if: steps.preflight.outputs.checkpoint_created == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-worker-checkpoint-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}
+          path: |
+            ${{ runner.temp }}/trusted-checkpoint/change.patch
+            ${{ runner.temp }}/trusted-checkpoint/checkpoint.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Record Worker attempt outcome
+        if: steps.preflight.outputs.attempt_outcome != ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_OPERATION: ${{ steps.preflight.outputs.operation }}
+          WORKER_ATTEMPT_OUTCOME: ${{ steps.preflight.outputs.attempt_outcome }}
+          WORKER_CHECKPOINT_PATH: ${{ runner.temp }}/trusted-checkpoint/checkpoint.json
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_REMAINING_AC: ${{ steps.preflight.outputs.remaining_ac }}
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_TERMINATION_REASON: ${{ steps.preflight.outputs.termination_reason }}
+        run: node trusted/.github/scripts/codex-worker.mjs finalize-attempt
+
+      - name: Dispatch next model attempt
+        if: steps.preflight.outputs.operation == 'retry'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+        run: node trusted/.github/scripts/codex-worker.mjs dispatch-retry
+
+      - name: Handle terminal attempt failure
+        if: steps.preflight.outputs.operation == 'triage'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_OPERATION: triage
           WORKER_REASON: ${{ steps.preflight.outputs.reason }}
         shell: bash
         run: |
           node trusted/.github/scripts/codex-worker.mjs handle
-          if [[ "$WORKER_OPERATION" == "triage" ]]; then
-            exit 1
-          fi
+          exit 1
 
       - name: Publish fixed branch and Draft PR
         id: publish
@@ -282,12 +487,12 @@ jobs:
         continue-on-error: true
         env:
           CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
-          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
           WORKER_COMMIT_SHA: ${{ steps.preflight.outputs.commit_sha }}
-          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
-          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-output/result.json
           WORKER_WORKSPACE: ${{ github.workspace }}/workspace
         run: node trusted/.github/scripts/codex-worker.mjs publish
 
@@ -299,11 +504,11 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
-          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
-          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
-          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-output/result.json
         run: node trusted/.github/scripts/codex-worker.mjs blockers
 
       - name: Publish human handoff
@@ -314,11 +519,11 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
-          WORKER_START_SHA: ${{ needs.implement.outputs.start_sha }}
-          WORKER_DEFAULT_BRANCH: ${{ needs.implement.outputs.default_branch }}
-          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-artifact/plan.json
-          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-artifact/output/result.json
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
+          WORKER_START_SHA: ${{ needs.prepare.outputs.start_sha }}
+          WORKER_DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
+          WORKER_PLAN_PATH: ${{ runner.temp }}/codex-worker-plan/plan.json
+          WORKER_RESULT_PATH: ${{ runner.temp }}/codex-worker-output/result.json
         run: node trusted/.github/scripts/codex-worker.mjs handoffs
 
       - name: Escalate publisher failure
@@ -328,7 +533,7 @@ jobs:
           steps.handoff.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          WORKER_ISSUE_NUMBER: ${{ needs.implement.outputs.issue_number }}
+          WORKER_ISSUE_NUMBER: ${{ needs.prepare.outputs.issue_number }}
           WORKER_OPERATION: triage
           WORKER_REASON: >-
             ${{

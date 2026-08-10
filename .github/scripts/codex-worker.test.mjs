@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -729,7 +730,7 @@ test("marks the Worker PR ready through the fixed GraphQL mutation", async () =>
 });
 
 const workerPlan = {
-  version: 2,
+  version: 3,
   repository: "AgoraIO-Extensions/agent-infra",
   defaultBranch: "main",
   issueNumber: 42,
@@ -741,7 +742,151 @@ const workerPlan = {
   branch: "codex/issue-42-cycle-1",
   branchExisted: false,
   pullRequestNumber: null,
+  mode: "implement",
+  repairRound: null,
+  workerRunId: createHash("sha256")
+    .update(
+      JSON.stringify([
+        "AgoraIO-Extensions/agent-infra",
+        42,
+        1,
+        "a".repeat(40),
+        "implement",
+        null,
+      ]),
+    )
+    .digest("hex"),
+  attempt: 1,
+  modelSlot: 1,
+  checkpointRunId: null,
+  checkpointArtifactName: null,
+  checkpointSourceAttempt: null,
+  remainingAcceptanceCriteria: ["AC-1"],
 };
+
+test("resumes a later attempt from the last validated checkpoint", () => {
+  const workerRunId = workerPlan.workerRunId;
+  const checkpoint = {
+    issueNumber: 42,
+    cycle: 1,
+    workerRunId,
+    baseSha: "a".repeat(40),
+    sourceAttempt: 1,
+    patchSha256: "b".repeat(64),
+    artifactRunId: 123,
+    artifactName: `codex-worker-checkpoint-${workerRunId}-attempt-1`,
+    remainingAcceptanceCriteria: ["AC-1"],
+  };
+  const result = createWorkerPlan({
+    repository: "AgoraIO-Extensions/agent-infra",
+    defaultBranch: "main",
+    issue: {
+      number: 42,
+      state: "open",
+      labels: [{ name: "ready-for-agent" }],
+    },
+    contract: workerContract,
+    authorizationRecord: workerAuthorization,
+    blockers: [],
+    workerPullRequests: [],
+    branchSha: null,
+    defaultSha: "a".repeat(40),
+    attempts: [
+      { attempt: 1, outcome: "recoverable", checkpoint },
+      { attempt: 2, outcome: "started", checkpoint: null },
+    ],
+  });
+
+  assert.equal(result.plan.attempt, 3);
+  assert.equal(result.plan.checkpointSourceAttempt, 1);
+  assert.equal(result.plan.checkpointArtifactName, checkpoint.artifactName);
+});
+
+test("creates a bounded repair plan for the current ready Worker PR", () => {
+  const headSha = "f".repeat(40);
+  const pullRequest = {
+    number: 90,
+    state: "open",
+    draft: false,
+    merged_at: null,
+    head: {
+      ref: "codex/issue-42-cycle-1",
+      sha: headSha,
+      repo: { full_name: "AgoraIO-Extensions/agent-infra" },
+    },
+    base: { ref: "main" },
+  };
+  const result = createWorkerPlan({
+    repository: "AgoraIO-Extensions/agent-infra",
+    defaultBranch: "main",
+    issue: {
+      number: 42,
+      state: "open",
+      labels: [{ name: "ready-for-agent" }],
+    },
+    contract: workerContract,
+    authorizationRecord: workerAuthorization,
+    blockers: [],
+    workerPullRequests: [pullRequest],
+    branchSha: headSha,
+    defaultSha: "a".repeat(40),
+    mode: "repair",
+    repairRound: 1,
+    repairPullRequest: pullRequest,
+  });
+
+  assert.equal(result.operation, "implement");
+  assert.equal(result.plan.mode, "repair");
+  assert.equal(result.plan.repairRound, 1);
+  assert.equal(result.plan.pullRequestNumber, 90);
+  assert.equal(result.plan.startSha, headSha);
+  assert.equal(result.plan.branchExisted, true);
+  assert.deepEqual(
+    evaluatePublicationState({
+      plan: result.plan,
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
+      blockers: [],
+      workerPullRequests: [pullRequest],
+      branchSha: headSha,
+    }),
+    { operation: "publish", reason: "authorized" },
+  );
+  assert.match(
+    buildWorkerPrompt({
+      issue: { number: 42, title: "Repair worker", body: "## Scope\nFix it" },
+      plan: result.plan,
+      recoveryContext: ["Run tests failed on the current head."],
+    }),
+    /Repair round: 1\/2[\s\S]*Run tests failed on the current head\./,
+  );
+  assert.deepEqual(
+    createWorkerPlan({
+      repository: "AgoraIO-Extensions/agent-infra",
+      defaultBranch: "main",
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
+      blockers: [{ number: 12, state: "open" }],
+      workerPullRequests: [pullRequest],
+      branchSha: headSha,
+      defaultSha: "a".repeat(40),
+      mode: "repair",
+      repairRound: 1,
+      repairPullRequest: pullRequest,
+    }),
+    { operation: "noop", reason: "open-blockers" },
+  );
+});
 
 test("validates bounded repository configuration before invoking Codex", () => {
   assert.deepEqual(
@@ -802,7 +947,21 @@ test("binds a Worker plan and file-based prompt to one fixed Issue branch", () =
   assert.match(prompt, /## Scope\nShip it/);
   assert.match(prompt, /human_handoffs/);
   assert.match(prompt, /protected path/);
+  assert.match(prompt, /Model attempt: 1\/3/);
+  assert.match(prompt, /Remaining AC: AC-1/);
   assert.doesNotMatch(prompt, /Closes #42/);
+  assert.throws(
+    () =>
+      buildWorkerPrompt({
+        issue: {
+          number: 42,
+          title: "Implement worker",
+          body: `api_key=sk-${"a".repeat(40)}`,
+        },
+        plan: workerPlan,
+      }),
+    /secret-like content/,
+  );
 });
 
 function workerResult(overrides = {}) {
@@ -958,6 +1117,14 @@ test("accepts only bounded Worker results for the recorded Issue and start commi
   );
   assert.throws(() =>
     validateWorkerResult(workerResult({ summary: "x".repeat(4001) }), workerPlan),
+  );
+  assert.throws(
+    () =>
+      validateWorkerResult(
+        workerResult({ summary: `api_key=sk-${"a".repeat(40)}` }),
+        workerPlan,
+      ),
+    /secret-like content/,
   );
   assert.throws(() =>
     validateWorkerResult(workerResult({ tests: ["x".repeat(1001)] }), workerPlan),
@@ -1275,7 +1442,7 @@ function git(cwd, args) {
   });
 }
 
-function artifactFixture(t) {
+function artifactFixture(t, readme = "before\n") {
   const root = mkdtempSync(path.join(tmpdir(), "agent-infra-worker-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = path.join(root, "origin");
@@ -1285,13 +1452,28 @@ function artifactFixture(t) {
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.name", "Test"]);
   git(origin, ["config", "user.email", "test@example.com"]);
-  writeFileSync(path.join(origin, "README.md"), "before\n");
+  writeFileSync(path.join(origin, "README.md"), readme);
   git(origin, ["add", "README.md"]);
   git(origin, ["commit", "-qm", "initial"]);
   git(root, ["clone", "-q", origin, model]);
   git(root, ["clone", "-q", origin, publish]);
   const startSha = git(origin, ["rev-parse", "HEAD"]).trim();
-  const plan = { ...workerPlan, startSha };
+  const plan = {
+    ...workerPlan,
+    startSha,
+    workerRunId: createHash("sha256")
+      .update(
+        JSON.stringify([
+          workerPlan.repository,
+          workerPlan.issueNumber,
+          workerPlan.cycle,
+          startSha,
+          workerPlan.mode,
+          workerPlan.repairRound,
+        ]),
+      )
+      .digest("hex"),
+  };
   const resultPath = path.join(root, "result.json");
   writeFileSync(
     resultPath,
@@ -1314,6 +1496,238 @@ function writePatch(fixture) {
   return patchPath;
 }
 
+function writeCheckpoint(fixture, patchPath, overrides = {}) {
+  const patch = readFileSync(patchPath);
+  const checkpointPath = path.join(fixture.root, "checkpoint.json");
+  writeFileSync(
+    checkpointPath,
+    JSON.stringify({
+      version: 1,
+      issue_number: fixture.plan.issueNumber,
+      cycle: fixture.plan.cycle,
+      worker_run_id: "b".repeat(64),
+      base_sha: fixture.plan.startSha,
+      source_attempt: 1,
+      patch_sha256: createHash("sha256").update(patch).digest("hex"),
+      remaining_acceptance_criteria: ["AC-1"],
+      error_classification: "timeout",
+      ...overrides,
+    }),
+  );
+  return checkpointPath;
+}
+
+function validateCheckpoint(fixture, patchPath, overrides = {}) {
+  return worker.validateWorkerCheckpoint({
+    workspace: fixture.publish,
+    patchPath,
+    checkpointPath: writeCheckpoint(fixture, patchPath, overrides),
+    identity: {
+      issueNumber: fixture.plan.issueNumber,
+      cycle: fixture.plan.cycle,
+      workerRunId: "b".repeat(64),
+      baseSha: fixture.plan.startSha,
+    },
+    sourceAttempt: 1,
+    acceptanceCriteriaIds: fixture.plan.acceptanceCriteriaIds,
+  });
+}
+
+test("validates and applies a trusted text Patch checkpoint", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "checkpoint\n");
+  const patchPath = writePatch(fixture);
+  const checkpointPath = writeCheckpoint(fixture, patchPath);
+
+  const checkpoint = await worker.validateWorkerCheckpoint({
+    workspace: fixture.publish,
+    patchPath,
+    checkpointPath,
+    identity: {
+      issueNumber: fixture.plan.issueNumber,
+      cycle: fixture.plan.cycle,
+      workerRunId: "b".repeat(64),
+      baseSha: fixture.plan.startSha,
+    },
+    sourceAttempt: 1,
+    acceptanceCriteriaIds: fixture.plan.acceptanceCriteriaIds,
+  });
+
+  assert.deepEqual(checkpoint.remainingAcceptanceCriteria, ["AC-1"]);
+  assert.equal(
+    readFileSync(path.join(fixture.publish, "README.md"), "utf8"),
+    "checkpoint\n",
+  );
+});
+
+test("rejects secret-like content in a Worker checkpoint", async (t) => {
+  for (const secret of [
+    `OPENAI_API_KEY=sk-${"a".repeat(40)}`,
+    `github_pat_${"a".repeat(82)}`,
+  ]) {
+    const fixture = artifactFixture(t);
+    writeFileSync(path.join(fixture.model, "token.txt"), `${secret}\n`);
+    const patchPath = writePatch(fixture);
+
+    await assert.rejects(
+      worker.validateWorkerCheckpoint({
+        workspace: fixture.publish,
+        patchPath,
+        checkpointPath: writeCheckpoint(fixture, patchPath),
+        identity: {
+          issueNumber: fixture.plan.issueNumber,
+          cycle: fixture.plan.cycle,
+          workerRunId: "b".repeat(64),
+          baseSha: fixture.plan.startSha,
+        },
+        sourceAttempt: 1,
+        acceptanceCriteriaIds: fixture.plan.acceptanceCriteriaIds,
+      }),
+      /secret-like content/,
+    );
+  }
+});
+
+test("rejects secret-like content carried in checkpoint Patch context", async (t) => {
+  const secretLine = `api_key=sk-${"a".repeat(40)}`;
+  const fixture = artifactFixture(t, `${secretLine}\nbefore\n`);
+  writeFileSync(path.join(fixture.model, "README.md"), `${secretLine}\nafter\n`);
+  const patchPath = writePatch(fixture);
+
+  await assert.rejects(validateCheckpoint(fixture, patchPath), /secret-like content/);
+});
+
+test("rejects tampered checkpoint metadata and Patch hashes", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "partial\n");
+  const patchPath = writePatch(fixture);
+
+  await assert.rejects(
+    validateCheckpoint(fixture, patchPath, { patch_sha256: "0".repeat(64) }),
+    /Patch hash is invalid/,
+  );
+  await assert.rejects(
+    validateCheckpoint(fixture, patchPath, { unexpected: true }),
+    /metadata is invalid/,
+  );
+});
+
+test("rejects a checkpoint from a stale base", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "partial\n");
+  const patchPath = writePatch(fixture);
+  git(fixture.publish, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "advance base",
+  ]);
+
+  await assert.rejects(validateCheckpoint(fixture, patchPath), /base SHA is stale/);
+});
+
+test("rejects protected and forbidden files in a checkpoint Patch", async (t) => {
+  const fixture = artifactFixture(t);
+  mkdirSync(path.join(fixture.model, ".codex"), { recursive: true });
+  writeFileSync(path.join(fixture.model, ".codex", "session.sqlite"), "session\n");
+  const patchPath = writePatch(fixture);
+
+  await assert.rejects(validateCheckpoint(fixture, patchPath), /protected path/);
+  assert.equal(worker.isProtectedWorkerPath(".git/credentials"), true);
+  assert.equal(worker.isProtectedWorkerPath(".codex/session.sqlite"), true);
+  assert.equal(
+    worker.isProtectedWorkerPath(".codex-worker-artifact/workspace.tar"),
+    true,
+  );
+});
+
+test("rejects oversized, binary, and invalid UTF-8 checkpoint Patches", async (t) => {
+  const oversized = artifactFixture(t);
+  const oversizedPatch = path.join(oversized.root, "oversized.patch");
+  writeFileSync(oversizedPatch, "x".repeat(400 * 1024 + 1));
+  await assert.rejects(validateCheckpoint(oversized, oversizedPatch), /400 KiB/);
+
+  const binary = artifactFixture(t);
+  writeFileSync(path.join(binary.model, "binary.dat"), Buffer.from([0, 1, 2, 3]));
+  const binaryPatch = writePatch(binary);
+  await assert.rejects(validateCheckpoint(binary, binaryPatch), /binary/);
+
+  const invalidUtf8 = artifactFixture(t);
+  const invalidPatch = path.join(invalidUtf8.root, "invalid.patch");
+  writeFileSync(invalidPatch, Buffer.from([0xff, 0xfe, 0xfd]));
+  await assert.rejects(validateCheckpoint(invalidUtf8, invalidPatch), /UTF-8/);
+});
+
+test("rejects an unapplyable checkpoint Patch", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "partial\n");
+  const patchPath = writePatch(fixture);
+  writeFileSync(
+    patchPath,
+    readFileSync(patchPath, "utf8").replace("-before", "-missing-context"),
+  );
+
+  await assert.rejects(validateCheckpoint(fixture, patchPath), /apply --check/);
+});
+
+test("rejects symlinked checkpoint files", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "partial\n");
+  const realPatch = writePatch(fixture);
+  const checkpointPath = writeCheckpoint(fixture, realPatch);
+  const linkedPatch = path.join(fixture.root, "linked-checkpoint.patch");
+  symlinkSync(realPatch, linkedPatch);
+
+  await assert.rejects(
+    worker.validateWorkerCheckpoint({
+      workspace: fixture.publish,
+      patchPath: linkedPatch,
+      checkpointPath,
+      identity: {
+        issueNumber: fixture.plan.issueNumber,
+        cycle: fixture.plan.cycle,
+        workerRunId: "b".repeat(64),
+        baseSha: fixture.plan.startSha,
+      },
+      sourceAttempt: 1,
+      acceptanceCriteriaIds: fixture.plan.acceptanceCriteriaIds,
+    }),
+    /regular files/,
+  );
+});
+
+test("creates a trusted checkpoint for a recoverable model interruption", async (t) => {
+  const fixture = artifactFixture(t);
+  writeFileSync(path.join(fixture.model, "README.md"), "partial\n");
+  const patchPath = writePatch(fixture);
+  const checkpointDirectory = path.join(fixture.root, "trusted-checkpoint");
+
+  const checkpoint = await worker.createWorkerCheckpoint({
+    workspace: fixture.publish,
+    patchPath,
+    checkpointDirectory,
+    plan: fixture.plan,
+    errorClassification: "timeout",
+  });
+
+  assert.equal(checkpoint.sourceAttempt, 1);
+  assert.equal(checkpoint.errorClassification, "timeout");
+  assert.equal(
+    readFileSync(path.join(checkpointDirectory, "change.patch"), "utf8"),
+    readFileSync(patchPath, "utf8"),
+  );
+  assert.equal(
+    JSON.parse(
+      readFileSync(path.join(checkpointDirectory, "checkpoint.json"), "utf8"),
+    ).worker_run_id,
+    fixture.plan.workerRunId,
+  );
+});
+
 test("validates and applies a bounded text Patch in a clean checkout", async (t) => {
   const fixture = artifactFixture(t);
   writeFileSync(path.join(fixture.model, "README.md"), "after\n");
@@ -1332,7 +1746,7 @@ test("validates and applies a bounded text Patch in a clean checkout", async (t)
   assert.equal(readFileSync(path.join(fixture.publish, "feature.txt"), "utf8"), "new file\n");
 });
 
-test("allows an empty Patch only when resuming an existing fixed branch", async (t) => {
+test("allows an empty Patch only when reusing an existing Draft PR", async (t) => {
   const resumed = artifactFixture(t);
   const emptyPatch = path.join(resumed.root, "empty.patch");
   writeFileSync(emptyPatch, "");
@@ -1340,7 +1754,11 @@ test("allows an empty Patch only when resuming an existing fixed branch", async 
     workspace: resumed.publish,
     patchPath: emptyPatch,
     resultPath: resumed.resultPath,
-    plan: { ...resumed.plan, branchExisted: true },
+    plan: {
+      ...resumed.plan,
+      branchExisted: true,
+      pullRequestNumber: 9,
+    },
   });
   assert.deepEqual(validated.changedPaths, []);
 
@@ -1353,7 +1771,37 @@ test("allows an empty Patch only when resuming an existing fixed branch", async 
       resultPath: firstRun.resultPath,
       plan: { ...firstRun.plan, branchExisted: false },
     }),
-    /first publication Patch is empty/,
+    /existing Draft PR/,
+  );
+
+  const orphanBranch = artifactFixture(t);
+  writeFileSync(path.join(orphanBranch.root, "empty.patch"), "");
+  await assert.rejects(
+    worker.validateAndApplyWorkerArtifact({
+      workspace: orphanBranch.publish,
+      patchPath: path.join(orphanBranch.root, "empty.patch"),
+      resultPath: orphanBranch.resultPath,
+      plan: { ...orphanBranch.plan, branchExisted: true },
+    }),
+    /existing Draft PR/,
+  );
+
+  const repair = artifactFixture(t);
+  writeFileSync(path.join(repair.root, "empty.patch"), "");
+  await assert.rejects(
+    worker.validateAndApplyWorkerArtifact({
+      workspace: repair.publish,
+      patchPath: path.join(repair.root, "empty.patch"),
+      resultPath: repair.resultPath,
+      plan: {
+        ...repair.plan,
+        branchExisted: true,
+        pullRequestNumber: 9,
+        mode: "repair",
+        repairRound: 1,
+      },
+    }),
+    /existing Draft PR/,
   );
 });
 
