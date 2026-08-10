@@ -136,7 +136,6 @@ jobs:
 
       - name: Mint Gate publisher token
         id: gate-publisher-token
-        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.TEAM_MEMBERSHIP_APP_ID }}

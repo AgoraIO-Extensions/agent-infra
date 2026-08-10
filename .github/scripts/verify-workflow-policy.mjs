@@ -513,7 +513,6 @@ export function validateWorkflowDocuments(workflows) {
       owner: "${{ github.repository_owner }}",
     }) ||
     gatePublisherTokenStep?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-    gatePublisherTokenStep?.["continue-on-error"] !== true ||
     !sameObject(gatePublisherTokenStep?.with, {
       "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
       "permission-checks": "write",
@@ -531,6 +530,9 @@ export function validateWorkflowDocuments(workflows) {
     gatePublisherTokenReferences(prGates).length !== 1
   ) {
     errors.push("PR Gates must mint and isolate a Team membership token");
+  }
+  if (gatePublisherTokenStep?.["continue-on-error"] === true) {
+    errors.push("Gate publisher token mint must fail the workflow");
   }
 
   const worker = workflows["codex-worker.yml"];
@@ -866,7 +868,6 @@ export function validateWorkflowDocuments(workflows) {
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
     reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
     reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-    reviewGatePublisherToken?.["continue-on-error"] !== true ||
     !sameObject(reviewGatePublisherToken?.with, {
       "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
       "permission-checks": "write",
@@ -891,6 +892,9 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Claude PR Review must publish only the completed CI head");
   }
+  if (reviewGatePublisherToken?.["continue-on-error"] === true) {
+    errors.push("Gate publisher token mint must fail the workflow");
+  }
   const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
   const reviewConfig = analyzeSteps[reviewConfigIndex];
   const reviewConfigEnv = reviewConfig?.env ?? {};
@@ -913,12 +917,17 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Claude PR Review model configuration must use validated Secrets");
   }
+  const reviewPublisherSecrets = referencedSecrets(review?.jobs?.publish).sort();
   if (
-    referencedSecrets(review?.jobs?.publish).some((secret) =>
-      CLAUDE_SECRETS.includes(secret),
-    )
+    JSON.stringify(reviewPublisherSecrets) !==
+    JSON.stringify([
+      "TEAM_MEMBERSHIP_APP_ID",
+      "TEAM_MEMBERSHIP_APP_PRIVATE_KEY",
+    ])
   ) {
-    errors.push("Claude Review publisher must not receive a model Secret");
+    errors.push(
+      "Claude Review publisher may receive Secrets only in the fixed control App token step",
+    );
   }
   const reviewPrompt = reviewAction?.with?.prompt ?? "";
   const reviewPromptRequirements = [

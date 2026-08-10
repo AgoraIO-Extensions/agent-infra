@@ -529,6 +529,20 @@ test("keeps model Secrets out of the trusted Claude publisher", async () => {
   );
 });
 
+test("keeps unapproved job-level Secrets out of the trusted Claude publisher", async () => {
+  const workflows = await actualWorkflows();
+  workflows["claude-pr-review.yml"].jobs.publish.container = {
+    image: "node:24",
+    credentials: {
+      password: "${{ secrets.PUBLISHER_PASSWORD }}",
+    },
+  };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) => error.includes("publisher")),
+  );
+});
+
 test("configures every Claude model job through validated repository settings", async () => {
   const workflows = await actualWorkflows();
   const maxTurns = "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}";
@@ -904,6 +918,25 @@ test("mints isolated check-only Gate publisher tokens", async () => {
 
   assert.equal(workflows["pr-gates.yml"].jobs.gates.permissions.checks, "read");
   assert.equal(workflows["claude-pr-review.yml"].jobs.publish.permissions.checks, "read");
+});
+
+test("fails the workflow when a Gate publisher token cannot be minted", async () => {
+  const workflows = await actualWorkflows();
+  const publisherSteps = [
+    workflows["pr-gates.yml"].jobs.gates.steps,
+    workflows["claude-pr-review.yml"].jobs.publish.steps,
+  ];
+
+  for (const steps of publisherSteps) {
+    const gateToken = steps.find((step) => step.id === "gate-publisher-token");
+    gateToken["continue-on-error"] = true;
+  }
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Gate publisher token mint must fail the workflow"),
+    ),
+  );
 });
 
 test("rejects workflow-token Gate publication and the wrong publisher App", async () => {
