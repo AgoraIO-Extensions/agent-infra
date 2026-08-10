@@ -676,6 +676,9 @@ test("locks CI repair, Review repair, and base-update triggers and permissions",
       worker.jobs["base-update"].permissions.contents = "write";
     },
     (worker) => {
+      worker.jobs.prepare.permissions["pull-requests"] = "read";
+    },
+    (worker) => {
       worker.jobs.publish.permissions.actions = "read";
     },
   ];
