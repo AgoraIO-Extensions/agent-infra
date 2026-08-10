@@ -25,6 +25,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Review pull request
+        # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
         uses: The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
