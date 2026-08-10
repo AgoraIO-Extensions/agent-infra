@@ -1,0 +1,40 @@
+name: PR-Agent Review
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, review_requested]
+
+permissions: {}
+
+concurrency:
+  group: pr-agent-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: PR-Agent Review
+    if: >-
+      vars.PR_AGENT_ENABLED == 'true' &&
+      github.event.sender.type != 'Bot' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Review pull request
+        uses: The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          config.model: ${{ secrets.PR_AGENT_MODEL }}
+          config.fallback_models: "[]"
+          config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: >-
+            ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]

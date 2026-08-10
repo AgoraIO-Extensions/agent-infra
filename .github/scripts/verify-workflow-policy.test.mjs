@@ -314,6 +314,55 @@ test("rejects floating third-party Action references", async () => {
   );
 });
 
+test("locks PR-Agent Review to the pinned official configuration", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["pr-agent-review.yml"];
+  const action = workflow.jobs.review.steps[0];
+
+  assert.deepEqual(workflow.on.pull_request_target.types, [
+    "opened",
+    "reopened",
+    "synchronize",
+    "ready_for_review",
+    "review_requested",
+  ]);
+  assert.deepEqual(workflow.jobs.review.permissions, {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  });
+  assert.equal(
+    action.uses,
+    "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
+  );
+  assert.equal(action.env.OPENAI_KEY, "${{ secrets.PR_AGENT_API_KEY }}");
+  assert.equal(
+    action.env.OPENAI__API_BASE,
+    "${{ secrets.PR_AGENT_API_BASE }}",
+  );
+  assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
+
+  action.env["github_action_config.auto_review"] = "false";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("pinned official configuration"),
+    ),
+  );
+});
+
+test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
+  const workflows = await actualWorkflows();
+  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+    BAD: "${{ secrets.PR_AGENT_API_KEY }}",
+  };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("PR_AGENT_API_KEY is allowed only in the pinned PR-Agent Action"),
+    ),
+  );
+});
+
 test("rejects an untrusted PR checkout in PR Gates", async () => {
   const workflows = await actualWorkflows();
   const checkout = workflows["pr-gates.yml"].jobs.gates.steps.find((step) => step.uses);

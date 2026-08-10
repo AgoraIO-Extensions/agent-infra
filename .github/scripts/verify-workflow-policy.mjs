@@ -10,6 +10,7 @@ const REQUIRED_WORKFLOWS = [
   "claude-pr-review.yml",
   "codex-worker.yml",
   "docs-ci.yml",
+  "pr-agent-review.yml",
   "pr-gates.yml",
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
@@ -25,6 +26,13 @@ const UPLOAD_ARTIFACT_ACTION =
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const PR_AGENT_ACTION =
+  "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa";
+const PR_AGENT_SECRETS = [
+  "PR_AGENT_API_KEY",
+  "PR_AGENT_API_BASE",
+  "PR_AGENT_MODEL",
+];
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 
@@ -166,6 +174,26 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       ) {
         errors.push(
           `${workflowName}/${jobName}: GH_TOKEN is allowed only in the fixed Auto-merge Enrollment step`,
+        );
+      }
+      continue;
+    }
+    if (PR_AGENT_SECRETS.includes(secret)) {
+      const reference = `\${{ secrets.${secret} }}`;
+      const envName = {
+        PR_AGENT_API_KEY: "OPENAI_KEY",
+        PR_AGENT_API_BASE: "OPENAI__API_BASE",
+        PR_AGENT_MODEL: "config.model",
+      }[secret];
+      if (
+        workflowName !== "pr-agent-review.yml" ||
+        jobName !== "review" ||
+        step.uses !== PR_AGENT_ACTION ||
+        step.env?.[envName] !== reference ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in the pinned PR-Agent Action`,
         );
       }
       continue;
@@ -620,6 +648,51 @@ export function validateWorkflowDocuments(workflows) {
     JSON.stringify(implement?.permissions) !== JSON.stringify({ contents: "read" })
   ) {
     errors.push("Codex Worker implement job permissions must stay contents: read");
+  }
+
+  const prAgent = workflows["pr-agent-review.yml"];
+  const prAgentJob = prAgent?.jobs?.review;
+  const prAgentAction = prAgentJob?.steps?.[0];
+  if (
+    JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
+      JSON.stringify([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+        "review_requested",
+      ]) ||
+    !sameObject(prAgent?.permissions, {}) ||
+    !sameObject(prAgent?.concurrency, {
+      group: "pr-agent-review-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
+    }) ||
+    !String(prAgentJob?.if ?? "").includes("vars.PR_AGENT_ENABLED == 'true'") ||
+    !String(prAgentJob?.if ?? "").includes("github.event.sender.type != 'Bot'") ||
+    !String(prAgentJob?.if ?? "").includes("github.event.pull_request.draft == false") ||
+    !sameObject(prAgentJob?.permissions, {
+      contents: "read",
+      issues: "write",
+      "pull-requests": "write",
+    }) ||
+    prAgentJob?.steps?.length !== 1 ||
+    prAgentAction?.uses !== PR_AGENT_ACTION ||
+    !sameObject(prAgentAction?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      OPENAI_KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+      OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
+      "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+      "config.fallback_models": "[]",
+      "config.custom_model_max_tokens":
+        "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      "github_action_config.auto_review": "true",
+      "github_action_config.auto_describe": "false",
+      "github_action_config.auto_improve": "false",
+      "github_action_config.pr_actions":
+        '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+    })
+  ) {
+    errors.push("PR-Agent Review must use the pinned official configuration");
   }
   if (
     JSON.stringify(publish?.permissions) !==
