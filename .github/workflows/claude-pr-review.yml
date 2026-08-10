@@ -145,6 +145,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Publish validated Review result
+        id: publish-review
         env:
           ANALYSIS_RESULT: ${{ needs.analyze.result }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -153,3 +154,33 @@ jobs:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}
         run: node .github/scripts/claude-review.mjs
+
+      - name: Stage trusted Review recovery target
+        if: steps.publish-review.outcome == 'success'
+        env:
+          REVIEW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REVIEW_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head_sha "$REVIEW_HEAD_SHA" \
+            --argjson pull_request_number "$REVIEW_PR_NUMBER" \
+            --argjson source_run_id "$GITHUB_RUN_ID" \
+            '{
+              version: 1,
+              repository: $repository,
+              pull_request_number: $pull_request_number,
+              head_sha: $head_sha,
+              source_run_id: $source_run_id
+            }' > "$RUNNER_TEMP/claude-review-recovery.json"
+
+      - name: Upload trusted Review recovery target
+        if: steps.publish-review.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: claude-review-recovery-${{ github.run_id }}
+          path: ${{ runner.temp }}/claude-review-recovery.json
+          if-no-files-found: error
+          retention-days: 1

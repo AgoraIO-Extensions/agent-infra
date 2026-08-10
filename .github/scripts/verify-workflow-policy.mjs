@@ -29,7 +29,7 @@ const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 
 function workflowSteps(workflow) {
-  return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
+  return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
 }
 
 function sameObject(actual, expected) {
@@ -122,7 +122,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       const allowedPrepare =
         workflowName === "codex-worker.yml" &&
-        jobName === "implement" &&
+        jobName === "prepare" &&
         step.name === "Prepare trusted Worker plan" &&
         step.run === "node trusted/.github/scripts/codex-worker.mjs prepare" &&
         step.env?.[secret] === reference &&
@@ -141,16 +141,28 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       continue;
     }
     if (secret === "CODEX_GITHUB_TOKEN") {
+      const allowedPublication =
+        workflowName === "codex-worker.yml" &&
+        jobName === "publish" &&
+        step.name === "Publish fixed branch and Draft PR" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs publish";
+      const allowedBaseUpdate =
+        workflowName === "codex-worker.yml" &&
+        jobName === "base-update" &&
+        step.name === "Update clean Worker PR branches" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs update-bases";
+      const allowedRetryDispatch =
+        workflowName === "codex-worker.yml" &&
+        jobName === "publish" &&
+        step.name === "Dispatch next model attempt" &&
+        step.run === "node trusted/.github/scripts/codex-worker.mjs dispatch-retry";
       if (
-        workflowName !== "codex-worker.yml" ||
-        jobName !== "publish" ||
-        step.name !== "Publish fixed branch and Draft PR" ||
-        step.run !== "node trusted/.github/scripts/codex-worker.mjs publish" ||
+        (!allowedPublication && !allowedBaseUpdate && !allowedRetryDispatch) ||
         step.env?.CODEX_GITHUB_TOKEN !== "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
         occurrences !== 1
       ) {
         errors.push(
-          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in the fixed Worker publication step`,
+          `${workflowName}/${jobName}: CODEX_GITHUB_TOKEN is allowed only in fixed Worker publisher steps`,
         );
       }
       continue;
@@ -213,6 +225,7 @@ export function validateTrustedScriptSources(sources) {
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
+  const resilienceSource = sources?.["worker-resilience.mjs"] ?? "";
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
   const blockerReconcilerSource = sources?.["blocker-reconciler.mjs"] ?? "";
@@ -275,6 +288,48 @@ export function validateTrustedScriptSources(sources) {
     )
   ) {
     errors.push("Codex Worker must bind authorization, cycle, hash, and AC evidence");
+  }
+  if (
+    !/async function authorizeCommand\(\)[\s\S]{0,1500}if \(eventName === "workflow_run"\) \{\s+await writeOutput\("allowed", true\);\s+return;\s+\}/.test(
+      workerSource,
+    )
+  ) {
+    errors.push("Codex Worker workflow recovery must pass authorization");
+  }
+  const claudeRecoveryRequirements = [
+    "readReviewRecoveryTarget({ repository, run })",
+    "target.source_run_id !== run.id",
+    "target.repository !== repository",
+    "reviewGateReason(checks.check_runs, sourceHeadSha)",
+    "reviewComments",
+  ];
+  const claudeFindingRequirements = [
+    "GITHUB_ACTIONS_BOT_ID = 41_898_282",
+    "comment.user?.id !== GITHUB_ACTIONS_BOT_ID",
+    "comment.original_commit_id !== headSha",
+    "agent-infra-claude-review:${headSha}",
+    'comment.user?.login !== "github-actions[bot]"',
+    'comment.user?.type !== "Bot"',
+    'reason: "claude_findings_unavailable"',
+  ];
+  if (
+    claudeRecoveryRequirements.some(
+      (requirement) => !workerSource.includes(requirement),
+    ) ||
+    claudeFindingRequirements.some(
+      (requirement) => !resilienceSource.includes(requirement),
+    )
+  ) {
+    errors.push(
+      "Claude recovery context must stay source-head and GitHub-Actions-authored",
+    );
+  }
+  if (
+    !/async function retryCiCommand\(\)[\s\S]{0,2500}await publishPullRequestRecoveryRecord\(\{ record, repository, token \}\);[\s\S]{0,500}\/rerun-failed-jobs/.test(
+      workerSource,
+    )
+  ) {
+    errors.push("CI retry audit must precede rerun dispatch");
   }
   const blockerContractRequirements = [
     "validateBlockerProposals",
@@ -431,8 +486,7 @@ export function validateWorkflowDocuments(workflows) {
           checkout.with?.path === "workspace" &&
           checkout.with?.["persist-credentials"] === false &&
           [
-            "${{ steps.prepare.outputs.start_sha }}",
-            "${{ needs.implement.outputs.start_sha }}",
+            "${{ needs.prepare.outputs.start_sha }}",
           ].includes(checkout.with?.ref);
         if (
           !workerRecordedCheckout &&
@@ -538,10 +592,18 @@ export function validateWorkflowDocuments(workflows) {
 
   const worker = workflows["codex-worker.yml"];
   const authorization = worker?.jobs?.authorization;
+  const prepare = worker?.jobs?.prepare;
   const implement = worker?.jobs?.implement;
   const publish = worker?.jobs?.publish;
   const workerGroup = String(worker?.concurrency?.group ?? "");
   const workerCancellation = String(worker?.concurrency?.["cancel-in-progress"] ?? "");
+  const workerText = JSON.stringify(worker ?? {});
+  if (
+    /git\s+push[^"\n]*(?:--force(?:-with-lease)?|\s-f(?:\s|$))/i.test(workerText) ||
+    /\bgh\s+pr\s+merge\b|\bmergePullRequest\b|\/merges\b/i.test(workerText)
+  ) {
+    errors.push("Codex Worker must not force-push or directly merge");
+  }
   if (
     JSON.stringify(worker?.on?.issues?.types) !==
       JSON.stringify(["closed", "edited", "reopened", "labeled", "unlabeled"])
@@ -563,8 +625,8 @@ export function validateWorkflowDocuments(workflows) {
       group: "worker-authorization-${{ github.repository }}",
       "cancel-in-progress": false,
     }) ||
-    implement?.needs !== "authorization" ||
-    implement?.if !==
+    prepare?.needs !== "authorization" ||
+    prepare?.if !==
       "always() && needs.authorization.result == 'success' && needs.authorization.outputs.allowed != 'false'" ||
     authorization?.outputs?.allowed !== "${{ steps.authorize.outputs.allowed }}"
   ) {
@@ -610,6 +672,12 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Codex Worker concurrency must isolate external fork PRs");
   }
   if (
+    !workerGroup.includes("codex-worker-review-recovery") ||
+    workerCancellation.includes("github.event_name == 'workflow_run'")
+  ) {
+    errors.push("Claude recovery concurrency must not cancel another PR");
+  }
+  if (
     !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
     !workerCancellation.includes("github.repository") ||
     !workerCancellation.includes("github.event.client_payload.operation")
@@ -617,34 +685,71 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Codex Worker cancellation must require a same-repository PR");
   }
   if (
-    JSON.stringify(implement?.permissions) !== JSON.stringify({ contents: "read" })
+    !sameObject(implement?.concurrency, {
+      group: "codex-worker-model-slot-${{ needs.prepare.outputs.model_slot }}",
+      "cancel-in-progress": false,
+    })
   ) {
-    errors.push("Codex Worker implement job permissions must stay contents: read");
+    errors.push("Codex Worker model concurrency must use one of two fixed slots");
   }
+  const implementText = JSON.stringify(implement ?? {});
   if (
-    JSON.stringify(publish?.permissions) !==
-    JSON.stringify({
+    !sameObject(implement?.permissions, { actions: "read", contents: "read" }) ||
+    /(?:CODEX_GITHUB_TOKEN|GATE_CHECK_TOKEN|TEAM_MEMBERSHIP_TOKEN|GH_TOKEN)/.test(
+      implementText,
+    )
+  ) {
+    errors.push("Codex Worker model job must stay read-only and isolated");
+  }
+  const baseUpdate = worker?.jobs?.["base-update"];
+  if (
+    JSON.stringify(worker?.on?.push?.branches) !== JSON.stringify(["main"]) ||
+    JSON.stringify(worker?.on?.workflow_run?.workflows) !==
+      JSON.stringify(["Docs CI", "Claude PR Review"]) ||
+    JSON.stringify(worker?.on?.workflow_run?.types) !== JSON.stringify(["completed"]) ||
+    baseUpdate?.if !== "github.event_name == 'push'" ||
+    !sameObject(baseUpdate?.permissions, {
+      contents: "read",
+      issues: "write",
+      "pull-requests": "read",
+    }) ||
+    !sameObject(publish?.permissions, {
+      actions: "write",
+      checks: "read",
       contents: "write",
       issues: "write",
       "pull-requests": "write",
     })
   ) {
-    errors.push("Codex Worker publish job permissions must stay minimal");
+    errors.push("Codex Worker recovery triggers and permissions must stay fixed");
   }
-  if (JSON.stringify(implement ?? {}).includes("CODEX_GITHUB_TOKEN")) {
+  if (implementText.includes("CODEX_GITHUB_TOKEN")) {
     errors.push("Codex Worker model job must not contain CODEX_GITHUB_TOKEN");
   }
   if (JSON.stringify(publish ?? {}).includes("CODEX_API_KEY")) {
     errors.push("Codex Worker publisher must not contain CODEX_API_KEY");
   }
   if (
-    implement?.outputs?.default_branch !==
+    prepare?.outputs?.default_branch !==
     "${{ steps.prepare.outputs.default_branch }}"
   ) {
     errors.push("Codex Worker must expose a trusted default branch output");
   }
 
   const publishSteps = publish?.steps ?? [];
+  const retryStep = publishSteps.find(
+    (step) => step.name === "Dispatch next model attempt",
+  );
+  if (
+    implement?.needs !== "prepare" ||
+    retryStep?.run !== "node trusted/.github/scripts/codex-worker.mjs dispatch-retry" ||
+    retryStep?.if !== "steps.preflight.outputs.operation == 'retry'" ||
+    retryStep?.env?.CODEX_GITHUB_TOKEN !==
+      "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
+    retryStep?.env?.GITHUB_TOKEN !== undefined
+  ) {
+    errors.push("Codex Worker retries must dispatch a fresh workflow run");
+  }
   for (const stepName of [
     "Validate Artifact before publisher credential exposure",
     "Publish fixed branch and Draft PR",
@@ -652,7 +757,7 @@ export function validateWorkflowDocuments(workflows) {
     const step = publishSteps.find((candidate) => candidate.name === stepName);
     if (
       step?.env?.WORKER_DEFAULT_BRANCH !==
-      "${{ needs.implement.outputs.default_branch }}"
+      "${{ needs.prepare.outputs.default_branch }}"
     ) {
       errors.push(`${stepName} must receive the trusted default branch input`);
     }
@@ -701,7 +806,122 @@ export function validateWorkflowDocuments(workflows) {
     );
   }
 
+  const planUpload = (prepare?.steps ?? []).find(
+    (step) => step.name === "Upload trusted Worker plan",
+  );
+  if (
+    planUpload?.uses !== UPLOAD_ARTIFACT_ACTION ||
+    planUpload?.if !== "steps.prepare.outputs.operation == 'implement'" ||
+    !sameObject(planUpload?.with, {
+      name: "codex-worker-plan-${{ steps.prepare.outputs.worker_run_id }}-attempt-${{ steps.prepare.outputs.attempt }}",
+      path:
+        "${{ runner.temp }}/codex-worker-prepare/plan.json\n" +
+        "${{ runner.temp }}/codex-worker-prepare/prompt.md\n" +
+        "${{ runner.temp }}/codex-worker-prepare/result.schema.json\n",
+      "if-no-files-found": "error",
+      "include-hidden-files": true,
+      "retention-days": 1,
+    })
+  ) {
+    errors.push("Codex Worker Artifact allowlist must stay fixed");
+  }
+
+  const checkpointUpload = publishSteps.find(
+    (step) => step.name === "Upload trusted Patch checkpoint",
+  );
+  if (
+    checkpointUpload?.uses !== UPLOAD_ARTIFACT_ACTION ||
+    checkpointUpload?.if !== "steps.preflight.outputs.checkpoint_created == 'true'" ||
+    !sameObject(checkpointUpload?.with, {
+      name: "codex-worker-checkpoint-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}",
+      path:
+        "${{ runner.temp }}/trusted-checkpoint/change.patch\n" +
+        "${{ runner.temp }}/trusted-checkpoint/checkpoint.json\n",
+      "if-no-files-found": "error",
+      "include-hidden-files": true,
+      "retention-days": 1,
+    })
+  ) {
+    errors.push("Codex Worker Artifact allowlist must stay fixed");
+  }
+  const artifactPaths = workflowSteps(worker)
+    .filter((step) => step.uses === UPLOAD_ARTIFACT_ACTION)
+    .flatMap((step) => String(step.with?.path ?? "").split("\n"))
+    .map((artifactPath) => artifactPath.trim())
+    .filter(Boolean);
+  if (
+    artifactPaths.some(
+      (artifactPath) =>
+        /^\$\{\{ github\.workspace \}\}\/workspace\/?$/.test(artifactPath) ||
+        /(?:codex[-_]?home|transcript|goal.*(?:db|sqlite)|session.*(?:db|sqlite)|git[-_]?credentials?)/i.test(
+          artifactPath,
+        ),
+    )
+  ) {
+    errors.push("Codex Worker Artifacts must not persist session or workspace state");
+  }
+
   const implementSteps = implement?.steps ?? [];
+  const checkpointDownload = implementSteps.find(
+    (step) => step.name === "Download previous trusted checkpoint",
+  );
+  if (
+    checkpointDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
+    checkpointDownload?.if !== "needs.prepare.outputs.checkpoint_run_id != ''" ||
+    !sameObject(checkpointDownload?.with, {
+      name: "${{ needs.prepare.outputs.checkpoint_artifact_name }}",
+      path: "${{ runner.temp }}/codex-worker-checkpoint",
+      "github-token": "${{ github.token }}",
+      repository: "${{ github.repository }}",
+      "run-id": "${{ needs.prepare.outputs.checkpoint_run_id }}",
+    })
+  ) {
+    errors.push(
+      "Codex Worker checkpoint download must bind the trusted source run and name",
+    );
+  }
+  const reviewRecoverySteps =
+    workflows["claude-pr-review.yml"]?.jobs?.publish?.steps ?? [];
+  const reviewTargetStage = reviewRecoverySteps.find(
+    (step) => step.name === "Stage trusted Review recovery target",
+  );
+  const reviewTargetUpload = reviewRecoverySteps.find(
+    (step) => step.name === "Upload trusted Review recovery target",
+  );
+  const reviewTargetDownload = (prepare?.steps ?? []).find(
+    (step) => step.name === "Download trusted Review recovery target",
+  );
+  const reviewTargetCondition = "steps.publish-review.outcome == 'success'";
+  if (
+    reviewTargetStage?.if !== reviewTargetCondition ||
+    !String(reviewTargetStage?.run ?? "").includes(
+      '> "$RUNNER_TEMP/claude-review-recovery.json"',
+    ) ||
+    reviewTargetUpload?.if !== reviewTargetCondition ||
+    reviewTargetUpload?.uses !== UPLOAD_ARTIFACT_ACTION ||
+    !sameObject(reviewTargetUpload?.with, {
+      name: "claude-review-recovery-${{ github.run_id }}",
+      path: "${{ runner.temp }}/claude-review-recovery.json",
+      "if-no-files-found": "error",
+      "retention-days": 1,
+    }) ||
+    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
+    !String(reviewTargetDownload?.if ?? "").includes(
+      "github.event.workflow_run.name == 'Claude PR Review'",
+    ) ||
+    !String(reviewTargetDownload?.if ?? "").includes(
+      "github.event.workflow_run.conclusion == 'success'",
+    ) ||
+    !sameObject(reviewTargetDownload?.with, {
+      name: "claude-review-recovery-${{ github.event.workflow_run.id }}",
+      path: "${{ runner.temp }}/claude-review-recovery",
+      "github-token": "${{ github.token }}",
+      repository: "${{ github.repository }}",
+      "run-id": "${{ github.event.workflow_run.id }}",
+    })
+  ) {
+    errors.push("Claude recovery target Artifact must stay source-run bound");
+  }
   const codexIndex = implementSteps.findIndex((step) =>
     step.uses?.startsWith("openai/codex-action@"),
   );
@@ -741,9 +961,8 @@ export function validateWorkflowDocuments(workflows) {
     const upload = afterCodex[0];
     if (
       !sameObject(upload?.with, {
-        name: "codex-worker-output",
+        name: "codex-worker-output-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}",
         path:
-          "${{ github.workspace }}/workspace/.codex-worker-artifact/plan.json\n" +
           "${{ github.workspace }}/workspace/.codex-worker-artifact/output/change.patch\n" +
           "${{ github.workspace }}/workspace/.codex-worker-artifact/output/result.json\n",
         "if-no-files-found": "error",
@@ -751,7 +970,7 @@ export function validateWorkflowDocuments(workflows) {
         "retention-days": 1,
       })
     ) {
-      errors.push("Codex Worker Artifact upload contract must stay fixed");
+      errors.push("Codex Worker Artifact allowlist must stay fixed");
     }
   }
   const download = (publish?.steps ?? []).find(
@@ -762,17 +981,19 @@ export function validateWorkflowDocuments(workflows) {
   }
   if (
     !sameObject(download?.with, {
-      name: "codex-worker-output",
-      path: "${{ runner.temp }}/codex-worker-artifact",
+      name: "codex-worker-output-${{ needs.prepare.outputs.worker_run_id }}-attempt-${{ needs.prepare.outputs.attempt }}",
+      path: "${{ runner.temp }}/codex-worker-output",
     })
   ) {
     errors.push("Codex Worker Artifact download contract must stay fixed");
   }
 
   for (const [jobName, job, expectedRef] of [
+    ["base-update", baseUpdate, null],
     ["authorization", authorization, null],
-    ["implement", implement, "${{ steps.prepare.outputs.start_sha }}"],
-    ["publish", publish, "${{ needs.implement.outputs.start_sha }}"],
+    ["prepare", prepare, null],
+    ["implement", implement, "${{ needs.prepare.outputs.start_sha }}"],
+    ["publish", publish, "${{ needs.prepare.outputs.start_sha }}"],
   ]) {
     const trustedCheckout = (job?.steps ?? []).find(
       (step) => step.name === "Checkout trusted default branch",
@@ -1212,6 +1433,7 @@ async function main() {
         "codex-worker.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
+        "worker-resilience.mjs",
       ].map(async (name) => [
         name,
         await fs.readFile(path.join(scriptDirectory, name), "utf8"),
