@@ -8,5 +8,5 @@ test("worker recovery post-merge fixture has the expected content", async () => 
 		"utf8",
 	);
 
-	assert.equal(fixture, "worker-recovery-post-merge\n");
+  assert.equal(fixture, "worker-recovery-post-merge\n");
 });
