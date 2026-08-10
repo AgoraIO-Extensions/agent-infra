@@ -211,6 +211,23 @@ test("rejects PR Review model configuration that bypasses validated Secrets", as
   );
 });
 
+test("rejects PR Review effort configuration that bypasses validated Secrets", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "claude",
+  );
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_EFFORT",
+    "vars.CLAUDE_REVIEW_EFFORT",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review model configuration must use validated Secrets"),
+    ),
+  );
+});
+
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
     (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
@@ -947,6 +964,12 @@ test("configures every Claude model job through validated repository settings", 
     assert.equal(config.env.ANTHROPIC_BASE_URL, "${{ secrets.ANTHROPIC_BASE_URL }}");
     assert.equal(action.env.ANTHROPIC_BASE_URL, config.env.ANTHROPIC_BASE_URL);
     assert.ok(action.with.claude_args.includes('--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"'));
+    assert.equal(config.env.CLAUDE_REVIEW_EFFORT, "${{ secrets.CLAUDE_REVIEW_EFFORT }}");
+    assert.ok(
+      action.with.claude_args.includes(
+        '--effort "${{ secrets.CLAUDE_REVIEW_EFFORT }}"',
+      ),
+    );
     assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
     assert.equal(action.with.show_full_output, verbose);
   }
@@ -1000,6 +1023,22 @@ test("rejects Issue Review model configuration that bypasses validated Secrets",
   action.with.claude_args = action.with.claude_args.replace(
     "secrets.CLAUDE_REVIEW_MODEL",
     "vars.CLAUDE_REVIEW_MODEL",
+  );
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("model configuration must use validated Secrets"),
+    ),
+  );
+});
+
+test("rejects Issue Review effort configuration that bypasses validated Secrets", async () => {
+  const workflows = await actualWorkflows();
+  const job = workflows["claude-issue-review.yml"].jobs.mentions;
+  const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+  action.with.claude_args = action.with.claude_args.replace(
+    "secrets.CLAUDE_REVIEW_EFFORT",
+    "vars.CLAUDE_REVIEW_EFFORT",
   );
 
   assert.ok(

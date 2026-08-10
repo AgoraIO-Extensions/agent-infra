@@ -12,6 +12,7 @@ function runConfigCheck(overrides = {}) {
       ...process.env,
       ANTHROPIC_API_KEY: "configured-api-key",
       ANTHROPIC_BASE_URL: "https://configured.invalid",
+      CLAUDE_REVIEW_EFFORT: "high",
       CLAUDE_REVIEW_MODEL: "configured-model",
       ...overrides,
     },
@@ -29,4 +30,15 @@ test("fails closed without printing configured Secret values", () => {
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, /CLAUDE_REVIEW_MODEL must be configured/);
   assert.doesNotMatch(execution.stderr, /configured-api-key|configured\.invalid/);
+});
+
+test("rejects missing or unsupported Claude Review effort without printing its value", () => {
+  const missing = runConfigCheck({ CLAUDE_REVIEW_EFFORT: "" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /CLAUDE_REVIEW_EFFORT must be configured/);
+
+  const unsupported = runConfigCheck({ CLAUDE_REVIEW_EFFORT: "configured-effort" });
+  assert.equal(unsupported.status, 1);
+  assert.match(unsupported.stderr, /CLAUDE_REVIEW_EFFORT must be one of/);
+  assert.doesNotMatch(unsupported.stderr, /configured-effort/);
 });

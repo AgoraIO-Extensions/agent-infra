@@ -18,6 +18,7 @@ const CLAUDE_ACTION = "anthropics/claude-code-action@";
 const CLAUDE_SECRETS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
+  "CLAUDE_REVIEW_EFFORT",
   "CLAUDE_REVIEW_MODEL",
 ];
 const CODEX_ACTION =
@@ -94,6 +95,8 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         ((secret === "ANTHROPIC_API_KEY" &&
           step.with?.anthropic_api_key === reference) ||
           (secret === "ANTHROPIC_BASE_URL" && step.env?.ANTHROPIC_BASE_URL === reference) ||
+          (secret === "CLAUDE_REVIEW_EFFORT" &&
+            step.with?.claude_args?.includes(`--effort "${reference}"`)) ||
           (secret === "CLAUDE_REVIEW_MODEL" &&
             step.with?.claude_args?.includes(`--model "${reference}"`)));
       if (!allowedConfig && !allowedAction) {
@@ -1300,11 +1303,18 @@ export function validateWorkflowDocuments(workflows) {
   if (
     reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
     Object.keys(reviewConfigEnv).sort().join("\0") !==
-      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+      [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_REVIEW_EFFORT",
+        "CLAUDE_REVIEW_MODEL",
+      ]
         .sort()
         .join("\0") ||
     reviewConfigEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
     reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewConfigEnv.CLAUDE_REVIEW_EFFORT !==
+      "${{ secrets.CLAUDE_REVIEW_EFFORT }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
@@ -1312,6 +1322,9 @@ export function validateWorkflowDocuments(workflows) {
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
     !reviewAction?.with?.claude_args?.includes(
       '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+    ) ||
+    !reviewAction?.with?.claude_args?.includes(
+      '--effort "${{ secrets.CLAUDE_REVIEW_EFFORT }}"',
     )
   ) {
     errors.push("Claude PR Review model configuration must use validated Secrets");
@@ -1515,15 +1528,25 @@ export function validateWorkflowDocuments(workflows) {
           configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
         configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
         Object.keys(configEnv).sort().join("\0") !==
-          ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+          [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_REVIEW_EFFORT",
+            "CLAUDE_REVIEW_MODEL",
+          ]
             .sort()
             .join("\0") ||
         configEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
         configEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        configEnv.CLAUDE_REVIEW_EFFORT !==
+          "${{ secrets.CLAUDE_REVIEW_EFFORT }}" ||
         configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
         modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
         !modelStep?.with?.claude_args?.includes(
           '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        ) ||
+        !modelStep?.with?.claude_args?.includes(
+          '--effort "${{ secrets.CLAUDE_REVIEW_EFFORT }}"',
         ))
     ) {
       errors.push(
