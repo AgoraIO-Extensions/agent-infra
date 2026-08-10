@@ -2392,7 +2392,7 @@ async function writePreparedWorker({
   await writePrepareOutputs({ ...decision, issueNumber });
 }
 
-async function prepareCommand() {
+export async function prepareCommand({ fetchState = fetchWorkerState } = {}) {
   const event = JSON.parse(
     await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"),
   );
@@ -2479,12 +2479,23 @@ async function prepareCommand() {
   }
 
   let state;
+  let decision;
   try {
-    state = await fetchWorkerState({
+    state = await fetchState({
       repository,
       issueNumber,
       defaultBranch,
       token: process.env.GITHUB_TOKEN,
+    });
+    decision = createWorkerPlan({
+      repository,
+      defaultBranch,
+      ...state,
+      retryIdentity:
+        eventName === "repository_dispatch" &&
+        event.client_payload?.operation === "retry-attempt"
+          ? event.client_payload
+          : null,
     });
   } catch {
     await writePrepareOutputs({
@@ -2494,16 +2505,6 @@ async function prepareCommand() {
     });
     return;
   }
-  const decision = createWorkerPlan({
-    repository,
-    defaultBranch,
-    ...state,
-    retryIdentity:
-      eventName === "repository_dispatch" &&
-      event.client_payload?.operation === "retry-attempt"
-        ? event.client_payload
-        : null,
-  });
   if (decision.operation !== "implement") {
     await writePrepareOutputs({ ...decision, issueNumber });
     return;

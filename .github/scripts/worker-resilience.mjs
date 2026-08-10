@@ -146,22 +146,22 @@ export function parseWorkerAttemptRecords(comments, identity) {
     ) {
       continue;
     }
-    if (
-      !Number.isSafeInteger(comment.id) ||
-      comment.created_at !== comment.updated_at
-    ) {
-      throw new Error("Worker attempt audit comments must be append-only");
-    }
     let record;
     try {
       record = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
     } catch {
       throw new Error("Worker attempt marker is invalid");
     }
-    validateWorkerAttemptRecord(record);
     if (!hasIdentity(record, identity)) {
       continue;
     }
+    if (
+      !Number.isSafeInteger(comment.id) ||
+      comment.created_at !== comment.updated_at
+    ) {
+      throw new Error("Worker attempt audit comments must be append-only");
+    }
+    validateWorkerAttemptRecord(record);
     records.push({
       ...record,
       commentId: comment.id,

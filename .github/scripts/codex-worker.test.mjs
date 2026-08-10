@@ -764,6 +764,86 @@ const workerPlan = {
   remainingAcceptanceCriteria: ["AC-1"],
 };
 
+test("routes malformed current Worker attempt audit to prepare triage", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "agent-infra-worker-prepare-"));
+  const eventPath = path.join(root, "event.json");
+  const outputPath = path.join(root, "output.txt");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      action: "labeled",
+      label: { name: "ready-for-agent" },
+      issue: { number: 42 },
+      repository: { default_branch: "main" },
+    }),
+  );
+  writeFileSync(outputPath, "");
+  const environment = {
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_REPOSITORY: workerPlan.repository,
+    GITHUB_EVENT_NAME: "issues",
+    GITHUB_OUTPUT: outputPath,
+  };
+  const previousEnvironment = Object.fromEntries(
+    Object.keys(environment).map((name) => [name, process.env[name]]),
+  );
+  Object.assign(process.env, environment);
+  t.after(() => {
+    for (const [name, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const malformedRecord = {
+    version: 1,
+    issueNumber: workerPlan.issueNumber,
+    cycle: workerPlan.cycle,
+    workerRunId: workerPlan.workerRunId,
+    baseSha: workerPlan.startSha,
+    attempt: 0,
+    outcome: "completed",
+    terminationReason: "completed",
+    remainingAcceptanceCriteria: [],
+    checkpoint: null,
+    recordedAt: "2026-08-10T00:00:00.000Z",
+  };
+
+  await worker.prepareCommand({
+    fetchState: async () => ({
+      issue: {
+        number: workerPlan.issueNumber,
+        state: "open",
+        labels: [{ name: "ready-for-agent" }],
+      },
+      contract: workerContract,
+      authorizationRecord: workerAuthorization,
+      blockers: [],
+      comments: [
+        {
+          id: 105,
+          body: `<!-- agent-infra-worker-attempt:${Buffer.from(
+            JSON.stringify(malformedRecord),
+            "utf8",
+          ).toString("base64url")} -->`,
+          user: { login: "github-actions[bot]", type: "Bot" },
+          performed_via_github_app: { id: 15368 },
+          created_at: "2026-08-10T00:00:00Z",
+          updated_at: "2026-08-10T00:00:00Z",
+        },
+      ],
+      workerPullRequests: [],
+      branchSha: null,
+      defaultSha: workerPlan.startSha,
+    }),
+  });
+
+  assert.match(
+    readFileSync(outputPath, "utf8"),
+    /^operation=triage\nreason=prepare-failed\nissue_number=42\n/,
+  );
+});
+
 test("resumes a later attempt from the last validated checkpoint", () => {
   const workerRunId = workerPlan.workerRunId;
   const checkpoint = {

@@ -207,6 +207,47 @@ test("ignores trusted attempt records from another Worker run", () => {
   assert.deepEqual(parseWorkerAttemptRecords([comment], identity), []);
 });
 
+test("ignores edited or malformed attempt records from another Worker run", () => {
+  const comment = (id, record, createdAt, updatedAt = createdAt) => ({
+    id,
+    body: `<!-- agent-infra-worker-attempt:${Buffer.from(
+      JSON.stringify(record),
+      "utf8",
+    ).toString("base64url")} -->`,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+    created_at: createdAt,
+    updated_at: updatedAt,
+  });
+  const unrelated = {
+    version: 1,
+    ...identity,
+    cycle: identity.cycle - 1,
+    attempt: 1,
+    outcome: "completed",
+    terminationReason: "completed",
+    remainingAcceptanceCriteria: [],
+    checkpoint: null,
+    recordedAt: "2026-08-09T00:00:00.000Z",
+  };
+
+  assert.deepEqual(
+    parseWorkerAttemptRecords(
+      [
+        comment(
+          103,
+          unrelated,
+          "2026-08-09T00:00:00Z",
+          "2026-08-09T00:01:00Z",
+        ),
+        comment(104, { ...unrelated, attempt: 0 }, "2026-08-09T00:02:00Z"),
+      ],
+      identity,
+    ),
+    [],
+  );
+});
+
 test("retries the first deterministic CI failure without code before repair", () => {
   const headSha = "c".repeat(40);
   const fingerprint = "d".repeat(64);
