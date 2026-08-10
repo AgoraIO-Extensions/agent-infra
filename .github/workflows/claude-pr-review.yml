@@ -142,6 +142,7 @@ jobs:
           permission-checks: write
           private-key: ${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       - name: Publish validated Review result
         env:

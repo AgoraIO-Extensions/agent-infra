@@ -518,6 +518,7 @@ export function validateWorkflowDocuments(workflows) {
       "permission-checks": "write",
       "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
       owner: "${{ github.repository_owner }}",
+      repositories: "${{ github.event.repository.name }}",
     }) ||
     evaluateGatesStep?.run !== "node .github/scripts/pr-gates.mjs" ||
     evaluateGatesStep?.if !== "always()" ||
@@ -873,6 +874,7 @@ export function validateWorkflowDocuments(workflows) {
       "permission-checks": "write",
       "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
       owner: "${{ github.repository_owner }}",
+      repositories: "${{ github.event.repository.name }}",
     }) ||
     !sameObject(reviewPublish?.env, {
       ANALYSIS_RESULT: "${{ needs.analyze.result }}",

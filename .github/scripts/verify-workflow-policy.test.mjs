@@ -892,6 +892,7 @@ test("mints isolated check-only Gate publisher tokens", async () => {
     "permission-checks": "write",
     "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
     owner: "${{ github.repository_owner }}",
+    repositories: "${{ github.event.repository.name }}",
   };
 
   const gateSteps = workflows["pr-gates.yml"].jobs.gates.steps;
@@ -937,6 +938,19 @@ test("fails the workflow when a Gate publisher token cannot be minted", async ()
       error.includes("Gate publisher token mint must fail the workflow"),
     ),
   );
+});
+
+test("scopes Gate publisher tokens to the current repository", async () => {
+  const workflows = await actualWorkflows();
+  const publisherSteps = [
+    workflows["pr-gates.yml"].jobs.gates.steps,
+    workflows["claude-pr-review.yml"].jobs.publish.steps,
+  ];
+
+  for (const steps of publisherSteps) {
+    const gateToken = steps.find((step) => step.id === "gate-publisher-token");
+    assert.equal(gateToken.with.repositories, "${{ github.event.repository.name }}");
+  }
 });
 
 test("rejects workflow-token Gate publication and the wrong publisher App", async () => {
