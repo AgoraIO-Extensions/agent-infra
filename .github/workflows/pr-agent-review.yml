@@ -22,10 +22,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      pull-requests: read
-    outputs:
-      expected_head: ${{ steps.target.outputs.head_sha }}
-      structured_output: ${{ steps.pr-agent.outputs.review }}
+      issues: write
+      pull-requests: write
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,10 +31,6 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Record trusted PR-Agent target
-        id: target
-        run: node .github/scripts/pr-agent-review.mjs record
 
       - name: Review pull request
         id: pr-agent
@@ -48,12 +42,14 @@ jobs:
           OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
           config.model: ${{ secrets.PR_AGENT_MODEL }}
           config.propagate_tool_errors: "true"
-          config.publish_output: "false"
+          config.publish_output: "true"
           config.publish_output_progress: "false"
+          config.restricted_mode: "true"
           config.use_repo_settings_file: "false"
           config.use_wiki_settings_file: "false"
           config.fallback_models: "[]"
           config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          pr_code_suggestions.commitable_code_suggestions: "true"
           pr_reviewer.enable_review_labels_effort: "false"
           pr_reviewer.enable_review_labels_security: "false"
           pr_reviewer.num_max_findings: "10"
@@ -68,40 +64,5 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"
-          github_action_config.enable_output: "true"
           github_action_config.pr_actions: >-
             ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]
-
-  publish:
-    name: PR-Agent Publisher
-    needs: analyze
-    if: >-
-      always() &&
-      needs.analyze.result == 'success' &&
-      vars.PR_AGENT_ENABLED == 'true' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout trusted default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
-      - name: Publish validated PR-Agent review
-        env:
-          EXPECTED_HEAD_SHA: ${{ needs.analyze.outputs.expected_head }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}
-        run: node .github/scripts/pr-agent-review.mjs publish
