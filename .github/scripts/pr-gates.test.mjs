@@ -579,6 +579,41 @@ test("Claude Review Gate accepts only current-head success or a bounded infrastr
   }
 });
 
+test("accepts a disabled Claude Review only from the current-head successful Gate", () => {
+  const currentHead = "a".repeat(40);
+  const state = buildReviewState({
+    checkRuns: [
+      {
+        id: 1,
+        name: "Claude Review Gate",
+        head_sha: currentHead,
+        app: { id: 4503079 },
+        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
+        status: "completed",
+        conclusion: "success",
+        output: { summary: "reason_code: disabled" },
+      },
+    ],
+    currentHead,
+    prNumber: 42,
+  });
+
+  assert.equal(state.review.reasonCode, "disabled");
+  assert.deepEqual(evaluateClaudeReviewGate({ currentHead, ...state }), {
+    ok: true,
+    waived: false,
+    description: "Claude Review passed for current head",
+  });
+  assert.equal(
+    evaluateClaudeReviewGate({
+      currentHead,
+      ...state,
+      review: { ...state.review, conclusion: "failure" },
+    }).ok,
+    false,
+  );
+});
+
 test("normalizes only current-head App Review state and blocking thread evidence", () => {
   const currentHead = "a".repeat(40);
   const oldHead = "b".repeat(40);
@@ -928,6 +963,22 @@ test("writes blocking Review thread state to the Gate and restores Review succes
       conclusion: "failure",
       description: "P0/P1 finding cannot be waived",
       reasonCode: "blocking_finding",
+    },
+  );
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: {
+        ok: false,
+        waived: false,
+        reasonCode: "unresolved_thread",
+        description: "Blocking Review thread is unresolved",
+      },
+      review: { reasonCode: "disabled" },
+    }),
+    {
+      conclusion: "failure",
+      description: "Blocking Review thread is unresolved",
+      reasonCode: "unresolved_thread",
     },
   );
   assert.deepEqual(

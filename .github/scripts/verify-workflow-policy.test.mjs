@@ -355,6 +355,30 @@ test("binds Claude Review analysis and publication to the completed CI head", as
   );
 });
 
+test("requires an explicit Claude Review switch in analysis and publication", async () => {
+  const workflows = await actualWorkflows();
+  const review = workflows["claude-pr-review.yml"];
+  const publish = review.jobs.publish.steps.find(
+    (step) => step.name === "Publish validated Review result",
+  );
+  const enabledCondition = "vars.CLAUDE_REVIEW_ENABLED == 'true' &&";
+
+  review.jobs.analyze.if = review.jobs.analyze.if.replace(enabledCondition, "");
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("trigger and concurrency must stay current-head bound"),
+    ),
+  );
+
+  review.jobs.analyze.if = `${enabledCondition}\n${review.jobs.analyze.if}`;
+  delete publish.env.REVIEW_ENABLED;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("publish only the completed CI head"),
+    ),
+  );
+});
+
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
@@ -398,6 +422,7 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
   assert.equal(action.env["config.propagate_tool_errors"], "true");
   assert.equal(action.env["config.publish_output"], "false");
+  assert.equal(action.env["github_action_config.auto_improve"], "true");
   assert.equal(action.env["github_action_config.enable_output"], "true");
   assert.deepEqual(workflow.jobs.publish.permissions, {
     contents: "read",
@@ -425,6 +450,14 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   );
 
   action.env["config.propagate_tool_errors"] = "true";
+  action.env["github_action_config.auto_improve"] = "false";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+
+  action.env["github_action_config.auto_improve"] = "true";
   workflow.jobs.publish.permissions["pull-requests"] = "read";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>

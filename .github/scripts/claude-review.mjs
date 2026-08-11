@@ -23,6 +23,12 @@ export function reviewFailureKind(error) {
     : "infrastructure_failure";
 }
 
+export function parseReviewEnabled(value) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("CLAUDE_REVIEW_ENABLED must be exactly true or false");
+}
+
 function exactKeys(value, keys) {
   return (
     value &&
@@ -95,6 +101,7 @@ export function buildReviewCheckOutput(
   blockingFindingCount = 0,
 ) {
   const success = conclusion === "success" && reasonCode === "success";
+  const disabled = conclusion === "success" && reasonCode === "disabled";
   const blockingFinding =
     conclusion === "failure" && reasonCode === "blocking_finding";
   const blockingFindingCountLine =
@@ -107,6 +114,8 @@ export function buildReviewCheckOutput(
     title: `Claude Review Gate: ${conclusion}`,
     summary: success
       ? "reason_code: success\n\nReview completed for the current head."
+      : disabled
+        ? "reason_code: disabled\n\nClaude Review is disabled for the current head."
       : blockingFinding
         ? `reason_code: blocking_finding${blockingFindingCountLine}\n\nReview completed with blocking P0/P1 findings.`
         : `reason_code: ${reasonCode}\n\nThe trusted Review workflow did not produce a publishable result.`,
@@ -342,6 +351,25 @@ async function main() {
   );
 
   try {
+    const reviewEnabled = parseReviewEnabled(process.env.REVIEW_ENABLED);
+    if (!reviewEnabled) {
+      await requireCurrentReviewTarget({
+        repository,
+        prNumber,
+        expectedHead,
+        request: githubRequest,
+      });
+      await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "completed",
+          conclusion: "success",
+          output: buildReviewCheckOutput("success", "disabled"),
+        }),
+      });
+      return;
+    }
     if (requiredEnvironment("ANALYSIS_RESULT") !== "success") {
       throw new Error("Claude Review analysis did not complete successfully");
     }

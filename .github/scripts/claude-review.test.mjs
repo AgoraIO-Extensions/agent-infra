@@ -8,6 +8,7 @@ import {
   collectChangedDiffLines,
   gateCheckRequest,
   isTrustedReviewComment,
+  parseReviewEnabled,
   parseReviewOutput,
   requireCurrentReviewTarget,
   reviewFailureKind,
@@ -36,6 +37,14 @@ test("parses a bounded Review result for the expected head", () => {
     summary: "Review completed.",
     findings: [],
   });
+});
+
+test("accepts only explicit Claude Review switch values", () => {
+  assert.equal(parseReviewEnabled("true"), true);
+  assert.equal(parseReviewEnabled("false"), false);
+  for (const value of [undefined, "", "TRUE", "1"]) {
+    assert.throws(() => parseReviewEnabled(value), /must be exactly true or false/);
+  }
 });
 
 test("marks only parsed or validated Review output defects as invalid output", () => {
@@ -153,6 +162,11 @@ test("publishes stable Review Gate success and failure reason codes", () => {
   assert.deepEqual(buildReviewCheckOutput("success", "success"), {
     title: "Claude Review Gate: success",
     summary: "reason_code: success\n\nReview completed for the current head.",
+  });
+  assert.deepEqual(buildReviewCheckOutput("success", "disabled"), {
+    title: "Claude Review Gate: success",
+    summary:
+      "reason_code: disabled\n\nClaude Review is disabled for the current head.",
   });
   assert.deepEqual(buildReviewCheckOutput("failure", "infrastructure_failure"), {
     title: "Claude Review Gate: failure",

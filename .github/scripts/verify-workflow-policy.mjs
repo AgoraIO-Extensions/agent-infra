@@ -426,7 +426,7 @@ export function validateTrustedScriptSources(sources) {
   const reviewHeadRechecks =
     reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
   if (
-    reviewHeadRechecks.length < 4 ||
+    reviewHeadRechecks.length < 5 ||
     !reviewSource.includes("reviewSummaryMarker(result.head_sha)") ||
     !reviewSource.includes("reviewSummaryMarker(expectedHead)")
   ) {
@@ -844,7 +844,7 @@ export function validateWorkflowDocuments(workflows) {
       "pr_reviewer.require_todo_scan": "false",
       "github_action_config.auto_review": "true",
       "github_action_config.auto_describe": "false",
-      "github_action_config.auto_improve": "false",
+      "github_action_config.auto_improve": "true",
       "github_action_config.enable_output": "true",
       "github_action_config.pr_actions":
         '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
@@ -1264,6 +1264,9 @@ export function validateWorkflowDocuments(workflows) {
         !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
         !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
         !condition.includes("github.event.workflow_run.pull_requests[0]"),
+    ) ||
+    !String(review?.jobs?.analyze?.if ?? "").includes(
+      "vars.CLAUDE_REVIEW_ENABLED == 'true'",
     )
   ) {
     errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
@@ -1300,6 +1303,7 @@ export function validateWorkflowDocuments(workflows) {
       GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+      REVIEW_ENABLED: "${{ vars.CLAUDE_REVIEW_ENABLED }}",
       STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     }) ||
     !sameObject(review?.jobs?.publish?.permissions, {
