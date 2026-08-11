@@ -245,7 +245,8 @@ function validateSourceRunBinding(sourceRun, parsedRunName) {
     parsedRunName.targetType !== "pr" ||
     !Array.isArray(pullRequests) ||
     pullRequests.length !== 1 ||
-    pullRequests[0]?.number !== parsedRunName.targetNumber
+    pullRequests[0]?.number !== parsedRunName.targetNumber ||
+    !/^[0-9a-f]{40}$/.test(pullRequests[0]?.head?.sha ?? "")
   ) {
     throw new Error(
       "Source pull request target does not match workflow_run metadata",
@@ -750,6 +751,12 @@ async function loadPullRequestContext({
   if (!/^[0-9a-f]{40}$/.test(headSha ?? "")) {
     throw new Error("Workflow outcome pull request head is invalid");
   }
+  if (
+    ["pull_request", "pull_request_target"].includes(sourceRun.event) &&
+    sourceRun.pull_requests[0].head.sha !== headSha
+  ) {
+    throw new Error("Source pull request head is stale");
+  }
   const primaryNumbers = extractPrimaryIssueNumbers(pullRequest.body ?? "");
   let issueContext = {};
   if (primaryNumbers.length === 1) {
@@ -852,16 +859,24 @@ function outcomeExternalId(record) {
   return `agent-infra:workflow-outcome:${record.eventId}:${record.outcome.code}`;
 }
 
+function matchingOutcomeChecks(response, record, externalId) {
+  return (response?.check_runs ?? [])
+    .filter(
+      (check) =>
+        Number.isSafeInteger(check?.id) &&
+        check.id > 0 &&
+        check?.app?.id === GITHUB_ACTIONS_APP_ID &&
+        check.head_sha === record.checkHeadSha &&
+        check.external_id === externalId,
+    )
+    .sort((left, right) => left.id - right.id);
+}
+
 async function claimOutcomeCheck({ repository, record, token, request }) {
   const path = `/repos/${repository}/commits/${record.checkHeadSha}/check-runs?check_name=Workflow%20Outcome&per_page=100`;
   const response = await request(path, { token });
   const externalId = outcomeExternalId(record);
-  const existing = (response?.check_runs ?? []).find(
-    (check) =>
-      check?.app?.id === GITHUB_ACTIONS_APP_ID &&
-      check.head_sha === record.checkHeadSha &&
-      check.external_id === externalId,
-  );
+  const existing = matchingOutcomeChecks(response, record, externalId)[0];
   if (existing) {
     return {
       checkId: existing.id,
@@ -886,6 +901,25 @@ async function claimOutcomeCheck({ repository, record, token, request }) {
     }),
   });
   positiveInteger(created?.id, "Workflow outcome Check Run id");
+  const candidates = new Map([[created.id, created]]);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (attempt > 1) await wait(50);
+    const confirmation = await request(path, { token });
+    for (const check of matchingOutcomeChecks(confirmation, record, externalId)) {
+      candidates.set(check.id, check);
+    }
+  }
+  const canonicalClaim = [...candidates.values()].sort(
+    (left, right) => left.id - right.id,
+  )[0];
+  if (canonicalClaim.id !== created.id) {
+    return {
+      checkId: created.id,
+      duplicateClaim: true,
+      incompleteClaim: false,
+      replay: false,
+    };
+  }
   return { checkId: created.id, incompleteClaim: false, replay: false };
 }
 
@@ -1053,7 +1087,23 @@ export async function processWorkflowOutcome({
   if (record.outcome.notify) {
     const claim = await claimOutcomeCheck({ repository, record, token, request });
     checkId = claim.checkId;
-    if (claim.incompleteClaim) {
+    if (claim.duplicateClaim) {
+      replay = true;
+      notification = {
+        configured: Boolean(webhookUrl),
+        delivered: false,
+        attempts: [],
+        warning: "deduplicated",
+      };
+      await completeOutcomeCheck({
+        repository,
+        checkId,
+        record,
+        notification,
+        token,
+        request,
+      });
+    } else if (claim.incompleteClaim) {
       replay = true;
       notification = {
         configured: Boolean(webhookUrl),

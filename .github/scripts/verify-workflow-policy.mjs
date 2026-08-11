@@ -577,6 +577,9 @@ export function validateTrustedScriptSources(sources) {
     "Response text is intentionally discarded.",
     "Source run operation does not match trusted workflow",
     "Source pull request target does not match workflow_run metadata",
+    "Source pull request head is stale",
+    "canonicalClaim.id !== created.id",
+    "duplicateClaim",
     "WECOM_BOT_WEBHOOK_URL",
   ];
   const summarySource = outcomeSource.slice(

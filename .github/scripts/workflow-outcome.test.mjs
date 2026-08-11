@@ -73,7 +73,7 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
       display_title: displayTitle,
       event: "pull_request",
       head_sha: headSha,
-      pull_requests: [{ number: 115 }],
+      pull_requests: [{ number: 115, head: { sha: headSha } }],
     }),
   });
 
@@ -96,6 +96,48 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
       writeSummary: async () => {},
     }),
     /Source run operation does not match trusted workflow/,
+  );
+});
+
+test("rejects a PR outcome after the live head advances beyond the source run", async () => {
+  const sourceHeadSha = "6".repeat(40);
+  const liveHeadSha = "7".repeat(40);
+  await assert.rejects(
+    processWorkflowOutcome({
+      event: {
+        action: "completed",
+        repository: {
+          full_name: "AgoraIO-Extensions/agent-infra",
+          default_branch: "main",
+        },
+        workflow_run: sourceRun({
+          id: 92,
+          name: "Docs CI",
+          display_title: "PR #115 | docs-ci | pull_request",
+          event: "pull_request",
+          head_sha: sourceHeadSha,
+          pull_requests: [{ number: 115, head: { sha: sourceHeadSha } }],
+        }),
+      },
+      token: "test-token",
+      webhookUrl: "",
+      request: async (apiPath) => {
+        if (apiPath.endsWith("/pulls/115")) {
+          return {
+            number: 115,
+            body: "",
+            head: { sha: liveHeadSha },
+            merged_at: null,
+          };
+        }
+        if (apiPath.includes(`/commits/${liveHeadSha}/check-runs`)) {
+          return { check_runs: [] };
+        }
+        throw new Error(`Unexpected request: ${apiPath}`);
+      },
+      writeSummary: async () => {},
+    }),
+    /Source pull request head is stale/,
   );
 });
 
@@ -728,6 +770,75 @@ test("processes a workflow event once and deduplicates notification replays", as
   assert.doesNotMatch(JSON.stringify({ checks, summaries }), /test-token|webhook/);
 });
 
+test("elects one canonical Check after concurrent semantic claims", async () => {
+  const headSha = "5".repeat(40);
+  const externalId =
+    "agent-infra:workflow-outcome:workflow-run-525:workflow_terminal_failure";
+  const canonical = {
+    id: 699,
+    app: { id: 15368 },
+    external_id: externalId,
+    head_sha: headSha,
+    status: "in_progress",
+  };
+  const checks = [];
+  let checkReads = 0;
+  let deliveries = 0;
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/55")) {
+      return { number: 55, state: "open", labels: [] };
+    }
+    if (apiPath.endsWith("/issues/55/comments")) return [];
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      checkReads += 1;
+      return { check_runs: checkReads === 1 ? [] : [canonical, ...checks] };
+    }
+    if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+      const check = {
+        id: 700,
+        app: { id: 15368 },
+        head_sha: headSha,
+        ...JSON.parse(options.body),
+      };
+      checks.push(check);
+      return check;
+    }
+    if (apiPath.endsWith("/check-runs/700") && options.method === "PATCH") {
+      const payload = JSON.parse(options.body);
+      Object.assign(checks[0], payload);
+      return payload;
+    }
+    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+  };
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 525,
+        conclusion: "failure",
+        head_sha: headSha,
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "https://example.invalid/webhook",
+    request,
+    sendNotification: async () => {
+      deliveries += 1;
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.replay, true);
+  assert.equal(result.notification.warning, "deduplicated");
+  assert.equal(deliveries, 0);
+  assert.equal(checks[0].status, "completed");
+  assert.equal(checks[0].conclusion, "neutral");
+});
+
 test("finalizes an interrupted notification claim without sending a duplicate", async () => {
   const headSha = "4".repeat(40);
   const check = {
@@ -1170,7 +1281,7 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
         event: "pull_request_target",
         conclusion: "success",
         head_sha: sourceHeadSha,
-        pull_requests: [{ number: 105 }],
+        pull_requests: [{ number: 105, head: { sha: headSha } }],
       }),
     },
     token: "test-token",
