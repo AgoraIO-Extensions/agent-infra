@@ -34,7 +34,6 @@ async function actualTrustedScriptSources() {
         "claude-blocker-review.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
-        "pr-agent-review.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
@@ -387,13 +386,10 @@ test("rejects floating third-party Action references", async () => {
   );
 });
 
-test("isolates pinned PR-Agent analysis from validated publication", async () => {
+test("uses pinned PR-Agent official inline publishing", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["pr-agent-review.yml"];
   const action = workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent");
-  const publish = workflow.jobs.publish.steps.find(
-    (step) => step.name === "Publish validated PR-Agent review",
-  );
 
   assert.deepEqual(workflow.on.pull_request_target.types, [
     "opened",
@@ -404,7 +400,8 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
-    "pull-requests": "read",
+    issues: "write",
+    "pull-requests": "write",
   });
   assert.match(
     workflow.jobs.analyze.if,
@@ -421,65 +418,65 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   );
   assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
   assert.equal(action.env["config.propagate_tool_errors"], "true");
-  assert.equal(action.env["config.publish_output"], "false");
-  assert.equal(action.env["github_action_config.auto_improve"], "true");
-  assert.equal(action.env["github_action_config.enable_output"], "true");
-  assert.deepEqual(workflow.jobs.publish.permissions, {
-    contents: "read",
-    "pull-requests": "write",
-  });
-  assert.equal(publish.run, "node .github/scripts/pr-agent-review.mjs publish");
+  assert.equal(action.env["config.publish_output"], "true");
+  assert.equal(action.env["config.restricted_mode"], "true");
   assert.equal(
-    publish.env.STRUCTURED_OUTPUT,
-    "${{ needs.analyze.outputs.structured_output }}",
+    action.env["pr_code_suggestions.commitable_code_suggestions"],
+    "true",
   );
+  assert.equal(action.env["github_action_config.auto_improve"], "true");
 
-  action.env["config.publish_output"] = "true";
+  action.env["config.publish_output"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("isolate the pinned analysis"),
+      error.includes("official inline publishing"),
     ),
   );
 
-  action.env["config.publish_output"] = "false";
+  action.env["config.publish_output"] = "true";
   action.env["config.propagate_tool_errors"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("isolate the pinned analysis"),
+      error.includes("official inline publishing"),
     ),
   );
 
   action.env["config.propagate_tool_errors"] = "true";
+  action.env["pr_code_suggestions.commitable_code_suggestions"] = "false";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+
+  action.env["pr_code_suggestions.commitable_code_suggestions"] = "true";
   action.env["github_action_config.auto_improve"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("isolate the pinned analysis"),
+      error.includes("official inline publishing"),
     ),
   );
 
   action.env["github_action_config.auto_improve"] = "true";
-  workflow.jobs.publish.permissions["pull-requests"] = "read";
+  workflow.jobs.analyze.permissions["pull-requests"] = "read";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("isolate the pinned analysis"),
+      error.includes("official inline publishing"),
     ),
   );
 });
 
-test("requires same-repository PR-Agent runs and a current-head publisher", async () => {
+test("requires same-repository PR-Agent runs", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["pr-agent-review.yml"];
   workflow.jobs.analyze.if = workflow.jobs.analyze.if.replace(
     "github.event.pull_request.head.repo.full_name == github.repository",
     "true",
   );
-  workflow.jobs.publish.steps.find(
-    (step) => step.name === "Publish validated PR-Agent review",
-  ).env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("isolate the pinned analysis"),
+      error.includes("official inline publishing"),
     ),
   );
 });
