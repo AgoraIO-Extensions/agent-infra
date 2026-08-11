@@ -1,0 +1,3 @@
+Claude effort post-merge smoke
+
+This disposable file verifies default-branch Variable wiring.
