@@ -707,6 +707,42 @@ test("returns an unmapped post-merge result when no single primary Issue exists"
   assert.equal(result, null);
 });
 
+test("returns an unmapped post-merge result when the primary Issue is missing", async () => {
+  const sha = "6".repeat(40);
+  const result = await triagePostMergeFailure({
+    repository: "AgoraIO-Extensions/agent-infra",
+    sourceRun: sourceRun({
+      id: 426,
+      name: "Docs CI",
+      display_title: "main | docs-ci | push",
+      event: "push",
+      conclusion: "failure",
+      head_sha: sha,
+      head_branch: "main",
+    }),
+    token: "test-token",
+    defaultBranch: "main",
+    request: async (apiPath, options = {}) => {
+      if (apiPath.endsWith(`/commits/${sha}/pulls`)) {
+        return [{
+          number: 105,
+          merged_at: "2026-08-11T09:00:00Z",
+          merge_commit_sha: sha,
+          base: { ref: "main" },
+          body: "Closes #999",
+        }];
+      }
+      if (apiPath.endsWith("/issues/999")) {
+        assert.equal(options.allowNotFound, true);
+        return null;
+      }
+      throw new Error(`Unexpected request: ${apiPath}`);
+    },
+  });
+
+  assert.equal(result, null);
+});
+
 test("degrades an unmapped post-merge failure to a generic terminal notification", async () => {
   const sha = "8".repeat(40);
   const checks = [];

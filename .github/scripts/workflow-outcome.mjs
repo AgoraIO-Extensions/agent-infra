@@ -619,7 +619,7 @@ export async function triagePostMergeFailure({
   }
   const issueNumber = primaryIssues[0];
   const issuePath = `/repos/${repository}/issues/${issueNumber}`;
-  let issue = await request(issuePath, { token });
+  let issue = await request(issuePath, { token, allowNotFound: true });
   if (issue?.pull_request || issue?.number !== issueNumber) {
     return null;
   }
