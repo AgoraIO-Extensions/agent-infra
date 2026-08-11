@@ -343,12 +343,13 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
     action.uses,
     "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
   );
-  assert.equal(action.env.OPENAI_KEY, "${{ secrets.PR_AGENT_API_KEY }}");
+  assert.equal(action.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
   assert.equal(
     action.env.OPENAI__API_BASE,
     "${{ secrets.PR_AGENT_API_BASE }}",
   );
   assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
+  assert.equal(action.env["config.propagate_tool_errors"], "true");
   assert.equal(action.env["config.publish_output"], "false");
   assert.equal(action.env["github_action_config.enable_output"], "true");
   assert.deepEqual(workflow.jobs.publish.permissions, {
@@ -363,6 +364,14 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   );
 
   action.env["config.publish_output"] = "true";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+
+  action.env["config.publish_output"] = "false";
+  action.env["config.propagate_tool_errors"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("isolate the pinned analysis"),
