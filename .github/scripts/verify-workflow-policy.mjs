@@ -837,8 +837,7 @@ export function validateWorkflowDocuments(workflows) {
     prAgentPublish?.needs !== "analyze" ||
     !sameObject(prAgentPublish?.permissions, {
       contents: "read",
-      issues: "write",
-      "pull-requests": "read",
+      "pull-requests": "write",
     }) ||
     prAgentCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
