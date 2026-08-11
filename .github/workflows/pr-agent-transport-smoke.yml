@@ -83,6 +83,10 @@ jobs:
               settings.set("GITHUB_ACTION_CONFIG.AUTO_DESCRIBE", False)
               settings.set("GITHUB_ACTION_CONFIG.AUTO_IMPROVE", False)
               settings.set("GITHUB_ACTION_CONFIG.ENABLE_OUTPUT", True)
+              settings.set(
+                  "GITHUB_ACTION_CONFIG.PR_ACTIONS",
+                  ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"],
+              )
 
               original = handler_module.acompletion
               calls = 0
