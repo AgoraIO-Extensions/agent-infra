@@ -18,15 +18,15 @@ const TRUSTED_OPERATIONS = new Set([
   "workflow-outcome",
 ]);
 
-const WORKFLOW_NAMES = new Set([
-  "Auto-merge Enrollment",
-  "Blocker Reconciler",
-  "Claude Issue Review",
-  "Claude PR Review",
-  "Codex Worker",
-  "Docs CI",
-  "PR-Agent Review",
-  "PR Gates",
+const WORKFLOW_OPERATIONS = new Map([
+  ["Auto-merge Enrollment", "auto-merge"],
+  ["Blocker Reconciler", "blocker-reconcile"],
+  ["Claude Issue Review", "claude-issue-review"],
+  ["Claude PR Review", "claude-pr-review"],
+  ["Codex Worker", "codex-worker"],
+  ["Docs CI", "docs-ci"],
+  ["PR-Agent Review", "pr-agent-review"],
+  ["PR Gates", "pr-gates"],
 ]);
 const POST_MERGE_MARKER = "agent-infra-post-merge-failure";
 const GITHUB_ACTIONS_APP_ID = 15_368;
@@ -51,7 +51,7 @@ function repositoryName(value) {
 
 function sourceRunMetadata(value) {
   positiveInteger(value?.id, "Source run id");
-  if (!WORKFLOW_NAMES.has(value?.name)) {
+  if (!WORKFLOW_OPERATIONS.has(value?.name)) {
     throw new Error("Source workflow is not trusted");
   }
   if (!/^[a-z_]+$/.test(value?.event ?? "")) {
@@ -231,6 +231,26 @@ export function parseSourceRunName(value) {
     targetNumber: null,
     targetType: target,
   };
+}
+
+function validateSourceRunBinding(sourceRun, parsedRunName) {
+  if (WORKFLOW_OPERATIONS.get(sourceRun.name) !== parsedRunName.operation) {
+    throw new Error("Source run operation does not match trusted workflow");
+  }
+  if (!["pull_request", "pull_request_target"].includes(sourceRun.event)) {
+    return;
+  }
+  const pullRequests = sourceRun.pull_requests;
+  if (
+    parsedRunName.targetType !== "pr" ||
+    !Array.isArray(pullRequests) ||
+    pullRequests.length !== 1 ||
+    pullRequests[0]?.number !== parsedRunName.targetNumber
+  ) {
+    throw new Error(
+      "Source pull request target does not match workflow_run metadata",
+    );
+  }
 }
 
 export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
@@ -580,17 +600,17 @@ export async function triagePostMergeFailure({
     )
     .sort((left, right) => Date.parse(right.merged_at) - Date.parse(left.merged_at))[0];
   if (!pullRequest) {
-    throw new Error("Failed main commit has no merged pull request");
+    return null;
   }
   const primaryIssues = extractPrimaryIssueNumbers(pullRequest.body ?? "");
   if (primaryIssues.length !== 1) {
-    throw new Error("Merged pull request must have exactly one primary Issue");
+    return null;
   }
   const issueNumber = primaryIssues[0];
   const issuePath = `/repos/${repository}/issues/${issueNumber}`;
   let issue = await request(issuePath, { token });
   if (issue?.pull_request || issue?.number !== issueNumber) {
-    throw new Error("Primary Issue is invalid");
+    return null;
   }
   const paginateRequest = paginate ??
     (request === githubRequest
@@ -971,6 +991,7 @@ export async function processWorkflowOutcome({
   if (!token) throw new Error("GITHUB_TOKEN is required");
   const sourceRun = sourceRunMetadata(event.workflow_run);
   const parsedRunName = parseSourceRunName(sourceRun.display_title);
+  validateSourceRunBinding(sourceRun, parsedRunName);
   const paginateRequest = paginate ??
     (request === githubRequest
       ? githubPaginate
@@ -989,23 +1010,27 @@ export async function processWorkflowOutcome({
       paginate: paginateRequest,
       defaultBranch: event.repository.default_branch,
     });
-    const issueContext = await loadIssueContext({
-      repository,
-      issueNumber: triage.issueNumber,
-      sourceRun,
-      token,
-      request,
-      paginate: paginateRequest,
-    });
-    context = {
-      ...issueContext,
-      postMergeFailure: true,
-      target: { type: "issue", number: triage.issueNumber },
-      eventIds: {
-        ...(issueContext.eventIds ?? {}),
-        post_merge_failure: `post-merge-run-${sourceRun.id}`,
-      },
-    };
+    if (triage) {
+      const issueContext = await loadIssueContext({
+        repository,
+        issueNumber: triage.issueNumber,
+        sourceRun,
+        token,
+        request,
+        paginate: paginateRequest,
+      });
+      context = {
+        ...issueContext,
+        postMergeFailure: true,
+        target: { type: "issue", number: triage.issueNumber },
+        eventIds: {
+          ...(issueContext.eventIds ?? {}),
+          post_merge_failure: `post-merge-run-${sourceRun.id}`,
+        },
+      };
+    } else {
+      context = {};
+    }
   } else {
     context = await loadOutcomeContext({
       repository,

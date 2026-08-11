@@ -22,7 +22,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: workflow-outcome-${{ github.repository }}
+  group: workflow-outcome-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:

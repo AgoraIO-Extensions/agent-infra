@@ -44,6 +44,61 @@ test("parses only fixed workflow run names into trusted targets", () => {
   }
 });
 
+test("rejects PR run targets and operations that disagree with workflow_run metadata", async () => {
+  const headSha = "9".repeat(40);
+  const request = async (apiPath) => {
+    const pullMatch = /\/pulls\/(\d+)$/.exec(apiPath);
+    if (pullMatch) {
+      return {
+        number: Number(pullMatch[1]),
+        body: "",
+        head: { sha: headSha },
+        merged_at: null,
+      };
+    }
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      return { check_runs: [] };
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  const eventFor = (displayTitle) => ({
+    action: "completed",
+    repository: {
+      full_name: "AgoraIO-Extensions/agent-infra",
+      default_branch: "main",
+    },
+    workflow_run: sourceRun({
+      id: 91,
+      name: "Docs CI",
+      display_title: displayTitle,
+      event: "pull_request",
+      head_sha: headSha,
+      pull_requests: [{ number: 115 }],
+    }),
+  });
+
+  await assert.rejects(
+    processWorkflowOutcome({
+      event: eventFor("PR #999 | docs-ci | pull_request"),
+      token: "test-token",
+      webhookUrl: "",
+      request,
+      writeSummary: async () => {},
+    }),
+    /Source pull request target does not match workflow_run metadata/,
+  );
+  await assert.rejects(
+    processWorkflowOutcome({
+      event: eventFor("PR #115 | pr-gates | pull_request"),
+      token: "test-token",
+      webhookUrl: "",
+      request,
+      writeSummary: async () => {},
+    }),
+    /Source run operation does not match trusted workflow/,
+  );
+});
+
 test("builds a safe terminal outcome and Job Summary from workflow_run metadata", () => {
   const record = buildOutcomeRecord({
     repository: "AgoraIO-Extensions/agent-infra",
@@ -481,6 +536,105 @@ test("does not reopen an Issue for a cancelled or skipped main run", async () =>
     );
     assert.equal(requested, false);
   }
+});
+
+test("returns an unmapped post-merge result when no single primary Issue exists", async () => {
+  const sha = "7".repeat(40);
+  const result = await triagePostMergeFailure({
+    repository: "AgoraIO-Extensions/agent-infra",
+    sourceRun: sourceRun({
+      id: 425,
+      name: "Docs CI",
+      display_title: "main | docs-ci | push",
+      event: "push",
+      conclusion: "failure",
+      head_sha: sha,
+      head_branch: "main",
+    }),
+    token: "test-token",
+    defaultBranch: "main",
+    request: async (apiPath) => {
+      if (apiPath.endsWith(`/commits/${sha}/pulls`)) {
+        return [{
+          number: 105,
+          merged_at: "2026-08-11T09:00:00Z",
+          merge_commit_sha: sha,
+          base: { ref: "main" },
+          body: "No primary Issue reference",
+        }];
+      }
+      throw new Error(`Unexpected request: ${apiPath}`);
+    },
+  });
+
+  assert.equal(result, null);
+});
+
+test("degrades an unmapped post-merge failure to a generic terminal notification", async () => {
+  const sha = "8".repeat(40);
+  const checks = [];
+  let deliveries = 0;
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith(`/commits/${sha}/pulls`)) return [];
+    if (apiPath.includes(`/commits/${sha}/check-runs`)) {
+      return { check_runs: checks };
+    }
+    if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+      const check = {
+        id: 650,
+        app: { id: 15368 },
+        head_sha: sha,
+        ...JSON.parse(options.body),
+      };
+      checks.push(check);
+      return check;
+    }
+    if (apiPath.endsWith("/check-runs/650") && options.method === "PATCH") {
+      const payload = JSON.parse(options.body);
+      Object.assign(checks[0], payload);
+      return payload;
+    }
+    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+  };
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 450,
+        name: "Docs CI",
+        display_title: "main | docs-ci | push",
+        event: "push",
+        conclusion: "failure",
+        head_sha: sha,
+        head_branch: "main",
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "https://example.invalid/webhook",
+    request,
+    sendNotification: async () => {
+      deliveries += 1;
+      return {
+        configured: true,
+        delivered: true,
+        attempts: [
+          { attempt: 1, businessCode: 0, httpStatus: 200, status: "delivered" },
+        ],
+        warning: null,
+      };
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.record.target.type, "main");
+  assert.equal(result.record.outcome.code, "workflow_terminal_failure");
+  assert.equal(deliveries, 1);
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, "completed");
 });
 
 test("processes a workflow event once and deduplicates notification replays", async () => {
@@ -1016,6 +1170,7 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
         event: "pull_request_target",
         conclusion: "success",
         head_sha: sourceHeadSha,
+        pull_requests: [{ number: 105 }],
       }),
     },
     token: "test-token",

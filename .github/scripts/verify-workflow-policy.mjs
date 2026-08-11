@@ -575,6 +575,8 @@ export function validateTrustedScriptSources(sources) {
     'body: JSON.stringify({ labels: ["needs-triage"] })',
     "delivery_state_unknown",
     "Response text is intentionally discarded.",
+    "Source run operation does not match trusted workflow",
+    "Source pull request target does not match workflow_run metadata",
     "WECOM_BOT_WEBHOOK_URL",
   ];
   const summarySource = outcomeSource.slice(
@@ -789,7 +791,7 @@ export function validateWorkflowDocuments(workflows) {
     JSON.stringify(outcomeWorkflow?.on?.workflow_run?.types) !==
       JSON.stringify(["completed"]) ||
     !sameObject(outcomeWorkflow?.concurrency, {
-      group: "workflow-outcome-${{ github.repository }}",
+      group: "workflow-outcome-${{ github.event.workflow_run.id }}",
       "cancel-in-progress": false,
     }) ||
     !sameObject(outcomeJob?.permissions, {

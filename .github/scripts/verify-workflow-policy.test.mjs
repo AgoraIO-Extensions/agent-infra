@@ -132,6 +132,22 @@ test("requires bounded deduplicated outcome and post-merge behavior", async () =
   );
 });
 
+test("isolates workflow outcome concurrency per source run", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["workflow-outcome.yml"];
+  assert.deepEqual(workflow.concurrency, {
+    group: "workflow-outcome-${{ github.event.workflow_run.id }}",
+    "cancel-in-progress": false,
+  });
+
+  workflow.concurrency.group = "workflow-outcome-${{ github.repository }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed trusted triggers"),
+    ),
+  );
+});
+
 test("rejects untrusted workflow Summary sources", async () => {
   for (const unsafe of [
     "sourceRun.title",
