@@ -46,6 +46,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_REVIEW_EFFORT: ${{ vars.CLAUDE_REVIEW_EFFORT }}
           CLAUDE_REVIEW_MODEL: ${{ secrets.CLAUDE_REVIEW_MODEL }}
         run: node .github/scripts/validate-claude-review-config.mjs
 
@@ -100,6 +101,7 @@ jobs:
             only the required JSON object.
           claude_args: |
             --model "${{ secrets.CLAUDE_REVIEW_MODEL }}"
+            --effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --add-dir pr-head
             --allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"

@@ -63,6 +63,24 @@ function gatePublisherTokenReferences(value) {
   ) ?? [];
 }
 
+function hasSingleFixedClaudeArgument(args, option, value) {
+  if (typeof args !== "string") {
+    return false;
+  }
+  const escapeRegExp = (input) => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const optionPattern = `(?:^|\\s)${escapeRegExp(option)}`;
+  const optionOccurrences = args.match(
+    new RegExp(`${optionPattern}(?=\\s|=|$)`, "g"),
+  ) ?? [];
+  const fixedOccurrences = args.match(
+    new RegExp(
+      `${optionPattern}\\s+"${escapeRegExp(value)}"(?=\\s|$)`,
+      "g",
+    ),
+  ) ?? [];
+  return optionOccurrences.length === 1 && fixedOccurrences.length === 1;
+}
+
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
   return (
     step.id === "validate-config" &&
@@ -118,15 +136,12 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       continue;
     }
     if (
-      ["CODEX_RESPONSES_API_ENDPOINT", "CODEX_MODEL", "CODEX_EFFORT"].includes(
-        secret,
-      )
+      ["CODEX_RESPONSES_API_ENDPOINT", "CODEX_MODEL"].includes(secret)
     ) {
       const reference = `\${{ secrets.${secret} }}`;
       const actionInput = {
         CODEX_RESPONSES_API_ENDPOINT: "responses-api-endpoint",
         CODEX_MODEL: "model",
-        CODEX_EFFORT: "effort",
       }[secret];
       const allowedPrepare =
         workflowName === "codex-worker.yml" &&
@@ -1098,6 +1113,12 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Claude recovery target Artifact must stay source-run bound");
   }
+  const prepareConfig = (prepare?.steps ?? []).find(
+    (step) => step.name === "Prepare trusted Worker plan",
+  );
+  if (prepareConfig?.env?.CODEX_EFFORT !== "${{ vars.CODEX_EFFORT }}") {
+    errors.push("Codex Worker effort must use the fixed repository Variable");
+  }
   const codexIndex = implementSteps.findIndex((step) =>
     step.uses?.startsWith("openai/codex-action@"),
   );
@@ -1120,7 +1141,7 @@ export function validateWorkflowDocuments(workflows) {
         "permission-profile": "github-worker",
         "codex-version": "0.146.0",
         model: "${{ secrets.CODEX_MODEL }}",
-        effort: "${{ secrets.CODEX_EFFORT }}",
+        effort: "${{ vars.CODEX_EFFORT }}",
         "safety-strategy": "drop-sudo",
       })
     ) {
@@ -1300,21 +1321,34 @@ export function validateWorkflowDocuments(workflows) {
   if (
     reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
     Object.keys(reviewConfigEnv).sort().join("\0") !==
-      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+      [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_REVIEW_EFFORT",
+        "CLAUDE_REVIEW_MODEL",
+      ]
         .sort()
         .join("\0") ||
     reviewConfigEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
     reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+    reviewConfigEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
-    !reviewAction?.with?.claude_args?.includes(
-      '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+    !hasSingleFixedClaudeArgument(
+      reviewAction?.with?.claude_args,
+      "--model",
+      "${{ secrets.CLAUDE_REVIEW_MODEL }}",
+    ) ||
+    !hasSingleFixedClaudeArgument(
+      reviewAction?.with?.claude_args,
+      "--effort",
+      "${{ vars.CLAUDE_REVIEW_EFFORT }}",
     )
   ) {
-    errors.push("Claude PR Review model configuration must use validated Secrets");
+    errors.push("Claude PR Review model configuration must use validated settings");
   }
   const reviewPublisherSecrets = referencedSecrets(review?.jobs?.publish).sort();
   if (
@@ -1515,19 +1549,32 @@ export function validateWorkflowDocuments(workflows) {
           configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
         configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
         Object.keys(configEnv).sort().join("\0") !==
-          ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_REVIEW_MODEL"]
+          [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_REVIEW_EFFORT",
+            "CLAUDE_REVIEW_MODEL",
+          ]
             .sort()
             .join("\0") ||
         configEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
         configEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
+        configEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
         configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
         modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-        !modelStep?.with?.claude_args?.includes(
-          '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        !hasSingleFixedClaudeArgument(
+          modelStep?.with?.claude_args,
+          "--model",
+          "${{ secrets.CLAUDE_REVIEW_MODEL }}",
+        ) ||
+        !hasSingleFixedClaudeArgument(
+          modelStep?.with?.claude_args,
+          "--effort",
+          "${{ vars.CLAUDE_REVIEW_EFFORT }}",
         ))
     ) {
       errors.push(
-        `claude-issue-review.yml/${jobName}: model configuration must use validated Secrets`,
+        `claude-issue-review.yml/${jobName}: model configuration must use validated settings`,
       );
     }
   }
