@@ -973,6 +973,22 @@ test("writes blocking Review thread state to the Gate and restores Review succes
         reasonCode: "unresolved_thread",
         description: "Blocking Review thread is unresolved",
       },
+      review: { reasonCode: "disabled" },
+    }),
+    {
+      conclusion: "failure",
+      description: "Blocking Review thread is unresolved",
+      reasonCode: "unresolved_thread",
+    },
+  );
+  assert.deepEqual(
+    claudeReviewGateUpdate({
+      result: {
+        ok: false,
+        waived: false,
+        reasonCode: "unresolved_thread",
+        description: "Blocking Review thread is unresolved",
+      },
       review: { reasonCode: "blocking_finding", blockingFindingCount: 2 },
     }),
     {

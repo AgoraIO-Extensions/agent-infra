@@ -445,7 +445,9 @@ export function claudeReviewGateUpdate({ result, review }) {
   if (
     !result?.ok &&
     threadFailureReason &&
-    ["success", "blocking_finding", "unresolved_thread"].includes(review?.reasonCode)
+    ["success", "disabled", "blocking_finding", "unresolved_thread"].includes(
+      review?.reasonCode,
+    )
   ) {
     return {
       conclusion: "failure",
