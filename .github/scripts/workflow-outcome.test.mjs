@@ -99,46 +99,133 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
   );
 });
 
-test("rejects a PR outcome after the live head advances beyond the source run", async () => {
+test("records an unbound fork PR source as a repository no-op", async () => {
+  const summaries = [];
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 93,
+        name: "Docs CI",
+        display_title: "PR #999 | docs-ci | pull_request",
+        event: "pull_request",
+        conclusion: "failure",
+        pull_requests: [],
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "https://example.invalid/webhook",
+    request: async (apiPath) => {
+      throw new Error(`Unexpected request: ${apiPath}`);
+    },
+    sendNotification: async () => {
+      throw new Error("Unexpected notification");
+    },
+    writeSummary: async (value) => summaries.push(value),
+  });
+
+  assert.equal(result.record.target.type, "repository");
+  assert.equal(result.record.target.number, null);
+  assert.equal(result.record.sourceRun.action, "unbound");
+  assert.equal(result.record.outcome.code, "workflow_not_run");
+  assert.equal(result.record.outcome.notify, false);
+  assert.equal(result.checkId, null);
+  assert.equal(summaries.length, 1);
+  assert.doesNotMatch(summaries[0], /#999/);
+});
+
+test("records a stale PR head as a non-notifying terminal outcome", async () => {
   const sourceHeadSha = "6".repeat(40);
   const liveHeadSha = "7".repeat(40);
-  await assert.rejects(
-    processWorkflowOutcome({
-      event: {
-        action: "completed",
-        repository: {
-          full_name: "AgoraIO-Extensions/agent-infra",
-          default_branch: "main",
-        },
-        workflow_run: sourceRun({
-          id: 92,
-          name: "Docs CI",
-          display_title: "PR #115 | docs-ci | pull_request",
-          event: "pull_request",
-          head_sha: sourceHeadSha,
-          pull_requests: [{ number: 115, head: { sha: sourceHeadSha } }],
-        }),
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
       },
-      token: "test-token",
-      webhookUrl: "",
-      request: async (apiPath) => {
-        if (apiPath.endsWith("/pulls/115")) {
-          return {
-            number: 115,
-            body: "",
-            head: { sha: liveHeadSha },
-            merged_at: null,
-          };
-        }
-        if (apiPath.includes(`/commits/${liveHeadSha}/check-runs`)) {
-          return { check_runs: [] };
-        }
-        throw new Error(`Unexpected request: ${apiPath}`);
+      workflow_run: sourceRun({
+        id: 92,
+        name: "Docs CI",
+        display_title: "PR #115 | docs-ci | pull_request",
+        event: "pull_request",
+        head_sha: sourceHeadSha,
+        pull_requests: [{ number: 115, head: { sha: sourceHeadSha } }],
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "",
+    request: async (apiPath) => {
+      if (apiPath.endsWith("/pulls/115")) {
+        return {
+          number: 115,
+          body: "",
+          head: { sha: liveHeadSha },
+          merged_at: null,
+        };
+      }
+      throw new Error(`Unexpected request: ${apiPath}`);
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.record.target.number, 115);
+  assert.equal(result.record.checkHeadSha, sourceHeadSha);
+  assert.equal(result.record.outcome.code, "workflow_not_run");
+  assert.equal(result.record.outcome.notify, false);
+  assert.equal(result.checkId, null);
+});
+
+test("ignores an unresolvable primary Issue in a PR body", async () => {
+  const headSha = "8".repeat(40);
+  const paths = [];
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
       },
-      writeSummary: async () => {},
-    }),
-    /Source pull request head is stale/,
-  );
+      workflow_run: sourceRun({
+        id: 94,
+        name: "Docs CI",
+        display_title: "PR #115 | docs-ci | pull_request",
+        event: "pull_request",
+        head_sha: headSha,
+        pull_requests: [{ number: 115, head: { sha: headSha } }],
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "",
+    request: async (apiPath, options = {}) => {
+      paths.push(apiPath);
+      if (apiPath.endsWith("/pulls/115")) {
+        return {
+          number: 115,
+          body: "Closes #999",
+          head: { sha: headSha },
+          merged_at: null,
+        };
+      }
+      if (apiPath.endsWith("/issues/999")) {
+        assert.equal(options.allowNotFound, true);
+        return null;
+      }
+      if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+        return { check_runs: [] };
+      }
+      throw new Error(`Unexpected request: ${apiPath}`);
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.record.target.number, 115);
+  assert.equal(result.record.outcome.code, "workflow_completed");
+  assert.equal(paths.some((path) => path.endsWith("/issues/999/comments")), false);
 });
 
 test("builds a safe terminal outcome and Job Summary from workflow_run metadata", () => {

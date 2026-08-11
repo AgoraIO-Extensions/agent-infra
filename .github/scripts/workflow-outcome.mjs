@@ -128,6 +128,9 @@ function stateExistedWhenRunCompleted(sourceRun, state) {
 }
 
 export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
+  if (context.workflowNotRun) {
+    return outcome("workflow_not_run", "none", false);
+  }
   if (context.postMergeFailure) {
     return outcome("post_merge_failure", "issue-owner", true);
   }
@@ -241,9 +244,12 @@ function validateSourceRunBinding(sourceRun, parsedRunName) {
     throw new Error("Source run operation does not match trusted workflow");
   }
   if (!["pull_request", "pull_request_target"].includes(sourceRun.event)) {
-    return;
+    return true;
   }
   const pullRequests = sourceRun.pull_requests;
+  if (Array.isArray(pullRequests) && pullRequests.length !== 1) {
+    return false;
+  }
   if (
     parsedRunName.targetType !== "pr" ||
     !Array.isArray(pullRequests) ||
@@ -255,6 +261,7 @@ function validateSourceRunBinding(sourceRun, parsedRunName) {
       "Source pull request target does not match workflow_run metadata",
     );
   }
+  return true;
 }
 
 export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
@@ -290,7 +297,7 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
       id: sourceRun.id,
       workflow: sourceRun.name,
       event: sourceRun.event,
-      action: parsed.action,
+      action: context.sourceAction ?? parsed.action,
       headSha: sourceRun.head_sha,
       conclusion: sourceRun.conclusion,
       url: `https://github.com/${repository}/actions/runs/${sourceRun.id}`,
@@ -679,15 +686,15 @@ async function loadIssueContext({
   token,
   request,
   paginate,
+  allowMissing = false,
 }) {
   const issuePath = `/repos/${repository}/issues/${issueNumber}`;
-  const [issue, comments] = await Promise.all([
-    request(issuePath, { token }),
-    paginate(`${issuePath}/comments`, { token, request }),
-  ]);
+  const issue = await request(issuePath, { token, allowNotFound: allowMissing });
   if (issue?.pull_request || issue?.number !== issueNumber) {
+    if (allowMissing) return null;
     throw new Error("Workflow outcome target Issue is invalid");
   }
+  const comments = await paginate(`${issuePath}/comments`, { token, request });
   const eligibleComments = (comments ?? []).filter((comment) =>
     existedBy(sourceRun?.updated_at, comment.created_at),
   );
@@ -758,19 +765,24 @@ async function loadPullRequestContext({
     ["pull_request", "pull_request_target"].includes(sourceRun.event) &&
     sourceRun.pull_requests[0].head.sha !== headSha
   ) {
-    throw new Error("Source pull request head is stale");
+    return {
+      checkHeadSha: sourceRun.pull_requests[0].head.sha,
+      target: { type: "pr", number: pullRequestNumber },
+      workflowNotRun: true,
+    };
   }
   const primaryNumbers = extractPrimaryIssueNumbers(pullRequest.body ?? "");
   let issueContext = {};
   if (primaryNumbers.length === 1) {
-    issueContext = await loadIssueContext({
+    issueContext = (await loadIssueContext({
       repository,
       issueNumber: primaryNumbers[0],
       sourceRun,
       token,
       request,
       paginate,
-    });
+      allowMissing: true,
+    })) ?? {};
   }
   const response = await request(
     `/repos/${repository}/commits/${headSha}/check-runs?per_page=100`,
@@ -1003,7 +1015,7 @@ async function completeOutcomeCheck({
 
 export async function githubRequest(
   apiPath,
-  { token, method = "GET", headers = {}, body } = {},
+  { token, method = "GET", headers = {}, body, allowNotFound = false } = {},
 ) {
   if (!apiPath.startsWith("/")) throw new Error("GitHub API path is invalid");
   if (!token) throw new Error("GITHUB_TOKEN is required");
@@ -1018,6 +1030,7 @@ export async function githubRequest(
     },
     body,
   });
+  if (allowNotFound && response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`GitHub API request failed with ${response.status}`);
   }
@@ -1067,13 +1080,19 @@ export async function processWorkflowOutcome({
   if (!token) throw new Error("GITHUB_TOKEN is required");
   const sourceRun = sourceRunMetadata(event.workflow_run);
   const parsedRunName = parseSourceRunName(sourceRun.display_title);
-  validateSourceRunBinding(sourceRun, parsedRunName);
+  const sourceRunBound = validateSourceRunBinding(sourceRun, parsedRunName);
   const paginateRequest = paginate ??
     (request === githubRequest
       ? githubPaginate
       : (apiPath, options) => request(apiPath, options));
   let context;
-  if (
+  if (!sourceRunBound) {
+    context = {
+      sourceAction: "unbound",
+      target: { type: "repository", number: null },
+      workflowNotRun: true,
+    };
+  } else if (
     sourceRun.name === "Docs CI" &&
     parsedRunName.targetType === "main" &&
     POST_MERGE_FAILURE_CONCLUSIONS.has(sourceRun.conclusion)
