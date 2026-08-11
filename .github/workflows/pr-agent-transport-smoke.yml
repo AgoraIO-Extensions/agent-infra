@@ -4,102 +4,127 @@ on:
   push:
     branches: [test/pr-agent-post-merge-smoke]
 
-permissions: {}
+permissions:
+  pull-requests: read
 
 jobs:
   probe:
-    name: Compare LiteLLM transports
+    name: Compare real and sanitized prompts
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Compare sync and async transports
+      - name: Prepare trusted PR event
         env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/95" > pr.json
+          jq -n --slurpfile pr pr.json \
+            '{action: "synchronize", pull_request: $pr[0]}' > event.json
+
+      - name: Compare real and sanitized prompts
+        env:
+          PROBE_GITHUB_TOKEN: ${{ github.token }}
           PR_AGENT_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
           PR_AGENT_API_KEY: ${{ secrets.PR_AGENT_API_KEY }}
           PR_AGENT_MODEL: ${{ secrets.PR_AGENT_MODEL }}
         run: |
           docker run --rm \
+            -v "$PWD/event.json:/tmp/event.json:ro" \
+            -e PROBE_GITHUB_TOKEN \
             -e PR_AGENT_API_BASE \
             -e PR_AGENT_API_KEY \
             -e PR_AGENT_MODEL \
             --entrypoint python \
             pragent/pr-agent:github_action \
             -c 'import asyncio
+          import copy
           import os
-          import litellm
-          from litellm import acompletion, completion
 
-          kwargs = {
-              "model": os.environ["PR_AGENT_MODEL"],
-              "api_base": os.environ["PR_AGENT_API_BASE"],
-              "api_key": os.environ["PR_AGENT_API_KEY"],
-              "messages": [{"role": "user", "content": "Reply with OK."}],
-              "reasoning_effort": "medium",
-              "allowed_openai_params": ["reasoning_effort"],
-              "timeout": 45,
-          }
+          os.environ["GITHUB_EVENT_NAME"] = "pull_request_target"
+          os.environ["GITHUB_EVENT_PATH"] = "/tmp/event.json"
+          os.environ["GITHUB_TOKEN"] = os.environ["PROBE_GITHUB_TOKEN"]
+          os.environ["GITHUB_OUTPUT"] = "/tmp/github-output"
+          os.environ["OPENAI_KEY"] = os.environ["PR_AGENT_API_KEY"]
+          os.environ["OPENAI__API_BASE"] = os.environ["PR_AGENT_API_BASE"]
 
-          def result(name, value=None, error=None):
-              if error is None:
-                  print(f"{name}=success choices={len(value.choices or [])}")
-                  return
+          def exception_chain(error):
               chain = []
               seen = set()
               while error is not None and id(error) not in seen:
                   seen.add(id(error))
                   chain.append(type(error).__module__ + "." + type(error).__name__)
                   error = error.__cause__ or error.__context__
-              print(f"{name}=failure exception_chain=" + " -> ".join(chain))
-
-          async def probe_async(name):
-              try:
-                  result(name, value=await acompletion(**kwargs))
-              except BaseException as error:
-                  result(name, error=error)
+              return " -> ".join(chain)
 
           async def main():
-              await probe_async("async_default")
-              try:
-                  result("sync", value=completion(**kwargs))
-              except BaseException as error:
-                  result("sync", error=error)
-              litellm.disable_aiohttp_transport = True
-              await probe_async("async_httpx")
-              litellm.disable_aiohttp_transport = False
-              kwargs["messages"] = [
-                  {"role": "system", "content": "Review code. " + "A" * 24_000},
-                  {"role": "user", "content": "Return OK. " + "B" * 4_000},
-              ]
-              await probe_async("async_large")
-              os.environ["OPENAI_KEY"] = os.environ["PR_AGENT_API_KEY"]
-              os.environ["OPENAI__API_BASE"] = os.environ["PR_AGENT_API_BASE"]
-              os.environ["config.model"] = os.environ["PR_AGENT_MODEL"]
-              os.environ["config.log_level"] = "ERROR"
-              from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+              from pr_agent.algo.ai_handlers import litellm_ai_handler as handler_module
               from pr_agent.config_loader import get_settings
-              get_settings().set("OPENAI.KEY", os.environ["PR_AGENT_API_KEY"])
-              handler = LiteLLMAIHandler()
-              print(
-                  "settings_key_match="
-                  + str(get_settings().get("OPENAI.KEY") == os.environ["PR_AGENT_API_KEY"]).lower()
-                  + " settings_base_match="
-                  + str(get_settings().get("OPENAI.API_BASE") == os.environ["PR_AGENT_API_BASE"]).lower()
-              )
-              print(
-                  "handler_key_match="
-                  + str(litellm.openai_key == os.environ["PR_AGENT_API_KEY"]).lower()
-                  + " handler_base_match="
-                  + str(handler.api_base == os.environ["PR_AGENT_API_BASE"]).lower()
-              )
+              from pr_agent.servers.github_action_runner import run_action
+
+              settings = get_settings()
+              settings.set("CONFIG.MODEL", os.environ["PR_AGENT_MODEL"])
+              settings.set("CONFIG.PUBLISH_OUTPUT", False)
+              settings.set("CONFIG.PUBLISH_OUTPUT_PROGRESS", False)
+              settings.set("CONFIG.USE_REPO_SETTINGS_FILE", False)
+              settings.set("CONFIG.USE_WIKI_SETTINGS_FILE", False)
+              settings.set("CONFIG.FALLBACK_MODELS", [])
+              settings.set("CONFIG.PROPAGATE_TOOL_ERRORS", True)
+              settings.set("CONFIG.LOG_LEVEL", "ERROR")
+              settings.set("PR_REVIEWER.NUM_MAX_FINDINGS", 10)
+              settings.set("PR_REVIEWER.REQUIRE_CAN_BE_SPLIT_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_ESTIMATE_CONTRIBUTION_TIME_COST", False)
+              settings.set("PR_REVIEWER.REQUIRE_ESTIMATE_EFFORT_TO_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_SCORE_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_SECURITY_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_TESTS_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_TICKET_ANALYSIS_REVIEW", False)
+              settings.set("PR_REVIEWER.REQUIRE_TODO_SCAN", False)
+              settings.set("GITHUB_ACTION_CONFIG.AUTO_REVIEW", True)
+              settings.set("GITHUB_ACTION_CONFIG.AUTO_DESCRIBE", False)
+              settings.set("GITHUB_ACTION_CONFIG.AUTO_IMPROVE", False)
+              settings.set("GITHUB_ACTION_CONFIG.ENABLE_OUTPUT", True)
+
+              original = handler_module.acompletion
+              calls = 0
+
+              async def compare_prompts(**kwargs):
+                  nonlocal calls
+                  calls += 1
+                  messages = kwargs.get("messages") or []
+                  lengths = [len(str(message.get("content", ""))) for message in messages]
+                  safe_keys = sorted(key for key in kwargs if key != "api_key")
+                  print(f"call={calls} keys={safe_keys} message_lengths={lengths}")
+                  try:
+                      response = await original(**kwargs)
+                      print(f"actual_{calls}=success choices={len(response.choices or [])}")
+                      return response
+                  except BaseException as actual_error:
+                      print(f"actual_{calls}=failure exception_chain={exception_chain(actual_error)}")
+                      caught_actual_error = actual_error
+
+                  sanitized = copy.deepcopy(kwargs)
+                  sanitized["messages"] = [
+                      {
+                          **message,
+                          "content": "A" * len(message.get("content", "")),
+                      }
+                      for message in messages
+                  ]
+                  try:
+                      response = await original(**sanitized)
+                      print(f"sanitized_{calls}=success choices={len(response.choices or [])}")
+                      return response
+                  except BaseException as sanitized_error:
+                      print(
+                          f"sanitized_{calls}=failure exception_chain="
+                          + exception_chain(sanitized_error)
+                      )
+                      raise caught_actual_error
+
+              handler_module.acompletion = compare_prompts
               try:
-                  response = await handler.chat_completion(
-                      model=os.environ["PR_AGENT_MODEL"],
-                      system="Review code. " + "A" * 24_000,
-                      user="Return OK. " + "B" * 4_000,
-                      temperature=0.2,
-                  )
-                  print(f"actual_handler=success content_type={type(response[0]).__name__}")
+                  await run_action()
               except BaseException as error:
-                  result("actual_handler", error=error)
+                  print("run_action=failure exception_chain=" + exception_chain(error))
 
           asyncio.run(main())' 2>/dev/null
