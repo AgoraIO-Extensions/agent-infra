@@ -1,0 +1,3 @@
+PR-Agent post-merge smoke
+
+This disposable text file verifies the default-branch review workflow.
