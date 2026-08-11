@@ -191,7 +191,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CODEX_RESPONSES_API_ENDPOINT: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
           CODEX_MODEL: ${{ secrets.CODEX_MODEL }}
-          CODEX_EFFORT: ${{ secrets.CODEX_EFFORT }}
+          CODEX_EFFORT: ${{ vars.CODEX_EFFORT }}
           CODEX_WORKER_TIMEOUT_MINUTES: ${{ vars.CODEX_WORKER_TIMEOUT_MINUTES || '60' }}
           WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
           WORKER_REVIEW_RECOVERY_PATH: ${{ runner.temp }}/claude-review-recovery/claude-review-recovery.json
@@ -313,7 +313,7 @@ jobs:
           permission-profile: github-worker
           codex-version: 0.146.0
           model: ${{ secrets.CODEX_MODEL }}
-          effort: ${{ secrets.CODEX_EFFORT }}
+          effort: ${{ vars.CODEX_EFFORT }}
           safety-strategy: drop-sudo
 
       - name: Upload fixed Worker Artifact

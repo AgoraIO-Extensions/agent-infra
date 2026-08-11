@@ -8,11 +8,12 @@ const allowedEfforts = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 for (const name of required) {
   if (!process.env[name]?.trim()) {
-    throw new Error(`${name} must be configured as a non-empty Actions Secret`);
+    throw new Error(`${name} must be configured as a non-empty repository setting`);
   }
 }
 
-if (!allowedEfforts.has(process.env.CLAUDE_REVIEW_EFFORT.trim())) {
+const effort = process.env.CLAUDE_REVIEW_EFFORT;
+if (effort !== effort.trim() || !allowedEfforts.has(effort)) {
   throw new Error(
     "CLAUDE_REVIEW_EFFORT must be one of low, medium, high, xhigh, or max",
   );

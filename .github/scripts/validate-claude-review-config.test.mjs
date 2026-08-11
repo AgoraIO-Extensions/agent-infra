@@ -19,13 +19,13 @@ function runConfigCheck(overrides = {}) {
   });
 }
 
-test("accepts non-empty Claude Review Secrets", () => {
+test("accepts non-empty Claude Review repository settings", () => {
   const execution = runConfigCheck();
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout, "");
 });
 
-test("fails closed without printing configured Secret values", () => {
+test("fails closed without printing configured values", () => {
   const execution = runConfigCheck({ CLAUDE_REVIEW_MODEL: "" });
   assert.equal(execution.status, 1);
   assert.match(execution.stderr, /CLAUDE_REVIEW_MODEL must be configured/);
@@ -41,4 +41,8 @@ test("rejects missing or unsupported Claude Review effort without printing its v
   assert.equal(unsupported.status, 1);
   assert.match(unsupported.stderr, /CLAUDE_REVIEW_EFFORT must be one of/);
   assert.doesNotMatch(unsupported.stderr, /configured-effort/);
+
+  const padded = runConfigCheck({ CLAUDE_REVIEW_EFFORT: "high " });
+  assert.equal(padded.status, 1);
+  assert.match(padded.stderr, /CLAUDE_REVIEW_EFFORT must be one of/);
 });

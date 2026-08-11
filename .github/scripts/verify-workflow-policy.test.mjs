@@ -194,7 +194,7 @@ test("requires Worker authorization, cycle, content hash, and AC evidence source
   );
 });
 
-test("rejects PR Review model configuration that bypasses validated Secrets", async () => {
+test("rejects PR Review model configuration that bypasses validated settings", async () => {
   const workflows = await actualWorkflows();
   const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
     (step) => step.id === "claude",
@@ -206,24 +206,24 @@ test("rejects PR Review model configuration that bypasses validated Secrets", as
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("Claude PR Review model configuration must use validated Secrets"),
+      error.includes("Claude PR Review model configuration must use validated settings"),
     ),
   );
 });
 
-test("rejects PR Review effort configuration that bypasses validated Secrets", async () => {
+test("rejects a PR Review effort Secret in place of the repository Variable", async () => {
   const workflows = await actualWorkflows();
   const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
     (step) => step.id === "claude",
   );
   action.with.claude_args = action.with.claude_args.replace(
-    "secrets.CLAUDE_REVIEW_EFFORT",
     "vars.CLAUDE_REVIEW_EFFORT",
+    "secrets.CLAUDE_REVIEW_EFFORT",
   );
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("Claude PR Review model configuration must use validated Secrets"),
+      error.includes("Claude PR Review model configuration must use validated settings"),
     ),
   );
 });
@@ -462,7 +462,7 @@ test("keeps the Codex API key only in the official model Action", async () => {
   );
 });
 
-test("keeps Codex model configuration in fixed Secret inputs", async () => {
+test("keeps Codex model configuration in fixed repository settings", async () => {
   const workflows = await actualWorkflows();
   const worker = workflows["codex-worker.yml"];
   const prepare = worker.jobs.prepare.steps.find(
@@ -477,7 +477,7 @@ test("keeps Codex model configuration in fixed Secret inputs", async () => {
       "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
     ],
     ["CODEX_MODEL", "${{ secrets.CODEX_MODEL }}"],
-    ["CODEX_EFFORT", "${{ secrets.CODEX_EFFORT }}"],
+    ["CODEX_EFFORT", "${{ vars.CODEX_EFFORT }}"],
   ]) {
     assert.equal(prepare.env[name], reference);
   }
@@ -486,7 +486,26 @@ test("keeps Codex model configuration in fixed Secret inputs", async () => {
     "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}",
   );
   assert.equal(action.with.model, "${{ secrets.CODEX_MODEL }}");
-  assert.equal(action.with.effort, "${{ secrets.CODEX_EFFORT }}");
+  assert.equal(action.with.effort, "${{ vars.CODEX_EFFORT }}");
+
+  for (const location of ["prepare", "action"]) {
+    const invalid = await actualWorkflows();
+    const invalidWorker = invalid["codex-worker.yml"];
+    if (location === "prepare") {
+      invalidWorker.jobs.prepare.steps.find(
+        (step) => step.name === "Prepare trusted Worker plan",
+      ).env.CODEX_EFFORT = "${{ secrets.CODEX_EFFORT }}";
+    } else {
+      invalidWorker.jobs.implement.steps.find((step) =>
+        step.uses?.startsWith("openai/codex-action@"),
+      ).with.effort = "${{ secrets.CODEX_EFFORT }}";
+    }
+    assert.ok(
+      validateWorkflowDocuments(invalid).some((error) =>
+        error.includes("CODEX_EFFORT") || error.includes("Codex Worker effort"),
+      ),
+    );
+  }
 });
 
 test("keeps the publisher PAT out of the model job", async () => {
@@ -964,10 +983,10 @@ test("configures every Claude model job through validated repository settings", 
     assert.equal(config.env.ANTHROPIC_BASE_URL, "${{ secrets.ANTHROPIC_BASE_URL }}");
     assert.equal(action.env.ANTHROPIC_BASE_URL, config.env.ANTHROPIC_BASE_URL);
     assert.ok(action.with.claude_args.includes('--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"'));
-    assert.equal(config.env.CLAUDE_REVIEW_EFFORT, "${{ secrets.CLAUDE_REVIEW_EFFORT }}");
+    assert.equal(config.env.CLAUDE_REVIEW_EFFORT, "${{ vars.CLAUDE_REVIEW_EFFORT }}");
     assert.ok(
       action.with.claude_args.includes(
-        '--effort "${{ secrets.CLAUDE_REVIEW_EFFORT }}"',
+        '--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
       ),
     );
     assert.ok(action.with.claude_args.includes(`--max-turns "${maxTurns}"`));
@@ -1016,7 +1035,7 @@ test("rejects Bot allowlists outside the trusted blocker Review dispatch", async
   );
 });
 
-test("rejects Issue Review model configuration that bypasses validated Secrets", async () => {
+test("rejects Issue Review model configuration that bypasses validated settings", async () => {
   const workflows = await actualWorkflows();
   const job = workflows["claude-issue-review.yml"].jobs.mentions;
   const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
@@ -1027,23 +1046,23 @@ test("rejects Issue Review model configuration that bypasses validated Secrets",
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("model configuration must use validated Secrets"),
+      error.includes("model configuration must use validated settings"),
     ),
   );
 });
 
-test("rejects Issue Review effort configuration that bypasses validated Secrets", async () => {
+test("rejects an Issue Review effort Secret in place of the repository Variable", async () => {
   const workflows = await actualWorkflows();
   const job = workflows["claude-issue-review.yml"].jobs.mentions;
   const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
   action.with.claude_args = action.with.claude_args.replace(
-    "secrets.CLAUDE_REVIEW_EFFORT",
     "vars.CLAUDE_REVIEW_EFFORT",
+    "secrets.CLAUDE_REVIEW_EFFORT",
   );
 
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("model configuration must use validated Secrets"),
+      error.includes("model configuration must use validated settings"),
     ),
   );
 });
