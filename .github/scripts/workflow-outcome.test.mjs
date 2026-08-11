@@ -241,6 +241,14 @@ test("notifies only actionable or final outcomes and ignores later audit state",
       terminal: true,
     },
   );
+  for (const conclusion of ["cancelled", "skipped", "stale"]) {
+    assert.deepEqual(build(sourceRun({ conclusion })), {
+      code: "workflow_not_run",
+      nextOwner: "none",
+      notify: false,
+      terminal: true,
+    });
+  }
   assert.deepEqual(
     build(
       sourceRun({

@@ -154,6 +154,9 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
       return outcome("blocker_waiting_authorization", "issue-owner", true);
     }
   }
+  if (["cancelled", "skipped", "stale"].includes(sourceRun.conclusion)) {
+    return outcome("workflow_not_run", "none", false);
+  }
   if (sourceRun.conclusion !== "success") {
     if (
       sourceRun.name === "Docs CI" &&

@@ -500,6 +500,8 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Codex Worker workflow recovery must pass authorization");
   }
   const claudeRecoveryRequirements = [
+    "reviewRecoveryArtifactAvailable({",
+    'if (command === "resolve-review-recovery") return resolveReviewRecoveryCommand();',
     "readReviewRecoveryTarget({ repository, run })",
     "target.source_run_id !== run.id",
     "target.repository !== repository",
@@ -1327,6 +1329,9 @@ export function validateWorkflowDocuments(workflows) {
   const reviewTargetUpload = reviewRecoverySteps.find(
     (step) => step.name === "Upload trusted Review recovery target",
   );
+  const reviewTargetResolve = (prepare?.steps ?? []).find(
+    (step) => step.name === "Resolve trusted Review recovery target",
+  );
   const reviewTargetDownload = (prepare?.steps ?? []).find(
     (step) => step.name === "Download trusted Review recovery target",
   );
@@ -1344,13 +1349,19 @@ export function validateWorkflowDocuments(workflows) {
       "if-no-files-found": "error",
       "retention-days": 1,
     }) ||
-    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
-    !String(reviewTargetDownload?.if ?? "").includes(
+    reviewTargetResolve?.id !== "resolve-review-recovery" ||
+    reviewTargetResolve?.run !==
+      "node trusted/.github/scripts/codex-worker.mjs resolve-review-recovery" ||
+    reviewTargetResolve?.env?.GITHUB_TOKEN !== "${{ github.token }}" ||
+    !String(reviewTargetResolve?.if ?? "").includes(
       "github.event.workflow_run.name == 'Claude PR Review'",
     ) ||
-    !String(reviewTargetDownload?.if ?? "").includes(
+    !String(reviewTargetResolve?.if ?? "").includes(
       "github.event.workflow_run.conclusion == 'success'",
     ) ||
+    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
+    reviewTargetDownload?.if !==
+      "steps.resolve-review-recovery.outputs.available == 'true'" ||
     !sameObject(reviewTargetDownload?.with, {
       name: "claude-review-recovery-${{ github.event.workflow_run.id }}",
       path: "${{ runner.temp }}/claude-review-recovery",
@@ -1366,6 +1377,12 @@ export function validateWorkflowDocuments(workflows) {
   );
   if (prepareConfig?.env?.CODEX_EFFORT !== "${{ vars.CODEX_EFFORT }}") {
     errors.push("Codex Worker effort must use the fixed repository Variable");
+  }
+  if (
+    prepareConfig?.env?.WORKER_REVIEW_RECOVERY_AVAILABLE !==
+    "${{ steps.resolve-review-recovery.outputs.available }}"
+  ) {
+    errors.push("Claude recovery Artifact availability must reach trusted preparation");
   }
   const codexIndex = implementSteps.findIndex((step) =>
     step.uses?.startsWith("openai/codex-action@"),

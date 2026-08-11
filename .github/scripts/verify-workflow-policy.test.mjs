@@ -1060,10 +1060,22 @@ test("binds Claude repair recovery to a trusted source-run target Artifact", asy
   const workerDownload = workflows["codex-worker.yml"].jobs.prepare.steps.find(
     (step) => step.name === "Download trusted Review recovery target",
   );
+  const workerResolve = workflows["codex-worker.yml"].jobs.prepare.steps.find(
+    (step) => step.name === "Resolve trusted Review recovery target",
+  );
   assert.ok(reviewUpload);
+  assert.ok(workerResolve);
   assert.ok(workerDownload);
 
   workerDownload.with["run-id"] = "${{ github.run_id }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude recovery target Artifact must stay source-run bound"),
+    ),
+  );
+
+  workerDownload.with["run-id"] = "${{ github.event.workflow_run.id }}";
+  workerResolve.run = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Claude recovery target Artifact must stay source-run bound"),

@@ -186,11 +186,19 @@ jobs:
         with:
           node-version: 24
 
-      - name: Download trusted Review recovery target
+      - name: Resolve trusted Review recovery target
+        id: resolve-review-recovery
         if: >-
           github.event_name == 'workflow_run' &&
           github.event.workflow_run.name == 'Claude PR Review' &&
           github.event.workflow_run.conclusion == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node trusted/.github/scripts/codex-worker.mjs resolve-review-recovery
+
+      - name: Download trusted Review recovery target
+        if: >-
+          steps.resolve-review-recovery.outputs.available == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: claude-review-recovery-${{ github.event.workflow_run.id }}
@@ -208,6 +216,7 @@ jobs:
           CODEX_EFFORT: ${{ vars.CODEX_EFFORT }}
           CODEX_WORKER_TIMEOUT_MINUTES: ${{ vars.CODEX_WORKER_TIMEOUT_MINUTES || '60' }}
           WORKER_PREPARE_DIR: ${{ runner.temp }}/codex-worker-prepare
+          WORKER_REVIEW_RECOVERY_AVAILABLE: ${{ steps.resolve-review-recovery.outputs.available }}
           WORKER_REVIEW_RECOVERY_PATH: ${{ runner.temp }}/claude-review-recovery/claude-review-recovery.json
         run: node trusted/.github/scripts/codex-worker.mjs prepare
 
