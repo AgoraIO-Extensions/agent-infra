@@ -1,0 +1,62 @@
+name: PR-Agent Connectivity Smoke
+
+on:
+  push:
+    branches: [test/pr-agent-post-merge-smoke]
+
+permissions: {}
+
+jobs:
+  probe:
+    name: Probe PR-Agent provider
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe provider without logging secrets
+        env:
+          PR_AGENT_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          PR_AGENT_API_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          PR_AGENT_MODEL: ${{ secrets.PR_AGENT_MODEL }}
+        run: |
+          node <<'NODE'
+          const dns = require("node:dns").promises;
+
+          async function main() {
+            const base = new URL(process.env.PR_AGENT_API_BASE);
+            const address = await dns.lookup(base.hostname);
+            console.log(`dns=success family=${address.family}`);
+
+            const pathname = `${base.pathname.replace(/\/$/, "")}/chat/completions`;
+            const response = await fetch(new URL(pathname, base.origin), {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${process.env.PR_AGENT_API_KEY}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: process.env.PR_AGENT_MODEL.replace(/^openai\//, ""),
+                messages: [{ role: "user", content: "Reply with OK." }],
+                max_tokens: 8,
+              }),
+              signal: AbortSignal.timeout(45_000),
+            });
+            const contentType = response.headers.get("content-type") || "missing";
+            console.log(`http_status=${response.status} content_type=${contentType.split(";")[0]}`);
+
+            const payload = contentType.includes("application/json")
+              ? await response.json()
+              : null;
+            console.log(
+              `json=${payload !== null} choices=${Array.isArray(payload?.choices)} error=${Boolean(payload?.error)}`,
+            );
+            if (!response.ok || !Array.isArray(payload?.choices)) process.exitCode = 1;
+          }
+
+          main().catch((error) => {
+            const cause = error?.cause;
+            console.error(
+              `probe=failure error=${error?.name || "unknown"} cause=${cause?.code || cause?.name || "unknown"}`,
+            );
+            process.exitCode = 1;
+          });
+          NODE
