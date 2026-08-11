@@ -116,7 +116,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "docs-ci",
   },
   "pr-agent-review.yml": {
-    needs: ["analyze", "publish"],
+    needs: ["analyze"],
     operation: "pr-agent-review",
   },
   "pr-gates.yml": {
@@ -425,7 +425,6 @@ export function validateTrustedScriptSources(sources) {
   }
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
-  const prAgentReviewSource = sources?.["pr-agent-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const resilienceSource = sources?.["worker-resilience.mjs"] ?? "";
@@ -468,21 +467,6 @@ export function validateTrustedScriptSources(sources) {
     contractRequirements.some((requirement) => !contractSource.includes(requirement))
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
-  }
-  const prAgentReviewRequirements = [
-    "parsePrAgentEvent(",
-    "parsePrAgentOutput(",
-    "validatePrAgentLocations(",
-    "assertCurrentPrAgentTarget(await githubRequest(prPath), expectedHead)",
-    "sanitizeMarkdown(",
-    "/issues/${prNumber}/comments",
-  ];
-  if (
-    prAgentReviewRequirements.some(
-      (requirement) => !prAgentReviewSource.includes(requirement),
-    )
-  ) {
-    errors.push("PR-Agent Publisher must validate output and the current PR head");
   }
   const workerAuthorizationRequirements = [
     "authorizeCycle({",
@@ -1055,25 +1039,11 @@ export function validateWorkflowDocuments(workflows) {
   }
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
-  const prAgentPublish = prAgent?.jobs?.publish;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
   const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
     (step) => step.name === "Checkout trusted default branch",
   );
-  const prAgentTarget = prAgentAnalyze?.steps?.find((step) => step.id === "target");
-  const prAgentPublishSteps = prAgentPublish?.steps ?? [];
-  const prAgentCheckout = prAgentPublishSteps.find(
-    (step) => step.name === "Checkout trusted default branch",
-  );
-  const prAgentSetup = prAgentPublishSteps.find(
-    (step) => step.name === "Set up Node.js",
-  );
-  const prAgentPublishStep = prAgentPublishSteps.find(
-    (step) => step.name === "Publish validated PR-Agent review",
-  );
-  const prAgentConditions = [prAgentAnalyze?.if, prAgentPublish?.if].map(
-    (condition) => String(condition ?? ""),
-  );
+  const prAgentCondition = String(prAgentAnalyze?.if ?? "");
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
       JSON.stringify([
@@ -1088,29 +1058,20 @@ export function validateWorkflowDocuments(workflows) {
       group: "pr-agent-review-${{ github.event.pull_request.number }}",
       "cancel-in-progress": true,
     }) ||
-    prAgentConditions.some(
-      (condition) =>
-        !condition.includes("vars.PR_AGENT_ENABLED == 'true'") ||
-        !condition.includes(
-          "github.event.pull_request.head.repo.full_name == github.repository",
-        ),
+    !prAgentCondition.includes("vars.PR_AGENT_ENABLED == 'true'") ||
+    !prAgentCondition.includes(
+      "github.event.pull_request.head.repo.full_name == github.repository",
     ) ||
-    !String(prAgentAnalyze?.if ?? "").includes("github.event.sender.type != 'Bot'") ||
-    !String(prAgentAnalyze?.if ?? "").includes(
-      "github.event.pull_request.draft == false",
-    ) ||
-    !String(prAgentPublish?.if ?? "").includes(
-      "needs.analyze.result == 'success'",
-    ) ||
+    !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
+    !prAgentCondition.includes("github.event.pull_request.draft == false") ||
     !sameObject(prAgentAnalyze?.permissions, {
       contents: "read",
-      "pull-requests": "read",
+      issues: "write",
+      "pull-requests": "write",
     }) ||
-    prAgentAnalyze?.outputs?.structured_output !==
-      "${{ steps.pr-agent.outputs.review }}" ||
-    prAgentAnalyze?.outputs?.expected_head !==
-      "${{ steps.target.outputs.head_sha }}" ||
-    prAgentAnalyze?.steps?.length !== 3 ||
+    Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
+      ["analyze", "outcome"].join("\0") ||
+    prAgentAnalyze?.steps?.length !== 2 ||
     prAgentAnalyzeCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
     !sameObject(prAgentAnalyzeCheckout?.with, {
@@ -1118,7 +1079,6 @@ export function validateWorkflowDocuments(workflows) {
       "fetch-depth": 1,
       "persist-credentials": false,
     }) ||
-    prAgentTarget?.run !== "node .github/scripts/pr-agent-review.mjs record" ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     !sameObject(prAgentAction?.env, {
       GITHUB_TOKEN: "${{ github.token }}",
@@ -1126,13 +1086,15 @@ export function validateWorkflowDocuments(workflows) {
       OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
       "config.model": "${{ secrets.PR_AGENT_MODEL }}",
       "config.propagate_tool_errors": "true",
-      "config.publish_output": "false",
+      "config.publish_output": "true",
       "config.publish_output_progress": "false",
+      "config.restricted_mode": "true",
       "config.use_repo_settings_file": "false",
       "config.use_wiki_settings_file": "false",
       "config.fallback_models": "[]",
       "config.custom_model_max_tokens":
         "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
       "pr_reviewer.num_max_findings": "10",
@@ -1147,35 +1109,12 @@ export function validateWorkflowDocuments(workflows) {
       "github_action_config.auto_review": "true",
       "github_action_config.auto_describe": "false",
       "github_action_config.auto_improve": "true",
-      "github_action_config.enable_output": "true",
       "github_action_config.pr_actions":
         '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
-    }) ||
-    prAgentPublish?.needs !== "analyze" ||
-    !sameObject(prAgentPublish?.permissions, {
-      contents: "read",
-      "pull-requests": "write",
-    }) ||
-    prAgentCheckout?.uses !==
-      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
-    !sameObject(prAgentCheckout?.with, {
-      ref: "${{ github.event.repository.default_branch }}",
-      "fetch-depth": 1,
-      "persist-credentials": false,
-    }) ||
-    prAgentSetup?.uses !==
-      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
-    prAgentSetup?.with?.["node-version"] !== 24 ||
-    prAgentPublishStep?.run !== "node .github/scripts/pr-agent-review.mjs publish" ||
-    !sameObject(prAgentPublishStep?.env, {
-      EXPECTED_HEAD_SHA: "${{ needs.analyze.outputs.expected_head }}",
-      GITHUB_TOKEN: "${{ github.token }}",
-      PR_NUMBER: "${{ github.event.pull_request.number }}",
-      STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     })
   ) {
     errors.push(
-      "PR-Agent Review must isolate the pinned analysis from validated publication",
+      "PR-Agent Review must use the pinned Action with official inline publishing settings",
     );
   }
   const implementText = JSON.stringify(implement ?? {});
@@ -1960,7 +1899,6 @@ async function main() {
         "claude-event-authorization.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
-        "pr-agent-review.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
