@@ -37,6 +37,31 @@ test("parses the bounded PR-Agent review schema", () => {
   );
 });
 
+test("normalizes PR-Agent YAML block scalar strings", () => {
+  const issue = validIssue();
+  const review = parsePrAgentOutput(
+    validReview({
+      key_issues_to_review: [
+        validIssue({
+          relevant_file: `${issue.relevant_file}\n`,
+          issue_header: `${issue.issue_header}\n`,
+          issue_content: `${issue.issue_content}\n`,
+        }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(review, { key_issues_to_review: [issue] });
+  assert.doesNotThrow(() =>
+    validatePrAgentLocations(review.key_issues_to_review, [
+      {
+        filename: issue.relevant_file,
+        patch: "@@ -1,2 +1,3 @@\n old\n+new\n old",
+      },
+    ]),
+  );
+});
+
 test("rejects malformed, extended, oversized, and unbounded PR-Agent output", () => {
   assert.throws(() => parsePrAgentOutput(""));
   assert.throws(() => parsePrAgentOutput("{"), { name: "PrAgentOutputError" });
@@ -44,6 +69,11 @@ test("rejects malformed, extended, oversized, and unbounded PR-Agent output", ()
   assert.throws(() =>
     parsePrAgentOutput(
       validReview({ key_issues_to_review: [validIssue({ end_line: 103 })] }),
+    ),
+  );
+  assert.throws(() =>
+    parsePrAgentOutput(
+      validReview({ key_issues_to_review: [validIssue({ relevant_file: " \n" })] }),
     ),
   );
   assert.throws(() =>

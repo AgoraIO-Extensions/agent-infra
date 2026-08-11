@@ -190,7 +190,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
     if (PR_AGENT_SECRETS.includes(secret)) {
       const reference = `\${{ secrets.${secret} }}`;
       const envName = {
-        PR_AGENT_API_KEY: "OPENAI_KEY",
+        PR_AGENT_API_KEY: "OPENAI__KEY",
         PR_AGENT_API_BASE: "OPENAI__API_BASE",
         PR_AGENT_MODEL: "config.model",
       }[secret];
@@ -802,9 +802,10 @@ export function validateWorkflowDocuments(workflows) {
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     !sameObject(prAgentAction?.env, {
       GITHUB_TOKEN: "${{ github.token }}",
-      OPENAI_KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+      OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
       OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
       "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+      "config.propagate_tool_errors": "true",
       "config.publish_output": "false",
       "config.publish_output_progress": "false",
       "config.use_repo_settings_file": "false",
