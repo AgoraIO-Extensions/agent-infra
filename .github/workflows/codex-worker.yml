@@ -1,4 +1,18 @@
 name: Codex Worker
+run-name: >-
+  ${{
+    github.event_name == 'issues' &&
+    format('Issue #{0} | codex-worker | {1}', github.event.issue.number, github.event.action) ||
+    github.event_name == 'pull_request_target' &&
+    format('PR #{0} | codex-worker | {1}', github.event.pull_request.number, github.event.action) ||
+    github.event_name == 'repository_dispatch' &&
+    format('Issue #{0} | codex-worker | repository_dispatch', github.event.client_payload.issue_number) ||
+    github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number &&
+    format('PR #{0} | codex-worker | source {1}', github.event.workflow_run.pull_requests[0].number, github.event.workflow_run.id) ||
+    github.event_name == 'workflow_run' &&
+    format('main | codex-worker | source {0}', github.event.workflow_run.id) ||
+    'main | codex-worker | push'
+  }}
 
 on:
   push:
@@ -545,3 +559,39 @@ jobs:
         run: |
           node trusted/.github/scripts/codex-worker.mjs handle
           exit 1
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [base-update, authorization, prepare, implement, publish]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ needs.prepare.outputs.head_sha || needs.prepare.outputs.start_sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: codex-worker
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: "${{ github.event_name == 'issues' && format('Issue #{0}', github.event.issue.number) || github.event_name == 'pull_request_target' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'repository_dispatch' && format('Issue #{0}', github.event.client_payload.issue_number) || github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('PR #{0}', github.event.workflow_run.pull_requests[0].number) || 'main' }}"
+          SUMMARY_TARGET_URL: ${{ github.event_name == 'issues' && format('{0}/{1}/issues/{2}', github.server_url, github.repository, github.event.issue.number) || github.event_name == 'pull_request_target' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || github.event_name == 'repository_dispatch' && format('{0}/{1}/issues/{2}', github.server_url, github.repository, github.event.client_payload.issue_number) || github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.workflow_run.pull_requests[0].number) || format('{0}/{1}/tree/{2}', github.server_url, github.repository, github.event.repository.default_branch) }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

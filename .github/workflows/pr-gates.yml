@@ -1,4 +1,18 @@
 name: PR Gates
+run-name: >-
+  ${{
+    github.event_name == 'pull_request_target' &&
+    format('PR #{0} | pr-gates | {1}', github.event.pull_request.number, github.event.action) ||
+    github.event_name == 'repository_dispatch' &&
+    format('PR #{0} | pr-gates | repository_dispatch', github.event.client_payload.pr_number) ||
+    github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+    format('PR #{0} | pr-gates | {1}', github.event.issue.number, github.event.action) ||
+    github.event_name == 'issue_comment' &&
+    format('Issue #{0} | pr-gates | {1}', github.event.issue.number, github.event.action) ||
+    github.event_name == 'issues' &&
+    format('Issue #{0} | pr-gates | {1}', github.event.issue.number, github.event.action) ||
+    'reconcile | pr-gates | schedule'
+  }}
 
 on:
   pull_request_target:
@@ -101,3 +115,39 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
         run: node .github/scripts/pr-gates.mjs
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [dispatch-issue-update, gates]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ""
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: pr-gates
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: "${{ github.event_name == 'pull_request_target' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'repository_dispatch' && format('PR #{0}', github.event.client_payload.pr_number) || github.event_name == 'issue_comment' && github.event.issue.pull_request && format('PR #{0}', github.event.issue.number) || github.event_name == 'issue_comment' && format('Issue #{0}', github.event.issue.number) || github.event_name == 'issues' && format('Issue #{0}', github.event.issue.number) || 'reconcile' }}"
+          SUMMARY_TARGET_URL: ${{ github.event_name == 'pull_request_target' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || github.event_name == 'repository_dispatch' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.client_payload.pr_number) || github.event_name == 'issue_comment' && github.event.issue.pull_request && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.issue.number) || github.event_name == 'issue_comment' && format('{0}/{1}/issues/{2}', github.server_url, github.repository, github.event.issue.number) || github.event_name == 'issues' && format('{0}/{1}/issues/{2}', github.server_url, github.repository, github.event.issue.number) || format('{0}/{1}', github.server_url, github.repository) }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -38,6 +38,7 @@ async function actualTrustedScriptSources() {
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
+        "workflow-outcome.mjs",
       ].map(
         async (name) => [
           name,
@@ -50,6 +51,108 @@ async function actualTrustedScriptSources() {
 
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("requires safe machine-parseable run names for every workflow", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(Object.keys(workflows).length, 9);
+  assert.ok(
+    Object.values(workflows).every(
+      (workflow) =>
+        typeof workflow["run-name"] === "string" &&
+        workflow["run-name"].length > 0,
+    ),
+  );
+
+  delete workflows["docs-ci.yml"]["run-name"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("safe run-name"),
+    ),
+  );
+});
+
+test("requires a safe terminal Job Summary in every source workflow", async () => {
+  const workflows = await actualWorkflows();
+  for (const [name, workflow] of Object.entries(workflows)) {
+    if (name === "workflow-outcome.yml") continue;
+    assert.ok(workflow.jobs.outcome, name);
+  }
+
+  workflows["docs-ci.yml"].jobs.outcome.steps[0].env.SUMMARY_TARGET =
+    "${{ github.event.pull_request.title }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("terminal Job Summary"),
+    ),
+  );
+});
+
+test("rejects untrusted text and Secrets in workflow run names", async () => {
+  for (const unsafe of [
+    "${{ github.event.issue.title }}",
+    "${{ github.event.issue.body }}",
+    "${{ github.event.comment.body }}",
+    "${{ github.event.head_commit.message }}",
+    "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  ]) {
+    const workflows = await actualWorkflows();
+    workflows["docs-ci.yml"]["run-name"] = unsafe;
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("safe run-name"),
+      ),
+      unsafe,
+    );
+  }
+});
+
+test("keeps the WeCom Secret only in the trusted outcome sender", async () => {
+  const workflows = await actualWorkflows();
+  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+    WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("WECOM_BOT_WEBHOOK_URL"),
+    ),
+  );
+});
+
+test("requires bounded deduplicated outcome and post-merge behavior", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "Math.min(Math.max(Number(maxAttempts) || 1, 1), 3)",
+    "Number(maxAttempts)",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("bounded dedupe and post-merge triage"),
+    ),
+  );
+});
+
+test("rejects untrusted workflow Summary sources", async () => {
+  for (const unsafe of [
+    "sourceRun.title",
+    "issue.body",
+    "comment.body",
+    "head_commit.message",
+    "model_output",
+  ]) {
+    const sources = await actualTrustedScriptSources();
+    sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+      "  const targetLabel = record.target.number",
+      `  const unsafeSummary = ${unsafe};\n  const targetLabel = record.target.number`,
+    );
+    assert.ok(
+      validateTrustedScriptSources(sources).some((error) =>
+        error.includes("trusted Summary sources"),
+      ),
+      unsafe,
+    );
+  }
 });
 
 test("requires the serialized Blocker Reconciler workflow", async () => {

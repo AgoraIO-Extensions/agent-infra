@@ -12,7 +12,150 @@ const REQUIRED_WORKFLOWS = [
   "docs-ci.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
+  "workflow-outcome.yml",
 ];
+const RUN_NAME_CONTRACTS = {
+  "auto-merge.yml": {
+    operation: "auto-merge",
+    references: ["github.event.action", "github.event.pull_request.number"],
+  },
+  "blocker-reconciler.yml": {
+    operation: "blocker-reconcile",
+    references: [
+      "github.event.action",
+      "github.event.issue.number",
+      "github.event_name",
+    ],
+  },
+  "claude-issue-review.yml": {
+    operation: "claude-issue-review",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.issue_number",
+      "github.event.issue.number",
+      "github.event.issue.pull_request",
+      "github.event.pull_request.number",
+      "github.event_name",
+    ],
+  },
+  "claude-pr-review.yml": {
+    operation: "claude-pr-review",
+    references: [
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+    ],
+  },
+  "codex-worker.yml": {
+    operation: "codex-worker",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.issue_number",
+      "github.event.issue.number",
+      "github.event.pull_request.number",
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+      "github.event_name",
+    ],
+  },
+  "docs-ci.yml": {
+    operation: "docs-ci",
+    references: ["github.event.pull_request.number", "github.event_name"],
+  },
+  "pr-agent-review.yml": {
+    operation: "pr-agent-review",
+    references: ["github.event.action", "github.event.pull_request.number"],
+  },
+  "pr-gates.yml": {
+    operation: "pr-gates",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.pr_number",
+      "github.event.issue.number",
+      "github.event.issue.pull_request",
+      "github.event.pull_request.number",
+      "github.event_name",
+    ],
+  },
+  "workflow-outcome.yml": {
+    operation: "workflow-outcome",
+    references: [
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+    ],
+  },
+};
+const SOURCE_OUTCOME_CONTRACTS = {
+  "auto-merge.yml": {
+    needs: ["enroll"],
+    operation: "auto-merge",
+  },
+  "blocker-reconciler.yml": {
+    needs: ["reconcile"],
+    operation: "blocker-reconcile",
+  },
+  "claude-issue-review.yml": {
+    needs: [
+      "automatic-issue-review",
+      "authorize-blocker-review",
+      "analyze-blocker-review",
+      "publish-blocker-review",
+      "mentions",
+    ],
+    operation: "claude-issue-review",
+  },
+  "claude-pr-review.yml": {
+    needs: ["analyze", "publish"],
+    operation: "claude-pr-review",
+  },
+  "codex-worker.yml": {
+    needs: ["base-update", "authorization", "prepare", "implement", "publish"],
+    operation: "codex-worker",
+  },
+  "docs-ci.yml": {
+    needs: ["docs"],
+    operation: "docs-ci",
+  },
+  "pr-agent-review.yml": {
+    needs: ["analyze", "publish"],
+    operation: "pr-agent-review",
+  },
+  "pr-gates.yml": {
+    needs: ["dispatch-issue-update", "gates"],
+    operation: "pr-gates",
+  },
+};
+const SOURCE_OUTCOME_ENV_KEYS = [
+  "SUMMARY_ACTION",
+  "SUMMARY_ATTEMPT",
+  "SUMMARY_CYCLE",
+  "SUMMARY_EVENT",
+  "SUMMARY_HEAD_SHA",
+  "SUMMARY_NEXT_OWNER",
+  "SUMMARY_OPERATION",
+  "SUMMARY_OUTCOME",
+  "SUMMARY_TARGET",
+  "SUMMARY_TARGET_URL",
+];
+const SOURCE_OUTCOME_NEXT_OWNER =
+  "${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}";
+const SOURCE_OUTCOME_RESULT =
+  "${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}";
+const SOURCE_OUTCOME_SUMMARY = [
+  "{",
+  '  echo "## Workflow terminal outcome"',
+  "  echo",
+  '  echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"',
+  '  echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"',
+  '  echo "- Operation: \\`$SUMMARY_OPERATION\\`"',
+  '  echo "- Event/action: \\`$SUMMARY_EVENT\\` / \\`$SUMMARY_ACTION\\`"',
+  '  echo "- Head SHA: \\`$SUMMARY_HEAD_SHA\\`"',
+  '  echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"',
+  '  echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"',
+  '  echo "- Terminal outcome: \\`$SUMMARY_OUTCOME\\`"',
+  '  echo "- Next owner: \\`$SUMMARY_NEXT_OWNER\\`"',
+  '} >> "$GITHUB_STEP_SUMMARY"',
+  "",
+].join("\n");
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
 const CLAUDE_SECRETS = [
@@ -205,6 +348,22 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (secret === "WECOM_BOT_WEBHOOK_URL") {
+      if (
+        workflowName !== "workflow-outcome.yml" ||
+        jobName !== "observe" ||
+        step.name !== "Record workflow outcome and notify" ||
+        step.run !== "node .github/scripts/workflow-outcome.mjs" ||
+        step.env?.WECOM_BOT_WEBHOOK_URL !==
+          "${{ secrets.WECOM_BOT_WEBHOOK_URL }}" ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: WECOM_BOT_WEBHOOK_URL is allowed only in the fixed outcome notification step`,
+        );
+      }
+      continue;
+    }
     if (PR_AGENT_SECRETS.includes(secret)) {
       const reference = `\${{ secrets.${secret} }}`;
       const envName = {
@@ -273,6 +432,7 @@ export function validateTrustedScriptSources(sources) {
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
   const blockerReconcilerSource = sources?.["blocker-reconciler.mjs"] ?? "";
+  const outcomeSource = sources?.["workflow-outcome.mjs"] ?? "";
   const claudeAuthorizationSource =
     sources?.["claude-event-authorization.mjs"] ?? "";
   const gateRequirements = [
@@ -423,6 +583,37 @@ export function validateTrustedScriptSources(sources) {
   ) {
     errors.push("Blocker automation must preserve bounded proposals and signed reconciliation");
   }
+  const outcomeRequirements = [
+    "Math.min(Math.max(Number(maxAttempts) || 1, 1), 3)",
+    "agent-infra:workflow-outcome:",
+    "agent-infra-post-merge-failure",
+    'body: JSON.stringify({ state: "open" })',
+    'body: JSON.stringify({ labels: ["needs-triage"] })',
+    "postMergeReplay",
+    "Response text is intentionally discarded.",
+    "WECOM_BOT_WEBHOOK_URL",
+  ];
+  const summarySource = outcomeSource.slice(
+    outcomeSource.indexOf("export function renderJobSummary"),
+    outcomeSource.indexOf("function wait(milliseconds)"),
+  );
+  if (
+    outcomeRequirements.some(
+      (requirement) => !outcomeSource.includes(requirement),
+    ) ||
+    /\/reverts?(?:\?|`|\")|\/merges(?:\?|`|\")/.test(outcomeSource)
+  ) {
+    errors.push(
+      "Workflow Outcome must preserve bounded dedupe and post-merge triage without auto-revert",
+    );
+  }
+  if (
+    /\b(?:sourceRun|issue|comment|head_commit)\.(?:title|body|message)\b|\bmodel_output\b/.test(
+      summarySource,
+    )
+  ) {
+    errors.push("Workflow Outcome must use only trusted Summary sources");
+  }
   const reviewHeadRechecks =
     reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
   if (
@@ -458,6 +649,66 @@ export function validateWorkflowDocuments(workflows) {
   const names = Object.keys(workflows).sort();
   if (names.join("\0") !== REQUIRED_WORKFLOWS.join("\0")) {
     errors.push(`Expected workflows: ${REQUIRED_WORKFLOWS.join(", ")}`);
+  }
+
+  for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
+    const runName = workflows[name]?.["run-name"];
+    const references = typeof runName === "string"
+      ? [...new Set(
+          [...runName.matchAll(/github(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])+/g)]
+            .map((match) => match[0]),
+        )].sort()
+      : [];
+    if (
+      typeof runName !== "string" ||
+      !runName.includes(`| ${contract.operation} |`) ||
+      references.join("\0") !== [...contract.references].sort().join("\0") ||
+      referencedSecrets(runName).length > 0 ||
+      /\b(?:title|body|comment|message|prompt|transcript|model_output)\b/i.test(
+        runName,
+      )
+    ) {
+      errors.push(`${name} must use its fixed safe run-name contract`);
+    }
+  }
+
+  for (const [name, contract] of Object.entries(SOURCE_OUTCOME_CONTRACTS)) {
+    const outcomeJob = workflows[name]?.jobs?.outcome;
+    const outcomeStep = outcomeJob?.steps?.[0];
+    const needs = Array.isArray(outcomeJob?.needs)
+      ? outcomeJob.needs
+      : [outcomeJob?.needs].filter(Boolean);
+    const envKeys = Object.keys(outcomeStep?.env ?? {}).sort();
+    const jobKeys = Object.keys(outcomeJob ?? {}).sort();
+    const stepKeys = Object.keys(outcomeStep ?? {}).sort();
+    const summarySources = JSON.stringify(outcomeStep?.env ?? {});
+    const unsafeSummarySource =
+      /(?:github|needs|steps|vars)(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])*\.(?:title|body|comment|message|prompt|transcript|model(?:_output)?|structured_output)(?:\b|\.)/i;
+    if (
+      jobKeys.join("\0") !==
+        ["if", "name", "needs", "permissions", "runs-on", "steps", "timeout-minutes"]
+          .sort()
+          .join("\0") ||
+      outcomeJob?.name !== "Publish terminal outcome" ||
+      needs.join("\0") !== contract.needs.join("\0") ||
+      outcomeJob?.if !== "always()" ||
+      outcomeJob?.["runs-on"] !== "ubuntu-24.04" ||
+      outcomeJob?.["timeout-minutes"] !== 1 ||
+      !sameObject(outcomeJob?.permissions, {}) ||
+      outcomeJob?.steps?.length !== 1 ||
+      stepKeys.join("\0") !== ["env", "name", "run", "shell"].sort().join("\0") ||
+      outcomeStep?.name !== "Publish terminal Job Summary" ||
+      outcomeStep?.shell !== "bash" ||
+      outcomeStep?.run !== SOURCE_OUTCOME_SUMMARY ||
+      envKeys.join("\0") !== [...SOURCE_OUTCOME_ENV_KEYS].sort().join("\0") ||
+      outcomeStep?.env?.SUMMARY_OPERATION !== contract.operation ||
+      outcomeStep?.env?.SUMMARY_NEXT_OWNER !== SOURCE_OUTCOME_NEXT_OWNER ||
+      outcomeStep?.env?.SUMMARY_OUTCOME !== SOURCE_OUTCOME_RESULT ||
+      referencedSecrets(outcomeStep?.env).length > 0 ||
+      unsafeSummarySource.test(summarySources)
+    ) {
+      errors.push(`${name} must use its fixed safe terminal Job Summary`);
+    }
   }
 
   for (const [name, workflow] of Object.entries(workflows)) {
@@ -530,10 +781,61 @@ export function validateWorkflowDocuments(workflows) {
     }
   }
 
+  const outcomeWorkflow = workflows["workflow-outcome.yml"];
+  const outcomeJob = outcomeWorkflow?.jobs?.observe;
+  const outcomeSteps = outcomeJob?.steps ?? [];
+  const outcomeCheckout = outcomeSteps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const outcomeStep = outcomeSteps.find(
+    (step) => step.name === "Record workflow outcome and notify",
+  );
+  if (
+    JSON.stringify(outcomeWorkflow?.on?.workflow_run?.workflows) !==
+      JSON.stringify([
+        "Auto-merge Enrollment",
+        "Blocker Reconciler",
+        "Claude Issue Review",
+        "Claude PR Review",
+        "Codex Worker",
+        "Docs CI",
+        "PR-Agent Review",
+        "PR Gates",
+      ]) ||
+    JSON.stringify(outcomeWorkflow?.on?.workflow_run?.types) !==
+      JSON.stringify(["completed"]) ||
+    !sameObject(outcomeWorkflow?.concurrency, {
+      group: "workflow-outcome-${{ github.repository }}",
+      "cancel-in-progress": false,
+    }) ||
+    !sameObject(outcomeJob?.permissions, {
+      actions: "read",
+      checks: "write",
+      contents: "read",
+      issues: "write",
+      "pull-requests": "read",
+    }) ||
+    outcomeCheckout?.with?.ref !==
+      "${{ github.event.repository.default_branch }}" ||
+    outcomeCheckout?.with?.["persist-credentials"] !== false ||
+    outcomeStep?.run !== "node .github/scripts/workflow-outcome.mjs" ||
+    !sameObject(outcomeStep?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+    })
+  ) {
+    errors.push(
+      "Workflow Outcome must use fixed trusted triggers, permissions, checkout, and notification step",
+    );
+  }
+
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.on?.pull_request_target) continue;
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-      if (/pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))) {
+      if (
+        jobName !== "outcome" &&
+        /pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))
+      ) {
         errors.push(`${name}/${jobName}: pull_request_target jobs must not execute PR head`);
       }
       for (const checkout of (job.steps ?? []).filter((step) =>
@@ -1662,6 +1964,7 @@ async function main() {
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
+        "workflow-outcome.mjs",
       ].map(async (name) => [
         name,
         await fs.readFile(path.join(scriptDirectory, name), "utf8"),
