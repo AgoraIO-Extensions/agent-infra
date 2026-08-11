@@ -69,6 +69,7 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
     version: 1,
     eventId: "workflow-run-31464062784",
     repository: "AgoraIO-Extensions/agent-infra",
+    checkHeadSha: "a".repeat(40),
     sourceRun: {
       id: 31464062784,
       workflow: "Claude PR Review",
@@ -512,7 +513,9 @@ test("processes a workflow event once and deduplicates notification replays", as
       return { check_runs: checks };
     }
     if (/\/check-runs\/\d+$/.test(apiPath) && options.method === "PATCH") {
-      return JSON.parse(options.body);
+      const payload = JSON.parse(options.body);
+      Object.assign(checks.find((check) => apiPath.endsWith(`/${check.id}`)), payload);
+      return payload;
     }
     throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
   };
@@ -569,6 +572,61 @@ test("processes a workflow event once and deduplicates notification replays", as
   assert.match(summaries[0], /Notification: `delivery_failed`/);
   assert.match(summaries[1], /Notification: `deduplicated`/);
   assert.doesNotMatch(JSON.stringify({ checks, summaries }), /test-token|webhook/);
+});
+
+test("finalizes an interrupted notification claim without sending a duplicate", async () => {
+  const headSha = "4".repeat(40);
+  const check = {
+    id: 750,
+    app: { id: 15368 },
+    external_id:
+      "agent-infra:workflow-outcome:workflow-run-550:workflow_terminal_failure",
+    head_sha: headSha,
+    status: "in_progress",
+  };
+  let deliveries = 0;
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/55")) {
+      return { number: 55, state: "open", labels: [] };
+    }
+    if (apiPath.endsWith("/issues/55/comments")) return [];
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      return { check_runs: [check] };
+    }
+    if (apiPath.endsWith("/check-runs/750") && options.method === "PATCH") {
+      const payload = JSON.parse(options.body);
+      Object.assign(check, payload);
+      return payload;
+    }
+    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+  };
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 550,
+        conclusion: "failure",
+        head_sha: headSha,
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "https://example.invalid/webhook",
+    request,
+    sendNotification: async () => {
+      deliveries += 1;
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.replay, true);
+  assert.equal(result.notification.warning, "delivery_state_unknown");
+  assert.equal(deliveries, 0);
+  assert.equal(check.status, "completed");
+  assert.equal(check.conclusion, "neutral");
 });
 
 test("derives a final Worker failure from its trusted append-only audit", async () => {
@@ -756,7 +814,9 @@ test("notifies one post-merge main failure across replayed observer events", asy
       return check;
     }
     if (apiPath.endsWith("/check-runs/901") && options.method === "PATCH") {
-      return JSON.parse(options.body);
+      const payload = JSON.parse(options.body);
+      Object.assign(checks[0], payload);
+      return payload;
     }
     throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
   };
@@ -797,6 +857,13 @@ test("notifies one post-merge main failure across replayed observer events", asy
       writeSummary: async () => {},
     });
 
+  await triagePostMergeFailure({
+    repository: "AgoraIO-Extensions/agent-infra",
+    sourceRun: event.workflow_run,
+    token: "test-token",
+    request,
+    defaultBranch: "main",
+  });
   const first = await invoke();
   const replay = await invoke();
   assert.equal(first.record.target.type, "issue");
@@ -880,6 +947,7 @@ test("derives dependency triage from a trusted Blocker Reconciler audit", async 
 
 test("derives current-head waiver use from trusted PR Gate Checks", async () => {
   const headSha = "2".repeat(40);
+  const sourceHeadSha = "3".repeat(40);
   const gateChecks = [
     {
       id: 1_100,
@@ -947,7 +1015,7 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
         display_title: "PR #105 | pr-gates | synchronize",
         event: "pull_request_target",
         conclusion: "success",
-        head_sha: headSha,
+        head_sha: sourceHeadSha,
       }),
     },
     token: "test-token",
@@ -958,6 +1026,9 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
 
   assert.equal(result.record.outcome.code, "waiver_used");
   assert.equal(result.record.eventId, "claude-waiver-check-1101");
+  assert.equal(result.record.sourceRun.headSha, sourceHeadSha);
+  assert.equal(result.record.checkHeadSha, headSha);
+  assert.equal(outcomeChecks[0].head_sha, headSha);
 });
 
 test("paginates trusted audit comments instead of truncating old Issues", async () => {

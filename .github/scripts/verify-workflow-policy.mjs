@@ -589,7 +589,7 @@ export function validateTrustedScriptSources(sources) {
     "agent-infra-post-merge-failure",
     'body: JSON.stringify({ state: "open" })',
     'body: JSON.stringify({ labels: ["needs-triage"] })',
-    "postMergeReplay",
+    "delivery_state_unknown",
     "Response text is intentionally discarded.",
     "WECOM_BOT_WEBHOOK_URL",
   ];

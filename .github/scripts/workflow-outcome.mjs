@@ -246,6 +246,10 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
     url: targetUrl(repository, selectedTarget.type, selectedTarget.number),
   };
   const classified = classifyOutcome({ sourceRun, parsedRunName: parsed, context });
+  const checkHeadSha = context.checkHeadSha ?? sourceRun.head_sha;
+  if (!/^[0-9a-f]{40}$/.test(checkHeadSha)) {
+    throw new Error("Workflow outcome Check Run head SHA is invalid");
+  }
   const semanticEventId = context.eventIds?.[classified.code];
   if (
     semanticEventId !== undefined &&
@@ -257,6 +261,7 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
     version: 1,
     eventId: semanticEventId ?? `workflow-run-${sourceRun.id}`,
     repository,
+    checkHeadSha,
     sourceRun: {
       id: sourceRun.id,
       workflow: sourceRun.name,
@@ -289,7 +294,7 @@ export function renderJobSummary(record) {
     `- Source run: ${markdownLink(record.sourceRun.id, record.sourceRun.url)}`,
     `- Workflow: ${record.sourceRun.workflow}`,
     `- Event/action: \`${record.sourceRun.event}\` / \`${record.sourceRun.action}\``,
-    `- Head SHA: \`${record.sourceRun.headSha}\``,
+    `- Head SHA: \`${record.checkHeadSha}\``,
     `- Cycle: ${record.cycle ?? "N/A"}`,
     `- Attempt: ${record.attempt ?? "N/A"}`,
     `- Terminal outcome: \`${record.outcome.code}\` (${record.sourceRun.conclusion})`,
@@ -762,6 +767,7 @@ async function loadPullRequestContext({
   return {
     ...issueContext,
     pullRequest,
+    checkHeadSha: headSha,
     pullRequestMerged: Boolean(
       parsedRunName.action === "closed" && pullRequest.merged_at,
     ),
@@ -827,23 +833,29 @@ function outcomeExternalId(record) {
 }
 
 async function claimOutcomeCheck({ repository, record, token, request }) {
-  const path = `/repos/${repository}/commits/${record.sourceRun.headSha}/check-runs?check_name=Workflow%20Outcome&per_page=100`;
+  const path = `/repos/${repository}/commits/${record.checkHeadSha}/check-runs?check_name=Workflow%20Outcome&per_page=100`;
   const response = await request(path, { token });
   const externalId = outcomeExternalId(record);
   const existing = (response?.check_runs ?? []).find(
     (check) =>
       check?.app?.id === GITHUB_ACTIONS_APP_ID &&
-      check.head_sha === record.sourceRun.headSha &&
+      check.head_sha === record.checkHeadSha &&
       check.external_id === externalId,
   );
-  if (existing) return { checkId: existing.id, replay: true };
+  if (existing) {
+    return {
+      checkId: existing.id,
+      incompleteClaim: existing.status !== "completed",
+      replay: existing.status === "completed",
+    };
+  }
   const created = await request(`/repos/${repository}/check-runs`, {
     token,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: "Workflow Outcome",
-      head_sha: record.sourceRun.headSha,
+      head_sha: record.checkHeadSha,
       details_url: record.sourceRun.url,
       external_id: externalId,
       status: "in_progress",
@@ -854,7 +866,7 @@ async function claimOutcomeCheck({ repository, record, token, request }) {
     }),
   });
   positiveInteger(created?.id, "Workflow outcome Check Run id");
-  return { checkId: created.id, replay: false };
+  return { checkId: created.id, incompleteClaim: false, replay: false };
 }
 
 function notificationSummary(notification) {
@@ -988,7 +1000,6 @@ export async function processWorkflowOutcome({
     context = {
       ...issueContext,
       postMergeFailure: true,
-      postMergeReplay: triage.replay,
       target: { type: "issue", number: triage.issueNumber },
       eventIds: {
         ...(issueContext.eventIds ?? {}),
@@ -1015,14 +1026,26 @@ export async function processWorkflowOutcome({
   };
   let checkId = null;
   if (record.outcome.notify) {
-    if (context.postMergeReplay) {
+    const claim = await claimOutcomeCheck({ repository, record, token, request });
+    checkId = claim.checkId;
+    if (claim.incompleteClaim) {
       replay = true;
-    } else {
-      const claim = await claimOutcomeCheck({ repository, record, token, request });
-      replay = claim.replay;
-      checkId = claim.checkId;
-    }
-    if (replay) {
+      notification = {
+        configured: Boolean(webhookUrl),
+        delivered: false,
+        attempts: [],
+        warning: "delivery_state_unknown",
+      };
+      await completeOutcomeCheck({
+        repository,
+        checkId,
+        record,
+        notification,
+        token,
+        request,
+      });
+    } else if (claim.replay) {
+      replay = true;
       notification = {
         configured: Boolean(webhookUrl),
         delivered: false,
