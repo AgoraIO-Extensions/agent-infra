@@ -65,5 +65,11 @@ jobs:
                   result("sync", error=error)
               litellm.disable_aiohttp_transport = True
               await probe_async("async_httpx")
+              litellm.disable_aiohttp_transport = False
+              kwargs["messages"] = [
+                  {"role": "system", "content": "Review code. " + "A" * 24_000},
+                  {"role": "user", "content": "Return OK. " + "B" * 4_000},
+              ]
+              await probe_async("async_large")
 
           asyncio.run(main())' 2>/dev/null
