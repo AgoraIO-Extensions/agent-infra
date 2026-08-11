@@ -877,6 +877,13 @@ export function validateWorkflowDocuments(workflows) {
       JSON.stringify(["Docs CI", "Claude PR Review"]) ||
     JSON.stringify(worker?.on?.workflow_run?.types) !== JSON.stringify(["completed"]) ||
     baseUpdate?.if !== "github.event_name == 'push'" ||
+    !sameObject(prepare?.permissions, {
+      actions: "read",
+      checks: "read",
+      contents: "read",
+      issues: "write",
+      "pull-requests": "write",
+    }) ||
     !sameObject(baseUpdate?.permissions, {
       contents: "read",
       issues: "write",
