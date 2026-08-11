@@ -60,7 +60,22 @@ export function parsePrAgentOutput(raw) {
     throw new PrAgentOutputError("PR-Agent returned too many findings");
   }
 
-  for (const issue of review.key_issues_to_review) {
+  const issues = review.key_issues_to_review.map((issue) => ({
+    ...issue,
+    issue_content:
+      typeof issue?.issue_content === "string"
+        ? issue.issue_content.trim()
+        : issue?.issue_content,
+    issue_header:
+      typeof issue?.issue_header === "string"
+        ? issue.issue_header.trim()
+        : issue?.issue_header,
+    relevant_file:
+      typeof issue?.relevant_file === "string"
+        ? issue.relevant_file.trim()
+        : issue?.relevant_file,
+  }));
+  for (const issue of issues) {
     if (
       !exactKeys(issue, ISSUE_KEYS) ||
       !boundedString(issue.issue_header, 200) ||
@@ -75,7 +90,7 @@ export function parsePrAgentOutput(raw) {
       throw new PrAgentOutputError("PR-Agent finding is invalid");
     }
   }
-  return review;
+  return { key_issues_to_review: issues };
 }
 
 export function validatePrAgentLocations(issues, files) {
