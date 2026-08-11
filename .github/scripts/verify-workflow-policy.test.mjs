@@ -566,25 +566,49 @@ test("keeps Codex model configuration in fixed repository settings", async () =>
   );
   assert.equal(action.with.model, "${{ secrets.CODEX_MODEL }}");
   assert.equal(action.with.effort, "${{ vars.CODEX_EFFORT }}");
+});
 
-  for (const location of ["prepare", "action"]) {
-    const invalid = await actualWorkflows();
-    const invalidWorker = invalid["codex-worker.yml"];
-    if (location === "prepare") {
-      invalidWorker.jobs.prepare.steps.find(
-        (step) => step.name === "Prepare trusted Worker plan",
-      ).env.CODEX_EFFORT = "${{ secrets.CODEX_EFFORT }}";
-    } else {
-      invalidWorker.jobs.implement.steps.find((step) =>
-        step.uses?.startsWith("openai/codex-action@"),
-      ).with.effort = "${{ secrets.CODEX_EFFORT }}";
-    }
-    assert.ok(
-      validateWorkflowDocuments(invalid).some((error) =>
-        error.includes("CODEX_EFFORT") || error.includes("Codex Worker effort"),
-      ),
-    );
-  }
+test("rejects a Codex Worker prepare effort Secret with the dedicated error", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].jobs.prepare.steps.find(
+    (step) => step.name === "Prepare trusted Worker plan",
+  ).env.CODEX_EFFORT = "${{ secrets.CODEX_EFFORT }}";
+
+  const errors = validateWorkflowDocuments(workflows);
+  assert.ok(
+    errors.includes("Codex Worker effort must use the fixed repository Variable"),
+  );
+  assert.equal(
+    errors.includes("Codex Worker Codex Action inputs must stay fixed"),
+    false,
+  );
+});
+
+test("rejects a Codex Action effort Secret with the dedicated error", async () => {
+  const workflows = await actualWorkflows();
+  workflows["codex-worker.yml"].jobs.implement.steps.find((step) =>
+    step.uses?.startsWith("openai/codex-action@"),
+  ).with.effort = "${{ secrets.CODEX_EFFORT }}";
+
+  const errors = validateWorkflowDocuments(workflows);
+  assert.ok(errors.includes("Codex Worker Codex Action inputs must stay fixed"));
+  assert.equal(
+    errors.includes("Codex Worker effort must use the fixed repository Variable"),
+    false,
+  );
+});
+
+test("rejects a CODEX_EFFORT Secret through default-deny", async () => {
+  const workflows = await actualWorkflows();
+  workflows["pr-gates.yml"].jobs.gates.steps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  ).env = { CODEX_EFFORT: "${{ secrets.CODEX_EFFORT }}" };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).includes(
+      "pr-gates.yml/gates: Secret CODEX_EFFORT is not allowlisted",
+    ),
+  );
 });
 
 test("keeps the publisher PAT out of the model job", async () => {
