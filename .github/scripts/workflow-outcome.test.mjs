@@ -770,6 +770,69 @@ test("processes a workflow event once and deduplicates notification replays", as
   assert.doesNotMatch(JSON.stringify({ checks, summaries }), /test-token|webhook/);
 });
 
+test("finds a semantic Check claim beyond the first filter=all page", async () => {
+  const headSha = "8".repeat(40);
+  const externalId =
+    "agent-infra:workflow-outcome:workflow-run-510:workflow_terminal_failure";
+  const existing = {
+    id: 899,
+    app: { id: 15368 },
+    external_id: externalId,
+    head_sha: headSha,
+    status: "completed",
+  };
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: 1_000 + index,
+    app: { id: 15368 },
+    external_id: `other-${index}`,
+    head_sha: headSha,
+    status: "completed",
+  }));
+  const pages = [];
+  let deliveries = 0;
+  const request = async (apiPath) => {
+    if (apiPath.endsWith("/issues/55")) {
+      return { number: 55, state: "open", labels: [] };
+    }
+    if (apiPath.endsWith("/issues/55/comments")) return [];
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      assert.match(apiPath, /check_name=Workflow%20Outcome&filter=all&per_page=100/);
+      const page = Number(new URL(apiPath, "https://api.github.test").searchParams.get("page"));
+      pages.push(page);
+      return page === 1
+        ? { total_count: 101, check_runs: firstPage }
+        : { total_count: 101, check_runs: [existing] };
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 510,
+        conclusion: "failure",
+        head_sha: headSha,
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "https://example.invalid/webhook",
+    request,
+    sendNotification: async () => {
+      deliveries += 1;
+    },
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.replay, true);
+  assert.equal(result.notification.warning, "deduplicated");
+  assert.equal(deliveries, 0);
+  assert.deepEqual(pages, [1, 2]);
+});
+
 test("elects one canonical Check after concurrent semantic claims", async () => {
   const headSha = "5".repeat(40);
   const externalId =

@@ -872,11 +872,44 @@ function matchingOutcomeChecks(response, record, externalId) {
     .sort((left, right) => left.id - right.id);
 }
 
+async function loadMatchingOutcomeChecks({
+  repository,
+  record,
+  externalId,
+  token,
+  request,
+}) {
+  const matches = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const path = `/repos/${repository}/commits/${record.checkHeadSha}/check-runs?check_name=Workflow%20Outcome&filter=all&per_page=100&page=${page}`;
+    const response = await request(path, { token });
+    if (!Array.isArray(response?.check_runs)) {
+      throw new Error("Workflow outcome Check Run response is invalid");
+    }
+    matches.push(...matchingOutcomeChecks(response, record, externalId));
+    if (
+      response.check_runs.length < 100 ||
+      (Number.isSafeInteger(response.total_count) &&
+        response.total_count >= 0 &&
+        page * 100 >= response.total_count)
+    ) {
+      return matches.sort((left, right) => left.id - right.id);
+    }
+  }
+  throw new Error("Workflow outcome Check Run pagination limit exceeded");
+}
+
 async function claimOutcomeCheck({ repository, record, token, request }) {
-  const path = `/repos/${repository}/commits/${record.checkHeadSha}/check-runs?check_name=Workflow%20Outcome&per_page=100`;
-  const response = await request(path, { token });
   const externalId = outcomeExternalId(record);
-  const existing = matchingOutcomeChecks(response, record, externalId)[0];
+  const existing = (
+    await loadMatchingOutcomeChecks({
+      repository,
+      record,
+      externalId,
+      token,
+      request,
+    })
+  )[0];
   if (existing) {
     return {
       checkId: existing.id,
@@ -904,8 +937,14 @@ async function claimOutcomeCheck({ repository, record, token, request }) {
   const candidates = new Map([[created.id, created]]);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     if (attempt > 1) await wait(50);
-    const confirmation = await request(path, { token });
-    for (const check of matchingOutcomeChecks(confirmation, record, externalId)) {
+    const confirmation = await loadMatchingOutcomeChecks({
+      repository,
+      record,
+      externalId,
+      token,
+      request,
+    });
+    for (const check of confirmation) {
       candidates.set(check.id, check);
     }
   }

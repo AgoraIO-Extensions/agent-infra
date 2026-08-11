@@ -580,6 +580,8 @@ export function validateTrustedScriptSources(sources) {
     "Source pull request head is stale",
     "canonicalClaim.id !== created.id",
     "duplicateClaim",
+    "check_name=Workflow%20Outcome&filter=all&per_page=100&page=",
+    "Workflow outcome Check Run pagination limit exceeded",
     "WECOM_BOT_WEBHOOK_URL",
   ];
   const summarySource = outcomeSource.slice(
