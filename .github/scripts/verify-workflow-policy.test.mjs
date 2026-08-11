@@ -34,6 +34,7 @@ async function actualTrustedScriptSources() {
         "claude-blocker-review.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
+        "pr-agent-review.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
@@ -312,6 +313,91 @@ test("rejects floating third-party Action references", async () => {
   workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) => error.includes("full commit SHA")),
+  );
+});
+
+test("isolates pinned PR-Agent analysis from validated publication", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["pr-agent-review.yml"];
+  const action = workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent");
+  const publish = workflow.jobs.publish.steps.find(
+    (step) => step.name === "Publish validated PR-Agent review",
+  );
+
+  assert.deepEqual(workflow.on.pull_request_target.types, [
+    "opened",
+    "reopened",
+    "synchronize",
+    "ready_for_review",
+    "review_requested",
+  ]);
+  assert.deepEqual(workflow.jobs.analyze.permissions, {
+    contents: "read",
+    "pull-requests": "read",
+  });
+  assert.match(
+    workflow.jobs.analyze.if,
+    /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
+  );
+  assert.equal(
+    action.uses,
+    "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
+  );
+  assert.equal(action.env.OPENAI_KEY, "${{ secrets.PR_AGENT_API_KEY }}");
+  assert.equal(
+    action.env.OPENAI__API_BASE,
+    "${{ secrets.PR_AGENT_API_BASE }}",
+  );
+  assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
+  assert.equal(action.env["config.publish_output"], "false");
+  assert.equal(action.env["github_action_config.enable_output"], "true");
+  assert.deepEqual(workflow.jobs.publish.permissions, {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "read",
+  });
+  assert.equal(publish.run, "node .github/scripts/pr-agent-review.mjs publish");
+  assert.equal(
+    publish.env.STRUCTURED_OUTPUT,
+    "${{ needs.analyze.outputs.structured_output }}",
+  );
+
+  action.env["config.publish_output"] = "true";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+});
+
+test("requires same-repository PR-Agent runs and a current-head publisher", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["pr-agent-review.yml"];
+  workflow.jobs.analyze.if = workflow.jobs.analyze.if.replace(
+    "github.event.pull_request.head.repo.full_name == github.repository",
+    "true",
+  );
+  workflow.jobs.publish.steps.find(
+    (step) => step.name === "Publish validated PR-Agent review",
+  ).env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+});
+
+test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
+  const workflows = await actualWorkflows();
+  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+    BAD: "${{ secrets.PR_AGENT_API_KEY }}",
+  };
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("PR_AGENT_API_KEY is allowed only in the pinned PR-Agent Action"),
+    ),
   );
 });
 

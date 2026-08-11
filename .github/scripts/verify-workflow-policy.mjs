@@ -10,6 +10,7 @@ const REQUIRED_WORKFLOWS = [
   "claude-pr-review.yml",
   "codex-worker.yml",
   "docs-ci.yml",
+  "pr-agent-review.yml",
   "pr-gates.yml",
 ];
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
@@ -25,6 +26,13 @@ const UPLOAD_ARTIFACT_ACTION =
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const PR_AGENT_ACTION =
+  "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa";
+const PR_AGENT_SECRETS = [
+  "PR_AGENT_API_KEY",
+  "PR_AGENT_API_BASE",
+  "PR_AGENT_MODEL",
+];
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 
@@ -182,6 +190,26 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (PR_AGENT_SECRETS.includes(secret)) {
+      const reference = `\${{ secrets.${secret} }}`;
+      const envName = {
+        PR_AGENT_API_KEY: "OPENAI_KEY",
+        PR_AGENT_API_BASE: "OPENAI__API_BASE",
+        PR_AGENT_MODEL: "config.model",
+      }[secret];
+      if (
+        workflowName !== "pr-agent-review.yml" ||
+        jobName !== "analyze" ||
+        step.uses !== PR_AGENT_ACTION ||
+        step.env?.[envName] !== reference ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in the pinned PR-Agent Action`,
+        );
+      }
+      continue;
+    }
     if (
       ["TEAM_MEMBERSHIP_APP_ID", "TEAM_MEMBERSHIP_APP_PRIVATE_KEY"].includes(secret)
     ) {
@@ -223,6 +251,7 @@ export function validateTrustedScriptSources(sources) {
   }
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
+  const prAgentReviewSource = sources?.["pr-agent-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const resilienceSource = sources?.["worker-resilience.mjs"] ?? "";
@@ -264,6 +293,21 @@ export function validateTrustedScriptSources(sources) {
     contractRequirements.some((requirement) => !contractSource.includes(requirement))
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
+  }
+  const prAgentReviewRequirements = [
+    "parsePrAgentEvent(",
+    "parsePrAgentOutput(",
+    "validatePrAgentLocations(",
+    "assertCurrentPrAgentTarget(await githubRequest(prPath), expectedHead)",
+    "sanitizeMarkdown(",
+    "/issues/${prNumber}/comments",
+  ];
+  if (
+    prAgentReviewRequirements.some(
+      (requirement) => !prAgentReviewSource.includes(requirement),
+    )
+  ) {
+    errors.push("PR-Agent Publisher must validate output and the current PR head");
   }
   const workerAuthorizationRequirements = [
     "authorizeCycle({",
@@ -691,6 +735,131 @@ export function validateWorkflowDocuments(workflows) {
     })
   ) {
     errors.push("Codex Worker model concurrency must use one of two fixed slots");
+  }
+  const prAgent = workflows["pr-agent-review.yml"];
+  const prAgentAnalyze = prAgent?.jobs?.analyze;
+  const prAgentPublish = prAgent?.jobs?.publish;
+  const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
+  const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const prAgentTarget = prAgentAnalyze?.steps?.find((step) => step.id === "target");
+  const prAgentPublishSteps = prAgentPublish?.steps ?? [];
+  const prAgentCheckout = prAgentPublishSteps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const prAgentSetup = prAgentPublishSteps.find(
+    (step) => step.name === "Set up Node.js",
+  );
+  const prAgentPublishStep = prAgentPublishSteps.find(
+    (step) => step.name === "Publish validated PR-Agent review",
+  );
+  const prAgentConditions = [prAgentAnalyze?.if, prAgentPublish?.if].map(
+    (condition) => String(condition ?? ""),
+  );
+  if (
+    JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
+      JSON.stringify([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+        "review_requested",
+      ]) ||
+    !sameObject(prAgent?.permissions, {}) ||
+    !sameObject(prAgent?.concurrency, {
+      group: "pr-agent-review-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
+    }) ||
+    prAgentConditions.some(
+      (condition) =>
+        !condition.includes("vars.PR_AGENT_ENABLED == 'true'") ||
+        !condition.includes(
+          "github.event.pull_request.head.repo.full_name == github.repository",
+        ),
+    ) ||
+    !String(prAgentAnalyze?.if ?? "").includes("github.event.sender.type != 'Bot'") ||
+    !String(prAgentAnalyze?.if ?? "").includes(
+      "github.event.pull_request.draft == false",
+    ) ||
+    !String(prAgentPublish?.if ?? "").includes(
+      "needs.analyze.result == 'success'",
+    ) ||
+    !sameObject(prAgentAnalyze?.permissions, {
+      contents: "read",
+      "pull-requests": "read",
+    }) ||
+    prAgentAnalyze?.outputs?.structured_output !==
+      "${{ steps.pr-agent.outputs.review }}" ||
+    prAgentAnalyze?.outputs?.expected_head !==
+      "${{ steps.target.outputs.head_sha }}" ||
+    prAgentAnalyze?.steps?.length !== 3 ||
+    prAgentAnalyzeCheckout?.uses !==
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+    !sameObject(prAgentAnalyzeCheckout?.with, {
+      ref: "${{ github.event.repository.default_branch }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    }) ||
+    prAgentTarget?.run !== "node .github/scripts/pr-agent-review.mjs record" ||
+    prAgentAction?.uses !== PR_AGENT_ACTION ||
+    !sameObject(prAgentAction?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      OPENAI_KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+      OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
+      "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+      "config.publish_output": "false",
+      "config.publish_output_progress": "false",
+      "config.use_repo_settings_file": "false",
+      "config.use_wiki_settings_file": "false",
+      "config.fallback_models": "[]",
+      "config.custom_model_max_tokens":
+        "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      "pr_reviewer.enable_review_labels_effort": "false",
+      "pr_reviewer.enable_review_labels_security": "false",
+      "pr_reviewer.num_max_findings": "10",
+      "pr_reviewer.require_can_be_split_review": "false",
+      "pr_reviewer.require_estimate_contribution_time_cost": "false",
+      "pr_reviewer.require_estimate_effort_to_review": "false",
+      "pr_reviewer.require_score_review": "false",
+      "pr_reviewer.require_security_review": "false",
+      "pr_reviewer.require_tests_review": "false",
+      "pr_reviewer.require_ticket_analysis_review": "false",
+      "pr_reviewer.require_todo_scan": "false",
+      "github_action_config.auto_review": "true",
+      "github_action_config.auto_describe": "false",
+      "github_action_config.auto_improve": "false",
+      "github_action_config.enable_output": "true",
+      "github_action_config.pr_actions":
+        '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+    }) ||
+    prAgentPublish?.needs !== "analyze" ||
+    !sameObject(prAgentPublish?.permissions, {
+      contents: "read",
+      issues: "write",
+      "pull-requests": "read",
+    }) ||
+    prAgentCheckout?.uses !==
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+    !sameObject(prAgentCheckout?.with, {
+      ref: "${{ github.event.repository.default_branch }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    }) ||
+    prAgentSetup?.uses !==
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
+    prAgentSetup?.with?.["node-version"] !== 24 ||
+    prAgentPublishStep?.run !== "node .github/scripts/pr-agent-review.mjs publish" ||
+    !sameObject(prAgentPublishStep?.env, {
+      EXPECTED_HEAD_SHA: "${{ needs.analyze.outputs.expected_head }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      PR_NUMBER: "${{ github.event.pull_request.number }}",
+      STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
+    })
+  ) {
+    errors.push(
+      "PR-Agent Review must isolate the pinned analysis from validated publication",
+    );
   }
   const implementText = JSON.stringify(implement ?? {});
   if (
@@ -1438,6 +1607,7 @@ async function main() {
         "claude-event-authorization.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
+        "pr-agent-review.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
