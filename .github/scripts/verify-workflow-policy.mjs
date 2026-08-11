@@ -63,6 +63,16 @@ function gatePublisherTokenReferences(value) {
   ) ?? [];
 }
 
+function hasSingleFixedClaudeArgument(args, option, value) {
+  if (typeof args !== "string") {
+    return false;
+  }
+  const optionOccurrences = args.match(
+    new RegExp(`(?:^|\\s)${option}(?=\\s|=|$)`, "g"),
+  ) ?? [];
+  return optionOccurrences.length === 1 && args.includes(`${option} "${value}"`);
+}
+
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
   return (
     step.id === "validate-config" &&
@@ -1320,11 +1330,15 @@ export function validateWorkflowDocuments(workflows) {
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
-    !reviewAction?.with?.claude_args?.includes(
-      '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+    !hasSingleFixedClaudeArgument(
+      reviewAction?.with?.claude_args,
+      "--model",
+      "${{ secrets.CLAUDE_REVIEW_MODEL }}",
     ) ||
-    !reviewAction?.with?.claude_args?.includes(
-      '--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+    !hasSingleFixedClaudeArgument(
+      reviewAction?.with?.claude_args,
+      "--effort",
+      "${{ vars.CLAUDE_REVIEW_EFFORT }}",
     )
   ) {
     errors.push("Claude PR Review model configuration must use validated settings");
@@ -1541,11 +1555,15 @@ export function validateWorkflowDocuments(workflows) {
         configEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
         configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
         modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-        !modelStep?.with?.claude_args?.includes(
-          '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        !hasSingleFixedClaudeArgument(
+          modelStep?.with?.claude_args,
+          "--model",
+          "${{ secrets.CLAUDE_REVIEW_MODEL }}",
         ) ||
-        !modelStep?.with?.claude_args?.includes(
-          '--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+        !hasSingleFixedClaudeArgument(
+          modelStep?.with?.claude_args,
+          "--effort",
+          "${{ vars.CLAUDE_REVIEW_EFFORT }}",
         ))
     ) {
       errors.push(

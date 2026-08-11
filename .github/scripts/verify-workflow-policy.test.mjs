@@ -228,6 +228,22 @@ test("rejects a PR Review effort Secret in place of the repository Variable", as
   );
 });
 
+test("rejects duplicate PR Review model configuration arguments", async () => {
+  for (const duplicate of ["--model unapproved", "--effort=max"]) {
+    const workflows = await actualWorkflows();
+    const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+      (step) => step.id === "claude",
+    );
+    action.with.claude_args = `${action.with.claude_args}\n${duplicate}`;
+
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("Claude PR Review model configuration must use validated settings"),
+      ),
+    );
+  }
+});
+
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
     (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
@@ -1074,6 +1090,21 @@ test("rejects an Issue Review effort Secret in place of the repository Variable"
       error.includes("model configuration must use validated settings"),
     ),
   );
+});
+
+test("rejects duplicate Issue Review model configuration arguments", async () => {
+  for (const duplicate of ["--model=unapproved", "--effort max"]) {
+    const workflows = await actualWorkflows();
+    const job = workflows["claude-issue-review.yml"].jobs.mentions;
+    const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
+    action.with.claude_args = `${action.with.claude_args}\n${duplicate}`;
+
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("model configuration must use validated settings"),
+      ),
+    );
+  }
 });
 
 test("guards every Issue Review model step with the trusted authorizer", async () => {
