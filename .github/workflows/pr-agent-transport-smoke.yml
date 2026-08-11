@@ -5,6 +5,7 @@ on:
     branches: [test/pr-agent-post-merge-smoke]
 
 permissions:
+  contents: read
   pull-requests: read
 
 jobs:
@@ -13,6 +14,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Prepare trusted PR event
         env:
           GH_TOKEN: ${{ github.token }}
