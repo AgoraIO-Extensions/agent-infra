@@ -569,37 +569,32 @@ erDiagram
 **[本项目设计决策]** Provider原生幂等不能用一个`supportsIdempotency=true`布尔值表达。每个声明原生幂等的ActionVersion必须引用ProviderRelease内不可变、canonical的`ProviderIdempotencyContractV1`：
 
 ```ts
-type ProviderIdempotencyContractV1 =
-  | {
-      schemaVersion: 1;
-      mode: "NONE";
-    }
-  | {
-      schemaVersion: 1;
-      mode: "NATIVE_EXACT_KEY";
-      contractVersion: string;
-      keyDerivationVersion: string;
-      keyFormatVersion: string;
-      keyNamespaceScope: "PROVIDER_ACCOUNT_ACTION_EFFECT";
-      placement:
-        | { kind: "HEADER"; headerNameLowercase: string }
-        | { kind: "JSON_BODY"; jsonPointer: string };
-      sameKeySameRequestSemantics: "SAME_LOGICAL_EFFECT";
-      sameKeyDifferentRequestSemantics: "REJECT_CONFLICT";
-      replayEvidenceKind:
-        | "PROVIDER_REQUEST_ID"
-        | "RESOURCE_ID"
-        | "STATUS_ENDPOINT";
-      minimumRetentionSeconds: number;
-      endpointPolicyId: string;
-      method: string;
-      pathTemplate: string;
-    };
+type ProviderIdempotencyContractV1 = {
+  schemaVersion: 1;
+  mode: "NATIVE_EXACT_KEY";
+  contractVersion: string;
+  keyDerivationVersion: string;
+  keyFormatVersion: string;
+  keyNamespaceScope: "PROVIDER_ACCOUNT_ACTION_EFFECT";
+  placement:
+    | { kind: "HEADER"; headerNameLowercase: string }
+    | { kind: "JSON_BODY"; jsonPointer: string };
+  sameKeySameRequestSemantics: "SAME_LOGICAL_EFFECT";
+  sameKeyDifferentRequestSemantics: "REJECT_CONFLICT";
+  replayEvidenceKind:
+    | "PROVIDER_REQUEST_ID"
+    | "RESOURCE_ID"
+    | "STATUS_ENDPOINT";
+  minimumRetentionSeconds: number;
+  endpointPolicyId: string;
+  method: string;
+  pathTemplate: string;
+};
 ```
 
-合同checksum覆盖上述完整closed tuple；自由说明、当前发布时间和测试日志不进入checksum。发布门禁要求`minimumRetentionSeconds`覆盖Action总deadline、最大backoff和恢复窗口，真实Provider conformance证明同key同canonical request只产生同一logical effect、同key异request确定拒绝，并验证placement、大小写/JSON Pointer、重复字段、代理重写和response-loss。`NONE`不得带其他字段；`IDEMPOTENT_WRITE`必须引用`NATIVE_EXACT_KEY`，`NON_IDEMPOTENT_WRITE`不得借该合同取得unknown-outcome retry资格。
+合同checksum覆盖上述完整closed tuple；自由说明、当前发布时间和测试日志不进入checksum。发布门禁要求`minimumRetentionSeconds`覆盖Action总deadline、最大backoff和恢复窗口，真实Provider conformance证明同key同canonical request只产生同一logical effect、同key异request确定拒绝，并验证placement、大小写/JSON Pointer、重复字段、代理重写和response-loss。无Provider原生幂等合同只有一种canonical表示：ActionVersion的合同引用为空，ProviderRelease registry不创建`NONE` entry；`IDEMPOTENT_WRITE`必须引用`NATIVE_EXACT_KEY`，`NON_IDEMPOTENT_WRITE`不得借该合同取得unknown-outcome retry资格。
 
-“兼容policy drift”不是Adapter自行语义比较。LogicalEffect冻结exact contract ID/checksum和完整tuple；current signed `catalog_recovery_validation`还必须逐字节声明支持该原checksum，并携未过期Provider support evidence。只有Effect冻结checksum、ActionVersion引用、ProviderRelease registry和current overlay四者完全相等，且原合同仍在支持期内，才是compatible；executor/Proxy继续按原tuple放置原key。任一字段、checksum、支持证据、有效期或overlay不一致都按incompatible处理，禁止从current合同重派生或把“看起来等价”作为放行依据。
+“兼容policy drift”不是Adapter自行语义比较。合同引用非空时，LogicalEffect冻结exact contract ID/checksum和完整tuple；current signed `catalog_recovery_validation`还必须逐字节声明支持该原checksum，并携未过期Provider support evidence。只有Effect冻结checksum、ActionVersion引用、ProviderRelease registry和current overlay四者完全相等，且原合同仍在支持期内，才是compatible；executor/Proxy继续按原tuple放置原key。引用为空时，ActionVersion、Effect合同/key和overlay support三组必须全部为空，不进入合同兼容分支。任一字段、checksum、支持证据、有效期或overlay不一致都按incompatible处理，禁止从current合同重派生或把“看起来等价”作为放行依据。
 
 **[PRD]** Agent Owner 只能选择已经发布的 Action。Action 被停用后，新调用立即拒绝，不能因为 Platform 目录缓存仍显示可用而继续执行。
 
@@ -1585,7 +1580,7 @@ SUBMISSION_STARTED -> OUTCOME_UNKNOWN
 | `IDEMPOTENT_WRITE` | Provider 原生 idempotency key 已绑定 effectId，契约证明重复 key 返回同一效果 | Provider 不接受或不持久化 key、key 语义未知 |
 | `NON_IDEMPOTENT_WRITE` | 只有durable Hop仍为`ASSERTION_ISSUED`且无Admission，或已验签持久化exact terminal `NOT_STARTED_AFTER_ACCEPT` receipt时 | `ACCEPTED_NO_START`但无terminal receipt、admission/receipt未知，或任何证据表明logical request/stream可能开始即禁止自动重试 |
 
-每次受控重试都创建新的 ActionAttempt 和新的 EffectDispatch，并各自使用新 ID；它们必须继续引用同一个 LogicalEffect。LogicalEffect首次创建时从`callId + logicalEffectKey + exact ActionVersion冻结的effectPolicyVersion + ProviderIdempotencyContractV1 checksum`确定性派生一次Provider idempotency key，并把contract ID/checksum、derivation version、密文/hash与Effect原子持久化为write-once字段。后续Attempt/Dispatch只读取该持久化合同和key，禁止从current Provider/Action policy重新派生；current policy漂移不能改变旧Effect的placement、duplicate-key semantics、retention contract或key。创建successor前必须执行13.2唯一compatible predicate：Effect冻结tuple/checksum、ActionVersion引用、ProviderRelease registry和current signed/validated overlay support checksum逐字节相等，support evidence未过期且覆盖本次deadline；不做自由语义比较。不兼容时在predecessor finalization事务写`RETRY_FORBIDDEN`，零budget扣减、零successor、零出站，并按exact未生效或未知证据进入`NOT_APPLIED`确定失败或`UNCERTAIN`/reconciliation。若漂移发生在successor已提交后、`SUBMISSION_STARTED`前，current Dispatch使用25.1.6独立的`RETRY_SUCCESSOR_*_POLICY_INCOMPATIBLE_BEFORE_SUBMIT` reason终结为`FAILED_BEFORE_SUBMIT`，不能复用只允许`RESPONSE_RECEIVED/OUTCOME_UNKNOWN`的predecessor reason。21.4 decision provenance为`PROVED_NOT_APPLIED`或Effect为READ_ONLY时，Attempt、Effect、Call按该predecessor category进入确定终态；mutating provenance为`OUTCOME_UNKNOWN`时，Attempt、Effect、Call必须进入`UNCERTAIN`。只有successor登记的Effect tuple本身漂移时才使用binding-conflict reason；其中mutating `OUTCOME_UNKNOWN`使用`RETRY_SUCCESSOR_BINDING_CONFLICT_WITH_PRIOR_OUTCOME_UNKNOWN_BEFORE_SUBMIT`并投影`ACTION_OUTCOME_UNCERTAIN`，不得投影`ACTION_LOGICAL_EFFECT_CONFLICT`。重试次数、backoff 和 timeout 是首个Effect冻结的Provider/ActionVersion policy，不由Agent参数决定。
+每次受控重试都创建新的 ActionAttempt 和新的 EffectDispatch，并各自使用新 ID；它们必须继续引用同一个 LogicalEffect。LogicalEffect首次创建时，只有exact ActionVersion合同引用非空才从`callId + logicalEffectKey + exact ActionVersion冻结的effectPolicyVersion + ProviderIdempotencyContractV1 checksum`确定性派生一次Provider idempotency key，并把contract ID/checksum、derivation version、密文/hash与Effect原子持久化为write-once字段；合同引用为空的READ_ONLY Effect保持五列全空。后续Attempt/Dispatch只读取该持久化合同和key，禁止从current Provider/Action policy重新派生；current policy漂移不能改变旧Effect的placement、duplicate-key semantics、retention contract或key。创建successor前，native合同执行13.2唯一compatible predicate：Effect冻结tuple/checksum、ActionVersion引用、ProviderRelease registry和current signed/validated overlay support checksum逐字节相等，support evidence未过期且覆盖本次deadline；无合同READ_ONLY则要求Effect/ActionVersion/overlay合同字段仍全空，并继续验证exact ActionVersion的只读endpoint/retry policy和current executable overlay。两者都不做自由语义比较；分支混用或不兼容时在predecessor finalization事务写`RETRY_FORBIDDEN`，零budget扣减、零successor、零出站，并按exact未生效或未知证据进入`NOT_APPLIED`确定失败或`UNCERTAIN`/reconciliation。若漂移发生在successor已提交后、`SUBMISSION_STARTED`前，current Dispatch使用25.1.6独立的`RETRY_SUCCESSOR_*_POLICY_INCOMPATIBLE_BEFORE_SUBMIT` reason终结为`FAILED_BEFORE_SUBMIT`，不能复用只允许`RESPONSE_RECEIVED/OUTCOME_UNKNOWN`的predecessor reason。21.4 decision provenance为`PROVED_NOT_APPLIED`或Effect为READ_ONLY时，Attempt、Effect、Call按该predecessor category进入确定终态；mutating provenance为`OUTCOME_UNKNOWN`时，Attempt、Effect、Call必须进入`UNCERTAIN`。只有successor登记的Effect tuple本身漂移时才使用binding-conflict reason；其中mutating `OUTCOME_UNKNOWN`使用`RETRY_SUCCESSOR_BINDING_CONFLICT_WITH_PRIOR_OUTCOME_UNKNOWN_BEFORE_SUBMIT`并投影`ACTION_OUTCOME_UNCERTAIN`，不得投影`ACTION_LOGICAL_EFFECT_CONFLICT`。重试次数、backoff 和 timeout 是首个Effect冻结的Provider/ActionVersion policy，不由Agent参数决定。
 
 预算内重试不是“把旧 Attempt 再跑一次”。worker 在一个短事务中按 `ActionCall -> current ActionAttempt -> LogicalEffect -> current EffectDispatch -> retry budget bucket` 顺序加锁，验证旧 Attempt/Dispatch 仍是各自 parent 的 current/max sequence、旧行尚无 successor、ActionVersion policy和总 deadline仍允许，并按21.4用同一stable retry operation取得Provider/account共享预算的唯一`ACQUIRED` decision，然后原子完成：
 
@@ -2422,7 +2417,7 @@ Invocation 是一次逻辑 toolCall 的稳定幂等根，避免把短期 Permit 
 - `authorization_digest` 只覆盖用户授权语义；不同 `version_manifest_checksum` 可以拥有相同 authorization digest，不能误用 digest 做版本唯一键或供应链完整性校验。
 - `action` 声明 unique `(provider_id, action_key)`、unique `(id, provider_id)`；`action_version` 冗余保存受约束的 `provider_id/provider_release_id`，以 composite FK `(action_id, provider_id) -> action(id, provider_id)` 和 `(provider_id, provider_release_id) -> provider_release(provider_id, id)` 防止把另一 Provider release 的 executor 拼到当前 Action。
 - `action_version` 声明 unique `(action_id, id)`；`action` 的 `(id, current_published_version_id) -> action_version(action_id, id)` 为 DEFERRABLE composite FK。deferred constraint trigger 只允许 current pointer 指向同 Action 的 `PUBLISHED | DEPRECATED` version；发布/停用/切换在一个事务结束时必须自洽。
-- `provider_idempotency_contract_id/checksum`为all-null/all-non-null；非空时composite FK精确引用本ActionVersion所属ProviderRelease registry entry。`IDEMPOTENT_WRITE`必须非空且合同mode为`NATIVE_EXACT_KEY`，`NON_IDEMPOTENT_WRITE`必须为空；READ_ONLY可为空，若非空同样只能引用exact registry entry。manifest checksum覆盖该引用和完整contract checksum。
+- `provider_idempotency_contract_id/checksum`为all-null/all-non-null；ProviderRelease registry只允许`NATIVE_EXACT_KEY` entry，非空引用以composite FK精确绑定本ActionVersion所属registry entry。`IDEMPOTENT_WRITE`必须非空，`NON_IDEMPOTENT_WRITE`必须为空；READ_ONLY可为空，若非空同样只能引用exact native entry。无合同不创建`NONE` row或sentinel ID。manifest checksum覆盖nullable引用和完整contract checksum。
 - PUBLISHED/DEPRECATED/DISABLED 版本不可 UPDATE identity、contract、execution、security、source 或 manifest 字段；只允许受控 lifecycle status/disable 审计转换。数据库 trigger 或 store policy 拒绝其他更新，修复和回滚只能 INSERT/选择新 exact version。
 - GIN 仅用于管理员目录搜索的 bounded metadata；执行 lookup 使用 `id/status` B-tree。
 
@@ -2465,7 +2460,7 @@ full-state manifest组exactly-one且all-or-none；typed common ref/checksum、re
 Unique `(resource_type,resource_id,catalog_validation_generation)`；一个资源当前最多一条本代validation。Overlay与全部
 source字段write-once；资源revision/checksum变化后旧overlay自然失配。
 
-ActionVersion引用`NATIVE_EXACT_KEY`时，overlay的三项Provider support字段必须全非空，contract checksum逐字节等于ActionVersion/ProviderRelease registry，support evidence由发布验证签名并且`valid_until`覆盖当前执行deadline；其他ActionVersion三项全空。恢复、续签和每个successor创建/`SUBMISSION_STARTED`都重新验证该exact overlay。Overlay只能证明原合同仍受支持，不能声明另一个“兼容”checksum。
+ActionVersion的Provider idempotency contract引用非空时，overlay的三项Provider support字段必须全非空，contract checksum逐字节等于ActionVersion/ProviderRelease registry，support evidence由发布验证签名并且`valid_until`覆盖当前执行deadline；合同引用为空时三项全空。恢复、续签和每个successor创建/`SUBMISSION_STARTED`都重新验证该exact overlay。Overlay只能证明原合同仍受支持，不能声明另一个“兼容”checksum。
 
 Effective executable要求每一层同时满足：业务行`PUBLISHED|DEPRECATED`、current pointer/composite FK正确、exact manifest/executor digest正确，并存在`catalog_validation_generation = connection_runtime_generation.catalog_validation_generation`且revision/checksum完全一致的overlay。DISABLED无条件deny，即使残留overlay；缺overlay、journal gap、checksum mismatch或父层未验证只可在管理员UI显示`CATALOG_REVALIDATION_REQUIRED`，目录不能导出给Agent、eligibility不能成功、Signer/dispatch不能放行。
 
@@ -3125,12 +3120,12 @@ ActionVersion冻结，所有successor必须与Call、首行和直接predecessor�
 | `id/call_id/logical_effect_key` | 一个 call 内稳定逻辑效果；unique `(call_id, logical_effect_key)` |
 | `effect_class/state/state_revision/mutation_ledger_generation` | effect class；`INTENT_RECORDED/SUBMITTED/RETRY_PENDING/CONFIRMED/NOT_APPLIED/UNCERTAIN`；追加状态 revision；mutating effect必须绑定current mutation generation |
 | `request_hash`、`effect_policy_version`、`endpoint_policy_id`、`method`、`path_template` | 从exact ActionVersion一次冻结的逻辑效果语义；全部write-once，不保存含 query Secret 的完整 URL |
-| `provider_idempotency_contract_id/checksum`、`provider_idempotency_key_derivation_version/ciphertext/hash` | 从exact ActionVersion/ProviderRelease冻结完整合同引用；Effect创建事务内只按该合同派生并保存一次key。合同tuple/checksum与key对同一逻辑Effect跨attempt逐字节固定，禁止按current policy重算 |
+| `provider_idempotency_contract_id/checksum`、`provider_idempotency_key_derivation_version/ciphertext/hash` | exact ActionVersion引用为空时全部为空；非空时从所属ProviderRelease冻结完整合同引用，并在Effect创建事务内只按该合同派生、保存一次key。合同tuple/checksum与key对同一逻辑Effect跨attempt逐字节固定，禁止按current policy重算 |
 | `intent_at/submitted_at/resolved_at` | crash window 证据 |
 | `current_dispatch_id?/current_reconcile_attempt_id?/max_dispatch_sequences/max_reconcile_sequences/retry_policy_version` | 两条独立current/max sequence链及冻结budget policy |
 | `reconcile_attempts/next_reconcile_at/evidence_summary` | bounded 对账信息 |
 
-Provider合同为`NONE`时contract ID/checksum及derivation version/ciphertext/hash必须全空；`NATIVE_EXACT_KEY`时五列必须全非空，contract composite FK指向ActionVersion所属ProviderRelease的exact registry entry，derivation version等于contract tuple并由该冻结合同一次生成key，AAD绑定environment、call、effect、contract checksum和key version。Store应用role禁止UPDATE/DELETE或部分填充；EffectDispatch只引用parent Effect，禁止持久化、提交或覆盖第二份合同/key。Binding与successor校验同时比较contract ID/checksum、derivation version和key hash，密文解密后再常量时间核对hash。创建successor及每次`SUBMISSION_STARTED`都要求current ActionVersion overlay的support checksum仍逐字节等于Effect contract checksum且证据未过期；不相等即20.6 incompatible，禁止发送。
+ActionVersion合同引用为空时，Effect的contract ID/checksum及derivation version/ciphertext/hash五列必须全空；引用`NATIVE_EXACT_KEY`时五列必须全非空并逐字节复制同一合同引用，contract composite FK指向ActionVersion所属ProviderRelease的exact registry entry，derivation version等于contract tuple并由该冻结合同一次生成key，AAD绑定environment、call、effect、contract checksum和key version。Store应用role禁止UPDATE/DELETE或部分填充；EffectDispatch只引用parent Effect，禁止持久化、提交或覆盖第二份合同/key。Binding与successor校验在空引用分支要求两侧五列全空；在native分支同时比较contract ID/checksum、derivation version和key hash，密文解密后再常量时间核对hash。只有native分支在创建successor及每次`SUBMISSION_STARTED`时要求current ActionVersion overlay的support checksum仍逐字节等于Effect contract checksum且证据未过期；不相等即20.6 incompatible，禁止发送。
 
 #### `effect_dispatch`
 
@@ -7333,7 +7328,7 @@ pinned upstream commit 0cb0e0d
 | T-LOAD | Load/soak | 控制面、read/write、热点 Shared、环境级Shared reset/checkpoint批次、429、DB/KMS latency、滚动 | 可重复脚本和当前环境容量/RTO基线；batch/lock时间有界且不饿死业务pool |
 | T-REAL | Real Provider E2E | 真实鉴权、refresh、Action、撤销、同/异账号重连、审计 | Provider 侧实际结果 + 全链路记录 |
 
-Provider idempotency contract另建立跨层共同golden，不允许四套fixture各自解释“兼容”：T-UNIT逐字段canonicalize `ProviderIdempotencyContractV1`并验证唯一checksum/predicate；T-ADAPTER在Production/Fake都真实验证HEADER/JSON_BODY placement、大小写/JSON Pointer、同key同request、同key异request、retention和response-loss；T-PG逐字段置换ProviderRelease registry、ActionVersion引用、Effect冻结tuple和current overlay support checksum/evidence/expiry并要求commit或submission fail closed；T-EFFECT用相同golden证明exact checksum继续支持才复用原key，任一字段或支持证据变化都在successor创建/提交边界进入incompatible分支且Provider request为零。
+Provider idempotency contract另建立跨层共同golden，不允许四套fixture各自解释“兼容”：T-UNIT逐字段canonicalize `ProviderIdempotencyContractV1`并验证唯一checksum/predicate；T-ADAPTER在Production/Fake都真实验证HEADER/JSON_BODY placement、大小写/JSON Pointer、同key同request、同key异request、retention和response-loss；T-PG先固定合法表示矩阵`READ_ONLY -> null | NATIVE_EXACT_KEY`、`IDEMPOTENT_WRITE -> NATIVE_EXACT_KEY`、`NON_IDEMPOTENT_WRITE -> null`，拒绝`NONE` registry entry、sentinel ID和ActionVersion/Effect五列partial，再逐字段置换ProviderRelease registry、ActionVersion引用、Effect冻结tuple和current overlay support checksum/evidence/expiry并要求commit或submission fail closed；T-EFFECT用相同golden证明exact checksum继续支持才复用原key，任一字段或支持证据变化都在successor创建/提交边界进入incompatible分支且Provider request为零。
 
 Cancel契约测试固定三组exact `callState`：`CANCELLED_NO_MUTATION` disposition只允许同名终态；`ALREADY_TERMINAL`只允许`DENIED | EXPIRED_BEFORE_AUTH | DENIED_LOCAL | CANCELLED_NO_MUTATION | SUCCEEDED | FAILED_DEFINITE`；`CANCEL_REQUESTED`只允许`DISPATCHING | UNCERTAIN | RECONCILING`。另用多read-effect和read-before-write fixture证明：第一次read submission后Call保持`DISPATCHING`，取消可以在所有mutating Effect零submission且read已收敛时返回`CANCELLED_NO_MUTATION`；任何mutating request可能开始后都不能返回该200 variant。
 
@@ -7901,7 +7896,7 @@ DoD：Agent 不能提交主体/Connection；企微群按 sender；自定义 WebU
 
 交付：ActionCall/typed owned Payload+object lifecycle/Attempt/LogicalEffect/EffectDispatch、EffectReconcileAttempt、idempotency、deadline、`first_submission_started_at`单调门禁、`CANCELLED_NO_MUTATION`零写效果证明与immutable `cancel_action_call_result`、result validation/persist、只读reconciliation，以及mutating Effect Ledger durability class、mutation generation/state与完整`CONTINUITY | PROVIDER_COVERAGE` evidence、Catalog mutating-set和future-write topology集成；消费WP9统一retry budget decision，并把ActionAttempt与EffectDispatch绑定同一decision。ResolutionProposal与second-person Resolution仅为`ONLY_IF_G04_APPROVED`条件交付：使用22.4 strict request/result、短事务原子terminal result及`NO_PUBLIC_IN_PROGRESS` exact replay，不进入当前WP8 active scope。
 
-DoD：Provider前持久化；锁/fence顺序固定；跨Call/type payload、INLINE/OBJECT both/neither、并发双写和对象stage/final约束通过；ActionAttempt/Dispatch/Reconcile的nullable初始pointer、唯一predecessor/successor、current最大sequence、冻结policy/max、`N-1/N/N+1`、budget unavailable、Action pair同decision、decision category/effectEvidence checksum、winner/stale loser和半完成事务直接PG/并发/crash用例通过；Cancel same-key exact status/content-type/body replay、different-key fresh observation、同key异hash409及claim/Call/result/audit/outbox原子crash矩阵通过；terminal/UNCERTAIN同toolCall重放固定原Call且零新Effect/Dispatch/Hop/Admission/Provider请求。LogicalEffect binding conflict必须覆盖零mutating、`SUBMITTED`、零发送`RETRY_PENDING`的PROVED_NOT_APPLIED/read与mutating unknown、`UNCERTAIN/RECONCILING`、`CONFIRMED/SUCCEEDED`事实优先级；Provider key三列all-or-none/write-once且compatible drift逐字节复用。Incompatible drift在successor前必须`RETRY_FORBIDDEN + 零budget/零successor/零出站`；successor已提交且零发送时，PROVED_NOT_APPLIED/read必须确定四层+audit/outbox原子终结，mutating unknown必须Dispatch `FAILED_BEFORE_SUBMIT`与Attempt/Effect/Call `UNCERTAIN`+audit/outbox原子终结并保留predecessor，任一半事务或unknown降级直接PG/并发/crash拒绝；可能发送后只保留真实`SUBMITTED/UNCERTAIN`。每个可枚举crash点确定或UNCERTAIN，非幂等效果不重复；缺任一typed evidence字段、完整风险窗口、exact Catalog set或未来写RPO=0 topology时mutating全链路保持MUTATION_RECOVERY_BLOCKED，自动对账独立owner且不重放mutation。仅`ONLY_IF_G04_APPROVED` suite增加proposal/resolution direct-PG约束、maker-checker同人/篡改/过期/stale/双批准/response-loss和每个claim/insert/CAS/audit/outbox边界；same-key/hash必须回放原201/200 status/content-type/body/ETag，异hash 409且零第二transition，IAM/capability/step-up失败不得留下durable claim。当前active migration、route、carrier、edge和fixture均无Resolution能力。
+DoD：Provider前持久化；锁/fence顺序固定；跨Call/type payload、INLINE/OBJECT both/neither、并发双写和对象stage/final约束通过；ActionAttempt/Dispatch/Reconcile的nullable初始pointer、唯一predecessor/successor、current最大sequence、冻结policy/max、`N-1/N/N+1`、budget unavailable、Action pair同decision、decision category/effectEvidence checksum、winner/stale loser和半完成事务直接PG/并发/crash用例通过；Cancel same-key exact status/content-type/body replay、different-key fresh observation、同key异hash409及claim/Call/result/audit/outbox原子crash矩阵通过；terminal/UNCERTAIN同toolCall重放固定原Call且零新Effect/Dispatch/Hop/Admission/Provider请求。LogicalEffect binding conflict必须覆盖零mutating、`SUBMITTED`、零发送`RETRY_PENDING`的PROVED_NOT_APPLIED/read与mutating unknown、`UNCERTAIN/RECONCILING`、`CONFIRMED/SUCCEEDED`事实优先级；合同引用与Provider key五列按nullable/native矩阵all-null或all-non-null、write-once，且compatible drift逐字节复用原key。Incompatible drift在successor前必须`RETRY_FORBIDDEN + 零budget/零successor/零出站`；successor已提交且零发送时，PROVED_NOT_APPLIED/read必须确定四层+audit/outbox原子终结，mutating unknown必须Dispatch `FAILED_BEFORE_SUBMIT`与Attempt/Effect/Call `UNCERTAIN`+audit/outbox原子终结并保留predecessor，任一半事务或unknown降级直接PG/并发/crash拒绝；可能发送后只保留真实`SUBMITTED/UNCERTAIN`。每个可枚举crash点确定或UNCERTAIN，非幂等效果不重复；缺任一typed evidence字段、完整风险窗口、exact Catalog set或未来写RPO=0 topology时mutating全链路保持MUTATION_RECOVERY_BLOCKED，自动对账独立owner且不重放mutation。仅`ONLY_IF_G04_APPROVED` suite增加proposal/resolution direct-PG约束、maker-checker同人/篡改/过期/stale/双批准/response-loss和每个claim/insert/CAS/audit/outbox边界；same-key/hash必须回放原201/200 status/content-type/body/ETag，异hash 409且零第二transition，IAM/capability/step-up失败不得留下durable claim。当前active migration、route、carrier、edge和fixture均无Resolution能力。
 
 #### WP9：Provider Egress、错误与配额
 
