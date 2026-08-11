@@ -67,10 +67,18 @@ function hasSingleFixedClaudeArgument(args, option, value) {
   if (typeof args !== "string") {
     return false;
   }
+  const escapeRegExp = (input) => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const optionPattern = `(?:^|\\s)${escapeRegExp(option)}`;
   const optionOccurrences = args.match(
-    new RegExp(`(?:^|\\s)${option}(?=\\s|=|$)`, "g"),
+    new RegExp(`${optionPattern}(?=\\s|=|$)`, "g"),
   ) ?? [];
-  return optionOccurrences.length === 1 && args.includes(`${option} "${value}"`);
+  const fixedOccurrences = args.match(
+    new RegExp(
+      `${optionPattern}\\s+"${escapeRegExp(value)}"(?=\\s|$)`,
+      "g",
+    ),
+  ) ?? [];
+  return optionOccurrences.length === 1 && fixedOccurrences.length === 1;
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {

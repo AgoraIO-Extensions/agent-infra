@@ -229,12 +229,26 @@ test("rejects a PR Review effort Secret in place of the repository Variable", as
 });
 
 test("rejects duplicate PR Review model configuration arguments", async () => {
-  for (const duplicate of ["--model unapproved", "--effort=max"]) {
+  const mutations = [
+    (args) => `${args}\n--model unapproved`,
+    (args) => `${args}\n--effort=max`,
+    (args) =>
+      args.replace(
+        '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        '--model unapproved\nx--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+      ),
+    (args) =>
+      args.replace(
+        '--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+        '--effort max\nx--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+      ),
+  ];
+  for (const mutate of mutations) {
     const workflows = await actualWorkflows();
     const action = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
       (step) => step.id === "claude",
     );
-    action.with.claude_args = `${action.with.claude_args}\n${duplicate}`;
+    action.with.claude_args = mutate(action.with.claude_args);
 
     assert.ok(
       validateWorkflowDocuments(workflows).some((error) =>
@@ -1093,11 +1107,25 @@ test("rejects an Issue Review effort Secret in place of the repository Variable"
 });
 
 test("rejects duplicate Issue Review model configuration arguments", async () => {
-  for (const duplicate of ["--model=unapproved", "--effort max"]) {
+  const mutations = [
+    (args) => `${args}\n--model=unapproved`,
+    (args) => `${args}\n--effort max`,
+    (args) =>
+      args.replace(
+        '--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+        '--model unapproved\nx--model "${{ secrets.CLAUDE_REVIEW_MODEL }}"',
+      ),
+    (args) =>
+      args.replace(
+        '--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+        '--effort max\nx--effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"',
+      ),
+  ];
+  for (const mutate of mutations) {
     const workflows = await actualWorkflows();
     const job = workflows["claude-issue-review.yml"].jobs.mentions;
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
-    action.with.claude_args = `${action.with.claude_args}\n${duplicate}`;
+    action.with.claude_args = mutate(action.with.claude_args);
 
     assert.ok(
       validateWorkflowDocuments(workflows).some((error) =>
