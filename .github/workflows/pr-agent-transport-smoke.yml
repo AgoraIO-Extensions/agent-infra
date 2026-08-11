@@ -68,6 +68,7 @@ jobs:
               settings.set("CONFIG.USE_REPO_SETTINGS_FILE", False)
               settings.set("CONFIG.USE_WIKI_SETTINGS_FILE", False)
               settings.set("CONFIG.FALLBACK_MODELS", [])
+              settings.set("CONFIG.CUSTOM_MODEL_MAX_TOKENS", 128000)
               settings.set("CONFIG.PROPAGATE_TOOL_ERRORS", True)
               settings.set("CONFIG.LOG_LEVEL", "ERROR")
               settings.set("PR_REVIEWER.NUM_MAX_FINDINGS", 10)
