@@ -1,5 +1,7 @@
 # Pull Request
 
+<!-- 先完成 primary Issue 中约定的实现和自检，再创建 PR；不得事后补建 Issue。 -->
+
 Closes #
 
 ## 变更摘要

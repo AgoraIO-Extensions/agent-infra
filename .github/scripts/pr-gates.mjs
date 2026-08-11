@@ -13,7 +13,7 @@ export function extractPrimaryIssueNumbers(body = "") {
   return [...withoutFences.matchAll(CLOSE_KEYWORD)].map((match) => Number(match[1]));
 }
 
-export function evaluateIssueGate({ issueNumbers, issue }) {
+export function evaluateIssueGate({ issueNumbers, issue, pullRequestCreatedAt }) {
   if (issueNumbers.length !== 1) {
     return {
       ok: false,
@@ -34,7 +34,17 @@ export function evaluateIssueGate({ issueNumbers, issue }) {
   if (labelNames(issue.labels).includes("wontfix")) {
     return { ok: false, description: `Primary Issue #${number} is marked wontfix` };
   }
-  return { ok: true, description: `Primary Issue #${number} is open` };
+
+  const issueCreatedAt = Date.parse(issue.created_at);
+  const prCreatedAt = Date.parse(pullRequestCreatedAt);
+  if (
+    !Number.isFinite(issueCreatedAt) ||
+    !Number.isFinite(prCreatedAt) ||
+    issueCreatedAt >= prCreatedAt
+  ) {
+    return { ok: false, description: `Primary Issue #${number} must predate this PR` };
+  }
+  return { ok: true, description: `Primary Issue #${number} predates this PR and is open` };
 }
 
 export function evaluateHumanValidationGate(labels) {
@@ -143,7 +153,11 @@ async function evaluatePullRequest(repository, number, action) {
       ? await githubRequest(`/repos/${repository}/issues/${issueNumbers[0]}`)
       : undefined;
   const targetUrl = pr.html_url;
-  const issueResult = evaluateIssueGate({ issueNumbers, issue });
+  const issueResult = evaluateIssueGate({
+    issueNumbers,
+    issue,
+    pullRequestCreatedAt: pr.created_at,
+  });
   const humanResult = evaluateHumanValidationGate(labels);
 
   await Promise.all([

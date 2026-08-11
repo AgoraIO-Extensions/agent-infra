@@ -10,7 +10,8 @@
 
 ## 2. 基本原则
 
-- 所有开发工作从 GitHub Issue 开始，并通过一个主要 Issue、一个实现 PR 完成追踪。
+- 所有开发工作严格按 `Issue -> 实现与验证 -> PR` 执行，并通过一个主要 Issue、一个实现 PR
+  完成追踪。不得先实现、先提交代码或先建占位 PR，再补建 Issue。
 - AI 负责需求梳理、实现、自检和独立评审；人负责确认需求、必要的真实测试和最终批准。
 - GitHub Issue、PR、Check、Review 和分支保护是流程状态的权威来源。
 - 确定性检查优先于模型判断。AI 不能覆盖 CI、人工批准或分支保护结果。
@@ -51,7 +52,7 @@
 ### 4.3 GitHub Actions 中的 Codex
 
 - 领取符合条件的 `ready-for-agent` Issue。
-- 在独立分支完成实现、自检和 Draft PR 更新。
+- 在独立分支完成实现和自检，提交并推送代码后再创建 PR。
 - 按授权触发修复，不批准或绕过自己的 PR。
 - 通过结构化输出向可信发布 job 提供变更摘要和验证结果。
 
@@ -97,6 +98,9 @@ Agent Brief、`to-spec` 和 `to-tickets` 能力，不重复建设同类流程。
 - 已知依赖和阻塞关系。
 - 预期验证方式。
 
+上述内容未明确前，不得创建任务分支、修改文件或提交代码。Issue 必须先于实现存在；PR
+必须等到实现、自检、提交和推送完成后创建。
+
 ### 5.3 实现标签
 
 | 标签 | 用于 Issue 时的含义 |
@@ -117,7 +121,7 @@ Codex 只领取同时满足以下条件的 Issue：
 - Issue 处于打开状态并带有 `ready-for-agent`。
 - 不带 `ready-for-human` 或 `wontfix`。
 - 所有明确声明的 blocker 已关闭。
-- 当前不存在该 Issue 的其他活动执行、活动分支或活动 Draft PR。
+- 当前不存在该 Issue 的其他活动执行、活动分支或活动 PR。
 
 满足这些条件的 Issue 称为 frontier Issue。多个互不阻塞的 frontier Issue 可以并行执行。
 
@@ -127,13 +131,14 @@ Codex 只领取同时满足以下条件的 Issue：
 
 - 使用官方 [`openai/codex-action`](https://github.com/openai/codex-action)。
 - 直接调用项目级 `implement` Skill，不额外包装一套重复的实现方法。
-- 每个 Issue 同一时间只有一个活动 branch、一个 Actions run 和一个 Draft PR。
-- Codex 开始工作后立即创建或复用该 Issue 的 Draft PR。
-- 实现和自检完成后，Codex 更新 PR 内容并将 Draft PR 标记为 Ready for review。
+- 每个 Issue 同一时间只有一个活动 branch、一个 Actions run；实现完成后最多有一个活动 PR。
+- Codex 开始工作前再次确认 Issue 已明确 5.2 的内容，然后创建或复用独立分支完成实现、
+  自检、commit 和 push。这一阶段不创建占位或 Draft PR。
+- 实现和自检完成后，可信发布 job 创建非 Draft PR，并写入 6.3 规定的完整正文。
 
-移除 `ready-for-agent` 会取消当前运行，但保留 branch 和 Draft PR。重新添加后继续使用原 PR。
-Issue 被关闭或添加 `wontfix` 后，自动关闭未合并的 Draft PR。PR 未合并而被关闭后，来源
-Issue 进入 `needs-triage`。
+移除 `ready-for-agent` 会取消当前运行并保留 branch；PR 已存在时也保留该 PR。重新添加后
+从已有 branch 或 PR 继续。Issue 被关闭或添加 `wontfix` 后，自动关闭未合并的 PR。PR 未
+合并而被关闭后，来源 Issue 进入 `needs-triage`。
 
 ### 6.2 执行环境与权限
 
@@ -171,6 +176,9 @@ Issue Gate 是 required check，并在每个 PR head 上校验：
 
 - PR 只关联一个 primary Issue。
 - primary Issue 存在、仍处于打开状态且不带 `wontfix`。
+- primary Issue 的 GitHub `created_at` 严格早于 PR 的 `created_at`，禁止在 PR 创建后补建
+  Issue。Git commit 时间受 rebase、cherry-pick 和本地时钟影响，不作为此 Gate 的依据；
+  “Issue 先于实现”的流程责任由 5.2、6.1 和人工 Review 共同约束。
 - Codex 创建的 PR 对应的 Issue 仍带有 `ready-for-agent`。
 
 校验失败时阻止合并，不由模型解释或覆盖。
@@ -270,7 +278,7 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 ### Stage 2：Codex Worker
 
 - 以 `ready-for-agent` 驱动 Codex Worker。
-- 实现 frontier Issue 选择、单活动执行、Draft PR 和暂停恢复。
+- 实现 frontier Issue 选择、单活动执行、实现完成后创建 PR 和暂停恢复。
 - 接入项目级 `implement` Skill。
 - 使用结构化输出和可信发布 job 维护 branch、PR 正文与标签。
 
@@ -286,8 +294,11 @@ PR 作者可以是人、AI 或 Bot。workflow 只 checkout 默认分支，不读
 
 - 新的成员 Issue 自动收到 Claude 建议；外部用户 Issue 只有成员添加 `claude` 后调用模型。
 - 未经人确认的 Issue 不能被无人值守流程标记为 `ready-for-agent`。
+- 所有工作在创建任务分支、修改文件和提交代码前已有内容明确的 primary Issue；实现、自检、
+  commit 和 push 完成后才创建 PR，不创建占位 Draft PR。
 - Codex 只领取无未关闭 blocker 的 frontier Issue，同一 Issue 不产生并发执行或多个活动 PR。
-- 每个 PR 只有一个有效且打开的 primary Issue，关系异常时 Issue Gate 阻止合并。
+- 每个 PR 只有一个有效且打开、创建时间严格早于 PR 的 primary Issue，关系异常时 Issue Gate
+  阻止合并。
 - Claude 只 Review CI 通过的当前 PR head，`P0`、`P1` 阻塞合并，`P2` 不阻塞。
 - 需要人工验证的 PR 在标签被人移除前不能合并；新增 commit 后标签重新出现。
 - 人工 Approve 和人工验证是两个独立门禁，任何标签操作都不能跳过 required checks。
