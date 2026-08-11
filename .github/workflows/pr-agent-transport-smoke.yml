@@ -1,0 +1,69 @@
+name: PR-Agent Transport Smoke
+
+on:
+  push:
+    branches: [test/pr-agent-post-merge-smoke]
+
+permissions: {}
+
+jobs:
+  probe:
+    name: Compare LiteLLM transports
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Compare sync and async transports
+        env:
+          PR_AGENT_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          PR_AGENT_API_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          PR_AGENT_MODEL: ${{ secrets.PR_AGENT_MODEL }}
+        run: |
+          docker run --rm \
+            -e PR_AGENT_API_BASE \
+            -e PR_AGENT_API_KEY \
+            -e PR_AGENT_MODEL \
+            --entrypoint python \
+            pragent/pr-agent:github_action \
+            -c 'import asyncio
+          import os
+          import litellm
+          from litellm import acompletion, completion
+
+          kwargs = {
+              "model": os.environ["PR_AGENT_MODEL"],
+              "api_base": os.environ["PR_AGENT_API_BASE"],
+              "api_key": os.environ["PR_AGENT_API_KEY"],
+              "messages": [{"role": "user", "content": "Reply with OK."}],
+              "reasoning_effort": "medium",
+              "allowed_openai_params": ["reasoning_effort"],
+              "timeout": 45,
+          }
+
+          def result(name, value=None, error=None):
+              if error is None:
+                  print(f"{name}=success choices={len(value.choices or [])}")
+                  return
+              chain = []
+              seen = set()
+              while error is not None and id(error) not in seen:
+                  seen.add(id(error))
+                  chain.append(type(error).__module__ + "." + type(error).__name__)
+                  error = error.__cause__ or error.__context__
+              print(f"{name}=failure exception_chain=" + " -> ".join(chain))
+
+          async def probe_async(name):
+              try:
+                  result(name, value=await acompletion(**kwargs))
+              except BaseException as error:
+                  result(name, error=error)
+
+          async def main():
+              await probe_async("async_default")
+              try:
+                  result("sync", value=completion(**kwargs))
+              except BaseException as error:
+                  result("sync", error=error)
+              litellm.disable_aiohttp_transport = True
+              await probe_async("async_httpx")
+
+          asyncio.run(main())' 2>/dev/null
