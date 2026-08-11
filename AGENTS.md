@@ -119,6 +119,9 @@ git diff --check
 
 ## Git And Review
 
+- 所有可能产生 PR 的工作必须按 `Issue -> 实现与验证 -> PR` 顺序执行。创建任务分支、修改文件或提交代码前，先创建或确认唯一的 open primary Issue，并按 Implementation 模板写明 Problem、Scope、稳定 `AC-N`、Validation 和 Blocked by。
+- Issue 未创建或契约未明确时停止实现；不得在完成实现后补建 Issue，也不得用占位 PR 代替 Issue。
+- 实现与自检完成后才创建 PR。PR 正文必须且只能包含一个 `Closes #<primary-issue>`，完整规则以开发工作流 Spec 为准。
 - 保持改动范围与当前任务一致，不顺手恢复本地历史材料或重构无关文档。
 - 提交前检查 `git status`、完整 diff 和上述验证命令。
 - Commit 使用简洁的 Conventional Commit，例如 `docs: refine M1 architecture`。
