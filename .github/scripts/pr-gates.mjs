@@ -318,7 +318,8 @@ export function evaluateClaudeReviewGate({
     };
   }
   const reviewSucceededBeforeThreadState =
-    (review.conclusion === "success" && review.reasonCode === "success") ||
+    (review.conclusion === "success" &&
+      ["success", "disabled"].includes(review.reasonCode)) ||
     (review.conclusion === "failure" &&
       ["blocking_finding", "unresolved_thread"].includes(review.reasonCode));
   if (reviewSucceededBeforeThreadState) {
@@ -373,7 +374,7 @@ export function buildReviewState({
     prNumber,
   });
   const reasonCode = check?.output?.summary?.match(
-    /(?:^|\n)reason_code: (success|infrastructure_failure|invalid_output|waived_infrastructure_failure|blocking_finding|unresolved_thread)(?:\n|$)/,
+    /(?:^|\n)reason_code: (success|disabled|infrastructure_failure|invalid_output|waived_infrastructure_failure|blocking_finding|unresolved_thread)(?:\n|$)/,
   )?.[1];
   const marker = `<!-- agent-infra-claude-review:${currentHead}:`;
   const blockingFindingCountText = check?.output?.summary?.match(
