@@ -76,8 +76,22 @@ jobs:
               os.environ["config.model"] = os.environ["PR_AGENT_MODEL"]
               os.environ["config.log_level"] = "ERROR"
               from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+              from pr_agent.config_loader import get_settings
+              handler = LiteLLMAIHandler()
+              print(
+                  "settings_key_match="
+                  + str(get_settings().get("OPENAI.KEY") == os.environ["PR_AGENT_API_KEY"]).lower()
+                  + " settings_base_match="
+                  + str(get_settings().get("OPENAI.API_BASE") == os.environ["PR_AGENT_API_BASE"]).lower()
+              )
+              print(
+                  "handler_key_match="
+                  + str(litellm.openai_key == os.environ["PR_AGENT_API_KEY"]).lower()
+                  + " handler_base_match="
+                  + str(handler.api_base == os.environ["PR_AGENT_API_BASE"]).lower()
+              )
               try:
-                  response = await LiteLLMAIHandler().chat_completion(
+                  response = await handler.chat_completion(
                       model=os.environ["PR_AGENT_MODEL"],
                       system="Review code. " + "A" * 24_000,
                       user="Return OK. " + "B" * 4_000,
