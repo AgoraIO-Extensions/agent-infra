@@ -71,5 +71,20 @@ jobs:
                   {"role": "user", "content": "Return OK. " + "B" * 4_000},
               ]
               await probe_async("async_large")
+              os.environ["OPENAI_KEY"] = os.environ["PR_AGENT_API_KEY"]
+              os.environ["OPENAI__API_BASE"] = os.environ["PR_AGENT_API_BASE"]
+              os.environ["config.model"] = os.environ["PR_AGENT_MODEL"]
+              os.environ["config.log_level"] = "ERROR"
+              from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+              try:
+                  response = await LiteLLMAIHandler().chat_completion(
+                      model=os.environ["PR_AGENT_MODEL"],
+                      system="Review code. " + "A" * 24_000,
+                      user="Return OK. " + "B" * 4_000,
+                      temperature=0.2,
+                  )
+                  print(f"actual_handler=success content_type={type(response[0]).__name__}")
+              except BaseException as error:
+                  result("actual_handler", error=error)
 
           asyncio.run(main())' 2>/dev/null
