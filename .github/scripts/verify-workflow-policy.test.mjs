@@ -355,7 +355,7 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
   assert.deepEqual(workflow.jobs.publish.permissions, {
     contents: "read",
     issues: "write",
-    "pull-requests": "read",
+    "pull-requests": "write",
   });
   assert.equal(publish.run, "node .github/scripts/pr-agent-review.mjs publish");
   assert.equal(
@@ -372,6 +372,21 @@ test("isolates pinned PR-Agent analysis from validated publication", async () =>
 
   action.env["config.publish_output"] = "false";
   action.env["config.propagate_tool_errors"] = "false";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+
+  action.env["config.propagate_tool_errors"] = "true";
+  workflow.jobs.publish.permissions["pull-requests"] = "read";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("isolate the pinned analysis"),
+    ),
+  );
+
+  delete workflow.jobs.publish.permissions["pull-requests"];
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("isolate the pinned analysis"),
