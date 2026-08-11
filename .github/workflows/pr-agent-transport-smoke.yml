@@ -133,3 +133,54 @@ jobs:
                   print("run_action=failure exception_chain=" + exception_chain(error))
 
           asyncio.run(main())' 2>/dev/null
+
+      - name: Run the unmodified Action entrypoint
+        env:
+          PROBE_GITHUB_TOKEN: ${{ github.token }}
+          PR_AGENT_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          PR_AGENT_API_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          PR_AGENT_MODEL: ${{ secrets.PR_AGENT_MODEL }}
+        run: |
+          trap 'rm -f action.env' EXIT
+          chmod 600 event.json
+          {
+            printf 'GITHUB_TOKEN=%s\n' "$PROBE_GITHUB_TOKEN"
+            printf 'OPENAI_KEY=%s\n' "$PR_AGENT_API_KEY"
+            printf 'OPENAI__API_BASE=%s\n' "$PR_AGENT_API_BASE"
+            printf 'config.model=%s\n' "$PR_AGENT_MODEL"
+          } > action.env
+          chmod 600 action.env
+
+          set +e
+          docker run --rm \
+            -v "$PWD/event.json:/tmp/event.json:ro" \
+            --env-file action.env \
+            -e GITHUB_EVENT_NAME=pull_request_target \
+            -e GITHUB_EVENT_PATH=/tmp/event.json \
+            -e GITHUB_OUTPUT=/tmp/github-output \
+            -e 'config.publish_output=false' \
+            -e 'config.publish_output_progress=false' \
+            -e 'config.use_repo_settings_file=false' \
+            -e 'config.use_wiki_settings_file=false' \
+            -e 'config.fallback_models=[]' \
+            -e 'config.custom_model_max_tokens=128000' \
+            -e 'config.propagate_tool_errors=true' \
+            -e 'config.log_level=ERROR' \
+            -e 'pr_reviewer.num_max_findings=10' \
+            -e 'pr_reviewer.require_can_be_split_review=false' \
+            -e 'pr_reviewer.require_estimate_contribution_time_cost=false' \
+            -e 'pr_reviewer.require_estimate_effort_to_review=false' \
+            -e 'pr_reviewer.require_score_review=false' \
+            -e 'pr_reviewer.require_security_review=false' \
+            -e 'pr_reviewer.require_tests_review=false' \
+            -e 'pr_reviewer.require_ticket_analysis_review=false' \
+            -e 'pr_reviewer.require_todo_scan=false' \
+            -e 'github_action_config.auto_review=true' \
+            -e 'github_action_config.auto_describe=false' \
+            -e 'github_action_config.auto_improve=false' \
+            -e 'github_action_config.enable_output=true' \
+            -e 'github_action_config.pr_actions=["opened","reopened","synchronize","ready_for_review","review_requested"]' \
+            pragent/pr-agent:github_action 2>/dev/null
+          status=$?
+          set -e
+          echo "exact_action_exit=$status"
