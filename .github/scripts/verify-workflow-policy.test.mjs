@@ -170,6 +170,20 @@ test("rejects untrusted workflow Summary sources", async () => {
   }
 });
 
+test("fails closed when the trusted workflow Summary window is missing", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "export function renderJobSummary",
+    "export function renamedJobSummary",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("trusted Summary sources"),
+    ),
+  );
+});
+
 test("requires the serialized Blocker Reconciler workflow", async () => {
   const workflows = await actualWorkflows();
   const reconciler = workflows["blocker-reconciler.yml"];

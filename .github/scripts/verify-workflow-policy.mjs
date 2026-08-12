@@ -588,10 +588,13 @@ export function validateTrustedScriptSources(sources) {
     "Workflow outcome Check Run pagination limit exceeded",
     "WECOM_BOT_WEBHOOK_URL",
   ];
-  const summarySource = outcomeSource.slice(
-    outcomeSource.indexOf("export function renderJobSummary"),
-    outcomeSource.indexOf("function wait(milliseconds)"),
-  );
+  const summaryStart = outcomeSource.indexOf("export function renderJobSummary");
+  const summaryEnd = outcomeSource.indexOf("function wait(milliseconds)");
+  const hasTrustedSummaryWindow =
+    summaryStart >= 0 && summaryEnd > summaryStart;
+  const summarySource = hasTrustedSummaryWindow
+    ? outcomeSource.slice(summaryStart, summaryEnd)
+    : "";
   if (
     outcomeRequirements.some(
       (requirement) => !outcomeSource.includes(requirement),
@@ -603,6 +606,7 @@ export function validateTrustedScriptSources(sources) {
     );
   }
   if (
+    !hasTrustedSummaryWindow ||
     /\b(?:sourceRun|issue|comment|head_commit)\.(?:title|body|message)\b|\bmodel_output\b/.test(
       summarySource,
     )
