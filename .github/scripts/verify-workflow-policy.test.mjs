@@ -259,14 +259,14 @@ test("rejects duplicate PR Review model configuration arguments", async () => {
 
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
-    (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
+    (args) => args.replace("Read,Grep,Glob", "Read,Grep"),
     (args) => `${args}\n--allowedTools "Bash"`,
     (args) => `${args}\n--allowedTools="Bash"`,
     (args) => `${args}\n--allowed-tools=Bash`,
     (args) => `${args}\n--disallowedTools=""`,
     (args) => `${args}\n--disallowed-tools=`,
     (args) => args.replace(
-      '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+      '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       "",
     ),
   ];
@@ -342,9 +342,13 @@ test("cancels stale Claude Review runs by PR while reviewing every successful CI
 
 test("binds Claude Review analysis and publication to the completed CI head", async () => {
   const workflows = await actualWorkflows();
+  const stage = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
   const publish = workflows["claude-pr-review.yml"].jobs.publish.steps.find(
     (step) => step.name === "Publish validated Review result",
   );
+  stage.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
   publish.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
 
   assert.ok(
@@ -389,7 +393,12 @@ test("rejects floating third-party Action references", async () => {
 test("uses pinned PR-Agent official inline publishing", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["pr-agent-review.yml"];
-  const action = workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent");
+  const reviewAction = workflow.jobs.analyze.steps.find(
+    (step) => step.id === "pr-agent",
+  );
+  const suggestionsAction = workflow.jobs.suggestions.steps.find(
+    (step) => step.id === "pr-agent-suggestions",
+  );
 
   assert.deepEqual(workflow.on.pull_request_target.types, [
     "opened",
@@ -403,62 +412,90 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     issues: "write",
     "pull-requests": "write",
   });
+  assert.deepEqual(workflow.jobs.suggestions.permissions, {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  });
   assert.match(
     workflow.jobs.analyze.if,
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
   );
+  assert.equal(suggestionsAction["continue-on-error"], true);
   assert.equal(
-    action.uses,
+    reviewAction.uses,
     "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
   );
-  assert.equal(action.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
+  assert.equal(suggestionsAction.uses, reviewAction.uses);
+  assert.equal(reviewAction.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
   assert.equal(
-    action.env.OPENAI__API_BASE,
+    reviewAction.env.OPENAI__API_BASE,
     "${{ secrets.PR_AGENT_API_BASE }}",
   );
-  assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
-  assert.equal(action.env["config.propagate_tool_errors"], "true");
-  assert.equal(action.env["config.publish_output"], "true");
-  assert.equal(action.env["config.restricted_mode"], "true");
+  assert.equal(reviewAction.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
+  assert.equal(reviewAction.env["config.propagate_tool_errors"], "true");
+  assert.equal(reviewAction.env["config.publish_output"], "true");
+  assert.equal(reviewAction.env["config.restricted_mode"], "true");
   assert.equal(
-    action.env["pr_code_suggestions.commitable_code_suggestions"],
+    suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"],
     "true",
   );
-  assert.equal(action.env["github_action_config.auto_improve"], "true");
+  assert.equal(reviewAction.env["github_action_config.auto_review"], "true");
+  assert.equal(reviewAction.env["github_action_config.auto_improve"], "false");
+  assert.equal(suggestionsAction.env["github_action_config.auto_review"], "false");
+  assert.equal(suggestionsAction.env["github_action_config.auto_improve"], "true");
 
-  action.env["config.publish_output"] = "false";
+  reviewAction.env["config.publish_output"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["config.publish_output"] = "true";
-  action.env["config.propagate_tool_errors"] = "false";
+  reviewAction.env["config.publish_output"] = "true";
+  reviewAction.env["config.propagate_tool_errors"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["config.propagate_tool_errors"] = "true";
-  action.env["pr_code_suggestions.commitable_code_suggestions"] = "false";
+  reviewAction.env["config.propagate_tool_errors"] = "true";
+  suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"] =
+    "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["pr_code_suggestions.commitable_code_suggestions"] = "true";
-  action.env["github_action_config.auto_improve"] = "false";
+  suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"] =
+    "true";
+  suggestionsAction.env["github_action_config.auto_improve"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["github_action_config.auto_improve"] = "true";
+  suggestionsAction.env["github_action_config.auto_improve"] = "true";
   workflow.jobs.analyze.permissions["pull-requests"] = "read";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+
+  workflow.jobs.analyze.permissions["pull-requests"] = "write";
+  suggestionsAction["continue-on-error"] = false;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+
+  suggestionsAction["continue-on-error"] = true;
+  suggestionsAction.env["github_action_config.auto_review"] = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
