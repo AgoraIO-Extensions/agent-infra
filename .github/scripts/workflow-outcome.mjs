@@ -12,7 +12,7 @@ const TRUSTED_OPERATIONS = new Set([
   "claude-issue-review",
   "claude-pr-review",
   "codex-worker",
-  "docs-ci",
+  "ci",
   "pr-agent-review",
   "pr-gates",
   "workflow-outcome",
@@ -24,7 +24,7 @@ const WORKFLOW_OPERATIONS = new Map([
   ["Claude Issue Review", "claude-issue-review"],
   ["Claude PR Review", "claude-pr-review"],
   ["Codex Worker", "codex-worker"],
-  ["Docs CI", "docs-ci"],
+  ["CI", "ci"],
   ["PR-Agent Review", "pr-agent-review"],
   ["PR Gates", "pr-gates"],
 ]);
@@ -34,7 +34,7 @@ const WORKFLOW_NAMES_BY_PATH = new Map([
   [".github/workflows/claude-issue-review.yml", "Claude Issue Review"],
   [".github/workflows/claude-pr-review.yml", "Claude PR Review"],
   [".github/workflows/codex-worker.yml", "Codex Worker"],
-  [".github/workflows/docs-ci.yml", "Docs CI"],
+  [".github/workflows/ci.yml", "CI"],
   [".github/workflows/pr-agent-review.yml", "PR-Agent Review"],
   [".github/workflows/pr-gates.yml", "PR Gates"],
 ]);
@@ -174,7 +174,7 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
   }
   if (sourceRun.conclusion !== "success") {
     if (
-      sourceRun.workflowName === "Docs CI" &&
+      sourceRun.workflowName === "CI" &&
       parsedRunName.targetType === "pr" &&
       sourceRun.run_attempt === 1 &&
       context.ciRecoveryEligible
@@ -867,7 +867,7 @@ async function loadPullRequestContext({
     pullRequest,
     checkHeadSha: headSha,
     ciRecoveryEligible: Boolean(
-      sourceRun.workflowName === "Docs CI" &&
+      sourceRun.workflowName === "CI" &&
         /^codex\/issue-[1-9]\d*-cycle-[1-9]\d*$/.test(pullRequest.head?.ref ?? "") &&
         pullRequest.state === "open" &&
         !pullRequest.draft &&
@@ -1158,7 +1158,7 @@ export async function processWorkflowOutcome({
       workflowNotRun: true,
     };
   } else if (
-    sourceRun.workflowName === "Docs CI" &&
+    sourceRun.workflowName === "CI" &&
     parsedRunName.targetType === "main" &&
     POST_MERGE_FAILURE_CONCLUSIONS.has(sourceRun.conclusion)
   ) {

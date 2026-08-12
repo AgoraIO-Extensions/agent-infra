@@ -20,9 +20,9 @@ test("parses only fixed workflow run names into trusted targets", () => {
       targetType: "pr",
     },
   );
-  assert.deepEqual(parseSourceRunName("main | docs-ci | push"), {
+  assert.deepEqual(parseSourceRunName("main | ci | push"), {
     action: "push",
-    operation: "docs-ci",
+    operation: "ci",
     targetNumber: null,
     targetType: "main",
   });
@@ -34,8 +34,8 @@ test("parses only fixed workflow run names into trusted targets", () => {
   });
 
   for (const invalid of [
-    "PR #105: user-controlled title | docs-ci | pull_request",
-    "PR #105 | docs-ci | pull_request\nsecret",
+    "PR #105: user-controlled title | ci | pull_request",
+    "PR #105 | ci | pull_request\nsecret",
     "Issue #0 | codex-worker | labeled",
     "PR #105 | unknown operation | opened",
   ]) {
@@ -68,7 +68,7 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
     },
     workflow_run: sourceRun({
       id: 91,
-      name: "Docs CI",
+      name: "CI",
       display_title: displayTitle,
       event: "pull_request",
       head_sha: headSha,
@@ -78,7 +78,7 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
 
   await assert.rejects(
     processWorkflowOutcome({
-      event: eventFor("PR #999 | docs-ci | pull_request"),
+      event: eventFor("PR #999 | ci | pull_request"),
       token: "test-token",
       webhookUrl: "",
       request,
@@ -99,9 +99,9 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
   await assert.rejects(
     processWorkflowOutcome({
       event: {
-        ...eventFor("PR #115 | docs-ci | pull_request"),
+        ...eventFor("PR #115 | ci | pull_request"),
         workflow_run: {
-          ...eventFor("PR #115 | docs-ci | pull_request").workflow_run,
+          ...eventFor("PR #115 | ci | pull_request").workflow_run,
           path: ".github/workflows/untrusted.yml",
         },
       },
@@ -125,8 +125,8 @@ test("records an unbound fork PR source as a repository no-op", async () => {
       },
       workflow_run: sourceRun({
         id: 93,
-        name: "Docs CI",
-        display_title: "PR #999 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #999 | ci | pull_request",
         event: "pull_request",
         conclusion: "failure",
         pull_requests: [],
@@ -165,8 +165,8 @@ test("records a stale PR head as a non-notifying terminal outcome", async () => 
       },
       workflow_run: sourceRun({
         id: 92,
-        name: "Docs CI",
-        display_title: "PR #115 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #115 | ci | pull_request",
         event: "pull_request",
         head_sha: sourceHeadSha,
         pull_requests: [{ number: 115, head: { sha: sourceHeadSha } }],
@@ -207,8 +207,8 @@ test("ignores an unresolvable primary Issue in a PR body", async () => {
       },
       workflow_run: sourceRun({
         id: 94,
-        name: "Docs CI",
-        display_title: "PR #115 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #115 | ci | pull_request",
         event: "pull_request",
         head_sha: headSha,
         pull_requests: [{ number: 115, head: { sha: headSha } }],
@@ -313,7 +313,7 @@ function sourceRun(overrides = {}) {
     "Claude Issue Review": ".github/workflows/claude-issue-review.yml",
     "Claude PR Review": ".github/workflows/claude-pr-review.yml",
     "Codex Worker": ".github/workflows/codex-worker.yml",
-    "Docs CI": ".github/workflows/docs-ci.yml",
+    "CI": ".github/workflows/ci.yml",
     "PR-Agent Review": ".github/workflows/pr-agent-review.yml",
     "PR Gates": ".github/workflows/pr-gates.yml",
   };
@@ -403,8 +403,8 @@ test("notifies only actionable or final outcomes and ignores later audit state",
   assert.deepEqual(
     build(
       sourceRun({
-        name: "Docs CI",
-        display_title: "PR #105 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #105 | ci | pull_request",
         event: "pull_request",
         conclusion: "failure",
       }),
@@ -428,8 +428,8 @@ test("notifies only actionable or final outcomes and ignores later audit state",
   assert.deepEqual(
     build(
       sourceRun({
-        name: "Docs CI",
-        display_title: "PR #105 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #105 | ci | pull_request",
         event: "pull_request",
         conclusion: "failure",
       }),
@@ -445,8 +445,8 @@ test("notifies only actionable or final outcomes and ignores later audit state",
   assert.deepEqual(
     build(
       sourceRun({
-        name: "Docs CI",
-        display_title: "PR #105 | docs-ci | pull_request",
+        name: "CI",
+        display_title: "PR #105 | ci | pull_request",
         event: "pull_request",
         conclusion: "failure",
         run_attempt: 2,
@@ -548,7 +548,7 @@ test("notifies only actionable or final outcomes and ignores later audit state",
   }
 });
 
-test("suppresses first Docs CI failures only for current Worker PRs", async () => {
+test("suppresses first CI failures only for current Worker PRs", async () => {
   const headSha = "c".repeat(40);
   const observe = async (headRef) => {
     const checks = [];
@@ -598,8 +598,8 @@ test("suppresses first Docs CI failures only for current Worker PRs", async () =
         },
         workflow_run: sourceRun({
           id: 560,
-          name: "Docs CI",
-          display_title: "PR #105 | docs-ci | pull_request",
+          name: "CI",
+          display_title: "PR #105 | ci | pull_request",
           event: "pull_request",
           conclusion: "failure",
           head_sha: headSha,
@@ -939,8 +939,8 @@ test("idempotently reopens and triages the primary Issue after a main failure", 
   };
   const run = sourceRun({
     id: 400,
-    name: "Docs CI",
-    display_title: "main | docs-ci | push",
+    name: "CI",
+    display_title: "main | ci | push",
     event: "push",
     conclusion: "failure",
     head_sha: "c".repeat(40),
@@ -990,8 +990,8 @@ test("does not reopen an Issue for a cancelled or skipped main run", async () =>
       triagePostMergeFailure({
         repository: "AgoraIO-Extensions/agent-infra",
         sourceRun: sourceRun({
-          name: "Docs CI",
-          display_title: "main | docs-ci | push",
+          name: "CI",
+          display_title: "main | ci | push",
           event: "push",
           conclusion,
           head_branch: "main",
@@ -1019,8 +1019,8 @@ test("requires a failed push on the exact default branch for post-merge triage",
       triagePostMergeFailure({
         repository: "AgoraIO-Extensions/agent-infra",
         sourceRun: sourceRun({
-          name: "Docs CI",
-          display_title: "main | docs-ci | push",
+          name: "CI",
+          display_title: "main | ci | push",
           event: "push",
           conclusion: "failure",
           ...override,
@@ -1043,8 +1043,8 @@ test("returns an unmapped post-merge result when no single primary Issue exists"
     repository: "AgoraIO-Extensions/agent-infra",
     sourceRun: sourceRun({
       id: 425,
-      name: "Docs CI",
-      display_title: "main | docs-ci | push",
+      name: "CI",
+      display_title: "main | ci | push",
       event: "push",
       conclusion: "failure",
       head_sha: sha,
@@ -1075,8 +1075,8 @@ test("returns an unmapped post-merge result when the primary Issue is missing", 
     repository: "AgoraIO-Extensions/agent-infra",
     sourceRun: sourceRun({
       id: 426,
-      name: "Docs CI",
-      display_title: "main | docs-ci | push",
+      name: "CI",
+      display_title: "main | ci | push",
       event: "push",
       conclusion: "failure",
       head_sha: sha,
@@ -1140,8 +1140,8 @@ test("degrades an unmapped post-merge failure to a generic terminal notification
       },
       workflow_run: sourceRun({
         id: 450,
-        name: "Docs CI",
-        display_title: "main | docs-ci | push",
+        name: "CI",
+        display_title: "main | ci | push",
         event: "push",
         conclusion: "failure",
         head_sha: sha,
@@ -1650,8 +1650,8 @@ test("notifies one post-merge main failure across replayed observer events", asy
     },
     workflow_run: sourceRun({
       id: 600,
-      name: "Docs CI",
-      display_title: "main | docs-ci | push",
+      name: "CI",
+      display_title: "main | ci | push",
       event: "push",
       conclusion: "failure",
       head_sha: sha,

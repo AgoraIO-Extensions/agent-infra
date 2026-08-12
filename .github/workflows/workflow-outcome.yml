@@ -14,7 +14,7 @@ on:
       - Claude Issue Review
       - Claude PR Review
       - Codex Worker
-      - Docs CI
+      - CI
       - PR-Agent Review
       - PR Gates
     types: [completed]

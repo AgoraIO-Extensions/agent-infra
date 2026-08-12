@@ -52,6 +52,38 @@ test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
 });
 
+test("publishes repository validation through the CI workflow and check", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(workflows["ci.yml"]?.name, "CI");
+  assert.equal(workflows["ci.yml"]?.jobs?.ci?.name, "CI");
+  assert.equal(workflows["docs-ci.yml"], undefined);
+
+  workflows["ci.yml"].jobs.ci.name = "Docs CI";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("CI workflow and required check"),
+    ),
+  );
+});
+
+test("starts review, recovery, and outcome handling from the CI workflow", async () => {
+  const workflows = await actualWorkflows();
+  assert.deepEqual(
+    workflows["claude-pr-review.yml"].on.workflow_run.workflows,
+    ["CI"],
+  );
+  assert.deepEqual(workflows["codex-worker.yml"].on.workflow_run.workflows, [
+    "CI",
+    "Claude PR Review",
+  ]);
+  assert.ok(
+    workflows["workflow-outcome.yml"].on.workflow_run.workflows.includes("CI"),
+  );
+  assert.ok(
+    !workflows["workflow-outcome.yml"].on.workflow_run.workflows.includes("Docs CI"),
+  );
+});
+
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
   assert.equal(Object.keys(workflows).length, 9);
@@ -63,7 +95,7 @@ test("requires safe machine-parseable run names for every workflow", async () =>
     ),
   );
 
-  delete workflows["docs-ci.yml"]["run-name"];
+  delete workflows["ci.yml"]["run-name"];
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("safe run-name"),
@@ -78,7 +110,7 @@ test("requires a safe terminal Job Summary in every source workflow", async () =
     assert.ok(workflow.jobs.outcome, name);
   }
 
-  workflows["docs-ci.yml"].jobs.outcome.steps[0].env.SUMMARY_TARGET =
+  workflows["ci.yml"].jobs.outcome.steps[0].env.SUMMARY_TARGET =
     "${{ github.event.pull_request.title }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
@@ -96,7 +128,7 @@ test("rejects untrusted text and Secrets in workflow run names", async () => {
     "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
   ]) {
     const workflows = await actualWorkflows();
-    workflows["docs-ci.yml"]["run-name"] = unsafe;
+    workflows["ci.yml"]["run-name"] = unsafe;
     assert.ok(
       validateWorkflowDocuments(workflows).some((error) =>
         error.includes("safe run-name"),
@@ -108,7 +140,7 @@ test("rejects untrusted text and Secrets in workflow run names", async () => {
 
 test("keeps the WeCom Secret only in the trusted outcome sender", async () => {
   const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+  workflows["ci.yml"].jobs.ci.steps[0].env = {
     WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
   };
   assert.ok(
@@ -527,7 +559,7 @@ test("requires an explicit Claude Review switch in analysis and publication", as
 
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
+  workflows["ci.yml"].jobs.ci.steps[0].uses = "actions/checkout@main";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) => error.includes("full commit SHA")),
   );
@@ -663,7 +695,7 @@ test("requires same-repository PR-Agent runs", async () => {
 
 test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
   const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+  workflows["ci.yml"].jobs.ci.steps[0].env = {
     BAD: "${{ secrets.PR_AGENT_API_KEY }}",
   };
 
