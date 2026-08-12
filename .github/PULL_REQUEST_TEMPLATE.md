@@ -1,6 +1,6 @@
 # Pull Request
 
-<!-- 先完成 primary Issue 约定的实现和自检，再创建 PR；不得事后补建 Issue。 -->
+<!-- 创建 PR 前请确认符合 [Issue-first 规则](../docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则)，不得事后补建 Issue。 -->
 
 Closes #
 
