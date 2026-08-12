@@ -1,5 +1,7 @@
 # Pull Request
 
+<!-- 创建 PR 前请确认符合 [Issue-first 规则](../docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则)，不得事后补建 Issue。 -->
+
 Closes #
 
 ## 变更摘要

@@ -91,9 +91,50 @@ test("Issue Gate accepts one open Issue without wontfix", () => {
   assert.deepEqual(
     evaluateIssueGate({
       issueNumbers: [42],
-      issue: { number: 42, state: "open", labels: [{ name: "bug" }] },
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [{ name: "bug" }],
+        created_at: "2026-08-11T08:00:00Z",
+      },
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }),
     { ok: true, description: "Primary Issue #42 is open" },
+  );
+});
+
+test("Issue Gate requires the primary Issue to predate the PR", () => {
+  const issue = {
+    number: 42,
+    state: "open",
+    labels: [],
+    created_at: "2026-08-11T08:00:00Z",
+  };
+  assert.equal(
+    evaluateIssueGate({
+      issueNumbers: [42],
+      issue,
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
+    }).ok,
+    true,
+  );
+  for (const pullRequestCreatedAt of [
+    "2026-08-11T08:00:00Z",
+    "2026-08-11T07:00:00Z",
+    undefined,
+  ]) {
+    assert.equal(
+      evaluateIssueGate({ issueNumbers: [42], issue, pullRequestCreatedAt }).ok,
+      false,
+    );
+  }
+  assert.equal(
+    evaluateIssueGate({
+      issue: { ...issue, created_at: undefined },
+      issueNumbers: [42],
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
+    }).ok,
+    false,
   );
 });
 
@@ -122,8 +163,10 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         number: 42,
         state: "open",
         labels: [{ name: "ready-for-agent" }],
+        created_at: "2026-08-11T08:00:00Z",
       },
       headRef: "codex/issue-42-cycle-1",
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }),
     { ok: true, description: "Worker Issue #42 is ready for Agent" },
   );
@@ -134,16 +177,24 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         number: 42,
         state: "open",
         labels: [{ name: "ready-for-agent" }],
+        created_at: "2026-08-11T08:00:00Z",
       },
       headRef: "codex/issue-7-cycle-1",
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }).ok,
     false,
   );
   assert.equal(
     evaluateIssueGate({
       issueNumbers: [42],
-      issue: { number: 42, state: "open", labels: [] },
+      issue: {
+        number: 42,
+        state: "open",
+        labels: [],
+        created_at: "2026-08-11T08:00:00Z",
+      },
       headRef: "codex/issue-42-cycle-1",
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }).ok,
     false,
   );
@@ -154,8 +205,10 @@ test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
         number: 42,
         state: "open",
         labels: [{ name: "ready-for-agent" }],
+        created_at: "2026-08-11T08:00:00Z",
       },
       headRef: "codex/issue-not-a-number",
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }).ok,
     false,
   );

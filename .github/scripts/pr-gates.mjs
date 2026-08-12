@@ -39,7 +39,12 @@ export function affectedPullRequests({ eventName, issueNumber, pulls = [] }) {
   throw new Error(`Unsupported PR Gate dispatch event: ${eventName}`);
 }
 
-export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
+export function evaluateIssueGate({
+  issueNumbers,
+  issue,
+  headRef,
+  pullRequestCreatedAt,
+}) {
   if (issueNumbers.length !== 1) {
     return {
       ok: false,
@@ -59,6 +64,13 @@ export function evaluateIssueGate({ issueNumbers, issue, headRef }) {
   }
   if (labelNames(issue.labels).includes("wontfix")) {
     return { ok: false, description: `Primary Issue #${number} is marked wontfix` };
+  }
+  if (
+    !validAuditTimestamp(issue.created_at) ||
+    !validAuditTimestamp(pullRequestCreatedAt) ||
+    Date.parse(issue.created_at) >= Date.parse(pullRequestCreatedAt)
+  ) {
+    return { ok: false, description: `Primary Issue #${number} must predate this PR` };
   }
 
   const workerBranch = /^codex\/issue-(\d+)-cycle-(\d+)$/.exec(headRef ?? "");
@@ -821,6 +833,7 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
     issueNumbers,
     issue,
     headRef: pr.head.ref,
+    pullRequestCreatedAt: pr.created_at,
   });
   let issueReadinessResult;
   try {
