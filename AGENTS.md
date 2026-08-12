@@ -119,6 +119,7 @@ git diff --check
 
 ## Git And Review
 
+- 所有可能产生 PR 的工作遵循 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则) 的 `Issue -> 实现与验证 -> PR` 规则；创建任务分支、修改文件或提交代码前，必须先确认内容完整的 primary Issue。
 - 保持改动范围与当前任务一致，不顺手恢复本地历史材料或重构无关文档。
 - 提交前检查 `git status`、完整 diff 和上述验证命令。
 - Commit 使用简洁的 Conventional Commit，例如 `docs: refine M1 architecture`。
