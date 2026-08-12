@@ -28,6 +28,16 @@ const WORKFLOW_OPERATIONS = new Map([
   ["PR-Agent Review", "pr-agent-review"],
   ["PR Gates", "pr-gates"],
 ]);
+const WORKFLOW_NAMES_BY_PATH = new Map([
+  [".github/workflows/auto-merge.yml", "Auto-merge Enrollment"],
+  [".github/workflows/blocker-reconciler.yml", "Blocker Reconciler"],
+  [".github/workflows/claude-issue-review.yml", "Claude Issue Review"],
+  [".github/workflows/claude-pr-review.yml", "Claude PR Review"],
+  [".github/workflows/codex-worker.yml", "Codex Worker"],
+  [".github/workflows/docs-ci.yml", "Docs CI"],
+  [".github/workflows/pr-agent-review.yml", "PR-Agent Review"],
+  [".github/workflows/pr-gates.yml", "PR Gates"],
+]);
 const POST_MERGE_MARKER = "agent-infra-post-merge-failure";
 const GITHUB_ACTIONS_APP_ID = 15_368;
 const GATE_PUBLISHER_APP_ID = 4_503_079;
@@ -52,7 +62,8 @@ function repositoryName(value) {
 
 function sourceRunMetadata(value) {
   positiveInteger(value?.id, "Source run id");
-  if (!WORKFLOW_OPERATIONS.has(value?.name)) {
+  const workflowName = WORKFLOW_NAMES_BY_PATH.get(value?.path);
+  if (!workflowName) {
     throw new Error("Source workflow is not trusted");
   }
   if (!/^[a-z_]+$/.test(value?.event ?? "")) {
@@ -85,7 +96,7 @@ function sourceRunMetadata(value) {
   ) {
     throw new Error("Source conclusion is invalid");
   }
-  return value;
+  return { ...value, workflowName };
 }
 
 function targetUrl(repository, targetType, targetNumber) {
@@ -141,16 +152,16 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
   )
     ? context.workerAttempt
     : null;
-  if (sourceRun.name === "Codex Worker" && attempt?.outcome === "recoverable") {
+  if (sourceRun.workflowName === "Codex Worker" && attempt?.outcome === "recoverable") {
     if (attempt.attempt >= 3) {
       return outcome("worker_budget_exhausted", "issue-owner", true);
     }
     return outcome("worker_retry_pending", "automation", false);
   }
-  if (sourceRun.name === "Codex Worker" && attempt?.outcome === "non_retryable") {
+  if (sourceRun.workflowName === "Codex Worker" && attempt?.outcome === "non_retryable") {
     return outcome("worker_final_failure", "issue-owner", true);
   }
-  if (sourceRun.name === "Codex Worker" && attempt?.outcome === "completed") {
+  if (sourceRun.workflowName === "Codex Worker" && attempt?.outcome === "completed") {
     if (attempt.terminationReason === "human_handoff") {
       return outcome("human_handoff", "issue-owner", true);
     }
@@ -163,7 +174,7 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
   }
   if (sourceRun.conclusion !== "success") {
     if (
-      sourceRun.name === "Docs CI" &&
+      sourceRun.workflowName === "Docs CI" &&
       parsedRunName.targetType === "pr" &&
       sourceRun.run_attempt === 1 &&
       context.ciRecoveryEligible
@@ -174,7 +185,7 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
   }
 
   if (
-    sourceRun.name === "Blocker Reconciler" &&
+    sourceRun.workflowName === "Blocker Reconciler" &&
     context.blockerState?.state === "triage" &&
     ["blocker-not-planned", "invalid-blocker-state"].includes(
       context.blockerState.reason,
@@ -183,13 +194,13 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
     return outcome("dependency_triage", "issue-owner", true);
   }
   if (
-    sourceRun.name === "Blocker Reconciler" &&
+    sourceRun.workflowName === "Blocker Reconciler" &&
     context.blockerState?.state === "frontier" &&
     context.blockerState.reason === "blockers-completed"
   ) {
     return outcome("blocker_resumed", "automation", true);
   }
-  if (sourceRun.name === "PR Gates" && context.waiverUsed) {
+  if (sourceRun.workflowName === "PR Gates" && context.waiverUsed) {
     return outcome("waiver_used", "repository-maintainer", true);
   }
   if (context.humanValidationPending) {
@@ -242,7 +253,7 @@ export function parseSourceRunName(value) {
 }
 
 function validateSourceRunBinding(sourceRun, parsedRunName) {
-  if (WORKFLOW_OPERATIONS.get(sourceRun.name) !== parsedRunName.operation) {
+  if (WORKFLOW_OPERATIONS.get(sourceRun.workflowName) !== parsedRunName.operation) {
     throw new Error("Source run operation does not match trusted workflow");
   }
   if (!["pull_request", "pull_request_target"].includes(sourceRun.event)) {
@@ -268,8 +279,8 @@ function validateSourceRunBinding(sourceRun, parsedRunName) {
 
 export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
   repositoryName(repository);
-  sourceRunMetadata(sourceRun);
-  const parsed = parseSourceRunName(sourceRun.display_title);
+  const normalizedSourceRun = sourceRunMetadata(sourceRun);
+  const parsed = parseSourceRunName(normalizedSourceRun.display_title);
   const selectedTarget = validatedTarget(context.target, {
     type: parsed.targetType,
     number: parsed.targetNumber,
@@ -278,8 +289,12 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
     ...selectedTarget,
     url: targetUrl(repository, selectedTarget.type, selectedTarget.number),
   };
-  const classified = classifyOutcome({ sourceRun, parsedRunName: parsed, context });
-  const checkHeadSha = context.checkHeadSha ?? sourceRun.head_sha;
+  const classified = classifyOutcome({
+    sourceRun: normalizedSourceRun,
+    parsedRunName: parsed,
+    context,
+  });
+  const checkHeadSha = context.checkHeadSha ?? normalizedSourceRun.head_sha;
   if (!/^[0-9a-f]{40}$/.test(checkHeadSha)) {
     throw new Error("Workflow outcome Check Run head SHA is invalid");
   }
@@ -292,17 +307,17 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
   }
   return {
     version: 1,
-    eventId: semanticEventId ?? `workflow-run-${sourceRun.id}`,
+    eventId: semanticEventId ?? `workflow-run-${normalizedSourceRun.id}`,
     repository,
     checkHeadSha,
     sourceRun: {
-      id: sourceRun.id,
-      workflow: sourceRun.name,
-      event: sourceRun.event,
+      id: normalizedSourceRun.id,
+      workflow: normalizedSourceRun.workflowName,
+      event: normalizedSourceRun.event,
       action: context.sourceAction ?? parsed.action,
-      headSha: sourceRun.head_sha,
-      conclusion: sourceRun.conclusion,
-      url: `https://github.com/${repository}/actions/runs/${sourceRun.id}`,
+      headSha: normalizedSourceRun.head_sha,
+      conclusion: normalizedSourceRun.conclusion,
+      url: `https://github.com/${repository}/actions/runs/${normalizedSourceRun.id}`,
     },
     target,
     cycle: Number.isSafeInteger(context.cycle) ? context.cycle : null,
@@ -852,7 +867,7 @@ async function loadPullRequestContext({
     pullRequest,
     checkHeadSha: headSha,
     ciRecoveryEligible: Boolean(
-      sourceRun.name === "Docs CI" &&
+      sourceRun.workflowName === "Docs CI" &&
         /^codex\/issue-[1-9]\d*-cycle-[1-9]\d*$/.test(pullRequest.head?.ref ?? "") &&
         pullRequest.state === "open" &&
         !pullRequest.draft &&
@@ -898,7 +913,7 @@ async function loadOutcomeContext({
         parsedRunName.action === "closed" && context.issue.state === "closed",
       ),
       humanValidationPending: Boolean(
-        sourceRun.name === "Codex Worker" &&
+        sourceRun.workflowName === "Codex Worker" &&
           context.workerAttempt?.outcome === "completed" &&
           context.workerAttempt.terminationReason === "authorized" &&
           labelsOf(context.issue).includes("ready-for-human"),
@@ -1143,7 +1158,7 @@ export async function processWorkflowOutcome({
       workflowNotRun: true,
     };
   } else if (
-    sourceRun.name === "Docs CI" &&
+    sourceRun.workflowName === "Docs CI" &&
     parsedRunName.targetType === "main" &&
     POST_MERGE_FAILURE_CONCLUSIONS.has(sourceRun.conclusion)
   ) {
