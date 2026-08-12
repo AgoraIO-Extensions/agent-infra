@@ -461,9 +461,13 @@ test("cancels stale Claude Review runs by PR while reviewing every successful CI
 
 test("binds Claude Review analysis and publication to the completed CI head", async () => {
   const workflows = await actualWorkflows();
+  const stage = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
   const publish = workflows["claude-pr-review.yml"].jobs.publish.steps.find(
     (step) => step.name === "Publish validated Review result",
   );
+  stage.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
   publish.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
 
   assert.ok(

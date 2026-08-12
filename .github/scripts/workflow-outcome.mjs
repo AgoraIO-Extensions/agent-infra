@@ -30,6 +30,7 @@ const WORKFLOW_OPERATIONS = new Map([
 ]);
 const POST_MERGE_MARKER = "agent-infra-post-merge-failure";
 const GITHUB_ACTIONS_APP_ID = 15_368;
+const GATE_PUBLISHER_APP_ID = 4_503_079;
 const POST_MERGE_FAILURE_CONCLUSIONS = new Set([
   "failure",
   "startup_failure",
@@ -164,7 +165,8 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
     if (
       sourceRun.name === "Docs CI" &&
       parsedRunName.targetType === "pr" &&
-      sourceRun.run_attempt === 1
+      sourceRun.run_attempt === 1 &&
+      context.ciRecoveryEligible
     ) {
       return outcome("ci_failure_pending_recovery", "automation", false);
     }
@@ -746,6 +748,7 @@ async function loadPullRequestContext({
   pullRequestNumber,
   sourceRun,
   parsedRunName,
+  defaultBranch,
   token,
   request,
   paginate,
@@ -784,19 +787,42 @@ async function loadPullRequestContext({
       allowMissing: true,
     })) ?? {};
   }
-  const response = await request(
-    `/repos/${repository}/commits/${headSha}/check-runs?per_page=100`,
-    { token },
-  );
-  const trustedChecks = (response?.check_runs ?? []).filter(
-    (check) => check?.app?.id === 4_503_079 && check.head_sha === headSha,
-  );
-  const humanCheck = trustedChecks.find(
-    (check) => check.name === "Human Validation Gate",
-  );
-  const claudeCheck = trustedChecks.find(
-    (check) => check.name === "Claude Review Gate",
-  );
+  const trustedChecks = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const response = await request(
+      `/repos/${repository}/commits/${headSha}/check-runs?filter=all&per_page=100&page=${page}`,
+      { token },
+    );
+    if (!Array.isArray(response?.check_runs)) {
+      throw new Error("Pull request Check Run response is invalid");
+    }
+    trustedChecks.push(
+      ...response.check_runs.filter(
+        (check) =>
+          Number.isSafeInteger(check?.id) &&
+          check.id > 0 &&
+          check?.app?.id === GATE_PUBLISHER_APP_ID &&
+          check.head_sha === headSha,
+      ),
+    );
+    if (
+      response.check_runs.length < 100 ||
+      (Number.isSafeInteger(response.total_count) &&
+        response.total_count >= 0 &&
+        page * 100 >= response.total_count)
+    ) {
+      break;
+    }
+    if (page === 20) {
+      throw new Error("Pull request Check Run pagination limit exceeded");
+    }
+  }
+  const latestTrustedCheck = (name) =>
+    trustedChecks
+      .filter((check) => check.name === name)
+      .sort((left, right) => right.id - left.id)[0];
+  const humanCheck = latestTrustedCheck("Human Validation Gate");
+  const claudeCheck = latestTrustedCheck("Claude Review Gate");
   const eventIds = {
     ...(issueContext.eventIds ?? {}),
     ...(humanCheck?.id
@@ -810,6 +836,15 @@ async function loadPullRequestContext({
     ...issueContext,
     pullRequest,
     checkHeadSha: headSha,
+    ciRecoveryEligible: Boolean(
+      sourceRun.name === "Docs CI" &&
+        /^codex\/issue-[1-9]\d*-cycle-[1-9]\d*$/.test(pullRequest.head?.ref ?? "") &&
+        pullRequest.state === "open" &&
+        !pullRequest.draft &&
+        pullRequest.head?.repo?.full_name?.toLowerCase() === repository.toLowerCase() &&
+        pullRequest.head?.sha === sourceRun.head_sha &&
+        pullRequest.base?.ref === defaultBranch
+    ),
     pullRequestMerged: Boolean(
       parsedRunName.action === "closed" && pullRequest.merged_at,
     ),
@@ -830,6 +865,7 @@ async function loadOutcomeContext({
   repository,
   sourceRun,
   parsedRunName,
+  defaultBranch,
   token,
   request,
   paginate,
@@ -862,6 +898,7 @@ async function loadOutcomeContext({
       pullRequestNumber: parsedRunName.targetNumber,
       sourceRun,
       parsedRunName,
+      defaultBranch,
       token,
       request,
       paginate,
@@ -1131,6 +1168,7 @@ export async function processWorkflowOutcome({
       repository,
       sourceRun,
       parsedRunName,
+      defaultBranch: event.repository.default_branch,
       token,
       request,
       paginate: paginateRequest,
@@ -1165,21 +1203,9 @@ export async function processWorkflowOutcome({
         request,
       });
     } else if (claim.incompleteClaim) {
-      replay = true;
-      notification = {
-        configured: Boolean(webhookUrl),
-        delivered: false,
-        attempts: [],
-        warning: "delivery_state_unknown",
-      };
-      await completeOutcomeCheck({
-        repository,
-        checkId,
-        record,
-        notification,
-        token,
-        request,
-      });
+      throw new Error(
+        `Notification claim ${claim.checkId} is incomplete and requires recovery`,
+      );
     } else if (claim.replay) {
       replay = true;
       notification = {

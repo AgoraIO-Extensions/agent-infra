@@ -574,12 +574,14 @@ export function validateTrustedScriptSources(sources) {
     "agent-infra-post-merge-failure",
     'body: JSON.stringify({ state: "open" })',
     'body: JSON.stringify({ labels: ["needs-triage"] })',
-    "delivery_state_unknown",
+    "is incomplete and requires recovery",
     "Response text is intentionally discarded.",
     "Source run operation does not match trusted workflow",
     "Source pull request target does not match workflow_run metadata",
     "workflowNotRun: true",
     "allowNotFound: allowMissing",
+    "GATE_PUBLISHER_APP_ID = 4_503_079",
+    "Pull request Check Run pagination limit exceeded",
     "canonicalClaim.id !== created.id",
     "duplicateClaim",
     "check_name=Workflow%20Outcome&filter=all&per_page=100&page=",
@@ -1647,12 +1649,16 @@ export function validateWorkflowDocuments(workflows) {
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
     reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    reviewInputStage?.env?.EXPECTED_HEAD_SHA !==
+      "${{ github.event.workflow_run.head_sha }}" ||
     reviewInputStage?.env?.PR_NUMBER !==
       "${{ github.event.workflow_run.pull_requests[0].number }}" ||
     reviewInputStage?.shell !== "bash" ||
     !String(reviewInputStage?.run ?? "").includes("gh pr view \"$PR_NUMBER\"") ||
     !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
     !String(reviewInputStage?.run ?? "").includes("gh pr diff \"$PR_NUMBER\" > .review-input/pr.diff") ||
+    (String(reviewInputStage?.run ?? "").match(/= \"\$EXPECTED_HEAD_SHA\"/g) ?? [])
+      .length !== 2 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||

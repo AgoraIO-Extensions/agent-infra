@@ -320,6 +320,7 @@ test("notifies only actionable or final outcomes and ignores later audit state",
         event: "pull_request",
         conclusion: "failure",
       }),
+      { ciRecoveryEligible: true },
     ),
     {
       code: "ci_failure_pending_recovery",
@@ -336,6 +337,23 @@ test("notifies only actionable or final outcomes and ignores later audit state",
       terminal: true,
     });
   }
+  assert.deepEqual(
+    build(
+      sourceRun({
+        name: "Docs CI",
+        display_title: "PR #105 | docs-ci | pull_request",
+        event: "pull_request",
+        conclusion: "failure",
+      }),
+      { ciRecoveryEligible: false },
+    ),
+    {
+      code: "workflow_terminal_failure",
+      nextOwner: "repository-maintainer",
+      notify: true,
+      terminal: true,
+    },
+  );
   assert.deepEqual(
     build(
       sourceRun({
@@ -440,6 +458,92 @@ test("notifies only actionable or final outcomes and ignores later audit state",
     assert.equal(outcome.code, code);
     assert.equal(outcome.notify, true);
   }
+});
+
+test("suppresses first Docs CI failures only for current Worker PRs", async () => {
+  const headSha = "c".repeat(40);
+  const observe = async (headRef) => {
+    const checks = [];
+    let deliveries = 0;
+    const request = async (apiPath, options = {}) => {
+      if (apiPath.endsWith("/pulls/105")) {
+        return {
+          number: 105,
+          body: "",
+          state: "open",
+          draft: false,
+          head: {
+            ref: headRef,
+            sha: headSha,
+            repo: { full_name: "AgoraIO-Extensions/agent-infra" },
+          },
+          base: { ref: "main" },
+          merged_at: null,
+        };
+      }
+      if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+        return { check_runs: checks };
+      }
+      if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+        const check = {
+          id: 1_200,
+          app: { id: 15_368 },
+          head_sha: headSha,
+          ...JSON.parse(options.body),
+        };
+        checks.push(check);
+        return check;
+      }
+      if (apiPath.endsWith("/check-runs/1200") && options.method === "PATCH") {
+        const payload = JSON.parse(options.body);
+        Object.assign(checks[0], payload);
+        return payload;
+      }
+      throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+    };
+    const result = await processWorkflowOutcome({
+      event: {
+        action: "completed",
+        repository: {
+          full_name: "AgoraIO-Extensions/agent-infra",
+          default_branch: "main",
+        },
+        workflow_run: sourceRun({
+          id: 560,
+          name: "Docs CI",
+          display_title: "PR #105 | docs-ci | pull_request",
+          event: "pull_request",
+          conclusion: "failure",
+          head_sha: headSha,
+          pull_requests: [{ number: 105, head: { sha: headSha } }],
+        }),
+      },
+      token: "test-token",
+      webhookUrl: "https://example.invalid/webhook",
+      request,
+      sendNotification: async () => {
+        deliveries += 1;
+        return {
+          configured: true,
+          delivered: true,
+          attempts: [],
+          warning: null,
+        };
+      },
+      writeSummary: async () => {},
+    });
+    return { checks, deliveries, result };
+  };
+
+  const worker = await observe("codex/issue-55-cycle-1");
+  assert.equal(worker.result.record.outcome.code, "ci_failure_pending_recovery");
+  assert.equal(worker.deliveries, 0);
+  assert.equal(worker.checks.length, 0);
+
+  const ordinary = await observe("fix/link-check");
+  assert.equal(ordinary.result.record.outcome.code, "workflow_terminal_failure");
+  assert.equal(ordinary.deliveries, 1);
+  assert.equal(ordinary.checks[0].status, "completed");
 });
 
 test("uses the semantic audit identity across different observer source runs", () => {
@@ -1033,7 +1137,7 @@ test("elects one canonical Check after concurrent semantic claims", async () => 
   assert.equal(checks[0].conclusion, "neutral");
 });
 
-test("finalizes an interrupted notification claim without sending a duplicate", async () => {
+test("fails loudly and preserves an interrupted notification claim", async () => {
   const headSha = "4".repeat(40);
   const check = {
     id: 750,
@@ -1059,33 +1163,34 @@ test("finalizes an interrupted notification claim without sending a duplicate", 
     }
     throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
   };
-  const result = await processWorkflowOutcome({
-    event: {
-      action: "completed",
-      repository: {
-        full_name: "AgoraIO-Extensions/agent-infra",
-        default_branch: "main",
+  await assert.rejects(
+    processWorkflowOutcome({
+      event: {
+        action: "completed",
+        repository: {
+          full_name: "AgoraIO-Extensions/agent-infra",
+          default_branch: "main",
+        },
+        workflow_run: sourceRun({
+          id: 550,
+          conclusion: "failure",
+          head_sha: headSha,
+        }),
       },
-      workflow_run: sourceRun({
-        id: 550,
-        conclusion: "failure",
-        head_sha: headSha,
-      }),
-    },
-    token: "test-token",
-    webhookUrl: "https://example.invalid/webhook",
-    request,
-    sendNotification: async () => {
-      deliveries += 1;
-    },
-    writeSummary: async () => {},
-  });
+      token: "test-token",
+      webhookUrl: "https://example.invalid/webhook",
+      request,
+      sendNotification: async () => {
+        deliveries += 1;
+      },
+      writeSummary: async () => {},
+    }),
+    /Notification claim 750 is incomplete and requires recovery/,
+  );
 
-  assert.equal(result.replay, true);
-  assert.equal(result.notification.warning, "delivery_state_unknown");
   assert.equal(deliveries, 0);
-  assert.equal(check.status, "completed");
-  assert.equal(check.conclusion, "neutral");
+  assert.equal(check.status, "in_progress");
+  assert.equal(check.conclusion, undefined);
 });
 
 test("derives a final Worker failure from its trusted append-only audit", async () => {
@@ -1409,6 +1514,14 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
   const sourceHeadSha = "3".repeat(40);
   const gateChecks = [
     {
+      id: 1_099,
+      name: "Claude Review Gate",
+      app: { id: 15_368 },
+      head_sha: headSha,
+      conclusion: "success",
+      output: { summary: "reason_code: waived_infrastructure_failure" },
+    },
+    {
       id: 1_100,
       name: "Human Validation Gate",
       app: { id: 4_503_079 },
@@ -1426,6 +1539,15 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
     },
   ];
   const outcomeChecks = [];
+  const staleGateChecks = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    name: index === 0 ? "Claude Review Gate" : `Other ${index}`,
+    app: { id: 4_503_079 },
+    head_sha: headSha,
+    conclusion: "failure",
+    output: { summary: "reason_code: blocking_finding" },
+  }));
+  const gatePages = [];
   const request = async (apiPath, options = {}) => {
     if (apiPath.endsWith("/pulls/105")) {
       return {
@@ -1444,7 +1566,15 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
     }
     if (apiPath.endsWith("/issues/55/comments")) return [];
     if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
-      return { check_runs: [...gateChecks, ...outcomeChecks] };
+      if (apiPath.includes("check_name=Workflow%20Outcome")) {
+        return { check_runs: outcomeChecks };
+      }
+      assert.match(apiPath, /filter=all&per_page=100/);
+      const page = Number(new URL(apiPath, "https://api.github.test").searchParams.get("page"));
+      gatePages.push(page);
+      return page === 1
+        ? { total_count: 103, check_runs: staleGateChecks }
+        : { total_count: 103, check_runs: gateChecks };
     }
     if (apiPath.endsWith("/check-runs") && options.method === "POST") {
       const check = {
@@ -1489,6 +1619,7 @@ test("derives current-head waiver use from trusted PR Gate Checks", async () => 
   assert.equal(result.record.sourceRun.headSha, sourceHeadSha);
   assert.equal(result.record.checkHeadSha, headSha);
   assert.equal(outcomeChecks[0].head_sha, headSha);
+  assert.deepEqual(gatePages, [1, 2]);
 });
 
 test("paginates trusted audit comments instead of truncating old Issues", async () => {
