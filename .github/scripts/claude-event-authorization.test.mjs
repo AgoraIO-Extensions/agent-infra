@@ -128,14 +128,38 @@ test("fails closed when the repository permission lookup fails", async () => {
   );
 });
 
-test("authorizes only the claude label on labeled Issue events", () => {
+test("authorizes only trusted authors with the claude label on labeled Issue events", () => {
   assert.equal(
-    authorizeClaudeEvent("issues", { action: "labeled", label: { name: "claude" } }),
+    authorizeClaudeEvent("issues", {
+      action: "labeled",
+      label: { name: "claude" },
+      issue: { author_association: "MEMBER" },
+    }),
     true,
   );
   assert.equal(
-    authorizeClaudeEvent("issues", { action: "labeled", label: { name: "bug" } }),
+    authorizeClaudeEvent("issues", {
+      action: "labeled",
+      label: { name: "claude" },
+      issue: { author_association: "NONE" },
+    }),
     false,
+  );
+  assert.equal(
+    authorizeClaudeEvent("issues", {
+      action: "labeled",
+      label: { name: "bug" },
+      issue: { author_association: "MEMBER" },
+    }),
+    false,
+  );
+  assert.equal(
+    authorizeClaudeEvent(
+      "issues",
+      { action: "labeled", label: { name: "claude" }, issue: { author_association: "NONE" } },
+      { verifiedRepositoryPermission: "maintain" },
+    ),
+    true,
   );
 });
 

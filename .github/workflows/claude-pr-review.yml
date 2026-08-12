@@ -24,7 +24,8 @@ jobs:
       vars.CLAUDE_REVIEW_ENABLED == 'true' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.pull_requests[0]
+      github.event.workflow_run.pull_requests[0] &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(vars.CLAUDE_REVIEW_TIMEOUT_MINUTES || '30') }}
     permissions:
@@ -111,8 +112,8 @@ jobs:
             --effort "${{ vars.CLAUDE_REVIEW_EFFORT }}"
             --max-turns "${{ fromJSON(vars.CLAUDE_REVIEW_MAX_TURNS || '30') }}"
             --add-dir pr-head
-            --allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"
-            --disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"
             --json-schema '{"type":"object","additionalProperties":false,"properties":{"completed":{"const":true},"head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":10,"items":{"type":"object","additionalProperties":false,"properties":{"severity":{"enum":["P0","P1","P2"]},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1},"side":{"enum":["LEFT","RIGHT"]}},"required":["severity","title","body","path","line","side"]}}},"required":["completed","head_sha","summary","findings"]}'
 
   publish:
@@ -122,7 +123,8 @@ jobs:
       always() &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.pull_requests[0]
+      github.event.workflow_run.pull_requests[0] &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

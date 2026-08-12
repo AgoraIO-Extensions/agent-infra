@@ -378,14 +378,14 @@ test("rejects duplicate PR Review model configuration arguments", async () => {
 
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
-    (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
+    (args) => args.replace("Read,Grep,Glob,Bash(git diff:*)", "Read,Grep,Bash(git diff:*)"),
     (args) => `${args}\n--allowedTools "Bash"`,
     (args) => `${args}\n--allowedTools="Bash"`,
     (args) => `${args}\n--allowed-tools=Bash`,
     (args) => `${args}\n--disallowedTools=""`,
     (args) => `${args}\n--disallowed-tools=`,
     (args) => args.replace(
-      '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+      '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"',
       "",
     ),
   ];
@@ -1042,8 +1042,8 @@ test("allows trusted completed-workflow recovery to reach preparation", async ()
   const sources = await actualTrustedScriptSources();
   assert.deepEqual(validateTrustedScriptSources(sources), []);
   sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
-    'if (eventName === "workflow_run") {',
-    'if (eventName === "never") {',
+    'isTrustedWorkflowRunSource({ repository, run: event.workflow_run })',
+    'true',
   );
   assert.ok(
     validateTrustedScriptSources(sources).some((error) =>
@@ -1331,7 +1331,9 @@ test("guards every Issue Review model step with the trusted authorizer", async (
   const workflows = await actualWorkflows();
   const workflow = workflows["claude-issue-review.yml"];
   for (const job of Object.values(workflow.jobs)) {
-    assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    if (job !== workflow.jobs["automatic-issue-review"]) {
+      assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    }
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
     if (!action) continue;
     if (job === workflow.jobs["analyze-blocker-review"]) {
@@ -1374,8 +1376,8 @@ test("rejects collection membership checks for trusted actor associations", asyn
 
 test("rejects identity authorization in job-level expressions", async () => {
   const workflows = await actualWorkflows();
-  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if =
-    "github.event.issue.author_association == 'MEMBER'";
+  workflows["claude-issue-review.yml"].jobs.mentions.if +=
+    " && github.event.issue.author_association == 'MEMBER'";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("must authorize identity in a trusted step"),
@@ -1855,12 +1857,7 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       candidate.uses?.startsWith("anthropics/"),
     );
     if (!action) continue;
-    assert.match(
-      action.with.claude_args,
-      jobName === "analyze-blocker-review"
-        ? /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/
-        : /--disallowedTools "Edit,Write,MultiEdit,Bash"/,
-    );
+    assert.match(action.with.claude_args, /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/);
   }
   const step = issueWorkflow.jobs["automatic-issue-review"].steps.find((candidate) =>
     candidate.uses?.startsWith("anthropics/"),

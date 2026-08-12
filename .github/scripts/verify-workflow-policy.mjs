@@ -493,9 +493,8 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Codex Worker must bind authorization, cycle, hash, and AC evidence");
   }
   if (
-    !/async function authorizeCommand\(\)[\s\S]{0,1500}if \(eventName === "workflow_run"\) \{\s+await writeOutput\("allowed", true\);\s+return;\s+\}/.test(
-      workerSource,
-    )
+    !workerSource.includes("isTrustedWorkflowRunSource({ repository, run: event.workflow_run })") ||
+    !workerSource.includes("run.head_repository.full_name.toLowerCase() === repository.toLowerCase()")
   ) {
     errors.push("Codex Worker workflow recovery must pass authorization");
   }
@@ -965,6 +964,15 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Codex Worker must record authorization-invalidating Issue edits");
   }
+  const workerAuthorizationIf = String(authorization?.if ?? "");
+  if (
+    !workerAuthorizationIf.includes("github.event_name != 'issues'") ||
+    !workerAuthorizationIf.includes("github.event.issue.author_association == 'MEMBER'") ||
+    !workerAuthorizationIf.includes("github.event.issue.author_association == 'OWNER'") ||
+    !workerAuthorizationIf.includes("github.event.issue.author_association == 'COLLABORATOR'")
+  ) {
+    errors.push("Codex Worker must skip external Issue authors before authorization");
+  }
   if (
     JSON.stringify(worker?.on?.repository_dispatch?.types) !==
       JSON.stringify(["codex-worker"])
@@ -1031,6 +1039,11 @@ export function validateWorkflowDocuments(workflows) {
     workerCancellation.includes("github.event_name == 'workflow_run'")
   ) {
     errors.push("Claude recovery concurrency must not cancel another PR");
+  }
+  if (
+    !workerGroup.includes("github.event.workflow_run.head_repository.full_name == github.repository")
+  ) {
+    errors.push("Codex Worker Review recovery must require a same-repository source");
   }
   if (
     !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
@@ -1529,7 +1542,8 @@ export function validateWorkflowDocuments(workflows) {
       (condition) =>
         !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
         !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
-        !condition.includes("github.event.workflow_run.pull_requests[0]"),
+        !condition.includes("github.event.workflow_run.pull_requests[0]") ||
+        !condition.includes("github.event.workflow_run.head_repository.full_name == github.repository"),
     ) ||
     !String(review?.jobs?.analyze?.if ?? "").includes(
       "vars.CLAUDE_REVIEW_ENABLED == 'true'",
@@ -1660,12 +1674,12 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(allowedToolFlags) !==
       JSON.stringify([
-        '--allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"',
+        '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh pr diff:*),Bash(gh pr view:*)"',
       ]) ||
     JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
     JSON.stringify(disallowedToolFlags) !==
       JSON.stringify([
-        '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+        '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"',
       ]) ||
     JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
   ) {
@@ -1775,7 +1789,7 @@ export function validateWorkflowDocuments(workflows) {
         `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
       );
     }
-    if ((job.if ?? "").includes("author_association")) {
+    if ((job.if ?? "").includes("author_association") && jobName !== "automatic-issue-review") {
       errors.push(
         `claude-issue-review.yml/${jobName}: must authorize identity in a trusted step`,
       );
@@ -1880,16 +1894,14 @@ export function validateWorkflowDocuments(workflows) {
       const args = step.with?.claude_args ?? "";
       const expectedAllowed =
         jobName === "analyze-blocker-review"
-          ? '--allowedTools "Read,Grep,Glob,Bash(gh issue view:*)"'
-          : '--allowedTools "Read,Grep,Glob"';
+          ? '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh issue view:*)"'
+          : jobName === "automatic-issue-review"
+            ? '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh issue view:*)"'
+            : '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh pr view:*),Bash(gh issue view:*)"';
       const expectedDisallowed =
-        jobName === "analyze-blocker-review"
-          ? '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"'
-          : '--disallowedTools "Edit,Write,MultiEdit,Bash"';
+        '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"';
       const unsafeBash =
-        jobName === "analyze-blocker-review"
-          ? /--allowedTools\s+"[^"]*\bBash(?!\(gh issue view:\*\))/.test(args)
-          : /--allowedTools\s+"[^"]*\bBash\b/.test(args);
+        /--allowedTools\s+"[^"]*\bBash\b(?!\([^)]*:\*\))/.test(args);
       if (
         !args.includes(expectedAllowed) ||
         !args.includes(expectedDisallowed) ||

@@ -38,7 +38,12 @@ export function authorizeClaudeEvent(
         TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission)
       );
     }
-    return event.action === "labeled" && event.label?.name === "claude";
+    return (
+      event.action === "labeled" &&
+      event.label?.name === "claude" &&
+      (TRUSTED_ASSOCIATIONS.has(event.issue?.author_association) ||
+        TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission))
+    );
   }
 
   if (eventName === "issue_comment" || eventName === "pull_request_review_comment") {
@@ -163,7 +168,7 @@ async function main() {
   let verifiedBlockerReview = false;
   if (
     eventName === "issues" &&
-    event.action === "opened" &&
+    (event.action === "opened" || event.action === "labeled") &&
     !authorizeClaudeEvent(eventName, event)
   ) {
     verifiedRepositoryPermission = await fetchRepositoryPermission({

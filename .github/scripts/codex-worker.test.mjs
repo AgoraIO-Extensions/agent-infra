@@ -111,6 +111,25 @@ test("no-ops a successful Claude Review run without a recovery Artifact", async 
   });
 });
 
+test("accepts only same-repository workflow recovery sources", () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+  assert.equal(
+    worker.isTrustedWorkflowRunSource({
+      repository,
+      run: { head_repository: { full_name: repository } },
+    }),
+    true,
+  );
+  assert.equal(
+    worker.isTrustedWorkflowRunSource({
+      repository,
+      run: { head_repository: { full_name: "external/fork" } },
+    }),
+    false,
+  );
+  assert.equal(worker.isTrustedWorkflowRunSource({ repository, run: {} }), false);
+});
+
 test("rejects missing, duplicated, self-referential, or free-form blockers", () => {
   assert.throws(() => parseBlockedBy("## Scope\nNone"), /Blocked by/);
   assert.throws(() => parseBlockedBy("## Blocked by\nNone\n\n## Blocked by\nNone"));

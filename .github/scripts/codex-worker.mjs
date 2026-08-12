@@ -1994,7 +1994,10 @@ async function authorizeCommand() {
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
   const token = requiredEnvironment("GITHUB_TOKEN");
   if (eventName === "workflow_run") {
-    await writeOutput("allowed", true);
+    await writeOutput(
+      "allowed",
+      isTrustedWorkflowRunSource({ repository, run: event.workflow_run }),
+    );
     return;
   }
   if (eventName === "repository_dispatch") {
@@ -2025,6 +2028,14 @@ async function authorizeCommand() {
     return;
   }
   await writeOutput("allowed", false);
+}
+
+export function isTrustedWorkflowRunSource({ repository, run }) {
+  return (
+    typeof repository === "string" &&
+    typeof run?.head_repository?.full_name === "string" &&
+    run.head_repository.full_name.toLowerCase() === repository.toLowerCase()
+  );
 }
 
 function issueNumberFromEvent(event, eventName) {
