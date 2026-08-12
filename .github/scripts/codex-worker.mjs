@@ -2231,7 +2231,7 @@ export async function preparePullRequestRecovery({
   const run = event.workflow_run;
   let runPullRequest;
   let sourceHeadSha;
-  if (run?.name === "Docs CI" && run.event === "pull_request") {
+  if (run?.name === "CI" && run.event === "pull_request") {
     runPullRequest = run.pull_requests?.[0];
     sourceHeadSha = run.head_sha;
   } else if (run?.name === "Claude PR Review" && run.event === "workflow_run") {
@@ -2297,7 +2297,7 @@ export async function preparePullRequestRecovery({
   });
   let recoveryEvent;
   let promptContext = [];
-  if (run.name === "Docs CI") {
+  if (run.name === "CI") {
     if (run.conclusion === "success") {
       return { operation: "noop", reason: "ci-success" };
     }

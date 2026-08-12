@@ -1,9 +1,9 @@
-name: Docs CI
+name: CI
 run-name: >-
   ${{
     github.event_name == 'pull_request' &&
-    format('PR #{0} | docs-ci | pull_request', github.event.pull_request.number) ||
-    'main | docs-ci | push'
+    format('PR #{0} | ci | pull_request', github.event.pull_request.number) ||
+    'main | ci | push'
   }}
 
 on:
@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  docs:
-    name: Docs CI
+  ci:
+    name: CI
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -89,7 +89,7 @@ jobs:
 
   outcome:
     name: Publish terminal outcome
-    needs: [docs]
+    needs: [ci]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1
@@ -103,7 +103,7 @@ jobs:
           SUMMARY_EVENT: ${{ github.event_name }}
           SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
-          SUMMARY_OPERATION: docs-ci
+          SUMMARY_OPERATION: ci
           SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
           SUMMARY_TARGET: "${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'main' }}"
           SUMMARY_TARGET_URL: ${{ github.event_name == 'pull_request' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || format('{0}/{1}/tree/{2}', github.server_url, github.repository, github.event.repository.default_branch) }}

@@ -8,7 +8,7 @@ run-name: >-
 
 on:
   workflow_run:
-    workflows: [Docs CI]
+    workflows: [CI]
     types: [completed]
 
 permissions: {}

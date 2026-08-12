@@ -295,21 +295,21 @@ test("retries the first deterministic CI failure without code before repair", ()
 test("classifies only repository validation steps as deterministic CI failures", () => {
   const deterministic = classifyCiFailure([
     {
-      name: "Docs CI",
+      name: "CI",
       conclusion: "failure",
       steps: [{ name: "Run tests", conclusion: "failure" }],
     },
   ]);
   const infrastructure = classifyCiFailure([
     {
-      name: "Docs CI",
+      name: "CI",
       conclusion: "failure",
       steps: [{ name: "Install dependencies", conclusion: "failure" }],
     },
   ]);
   const markdown = classifyCiFailure([
     {
-      name: "Docs CI",
+      name: "CI",
       conclusion: "failure",
       steps: [{ name: "Lint Markdown", conclusion: "failure" }],
     },

@@ -24,7 +24,7 @@ on:
   repository_dispatch:
     types: [codex-worker]
   workflow_run:
-    workflows: [Docs CI, Claude PR Review]
+    workflows: [CI, Claude PR Review]
     types: [completed]
 
 permissions: {}

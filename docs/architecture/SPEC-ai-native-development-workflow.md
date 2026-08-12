@@ -66,7 +66,7 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 - 选定仓库的控制 App `agora-agent-infra-team-membership` 具有 Organization
   `members:read` 和仓库 `checks:write`。可信 workflow 分别 mint membership-only token 与
   check-only token；任何单个 token 都不能同时获得两种能力，模型步骤不能获得任一 token。
-- `main` 分支保护将 `Docs CI` 绑定 GitHub Actions App `15368`，将四个自定义 Gate 绑定控制
+- `main` 分支保护将 `CI` 绑定 GitHub Actions App `15368`，将四个自定义 Gate 绑定控制
   App `4503079`，不接受同名但来源不明的 Check Run 或 legacy status。
 - 开发流程企微机器人使用轮换后的 GitHub Actions Secret `WECOM_BOT_WEBHOOK_URL`。该通知
   通道与产品 PRD 中的企微 Channel 无关。
@@ -306,12 +306,12 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 ### 7.2 Current-head Check Runs
 
-`Docs CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
+`CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
 所有 Check Run 都绑定精确 head SHA、由 branch protection 锁定来源：
 
 | Check | 适用范围 | 校验内容 |
 | --- | --- | --- |
-| `Docs CI` | 所有 PR | 确定性仓库检查 |
+| `CI` | 所有 PR | 确定性仓库检查 |
 | `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，且不带 `wontfix` |
 | `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
@@ -374,7 +374,7 @@ PR 正文列出验证内容。
 
 所有 PR 必须同时满足：
 
-- 当前 head 的 `Docs CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
+- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
   `Claude Review Gate` 通过。
 - 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
 - 所有阻塞 Review thread 已解决。

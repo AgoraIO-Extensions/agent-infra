@@ -6,10 +6,10 @@ import YAML from "yaml";
 const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "blocker-reconciler.yml",
+  "ci.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
-  "docs-ci.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
   "workflow-outcome.yml",
@@ -57,8 +57,8 @@ const RUN_NAME_CONTRACTS = {
       "github.event_name",
     ],
   },
-  "docs-ci.yml": {
-    operation: "docs-ci",
+  "ci.yml": {
+    operation: "ci",
     references: ["github.event.pull_request.number", "github.event_name"],
   },
   "pr-agent-review.yml": {
@@ -111,9 +111,9 @@ const SOURCE_OUTCOME_CONTRACTS = {
     needs: ["base-update", "authorization", "prepare", "implement", "publish"],
     operation: "codex-worker",
   },
-  "docs-ci.yml": {
-    needs: ["docs"],
-    operation: "docs-ci",
+  "ci.yml": {
+    needs: ["ci"],
+    operation: "ci",
   },
   "pr-agent-review.yml": {
     needs: ["analyze", "suggestions"],
@@ -649,6 +649,12 @@ export function validateWorkflowDocuments(workflows) {
   if (names.join("\0") !== REQUIRED_WORKFLOWS.join("\0")) {
     errors.push(`Expected workflows: ${REQUIRED_WORKFLOWS.join(", ")}`);
   }
+  if (
+    workflows["ci.yml"]?.name !== "CI" ||
+    workflows["ci.yml"]?.jobs?.ci?.name !== "CI"
+  ) {
+    errors.push("CI workflow and required check must both use the CI name");
+  }
 
   for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
     const runName = workflows[name]?.["run-name"];
@@ -797,7 +803,7 @@ export function validateWorkflowDocuments(workflows) {
         "Claude Issue Review",
         "Claude PR Review",
         "Codex Worker",
-        "Docs CI",
+        "CI",
         "PR-Agent Review",
         "PR Gates",
       ]) ||
@@ -1173,7 +1179,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(worker?.on?.push?.branches) !== JSON.stringify(["main"]) ||
     JSON.stringify(worker?.on?.workflow_run?.workflows) !==
-      JSON.stringify(["Docs CI", "Claude PR Review"]) ||
+      JSON.stringify(["CI", "Claude PR Review"]) ||
     JSON.stringify(worker?.on?.workflow_run?.types) !== JSON.stringify(["completed"]) ||
     baseUpdate?.if !== "github.event_name == 'push'" ||
     !sameObject(prepare?.permissions, {
@@ -1553,7 +1559,7 @@ export function validateWorkflowDocuments(workflows) {
     (condition) => String(condition ?? ""),
   );
   if (
-    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["Docs CI"]) ||
+    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["CI"]) ||
     JSON.stringify(reviewTrigger?.types) !== JSON.stringify(["completed"]) ||
     reviewConcurrency?.group !==
       "claude-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}" ||
