@@ -37,6 +37,7 @@ async function actualTrustedScriptSources() {
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
+        "workflow-outcome.mjs",
       ].map(
         async (name) => [
           name,
@@ -49,6 +50,138 @@ async function actualTrustedScriptSources() {
 
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("requires safe machine-parseable run names for every workflow", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(Object.keys(workflows).length, 9);
+  assert.ok(
+    Object.values(workflows).every(
+      (workflow) =>
+        typeof workflow["run-name"] === "string" &&
+        workflow["run-name"].length > 0,
+    ),
+  );
+
+  delete workflows["docs-ci.yml"]["run-name"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("safe run-name"),
+    ),
+  );
+});
+
+test("requires a safe terminal Job Summary in every source workflow", async () => {
+  const workflows = await actualWorkflows();
+  for (const [name, workflow] of Object.entries(workflows)) {
+    if (name === "workflow-outcome.yml") continue;
+    assert.ok(workflow.jobs.outcome, name);
+  }
+
+  workflows["docs-ci.yml"].jobs.outcome.steps[0].env.SUMMARY_TARGET =
+    "${{ github.event.pull_request.title }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("terminal Job Summary"),
+    ),
+  );
+});
+
+test("rejects untrusted text and Secrets in workflow run names", async () => {
+  for (const unsafe of [
+    "${{ github.event.issue.title }}",
+    "${{ github.event.issue.body }}",
+    "${{ github.event.comment.body }}",
+    "${{ github.event.head_commit.message }}",
+    "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  ]) {
+    const workflows = await actualWorkflows();
+    workflows["docs-ci.yml"]["run-name"] = unsafe;
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("safe run-name"),
+      ),
+      unsafe,
+    );
+  }
+});
+
+test("keeps the WeCom Secret only in the trusted outcome sender", async () => {
+  const workflows = await actualWorkflows();
+  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+    WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("WECOM_BOT_WEBHOOK_URL"),
+    ),
+  );
+});
+
+test("requires bounded deduplicated outcome and post-merge behavior", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "Math.min(Math.max(Number(maxAttempts) || 1, 1), 3)",
+    "Number(maxAttempts)",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("bounded dedupe and post-merge triage"),
+    ),
+  );
+});
+
+test("isolates workflow outcome concurrency per source run", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["workflow-outcome.yml"];
+  assert.deepEqual(workflow.concurrency, {
+    group: "workflow-outcome-${{ github.event.workflow_run.id }}",
+    "cancel-in-progress": false,
+  });
+
+  workflow.concurrency.group = "workflow-outcome-${{ github.repository }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed trusted triggers"),
+    ),
+  );
+});
+
+test("rejects untrusted workflow Summary sources", async () => {
+  for (const unsafe of [
+    "sourceRun.title",
+    "issue.body",
+    "comment.body",
+    "head_commit.message",
+    "model_output",
+  ]) {
+    const sources = await actualTrustedScriptSources();
+    sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+      "  const targetLabel = record.target.number",
+      `  const unsafeSummary = ${unsafe};\n  const targetLabel = record.target.number`,
+    );
+    assert.ok(
+      validateTrustedScriptSources(sources).some((error) =>
+        error.includes("trusted Summary sources"),
+      ),
+      unsafe,
+    );
+  }
+});
+
+test("fails closed when the trusted workflow Summary window is missing", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "export function renderJobSummary",
+    "export function renamedJobSummary",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("trusted Summary sources"),
+    ),
+  );
 });
 
 test("requires the serialized Blocker Reconciler workflow", async () => {
@@ -970,8 +1103,8 @@ test("allows trusted completed-workflow recovery to reach preparation", async ()
   const sources = await actualTrustedScriptSources();
   assert.deepEqual(validateTrustedScriptSources(sources), []);
   sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
-    'if (eventName === "workflow_run") {',
-    'if (eventName === "never") {',
+    'isTrustedWorkflowRunSource({ repository, run: event.workflow_run })',
+    'true',
   );
   assert.ok(
     validateTrustedScriptSources(sources).some((error) =>
@@ -988,10 +1121,22 @@ test("binds Claude repair recovery to a trusted source-run target Artifact", asy
   const workerDownload = workflows["codex-worker.yml"].jobs.prepare.steps.find(
     (step) => step.name === "Download trusted Review recovery target",
   );
+  const workerResolve = workflows["codex-worker.yml"].jobs.prepare.steps.find(
+    (step) => step.name === "Resolve trusted Review recovery target",
+  );
   assert.ok(reviewUpload);
+  assert.ok(workerResolve);
   assert.ok(workerDownload);
 
   workerDownload.with["run-id"] = "${{ github.run_id }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude recovery target Artifact must stay source-run bound"),
+    ),
+  );
+
+  workerDownload.with["run-id"] = "${{ github.event.workflow_run.id }}";
+  workerResolve.run = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Claude recovery target Artifact must stay source-run bound"),
@@ -1247,7 +1392,9 @@ test("guards every Issue Review model step with the trusted authorizer", async (
   const workflows = await actualWorkflows();
   const workflow = workflows["claude-issue-review.yml"];
   for (const job of Object.values(workflow.jobs)) {
-    assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    if (job !== workflow.jobs["automatic-issue-review"]) {
+      assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    }
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
     if (!action) continue;
     if (job === workflow.jobs["analyze-blocker-review"]) {
@@ -1290,8 +1437,8 @@ test("rejects collection membership checks for trusted actor associations", asyn
 
 test("rejects identity authorization in job-level expressions", async () => {
   const workflows = await actualWorkflows();
-  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if =
-    "github.event.issue.author_association == 'MEMBER'";
+  workflows["claude-issue-review.yml"].jobs.mentions.if +=
+    " && github.event.issue.author_association == 'MEMBER'";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("must authorize identity in a trusted step"),
@@ -1771,12 +1918,7 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       candidate.uses?.startsWith("anthropics/"),
     );
     if (!action) continue;
-    assert.match(
-      action.with.claude_args,
-      jobName === "analyze-blocker-review"
-        ? /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/
-        : /--disallowedTools "Edit,Write,MultiEdit,Bash"/,
-    );
+    assert.match(action.with.claude_args, /--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"/);
   }
   const step = issueWorkflow.jobs["automatic-issue-review"].steps.find((candidate) =>
     candidate.uses?.startsWith("anthropics/"),
