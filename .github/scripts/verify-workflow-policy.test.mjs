@@ -378,14 +378,14 @@ test("rejects duplicate PR Review model configuration arguments", async () => {
 
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
-    (args) => args.replace("Read,Grep,Glob,Bash(git diff:*)", "Read,Grep,Bash(git diff:*)"),
+    (args) => args.replace("Read,Grep,Glob", "Read,Grep"),
     (args) => `${args}\n--allowedTools "Bash"`,
     (args) => `${args}\n--allowedTools="Bash"`,
     (args) => `${args}\n--allowed-tools=Bash`,
     (args) => `${args}\n--disallowedTools=""`,
     (args) => `${args}\n--disallowed-tools=`,
     (args) => args.replace(
-      '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"',
+      '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       "",
     ),
   ];
@@ -543,7 +543,11 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     action.env["pr_code_suggestions.commitable_code_suggestions"],
     "true",
   );
-  assert.equal(action.env["github_action_config.auto_improve"], "true");
+  assert.equal(action.env["github_action_config.auto_improve"], "false");
+  const suggestions = workflow.jobs.suggestions.steps[0];
+  assert.equal(suggestions["continue-on-error"], true);
+  assert.equal(suggestions.env["github_action_config.auto_review"], "false");
+  assert.equal(suggestions.env["github_action_config.auto_improve"], "true");
 
   action.env["config.publish_output"] = "false";
   assert.ok(
@@ -569,14 +573,14 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
 
   action.env["pr_code_suggestions.commitable_code_suggestions"] = "true";
-  action.env["github_action_config.auto_improve"] = "false";
+  action.env["github_action_config.auto_improve"] = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["github_action_config.auto_improve"] = "true";
+  action.env["github_action_config.auto_improve"] = "false";
   workflow.jobs.analyze.permissions["pull-requests"] = "read";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
@@ -1857,7 +1861,7 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       candidate.uses?.startsWith("anthropics/"),
     );
     if (!action) continue;
-    assert.match(action.with.claude_args, /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/);
+    assert.match(action.with.claude_args, /--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"/);
   }
   const step = issueWorkflow.jobs["automatic-issue-review"].steps.find((candidate) =>
     candidate.uses?.startsWith("anthropics/"),

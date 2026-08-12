@@ -101,11 +101,6 @@ jobs:
 
   authorization:
     name: Record Worker authorization
-    if: >-
-      github.event_name != 'issues' ||
-      github.event.issue.author_association == 'MEMBER' ||
-      github.event.issue.author_association == 'OWNER' ||
-      github.event.issue.author_association == 'COLLABORATOR'
     concurrency:
       group: worker-authorization-${{ github.repository }}
       cancel-in-progress: false

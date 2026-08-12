@@ -65,13 +65,50 @@ jobs:
           pr_reviewer.require_todo_scan: "false"
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: >-
+            ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]
+
+  suggestions:
+    name: PR-Agent Suggestions
+    if: >-
+      vars.PR_AGENT_ENABLED == 'true' &&
+      github.event.sender.type != 'Bot' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Generate optional code suggestions
+        continue-on-error: true
+        uses: The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI__KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          config.model: ${{ secrets.PR_AGENT_MODEL }}
+          config.propagate_tool_errors: "true"
+          config.publish_output: "true"
+          config.publish_output_progress: "false"
+          config.restricted_mode: "true"
+          config.use_repo_settings_file: "false"
+          config.use_wiki_settings_file: "false"
+          config.fallback_models: "[]"
+          config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          pr_code_suggestions.commitable_code_suggestions: "true"
+          github_action_config.auto_review: "false"
+          github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"
           github_action_config.pr_actions: >-
             ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]
 
   outcome:
     name: Publish terminal outcome
-    needs: [analyze]
+    needs: [analyze, suggestions]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

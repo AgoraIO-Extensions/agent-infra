@@ -41,8 +41,7 @@ export function authorizeClaudeEvent(
     return (
       event.action === "labeled" &&
       event.label?.name === "claude" &&
-      (TRUSTED_ASSOCIATIONS.has(event.issue?.author_association) ||
-        TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission))
+      TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission)
     );
   }
 
@@ -153,6 +152,12 @@ export async function fetchRepositoryPermission({
   return payload.role_name;
 }
 
+export function repositoryPermissionUsername(event) {
+  return event.action === "labeled"
+    ? event.sender?.login
+    : event.issue?.user?.login;
+}
+
 function requiredEnvironment(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -173,7 +178,7 @@ async function main() {
   ) {
     verifiedRepositoryPermission = await fetchRepositoryPermission({
       repository: requiredEnvironment("GITHUB_REPOSITORY"),
-      username: event.issue?.user?.login,
+      username: repositoryPermissionUsername(event),
       token: requiredEnvironment("GITHUB_TOKEN"),
     });
   }

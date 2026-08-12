@@ -116,7 +116,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "docs-ci",
   },
   "pr-agent-review.yml": {
-    needs: ["analyze"],
+    needs: ["analyze", "suggestions"],
     operation: "pr-agent-review",
   },
   "pr-gates.yml": {
@@ -373,7 +373,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       if (
         workflowName !== "pr-agent-review.yml" ||
-        jobName !== "analyze" ||
+        !["analyze", "suggestions"].includes(jobName) ||
         step.uses !== PR_AGENT_ACTION ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
@@ -964,14 +964,8 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Codex Worker must record authorization-invalidating Issue edits");
   }
-  const workerAuthorizationIf = String(authorization?.if ?? "");
-  if (
-    !workerAuthorizationIf.includes("github.event_name != 'issues'") ||
-    !workerAuthorizationIf.includes("github.event.issue.author_association == 'MEMBER'") ||
-    !workerAuthorizationIf.includes("github.event.issue.author_association == 'OWNER'") ||
-    !workerAuthorizationIf.includes("github.event.issue.author_association == 'COLLABORATOR'")
-  ) {
-    errors.push("Codex Worker must skip external Issue authors before authorization");
+  if (authorization?.if !== undefined) {
+    errors.push("Codex Worker authorization recorder must observe every source event");
   }
   if (
     JSON.stringify(worker?.on?.repository_dispatch?.types) !==
@@ -1062,7 +1056,11 @@ export function validateWorkflowDocuments(workflows) {
   }
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
+  const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
+  const prAgentSuggestionAction = prAgentSuggestions?.steps?.find((step) =>
+    step.uses?.startsWith("The-PR-Agent/pr-agent@"),
+  );
   const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
     (step) => step.name === "Checkout trusted default branch",
   );
@@ -1093,7 +1091,7 @@ export function validateWorkflowDocuments(workflows) {
       "pull-requests": "write",
     }) ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
-      ["analyze", "outcome"].join("\0") ||
+      ["analyze", "outcome", "suggestions"].join("\0") ||
     prAgentAnalyze?.steps?.length !== 2 ||
     prAgentAnalyzeCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
@@ -1130,6 +1128,33 @@ export function validateWorkflowDocuments(workflows) {
       "pr_reviewer.require_ticket_analysis_review": "false",
       "pr_reviewer.require_todo_scan": "false",
       "github_action_config.auto_review": "true",
+      "github_action_config.auto_describe": "false",
+      "github_action_config.auto_improve": "false",
+      "github_action_config.pr_actions":
+        '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+    }) ||
+    prAgentSuggestions?.if !== prAgentAnalyze?.if ||
+    prAgentSuggestions?.["timeout-minutes"] !== 15 ||
+    !sameObject(prAgentSuggestions?.permissions, prAgentAnalyze?.permissions) ||
+    prAgentSuggestions?.steps?.length !== 1 ||
+    prAgentSuggestionAction?.["continue-on-error"] !== true ||
+    prAgentSuggestionAction?.uses !== PR_AGENT_ACTION ||
+    !sameObject(prAgentSuggestionAction?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+      OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
+      "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+      "config.propagate_tool_errors": "true",
+      "config.publish_output": "true",
+      "config.publish_output_progress": "false",
+      "config.restricted_mode": "true",
+      "config.use_repo_settings_file": "false",
+      "config.use_wiki_settings_file": "false",
+      "config.fallback_models": "[]",
+      "config.custom_model_max_tokens":
+        "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      "pr_code_suggestions.commitable_code_suggestions": "true",
+      "github_action_config.auto_review": "false",
       "github_action_config.auto_describe": "false",
       "github_action_config.auto_improve": "true",
       "github_action_config.pr_actions":
@@ -1601,6 +1626,9 @@ export function validateWorkflowDocuments(workflows) {
   }
   const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
   const reviewConfig = analyzeSteps[reviewConfigIndex];
+  const reviewInputStage = analyzeSteps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
   const reviewConfigEnv = reviewConfig?.env ?? {};
   if (
     reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
@@ -1618,6 +1646,13 @@ export function validateWorkflowDocuments(workflows) {
     reviewConfigEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
+    reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    reviewInputStage?.env?.PR_NUMBER !==
+      "${{ github.event.workflow_run.pull_requests[0].number }}" ||
+    reviewInputStage?.shell !== "bash" ||
+    !String(reviewInputStage?.run ?? "").includes("gh pr view \"$PR_NUMBER\"") ||
+    !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
+    !String(reviewInputStage?.run ?? "").includes("gh pr diff \"$PR_NUMBER\" > .review-input/pr.diff") ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
@@ -1674,12 +1709,12 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(allowedToolFlags) !==
       JSON.stringify([
-        '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh pr diff:*),Bash(gh pr view:*)"',
+        '--allowedTools "Read,Grep,Glob"',
       ]) ||
     JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
     JSON.stringify(disallowedToolFlags) !==
       JSON.stringify([
-        '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"',
+        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       ]) ||
     JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
   ) {
@@ -1805,6 +1840,9 @@ export function validateWorkflowDocuments(workflows) {
     const configIndex = (job.steps ?? []).findIndex((step) => step.id === "validate-config");
     const configStep = job.steps?.[configIndex];
     const modelStep = job.steps?.[modelIndex];
+    const reviewInputStage = (job.steps ?? []).find((step) =>
+      step.name?.startsWith("Stage untrusted "),
+    );
     const configEnv = configStep?.env ?? {};
     const splitBlockerReview = jobName === "analyze-blocker-review";
     if (
@@ -1828,10 +1866,15 @@ export function validateWorkflowDocuments(workflows) {
     if (
       modelIndex >= 0 &&
       (modelIndex !== configIndex + 1 ||
-        (!splitBlockerReview && configIndex !== authorizeIndex + 1) ||
+        (!splitBlockerReview && configIndex <= authorizeIndex) ||
         (!splitBlockerReview &&
           configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
         configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+        (["automatic-issue-review", "analyze-blocker-review"].includes(jobName) &&
+          (reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+            reviewInputStage?.shell !== "bash" ||
+            !String(reviewInputStage?.run ?? "").includes("gh issue view \"$ISSUE_NUMBER\"") ||
+            !String(reviewInputStage?.run ?? "").includes("> .review-input/issue.json"))) ||
         Object.keys(configEnv).sort().join("\0") !==
           [
             "ANTHROPIC_API_KEY",
@@ -1892,16 +1935,10 @@ export function validateWorkflowDocuments(workflows) {
     for (const step of job.steps ?? []) {
       if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
       const args = step.with?.claude_args ?? "";
-      const expectedAllowed =
-        jobName === "analyze-blocker-review"
-          ? '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh issue view:*)"'
-          : jobName === "automatic-issue-review"
-            ? '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh issue view:*)"'
-            : '--allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git show:*),Bash(git status:*),Bash(rg:*),Bash(sed:*),Bash(gh pr view:*),Bash(gh issue view:*)"';
+      const expectedAllowed = '--allowedTools "Read,Grep,Glob"';
       const expectedDisallowed =
-        '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"';
-      const unsafeBash =
-        /--allowedTools\s+"[^"]*\bBash\b(?!\([^)]*:\*\))/.test(args);
+        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"';
+      const unsafeBash = /--allowedTools\s+"[^"]*\bBash\b/.test(args);
       if (
         !args.includes(expectedAllowed) ||
         !args.includes(expectedDisallowed) ||
