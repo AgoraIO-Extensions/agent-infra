@@ -568,6 +568,134 @@ test("uses the semantic audit identity across different observer source runs", (
   assert.equal(build(101).eventId, "worker-attempt-worker-500-3-recoverable");
 });
 
+test("deduplicates completed target notifications across source workflows", async () => {
+  const completedAt = "2026-08-11T09:55:00Z";
+  for (const scenario of [
+    {
+      code: "pr_completed",
+      expectedEventId: `pr-completed-115-${"4".repeat(40)}`,
+      runs: [
+        {
+          name: "PR Gates",
+          operation: "pr-gates",
+          event: "pull_request_target",
+          target: "PR #115",
+        },
+        {
+          name: "Auto-merge Enrollment",
+          operation: "auto-merge",
+          event: "pull_request_target",
+          target: "PR #115",
+        },
+      ],
+    },
+    {
+      code: "issue_completed",
+      expectedEventId: `issue-completed-55-${Date.parse(completedAt)}`,
+      runs: [
+        {
+          name: "Codex Worker",
+          operation: "codex-worker",
+          event: "issues",
+          target: "Issue #55",
+        },
+        {
+          name: "Claude Issue Review",
+          operation: "claude-issue-review",
+          event: "issues",
+          target: "Issue #55",
+        },
+      ],
+    },
+  ]) {
+    const headSha = scenario.code === "pr_completed" ? "4".repeat(40) : "5".repeat(40);
+    const checks = [];
+    let deliveries = 0;
+    const request = async (apiPath, options = {}) => {
+      if (apiPath.endsWith("/pulls/115")) {
+        return {
+          number: 115,
+          body: "",
+          head: { sha: headSha },
+          merged_at: completedAt,
+        };
+      }
+      if (apiPath.endsWith("/issues/55")) {
+        return {
+          number: 55,
+          state: "closed",
+          closed_at: completedAt,
+          labels: [],
+        };
+      }
+      if (apiPath.endsWith("/issues/55/comments")) return [];
+      if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+        return { check_runs: checks };
+      }
+      if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+        const check = {
+          id: 1_300 + checks.length,
+          app: { id: 15_368 },
+          head_sha: headSha,
+          ...JSON.parse(options.body),
+        };
+        checks.push(check);
+        return check;
+      }
+      if (/\/check-runs\/\d+$/.test(apiPath) && options.method === "PATCH") {
+        const check = checks.find((candidate) => apiPath.endsWith(`/${candidate.id}`));
+        Object.assign(check, JSON.parse(options.body));
+        return check;
+      }
+      throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+    };
+    const results = [];
+    for (const [index, run] of scenario.runs.entries()) {
+      results.push(
+        await processWorkflowOutcome({
+          event: {
+            action: "completed",
+            repository: {
+              full_name: "AgoraIO-Extensions/agent-infra",
+              default_branch: "main",
+            },
+            workflow_run: sourceRun({
+              id: 700 + index,
+              name: run.name,
+              display_title: `${run.target} | ${run.operation} | closed`,
+              event: run.event,
+              head_sha: headSha,
+              ...(run.event.startsWith("pull_request")
+                ? { pull_requests: [{ number: 115, head: { sha: headSha } }] }
+                : {}),
+            }),
+          },
+          token: "test-token",
+          webhookUrl: "https://example.invalid/webhook",
+          request,
+          sendNotification: async () => {
+            deliveries += 1;
+            return {
+              configured: true,
+              delivered: true,
+              attempts: [],
+              warning: null,
+            };
+          },
+          writeSummary: async () => {},
+        }),
+      );
+    }
+
+    assert.equal(results[0].record.outcome.code, scenario.code);
+    assert.equal(results[0].record.eventId, scenario.expectedEventId);
+    assert.equal(results[1].record.eventId, scenario.expectedEventId);
+    assert.equal(results[1].replay, true);
+    assert.equal(deliveries, 1);
+    assert.equal(checks.length, 1);
+  }
+});
+
 test("retries a rate-limited WeCom delivery without exposing response content", async () => {
   const requests = [];
   const fetchImpl = async (_url, options) => {
@@ -737,6 +865,7 @@ test("idempotently reopens and triages the primary Issue after a main failure", 
     request,
     defaultBranch: "main",
   });
+  issue = { ...issue, state: "closed", labels: [] };
   const replay = await triagePostMergeFailure({
     repository: "AgoraIO-Extensions/agent-infra",
     sourceRun: run,
@@ -751,8 +880,8 @@ test("idempotently reopens and triages the primary Issue after a main failure", 
     replay: false,
   });
   assert.equal(replay.replay, true);
-  assert.equal(issue.state, "open");
-  assert.ok(issue.labels.some((label) => label.name === "needs-triage"));
+  assert.equal(issue.state, "closed");
+  assert.equal(issue.labels.some((label) => label.name === "needs-triage"), false);
   assert.equal(comments.length, 1);
   assert.match(comments[0].body, /Post-merge failure audit/);
   assert.match(comments[0].body, /actions\/runs\/400/);

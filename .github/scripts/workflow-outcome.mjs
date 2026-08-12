@@ -645,7 +645,7 @@ export async function triagePostMergeFailure({
     samePostMergeEvent(parsePostMergeRecord(comment), record),
   );
 
-  if (issue.state !== "open") {
+  if (!replay && issue.state !== "open") {
     issue = await request(issuePath, {
       token,
       method: "PATCH",
@@ -653,7 +653,7 @@ export async function triagePostMergeFailure({
       body: JSON.stringify({ state: "open" }),
     });
   }
-  if (!labelsOf(issue).includes("needs-triage")) {
+  if (!replay && !labelsOf(issue).includes("needs-triage")) {
     await request(`${issuePath}/labels`, {
       token,
       method: "POST",
@@ -717,6 +717,10 @@ async function loadIssueContext({
   const blockerEventId = blockerState
     ? `blocker-state-${blockerState.signature}`
     : null;
+  const issueClosedAt = Date.parse(issue.closed_at ?? "");
+  const issueCompletedEventId = Number.isFinite(issueClosedAt)
+    ? `issue-completed-${issueNumber}-${issueClosedAt}`
+    : null;
   return {
     issue,
     comments,
@@ -740,6 +744,9 @@ async function loadIssueContext({
             blocker_resumed: blockerEventId,
             dependency_triage: blockerEventId,
           }
+        : {}),
+      ...(issueCompletedEventId
+        ? { issue_completed: issueCompletedEventId }
         : {}),
     },
   };
@@ -825,8 +832,14 @@ async function loadPullRequestContext({
       .sort((left, right) => right.id - left.id)[0];
   const humanCheck = latestTrustedCheck("Human Validation Gate");
   const claudeCheck = latestTrustedCheck("Claude Review Gate");
+  const pullRequestMerged = Boolean(
+    parsedRunName.action === "closed" && pullRequest.merged_at,
+  );
   const eventIds = {
     ...(issueContext.eventIds ?? {}),
+    ...(pullRequestMerged
+      ? { pr_completed: `pr-completed-${pullRequestNumber}-${headSha}` }
+      : {}),
     ...(humanCheck?.id
       ? { human_validation_required: `human-validation-check-${humanCheck.id}` }
       : {}),
@@ -847,9 +860,7 @@ async function loadPullRequestContext({
         pullRequest.head?.sha === sourceRun.head_sha &&
         pullRequest.base?.ref === defaultBranch
     ),
-    pullRequestMerged: Boolean(
-      parsedRunName.action === "closed" && pullRequest.merged_at,
-    ),
+    pullRequestMerged,
     humanValidationPending: Boolean(
       labelsOf(issueContext.issue).includes("ready-for-human") &&
         humanCheck?.conclusion !== "success",
