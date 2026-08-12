@@ -214,7 +214,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       if (
         workflowName !== "pr-agent-review.yml" ||
-        jobName !== "analyze" ||
+        !["analyze", "suggestions"].includes(jobName) ||
         step.uses !== PR_AGENT_ACTION ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
@@ -737,11 +737,39 @@ export function validateWorkflowDocuments(workflows) {
   }
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
+  const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
+  const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
+    (step) => step.id === "pr-agent-suggestions",
+  );
   const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
     (step) => step.name === "Checkout trusted default branch",
   );
   const prAgentCondition = String(prAgentAnalyze?.if ?? "");
+  const prAgentSuggestionsCondition = String(prAgentSuggestions?.if ?? "");
+  const prAgentPermissions = {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  };
+  const prAgentCommonEnv = {
+    GITHUB_TOKEN: "${{ github.token }}",
+    OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+    OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
+    "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+    "config.propagate_tool_errors": "true",
+    "config.publish_output": "true",
+    "config.publish_output_progress": "false",
+    "config.restricted_mode": "true",
+    "config.use_repo_settings_file": "false",
+    "config.use_wiki_settings_file": "false",
+    "config.fallback_models": "[]",
+    "config.custom_model_max_tokens":
+      "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+    "github_action_config.auto_describe": "false",
+    "github_action_config.pr_actions":
+      '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+  };
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
       JSON.stringify([
@@ -762,13 +790,12 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCondition.includes("github.event.pull_request.draft == false") ||
-    !sameObject(prAgentAnalyze?.permissions, {
-      contents: "read",
-      issues: "write",
-      "pull-requests": "write",
-    }) ||
-    Object.keys(prAgent?.jobs ?? {}).length !== 1 ||
+    prAgentSuggestionsCondition !== prAgentCondition ||
+    !sameObject(prAgentAnalyze?.permissions, prAgentPermissions) ||
+    !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
+    Object.keys(prAgent?.jobs ?? {}).length !== 2 ||
     prAgentAnalyze?.steps?.length !== 2 ||
+    prAgentSuggestions?.steps?.length !== 1 ||
     prAgentAnalyzeCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
     !sameObject(prAgentAnalyzeCheckout?.with, {
@@ -777,20 +804,10 @@ export function validateWorkflowDocuments(workflows) {
       "persist-credentials": false,
     }) ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
+    prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
+    prAgentSuggestionsAction?.["continue-on-error"] !== true ||
     !sameObject(prAgentAction?.env, {
-      GITHUB_TOKEN: "${{ github.token }}",
-      OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
-      OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
-      "config.model": "${{ secrets.PR_AGENT_MODEL }}",
-      "config.propagate_tool_errors": "true",
-      "config.publish_output": "true",
-      "config.publish_output_progress": "false",
-      "config.restricted_mode": "true",
-      "config.use_repo_settings_file": "false",
-      "config.use_wiki_settings_file": "false",
-      "config.fallback_models": "[]",
-      "config.custom_model_max_tokens":
-        "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      ...prAgentCommonEnv,
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
@@ -804,10 +821,13 @@ export function validateWorkflowDocuments(workflows) {
       "pr_reviewer.require_ticket_analysis_review": "false",
       "pr_reviewer.require_todo_scan": "false",
       "github_action_config.auto_review": "true",
-      "github_action_config.auto_describe": "false",
+      "github_action_config.auto_improve": "false",
+    }) ||
+    !sameObject(prAgentSuggestionsAction?.env, {
+      ...prAgentCommonEnv,
+      "pr_code_suggestions.commitable_code_suggestions": "true",
+      "github_action_config.auto_review": "false",
       "github_action_config.auto_improve": "true",
-      "github_action_config.pr_actions":
-        '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
     })
   ) {
     errors.push(
@@ -1201,7 +1221,10 @@ export function validateWorkflowDocuments(workflows) {
       (condition) =>
         !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
         !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
-        !condition.includes("github.event.workflow_run.pull_requests[0]"),
+        !condition.includes("github.event.workflow_run.pull_requests[0]") ||
+        !condition.includes(
+          "github.event.workflow_run.head_repository.full_name == github.repository",
+        ),
     ) ||
     !String(review?.jobs?.analyze?.if ?? "").includes(
       "vars.CLAUDE_REVIEW_ENABLED == 'true'",
@@ -1259,6 +1282,9 @@ export function validateWorkflowDocuments(workflows) {
   }
   const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
   const reviewConfig = analyzeSteps[reviewConfigIndex];
+  const reviewInputStage = analyzeSteps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
   const reviewConfigEnv = reviewConfig?.env ?? {};
   if (
     reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
@@ -1276,6 +1302,19 @@ export function validateWorkflowDocuments(workflows) {
     reviewConfigEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
+    reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    reviewInputStage?.env?.EXPECTED_HEAD_SHA !==
+      "${{ github.event.workflow_run.head_sha }}" ||
+    reviewInputStage?.env?.PR_NUMBER !==
+      "${{ github.event.workflow_run.pull_requests[0].number }}" ||
+    reviewInputStage?.shell !== "bash" ||
+    !String(reviewInputStage?.run ?? "").includes('gh pr view "$PR_NUMBER"') ||
+    !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'gh pr diff "$PR_NUMBER" > .review-input/pr.diff',
+    ) ||
+    (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
+      .length !== 2 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
@@ -1331,13 +1370,11 @@ export function validateWorkflowDocuments(workflows) {
     reviewArgs.match(/--(?:disallowedTools|disallowed-tools)(?=\s|=|$)/g) ?? [];
   if (
     JSON.stringify(allowedToolFlags) !==
-      JSON.stringify([
-        '--allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"',
-      ]) ||
+      JSON.stringify(['--allowedTools "Read,Grep,Glob"']) ||
     JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
     JSON.stringify(disallowedToolFlags) !==
       JSON.stringify([
-        '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       ]) ||
     JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
   ) {
