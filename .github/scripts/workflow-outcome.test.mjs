@@ -96,6 +96,22 @@ test("rejects PR run targets and operations that disagree with workflow_run meta
     }),
     /Source run operation does not match trusted workflow/,
   );
+  await assert.rejects(
+    processWorkflowOutcome({
+      event: {
+        ...eventFor("PR #115 | docs-ci | pull_request"),
+        workflow_run: {
+          ...eventFor("PR #115 | docs-ci | pull_request").workflow_run,
+          path: ".github/workflows/untrusted.yml",
+        },
+      },
+      token: "test-token",
+      webhookUrl: "",
+      request,
+      writeSummary: async () => {},
+    }),
+    /Source workflow is not trusted/,
+  );
 });
 
 test("records an unbound fork PR source as a repository no-op", async () => {
@@ -233,6 +249,7 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
     sourceRun: {
       id: 31464062784,
       name: "Claude PR Review",
+      path: ".github/workflows/claude-pr-review.yml",
       display_title: "PR #105 | claude-pr-review | source 31464062784",
       event: "workflow_run",
       conclusion: "failure",
@@ -289,9 +306,21 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
 });
 
 function sourceRun(overrides = {}) {
+  const name = overrides.name ?? "Codex Worker";
+  const workflowPaths = {
+    "Auto-merge Enrollment": ".github/workflows/auto-merge.yml",
+    "Blocker Reconciler": ".github/workflows/blocker-reconciler.yml",
+    "Claude Issue Review": ".github/workflows/claude-issue-review.yml",
+    "Claude PR Review": ".github/workflows/claude-pr-review.yml",
+    "Codex Worker": ".github/workflows/codex-worker.yml",
+    "Docs CI": ".github/workflows/docs-ci.yml",
+    "PR-Agent Review": ".github/workflows/pr-agent-review.yml",
+    "PR Gates": ".github/workflows/pr-gates.yml",
+  };
   return {
     id: 90,
-    name: "Codex Worker",
+    name,
+    path: overrides.path ?? workflowPaths[name],
     display_title: "Issue #55 | codex-worker | labeled",
     event: "issues",
     conclusion: "success",
@@ -302,6 +331,66 @@ function sourceRun(overrides = {}) {
     ...overrides,
   };
 }
+
+test("accepts the hosted workflow identity from its trusted path", async () => {
+  const headSha = "e".repeat(40);
+  const checks = [];
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/55")) {
+      return {
+        number: 55,
+        state: "closed",
+        closed_at: "2026-08-12T12:37:36Z",
+        labels: [],
+      };
+    }
+    if (apiPath.endsWith("/issues/55/comments")) return [];
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      return { check_runs: checks };
+    }
+    if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+      const check = {
+        id: 1_900,
+        app: { id: 15_368 },
+        head_sha: headSha,
+        ...JSON.parse(options.body),
+      };
+      checks.push(check);
+      return check;
+    }
+    if (apiPath.endsWith("/check-runs/1900") && options.method === "PATCH") {
+      Object.assign(checks[0], JSON.parse(options.body));
+      return checks[0];
+    }
+    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+  };
+
+  const result = await processWorkflowOutcome({
+    event: {
+      action: "completed",
+      repository: {
+        full_name: "AgoraIO-Extensions/agent-infra",
+        default_branch: "main",
+      },
+      workflow_run: sourceRun({
+        id: 31597352414,
+        name: "Issue #55 | pr-gates | closed",
+        path: ".github/workflows/pr-gates.yml",
+        display_title: "Issue #55 | pr-gates | closed",
+        event: "issues",
+        head_sha: headSha,
+        updated_at: "2026-08-12T12:37:55Z",
+      }),
+    },
+    token: "test-token",
+    webhookUrl: "",
+    request,
+    writeSummary: async () => {},
+  });
+
+  assert.equal(result.record.sourceRun.workflow, "PR Gates");
+  assert.equal(result.record.outcome.code, "issue_completed");
+});
 
 test("notifies only actionable or final outcomes and ignores later audit state", () => {
   const build = (run, context = {}) =>
