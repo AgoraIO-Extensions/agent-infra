@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import http from "node:http";
 import test from "node:test";
 import {
   buildOutcomeRecord,
@@ -329,7 +328,7 @@ test("notifies only actionable or final outcomes and ignores later audit state",
       terminal: true,
     },
   );
-  for (const conclusion of ["cancelled", "skipped", "stale"]) {
+  for (const conclusion of ["cancelled", "neutral", "skipped", "stale"]) {
     assert.deepEqual(build(sourceRun({ conclusion })), {
       code: "workflow_not_run",
       nextOwner: "none",
@@ -569,35 +568,23 @@ test("uses the semantic audit identity across different observer source runs", (
   assert.equal(build(101).eventId, "worker-attempt-worker-500-3-recoverable");
 });
 
-test("retries a rate-limited WeCom delivery without exposing response content", async (t) => {
+test("retries a rate-limited WeCom delivery without exposing response content", async () => {
   const requests = [];
-  const server = http.createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      requests.push(JSON.parse(body));
-      if (requests.length === 1) {
-        response.writeHead(429, { "content-type": "application/json" });
-        response.end(JSON.stringify({ errcode: 45009, errmsg: "secret response" }));
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ errcode: 0, errmsg: "ok" }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-
-  const address = server.address();
+  const fetchImpl = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return requests.length === 1
+      ? new Response('{"errcode":45009,"errmsg":"secret response"}', {
+          status: 429,
+        })
+      : new Response('{"errcode":0,"errmsg":"ok"}', { status: 200 });
+  };
   const result = await sendWeComNotification({
-    webhookUrl: `http://127.0.0.1:${address.port}/webhook?key=never-log-me`,
+    webhookUrl: "https://example.invalid/webhook?key=never-log-me",
     record: buildOutcomeRecord({
       repository: "AgoraIO-Extensions/agent-infra",
       sourceRun: sourceRun({ conclusion: "failure" }),
     }),
+    fetchImpl,
     retryDelayMs: 0,
     timeoutMs: 500,
   });
@@ -614,6 +601,29 @@ test("retries a rate-limited WeCom delivery without exposing response content", 
   assert.equal(requests.length, 2);
   assert.deepEqual(Object.keys(requests[0]), ["msgtype", "markdown"]);
   assert.doesNotMatch(JSON.stringify(result), /never-log-me|secret response/);
+});
+
+test("rejects plaintext WeCom webhook delivery before calling fetch", async () => {
+  let requested = false;
+  const result = await sendWeComNotification({
+    webhookUrl: "http://example.invalid/webhook?key=never-log-me",
+    record: buildOutcomeRecord({
+      repository: "AgoraIO-Extensions/agent-infra",
+      sourceRun: sourceRun({ conclusion: "failure" }),
+    }),
+    fetchImpl: async () => {
+      requested = true;
+      return new Response('{"errcode":0}', { status: 200 });
+    },
+  });
+
+  assert.deepEqual(result, {
+    configured: true,
+    delivered: false,
+    attempts: [],
+    warning: "webhook_invalid",
+  });
+  assert.equal(requested, false);
 });
 
 test("keeps every WeCom failure non-blocking and bounded to three attempts", async () => {
@@ -717,6 +727,7 @@ test("idempotently reopens and triages the primary Issue after a main failure", 
     event: "push",
     conclusion: "failure",
     head_sha: "c".repeat(40),
+    head_branch: "main",
   });
 
   const first = await triagePostMergeFailure({
@@ -773,7 +784,36 @@ test("does not reopen an Issue for a cancelled or skipped main run", async () =>
           requested = true;
         },
       }),
-      /failed default-branch run/,
+      /failed default-branch push/,
+    );
+    assert.equal(requested, false);
+  }
+});
+
+test("requires a failed push on the exact default branch for post-merge triage", async () => {
+  for (const override of [
+    { event: "workflow_dispatch", head_branch: "main" },
+    { event: "push", head_branch: undefined },
+    { event: "push", head_branch: "release" },
+  ]) {
+    let requested = false;
+    await assert.rejects(
+      triagePostMergeFailure({
+        repository: "AgoraIO-Extensions/agent-infra",
+        sourceRun: sourceRun({
+          name: "Docs CI",
+          display_title: "main | docs-ci | push",
+          event: "push",
+          conclusion: "failure",
+          ...override,
+        }),
+        token: "test-token",
+        defaultBranch: "main",
+        request: async () => {
+          requested = true;
+        },
+      }),
+      /failed default-branch push/,
     );
     assert.equal(requested, false);
   }

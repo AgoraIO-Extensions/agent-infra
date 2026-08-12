@@ -158,7 +158,7 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
       return outcome("blocker_waiting_authorization", "issue-owner", true);
     }
   }
-  if (["cancelled", "skipped", "stale"].includes(sourceRun.conclusion)) {
+  if (["cancelled", "neutral", "skipped", "stale"].includes(sourceRun.conclusion)) {
     return outcome("workflow_not_run", "none", false);
   }
   if (sourceRun.conclusion !== "success") {
@@ -382,7 +382,7 @@ export async function sendWeComNotification({
     };
   }
   if (
-    !["http:", "https:"].includes(parsedUrl.protocol) ||
+    parsedUrl.protocol !== "https:" ||
     parsedUrl.username ||
     parsedUrl.password
   ) {
@@ -595,10 +595,12 @@ export async function triagePostMergeFailure({
   sourceRunMetadata(sourceRun);
   if (!token) throw new Error("GITHUB_TOKEN is required");
   if (
+    sourceRun.event !== "push" ||
+    sourceRun.head_branch !== defaultBranch ||
     !POST_MERGE_FAILURE_CONCLUSIONS.has(sourceRun.conclusion) ||
-    (sourceRun.head_branch && sourceRun.head_branch !== defaultBranch)
+    !defaultBranch
   ) {
-    throw new Error("Post-merge triage requires a failed default-branch run");
+    throw new Error("Post-merge triage requires a failed default-branch push");
   }
   const pulls = await request(
     `/repos/${repository}/commits/${sourceRun.head_sha}/pulls`,
