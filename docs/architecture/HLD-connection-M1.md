@@ -1219,7 +1219,7 @@ Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务�
 | `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash |
 | `effect_dispatch` | dispatch_id、effect_id、ordinal、state、request_hash、deadline |
 | `provider_egress_hop` | hop_id、dispatch_id、jti、assertion_hash、state、receipt refs |
-| `egress_admission` | hop_id、jti、accepted_at、lease_proof_hash | one admission per hop/jti |
+| `egress_admission` | hop_id、jti、accepted_at、lease_proof_hash；one admission per hop/jti |
 | `provider_receipt` | receipt_id、hop_id、type、signed_envelope、checksum、occurred_at |
 | `reconciliation_job` | id、effect_id、strategy、lease、next_at、status、evidence_ref |
 
