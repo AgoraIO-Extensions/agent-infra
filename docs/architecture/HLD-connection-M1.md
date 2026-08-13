@@ -10,7 +10,7 @@
 | 产品依据 | [企业级 Agent 平台 M1 产品需求](../prd/PRD-agent-platform-M1.md)、[Connection M1 产品需求](../prd/PRD-connection-M1.md) |
 | 工程依据 | [agent-infra M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) |
 | 交付流程依据 | [agent-infra AI 主导开发工作流 Spec](SPEC-ai-native-development-workflow.md) |
-| 参考实现 | [OpenConnector 固定 Commit `0cb0e0d`](https://github.com/oomol-lab/open-connector/tree/0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674) |
+| 参考实现 | [OpenConnector 固定 Commit `07f0a190`](https://github.com/oomol-lab/open-connector/tree/07f0a190a9815827d2d3ecae1e6ba7b8524662e8) |
 
 ## 1. 文档目的
 
@@ -39,7 +39,15 @@
 | **[本项目设计决策]** | 为闭合 M1 需求提出的工程设计 | HLD PR 合并只证明该版本完成交付门禁；决策是否生效还取决于本文章节36记录的批准状态及前置PRD、工程Spec和ADR动作 |
 | **[评审门禁]** | 会改变产品语义、外部依赖或重大架构边界的待确认项 | 未批准前不得进入实现 |
 
-除引用外部项目事实的段落外，OpenConnector 均指固定 Commit `0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674`，不指浮动的 `main`。
+除引用外部项目事实的段落外，OpenConnector 均指固定 Commit `07f0a190a9815827d2d3ecae1e6ba7b8524662e8`，不指浮动的 `main`。
+
+### 2.1 Issue #4 行为边界
+
+**[OpenConnector 参考]** 上游 Action 请求在入口读取当前 runtime token 和 policy，随后以请求快照继续执行；执行中不会再次读取授权状态、主动取消或回滚 Provider 操作。
+
+**[本项目设计决策]** Issue #4 只对齐这一最小行为，并只约束平台已接入、声明并托管的 Provider/Action：Connection 在托管 Action 请求入口检查当前 Connection、Provider 和 Action 状态一次；检查通过后继续执行，撤权、断开或停用不会中途取消该请求；状态变化对后续进入 Connection 的新请求生效。Platform 到 Connection 的调用身份仍由服务端保护传递，但具体字段、版本号和跨系统协议不在 #4 中固化。
+
+自定义 Agent 镜像自行发起的任意网络访问不属于平台托管 Action，也不在本 Issue 的 M1 验收范围内。用户修复授权或 Connection 后，主动重试才会创建新的 Action 调用；不自动重放旧请求。
 
 **来源继承规则：** 本文所有未在句首、表格“来源”列或所属小节中另行标注的规范性状态、字段、时序、API、约束和默认值，统一属于 **[本项目设计决策]**，不是 PRD 已确认结论，也不是 OpenConnector 现成能力。产品行为只有明确标注 **[PRD]** 时才表示权威需求；外部事实只有明确标注 **[OpenConnector 参考]** 时才表示固定 Commit 的参考做法。
 
@@ -54,7 +62,7 @@
 | Agent 可以调用真实外部 API，但不能获得原始凭证 | [PRD] | Tool Gateway、Credential Boundary、Provider Executor |
 | Agent Owner 决定 Agent 可使用的 Action | [PRD] | Owner Action Set 与不可变 ActionVersion |
 | 使用者决定把哪个 Connection 授权给哪个 Agent | [PRD] | Platform ConnectionGrant 与确认快照 |
-| 个人、共享、跨用户、跨 Agent 授权相互隔离 | [PRD] | 服务端解析、Permit 绑定、数据库约束和负向测试 |
+| 个人、共享、跨用户、跨 Agent 授权相互隔离 | [PRD] | 服务端解析、受保护调用上下文、数据库约束和负向测试 |
 | 至少一个真实 Provider 完成连接、刷新、授权、调用和撤销 | [PRD] | Provider Onboarding 与真实 E2E 门禁 |
 | Platform 与 Connection 保持独立模块、数据库账号和部署边界 | [现有工程 Spec] | 两个 bounded context、版本化 HTTP 和 outbox |
 | Action 调用先获得稳定 ID 和持久化状态；其他 Provider 出站也先建立 durable attempt | Action持久化：[现有工程 Spec]；其他attempt与具体模型：[本项目设计决策] | ActionCall、ActionAttempt、OAuth/refresh/revoke attempt、LogicalEffect 和 EffectDispatch |
@@ -71,11 +79,11 @@
 | OAuth Authorization Code + PKCE 和受控 API Key 输入 | 鉴权方式：[PRD]；PKCE、take-once与输入控制：[本项目设计决策] |
 | 外部账号稳定识别、同账号重连和不同账号切换 | 产品行为：[PRD]；issuer/tenant/subject fingerprint算法：[本项目设计决策] |
 | Owner Action 选择、用户授权、Action 扩权确认和撤销 | [PRD] |
-| Tool Gateway与Action执行；一次性 Execution Permit和在线兑换 | 调用能力与Agent不可见凭证：[PRD]；Permit协议：[本项目设计决策] |
+| Tool Gateway与Action执行；受保护的调用上下文传递 | 调用能力与Agent不可见凭证：[PRD]；具体上下文协议留给后续 HLD/ADR |
 | ActionCall持久化、幂等、防盲目重试、外部效果账本和最小对账能力 | Provider前持久化：[现有工程 Spec]；状态机、Effect Ledger和对账协议：[本项目设计决策] |
 | 用户调用记录、管理员审计、跨系统关联和脱敏 | 可见记录与审计目标：[PRD]；事件源、correlation和脱敏字段：[本项目设计决策] |
 | PostgreSQL、KMS、公司身份、对象存储和真实Provider的生产Adapter边界 | 技术栈与部署边界：[现有工程 Spec]；真实Provider闭环：[PRD]；Adapter契约：[本项目设计决策] |
-| Web、企微和自定义WebUI触发执行时的统一Connection授权边界 | 渠道与身份要求：[PRD]；统一Platform执行上下文和Permit链路：[本项目设计决策] |
+| Web、企微和自定义WebUI触发执行时的统一Connection授权边界 | 渠道与身份要求：[PRD]；统一Platform执行上下文和Connection入口检查：[本项目设计决策] |
 
 ### 3.3 非目标
 
@@ -97,8 +105,8 @@
 
 | ID | 当前事实 | 风险 | Proposed 处理 | 后续权威文档动作 |
 | --- | --- | --- | --- | --- |
-| G-01 | Platform DB 是授权权威，但 Connection 也被描述为负责授权校验和授权审计 | 双方可能各建一份可写 Grant | Platform 保存 Grant；Connection 只兑换 Permit 并保存只读审计投影 | 先澄清工程 Spec 6.2 和审计边界，再批准/落地 |
-| G-02 | Execution Grant 未绑定目标 Connection、Grant revision 或 ActionVersion | Agent/调用方可能替换目标，撤销无法 fence | 增加调用级一次性 ExecutionPermit 和在线 redeem | 先更新工程 Spec 9.3、13.3，再批准/落地 |
+| G-01 | Platform DB 是用户、Agent 和授权关系的权威；Connection 负责外部账号、Action 执行和调用审计 | 双方可能各建一份可写授权副本 | Platform 继续保存授权；Connection 在托管 Action 请求入口检查自身当前状态并保存调用事实。具体受保护上下文协议留给后续 HLD/ADR | 保持现有工程 Spec 边界；实现前补充内部接口契约 |
+| G-02 | OpenConnector 只在请求入口生成 runtime 授权/策略快照，不提供企业 Grant 或跨系统版本协议 | 把 `ExecutionPermit`、revision fence 或 redeem 竞态误写成 M1 必选协议 | #4 对齐上游最小行为：入口检查一次，检查通过后继续执行；后续请求在入口拒绝。Permit、revision 和跨系统协议仅作为后续设计候选 | 本 Issue 评论已确认；后续 HLD/ADR 如确有需要再单独批准 |
 | G-03 | 架构原则要求 Action 调用先持久化，原时序却在 Provider 返回后记录 | 进程崩溃时可能已有副作用却无记录 | 先创建 ActionCall 和 Effect intent，再出站 | 先更新工程 Spec 13.3，再批准/落地 |
 | G-04 | PRD 只列成功或失败，未定义 Provider 超时后的未知效果 | Agent 可能盲目重试并重复写入 | 增加 `UNCERTAIN`/“结果待确认”及对账语义 | **[评审门禁]** 产品确认后更新 Connection PRD |
 | G-05 | Action 实质变化要求重新发布和 Owner 重选，但未明确用户是否重确认 | 用户可能静默获得新能力 | 权限摘要变化时必须重新确认 | **[评审门禁]** 产品确认后更新 Connection PRD |
@@ -118,7 +126,7 @@
 
 ### 4.2 评审批准规则
 
-**[本项目设计决策]** G-01、G-02、G-03、G-06、G-07 和 G-08 是本文提出的可执行契约细化；其中任何会改变工程 Spec 既有接口、数据归属、身份传递或运行契约的结论，都必须先更新工程 Spec，再批准本文对应决策并进入实现。HLD Review 不能倒置该权威顺序。
+**[本项目设计决策]** G-01、G-03、G-06、G-07 和 G-08 是本文提出的可执行契约细化；G-02 已按 Issue #4 评论收窄为 OpenConnector 对齐的行为边界，不批准任何特定 Permit、revision 或跨系统 redeem 协议。任何改变工程 Spec 既有接口、数据归属、身份传递或运行契约的结论，都必须先更新工程 Spec，再批准本文对应决策并进入实现。HLD Review 不能倒置该权威顺序。
 
 **[评审门禁]** G-04、G-05、G-14、G-16、G-17 和 G-18 会改变用户可见产品状态或授权语义，必须由 Product Owner 明确确认并回写 PRD。G-09至G-13是上线外部依赖或重大安全契约；在不固化未批准边界的前提下可以评审Fake契约，但不能宣布真实M1闭环完成。G-11不把Journal变成第二个业务授权库，但新增PITR域外依赖、恢复身份和路由；G-12新增不可放宽的mutating数据可靠性门禁；G-13新增Proxy/Connection线性化协议，三者都必须先同步工程Spec并完成对应ADR。G-15在进入数据DDL/cutover前必须关闭；仓库当前领域功能尚未实现不能替代legacy inventory证据。G-16批准并回写PRD前，只允许继续设计评审或在不进入默认分支、不形成可复用migration/worker/state transition的隔离验证环境中做一次性技术探针；不得提交会写`REVOKED/TERMINATED/new epoch`的Schema、worker、状态迁移或产品流程实现。G-17批准前可以实现“bound exact path仍有效时完全保留”和live fail-closed检查；若bound path失效但另一当前path仍有效，只可返回安全不可用且对root、Grant、event和审计终态零写，不得实现`CURRENT_PATH_LOST`终结、备用path迁移、产品提示或重新INITIAL入口。没有任何当前资格path时，PRD已明确的不具备使用资格仍可走基础definitive-loss终结。G-18是G-17之上的第二层条件门禁：只有两者均已回写两份PRD、工程Spec已接纳跨系统状态/身份传递变化且ADR已批准时，active migration/OpenAPI/UI/event/fixture才可包含`ABANDON_REQUESTED/ABANDONED`、用户放弃入口或跨Agent successor；否则G-17的未完成attempt继续fail closed保留，不能用TTL、管理员操作或后台worker模拟放弃。
 
@@ -199,14 +207,14 @@ flowchart LR
 | 数据或决策 | 权威系统 | 非权威副本或引用 | 来源 |
 | --- | --- | --- | --- |
 | 公司用户状态和组织成员关系 | 公司身份系统 | 请求期解析结果，不持久化为永久权限 | [PRD] |
-| Agent、Owner、Agent 可用范围和渠道能力 | Platform | Permit 中的不可变调用快照 | 权威归属：[PRD]；Permit快照：[本项目设计决策] |
+| Agent、Owner、Agent 可用范围和渠道能力 | Platform | Connection 请求中的受保护调用上下文 | 权威归属：[PRD]；上下文格式留给后续 HLD/ADR |
 | Owner 当前 Action 选择 | Platform | Connection 仅按 ActionVersion 校验当前发布状态 | Owner选择权威：[PRD]；Connection校验方式：[本项目设计决策] |
 | 用户到 Agent/Connection 的 Grant 和确认 Action 集 | Platform DB | Connection 中的审计投影不可写 | Platform Grant权威：[现有工程 Spec]；只读投影：[本项目设计决策] |
 | Provider、ProviderRelease、ActionVersion 和发布状态 | Connection DB | Platform 目录缓存/投影 | 目录/发布权威：[PRD]；版本与投影结构：[本项目设计决策] |
-| 个人或共享 Connection、外部账号归属和共享范围 | Connection DB | Platform Grant 只保存稳定 Connection ID 与 account binding revision | Connection归属/范围：[PRD]；revision引用：[本项目设计决策] |
+| 个人或共享 Connection、外部账号归属和共享范围 | Connection DB | Platform 授权关系中的受保护 Connection 引用 | Connection归属/范围：[PRD]；引用格式留给后续 HLD/ADR |
 | OAuth、Credential 密文和 refresh 状态 | Connection DB + KMS | 其他系统无副本 | Credential归属：[PRD]；Connection DB/KMS基线：[现有工程 Spec] |
 | ActionCall、Provider attempt、外部 Effect 和脱敏调用结果 | Connection DB | Platform 保存 callId 和用户时间线引用 | Action持久化边界：[现有工程 Spec]；attempt/Effect/投影：[本项目设计决策] |
-| 对话、execution、toolCall 和渠道上下文 | Platform DB | Permit 中包含最小绑定，不含会话正文 | Platform上下文归属：[现有工程 Spec]；Permit最小绑定：[本项目设计决策] |
+| 对话、execution、toolCall 和渠道上下文 | Platform DB | Connection 调用中的受保护关联引用，不含会话正文 | Platform上下文归属：[现有工程 Spec] |
 | Alternate attempt 的签名终态 receipt | Connection DB | Platform 保存首次验签后冻结的 terminal projection、原 Connection signature evidence 和 source provenance | [本项目设计决策]，仅在 G-17/G-18 对应条件能力启用后存在 |
 | Platform 对 alternate terminal receipt 的首次接纳时间、source、SIGNED acceptance proof 和 durable delivery receipt | Platform DB | Connection 保存不可变 proof witness、terminal-ack projection、canonical ACK 与 acquisition pointer；这些副本不能反向成为 Platform 授权或状态权威 | [本项目设计决策]，仅在 G-17/G-18 对应条件能力启用后存在 |
 | 恢复 cohort、执行 generation 和恢复后 policy/catalog validation generation | PITR 域外 Recovery Control | 两个业务库 runtime 行只保存验签后的事务镜像 | [本项目设计决策] |
@@ -218,11 +226,11 @@ flowchart LR
 
 **[本项目设计决策]** 该规则同样覆盖 Sandbox 输入和 Provider 返回内容。服务端从公司身份、execution、Agent 配置和 Grant 解析当前用户、Agent、Connection 与外部账号；任何不可信内容只能提供 Action 参数，不能改变授权主体。
 
-**[本项目设计决策]** Agent Runtime 唯一可见的工具调用输入是 Provider-qualified `toolName`、符合 Schema 的 `args` 和 Platform 签发的 execution token。`toolName` 由 Platform 目录按 `conn__{providerKey}__{actionKey}` 生成并全局检查唯一，再服务端解析为 `providerId + actionId + exact actionVersionId`；不能只用可能跨 Provider 重名的 `actionKey`。Agent 不接收 `connectionId`、`grantId`、`permitId`、外部账号标识或 Credential。
+**[本项目设计决策]** Agent Runtime 唯一可见的工具调用输入是 Provider-qualified `toolName`、符合 Schema 的 `args` 和 Platform 执行身份。`toolName` 由 Platform 目录按 `conn__{providerKey}__{actionKey}` 生成并全局检查唯一，再服务端解析为 `providerId + actionId`；不能只用可能跨 Provider 重名的 `actionKey`。Agent 不接收 Connection 标识、授权内部字段、外部账号标识或 Credential。
 
 **[现有工程 Spec]** Agent Pod 只能访问 Platform Tool Gateway，网络策略拒绝其访问 Connection DB、Connection API、KMS 和 Provider Credential endpoint。
 
-**[本项目设计决策]** Platform 不读取 Connection DB，Connection 不读取 Platform DB。跨边界只使用版本化 HTTP、服务身份、短期 Permit、outbox 事件和稳定关联 ID。
+**[本项目设计决策]** Platform 不读取 Connection DB，Connection 不读取 Platform DB。跨边界只使用版本化 HTTP、服务身份、受保护的调用上下文、outbox 事件和稳定关联 ID；具体令牌或字段方案不由 Issue #4 固化。
 
 **[本项目设计决策]** 正常路径中，Connection 的 receipt/proof witness 与 Platform 的 projection/acceptance proof 各自只证明另一侧已经发生的不可变事实，不能成为对方业务状态的可写副本。唯一受限例外是 28.7 的 `QUARANTINED` PITR repair：它只能用原权威方已经签名且另一侧原样保存的 witness 恢复**同一历史字节和身份**，不能据此创建新 Grant、Connection、attempt、successor、当前授权或新的接纳时间。
 
@@ -232,9 +240,8 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | Browser -> Platform | 公司员工 | 公司会话 Cookie / Identity Gateway | 实时公司身份、Agent 范围 | 接受 body 中的 userId/agent owner 身份 |
 | Browser -> Connection | 公司员工或管理员 | 同一公司会话或等价网关身份 | 当前用户、RBAC、实时组织关系 | 以 URL 中 ownerId 决定数据范围 |
-| Agent -> Tool Gateway | Agent workload | workload service identity + execution token | Platform execution 记录 | 传入 userId、connectionId 或 permit |
-| Platform -> Connection | `platform-api` | mTLS 或公司等价服务身份 | 一次性 Permit + 本地 live state | 仅凭集群网络或可重放 JWT 放行 |
-| Connection -> Platform redeem | `connection-api` | mTLS + audience 限制 | Permit hash、callId、argsHash | 把 token 返回 Browser/Agent，或允许其代为兑换 |
+| Agent -> Tool Gateway | Agent workload | workload service identity + execution token | Platform execution 记录 | 传入 userId、connectionId 或受保护调用上下文内部字段 |
+| Platform -> Connection | `platform-api` | mTLS 或公司等价服务身份 | 受保护调用上下文 + Connection 本地 live state | 仅凭集群网络或可重放 JWT 放行 |
 | Connection -> KMS | `connection-api` workload | 独立 workload identity | key policy、environment、purpose | Platform/Agent 使用解密权限 |
 | Connection Provider Adapter -> Egress Proxy | `connection-api` workload | workload mTLS + per-request JWS + keyed envelope MAC | exact durable owner/hop、current Control/generations/Catalog overlay | 直连公网、复用旧JWS/MAC、把TCP连接当授权 |
 | Egress Proxy -> Connection admission/receipt | `provider-egress-proxy` workload | Proxy专用mTLS/audience | exact hop/JTI/MAC/control lease；DB take-once CAS | 通用Connection API/DB访问、把receipt当第二次发送许可 |
@@ -336,7 +343,7 @@ flowchart TB
 | Connection Account | 个人/共享 Connection、归属、共享范围、账号 fingerprint、状态机 | Identity Adapter、Connection Store | Agent 可用范围和会话 |
 | Authorization Flow | OAuth transaction、callback、API Key 替换、重连 | Provider Auth Adapter、KMS、Store | 保存 Agent Grant |
 | Credential Vault | envelope encryption、revision、refresh lease、CAS、rotation | KMS Adapter、Store | 向调用方返回明文 Credential |
-| Execution Authorization | Permit 校验/redeem、live Connection/Action/scope 交集 | Platform Permit Client、Catalog、Account | 创建或修改 Platform Grant |
+| Execution Authorization | 受保护调用上下文解析、Connection/Action/scope 入口检查 | Platform internal client、Catalog、Account | 创建或修改 Platform Grant；不固化跨系统 Permit 协议 |
 | Action Execution | 输入输出校验、幂等、attempt、effect、Provider 调用、对账 | Provider Adapter、Credential Vault、Egress Client | 任意 Provider proxy |
 | Connection Audit | 连接、目录、Credential 状态和 Action 调用审计 | Store、Platform 审计投影 | 保存聊天正文或模型思考 |
 | Background Maintenance | outbox、refresh、清理、reconciliation、projection | PostgreSQL leases | 以内存队列作为事实来源 |
@@ -434,17 +441,17 @@ flowchart LR
 | `actionVersionId` | Connection | Action 产生任何不可变新版本 | 不允许原地修改 | Owner 选择、用户确认、Permit |
 | `authorizationDigest` | Connection | 用途、输入输出 Schema、required scopes、effect class 变化 | 纯展示文案且语义不变 | 判断是否需要重新选择/确认 |
 | `connectionRevision` | Connection | Connection 任意持久化状态变化 | 无 | 乐观并发和审计 |
-| `accountBindingRevision` | Connection | 首次绑定，或经明确迁移重新证明 external fingerprint/issuer/tenant/subject | 同账号重连、scope 和共享范围变化 | Grant 确认防止账号偷换 |
-| `externalScopeRevision` | Connection | Provider 有效 scope 集合变化 | token 变化但 scope 相同 | Permit 与 Action required scope 交集 |
-| `sharedScopeRevision` | Connection | Shared 的 USER/ORG 配置集合变化 | 实时组织成员变化由身份断言处理 | Permit 和共享范围审计 |
-| `connectionExecutionFence` | Connection | 断开、重连完成、禁用、账号/scope/共享范围变化等必须淘汰旧执行许可的转换 | 不改变可执行性的展示字段变化 | Permit 和 dispatch live check |
+| `accountBindingRevision` | Connection | 首次绑定，或经明确迁移重新证明 external fingerprint/issuer/tenant/subject | 同账号重连、scope 和共享范围变化 | 账号绑定并发控制与审计；不作为 #4 必选授权协议 |
+| `externalScopeRevision` | Connection | Provider 有效 scope 集合变化 | token 变化但 scope 相同 | Connection 本地状态并发控制与审计；不作为 #4 必选授权协议 |
+| `sharedScopeRevision` | Connection | Shared 的 USER/ORG 配置集合变化 | 实时组织成员变化由身份断言处理 | Connection 本地状态并发控制与审计；不作为 #4 必选授权协议 |
+| `connectionExecutionFence` | Connection | 断开、重连完成、禁用、账号/scope/共享范围变化等状态转换 | 不改变可执行性的展示字段变化 | Connection 本地并发控制与审计；不作为 #4 必选授权协议 |
 | `credentialSetRevision` | ConnectionAccount | current Credential 指针或其可用性变化 | display profile、同版本 lease 续期 | active pointer/refresh CAS 和执行选择 |
 | `credentialStateRevision` | CredentialVersion | lifecycle、refresh lease 或销毁状态变化 | Connection 展示字段变化 | 单版本状态 CAS；不进入 AEAD AAD |
 | `encryptionRevision` | CredentialVersion | CredentialVersion 创建时固定；重新加密必须创建新版本 | lifecycle/lease、仅 rewrap DEK | 不可变 AEAD AAD |
-| `ownerActionSetRevision` | Platform | Owner Action 集变化 | 调用发生 | ExecutionGrant/Permit |
+| `ownerActionSetRevision` | Platform | Owner Action 集变化 | 调用发生 | Platform 内部变更记录；不作为 #4 必选字段 |
 | `agentAuthorizationRevision` | Platform | Agent 状态、Owner Action、可用范围或渠道执行策略任一变化 | 调用统计、展示文案变化 | 所有 Platform 授权命令的共同线性化根 |
-| `grantRevision` | Platform | Connection 选择、确认快照、状态变化 | Permit 签发 | 撤销、切换和扩权 fence |
-| `authorizationFence` | Platform | 稳定 GrantSlot 上的创建、替换、撤销或确认变化 | 只读查询 | issue/redeem 与撤销线性化 |
+| `grantRevision` | Platform | Connection 选择、确认快照、状态变化 | Permit 签发 | 后续 HLD/ADR 候选；不作为 #4 必选字段 |
+| `authorizationFence` | Platform | 稳定授权关系上的创建、替换、撤销或确认变化 | 只读查询 | 后续 HLD/ADR 候选；不作为 #4 必选字段 |
 | `platformRecoveryGeneration` | Recovery Control，Platform 镜像 | 任一业务 DB restore/PITR 或可能丢已提交写的故障转移所建立的 recovery cohort | 普通发布、Pod 重启或已证明零数据丢失的故障转移 | 淘汰旧 Permit，并让恢复出的 Grant 进入重确认隔离 |
 | `connectionRecoveryGeneration` | Recovery Control，Connection 镜像 | 与 Platform 同一 recovery cohort 旋转 | 同上 | 淘汰旧 Permit、lease、OAuth/refresh/revoke、Call 和 Dispatch |
 | `connectionDataValidationGeneration` | Recovery Control，Connection 镜像 | Connection DB 本身发生可能丢写的 restore/failover | Platform-only restore、普通发布和零数据丢失故障转移 | 让恢复出的 Account/Shared scope 必须重新鉴权确认 |
@@ -463,17 +470,17 @@ flowchart LR
 3. **[PRD]** 同一 `user + agent + provider` 最多只有一个当前授权 Connection；**[本项目设计决策]** 以最多一个current `ConnectionGrant`及数据库partial unique落地。
 4. **[PRD]** Agent Owner 选择 Action，不选择普通用户的外部账号。
 5. **[PRD]** Agent、Browser body 和模型输出都不能成为 user、Agent、Connection 或外部账号的授权来源。
-6. **[本项目设计决策]** 每个 Permit 只能绑定一个规范化参数 hash 和一个 `callId`；跨 call 重放必须冲突。
+6. **[后续 HLD/ADR 候选]** 如果未来引入一次性调用许可，它必须绑定一个规范化参数 hash 和一个 `callId`；该候选不属于 Issue #4 的 M1 必选行为。
 7. **[本项目设计决策]** Provider 出站前必须已有 ActionCall、ActionAttempt、LogicalEffect 和 EffectDispatch intent。
 8. **[PRD]** Action、Provider、Connection、公司账号或共享范围任一当前无效时，新出站请求必须 fail closed。
 9. **[本项目设计决策]** Credential 明文只存在于单次执行或 refresh 的受控内存范围，不进入异常、日志、Trace、事件、队列或持久化 payload。
 10. **[本项目设计决策]** `UNCERTAIN` 外部效果不能通过普通重试再次执行，只能对账或由明确的人工作出新调用决定。
-11. **[本项目设计决策]** Recovery generation 是业务 DB 恢复**之前**由外部 Recovery Control 用 CSPRNG 生成的 128-bit 不可预测新值，不是保存在同一被恢复数据库中的自增数；任一业务 DB restore/PITR 前必须先冻结入口/egress，并为同一 cohort 旋转 Platform/Connection execution generations。任何旧 generation 的 Permit、Grant、lease、OAuth callback、refresh、revoke、Call 或 Dispatch 都不能继续授权或出站。
-12. **[本项目设计决策]** Platform 或 Connection DB 可能丢写后，分别恢复出的 Agent policy 或 Catalog lifecycle 行都不是可立即执行的 current policy。其 validation generation 必须等于 Recovery Control 当前值，且已由 PITR 域外连续证据重放或双人全量复核；否则 preview/Permit 或 Provider 出站必须为零。
+11. **[本项目设计决策]** Recovery generation 是业务 DB 恢复**之前**由外部 Recovery Control 用 CSPRNG 生成的 128-bit 不可预测新值，不是保存在同一被恢复数据库中的自增数；任一业务 DB restore/PITR 前必须先冻结入口/egress，并为同一 cohort 旋转 Platform/Connection execution generations。任何旧 generation 的授权上下文、Grant、lease、OAuth callback、refresh、revoke、Call 或 Dispatch 都不能继续授权或出站。
+12. **[本项目设计决策]** Platform 或 Connection DB 可能丢写后，分别恢复出的 Agent policy 或 Catalog lifecycle 行都不是可立即执行的 current policy。其 validation generation 必须等于 Recovery Control 当前值，且已由 PITR 域外连续证据重放或双人全量复核；否则 preview/受保护调用上下文签发或 Provider 出站必须为零。
 13. **[本项目设计决策]** 每次 Provider 出站必须同时验证 Provider、exact ProviderRelease 和 exact ActionVersion 当前可执行且已在本代 Catalog 复核；任一层 DISABLED、validation generation 过期或 executor/release digest不符都在逻辑请求/HTTP2 stream 接受前 fail closed，不能只检查父 Provider或目录 current pointer。
-14. **[本项目设计决策]** ToolConnectionInvocation 首次签发 Permit 时冻结 `grantId + connectionId + accountBindingRevision + preauthorizationRequestHash`；同一 toolCall 之后不得因 Grant 切换、账号更换、重绑或另一 Call 的 Permit 而静默执行。
+14. **[后续 HLD/ADR 候选]** 若未来为 ToolConnectionInvocation 引入调用许可，首次签发时应冻结 `grantId + connectionId + accountBindingRevision + preauthorizationRequestHash`；同一 toolCall 之后不得因 Grant 切换、账号更换、重绑或另一 Call 的许可而静默执行。
 15. **[本项目设计决策]** 每个 EgressDispatchAssertion 的 `(issuer,kid,jti)` 只能由共享强一致 admission store 接受一次；只有本次 CAS 返回 `ACCEPTED_NOW` 的 proxy 请求可以创建逻辑外部请求、HTTP/2 stream 或写出首字节。
-16. **[本项目设计决策]** Agent policy、Catalog和Shared永久disable的restrictive mutation必须先提交PITR域外、不可取消的final `RESTRICT` barrier，再物化业务库deny；barrier已提交而本地状态未提交、未知或被PITR回退时，preview、confirm、Permit、eligibility、revalidate、Signer和dispatch都必须拒绝。Policy/Catalog恢复能力只能是新的permissive operation；Shared disable永久tombstone没有permissive operation。任何旧barrier都不能删除、覆盖或取消。
+16. **[本项目设计决策]** Agent policy、Catalog和Shared永久disable的restrictive mutation必须先提交PITR域外、不可取消的final `RESTRICT` barrier，再物化业务库deny；barrier已提交而本地状态未提交、未知或被PITR回退时，preview、confirm、受保护调用上下文签发、eligibility、revalidate、Signer和dispatch都必须拒绝。Policy/Catalog恢复能力只能是新的permissive operation；Shared disable永久tombstone没有permissive operation。任何旧barrier都不能删除、覆盖或取消。
 17. **[本项目设计决策]** 任何mutating Action出站前，其ActionCall、LogicalEffect、EffectDispatch、ProviderEgressHop、Admission和receipt所在Effect Ledger durability domain必须绑定当前Control version的完整`MutationDurabilityEvidenceV1`：`CONTINUITY`直接证明风险窗口零丢失，或`PROVIDER_COVERAGE`完整重建/对账该窗口；两者都绑定exact Catalog mutating set并证明恢复后未来acknowledged commit仍RPO=0。任一字段缺失、过期、集合变化或可能丢失枚举锚点时，外部Control必须保持`MUTATION_RECOVERY_BLOCKED`；不能用“把仍看得到的行标UNCERTAIN”推断丢失行不存在。
 18. **[本项目设计决策]** Admission accept 端必须独立验证 Recovery admission lease proof 的签名、主体、版本、代次、Proxy mTLS binding、nonce 和有效期，并把 exact proof、Hop、JTI、MAC 与 generation tuple 以数据库约束绑定。Receipt 只能证明 transport 事实，不能再次授予发送权。
 19. **[本项目设计决策]** `ConnectionUserEntitlement`是连续资格stable root，证据只能append version并让current pointer单调指向同root最大revision。Connection data generation变化后G0不得eligible；Personal只有以PITR域外current authority epochs证明continuity时才可在同epoch追加G1。M1没有PITR域外Shared scope lifecycle证据，因此Shared恢复出的旧root一律单向REVOKED，fresh eligibility只可为当前有效资格创建new root/new epoch。Platform只为current exact evidence创建immutable binding；旧Grant只能按source/target协议被替换或终结，不能原地换binding或被事件复活。
@@ -741,18 +748,18 @@ sharedEntitlementResetCurrent(runtime, connectionReset, platformCheckpoint) =
     and platformCheckpoint.platformManifestChecksum is present
 ```
 
-两侧runtime只镜像Recovery Control按28.7公式计算的Required。Connection DB被恢复，或前代Required义务尚未有Control接受的双侧completion evidence时，它为true；后一种carry-forward即使本次scope不含Connection DB、target data generation不变，也必须在mirror事务创建新cohort/reset、started outbox和后续Platform checkpoint。全新环境、普通运行，以及前代义务已清偿且本次不恢复Connection DB的cohort为false，reset pointer、checkpoint和completion evidence必须为空，不能凭历史reset自行把该位改为true。Required为true且上述谓词为false时，所有Shared eligibility、preview/Confirmation、Permit和revalidation入口都fail closed；Personal仍按自身Account/evidence规则处理。Reset/checkpoint只证明旧root/Grant已经有界终结，不成为当前Shared资格权威，也不能替代Identity fresh check。
+两侧runtime只镜像Recovery Control按28.7公式计算的Required。Connection DB被恢复，或前代Required义务尚未有Control接受的双侧completion evidence时，它为true；后一种carry-forward即使本次scope不含Connection DB、target data generation不变，也必须在mirror事务创建新cohort/reset、started outbox和后续Platform checkpoint。全新环境、普通运行，以及前代义务已清偿且本次不恢复Connection DB的cohort为false，reset pointer、checkpoint和completion evidence必须为空，不能凭历史reset自行把该位改为true。Required为true且上述谓词为false时，所有Shared eligibility、preview/Confirmation 和托管 Action 入口都fail closed；Personal仍按自身Account/evidence规则处理。后续 Permit issue/redeem 若获批准，也必须继承该门禁。Reset/checkpoint只证明旧root/Grant已经有界终结，不成为当前Shared资格权威，也不能替代Identity fresh check。
 
 API展示、事件、eligibility、Grant产品投影和最终dispatch check一律使用effective status；Store/迁移和状态CAS一律使用stored status。**[评审门禁 G-14]** Proposed的Shared永久disable先在PITR域外Journal形成final tombstone；因此Connection DB恢复出旧ACTIVE行时，JournalSafetyGate仍派生DISABLED并阻止eligibility、reconnect、revalidation和dispatch，materializer随后只可把本地行补落为DISABLED。**恢复Intent创建资格单独使用`needsRecoveryRevalidation`，不得通过effective enum反推**，并且要求`stored_status != DISABLED`且不存在final或未物化Shared disable tombstone。按该Proposed语义，恢复出的Shared `DISABLED`始终展示/执行为DISABLED、Grant保持TERMINATED；tombstone物化前只允许materializer，物化后也不提供revalidation入口。普通用户和live admin都不能以恢复重校验触碰该旧Connection ID，重新接入只能创建新Connection。Product Owner批准并回写PRD前，不得把这一不可逆用户行为标为Approved或进入生产实现。外部Recovery Control/Journal不可读、cohort/phase/mirror不匹配属于环境级`RECOVERY_CONTROL_UNAVAILABLE`门禁，不伪造或批量改写任何ConnectionAccount状态。
 
-| Effective 状态 | 是否可发现 | 是否可新签 Permit | 是否可出站 | Grant 产品状态 |
+| Effective 状态 | 是否可发现 | Connection 入口检查 | 是否可出站 | Grant 产品状态 |
 | --- | --- | --- | --- | --- |
-| `ACTIVE` | 按 owner/shared scope | 是 | 是 | 有效 |
-| `DEGRADED` | 是 | 可签，但本地 live check 可返回暂时不可用 | 视错误和熔断器 | 暂时不可用，不终止 Grant |
-| `REAUTH_REQUIRED` | 是 | 否 | 否 | 暂停，提供重连入口 |
-| `DISCONNECTED` | 是，仅用于管理和同账号重连 | 否 | 否 | 暂停 |
-| `RECOVERY_REVALIDATION_REQUIRED` | 仅 Personal 原 owner 或 Shared live system admin 管理可见 | 否 | 否 | 恢复覆盖；必须在当前 data generation 重新证明账号/共享范围 |
-| `DISABLED` | 普通用户不可新发现；已有引用显示已禁用 | 否 | 否 | 所有引用该Shared Connection的current Grant持久化为TERMINATED；不保留可恢复暂停态 |
+| `ACTIVE` | 按 owner/shared scope | 可进入 Connection 入口检查 | 是 | 有效 |
+| `DEGRADED` | 是 | 可进入入口检查，由当前 breaker/error policy 决定 | 视错误和熔断器 | 暂时不可用，不终止 Grant |
+| `REAUTH_REQUIRED` | 是 | 入口拒绝 | 否 | 暂停，提供重连入口 |
+| `DISCONNECTED` | 是，仅用于管理和同账号重连 | 入口拒绝 | 否 | 暂停 |
+| `RECOVERY_REVALIDATION_REQUIRED` | 仅 Personal 原 owner 或 Shared live system admin 管理可见 | 入口拒绝 | 否 | 恢复覆盖；必须在当前 data generation 重新证明账号/共享范围 |
+| `DISABLED` | 普通用户不可新发现；已有引用显示已禁用 | 入口拒绝 | 否 | 所有引用该Shared Connection的current Grant持久化为TERMINATED；不保留可恢复暂停态 |
 
 ConnectionAccount 只在 OAuth/API Key 鉴权、stable account identity 和 Credential 都已成功提交后创建，初始 stored status 为 ACTIVE。`PENDING_AUTH/AUTH_FAILED/EXPIRED` 属于 `ConnectionIntent`/OAuthTransaction 的 UI 状态，不是 ConnectionAccount status，也不分配可授权的 `connectionId`。`ConnectionIntent` 绑定 actor、kind、provider、auth method、return intent、idempotency claim 和 expiry，状态为 `PENDING | COMPLETED | FAILED_DEFINITE | UNCERTAIN | EXPIRED`；COMPLETED 保存 result connectionId。失败或过期 intent 按保留政策清理，但其安全审计不删除。
 
@@ -766,28 +773,28 @@ ConnectionAccount 只在 OAuth/API Key 鉴权、stable account identity 和 Cred
 | --- | --- | --- | --- |
 | 创建 Personal | 当前公司账号有效，Provider 已发布 | 先原子创建`AWAITING_USER_ACTION` ConnectionIntent；用户执行nextAction后再以独立事务创建所选 OAuth/API validation child并推进pointer | 尚不创建 Platform Grant |
 | 创建 Shared | 系统管理员、Provider 已发布、共享范围合法 | 先原子创建带冻结scope snapshot的`AWAITING_USER_ACTION` Shared Intent；用户执行nextAction后再创建auth child；成功后写 scope revision | 用户仍需独立 Grant |
-| 断开 | Personal 仅当前 owner；Shared 仅 live system admin；幂等键 | 先把状态改为 DISCONNECTED、提升 connectionExecutionFence、禁用 Credential并创建 revoke attempt | 后续 redeem/dispatch 立即拒绝；Provider revoke 由 durable worker 执行并保留未知结果 |
+| 断开 | Personal 仅当前 owner；Shared 仅 live system admin；幂等键 | 先把状态改为 DISCONNECTED、提升 connectionExecutionFence、禁用 Credential并创建 revoke attempt | 后续新请求在 Connection 入口拒绝；已通过入口的请求保留请求快照和实际结果；Provider revoke 由 durable worker 执行并保留未知结果 |
 | Reauth | Personal 仅当前 owner；Shared 仅 live system admin；进行中旧 Connection 保持原状态 | 新 RECONNECT Intent + OAuth/API child绑定目标、旧 fingerprint、previous status 和 expected fences | 同账号成功原子切换Credential/ACTIVE；失败不改旧状态；异账号创建新Connection、旧Connection本地DISCONNECTED/revoke并发出Grant终止事件 |
 | API Key替换 | Personal 仅当前 owner；Shared 仅 live system admin；same fingerprint、expected revisions | REPLACE_CREDENTIAL Intent成功后原子切current Credential并提升fence | 失败/异账号/UNCERTAIN不覆盖原Connection |
 | 恢复重校验 | `REVALIDATE_RECOVERY`；`needsRecoveryRevalidation=true`；`stored_status != DISABLED`且无final Shared tombstone；Personal owner或Shared live admin；same fingerprint与current data generation；Shared另要求环境级双侧reset已完成；不依赖effective enum | 保留stored status，更新Account/完整Shared scope generation、必要Credential和execution fence；非可执行stored status不留可执行Credential；不在Account事务批量触碰entitlement root | 发 `connection.revalidated.v1`；Personal仅在continuity可证明时append本代evidence并走RECOVERY_RECONFIRM；Shared旧root已由环境reset终结，当前资格以new epoch走INITIAL；terminal Grant不恢复 |
 | 禁用 Shared | **[评审门禁 G-14]** 管理员；stable safety operation与expected revision/checksum | Proposed为先append final Shared disable tombstone，再物化状态 DISABLED、提升 connectionExecutionFence、写审计/outbox | tombstone一提交所有用户新调用立即拒绝；PITR不复活；旧ID不可恢复需Product批准 |
-| 修改共享范围 | 管理员、scope revision CAS | 替换不可变 scope 集并提升 sharedScopeRevision 与 connectionExecutionFence | 失去范围的用户不能签发或兑换新 Permit |
+| 修改共享范围 | 管理员、scope revision CAS | 替换不可变 scope 集并提升 sharedScopeRevision 与 connectionExecutionFence | 失去范围的用户不能通过 Connection 入口检查 |
 
 **[PRD]** 断开或撤销不会回滚已经提交给 Provider 的操作，产品保留实际完成或失败结果。
 
 **[本项目设计决策]** scope 变化同样只阻止尚未越过 dispatch 资格边界的新操作；已经可能提交给 Provider 的操作不做虚假回滚，继续按实际终态或 `UNCERTAIN` 保存和展示。
 
-**[本项目设计决策]** 本文区分三道边界：Permit redeem 只线性化 Platform 授权接受；Connection 在同一短事务完成 live check 和 Effect/Dispatch intent，线性化本地 dispatch 资格；EffectDispatch `SUBMISSION_STARTED` 后才可能已经向 Provider 提交。数据库与网络不能原子提交，因此最后一道边界采用保守的“可能已提交”语义。
+**[本项目设计决策]** 本文区分两道边界：Connection 在同一短事务完成入口 live check 和 Effect/Dispatch intent，线性化本地执行资格；EffectDispatch `SUBMISSION_STARTED` 后才可能已经向 Provider 提交。数据库与网络不能原子提交，因此最后一道边界采用保守的“可能已提交”语义。跨系统 Permit redeem 如未来需要，另由 HLD/ADR 固化。
 
 **[本项目设计决策]** 任一业务 DB 进入可能丢写的恢复都建立同一 recovery cohort，并旋转 Platform 与 Connection execution generation，从而 fence 两侧旧 Invocation/Call/lease。只有 Connection DB 本身恢复时才额外旋转 `connectionDataValidationGeneration` 和 `catalogValidationGeneration`：所有恢复出的ConnectionAccount均取得`needsRecoveryRevalidation=true`；非DISABLED账号的effective status为RECOVERY_REVALIDATION_REQUIRED；DISABLED仍为DISABLED，并按G-14 Proposed语义不给Personal owner或Shared admin恢复重校验入口，只允许final tombstone materializer、revoke cleanup、受限只读查询和operation poll，重新接入必须创建新Connection ID。Provider/Release/ActionVersion也因缺少本代Catalog validation overlay不可执行。对于非DISABLED账号，Personal必须由原owner通过上述Intent重新鉴权并证明stable account；Shared必须由当前管理员重新鉴权并确认完整USER/ORG scope。恢复出的Credential、scope、Catalog lifecycle、stored status和旧entitlement evidence不能被批量信任或改写。Account/scope完成本代重校验后，Personal用户仍须在fresh eligibility中以PITR域外current account/owner epochs证明资格连续：可证明时保留epoch并append本代evidence version，不可证明时终结旧root。
 
-M1的`CONNECTION_SAFETY` Journal只覆盖Shared永久disable，不记录Shared scope remove/re-add，恢复库中的`scopeBindingGeneration`不能证明备份点之后没有发生过资格中断；因此Connection data generation旋转后，mirror同步事务立即创建环境级`SharedEntitlementRecoveryReset`。Connection worker在固定批次内把所有current evidence generation不是target的ACTIVE Shared root以exact CAS置REVOKED并写逐root loss outbox；Platform随后按Connection completion manifest有界终结所有仍current且binding generation不是target的Shared Grant。两侧零查询、checkpoint和checksum均完成前，Shared eligibility/revalidation/preview/Confirmation/Permit全部为零且Recovery Control不能activate；不依赖用户再次访问。完成后当前仍符合资格的用户才由fresh eligibility创建new root/new CSPRNG epoch，旧Grant保持TERMINATED并以source为空的INITIAL重新授权。旧长期Grant在任何cohort都取得effective `PAUSED_RECOVERY`，已TERMINATED Grant不恢复；本代evidence binding和新Grant确认完成前不能签发Permit。
+M1的`CONNECTION_SAFETY` Journal只覆盖Shared永久disable，不记录Shared scope remove/re-add，恢复库中的`scopeBindingGeneration`不能证明备份点之后没有发生过资格中断；因此Connection data generation旋转后，mirror同步事务立即创建环境级`SharedEntitlementRecoveryReset`。Connection worker在固定批次内把所有current evidence generation不是target的ACTIVE Shared root以exact CAS置REVOKED并写逐root loss outbox；Platform随后按Connection completion manifest有界终结所有仍current且binding generation不是target的Shared Grant。两侧零查询、checkpoint和checksum均完成前，Shared eligibility/revalidation/preview/Confirmation 和托管 Action 入口全部为零且Recovery Control不能activate；不依赖用户再次访问。完成后当前仍符合资格的用户才由fresh eligibility创建new root/new CSPRNG epoch，旧Grant保持TERMINATED并以source为空的INITIAL重新授权。旧长期Grant在任何cohort都取得effective `PAUSED_RECOVERY`，已TERMINATED Grant不恢复；本代evidence binding和新Grant确认完成前不能进入托管 Action 入口。后续 Permit issue/redeem 若获批准，仍受同一 reset/checkpoint 门禁约束。
 
 ### 14.4 公司共享范围
 
 共享范围由 `USER(userId)` 和 `ORG(orgId)` 条目组成。Connection DB 保存管理员配置的稳定 subject ID 和 scope revision，公司身份系统实时回答用户是否仍有效以及是否属于目标组织。
 
-**[本项目设计决策]** 共享 Connection 的发现、Grant 创建、Permit 签发和 Permit redeem 都必须重新检查当前公司账号与组织成员关系。缓存只能缩短查询，不能在身份系统明确返回失效后继续授权；身份系统不可用时敏感写操作 fail closed。
+**[本项目设计决策]** 共享 Connection 的发现、Grant 创建和托管 Action 入口检查都必须重新检查当前公司账号与组织成员关系。缓存只能缩短查询，不能在身份系统明确返回失效后继续授权；身份系统不可用时敏感写操作 fail closed。
 
 **[PRD]** 直接 USER 范围和 ORG 范围分别判断：调岗会立即移除 ORG 派生权限，但不会移除独立 USER 条目，除非管理员显式删除。
 
@@ -1016,20 +1023,22 @@ API Key candidate 使用独立 `environmentId | providerId | connectionIntentId 
 
 ## 17. Platform Grant 与授权交集
 
+> **范围说明（Issue #4 收敛）**：本节后半部分曾提出 GrantSlot、revision 和一次性 ExecutionPermit 的完整协议。该协议不是 OpenConnector 当前能力，也不是本次已确认的 M1 必选方案；它们统一保留为后续 HLD/ADR 候选。M1 当前只要求 Platform 维护用户授权，托管 Action 经过受保护的服务调用进入 Connection，由 Connection 在请求入口检查当前状态一次。检查通过后按请求快照执行；撤权、断开或停用对后续请求生效，不中途取消或回滚已进入执行的请求。
+
 ### 17.1 两层授权对象
 
 **[现有工程 Spec]** Platform DB 是用户到 `Agent + Connection + 已确认 Action 集` 的权威来源。
 
-**[本项目设计决策]** Connection 不复制一份可写 Grant，只保存 Permit 兑换与调用所需证据和只读审计投影。
+**[本项目设计决策]** Connection 不复制一份可写 Grant，只保存调用事实和只读审计投影；具体受保护调用上下文协议留给后续 HLD/ADR。
 
 **[本项目设计决策]** 授权分成两个层次：
 
 | 对象 | 生命周期 | 粒度 | 持有方 | 用途 |
 | --- | --- | --- | --- | --- |
 | `ConnectionGrant` | 长期，直到撤销、账号切换或权威条件终止 | `user + agent + provider -> connection` | Platform DB | 表达用户选择和最近确认范围 |
-| `ExecutionPermit` | 单次 Action 调用，短期、一次兑换 | `execution + toolCall + connection + actionVersion + argsHash` | Platform DB，Connection 在线兑换 | 把当前授权决定安全交给 Connection 执行 |
+| 受保护调用上下文 | 单次托管 Action 调用 | `execution + toolCall + connection + action + args` 的服务端解析结果 | Platform 到 Connection 的内部请求 | 把当前授权决定和请求关联安全交给 Connection 入口检查 |
 
-Agent execution 级的 `ExecutionGrant` 继续绑定用户、Agent、渠道和 Owner Action Set revision；它允许 Agent 调用 Tool Gateway，但不能直接授权任何外部账号。Tool Gateway 为每个实际工具调用再创建 ExecutionPermit。
+Agent execution 级的 Platform 授权继续绑定用户、Agent、渠道和 Owner Action 选择；它允许 Agent 调用 Tool Gateway，但不能直接授权任何外部账号。Tool Gateway 将服务端解析的受保护调用上下文传给 Connection；Connection 入口检查是最终执行兜底。
 
 ### 17.2 有效能力公式
 
@@ -1068,15 +1077,15 @@ INTERSECT mutation durability current (仅mutating Action)
 | --- | --- | --- | --- |
 | 配置目录 | published + Owner selected + runtime/channel capable | Action 名称、用途和参数 Schema | 让 Agent 理解已配置能力 |
 | 用户可用目录 | 配置目录 + 当前用户/Agent 范围 + Grant/Connection 状态 | `AVAILABLE` 或产品化不可用原因，不含账号 ID | 支持连接/确认入口 |
-| 实际执行 | 全部授权交集 + live revisions + Permit redeem | 仅工具结果或稳定错误 | 防止目录缓存和长 execution 绕过撤销 |
+| 实际执行 | 全部授权交集 + Connection 入口 live check | 仅工具结果或稳定错误 | 防止目录缓存和长 execution 绕过撤销 |
 
 **[本项目设计决策]** “Agent 看到了 Action Schema”不等于“Action 已授权”。当前用户没有可选Connection时返回`CONNECTION_REQUIRED`；已有Connection但尚未授权给该Agent时返回`GRANT_REQUIRED`；现有Grant未覆盖新增Action时返回`ACTION_CONFIRMATION_REQUIRED`。三者在唯一错误registry中有不同resolution，任何情况都不能先调用Provider。
 
-### 17.4 Agent 授权根与 GrantSlot 并发根
+### 17.4 Agent 授权根与 GrantSlot 并发根（后续候选）
 
-**[本项目设计决策]** Platform 为每个 Agent 建立稳定 `AgentAuthorizationRoot(agentId, authorizationRevision)`。Agent 启停、Owner Action 选择、可用用户/组织范围和渠道执行策略的任何变化，都必须先锁该 Root、更新对应配置并递增 revision。Confirmation commit、Permit issue 和 Permit redeem 也先锁相同 Root，再重读这些本地条件；因此 Owner 移除与 redeem 在 PostgreSQL `READ COMMITTED` 下仍只有一个提交顺序，不依赖一次无锁 revision read。
+**[后续 HLD/ADR 候选]** Platform 如需跨系统授权线性化，可为每个 Agent 建立稳定 `AgentAuthorizationRoot(agentId, authorizationRevision)`，并让确认、授权上下文签发和后续调用共享该根。该候选不属于 Issue #4 的 M1 必选协议；M1 只要求 Platform 保存授权并由 Connection 在入口检查当前状态。
 
-Platform 还为每个 `(userId, agentId, providerId)` 建立稳定 `GrantSlot`。Slot 在 Grant 替换、撤销后仍保留，包含 `currentGrantId` 和单调 `authorizationFence`。Grant 是该 Slot 下不可变的用户确认版本：首次授权创建首个版本，扩权、恢复重确认和换号都在同一事务把旧 current Grant 标为 `REPLACED`、创建新 Grant并切换 Slot pointer；只有不改变确认 tuple 的同账号重连可以在原 Grant上做 `PAUSED_CONNECTION -> ACTIVE` 生命周期更新。首次授权、确认、切换、撤销、Permit issue 和 redeem 全部锁定同一 Slot，再读取当前 Grant。只锁 Grant 行不够：确认替换可能创建新 Grant，撤销线程和 redeem 线程若分别锁旧/新行，就无法证明全局顺序。
+后续协议如采用该模型，还可为每个 `(userId, agentId, providerId)` 建立稳定 `GrantSlot`，以串行化 Grant 替换、撤销和调用上下文签发。这里的 `GrantSlot`、`authorizationFence` 仅作为候选并发根，不是当前 Connection 执行契约。
 
 Platform 对所有授权路径使用同一个effective predicate，而不是让各路由自行解释恢复状态：
 
@@ -1094,13 +1103,13 @@ effectiveGrantStatus(grant, runtime) =
     otherwise
 ```
 
-API投影、Confirmation preview/commit、Permit issue/redeem、同账号恢复和数据库constraint trigger都调用该predicate；存储、CAS和审计仍读取`grant.status`。Recovery rotation不依赖批量UPDATE Grant才能fail closed，后台materializer也不是正确性前提。`RECOVERY_RECONFIRM`可把stored `ACTIVE`或`PAUSED_CONNECTION`但effective为`PAUSED_RECOVERY`的source直接原子置为`REPLACED`；同账号reconnect只接受stored/effective均为`PAUSED_CONNECTION`且两侧generation匹配的source。
+后续协议的 API 投影、Confirmation preview/commit、授权上下文签发和数据库 constraint trigger可调用该 predicate；当前 M1 的 Connection 入口仍必须独立检查自己的 live state。存储、CAS和审计仍读取`grant.status`。Recovery rotation不依赖批量UPDATE Grant才能 fail closed，后台materializer也不是正确性前提。`RECOVERY_RECONFIRM`可把stored `ACTIVE`或`PAUSED_CONNECTION`但effective为`PAUSED_RECOVERY`的source直接原子置为`REPLACED`；同账号reconnect只接受stored/effective均为`PAUSED_CONNECTION`且两侧generation匹配的source。
 
-若runtime Required=true，Shared授权还有独立环境reset gate，不论它来自本次Connection DB restore还是前代义务carry-forward：本代21.2 Platform checkpoint完成前，preview/Confirmation/Permit一律拒绝，即使某个旧Grant已经被事件提前TERMINATED或某个Connection已重校验。Checkpoint worker只持久化terminal lifecycle和Slot fence，不UPDATE不可变Binding/Snapshot/Grant confirmation tuple。双侧reset完成后，旧Shared binding跨epoch不能进入RECOVERY_RECONFIRM；INITIAL短事务先重读Slot，要求旧current已经TERMINATED/pointer为空，再为new-epoch binding创建首个current Grant。迟到worker以`old validatedDataGeneration + exact current Grant`谓词跳过该新Grant。
+若runtime Required=true，Shared授权还有独立环境reset gate，不论它来自本次Connection DB restore还是前代义务carry-forward：本代21.2 Platform checkpoint完成前，preview/Confirmation/后续授权上下文签发一律拒绝，即使某个旧Grant已经被事件提前TERMINATED或某个Connection已重校验。Checkpoint worker只持久化terminal lifecycle和Slot fence，不UPDATE不可变Binding/Snapshot/Grant confirmation tuple。双侧reset完成后，旧Shared binding跨epoch不能进入RECOVERY_RECONFIRM；INITIAL短事务先重读Slot，要求旧current已经TERMINATED/pointer为空，再为new-epoch binding创建首个current Grant。迟到worker以`old validatedDataGeneration + exact current Grant`谓词跳过该新Grant。
 
 所有 Platform 授权短事务使用同一锁顺序：`PlatformAuthorizationRuntime(fenced read) -> AgentAuthorizationRoot -> GrantSlot -> current Grant -> Invocation -> Permit/ConfirmationIntent`。同generation业务事务对runtime取得可彼此并行、但会被recovery rotate/checkpoint final的`FOR UPDATE`阻塞的fenced read lock；这使generation校验与Shared checkpoint零查询具有同一提交顺序。操作先在事务外做只读解析和远程 preflight，事务内按已解析 ID 重新取锁和复核；行消失、主体或 revision 变化即重试或 fail closed。Owner/范围/渠道命令只需要锁到其最后一个相关对象，但不得逆序。违反锁顺序由 repository API、数据库集成测试和 deadlock telemetry 共同阻止。
 
-AgentAuthorizationRoot还有恢复后effective validity：`validatedPolicyGeneration`必须等于runtime current `platformPolicyValidationGeneration`，且validation evidence绑定当前Owner/Agent status/range/channel/Owner Action完整checksum。Platform DB PITR后，恢复出的Root即使status=ACTIVE也只能显示`POLICY_REVALIDATION_REQUIRED`；未逐对象应用PITR外Journal/full-state manifest前不得创建preview、commit Confirmation、issue或redeem Permit。Fresh用户确认不能把过时扩大policy变current。Restrictive普通变更使Root立即失配/deny，receipt回写后才重新validated；permissive变更必须receipt先行，见21.2/28.7。
+AgentAuthorizationRoot还有恢复后effective validity：`validatedPolicyGeneration`必须等于runtime current `platformPolicyValidationGeneration`，且validation evidence绑定当前Owner/Agent status/range/channel/Owner Action完整checksum。Platform DB PITR后，恢复出的Root即使status=ACTIVE也只能显示`POLICY_REVALIDATION_REQUIRED`；未逐对象应用PITR外Journal/full-state manifest前不得创建preview、commit Confirmation、签发受保护调用上下文或执行 Provider 出站。Fresh用户确认不能把过时扩大policy变current。Restrictive普通变更使Root立即失配/deny，receipt回写后才重新validated；permissive变更必须receipt先行，见21.2/28.7。
 
 ### 17.5 ConnectionGrant 关键字段
 
@@ -1197,7 +1206,7 @@ stateDiagram-v2
 
 **[PRD]** Agent 授权本身无独立到期时间；用户撤销、换为不同外部账号、账号被禁用或共享范围失效时授权终止，Connection 断开或外部凭证失效时授权暂停，且停用、撤销等收紧必须对后续调用即时生效。
 
-**[本项目设计决策]** 上述即时失效通过每次 Permit issue、redeem 和 dispatch 的 live check 实现；“无期限”不能被实现成永不复核的长期 bearer token。
+**[本项目设计决策]** 上述即时失效通过 Platform/Connection 的新请求入口 live check 实现；“无期限”不能被实现成永不复核的长期 bearer token。Connection 入口检查之后按请求快照继续执行。
 
 **[本项目设计决策]** 任一confirmed recovery generation与runtime current不一致时，所有恢复出的current Grant即使stored状态仍显示ACTIVE或PAUSED_CONNECTION，也由17.4 predicate得到effective `PAUSED_RECOVERY`；只有当前Agent policy已验证到本代`platformPolicyValidationGeneration`，且用户重新完成当前Agent、Connection、账号、同一entitlement epoch和Action preview，才能以本代两侧recovery generations创建新的ACTIVE Grant，并把旧source置为`REPLACED(reason=RECOVERY_RECONFIRMED)`。Entitlement epoch已变化时旧Grant必须TERMINATED，新授权走INITIAL。M1没有可替代用户确认的外部授权账本，因此不得批量直接OPEN或原地改写旧确认版本。外部policy change journal只用于证明恢复出的Owner/范围/渠道配置没有遗漏后续缩权，不替用户重建Grant。
 
@@ -1210,7 +1219,7 @@ stateDiagram-v2
 | Owner 新增 Action | Owner 权限、Action 已发布 | 当前 scope 是否支持只用于展示 | 不修改旧确认；首次调用返回确认入口 |
 | 用户确认新增 Action | 当前 Agent 授权根、Owner set revision、稳定 Action 和 permission 摘要 | Connection live account binding、scope revisions 和 execution fence | 同一事务将旧 Grant REPLACED并创建新 Grant/确认快照，切换Slot pointer/fence |
 | Owner 移除 Action | Owner 权限、配置 revision | 无 | live 交集立即移除，无需等待用户确认 |
-| 用户撤销 | 当前用户、Grant revision、幂等键 | 无同步写依赖 | 锁定 Grant/fence，状态 REVOKED；后续 redeem 失败 |
+| 用户撤销 | 当前用户、Grant revision、幂等键 | 无同步写依赖 | 锁定 Grant/fence，状态 REVOKED；后续新请求在入口拒绝 |
 | 普通终态后重新授权 | Slot current pointer为空；不存在需要收敛或续接的alternate claim；当前Agent policy与新资格已验证 | fresh eligibility返回current exact entitlement；若资格曾中断则必须是new epoch | 使用通用INITIAL创建新的current Grant；历史REVOKED/TERMINATED版本保持终态 |
 | Alternate attempt终态后续接（条件build） | 前一claim是连续sequence-1；17.5五层proof/delivery闭环完整；当前用户在目标Agent页面执行新的page action | previous lineage与本地terminal receipt、proof witness、六列ack pointer完全一致 | 只能创建下一sequence的ALTERNATE_PATH_INITIAL；普通INITIAL、worker、consumer和管理员均不得创建successor |
 
@@ -1225,7 +1234,9 @@ stateDiagram-v2
 - **[本项目设计决策]** `channel` 和 `channelSubjectBindingId` 进入 ExecutionGrant/Permit；回调、重试或跨渠道继续任务不能替换原 actor。
 - **[本项目设计决策]** 自定义 WebUI 即使拥有自己的页面和会话，也只能通过身份感知入口创建 Platform execution，再经 Tool Gateway 调用 Connection。WebUI 或 Agent Pod 直连 `connection-api` 被服务认证和 NetworkPolicy 双重拒绝。
 
-## 18. ExecutionGrant 与 ExecutionPermit
+## 18. ExecutionGrant 与 ExecutionPermit（后续候选）
+
+> **后续候选，不是 M1 必选协议。** OpenConnector 的行为是请求入口读取当前 runtime token/policy 后形成请求快照。除非后续 HLD/ADR 单独批准，M1 不要求 `ExecutionPermit`、在线 redeem、`grantRevision`、`authorizationFence` 或跨系统撤权线性化；Connection 入口的当前状态检查是最终执行兜底。本节字段、状态机、API 和测试仅用于保留候选设计，不得作为当前实现或 Issue #4 验收依据。
 
 ### 18.1 对象职责
 
@@ -1233,7 +1244,7 @@ stateDiagram-v2
 | --- | --- | --- | --- |
 | Execution token | Platform 接受用户消息/execution 后 | Agent Runtime | 否，只能认证 Tool Gateway 请求 |
 | ExecutionGrant | Platform 创建 execution 时 | Platform DB | 否，缺少具体 Connection/Action/args |
-| ExecutionPermit | Tool Gateway 接受一次 toolCall 并完成授权检查后 | Platform DB；opaque token 只发送给 Connection | 是，一次、短期、在线 redeem |
+| ExecutionPermit | 后续协议如获批准时 | Platform DB；opaque token 只发送给 Connection | 候选的一次、短期、在线 redeem |
 
 ### 18.2 Permit claims
 
@@ -1381,24 +1392,14 @@ sequenceDiagram
     participant R as Recovery Control
     participant X as Provider
 
-    A->>P: provider-qualified toolName + args + executionToken
-    P->>PD: resolve execution/user/Agent/Grant snapshot without row lock
-    P->>C: eligibility preflight via service identity
-    C->>CD: check ownership/shared scope + all revisions/fence
-    C-->>P: eligible + revisions or existence-neutral denial
-    P->>R: mutating only: acquire PERMIT_ISSUE mutation decision lease
-    P->>PD: lock Agent auth root + GrantSlot + Invocation, persist Permit
-    P->>C: permitToken + toolName + toolCallId + actionVersionId + deadlineAt + args
-    C->>CD: claim/select Call + compare preauthorization commitment
-    C->>P: redeem permitToken + callId + argsHash + preauthorizationHash
-    P->>R: mutating only: acquire PERMIT_REDEEM mutation decision lease
-    P->>PD: compare Invocation/Permit commitment + atomically bind/redeem
-    P-->>C: authoritative Permit claims
-    C->>CD: persist AUTHORIZED + dispatch lease
-    C->>CD: recheck catalog/account/scope/credential and write Attempt + LogicalEffect + Dispatch PREPARED
+    A->>P: provider-qualified toolName + args + execution identity
+    P->>PD: resolve execution/user/Agent/current authorization
+    P->>C: protected call context + toolName + args via service identity
+    C->>CD: check current Connection/Provider/Action/credential state once
+    C-->>P: structured denial or request authorization snapshot
+    C->>CD: persist ActionCall/Attempt/Effect intent
     C->>K: decrypt current Credential revision
-    C->>R: mutating Action verify current generation/state/typed evidence/Catalog set
-    C->>CD: recheck fences + CAS Dispatch SUBMISSION_STARTED
+    C->>CD: dispatch using the request snapshot
     C->>E: mTLS + EgressDispatchAssertion + allowlisted request
     E->>R: acquire current ACTIVE admission lease proof
     E->>C: accept exact hop/JTI/MAC/proof
@@ -1409,33 +1410,29 @@ sequenceDiagram
     X-->>E: result/error/requestId
     E-->>C: signed terminal response/unknown receipt + bounded evidence
     C->>CD: atomically finalize Effect, Call, audit and outbox
-    C-->>P: callId + typed redacted result/error
+    C-->>P: call reference + typed redacted result/error
     P->>PD: persist Connection call reference and execution event
     P-->>A: tool result
 ```
 
-### 19.1 Preflight 与最终校验
+### 19.1 请求入口检查与执行快照
 
-Preflight 只用于快速拒绝和取得当前 account/scope/shared revisions 与 execution fence。以下条件必须在实际 Provider 出站前由 Connection 再检查：
+Platform 的检查用于解析当前用户、Agent 和平台授权；Connection 是托管 Action 的最终执行入口。Connection 在请求入口读取以下当前状态并形成本次请求快照：
 
-- Platform redeem 返回的 `connectionId/accountBindingRevision/externalScopeRevision/sharedScopeRevision/connectionExecutionFence/connectionRecoveryGeneration/toolName/actionId/actionVersionId/argsHash/deadlineAt` 与本地完全一致。
+- 受保护调用上下文中的目标 Connection、Provider/Action 和参数与服务端解析结果一致；Agent 或调用方不能提交或替换用户、Connection、账号或授权字段。
 - Provider、exact ProviderRelease和exact ActionVersion均为`PUBLISHED | DEPRECATED`且三层21.3 validation overlay属于current `catalogValidationGeneration`并匹配exact revision/checksum；任一DISABLED、缺overlay或Journal/checkpoint异常都拒绝。
 - Connection effective status 为 ACTIVE，或为 DEGRADED 且当前 breaker/错误策略明确允许本次 dispatch；个人 owner 或共享范围仍包含当前 user。REAUTH_REQUIRED/DISCONNECTED/RECOVERY_REVALIDATION_REQUIRED/DISABLED 一律拒绝。
 - Credential revision 可用，外部 scopes 仍覆盖 required scopes。
 - Provider/Connection/主体并发和速率限制允许执行。
 - ActionVersion executor digest 与已发布记录相同。
 
-最终校验与 dispatch 分两次短事务，不跨网络持锁：
+检查通过后，Connection 使用该请求快照完成后续执行，不再二次读取授权或状态：
 
-1. 在 DB 锁外取得最新公司 identity assertion；Personal 校验账号有效，Shared 还校验当前 USER/ORG membership。Identity 不可用时 fail closed。
-2. 按固定顺序锁或 CAS `provider -> provider_release -> action_version -> connection_account -> current credential -> action_call`，验证 assertion freshness、所有状态/revisions/fence/scope，并把 exact `providerReleaseId + executorDigest + credentialVersionId + credentialSetRevision + credentialStateRevision` 固定到 ActionAttempt。
-3. 在同一事务创建 ActionAttempt、稳定 LogicalEffect、EffectDispatch `PREPARED`，并把 Call 推进 `DISPATCH_READY`；写 audit/outbox 后提交。
-4. disconnect、shared scope update、Provider/ProviderRelease/ActionVersion disable 使用同样的资源锁顺序并提升对应 revision/fence，因此和步骤 2 只有一个合法先后结果。
-5. `ProviderHttpClient`准备创建逻辑Provider请求前开启第二个短事务，仍按 `provider -> provider_release -> action_version -> connection_account -> exact credential_version -> action_call -> attempt -> effect -> dispatch` 加锁；重新检查Provider/Release/ActionVersion状态、current catalog validation overlays与digests、Connection fences、current Credential pointer、`credentialSetRevision`、exact Credential的`credentialStateRevision/lifecycle/expiry`、本地Recovery Control mirror freshness/cohort/generations/phase和execution recovery state，再CAS `EffectDispatch PREPARED -> SUBMISSION_STARTED`、把Call首次`first_submission_started_at`从null填为当前时间并推进到`DISPATCHING`（后续Effect/重试只验证该字段非空并保持`DISPATCHING`），同时插入绑定该dispatch的`ProviderEgressHop(PREPARED)`。
-6. disconnect、Credential refresh/API Key 替换/invalid、shared scope update和 Provider/ProviderRelease/ActionVersion disable 使用相同前缀锁序。若这些变化先提交，旧 Dispatch记`FAILED_BEFORE_SUBMIT`、旧Attempt记`FAILED_DEFINITE`，Call按原因进入`DENIED_LOCAL`，需要时只能由上层以新 current Credential和新toolCall发起新调用；若 SUBMISSION_STARTED 先提交，该 Dispatch 成为 in-flight，随后 Credential 退休或停用只阻止新 Dispatch，不能伪称旧请求未发送。
-7. 提交SUBMISSION_STARTED后释放DB锁，按exact durable dispatch签发22.10短期mTLS-bound EgressDispatchAssertion。Proxy完成外部Recovery Control admission lease、完整MAC和endpoint policy检查后，还必须取得Connection DB CAS唯一返回的ACCEPTED_NOW，才可创建一个逻辑request/HTTP2 stream。marker/签发/CAS后任一点崩溃都按admission+transport receipt收敛为FAILED_BEFORE_SUBMIT或UNCERTAIN；不能跨网络保持行锁来伪造数据库与Provider原子性，也不能凭旧Pod/Proxy内存绕过take-once fence。
+1. 在本地事务中记录 ActionCall、Attempt、LogicalEffect 和 EffectDispatch intent；凭证只在受控执行上下文中解密。
+2. Provider 出站使用已检查的请求快照和本项目既有的 Egress/Effect Ledger 安全门禁。
+3. 如果撤权、断开、停用或凭证状态变化在入口检查之后发生，本次请求继续执行并保留 Provider 的实际结果；Connection 不主动取消或回滚。
 
-任何 live check 失败都在 EffectDispatch `SUBMISSION_STARTED` 之前结束，从而能证明没有外部副作用。`INTENT_RECORDED/PREPARED` 严格表示尚未开始出站；`SUBMISSION_STARTED` 表示可能已经出站。
+入口检查失败时不创建 Provider 出站；后续新请求重新经过入口检查。已进入执行的请求可能产生实际 Provider 结果或结果不确定状态。
 
 ### 19.2 同步响应与恢复查询
 
@@ -1756,6 +1753,8 @@ fencing ADR 中共同批准。未来若需要per-Action reopen，必须新增权
 - 凡ProviderFailure映射允许自动创建successor的链，统一持久化sequence、exact predecessor、冻结retry policy/max/deadline、五值retry decision、稳定retry operation和可验证budget decision；不能只在worker内存里计数。适用链及其共同约束在21.4的retry budget契约中完整定义。
 
 ### 21.2 Platform DB 依赖表
+
+> **M1 范围说明（Issue #4 收敛）**：Platform 授权关系仍由 Platform DB 保存；Connection 托管 Action 的当前执行入口检查自身状态并形成请求快照。下文 `tool_connection_invocation`、`execution_permit` 以及 GrantSlot 的完整字段、约束和 redeem API 仅作为后续 HLD/ADR 候选，不能作为当前 M1 的跨系统授权或撤权协议。
 
 #### `platform_authorization_runtime`
 
@@ -4036,7 +4035,7 @@ Connection 已成功而 ReturnIntent 过期、Platform generation变化或原 Ag
 
 `invokeConnectionAction`固定为`POST /internal/v1/tool-calls:invoke`，物理上属于Platform Tool Gateway，唯一调用者是受支持的Agent Runtime workload。该route使用独立mTLS audience=`platform-tool-gateway`，并在`Authorization` header携带Platform签发、绑定当前execution和workload identity的短期execution token；token不得进入body、URL、日志或Trace。
 
-request body使用`ToolInvocationRequestV1{toolCallId,toolName,args}` strict schema，`additionalProperties:false`。`userId/agentId/executionId/channel/connectionId/providerId/actionVersionId/account selector/Grant或Credential字段`全部禁止由调用方提交；Platform从已验签token和权威execution记录解析当前user/Agent/channel，再从Owner Action、current GrantSlot和目录投影解析exact ActionVersion与Connection。`toolCallId`必须与同execution的持久化ToolConnectionInvocation一一对应；相同toolCallId和canonical args回放同一Invocation/ActionCall，不同args返回幂等冲突，Agent不能通过换字段选择另一账号。
+request body使用`ToolInvocationRequestV1{toolCallId,toolName,args}` strict schema，`additionalProperties:false`。`userId/agentId/executionId/channel/connectionId/providerId/actionVersionId/account selector/Grant或Credential字段`全部禁止由调用方提交；Platform从已验签token和权威execution记录解析当前user/Agent/channel，再从Owner Action、当前授权关系和目录投影解析目标 Action 与 Connection。`toolCallId`必须与同execution的持久化调用关联；相同toolCallId和canonical args回放同一调用，不同args返回幂等冲突，Agent不能通过换字段选择另一账号。
 
 若尚未建立ActionCall，route只可返回25.1.7为该operation列出的`HttpErrorEnvelopeV1`，例如会话/账号、Grant、Action确认、Connection、Catalog、scope、恢复或参数门禁；这些失败不会调用Provider。建立Call后，`200/202`逐字节复用22.6的`ActionCallRepresentationV1/CommandInProgressV1`，且Platform不得把已持久化的`ACTION_*` condition重新包装成裸HTTP error。恢复查询和取消分别复用`getActionCallInternal`与`cancelActionCall`，M1不增加第二套Tool Gateway status/cancel schema。
 
@@ -4044,7 +4043,7 @@ request body使用`ToolInvocationRequestV1{toolCallId,toolName,args}` strict sch
 
 #### `POST /internal/v1/connection-eligibility:check`
 
-请求由 Platform 服务身份签名，包含 current verified `userId`、`connectionId`、`providerId`、用途 `GRANT|PERMIT`、CSPRNG `requestNonce`、correlation 和 contract version；`environmentId`和调用workload从mTLS/route解析，不能由body覆盖。Connection按固定codec计算`canonicalRequestHash = SHA256(JCS({environmentId, authenticatedCallerIdentity, contractVersion, userId, connectionId, providerId, purpose, requestNonce, correlation, conditionalAcquisitionTuple}))`，普通purpose的`conditionalAcquisitionTuple=null`。当前active request schema只接受`GRANT|PERMIT`；`ALTERNATE_PATH_INITIAL`是G-17批准后才加入独立contract version和reader capability的条件variant，并强制携带Platform在出网前持久化的`platformAcquisitionClaimId + alternateAcquisitionOperationId + acquisitionAttemptSequence + previousTerminalClaimId? + previousTerminalDisposition? + previousTerminalReceiptChecksum? + predecessorAgentId + predecessorGrantSlotId + predecessorGrantSlotAuthorizationFence + acquiringAgentId + acquiringGrantSlotId + acquiringGrantSlotAuthorizationFence + createdPlatformRecoveryGeneration + createdConnectionRecoveryGeneration + createdConnectionDataValidationGeneration + predecessorGrantId + predecessorGrantCreatedAtFence + predecessorEntitlementBindingId + predecessorGrantStatus=TERMINATED + predecessorGrantReason=CURRENT_ENTITLEMENT_PATH_LOST + predecessorConnectionEntitlementId + predecessorConnectionEntitlementEpoch + predecessorEntitlementEvidenceChecksum + predecessorDefinitiveLossChecksum`。Attempt=1必须三列terminal lineage都是JSON null，attempt>1必须三列全非空；字段不能省略。Platform request builder只能从状态`CLAIMED|ROOT_READY`的21.2 claim读取整组字段，并复用其持久化nonce/correlation/contract version；不得从HTTP重试上下文重新随机或接受Browser回传claim、Agent/Slot或lineage tuple。任一字段缺失、多余、attempt lineage不连续、claim状态不允许、claim request hash不一致或与latest signed loss不符都零写。批准前发送该token固定为`REQUEST_SCHEMA_INVALID`且零领域写入。HTTP 200决策体使用`EligibilityDecisionV1` strict union；成功variant示例为：
+请求由 Platform 服务身份签名，包含 current verified `userId`、`connectionId`、`providerId`、用途 `GRANT`、CSPRNG `requestNonce`、correlation 和 contract version；`environmentId`和调用workload从mTLS/route解析，不能由body覆盖。Connection按固定codec计算`canonicalRequestHash = SHA256(JCS({environmentId, authenticatedCallerIdentity, contractVersion, userId, connectionId, providerId, purpose, requestNonce, correlation, conditionalAcquisitionTuple}))`，普通purpose的`conditionalAcquisitionTuple=null`。当前 M1 active request schema只接受`GRANT`；后续 `PERMIT` 只有第18节候选协议获批准后才可加入独立 contract version 和 reader capability。`ALTERNATE_PATH_INITIAL`是G-17批准后才加入独立contract version和reader capability的条件variant，并强制携带Platform在出网前持久化的`platformAcquisitionClaimId + alternateAcquisitionOperationId + acquisitionAttemptSequence + previousTerminalClaimId? + previousTerminalDisposition? + previousTerminalReceiptChecksum? + predecessorAgentId + predecessorGrantSlotId + predecessorGrantSlotAuthorizationFence + acquiringAgentId + acquiringGrantSlotId + acquiringGrantSlotAuthorizationFence + createdPlatformRecoveryGeneration + createdConnectionRecoveryGeneration + createdConnectionDataValidationGeneration + predecessorGrantId + predecessorGrantCreatedAtFence + predecessorEntitlementBindingId + predecessorGrantStatus=TERMINATED + predecessorGrantReason=CURRENT_ENTITLEMENT_PATH_LOST + predecessorConnectionEntitlementId + predecessorConnectionEntitlementEpoch + predecessorEntitlementEvidenceChecksum + predecessorDefinitiveLossChecksum`。Attempt=1必须三列terminal lineage都是JSON null，attempt>1必须三列全非空；字段不能省略。Platform request builder只能从状态`CLAIMED|ROOT_READY`的21.2 claim读取整组字段，并复用其持久化nonce/correlation/contract version；不得从HTTP重试上下文重新随机或接受Browser回传claim、Agent/Slot或lineage tuple。任一字段缺失、多余、attempt lineage不连续、claim状态不允许、claim request hash不一致或与latest signed loss不符都零写。批准前发送该token固定为`REQUEST_SCHEMA_INVALID`且零领域写入。HTTP 200决策体使用`EligibilityDecisionV1` strict union；成功variant示例为：
 
 ```json
 {
@@ -4308,9 +4307,11 @@ Platform使用返回的signed acquisition/predecessor tuple原子推进claim到R
 
 #### `POST /internal/v1/action-calls`
 
-请求字段：`permitToken`、`invocationId`、Provider-qualified `toolName`、`toolCallId`、`actionVersionId`、typed `args`、`deadlineAt`、`idempotencyKey`、`contractVersion`、`canonicalizationVersion`和trace context。`invocationId/idempotencyKey`必须来自Platform持久化Invocation，不接受Agent或浏览器输入；Connection把前者作为redeem前的opaque claim，把后者作为非bearer幂等键。Connection自己生成callId、canonical argsHash和22.9 preauthorization hash并prewrite，不能接受调用方指定user/agent/connection。`deadlineAt`必须等于或早于redeemed claim；Connection实际deadline取claim、Action policy、服务上限和剩余transport budget最小值，任何重试不得延长。
+当前 M1 active 请求字段是 Platform 服务端生成的受保护调用上下文、Provider-qualified `toolName`、`toolCallId`、typed `args`、contract/canonicalization version 和 trace context；`userId/agentId/executionId/channel/connectionId/providerId/actionVersionId/account selector/Grant/Permit/Credential` 字段禁止由调用方提交。Connection 在入口解析并检查当前 Connection、Provider、Action、Credential 与 scope 状态一次，随后生成/选择本地 `callId`，持久化 ActionCall/Attempt/Effect intent，并按请求快照执行。
 
-处理顺序是API契约的一部分：严格Schema/canonicalize -> 计算本次preauthorization hash -> claim/select Call -> 常量时间比较持久化version/hash -> 只有相同才调用Platform redeem。不同hash返回409且不得发送redeem/introspect；相同hash时redeem body携`callId + preauthorizationRequestHash`，Platform只在同一事务验证Permit/Invocation commitment后消费并绑定。redeem响应丢失时introspect也必须携同一token、callId和hash；不能先消费Permit再回填本地association。已有AUTHORIZED/terminal Call仍执行本顺序，普通结果回放改走ExecutionAccessAssertion read API。
+**[后续 HLD/ADR 候选]** 若未来批准第18节协议，才把 `permitToken`、`invocationId`、redeem/introspect、preauthorization hash 和对应的跨系统幂等字段加入独立 contract version；这些字段不属于当前 M1 active API。
+
+后续候选协议启用时，另按第18节的 preauthorization/redeem 顺序执行；当前 M1 不调用 Platform redeem/introspect，入口检查通过后直接按请求快照继续本地 ActionCall/Effect 流程。
 
 响应：
 
@@ -4321,7 +4322,7 @@ Platform使用返回的signed acquisition/predecessor tuple原子推进claim到R
   condition.code=IDEMPOTENCY_IN_PROGRESS}`；首次受理和同幂等claim重放使用同一schema，不得省略condition。
 - `409 IDEMPOTENCY_CONFLICT`：同 key 不同 canonical request。
 
-只有在尚不能返回actor-authorized ActionCall resource时，route才使用25.1.1至25.1.4的4xx/5xx error envelope。Call一旦持久化，Permit、Catalog、Provider、egress、结果校验和recovery失败都先提交真实Call状态，再按25.1.5映射为`200 + condition`；不能让同一失败有时是HTTP error、有时是resource condition。
+只有在尚不能返回actor-authorized ActionCall resource时，route才使用25.1.1至25.1.4的4xx/5xx error envelope。Call一旦持久化，Catalog、Provider、egress、结果校验和recovery失败都先提交真实Call状态，再按25.1.5映射为`200 + condition`；后续 Permit 候选协议启用时，其 issue/redeem 失败也沿用同一资源状态规则；不能让同一失败有时是HTTP error、有时是resource condition。
 
 其他尚未创建可授权Call资源的拒绝使用25.1的`HttpErrorEnvelopeV1`；一旦callId已创建必须返回它。
 
@@ -4395,12 +4396,12 @@ Reset response同样使用`oneOf + const + additionalProperties:false`，联合�
 
 | Method/Path | 作用 | 约束 |
 | --- | --- | --- |
-| `POST /internal/v1/execution-permits:redeem` | 原子兑换并返回 claims | token 在 body；mTLS；同 call 幂等 |
-| `POST /internal/v1/execution-permits:introspect` | crash恢复查询同permit/call association | 只接受Connection service；body必须含permitToken/callId/preauthorizationRequestHash；不能改变状态或为新Call补绑定 |
+| `POST /internal/v1/execution-permits:redeem` | **后续候选**：原子兑换并返回 claims | 不属于当前 M1 active API；若批准，token 在 body；mTLS；同 call 幂等 |
+| `POST /internal/v1/execution-permits:introspect` | **后续候选**：crash恢复查询同permit/call association | 不属于当前 M1 active API；若批准，只接受 Connection service且不能改变状态或为新Call补绑定 |
 | `POST /internal/v1/connection-return-intents:bind` | 把预留 ConnectionIntent 绑定到 Platform ReturnIntent | mTLS；同 user/context/generation；expected revision CAS；exact tuple幂等 |
 | `POST /internal/v1/recovery/shared-entitlement-checkpoints:check` | Connection复核本代Platform Grant终结checkpoint | mTLS；请求绑定reset/cohort/两侧generation/source manifest；只读，不创建或推进checkpoint |
 
-Permit token禁止放在URL、query、日志或trace attribute。Introspect只用于redeem结果未知的恢复：只有Permit已REDEEMED且持久化association的`callId + hash`完全相同才返回claims；未消费返回NOT_REDEEMED，不执行消费；任一不匹配统一冲突。它不能成为绕过一次性redeem的离线授权入口。
+Permit token禁止放在URL、query、日志或trace attribute。以上 introspect 规则仅约束后续候选实现，当前 M1 不创建或兑换 Permit；Connection 入口直接对受保护调用上下文和自身 live state 做一次检查。
 
 ReturnIntent bind 在 Connection 本地业务事务外执行，但必须先持久化 command claim 和预留稳定 Intent ID；Platform 成功 bind 后，本地只允许用该 ID/checksum提交。超时先用同 tuple 重试或查询既有 bind，不能换 ID；确定失败才终结本地命令。Platform 不接受 Browser 直接调用内部 bind，也不相信 Connection 提交的 conversation/route 字段。
 
@@ -7231,7 +7232,7 @@ Envelope MAC使用与Credential KEK、fingerprint/idempotency HMAC和JWS signing
 ### 30.6 初始 OpenConnector Catalog 导入
 
 ```text
-pinned upstream commit 0cb0e0d
+pinned upstream commit 07f0a190a9815827d2d3ecae1e6ba7b8524662e8
 -> 生成 source/catalog/executor checksums
 -> 导入隔离 DRAFT release
 -> license/dependency/security/egress diff
@@ -7561,11 +7562,13 @@ Fixture 至少包含：Alice、Bob；Agent A、Agent B；Personal A1/A2/B1；Sha
 
 ### 31.6 并发线性化测试
 
+Issue #4 的 M1 必测并发只有：Connection 入口检查前发生撤权/断开/停用时请求拒绝；入口检查完成后发生同类变化时请求继续并保留实际 Provider 结果。下表中 Permit/GrantSlot redeem 竞态属于第 18 节后续候选，不是当前 M1 通过条件。
+
 使用 barrier 精确并发，接受且只接受文档定义的顺序：
 
 | 并发操作 | 合法结果 |
 | --- | --- |
-| Permit redeem vs Grant revoke | redeem 先：Invocation in-flight；revoke 先：redeem denied |
+| Connection 入口检查 vs Grant/Connection revoke | 入口检查先：请求继续并保留实际结果；撤权/断开先：新请求拒绝 |
 | 两个Invocation/Permit交叉绑定同Call | 只有preauthorization commitment与Invocation/Permit/call全相同者可redeem；mismatch在Platform消费前拒绝，两个Permit不被错误消耗 |
 | Grant switch vs old Permit issue/redeem | stable Slot fence 只允许 old 或 new current Grant，不混合 |
 | Owner remove/range/channel change vs Permit issue/redeem | 同 AgentAuthorizationRoot；变更先则拒绝，redeem 先才进入 in-flight |
@@ -7633,6 +7636,8 @@ Fixture 至少包含：Alice、Bob；Agent A、Agent B；Personal A1/A2/B1；Sha
 | Recovery revalidation/eligibility/Grant reconfirm vs status/role/generation变化 | 任一expected向量变化则Intent stale、stored status和Credential pointer不变；Account/scope未到本代时零G1 evidence，G1未提交时零target binding/preview，target tuple或任一generation变化时零replacement；同key响应丢失只回放同一evidence/Intent/Grant结果，不跨owner接管 |
 
 ### 31.7 Crash-window 故障注入
+
+除第 19-20 节的 Connection 入口检查、ActionCall/Effect 持久化和 Provider 实际结果恢复外，Permit issue/redeem、GrantSlot 和跨系统 redeem crash 窗口仅属于第 18 节后续候选，不作为当前 M1 验收条件。
 
 必须能在以下边界 deterministic pause/kill：
 
@@ -7829,7 +7834,7 @@ Lane选择由变更路径和risk label自动取并集，作者不能手工降级
 
 - 修正 Platform/Connection 授权权威表述。
 - PRD 决定 UNCERTAIN 用户状态及G-04人工解析主体/用户可见语义/支持责任、ActionVersion 重新确认、已兑换 in-flight 撤销语义、G-14 Shared永久disable/旧ID展示/重新接入、G-16恢复后旧Shared授权终结/提示/重新授权、G-17 Shared current exact path失效但备用path仍有效时的提示/终结/重新授权/下一步，以及G-18用户显式放弃未完成attempt、不可恢复语义、跨Agent fresh confirmation、旧Agent名称可见性和下一步。
-- ADR固定GrantSlot/Confirmation/Permit/preauthorization redeem、continuous entitlement与Shared exact-path loss/conditional alternate-path acquisition，以及G-18 page-action actor predicate、`ABANDON_REQUESTED/ABANDONED`双侧状态机、统一terminal receipt/ack/snapshot、无target tombstone、两组Agent/Slot lineage、不可逆drain/late-write guard；同时固定Effect Ledger acknowledged-commit RPO=0与独立mutation recovery state/decision lease、完整`MutationDurabilityEvidenceV1`/Catalog mutating-set/future-write topology/canary manifest、pinned Adapter、Recovery Authority的greenfield与total-loss各自claim-first/immutable plan/genesis/rebootstrap/quarantine/activate、两库bootstrap mirror receipt/runtime exact pointer/Authority ACK、PITR-external policy/catalog/connection-safety三分区Journal的claim/append commitment/resolve协议、两库operation projection/receipt、`TypedRecoveryEvidenceRefV1`、write-ahead barrier/validation或tombstone materialization，以及Provider egress MAC/take-once admission/proof/receipt。
+- ADR固定后续候选的GrantSlot/Confirmation/Permit/preauthorization redeem、continuous entitlement与Shared exact-path loss/conditional alternate-path acquisition，以及G-18 page-action actor predicate、`ABANDON_REQUESTED/ABANDONED`双侧状态机、统一terminal receipt/ack/snapshot、无target tombstone、两组Agent/Slot lineage、不可逆drain/late-write guard；同时固定Effect Ledger acknowledged-commit RPO=0与独立mutation recovery state/decision lease、完整`MutationDurabilityEvidenceV1`/Catalog mutating-set/future-write topology/canary manifest、pinned Adapter、Recovery Authority的greenfield与total-loss各自claim-first/immutable plan/genesis/rebootstrap/quarantine/activate、两库bootstrap mirror receipt/runtime exact pointer/Authority ACK、PITR-external policy/catalog/connection-safety三分区Journal的claim/append commitment/resolve协议、两库operation projection/receipt、`TypedRecoveryEvidenceRefV1`、write-ahead barrier/validation或tombstone materialization，以及Provider egress MAC/take-once admission/proof/receipt。当前 M1 仅实现受保护调用上下文、Connection 入口检查和本地 ActionCall/Effect 闭环。
 - 冻结`ConnectionTerminalSourceV1`三分union、`PlatformTerminalAcceptanceProofV1`五步无环hash与锁外KMS状态机，以及“Connection receipt -> Platform source projection/original evidence -> SIGNED Platform proof/READY outbox -> Connection witness/canonical ACK/六列pointer -> Platform ACKED delivery receipt”五层proof/delivery闭环；同时冻结历史trust retention、Connection-only/Platform-only PITR的restricted identity、函数结果、cursor、原`accepted_at`和outbox恢复契约，并归入D-20、Connection ownership/Permit与Recovery fencing ADR，不新增Product Gate。
 - 冻结Terminal Recovery Route方案A的两个独立operation：`restorePlatformAlternateTerminalAcceptance` / `POST /recovery/v1/alternate-terminal-acceptances:restore`只属于`platform-recovery-command.openapi.yaml`，audience=`platform-recovery-command`、purpose=`PLATFORM_TERMINAL_ACCEPTANCE_RESTORE`、幂等模式=`HEADER_KEY`；`resolvePlatformTerminalAcceptanceWitness` / `POST /recovery/v1/platform-terminal-acceptance-witnesses:resolve`只属于`connection-recovery-command.openapi.yaml`，audience=`connection-recovery-command`、purpose=`PLATFORM_TERMINAL_ACCEPTANCE_WITNESS_RESOLVE`、幂等模式=`PROTOCOL_IDENTITY`。两者各生成一个router entry、client method和physical instance，不合并成既有endpoint variant。
 - 选择首个 Provider/Action/auth/test account/minimum scope。
@@ -7868,7 +7873,7 @@ WP3附加DoD还必须证明：snapshot的`platformAcknowledgedAt`等于proof/Pla
 
 DoD：依赖WP9真实egress门后，Intent 201/202/poll/response-loss、OAuth state/retry disposition、retryable failure提交后父Intent确为AWAITING且零budget/successor、用户点击ACQUIRED时整组创建唯一PENDING child、EXHAUSTED/FORBIDDEN时整组终结父Intent、旧actionRef/旧child/旧幂等key/双worker均零写、profile durable owner/takeover/重复只读策略、双API Key/callback/refresh、owner/admin中途撤权、candidate cleanup、REVALIDATE保持全部非DISABLED stored status且old generation/cross-owner/final tombstone拒绝、Shared scope复核、revoke/destroy、全部crash windows、wrong KMS context、Secret canary和same/different fingerprint通过。Connection data recovery后，Account/scope未到本代时eligibility成功数为0；Personal continuity可证的并发/响应丢失请求只产生并复用一个same-epoch G1；Shared reset或Platform checkpoint任一未完成时eligibility/revalidation成功数为0，完成后恢复请求绝不操作旧root，只产生至多一个current-qualification new root；任何成功响应的epoch/revision/generation/checksum/typed path均来自同一current evidence且签名覆盖全部字段。普通运行的多路径fixture必须证明current exact path仍live时逐字节复用；bound path失效且另一path仍live时，未批准build只SAFE_DENY且全链零终态写，已批准build才返回old definitive-loss predecessor并保持普通GRANT/PERMIT零successor。未批准build反向证明alternate token/schema/专用fixture/bound event不存在，G-17 build证明首次HTTP前claim已提交、retry逐字段复用`request_nonce/request_correlation_id/conditional_contract_version/canonical_request_hash`、latest predecessor、stable operation、attempt lineage、不同live path、new epoch、signed provenance、每attempt一个root及单一非STALE/BOUND winner。至少覆盖attempt 1 target loss后由新用户确认创建attempt 2、普通GRANT不返回PENDING root、PERMIT只接受BOUND、definitive loss与recovery reset union不可混用，并对每个下游carrier逐列置换quartet。G-18条件再逐字节冻结abandon decision/terminal receipt的无target与TARGET_REVOKED union、签名/freshness/response-loss replay、receipt mismatch和late event/snapshot拒绝；不得把signed abandonment decision映射进52或53/26/2任一public code namespace。
 
-#### WP5：Platform GrantSlot 与 Confirmation
+#### WP5：Platform GrantSlot 与 Confirmation（后续候选）
 
 G-17 common条件范围内，WP5拥有Platform terminal acceptance权威：首次接纳事务冻结三分source、完整原Connection evidence、`accepted_at`、event identity、proof body `BODY_COMMITTED`和`WAITING_PROOF` outbox；signer-prep/KMS/完成事务按21.2推进`SIGNED`，随后才定稿`READY` event/snapshot。WP5还拥有proof-aware ACK验证、ACKED delivery receipt、Platform-only restricted PITR函数及历史trust retention；并交付Platform recovery-command OpenAPI中的独立`restorePlatformAlternateTerminalAcceptance` router/client contract、`HEADER_KEY` exact replay、受限数据库函数绑定和route-specific alternate response serializer。G-18只在同一协议上增加`USER_ABANDONED` variant，不另建证据链或route。
 
@@ -7880,11 +7885,11 @@ G-17/G-18条件交付中，WP5额外负责Platform terminal acceptance与deliver
 
 WP5附加DoD必须逐字段置换三分source、原Connection evidence、proof core/body/input/signature/envelope、event/snapshot proof ref和ACK，覆盖KMS timeout/响应未知与每个fill-once crash点；证明历史双层验签、当前TTL不否定当时有效证据、snapshot只复用原`accepted_at/event identity`。Platform-only PITR必须覆盖`APPLIED|COMPLETE_PROOF|ALREADY_APPLIED`、partial/conflict/cursor拒绝、原时间/proof/event恢复、未交付outbox和新ACK时间；cleanup/rotation不得删除lineage引用的bytes/key/registry。
 
-#### WP6：Execution Invocation 与 Permit
+#### WP6：Execution Invocation 与 Permit（后续候选）
 
-交付：ExecutionGrant binding、ToolConnectionInvocation、preauthorization commitment、Permit generations、effect class与mutation generation/decision proof binding、issue/redeem/introspect、调用WP4 entitlement eligibility、identity freshness、Grant revoke/terminate竞态。
+交付（仅在后续 HLD/ADR 批准后）：ExecutionGrant binding、ToolConnectionInvocation、preauthorization commitment、Permit generations、effect class与mutation generation/decision proof binding、issue/redeem/introspect、调用WP4 entitlement eligibility、identity freshness、Grant revoke/terminate竞态。当前 M1 只交付第 19 节的受保护调用上下文、Connection 入口检查、ActionCall 和 Effect 持久化。
 
-DoD：除28.7明确的Journal受控例外外所有network call在DB lock外；Invocation创建时持久化非bearer、write-once Connection幂等键；同Invocation在prewrite、response-loss、进程kill、Permit expiry/next sequence下始终命中同一Call，第二key或第二PREPARED Call由DB拒绝；Call本地hash比较先于任何redeem/introspect；Permit/Invocation/Call+key+hash及`bound_call_id`原子fill-once association、跨Invocation不消费，`SUCCEEDED/FAILED_DEFINITE/UNCERTAIN`及其他terminal replay始终返回原Call且零新Permit/Call/出站。Association或tombstone清理前必须先永久关闭execution/toolCall受理，row absent不得重建；mutating issue冻结完整typed evidence/Catalog set/future topology/target，redeem必须新取proof并逐项重验。Control切BLOCKED、generation/evidence/set/topology/manifest变化与issue/redeem只有一个安全顺序，同generation CANARY/OPEN变化不改写issue历史且只以current exact target放行；immutable claims/expiry/renewal和stable Slot并发只有合法结果。
+DoD（后续候选）：执行第 18 节协议的完整一致性、并发和故障矩阵。当前 M1 DoD 由第 19-20 节定义：请求入口一次 live check、先持久化 ActionCall/Effect intent、入口前撤权拒绝、入口后撤权不取消/不回滚且保留实际 Provider 结果。
 
 #### WP7：统一 Tool Gateway 与渠道
 
@@ -8010,7 +8015,7 @@ WP 是本 HLD 的技术 ownership 和依赖追踪单位，不是开发流程状�
 | 重连账号 | 同账号恢复；不同账号重新授权 | 15、16.1、17 | T-UNIT fingerprint、T-REAL 5 |
 | 公司共享账号 | 仅当前 USER/ORG 范围发现；仍需 Grant | 14.1/14.4、17、21.4、22.4、24 | T-PG scope约束、T-ISO Shared、T-REAL 8（必验） |
 | 多账号选择 | user+Agent+Provider 一个当前 Connection；替换需明确确认 | 11.3、17.4-17.8、21.2 | GrantSlot unique、confirmation/switch concurrency |
-| 授权与撤销 | 每 Agent 独立；界面展示 Action；撤销不影响其他 Agent | 17、24.6 | T-ISO、redeem-vs-revoke barrier |
+| 授权与撤销 | 每 Agent 独立；界面展示 Action；撤销不影响其他 Agent | 17、19、24.6 | T-ISO、入口前撤权拒绝与入口后继续执行 |
 | Action 变更 | 新增需确认；移除/停用立即生效 | 13.4、17.2/17.6、19.1 | Confirmation stale、disable-vs-dispatch |
 | 执行 Action | 真实 Provider；完整授权交集 | 17.2、18-20、22.8 | T-EFFECT、T-REAL 2/3 |
 | 调用详情 | 本人看到 Provider、脱敏账号、Action、时间、状态、结果/错误 | 20.8、22.3、26 | UI E2E、audit/call RBAC |
@@ -8044,7 +8049,7 @@ WP 是本 HLD 的技术 ownership 和依赖追踪单位，不是开发流程状�
 | --- | --- | --- |
 | 三个标准模板都接入 Connection | 17.3、22.5-22.7、WP7 | Runtime conformance + E2E |
 | Owner 新增 Action 不自动扩权 | immutable confirmation snapshot/intent | Confirmation tests |
-| Owner 移除/Connection 停用立即生效 | issue/redeem + dispatch 双 live checks | 并发 barrier |
+| Owner 移除/Connection 停用立即生效 | 新请求由 Platform/Connection 入口 live check 拒绝；已进入执行的请求保留快照 | 入口前后撤权并发测试 |
 | 企微按消息发送者使用 Connection | 17.9、24.7 | sender matrix |
 | 自定义 WebUI 不能绕过身份/范围 | 24.8，统一 Platform execution/Tool Gateway | direct URL/Pod negative E2E |
 | 执行详情显示平台实际 Connection Call | callId event/outbox + Platform reference | correlation/UI E2E |
@@ -8061,10 +8066,10 @@ WP 是本 HLD 的技术 ownership 和依赖追踪单位，不是开发流程状�
 | apps 只装配、领域规则在 core | 9.1/9.2 |
 | 先持久化再处理 | 19、20、21.5 |
 | 不预引入消息/工作流基础设施 | PostgreSQL lease/outbox，8/23/28 |
-| 用户隔离由服务端决定 | 17、18、24 |
+| 用户隔离由服务端决定 | 17、18、19、24 |
 | OpenConnector fixed Fork/Adapter | 10、30.6/30.7 |
 | 版本化内部 HTTP/mTLS | 7、22 |
-| 无分布式事务 | Grant/Permit 协议、outbox、revisions，18/23 |
+| 无分布式事务 | 入口检查、请求快照、outbox、Connection 本地 revisions，18/23；跨系统 Grant/Permit 协议仅为后续候选 |
 | 真实 Provider与故障/负载测试 | 31、WP11/WP12 |
 
 ### 33.5 HLD 完整性验收矩阵
@@ -8074,7 +8079,7 @@ WP 是本 HLD 的技术 ownership 和依赖追踪单位，不是开发流程状�
 | 系统边界 | 6-10；权威矩阵、信任边界、部署单元、复用边界 | Architecture A 的private package、同进程、无Runtime Server及OpenConnector非授权权威边界继承PRD/Spec；D-01仅新增kernel allowlist、禁止装配和Fork治理待评审；D-02及新增外部协议的Spec回写待评审 |
 | 核心领域模型 | 11-13、17-20；聚合、状态机、invariants、Effect Ledger | 技术候选闭合；G-04/G-05产品语义、G-17 alternate-path重授权及G-18显式放弃/不可恢复语义待批准 |
 | Connection 生命周期 | 14-16；Personal/Shared、stored/effective status、connect/reconnect/revalidate/disconnect | 技术候选闭合；G-14/G-16/G-17/G-18产品生命周期Gate及实现/真实Provider证据待关闭 |
-| 授权与凭证归属 | 6、16-18；Platform Grant与Connection Credential单一权威 | 技术候选闭合；跨团队协议待D-02/D-03批准，exact-path备用授权待D-18/G-17，跨Agent abandonment/fresh successor待D-19/G-18；两者均不改变Credential只归Connection |
+| 授权与凭证归属 | 6、16-18；Platform Grant与Connection Credential单一权威 | Platform 保存授权，Connection 在托管 Action 入口检查当前状态并形成快照；跨系统 Permit/GrantSlot 协议仅为D-02/D-03后续候选，exact-path备用授权待D-18/G-17，跨Agent abandonment/fresh successor待D-19/G-18；两者均不改变Credential只归Connection |
 | 数据模型 | 21；逻辑表、字段、unique/check/composite FK/trigger/index/锁顺序，含retry budget三表、七类bounded chain、immutable cancel result；G-17 common的claim/receipt/acquisition、三分source projection、原Connection evidence、SIGNED Platform proof/READY outbox、Connection witness/canonical ACK/六列pointer、Platform ACKED delivery receipt；G-18另增abandonment states/no-target tombstone/late-write guard | Active Schema技术候选闭合；G-17 common integrity按reader-first独立expand，G-18只在其上增加`USER_ABANDONED`产品variant。已写receipt/source/proof/witness/ACK/pointer/delivery/trust history及G-18 tombstone/late-write guard均永久不contract；物理Drizzle migration待各WP验证 |
 | API 契约 | 22、23、25.1.7、28.1；Browser/Admin/Internal/Adapter/Egress/Recovery/Event/Operational | 完整inventory为67 logical / 69 physical：默认build 63/65，仅G-04为65/67，仅G-17为另一operation集合的65/67，两Gate均关闭为67/69；另有独立3/12 operational。`consumeConnectionCompletion`以POST、CSRF、strict body和exact replay取代有副作用GET；G-04关闭后proposal/approval两个normal route各生成strict request/result/status、`NO_PUBLIC_IN_PROGRESS` carrier和7/8条failure edge；四build幂等矩阵固定为`29/31/30/32 HEADER_KEY + 2 DOMAIN_COMMITMENT`及`3/7/6/15\|17\|16\|18` policy tuple。G-17关闭后增加两个独立formal route：Platform `restorePlatformAlternateTerminalAcceptance`与Connection `resolvePlatformTerminalAcceptanceWitness`，各自只有一个physical instance、OpenAPI、audience、purpose和幂等模式；G-18复用二者且不新增route。HttpError按四build为52/53/52/53，26/2 failure literal、15/11 Resolution/NextAction及3/12不变。Definitive-loss只在无任何current path等PRD既有场景active；另一path live时G-17未批准只SAFE_DENY零写。OpenAPI baseline、physical expansion、四种build和N/N-1 evidence待WP0/WP1 |
 | 跨 Agent 隔离 | 17、18、24；服务端主体解析、Slot/Permit/entitlement、存在性隐藏；G-18 predecessor/acquiring Agent-Slot与page-action actor/ref | HLD设计闭合；两组Agent/Slot逐字段置换、Browser注入和失去旧Agent访问后的名称隐藏待WP5/WP7/WP10 |
@@ -8288,8 +8293,8 @@ WP 是本 HLD 的技术 ownership 和依赖追踪单位，不是开发流程状�
 | ID | 决策 | 状态 | 批准前必须完成的权威文档动作 |
 | --- | --- | --- | --- |
 | D-01 | Connector Architecture A：在PRD/Spec既有边界内，将经allowlist的上游代码作为进程内Connector Kernel，并执行10.2禁止装配清单 | 本稿推荐为唯一active proposal；仍为`Proposed for Design Review`，尚未获得独立Owner确认。仅新增kernel allowlist、禁止装配和Fork治理；private package、同进程、无Runtime Server及OpenConnector非授权权威均为继承基线 | 既有基线无需回写Spec；新增治理记录OpenConnector fork governance ADR。若改变继承边界，先更新工程Spec；HLD交付证据不替代ADR批准 |
-| D-02 | Platform Grant 权威；Connection 只校验 Permit/保存投影 | Proposed | 澄清两份 PRD/Spec 6.2 |
-| D-03 | Authorization Protocol R-A：stable GrantSlot；不可变Grant replacement；effective recovery predicate；ConfirmationIntent source/target exact tuple与same-epoch reconfirm；Invocation持久Connection幂等键；两侧recovery generations；kind-safe entitlement root + append-only evidence/binding；Shared环境reset与Platform checkpoint技术机制 | Connection Engineering Owner已确认R-A作为本地设计输入；本稿按R-A收敛但仍为Proposed并待联合设计评审。该本地确认不批准D-17、D-18或D-19用户行为 | Spec 9.3/13.3 + Connection ownership/Permit ADR |
+| D-02 | Platform Grant 权威；Connection 在托管 Action 入口做当前状态检查并保存调用事实 | Proposed | 保持两份 PRD/Spec 6.2 边界；内部调用上下文契约另行评审 |
+| D-03 | 后续 Authorization Protocol 候选：stable GrantSlot、不可变 Grant replacement、ConfirmationIntent、Invocation、Permit/redeem、两侧 recovery generations 与 entitlement binding | Deferred，非当前 M1 契约 | 只有未来确需跨系统线性化时，才更新工程 Spec 并新增 Connection ownership/Permit ADR |
 | D-04 | account/external/shared revisions + execution fence 分离 | Proposed | Spec 数据契约 |
 | D-05 | ActionCall/Attempt/LogicalEffect/EffectDispatch、UNCERTAIN和mutating Effect Ledger acknowledged-commit RPO=0 | Proposed，含产品/SRE Gate | Connection PRD + Spec + External effect ADR |
 | D-06 | PostgreSQL + KMS envelope + durable refresh attempt | Proposed | Spec credential/ADR（如改变外部选型） |
@@ -8318,8 +8323,8 @@ HLD交付证据直接使用[开发工作流Spec](SPEC-ai-native-development-work
 
 1. 产品确认 `UNCERTAIN/结果待确认` 文案、可见性、reconciliation 主体和支持责任。
 2. 产品确认 ActionVersion 实质变化后用户是否重新确认；Proposed 为 authorization digest变化必须确认。
-3. 产品确认 Permit 已 redeem、尚未 SUBMISSION_STARTED 时随后撤销的 in-flight 语义；Proposed 见 18.5。
-4. Platform/Connection 联合批准Authorization Protocol R-A完整包：GrantSlot稳定并发根、不可变Grant replacement、ConfirmationIntent source/target exact tuple、Invocation持久Connection幂等键、Platform/Connection recovery generations、entitlement continuity root/append-only evidence/immutable binding、Shared环境reset/Platform checkpoint/Control activate gate、redeem API和lock/fence时序。Connection Engineering Owner已确认R-A作为本地设计输入且本稿已据此收敛，但本项只有联合架构批准与当前head按工作流Spec §§5.1、6.6、7和9收敛的证据均存在时才可关闭。该本地确认、Connector Architecture A或Terminal Recovery Route方案A的候选状态、HLD PR合并都不能替代D-17/G-16、D-18/G-17、D-19/G-18或D-20 common integrity Gate。
+3. 产品确认 Issue #4 入口检查后的撤权语义：入口检查前的新请求拒绝；入口检查后请求继续并保留 Provider 实际结果，不取消、不回滚；用户修复后只允许主动创建新调用。
+4. **后续候选**：若未来需要跨系统一次性调用许可，再由 Platform/Connection 联合批准 GrantSlot、ConfirmationIntent、Invocation、Permit/redeem 和 recovery fence 的完整协议。该候选不属于当前 M1，也不能作为 Issue #4 的验收前置；当前只要求 Connection 入口 live check 与请求快照。
 5. 选择首个真实 Provider/Action/auth/test tenant/minimal scope，并证明 stable identity。
 6. 明确 Identity account/organization revision、freshness、禁用传播和故障契约。
 7. 明确 KMS、mTLS/workload identity、egress proxy、对象存储的生产 Adapter和测试环境。
@@ -8354,7 +8359,7 @@ HLD交付证据直接使用[开发工作流Spec](SPEC-ai-native-development-work
 
 | ADR | 触发条件 |
 | --- | --- |
-| Connection ownership and Permit protocol | 授权权威、身份传递、Shared恢复旧root/Grant双侧终结/new-epoch INITIAL、普通运行exact-path retention/无current-path definitive loss/G-17另一path live零写、typed reason mapping、条件alternate pre-network claim/PENDING/ROOT_READY/terminal receipt、BOUND EVENT/SNAPSHOT exactly-one source与同逻辑projection、STALE/跨Agent普通INITIAL；D-20五层proof/delivery闭环、Platform完整SIGNED proof与历史双层验签、普通terminal snapshot冻结`platformAcknowledgedAt`、terminal-ack canonicalization、六列pointer、local-time-only ordering；G-18 opaque page action actor predicate、ABANDON_REQUESTED/ABANDONED、无target/有target tombstone、两组Agent/Slot successor lineage、不可逆drain与永久late-write guard，以及调用线性化 |
+| Connection ownership and Permit protocol | **后续候选**：仅在未来需要跨系统调用许可或线性化时记录；当前 M1 只采用 Platform 授权权威、受保护调用上下文和 Connection 入口检查。其余 Shared 恢复、alternate、terminal proof 与 G-18 条件协议仍按各自 Gate/ADR 管理 |
 | OpenConnector fork governance | 内部 Fork、精确版本、升级和供应链 |
 | External effect reliability | Effect Ledger、UNCERTAIN、reconciliation、acknowledged-commit RPO=0、两服务mutation recovery state/decision lease、`CONTINUITY / PROVIDER_COVERAGE` typed evidence、Catalog mutating-set与future-write topology |
 | Credential encryption and refresh | KMS envelope、codec、rotating token crash |
