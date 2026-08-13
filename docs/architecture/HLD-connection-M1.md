@@ -570,7 +570,7 @@ stateDiagram-v2
 
 ### 14.3 转换规则
 
-- `ACTIVE/DEGRADED -> DISCONNECTED` 在同一事务提升 execution fence、清 current Credential pointer、创建 revoke attempt、暂停引用 Grant并写 audit/outbox。
+- `ACTIVE/DEGRADED -> DISCONNECTED` 在 Connection Account 事务中提升 execution fence、清 current Credential pointer、创建 revoke attempt并写 audit/outbox。引用 Grant 因 fence 不匹配立即不可执行；其 `PAUSED_CONNECTION` 展示状态由 outbox 消费者幂等更新。
 - 同账号 reauth 只能在 stable account proof 相同且旧 Grant 未终结时恢复。
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
@@ -714,12 +714,12 @@ type CredentialVersion = {
 ### 16.5 Refresh 与 Rotation
 
 1. Worker 以 `connectionId` 获取 DB lease，其他副本退避。
-2. 事务外解密 exact current 版本并访问 Provider。
-3. 持久化 refresh attempt 和 Provider response metadata，不记录 token。
+2. 事务重读 exact current CredentialVersion ID/revision，创建绑定该版本的 refresh attempt，并将 attempt CAS 到 `SUBMISSION_STARTED`。
+3. 提交后解密该 exact 版本并访问 Provider；随后持久化 Provider response metadata，不记录 token。
 4. 成功时创建新版本；事务锁 Connection，比较 old version ID/revision 后 CAS。
 5. CAS 输家销毁候选 ciphertext 并读取新 current，不覆盖胜者。
 6. Provider 明确 `invalid_grant` 时标 old `INVALID`、清 pointer、提升 fence并进入 `REAUTH_REQUIRED`。
-7. timeout/commit unknown 时 attempt 进入 `UNCERTAIN`，不得盲目重复使用旋转型 refresh token。
+7. timeout、进程崩溃或结果未知时 attempt 进入 `UNCERTAIN`，不得盲目重复使用旋转型 refresh token。
 
 ### 16.6 Scope 变化
 
@@ -884,6 +884,7 @@ type DelegatedInvocationAssertionV1 = {
   subject: string;
   consumerId: string;
   consumerInstanceId: string;
+  workloadBindingHash: string;
   actorId?: string;
   actionVersionId: string;
   argsHash: string;
@@ -896,10 +897,10 @@ type DelegatedInvocationAssertionV1 = {
 };
 ```
 
-- assertion 由注册 workload key 签名并绑定 mTLS identity。
-- `subject` 由 Connection 的 Identity Adapter 映射到 Principal，不能采用 body 中的 userId。
+- assertion 由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发，并绑定注册 workload 的 mTLS identity；workload 不能自签 Principal 身份。
+- `subject` 由受信 issuer 的声明经 Connection Identity Adapter 映射到 Principal，不能采用 Consumer body 中的 userId。
 - TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
-- `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试可以签发新 `jti`，但必须复用同一业务幂等键。
+- `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试必须向受信 issuer 获取带新 `jti` 的令牌，并复用同一业务幂等键。
 - `actorId` 只参与 exact Grant lookup 和审计，不能用来查询 Consumer 内部对象。
 - assertion 不携带 `connectionId`、grant、scope、Credential 或可替换 endpoint。
 
@@ -937,14 +938,15 @@ AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consume
 Direct：
 
 ```text
-principalId + consumerInstanceId + actionVersionId + MCP stable request key
+principalId + consumerId + consumerInstanceId + connectionId
++ actionVersionId + MCP stable request key
 ```
 
 Delegated：
 
 ```text
 principalId + consumerId + consumerInstanceId + actorKey
-+ actionVersionId + Idempotency-Key
++ connectionId + actionVersionId + Idempotency-Key
 ```
 
 相同 scope 且 args hash 相同返回原 Invocation/Call；args hash 不同返回 `IDEMPOTENCY_CONFLICT`，不能覆盖原调用。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
@@ -1668,7 +1670,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 
 - Authorization Code + PKCE S256；state take-once；exact redirect URI。
 - issuer/authorization/token/profile endpoint来自 immutable ProviderRelease。
-- 不接受 password grant、implicit flow、动态 client registration 或任意 callback。
+- 不接受 password grant、implicit flow 或任意 callback。动态 client registration 默认关闭；仅在 G-01 证明目标 Codex 版本确有需要时，才按 22.4 的 redirect URI、software metadata 和注册生命周期约束启用。
 - login CSRF、session fixation、mix-up attack、code injection 和 open redirect 有专门测试。
 - OAuth client secret 在 KMS，不能进入 Web bundle、Consumer 或 repo。
 

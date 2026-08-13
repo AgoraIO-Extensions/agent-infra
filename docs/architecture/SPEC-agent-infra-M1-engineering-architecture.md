@@ -302,9 +302,9 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct Consumer 只提交 Action 和参数，Connection 从用户会话解析 Principal、Consumer 和授权目标。Delegated Consumer 提交由注册 workload 签名的短期委托上下文；Connection 验证 issuer、subject、consumer、actor、audience、args hash、期限和防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
+Direct Consumer 只提交 Action 和参数，Connection 从用户会话解析 Principal、Consumer 和授权目标。Delegated Consumer 先认证注册 workload，再提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托令牌；令牌绑定 workload、consumer、actor、audience、action、args hash、期限和一次性 `jti`。Connection 验签并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
 
-委托上下文只能证明调用主体，不能创建或扩大 Grant。任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
+委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 
 ## 10. Agent Workload 与调谐
 
@@ -487,8 +487,8 @@ sequenceDiagram
     P->>C: user session 或 delegated assertion + actionId + args
     C->>C: 认证 Principal/Consumer/Actor
     C->>D: 解析 current Grant 和唯一 Connection
-    C->>D: 持久化 AuthorizedInvocation、Call 和 Effect intent
-    C->>C: 校验 scope、Action、Credential 和 egress policy
+    C->>C: 校验 Action 参数和 egress policy
+    C->>D: 重校验 scope、Credential 和 fence，持久化 Invocation、Call、Effect intent
     C->>X: 注入凭证并执行
     X-->>C: 结果或错误
     C->>D: 脱敏并完成 Call、Effect、审计和 outbox

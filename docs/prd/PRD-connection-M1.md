@@ -178,7 +178,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 ### 9.3 Direct 与 Delegated 调用
 
 - Direct Consumer 使用 Connection 当前用户会话，Connection 自行解析 Principal 和授权。
-- Delegated Consumer 使用注册 workload 身份和短期委托上下文，Connection 验证其代表的 Principal、Consumer、Actor、Action、参数摘要和期限。
+- Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托上下文；上下文绑定 workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
 - 委托上下文只能证明“谁在请求”，不能创建、替换或扩大 Connection 中的授权。
 - 两种调用最终使用同一授权校验、账号解析、执行、审计和错误语义。
 
@@ -194,14 +194,14 @@ Connection 必须根据服务端认证结果和 Connection DB 中的当前授权
 - Delegated Consumer 使用未授权 Actor 或把授权从一个 Actor 转给另一个 Actor。
 - 已撤销 ConsumerInstance、授权或共享资格继续发起新调用。
 
-OAuth callback 只能完成发起 Principal 的事务，不能改变 Connection 的所有者、共享范围或目标 Consumer。
+OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务。Connection 必须校验高熵 state、PKCE、Provider、发起 Principal、Consumer、目标用途、过期时间和预注册返回地址，并在首次处理后原子消费事务；任何字段不匹配、过期或重放都必须拒绝，且不能改变 Connection 的所有者、共享范围或目标 Consumer。
 
 ## 11. Action 执行、错误与审计
 
 - Consumer 只提交 Action 和参数。
 - Connection 解析唯一授权 Connection，选择其 current Credential，注入凭证并调用 Provider。
-- 写 Action 在访问 Provider 前获得稳定调用 ID 并持久化外部效果意图。
-- 相同幂等键不能重复创建同一外部效果。
+- 写 Action 在访问 Provider 前提交稳定调用 ID、调用记录和外部效果意图。
+- Connection 以 `Principal + Consumer + Actor（如有）+ Connection + ActionVersion + 幂等键` 作为幂等作用域；同一作用域、幂等键和参数摘要返回原调用结果，参数摘要不同时拒绝为冲突，不同作用域互不影响。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
 - Provider 拒绝、scope 不足、限流或暂时不可用时，返回稳定原因和可执行下一步。
 - 用户可以在 Connection 调用记录查看自己的 Provider、脱敏账号、Consumer、Actor、Action、时间、状态、结果和错误。
