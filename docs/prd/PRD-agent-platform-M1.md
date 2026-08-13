@@ -4,7 +4,7 @@
 
 企业级 Agent 平台面向企业员工。M1 需要让员工能够基于企业提供的标准模板，或企业 Hub 中已有的自定义 Agent 镜像，创建并使用一个长期运行的 Agent。
 
-M1 同时交付 Agent 平台和独立的 Connection 系统。Agent 平台负责 Agent 的创建、权限、运行和使用体验；Connection 系统负责外部平台接入、账户鉴权和用户授权。
+M1 同时交付 Agent 平台和独立的 Connection 系统。Agent 平台负责 Agent 的创建、权限、运行和使用体验；Connection 系统负责外部平台接入、账户鉴权和 Consumer 授权。Agent 平台是 Connection 的一个 Consumer，不是其授权权威或必经入口。
 
 M1 上线后应形成以下闭环：
 
@@ -30,7 +30,7 @@ M1 只设置三类角色。
 
 - 浏览并使用自己有权访问的 Agent。
 - 提交 Agent 创建申请，并查看申请状态。
-- 建立自己的 Connection，并决定是否授权给某个 Agent 使用。
+- 在独立 Connection 系统中连接外部账号，并决定是否授权给代表某个 Agent 的 Consumer/Actor 使用。
 
 ### 2.2 Agent Owner
 
@@ -107,7 +107,7 @@ M1 的 Base Image 不要求预集成身份、消息、Connection 或其他平台
 ### 5.4 模型与 Connection
 
 - 自定义 Agent 的模型配置属于 Pod 内部实现。平台不收集或注入模型信息，也不提供模型切换。
-- 自定义 Agent 不会自动获得 Connection 能力。只有实现 Connection 约定接口并声明支持后，Owner 才能配置 Action，使用者才能授权 Connection。
+- 自定义 Agent 不会自动获得 Connection 能力。只有平台作为 Connection Consumer 完成通用接入并声明支持后，Owner 才能配置 Action，使用者才能在 Connection 中授权对应 Actor。
 - 对于未声明支持 Connection 的自定义 Agent，平台不展示 Connection 配置；Agent 自行发起的外部调用也不由 Connection 管理。
 
 ### 5.5 升级
@@ -229,15 +229,16 @@ Owner 保存配置后自动生效。底层如需重启 Pod，由平台处理，�
 
 Connection 是与 Agent 平台并行建设的独立系统。详细需求见 [Connection M1 产品需求](PRD-connection-M1.md)。
 
-Agent 平台与 Connection 的边界如下：
+Agent 平台只作为一个 Delegated Consumer 接入 Connection，边界如下：
 
 - Connection 系统发布 Provider 和 Action，处理外部账户鉴权、凭证保管和 API 调用。
 - Agent Owner 选择 Agent 可以使用的 Action，但不能绑定普通使用者的个人外部账号。
-- 使用者将自己的 Connection，或自己有权使用的公司 Connection，授权给具体 Agent。
-- Owner 新增 Action 后，已有 Connection 授权不能自动获得该新增能力。使用者确认更新后的能力范围后，Agent 才能代表该用户调用新增 Action。
+- 使用者在 Connection 中将个人或有资格使用的公司 Connection 授权给 Agent Platform Consumer 下的具体 Agent Actor。
+- Owner 新增 Action 后，Connection 中的已有授权不能自动获得该新增能力。使用者在 Connection 中确认更新后的能力范围后，Agent 才能代表该用户调用新增 Action。
 - Owner 移除 Action，或 Connection 系统停用 Provider 或 Action 后，对应能力立即停止使用。
 - Agent、模型和运行环境不能获得 Connection 保存的原始凭证。
-- 三个标准模板必须完成 Connection 接入。
+- 三个标准模板必须通过 Connection 的通用 Delegated Consumer 契约完成接入，不使用 Platform 私有授权协议。
+- Agent 平台只保存自身 Agent policy、execution 和 Connection `callId` 引用，不保存第二份可写 Connection 授权。
 - M1 至少使用一个真实外部平台，完成连接、授权、调用和撤销授权的端到端闭环。
 
 ## 10. 使用渠道
@@ -261,7 +262,7 @@ Agent 平台与 Connection 的边界如下：
 - 每条企微消息都必须映射到当前发送者的公司身份。无法映射身份，或发送者不在 Agent 可用范围内时，机器人不调用 Agent，并回复“暂无权限使用此 Agent”。
 - 群消息和 Agent 回复对群成员可见。Agent 可用范围只决定谁能触发 Agent，不能阻止其他群成员阅读群内已有内容；Owner 绑定群聊时必须看到该提示。
 - 普通群聊按发送者隔离上下文；明确线程遵循 Hermes 的共享逻辑，只共享该群或线程中已经公开的消息，不读取参与者的个人会话、个人附件或个人记忆。
-- 群聊中调用 Connection 时，只能使用触发本次调用的消息发送者已经授权给该 Agent 的 Connection。其他群成员的 Connection 和授权不能被使用。
+- 群聊中调用 Connection 时，平台必须把触发消息发送者解析为委托 Principal，并使用该 Principal 在 Connection 中授权给当前 Agent Actor 的 Connection。其他群成员的 Connection 和授权不能被使用。
 - Web、企微智能机器人和企微自建应用之间不合并会话。
 
 ## 11. Web 产品体验
@@ -275,7 +276,7 @@ M1 提供以下页面：
 - 对话页：提供 ChatGPT 式对话和个人历史会话。
 - 我的 Agent：查看申请状态，管理自己作为 Owner 的 Agent。
 - 创建与配置页：提交申请并管理 Owner、可用范围、模型、渠道和 Connection Action。
-- 我的 Connection：进入独立 Connection 系统，管理个人 Connection 和 Agent 授权。
+- 我的 Connection：进入独立 Connection 系统，管理个人 Connection 和 Consumer/Actor 授权。
 - 审批页：系统管理员审批申请和停用 Agent。
 - 操作审计页：仅系统管理员可见，属于 M1 次要优先级。
 
@@ -328,7 +329,7 @@ M1 不支持分享、临时会话或对话分支。
 - 企微渠道绑定变更。
 - 标准模板的模型清单和默认项变更。
 - Agent 可用的 Provider 和 Action 变更。
-- 用户对 Connection 的授权、更新确认和撤销。
+- Agent 平台保存 Connection 调用关联；Connection 授权、更新确认和撤销的权威审计由 Connection 保存。
 - 用户使用 Agent 的时间、渠道和结果状态，不记录会话内容。
 
 平台操作审计与 Connection 调用审计分别由两个系统提供。两类记录必须能够关联同一次 Connection 调用。审计不记录聊天内容、模型内部思考或 API Key 明文。
