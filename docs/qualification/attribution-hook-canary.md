@@ -9,3 +9,5 @@ The second commit verifies that work arriving while the detached runner is
 active is retained and drained without a manual sync.
 
 Qualification step: 2 of 2.
+
+Qualification step: 3 of 3 verifies that a freshly started Codex TUI validates HTTP-only Request evidence.
