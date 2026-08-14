@@ -1035,6 +1035,7 @@ sequenceDiagram
     participant D as Connection DB
     participant G as GitHub
 
+    P->>P: enforce current Agent/Owner Action policy
     P->>H: mTLS + delegated assertion + action args
     H->>C: verified workload/assertion/args hash
     C->>D: take-once jti; bind business idempotency key
@@ -1047,7 +1048,7 @@ sequenceDiagram
     H-->>P: typed response
 ```
 
-Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversation、Execution 或 Tool Gateway。Platform 内部 policy 是额外收紧条件，Connection 只校验自身 Consumer/Actor Grant。
+Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversation、Execution 或 Tool Gateway。Agent Platform 必须在请求 delegated assertion 前校验 current Agent/Owner Action policy；该 policy 只能在 Consumer 侧额外收紧，Connection 不信任或复制其结论，仍只校验自身 Consumer/Actor Grant。
 
 ### 19.3 Preflight 与最终校验
 
@@ -1119,7 +1120,8 @@ stateDiagram-v2
 ```text
 LogicalEffect:
   INTENT_RECORDED -> SUBMISSION_POSSIBLE
-  -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
+  SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT
+  SUBMISSION_POSSIBLE -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
 
 EffectDispatch:
   PREPARED -> CANCELED_PRE_SUBMIT | FAILED_BEFORE_SUBMIT
@@ -1630,7 +1632,7 @@ deadline 取 Consumer 请求、Action 上限、Provider 上限和服务端最大
 ### 25.4 取消
 
 - `AUTHORIZED/PREPARED` 只能通过原子 pre-submit cancel 进入 `CANCELED_PRE_SUBMIT`，并确定没有外部效果。
-- 取消事务锁定 ActionCall 和 current EffectDispatch（如有）；Call 为 `AUTHORIZED` 且尚无 Dispatch 时可直接 CAS，已有 Dispatch 时仅在其仍为 `PREPARED` 时同时 CAS Call/Dispatch 到 `CANCELED_PRE_SUBMIT`。worker 必须在同一 CAS 中将 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，因此只有一方能成功。
+- 取消事务锁定 ActionCall、LogicalEffect 和 current EffectDispatch（如有）；Call 为 `AUTHORIZED` 且尚无 Dispatch 时可直接 CAS Call/Effect，已有 Dispatch 时仅在其仍为 `PREPARED` 时同时 CAS Call/Effect/Dispatch 到 `CANCELED_PRE_SUBMIT`。worker 必须在同一 CAS 中将 Call `DISPATCH_READY -> DISPATCHING`、保持 Effect `SUBMISSION_POSSIBLE`、Dispatch `PREPARED -> SUBMISSION_STARTED`，因此只有一方能成功。
 - `SUBMISSION_STARTED` 后取消只停止等待和后续 retry，不撤回 Provider 请求。
 - Provider 提供明确 cancel API 时，它是另一个受控 Action/Effect，不是本地状态改写。
 - Call 最终状态保留实际结果，不能因用户取消伪装为未执行。
