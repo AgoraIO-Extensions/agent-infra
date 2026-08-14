@@ -172,11 +172,11 @@ sequenceDiagram
 
 ### 6.1 Direct MCP Consumer
 
-Direct MCP Client 通过 Connection MCP 调用。Connection 从 access token 解析 Principal、已注册 Consumer、ConsumerInstance 和 audience，`tools/list` 只暴露当前授权可用的 Action；浏览器登录会话只完成用户认证，不能单独决定 Consumer 或 Instance。Codex、Claude App、Cursor 等客户端产品分别注册 Consumer，每个设备或安装形成独立 ConsumerInstance；它们不需要经过 Agent Platform，也不保存 Provider Credential。
+Direct MCP Client 通过 Connection MCP 调用。Connection 必须先验证 access token 的签名、受信 issuer、audience、有效期、必要 scope、适用的 sender binding 和当前 session 撤销状态，再解析 Principal、已注册 Consumer 和 ConsumerInstance，并校验这些主体当前仍有效；`tools/list` 只暴露当前授权可用的 Action。浏览器登录会话只完成用户认证，不能单独决定 Consumer 或 Instance。Codex、Claude App、Cursor 等客户端产品分别注册 Consumer，每个设备或安装形成独立 ConsumerInstance；它们不需要经过 Agent Platform，也不保存 Provider Credential。
 
 ### 6.2 Delegated Consumer
 
-Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文必须绑定稳定 Principal subject、组织或租户、Consumer、具体 ConsumerInstance、已认证 workload 的 sender identity、可选 Actor、Action、参数摘要、业务幂等键摘要、audience、有效期和一次性防重放标识；Connection 必须校验签发方、签名、这些绑定与当前连接身份及当前组织关系一致，并确认幂等键摘要与请求的 `Idempotency-Key` 一致。具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结，在契约冻结前不开放 Delegated 调用。
+Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文由 Connection 或受信公司身份系统在同时认证当前 Principal、注册 workload 及其 Consumer/ConsumerInstance 映射后签发，不能根据 Consumer 自报字段签发；上下文必须绑定稳定 Principal subject、组织或租户、Consumer、具体 ConsumerInstance、已认证 workload 的 sender identity、可选 Actor、Action、参数摘要、业务幂等键摘要、audience、有效期和一次性 `jti`。Connection 必须校验签发方、签名、这些绑定与当前连接身份及当前组织关系一致，确认幂等键摘要与请求的 `Idempotency-Key` 一致，并拒绝重复 `jti`；重试使用新的 `jti` 和原业务调用的同一幂等键。具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结，在契约冻结前不开放 Delegated 调用。
 
 Agent Platform 在发起调用前仍执行自己的用户、Agent、渠道和 Owner Action 策略；这些检查只能收紧调用。Connection 独立执行当前 ConsumerGrant 和 Connection 状态检查，任何一侧拒绝都不调用 Provider。
 
@@ -230,7 +230,7 @@ Consumer 内部 Agent policy 可以进一步缩小该集合，但不能扩大它
 
 M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `DISABLED`。状态转换、外部账号稳定识别、共享范围和 Credential 生命周期由 Connection 持久化。
 
-- OAuth 使用 Authorization Code、PKCE、一次性高熵 state 和预注册回跳地址；callback 校验 Provider、发起 Principal、Consumer、目标用途、过期时间并原子消费事务。
+- OAuth 使用 Authorization Code、PKCE、一次性高熵 state 和预注册回跳地址；callback 校验 Provider、发起 Principal、目标用途和过期时间，Consumer 发起的事务还必须校验 Consumer 和 ConsumerInstance，随后原子消费事务。
 - API Key/PAT 只允许受控输入，提交后立即加密保存，不回显。
 - Credential 使用公司 KMS/Secret Service envelope encryption；数据库只保存密文、Key 版本和必要元数据。
 - refresh、rotation 和 revoke 使用 Connection 本地幂等键以及事务/CAS/lease，避免并发覆盖 current 版本。
@@ -243,6 +243,7 @@ M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `
 - 只有经过代码、安全、网络出口和 Provider Owner 评审的 allowlist executor 可以执行。目录存在不等于自动允许执行。
 - Provider 出站的 origin、path 模板和 Credential 注入来自已发布版本，不来自 Action 参数或 Provider 返回内容。
 - 写 Action 在访问 Provider 前提交稳定 `callId`、ActionCall 和 Effect intent。
+- 写 Action 必须使用 Consumer 生成且在同一业务调用重试间保持稳定的幂等键，不能使用每次变化的传输 request ID 代替。
 - Connection 先以 `Principal + Consumer + ConsumerInstance + Actor（如有）+ request key` 查找原调用。首次请求冻结版本化请求摘要、Connection、ActionVersion 和 exact CredentialVersion；后续同键、同请求不因换号、非撤销类授权更新或版本发布重新解析，同键不同请求返回冲突。
 - 幂等命中时先校验当前身份、Instance 和 AuthorizationRoot 对原调用的访问；已撤销则拒绝且不创建新 Call。访问仍有效时，只有持久事实证明 Provider 提交尚未开始且能够原子 claim 原 ActionCall，才可继续执行该原调用一次；已经提交、已经完成或提交状态未知时只返回原调用，不产生新的 Provider 出站。
 - 只有 Provider 明确支持幂等机制时才自动重试写操作。Provider 可能已执行但结果无法确认时记录 `UNCERTAIN`，不伪造失败或成功。
