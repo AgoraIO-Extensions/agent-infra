@@ -128,10 +128,12 @@ sequenceDiagram
     U->>C: 用户会话或委托上下文 + Action + args
     C->>C: 认证 Principal / Consumer / Actor
     C->>D: 解析 current Grant 和唯一 Connection
-    C->>D: 入口重校验并持久化 Invocation / Call / Effect intent，绑定 exact CredentialVersion
+    C->>D: 入口重校验；按幂等键创建或读取 Invocation / Call / Effect intent，绑定 exact CredentialVersion
     alt 入口检查失败
         C-->>U: 结构化拒绝，不产生 Provider 出站
-    else 入口检查提交
+    else 幂等命中已有调用
+        C-->>U: 原 callId + 已保存状态、结果或错误，不产生 Provider 出站
+    else 新调用提交
         C->>X: 使用请求快照固定的 exact CredentialVersion 执行
         X-->>C: 实际结果或错误
         C->>D: 保存脱敏结果、状态、审计和 outbox
@@ -145,7 +147,7 @@ Direct Consumer 使用 Connection 的用户态 MCP 或 HTTP 接口。Connection 
 
 ### 6.2 Delegated Consumer
 
-Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文绑定当前调用主体、Consumer、可选 Actor、Action、参数摘要和有效期；具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结。
+Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文必须绑定当前调用主体、Consumer、具体 ConsumerInstance、已认证 workload 的 sender identity、可选 Actor、Action、参数摘要、audience、有效期和一次性防重放标识；Connection 必须校验这些绑定与当前连接身份一致。具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结，在契约冻结前不开放 Delegated 调用。
 
 Agent Platform 在发起调用前仍执行自己的用户、Agent、渠道和 Owner Action 策略；这些检查只能收紧调用。Connection 独立执行当前 ConsumerGrant 和 Connection 状态检查，任何一侧拒绝都不调用 Provider。
 
