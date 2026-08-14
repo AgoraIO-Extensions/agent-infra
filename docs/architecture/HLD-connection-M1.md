@@ -665,7 +665,8 @@ fingerprint = HMAC-SHA-256(
 type OAuthTransaction = {
   oauthTransactionId: string;
   principalId: string;
-  consumerId: string;
+  consumerId: string | null;
+  consumerInstanceId: string | null;
   providerReleaseId: string;
   purpose: "CONNECT" | "REAUTH";
   targetConnectionId: string | null;
@@ -682,9 +683,9 @@ type OAuthTransaction = {
 OAuth 流程：
 
 1. Browser/Consumer 只提交 Provider 和 opaque return intent。
-2. Connection 解析当前 Principal、Consumer 和允许 scope，创建 transaction。
+2. Connection 解析当前 Principal 和允许 scope；Consumer 发起时再从认证上下文解析 Consumer/Instance，独立 Connection 管理流程则把两者都保存为 null。
 3. state 只保存 hash，PKCE verifier 加密保存；TTL 不超过 10 分钟。
-4. callback 事务使用 `SELECT FOR UPDATE` take-once 消费 state。
+4. callback 事务使用 `SELECT FOR UPDATE` take-once 消费 state，并精确校验 transaction 中 Consumer/Instance 的存在性和值；独立管理流程不得临时附加 Consumer。
 5. token exchange 通过受控 egress，保存 durable attempt。
 6. 使用 token 调 exact profile endpoint，取得 stable identity proof。
 7. 创建/匹配 Connection 和新 CredentialVersion，CAS current pointer。
@@ -978,7 +979,7 @@ principalId + consumerId + consumerInstanceId + actorKey
 
 request key 使用 HTTP `Idempotency-Key`。
 
-Connection 先认证 current Principal、Consumer、ConsumerInstance 和 Actor，再按上述 stable subject scope + request key 查找 `idempotency_record`，命中前不能解析新的 current Grant、Connection 或 ActionVersion。首次请求在同一事务中冻结 versioned request hash、Connection、CredentialVersion 和 ActionVersion。命中时必须校验当前身份、Instance 和 AuthorizationRoot 访问仍有效：已撤销则拒绝且不创建新 Call；仍有效且请求相同则返回原 Invocation/Call，不因换号、非撤销类授权更新或版本发布重新解析；请求不同返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
+Connection 先认证 current Principal、Consumer、ConsumerInstance 和 Actor，再按上述 stable subject scope + request key 查找 `idempotency_record`，命中前不能解析新的 current Grant、Connection 或 ActionVersion。首次请求在同一事务中冻结由协议 Action 标识与 canonical args 组成的 versioned request hash、Connection、CredentialVersion 和 ActionVersion。命中时必须校验当前身份、Instance 和 AuthorizationRoot 访问仍有效：已撤销则拒绝且不创建新 Call；仍有效且请求相同则返回原 Invocation/Call，不因换号、非撤销类授权更新或版本发布重新解析；请求不同返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 必须在 take-once 检查处拒绝；业务重试必须使用新 `jti` 并复用原 Idempotency-Key，由幂等记录返回原 Invocation/Call，且不能创建第二个 Call。
 
 ### 18.5 撤销线性化
 
@@ -1228,7 +1229,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `shared_scope_org_ref` | scope_id、org_ref_hash | organization path |
 | `connection_account` | id、release_id、owner_type、owner_principal_id、shared_scope_id、external_identity_id、status、revisions/fences、current_credential_id | owner_type 与对应 owner 字段严格匹配 CHECK |
 | `credential_version` | id、connection_id、type、ciphertext、encrypted_dek、kms_ref、codec_version、scope_json、expiry、lifecycle、revision | one CURRENT per connection |
-| `oauth_transaction` | id、principal_id、consumer_id、release_id、purpose、state_hash、pkce_ciphertext、return_intent_id、expiry、status | unique state_hash；take-once |
+| `oauth_transaction` | id、principal_id、consumer_id?、consumer_instance_id?、release_id、purpose、state_hash、pkce_ciphertext、return_intent_id、expiry、status | unique state_hash；consumer/instance 同为空或同非空；take-once |
 | `credential_attempt` | id、connection_id、kind、source_version、status、provider_request_id、started/finished | refresh/replace/revoke durable evidence |
 
 ### 21.5 Authorization 表
