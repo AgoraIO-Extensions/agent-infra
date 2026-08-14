@@ -424,12 +424,21 @@ type ConsumerInstance = {
   instanceRevision: bigint;
   lastSeenAt: string | null;
 };
+
+type ConsumerActorBinding = {
+  consumerId: string;
+  actorKey: string;
+  consumerInstanceId: string;
+  status: "ACTIVE" | "REVOKED";
+  bindingRevision: bigint;
+};
 ```
 
 - Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant。
 - Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。
 - `Consumer.type` 表示信任与调用模式，不编码客户端品牌。产品名、版本和已验证能力属于注册元数据与 conformance evidence；Connection Core 不按 Codex、Claude App 或 Cursor 分支授权规则。
 - `authenticationBindingHash` 绑定 OAuth client/session 或 workload mTLS identity；客户端支持 sender-constrained token 时同时绑定 key thumbprint，不保存 private key或 bearer token。
+- Delegated Consumer 使用 Actor 细分授权时，`actorKey` 必须由 current `ConsumerActorBinding` 证明当前 WORKLOAD instance 可以代表该 Actor；Consumer 请求体或未校验的 assertion claim 不能创建该绑定。
 - Consumer disable 同步阻止全部实例、新授权和调用；不能只依赖 token expiry。
 
 ### 12.4 Consumer Action Declaration
@@ -496,7 +505,7 @@ type ActionVersion = {
 - Schema 使用受限 JSON Schema 2020-12 子集，拒绝远程 `$ref`、可执行默认值和未受限递归。
 - `authorizationDigest` 覆盖用途、effect class、required scopes、敏感参数提示和外部账号类型；变化时用户必须重新确认。
 - M1 的 MUTATING Action 只允许一个独立 LogicalEffect，避免部分成功产品状态。
-- `DEPRECATED` 可执行但不能进入新 Consumer declaration；`DISABLED` 立即拒绝全部新 dispatch。
+- `DEPRECATED` 只用于不扩大权限且不涉及安全修复的兼容旧版本，可执行但不能进入新 Consumer declaration。scope/effect 收缩、安全修复或其他强制限制必须在 Catalog 事务中将所有不再合规的旧版本置为 `DISABLED`；`DISABLED` 立即拒绝全部新 dispatch。
 
 ### 13.3 发布状态机
 
@@ -925,6 +934,7 @@ type DelegatedInvocationAssertionV1 = {
 
 - assertion 默认通过 Connection token exchange 签发：Connection 同时认证当前 Principal、注册 workload 的 mTLS identity 及其 Consumer/Instance 映射。若由受信公司身份系统签发，该系统也必须完成相同认证和注册映射校验，不能根据 Consumer 自报字段签发；workload 不能自签 Principal 身份、组织或租户。
 - 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
+- assertion 包含 `actorId` 时，token exchange 和最终校验都必须验证 Actor 已注册到该 Consumer，且 current ConsumerActorBinding 允许已认证 WORKLOAD instance 代表该 Actor；外部受信 signer 也必须认证同一 workload-to-actor 事实。Consumer 自报 Actor 不能进入授权上下文。
 - `recoveryGeneration` 必须来自 PITR 域外的 Recovery Control 并等于 current generation；旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
 - TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
 - `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试必须向受信 issuer 获取带新 `jti` 的令牌，并复用同一业务幂等键。
@@ -944,6 +954,7 @@ type AuthorizedInvocation = {
   consumerInstanceId: string;
   consumerInstanceRevision: bigint;
   actorKey: string;
+  actorBindingRevision: bigint | null;
   authorizationRootId: string;
   authorizationFence: bigint;
   grantId: string;
@@ -963,7 +974,7 @@ type AuthorizedInvocation = {
 };
 ```
 
-AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、current declaration、ConsumerInstance、Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration、instance revision 和 `credentialVersionId` 并生成稳定 `invocationId`。后续 refresh/rotation 不能替换该版本；执行前任一 frozen revision、declaration、pointer 或 fence 已变化时在出站前拒绝。
+AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、current declaration、ConsumerInstance、适用的 ConsumerActorBinding、Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration、instance/actor binding revision 和 `credentialVersionId` 并生成稳定 `invocationId`。Direct 调用的 `actorBindingRevision` 为空；Delegated Actor binding 缺失、撤销或变化都在出站前拒绝。后续 refresh/rotation 不能替换 frozen CredentialVersion。
 
 ### 18.4 Idempotency Scope
 
@@ -1058,7 +1069,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 工具发现或授权 preview 的 preflight 只用于用户体验。Provider 出站前必须重新检查：
 
-- Principal 和 Consumer/Instance current status；Consumer/Instance revision 必须等于 Invocation 快照，current declaration ID 必须未变且仍包含 frozen ActionVersion。
+- Principal 和 Consumer/Instance current status；Consumer/Instance revision 必须等于 Invocation 快照，current declaration ID 必须未变且仍包含 frozen ActionVersion；Delegated Actor binding 必须仍为 current 且 revision 匹配。
 - AuthorizationRoot current Grant、fence、actor key 和 Action set。
 - Connection owner/shared eligibility、revision 和 execution fence。
 - ProviderRelease/ActionVersion state、digest 和 endpoint policy。
@@ -1067,7 +1078,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
 
-1. 事务 A 锁 Consumer -> current declaration -> ConsumerInstance -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
+1. 事务 A 锁 Consumer -> current declaration -> ConsumerInstance -> applicable ActorBinding -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
 2. 事务 B 按相同顺序重读 current 状态，在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，然后创建 durable egress hop；任一状态已变化都失败。
 3. 提交后才签发绑定 exact dispatch 的短期 egress assertion。
 4. 任一校验失败都在 `SUBMISSION_STARTED` 前结束，证明没有本次外部副作用。
@@ -1126,10 +1137,12 @@ LogicalEffect:
   INTENT_RECORDED -> SUBMISSION_POSSIBLE
   SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT
   SUBMISSION_POSSIBLE -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
+  UNCERTAIN -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED
 
 EffectDispatch:
   PREPARED -> CANCELED_PRE_SUBMIT | FAILED_BEFORE_SUBMIT
-  PREPARED -> SUBMISSION_STARTED -> REQUEST_STARTED
+  PREPARED -> SUBMISSION_STARTED
+  SUBMISSION_STARTED -> REQUEST_STARTED | UNKNOWN
   REQUEST_STARTED -> RESPONSE_RECEIVED | UNKNOWN
 ```
 
@@ -1151,7 +1164,7 @@ EffectDispatch:
 
 - READ_ONLY 在 deadline/retry budget 内可自动 retry。
 - MUTATING 只有 Provider 原生 idempotency key 或可证明 natural key 时可自动 retry。
-- 相同 LogicalEffect 的 retry 使用同一 provider idempotency key，创建新 Attempt/Dispatch但不创建新 Call。
+- Provider 原生 idempotency key 在首次 Dispatch 前与 LogicalEffect 一起持久化为包含 KMS key reference 的可恢复加密值、hash 和 codec version；相同 LogicalEffect 的 retry/recovery 解密并使用完全相同的 key，创建新 Attempt/Dispatch但不创建新 Call。仅保存 hash 不满足恢复要求。
 - 401 触发一次受控 refresh 后，只在确定请求未提交时 retry。
 - 429/5xx 遵循 Provider retry-after、全局 budget 和 deadline。
 - `UNCERTAIN` 不进入普通 retry queue。
@@ -1204,7 +1217,8 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `principal_profile` | principal_id、ciphertext、profile_revision | PK principal_id |
 | `consumer` | id、type、name、status、current_declaration_id、revision | name非授权键 |
 | `consumer_owner` | consumer_id、principal_id | composite PK |
-| `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding |
+| `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding；unique id+consumer |
+| `consumer_actor_binding` | consumer_id、actor_key、instance_id、status、revision | composite PK；composite FK instance+consumer；current binding required |
 | `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current published |
 | `consumer_declared_action` | declaration_id、action_version_id | composite PK |
 | `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
@@ -1258,7 +1272,7 @@ Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_gra
 | `idempotency_record` | stable_scope_hash、request_key_hash、request_hash、connection_id、action_version_id、invocation_id、response_ref、response_expires_at、reuse_blocked_until、state；unique stable scope+request key |
 | `action_call` | call_id、invocation_id、status、first_submission_started_at、result/error refs |
 | `action_attempt` | attempt_id、call_id、ordinal、credential_version_id、executor_digest、status |
-| `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash |
+| `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash、provider_idempotency_key_ciphertext?、idempotency_key_kms_ref?、idempotency_key_codec_version? |
 | `effect_dispatch` | dispatch_id、effect_id、ordinal、state、request_hash、deadline |
 | `provider_egress_hop` | hop_id、dispatch_id、jti、assertion_hash、state、receipt refs |
 | `egress_admission` | hop_id、jti、accepted_at、lease_proof_hash；unique hop_id；FK hop_id -> provider_egress_hop ON DELETE RESTRICT |

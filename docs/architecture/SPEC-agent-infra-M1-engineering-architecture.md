@@ -304,7 +304,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Delegated Consumer 先认证注册 workload，再通过 Connection token exchange 获取短期委托令牌；若由受信公司身份系统签发，该系统必须同时认证当前 Principal 和 workload，并校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。令牌绑定稳定 Principal subject、组织或租户、workload、consumer、actor、audience、action、args hash、recovery generation、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段、注册映射、current recovery generation 并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Delegated Consumer 先认证注册 workload，再通过 Connection token exchange 获取短期委托令牌；若由受信公司身份系统签发，该系统必须同时认证当前 Principal 和 workload，并校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。使用 Actor 细分授权时，Connection 还必须校验 Actor 已注册到该 Consumer，且由 Connection 保存的 current workload-to-actor binding 或受信签发方认证的等价事实证明本次 workload 可以代表该 Actor；Consumer 自报 Actor 不能进入授权上下文。令牌绑定稳定 Principal subject、组织或租户、workload、consumer、actor、audience、action、args hash、recovery generation、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段、注册映射、current recovery generation 并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。
 
 委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal、组织或租户；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 
@@ -478,7 +478,7 @@ Grant 与 Consumer declaration 共同引用的 exact ActionVersion 当前处于
 ∩ 当前 Connection 与 current Credential 的外部权限
 ```
 
-Grant 和 Consumer declaration 都绑定不可变的 exact ActionVersion；发布新版本不会改写或替换旧版本，也不会让旧授权自动迁移。旧版本进入 `DEPRECATED` 后可在已有 declaration/Grant 中继续执行，但不能进入新 declaration；Consumer 移除该 version、Catalog 将其停用、主体失效或共享资格移除都立即阻止新 dispatch。
+Grant 和 Consumer declaration 都绑定不可变的 exact ActionVersion；发布新版本不会改写或替换旧版本，也不会让旧授权自动迁移。只有不扩大权限且不涉及安全修复的兼容旧版本可以进入 `DEPRECATED`，并在已有 declaration/Grant 中继续执行，但不能进入新 declaration。scope/effect 收缩、安全修复或其他强制限制必须由 Catalog 原子停用所有不再合规的旧版本；Consumer 移除该 version、Catalog 将其停用、主体失效或共享资格移除也都立即阻止新 dispatch。
 
 ### 13.3 调用链路
 
