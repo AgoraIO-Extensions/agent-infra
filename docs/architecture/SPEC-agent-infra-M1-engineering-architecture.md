@@ -303,7 +303,9 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Delegated Consumer 先认证注册 workload，再通过 Connection token exchange 获取短期委托令牌；若由受信公司身份系统签发，该系统必须同时认证当前 Principal 和 workload，并校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。令牌绑定稳定 Principal subject、组织或租户、workload、consumer、actor、audience、action、args hash、recovery generation、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段、注册映射、current recovery generation 并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。
+Direct MCP Client 通过 MCP 只提交 Action 和参数。Connection 必须先验证 access token 的签名、受信 issuer、audience、有效期、必要 scope、适用的 sender binding 和当前 session 撤销状态，再解析并校验当前 Principal、已注册 Consumer 和 ConsumerInstance。
+
+Delegated Consumer 先认证注册 workload，再提交由 Connection 或受信公司身份系统签发的短期委托令牌。签发方必须同时认证当前 Principal 和 workload，并校验 workload 与已注册 Consumer/ConsumerInstance 的映射，不能根据 Consumer 自报字段签发。令牌绑定稳定 Principal subject、组织或租户、workload、consumer、consumer instance、actor、audience、action、args hash、业务幂等键 hash、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段和注册映射，确认令牌中的业务幂等键 hash 与请求 `Idempotency-Key` 一致，并拒绝重复 `jti` 后，仍以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。重试必须使用新的 `jti` 和原业务调用的同一 `Idempotency-Key`，该键由 Consumer 生成并跨重试保持稳定，不能使用每次变化的传输 request ID 代替。
 
 委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal、组织或租户；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 

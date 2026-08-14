@@ -180,7 +180,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 ### 9.3 Direct 与 Delegated 调用
 
 - Direct MCP Consumer 通过 MCP 使用绑定 Principal、Consumer、ConsumerInstance 和 audience 的 access token，Connection 自行解析身份和授权。
-- Delegated Consumer 使用注册 workload 身份，并通过 Connection token exchange 获取短期委托上下文；如由受信公司身份系统签发，该系统必须同时认证当前 Principal、workload 及其注册 Consumer/Instance 映射。上下文绑定稳定 Principal subject、组织或租户、workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
+- Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或受信公司身份系统签发的短期委托上下文；签发方必须同时认证当前 Principal、workload 及其注册 Consumer/ConsumerInstance 映射。上下文绑定稳定 Principal subject、组织或租户、workload、Consumer、ConsumerInstance、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
 - 委托上下文只能证明“谁在请求”，不能创建、替换或扩大 Connection 中的授权。
 - 两种调用最终使用同一授权校验、账号解析、执行、审计和错误语义。
 
@@ -201,7 +201,7 @@ OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务�
 ## 11. Action 执行、错误与审计
 
 - Consumer 提交 Action 和参数；写 Action 还必须通过 MCP 或 HTTP 协议元数据提交由 Consumer 生成、跨重试稳定的幂等键，不能使用每次重试可能变化的传输层 request ID。
-- Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行前校验该版本及其 fence 仍可用，再注入凭证并调用 Provider。并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
+- Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行只使用该版本注入凭证并调用 Provider，并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
 - 写 Action 在访问 Provider 前，把幂等键与已认证 Principal、Consumer、ConsumerInstance、Actor（如有）、Action 和请求摘要绑定，并提交稳定调用 ID、调用记录和外部效果意图。
 - Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以这些稳定主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、ActionVersion 和请求摘要；命中同键、同请求时，当前身份、实例或授权已撤销则拒绝且绝不重新执行，否则返回原调用，不因换号、非撤销类授权更新或版本发布创建第二次调用；同键不同请求拒绝为冲突。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
