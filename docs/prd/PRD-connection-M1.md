@@ -180,7 +180,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 ### 9.3 Direct 与 Delegated 调用
 
 - Direct MCP Consumer 通过 MCP 使用绑定 Principal、Consumer、ConsumerInstance 和 audience 的 access token，Connection 自行解析身份和授权。
-- Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托上下文；上下文绑定稳定 Principal subject、组织或租户、workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
+- Delegated Consumer 使用注册 workload 身份，并通过 Connection token exchange 获取短期委托上下文；如由受信公司身份系统签发，该系统必须同时认证当前 Principal、workload 及其注册 Consumer/Instance 映射。上下文绑定稳定 Principal subject、组织或租户、workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
 - 委托上下文只能证明“谁在请求”，不能创建、替换或扩大 Connection 中的授权。
 - 两种调用最终使用同一授权校验、账号解析、执行、审计和错误语义。
 

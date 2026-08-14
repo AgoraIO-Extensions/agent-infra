@@ -921,7 +921,7 @@ type DelegatedInvocationAssertionV1 = {
 };
 ```
 
-- assertion 由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发，并绑定注册 workload 的 mTLS identity；workload 不能自签 Principal 身份、组织或租户。
+- assertion 默认通过 Connection token exchange 签发：Connection 同时认证当前 Principal、注册 workload 的 mTLS identity 及其 Consumer/Instance 映射。若由受信公司身份系统签发，该系统也必须完成相同认证和注册映射校验，不能根据 Consumer 自报字段签发；workload 不能自签 Principal 身份、组织或租户。
 - 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
 - `recoveryGeneration` 必须来自 PITR 域外的 Recovery Control 并等于 current generation；旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
 - TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
@@ -1121,9 +1121,9 @@ LogicalEffect:
   -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
 
 EffectDispatch:
-  PREPARED -> CANCELED_PRE_SUBMIT
+  PREPARED -> CANCELED_PRE_SUBMIT | FAILED_BEFORE_SUBMIT
   PREPARED -> SUBMISSION_STARTED -> REQUEST_STARTED
-  REQUEST_STARTED -> RESPONSE_RECEIVED | FAILED_BEFORE_SUBMIT | UNKNOWN
+  REQUEST_STARTED -> RESPONSE_RECEIVED | UNKNOWN
 ```
 
 只有 `FAILED_BEFORE_SUBMIT` 能证明该 dispatch 没有产生外部效果。进程在 `SUBMISSION_STARTED` 后崩溃，没有 Provider 证据时必须为 `UNKNOWN/UNCERTAIN`。
@@ -1248,17 +1248,19 @@ Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务�
 | 表 | 关键列 |
 | --- | --- |
 | `authorized_invocation` | 全部 18.3 frozen claims、status、created/expiry |
-| `idempotency_record` | stable_scope_hash、request_key_hash、request_hash、connection_id、action_version_id、invocation_id、response_ref、expiry；unique stable scope+request key |
+| `idempotency_record` | stable_scope_hash、request_key_hash、request_hash、connection_id、action_version_id、invocation_id、response_ref、response_expires_at、reuse_blocked_until、state；unique stable scope+request key |
 | `action_call` | call_id、invocation_id、status、first_submission_started_at、result/error refs |
 | `action_attempt` | attempt_id、call_id、ordinal、credential_version_id、executor_digest、status |
 | `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash |
 | `effect_dispatch` | dispatch_id、effect_id、ordinal、state、request_hash、deadline |
 | `provider_egress_hop` | hop_id、dispatch_id、jti、assertion_hash、state、receipt refs |
-| `egress_admission` | hop_id、jti、accepted_at、lease_proof_hash；one admission per hop/jti |
+| `egress_admission` | hop_id、jti、accepted_at、lease_proof_hash；unique hop_id；FK hop_id -> provider_egress_hop ON DELETE RESTRICT |
 | `provider_receipt` | receipt_id、hop_id、type、signed_envelope、checksum、occurred_at |
 | `reconciliation_job` | id、effect_id、strategy、lease、next_at、status、evidence_ref |
 
-`action_call(invocation_id)` 唯一；`logical_effect(call_id, effect_key)` 唯一；`effect_dispatch(effect_id, ordinal)` 唯一；admission 与 hop 使用双向 DEFERRABLE 约束，避免存在可发送但无 durable owner 的孤立 admission。
+`action_call(invocation_id)` 唯一；`logical_effect(call_id, effect_key)` 唯一；`effect_dispatch(effect_id, ordinal)` 唯一。Hop 先以不可发送状态持久化；Proxy admission 事务通过 hop 状态 CAS 原子插入唯一 `egress_admission`。只使用 admission -> hop 的单向外键，不要求两个跨事务对象通过双向外键同时存在。
+
+MUTATING 调用的 response payload 可以按 G-04 保留策略清理，但 stable scope + request key 不得随 response expiry 立即复用。记录转为最小 tombstone，至少保留到已批准的最大客户端重放、PITR 恢复和审计窗口结束；命中 tombstone 时返回原调用引用或明确拒绝，不得创建新 Call。G-04 未关闭前不得物理删除 MUTATING tombstone。
 
 ### 21.7 Audit、Outbox 与 Recovery 表
 
