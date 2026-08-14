@@ -340,7 +340,7 @@ invocationId, callId, attemptId, effectId, dispatchId
 3. 同一 `principal + consumer + actor? + provider` 最多一个 current Grant。
 4. 一个 Connection 最多一个 current CredentialVersion。
 5. 历史 Credential 不能被新 Invocation 自动选择。
-6. AuthorizedInvocation 一经创建不改变 Principal、Consumer、Actor、Connection、Action 或 args hash。
+6. AuthorizedInvocation 一经创建不改变 Principal、Consumer、Actor、Connection、CredentialVersion、Action 或 args hash。
 7. 写 Provider 请求前必须存在 committed Call、Effect 和 Dispatch intent。
 8. `SUBMISSION_STARTED` 之后不能声称“确定未发送”。
 9. 任何 identity、Grant、Catalog、Connection、Credential 或 recovery 校验失败都 fail closed。
@@ -558,7 +558,15 @@ type ConnectionStatus =
   | "RECOVERY_REVALIDATION_REQUIRED";
 ```
 
-`ownerPrincipalId` 与 `sharedScopeId` 恰有一个非空。数据库用 CHECK constraint 保证，不能由 application convention 代替。
+数据库必须使用 CHECK constraint 同时约束 owner 类型和字段，不能只校验两个 owner 字段恰有一个非空，也不能由 application convention 代替：
+
+```sql
+CHECK (
+  (owner_type = 'PERSONAL' AND owner_principal_id IS NOT NULL AND shared_scope_id IS NULL)
+  OR
+  (owner_type = 'SHARED' AND owner_principal_id IS NULL AND shared_scope_id IS NOT NULL)
+)
+```
 
 ### 14.2 生命周期
 
@@ -938,6 +946,8 @@ type AuthorizedInvocation = {
   connectionId: string;
   connectionExecutionFence: bigint;
   credentialSetRevision: bigint;
+  credentialVersionId: string;
+  credentialStateRevision: bigint;
   actionVersionId: string;
   argsHash: string;
   idempotencyKeyHash: string;
@@ -948,7 +958,7 @@ type AuthorizedInvocation = {
 };
 ```
 
-AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Root、current Grant 和 idempotency record，重读所有 current revision/fence，生成稳定 `invocationId`。
+AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 `credentialVersionId` 并生成稳定 `invocationId`。后续 refresh/rotation 不能替换该版本；执行前原版本或 pointer/fence 已变化时在出站前拒绝。
 
 ### 18.4 Idempotency Scope
 
@@ -968,7 +978,7 @@ principalId + consumerId + consumerInstanceId + actorKey
 
 request key 使用 HTTP `Idempotency-Key`。
 
-Connection 必须先按上述 stable subject scope + request key 查找 `idempotency_record`，再解析 current Grant、Connection 和 ActionVersion。首次请求在同一事务中冻结 versioned request hash、Connection 和 ActionVersion；后续同键、同请求返回原 Invocation/Call，不因换号、授权更新或版本发布重新解析，同键不同请求返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
+Connection 先认证 current Principal、Consumer、ConsumerInstance 和 Actor，再按上述 stable subject scope + request key 查找 `idempotency_record`，命中前不能解析新的 current Grant、Connection 或 ActionVersion。首次请求在同一事务中冻结 versioned request hash、Connection、CredentialVersion 和 ActionVersion。命中时必须校验当前身份、Instance 和 AuthorizationRoot 访问仍有效：已撤销则拒绝且不创建新 Call；仍有效且请求相同则返回原 Invocation/Call，不因换号、非撤销类授权更新或版本发布重新解析；请求不同返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
 
 ### 18.5 撤销线性化
 
@@ -997,9 +1007,10 @@ sequenceDiagram
     X->>M: authenticated tools/call + args + stable request key
     M->>C: verified Direct Session + tool + args
     C->>D: lock root; resolve current Grant/Connection
-    C->>D: create AuthorizedInvocation + ActionCall + Effect intent
+    C->>D: create Invocation; freeze Connection/Action/CredentialVersion
+    C->>D: create ActionCall + Effect intent
     C->>D: recheck identity/catalog/grant/connection/credential fences
-    C->>K: decrypt exact current CredentialVersion
+    C->>K: decrypt exact frozen CredentialVersion
     C->>D: create Attempt/Dispatch; CAS SUBMISSION_STARTED
     C->>E: bound dispatch assertion + allowlisted request
     E->>G: GitHub API + pinned ActionVersion reliability contract
@@ -1045,13 +1056,13 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 - AuthorizationRoot current Grant、fence、actor key 和 Action set。
 - Connection owner/shared eligibility、revision 和 execution fence。
 - ProviderRelease/ActionVersion state、digest 和 endpoint policy。
-- exact current Credential pointer、state revision、expiry 和 required scope。
+- exact frozen CredentialVersion ID/state revision、current pointer/fence、expiry 和 required scope；pointer 变化时拒绝，不能替换或回退版本。
 - recovery generation、mutation gate、rate limit、deadline 和 breaker。
 
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
 
-1. 事务 A 锁 Root -> Grant -> Connection -> Credential -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
-2. 事务 B 按相同顺序重读 current 状态，CAS Dispatch `PREPARED -> SUBMISSION_STARTED`，创建 durable egress hop。
+1. 事务 A 锁 Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
+2. 事务 B 按相同顺序重读 current 状态，在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，然后创建 durable egress hop；任一状态已变化都失败。
 3. 提交后才签发绑定 exact dispatch 的短期 egress assertion。
 4. 任一校验失败都在 `SUBMISSION_STARTED` 前结束，证明没有本次外部副作用。
 
@@ -1087,8 +1098,10 @@ Consumer 使用受同一 Session/Workload 和 Principal/Consumer scope 保护的
 stateDiagram-v2
     [*] --> AUTHORIZED
     AUTHORIZED --> DISPATCH_READY
+    AUTHORIZED --> CANCELED_PRE_SUBMIT: cancel
     DISPATCH_READY --> DISPATCHING
     DISPATCH_READY --> DENIED_LOCAL
+    DISPATCH_READY --> CANCELED_PRE_SUBMIT: cancel
     DISPATCHING --> SUCCEEDED
     DISPATCHING --> FAILED_DEFINITE
     DISPATCHING --> UNCERTAIN
@@ -1097,6 +1110,7 @@ stateDiagram-v2
     SUCCEEDED --> [*]
     FAILED_DEFINITE --> [*]
     DENIED_LOCAL --> [*]
+    CANCELED_PRE_SUBMIT --> [*]
 ```
 
 ### 20.3 LogicalEffect 与 Dispatch 状态
@@ -1107,9 +1121,9 @@ LogicalEffect:
   -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
 
 EffectDispatch:
-  PREPARED -> SUBMISSION_STARTED
-  -> REQUEST_STARTED
-  -> RESPONSE_RECEIVED | FAILED_BEFORE_SUBMIT | UNKNOWN
+  PREPARED -> CANCELED_PRE_SUBMIT
+  PREPARED -> SUBMISSION_STARTED -> REQUEST_STARTED
+  REQUEST_STARTED -> RESPONSE_RECEIVED | FAILED_BEFORE_SUBMIT | UNKNOWN
 ```
 
 只有 `FAILED_BEFORE_SUBMIT` 能证明该 dispatch 没有产生外部效果。进程在 `SUBMISSION_STARTED` 后崩溃，没有 Provider 证据时必须为 `UNKNOWN/UNCERTAIN`。
@@ -1212,7 +1226,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `shared_scope` | id、state、revision | 不保存组织快照为永久权利 |
 | `shared_scope_principal` | scope_id、principal_id | direct path |
 | `shared_scope_org_ref` | scope_id、org_ref_hash | organization path |
-| `connection_account` | id、release_id、owner_type、owner_principal_id、shared_scope_id、external_identity_id、status、revisions/fences、current_credential_id | owner XOR shared CHECK |
+| `connection_account` | id、release_id、owner_type、owner_principal_id、shared_scope_id、external_identity_id、status、revisions/fences、current_credential_id | owner_type 与对应 owner 字段严格匹配 CHECK |
 | `credential_version` | id、connection_id、type、ciphertext、encrypted_dek、kms_ref、codec_version、scope_json、expiry、lifecycle、revision | one CURRENT per connection |
 | `oauth_transaction` | id、principal_id、consumer_id、release_id、purpose、state_hash、pkce_ciphertext、return_intent_id、expiry、status | unique state_hash；take-once |
 | `credential_attempt` | id、connection_id、kind、source_version、status、provider_request_id、started/finished | refresh/replace/revoke durable evidence |
@@ -1612,7 +1626,8 @@ deadline 取 Consumer 请求、Action 上限、Provider 上限和服务端最大
 
 ### 25.4 取消
 
-- `AUTHORIZED/PREPARED` 可取消并确定没有外部效果。
+- `AUTHORIZED/PREPARED` 只能通过原子 pre-submit cancel 进入 `CANCELED_PRE_SUBMIT`，并确定没有外部效果。
+- 取消事务锁定 ActionCall 和 current EffectDispatch（如有）；Call 为 `AUTHORIZED` 且尚无 Dispatch 时可直接 CAS，已有 Dispatch 时仅在其仍为 `PREPARED` 时同时 CAS Call/Dispatch 到 `CANCELED_PRE_SUBMIT`。worker 必须在同一 CAS 中将 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，因此只有一方能成功。
 - `SUBMISSION_STARTED` 后取消只停止等待和后续 retry，不撤回 Provider 请求。
 - Provider 提供明确 cancel API 时，它是另一个受控 Action/Effect，不是本地状态改写。
 - Call 最终状态保留实际结果，不能因用户取消伪装为未执行。
@@ -1698,8 +1713,9 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 ### 27.4 SSRF 与网络出口
 
 - Provider origin/path template来自 Catalog，不来自 args 或 Provider response。
-- DNS 解析后拒绝 loopback、link-local、private、metadata 和未 allowlist ranges。
-- 每次 redirect 重新校验 scheme/host/IP/header；默认禁止跨 origin。
+- Egress Proxy 对每次新连接执行受控 DNS 解析，拒绝 loopback、link-local、private、metadata 和未 allowlist ranges，并把该连接固定到已校验 IP；HTTP client 不得再次独立解析 hostname。
+- TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。
+- 每次 redirect 和新连接都重新执行 scheme、host、DNS/IP、TLS 和 header 校验；默认禁止跨 origin。
 - 禁止 Consumer 控制 Host、Authorization、Cookie、Proxy-*、Forwarded 和 hop-by-hop headers。
 - Egress Proxy 是唯一公网路径；NetworkPolicy 阻止 `connection-api` 直连公网。
 

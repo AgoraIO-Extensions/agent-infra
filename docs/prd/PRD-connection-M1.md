@@ -201,9 +201,9 @@ OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务�
 ## 11. Action 执行、错误与审计
 
 - Consumer 只提交 Action 和参数。
-- Connection 解析唯一授权 Connection，选择其 current Credential，注入凭证并调用 Provider。
+- Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行前校验该版本及其 fence 仍可用，再注入凭证并调用 Provider。并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
 - 写 Action 在访问 Provider 前提交稳定调用 ID、调用记录和外部效果意图。
-- Connection 先以 `Principal + Consumer + ConsumerInstance + Actor（如有）+ 幂等键` 查找原调用；首次请求冻结解析出的 Connection、ActionVersion 和请求摘要，后续同键、同请求始终返回原调用，不因换号、授权更新或版本发布重新执行，同键不同请求拒绝为冲突。
+- Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以这些稳定主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、ActionVersion 和请求摘要；命中同键、同请求时，当前身份、实例或授权已撤销则拒绝且绝不重新执行，否则返回原调用，不因换号、非撤销类授权更新或版本发布创建第二次调用；同键不同请求拒绝为冲突。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
 - Provider 拒绝、scope 不足、限流或暂时不可用时，返回稳定原因和可执行下一步。
 - 用户可以在 Connection 调用记录查看自己的 Provider、脱敏账号、Consumer、Actor、Action、时间、状态、结果和错误。
