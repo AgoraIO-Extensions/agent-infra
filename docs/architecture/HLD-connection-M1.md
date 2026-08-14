@@ -306,6 +306,20 @@ Domain 不依赖 Hono、MCP SDK、Drizzle、KMS SDK、OpenConnector 或 Provider
 - 上游变更不能直接改变已发布 ActionVersion；必须产生新版本。
 - 紧急安全停用通过 Connection Catalog kill switch，不能等待 Fork 发布。
 
+### 10.4 Action 说明与发现契约
+
+固定 Commit 的 OpenConnector MCP 只暴露 `list_apps`、`list_connections`、`search_actions`、
+`get_action_guide` 和 `execute_action` 五个通用 tool，不把每个 Action 注册为独立 tool。Agent 先搜索 Action，
+再由 `get_action_guide` 按需返回使用说明，最后以 `actionId` 和业务参数调用 `execute_action`。
+
+`get_action_guide` 的说明不是 AI 生成或逐 Action 人工维护的文档。上游代码根据已维护的 Action description、
+input schema、scope，以及当前 Connection 摘要和执行策略，确定性生成包含参数表、调用示例和权限状态的
+Markdown；它不是原始 input/output schema 接口。AI 只负责选择 Action，并从用户请求和可见上下文中寻找业务
+参数；Credential、账号选择、endpoint、HTTP method 和鉴权 header 仍由 Runtime 与 executor 处理。
+
+M1 只复用 Provider/Action 元数据、schema 和 executor，不复用上述发现契约或 Markdown renderer，也不维护逐
+Action Guide。Direct MCP 按 22.3 节从版本化 ActionVersion 直接生成当前主体已授权的 Action tool。
+
 ## 11. 标识、Revision 与全局不变量
 
 ### 11.1 标识
@@ -1357,6 +1371,9 @@ MCP Server 暴露：
 | tools/list | 固定返回少量 control tools；Action tools 只返回当前 Principal/Consumer 已授权的 Action |
 | tools/call: control | `connection_status` 返回连接/授权入口；`get_action_call` 返回当前主体可见的 Call 状态和脱敏结果 |
 | tools/call: Action | 创建或复用 AuthorizedInvocation 和 ActionCall |
+
+M1 不暴露上游的 `search_actions`、`get_action_guide` 或通用 `execute_action`；Action description 和 input schema
+直接映射到 `tools/list` 返回的已授权 Action tool。
 
 所有 Direct MCP Client 使用相同的 tool 与错误契约；产品或版本差异只能影响 G-01 验证过的 OAuth、registration、token 和 request identity Adapter 行为，不能改变 ConnectionGrant、ActionVersion 或执行语义。
 
