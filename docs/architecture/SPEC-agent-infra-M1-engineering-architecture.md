@@ -296,8 +296,9 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 2. 用户属于 Agent 当前可用范围，或是当前有效 Owner。
 3. 当前渠道已绑定并支持目标操作。
 4. 模型选项属于 Owner 当前允许清单。
-5. 若调用 Connection，Consumer 在 Connection 注册且声明该 Action。
-6. Connection 中 Principal 对目标 Consumer/Actor、Connection 和 Action 的授权仍有效。
+5. 若由 Agent Platform 调用 Connection，Action 属于 Owner 为当前 Agent 选择的有效 Action policy。
+6. 若调用 Connection，Consumer 在 Connection 注册且声明该 Action。
+7. Connection 中 Principal 对目标 Consumer/Actor、Connection 和 Action 的授权仍有效。
 
 任何一步失败都停止后续处理，并返回可理解的产品错误。错误不能暴露其他用户、Agent 或 Connection 是否存在。
 
@@ -468,15 +469,16 @@ Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Ac
 一次 Action 调用的有效能力为以下集合的交集：
 
 ```text
-系统当前已发布且未停用的 ActionVersion
-∩ Consumer 当前已发布的 Action 声明版本
+Grant 与 Consumer declaration 共同引用的 exact ActionVersion 当前处于
+`PUBLISHED` 或 `DEPRECATED` 可执行态，且未 `DISABLED`
+∩ Consumer current published declaration 仍包含该 exact ActionVersion
 ∩ Principal、Consumer 和适用的 ConsumerInstance 当前有效状态
 ∩ Principal 对个人 Connection 的所有权或公司共享 Connection 的当前使用资格
-∩ Grant 固定的 Consumer/Actor、Connection 和已确认 ActionVersion 能力指纹
+∩ Grant 固定的 Consumer/Actor、Connection、exact ActionVersion 和能力指纹
 ∩ 当前 Connection 与 current Credential 的外部权限
 ```
 
-Grant 必须绑定用户确认时不可变的 ActionVersion 或等价能力指纹。Consumer 新增 Action 或 Action scope/effect 扩大后，旧授权不包含新增项；主体失效、共享资格移除、Action 移除、收缩或停用立即生效。
+Grant 和 Consumer declaration 都绑定不可变的 exact ActionVersion；发布新版本不会改写或替换旧版本，也不会让旧授权自动迁移。旧版本进入 `DEPRECATED` 后可在已有 declaration/Grant 中继续执行，但不能进入新 declaration；Consumer 移除该 version、Catalog 将其停用、主体失效或共享资格移除都立即阻止新 dispatch。
 
 ### 13.3 调用链路
 
@@ -491,7 +493,8 @@ sequenceDiagram
     C->>C: 认证 Principal/Consumer/Actor
     C->>D: 解析 current Grant 和唯一 Connection
     C->>C: 校验 Action 参数和 egress policy
-    C->>D: 重校验 scope、Credential 和 fence，持久化 Invocation、Call、Effect intent
+    C->>D: 冻结 Consumer/declaration/Instance revision、Grant、Credential 和 ActionVersion
+    C->>D: 出站前重校验 current revision、scope 和 fence，持久化 Call/Effect intent
     C->>X: 注入凭证并执行
     X-->>C: 结果或错误
     C->>D: 脱敏并完成 Call、Effect、审计和 outbox

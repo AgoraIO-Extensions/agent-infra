@@ -592,7 +592,7 @@ stateDiagram-v2
 ### 14.3 转换规则
 
 - `ACTIVE/DEGRADED -> DISCONNECTED` 在 Connection Account 事务中提升 execution fence、清 current Credential pointer、创建 revoke attempt并写 audit/outbox。引用 Grant 因 fence 不匹配立即不可执行；其 `PAUSED_CONNECTION` 展示状态由 outbox 消费者幂等更新。
-- 同账号 reauth 只能在 stable account proof 相同且旧 Grant 未终结时恢复。
+- 同账号 reauth 只能在 stable account proof、Credential scope 和原 Consent 的授权摘要均未变化时恢复；由于 execution fence 已提升，系统必须基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，并将旧 Grant 标记为 `REPLACED`，不能原地恢复旧 Grant。
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
 - ProviderRelease/ActionVersion disable 不改变 Connection 状态，但 effective eligibility 立即为 false。
@@ -796,14 +796,15 @@ type ConnectionGrant = {
 };
 ```
 
-Grant 是不可变确认版本。切换账号、Action 集变化或恢复重确认创建新 Grant，并在同一事务把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。
+Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一事务把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect 仅在 stable account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建 replacement Grant；否则必须重新 preview/consent。
 
 ### 17.3 有效能力公式
 
 ```text
-ProviderRelease/ActionVersion current published state
-∩ Consumer current published Action declaration
-∩ Principal current ConnectionGrant confirmed Action set
+Grant 与 Consumer declaration 共同引用的 exact ProviderRelease/ActionVersion
+current executable state (`PUBLISHED` or `DEPRECATED`)
+∩ Consumer current published declaration 仍包含该 exact ActionVersion
+∩ Principal current ConnectionGrant confirmed exact ActionVersion/capability digest
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
 ∩ current Credential scopes
@@ -812,7 +813,7 @@ ProviderRelease/ActionVersion current published state
 
 工具“可发现”与“可执行”分开：
 
-- 可发现：ActionVersion 已发布、Consumer 声明且用户已授权；Connection 暂时需要 reauth 时仍可展示并提供下一步。
+- 可发现：ActionVersion 处于 `PUBLISHED` 或 `DEPRECATED` 可执行态、Consumer current declaration 仍包含该 exact version 且用户已授权；Connection 暂时需要 reauth 时仍可展示并提供下一步。`DEPRECATED` 不能进入新 declaration。
 - 可执行：除可发现条件外，所有实时身份、共享资格、Credential、scope、fence、limit 和 recovery gate 都通过。
 
 ### 17.4 Authorization Preview
@@ -855,7 +856,7 @@ Consent 保存用户看到并确认的 exact 事实：Consumer 名称/ID、Actor
 
 | 操作 | 结果 |
 | --- | --- |
-| 同账号 reconnect，原确认集合未变 | 原 Grant 从 paused 恢复 active |
+| 同账号 reconnect，原确认集合未变 | 基于原 Consent 创建冻结 current revision/fence 的 replacement Grant；旧 Grant replaced |
 | 切换另一个 Connection | 新 preview/consent/Grant；旧 Grant replaced |
 | Consumer 新增 Action或Action扩权 | 新 preview/consent/Grant；旧集合继续有效直到替换 |
 | Consumer 移除 Action | effective set 立即收缩；可异步生成新 compact Grant |
@@ -938,7 +939,10 @@ type AuthorizedInvocation = {
   source: "DIRECT" | "DELEGATED";
   principalId: string;
   consumerId: string;
+  consumerRevision: bigint;
+  consumerDeclarationId: string;
   consumerInstanceId: string;
+  consumerInstanceRevision: bigint;
   actorKey: string;
   authorizationRootId: string;
   authorizationFence: bigint;
@@ -959,7 +963,7 @@ type AuthorizedInvocation = {
 };
 ```
 
-AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 `credentialVersionId` 并生成稳定 `invocationId`。后续 refresh/rotation 不能替换该版本；执行前原版本或 pointer/fence 已变化时在出站前拒绝。
+AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、current declaration、ConsumerInstance、Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration、instance revision 和 `credentialVersionId` 并生成稳定 `invocationId`。后续 refresh/rotation 不能替换该版本；执行前任一 frozen revision、declaration、pointer 或 fence 已变化时在出站前拒绝。
 
 ### 18.4 Idempotency Scope
 
@@ -1054,7 +1058,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 工具发现或授权 preview 的 preflight 只用于用户体验。Provider 出站前必须重新检查：
 
-- Principal 和 Consumer/Instance current status。
+- Principal 和 Consumer/Instance current status；Consumer/Instance revision 必须等于 Invocation 快照，current declaration ID 必须未变且仍包含 frozen ActionVersion。
 - AuthorizationRoot current Grant、fence、actor key 和 Action set。
 - Connection owner/shared eligibility、revision 和 execution fence。
 - ProviderRelease/ActionVersion state、digest 和 endpoint policy。
@@ -1063,7 +1067,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
 
-1. 事务 A 锁 Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
+1. 事务 A 锁 Consumer -> current declaration -> ConsumerInstance -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
 2. 事务 B 按相同顺序重读 current 状态，在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，然后创建 durable egress hop；任一状态已变化都失败。
 3. 提交后才签发绑定 exact dispatch 的短期 egress assertion。
 4. 任一校验失败都在 `SUBMISSION_STARTED` 前结束，证明没有本次外部副作用。
@@ -1244,7 +1248,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `connection_grant` | id、root_id、connection_id、all frozen revisions/digests、status、consent_id | current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
 
-Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务末尾约束验证 pointer 与 Grant root一致。Grant 终态不可恢复为 ACTIVE；恢复只允许同 Grant paused->active，且 exact account/consent tuple 不变。
+Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务末尾约束验证 pointer 与 Grant root一致。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
