@@ -485,7 +485,7 @@ sequenceDiagram
     participant D as Connection DB
     participant X as Provider
 
-    P->>C: user session 或 delegated assertion + actionId + args
+    P->>C: MCP access token 或 delegated assertion + actionId + args
     C->>C: 认证 Principal/Consumer/Actor
     C->>D: 解析 current Grant 和唯一 Connection
     C->>C: 校验 Action 参数和 egress policy

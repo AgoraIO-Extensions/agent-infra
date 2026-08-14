@@ -142,13 +142,18 @@ sequenceDiagram
     alt 同键但请求摘要不同
         C-->>U: 幂等冲突，不产生 Provider 出站
     else 幂等命中同一请求
-        alt 持久事实证明尚未开始 Provider 提交，且原子 claim 成功
-            C->>X: 使用原请求快照固定的 exact CredentialVersion 执行
-            X-->>C: 实际结果、错误或未知结果
-            C->>D: 保存脱敏结果、状态、审计和 outbox
-            C-->>U: 原 callId + 脱敏结果、错误或未知状态
-        else 已提交、已完成或提交状态未知
-            C-->>U: 原 callId + 已保存状态、结果或错误，不产生 Provider 出站
+        C->>D: 校验当前身份、Instance 和 AuthorizationRoot 对原调用的访问
+        alt 当前访问已撤销
+            C-->>U: 结构化拒绝，不创建新 Call 或 Provider 出站
+        else 当前访问仍有效
+            alt 持久事实证明尚未开始 Provider 提交，且原子 claim 成功
+                C->>X: 使用原请求快照固定的 exact CredentialVersion 执行
+                X-->>C: 实际结果、错误或未知结果
+                C->>D: 保存脱敏结果、状态、审计和 outbox
+                C-->>U: 原 callId + 脱敏结果、错误或未知状态
+            else 已提交、已完成或提交状态未知
+                C-->>U: 原 callId + 已保存状态、结果或错误，不产生 Provider 出站
+            end
         end
     else 首次请求
         C->>D: 解析 current Grant 和唯一 Connection
@@ -238,8 +243,8 @@ M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `
 - 只有经过代码、安全、网络出口和 Provider Owner 评审的 allowlist executor 可以执行。目录存在不等于自动允许执行。
 - Provider 出站的 origin、path 模板和 Credential 注入来自已发布版本，不来自 Action 参数或 Provider 返回内容。
 - 写 Action 在访问 Provider 前提交稳定 `callId`、ActionCall 和 Effect intent。
-- Connection 先以 `Principal + Consumer + ConsumerInstance + Actor（如有）+ request key` 查找原调用。首次请求冻结版本化请求摘要、Connection 和 ActionVersion；后续同键、同请求返回原调用，不因换号、授权更新或版本发布重新解析，同键不同请求返回冲突。
-- 幂等命中时，只有持久事实证明 Provider 提交尚未开始且能够原子 claim 原 ActionCall，才可继续执行该原调用一次；已经提交、已经完成或提交状态未知时只返回原调用，不产生新的 Provider 出站。
+- Connection 先以 `Principal + Consumer + ConsumerInstance + Actor（如有）+ request key` 查找原调用。首次请求冻结版本化请求摘要、Connection、ActionVersion 和 exact CredentialVersion；后续同键、同请求不因换号、非撤销类授权更新或版本发布重新解析，同键不同请求返回冲突。
+- 幂等命中时先校验当前身份、Instance 和 AuthorizationRoot 对原调用的访问；已撤销则拒绝且不创建新 Call。访问仍有效时，只有持久事实证明 Provider 提交尚未开始且能够原子 claim 原 ActionCall，才可继续执行该原调用一次；已经提交、已经完成或提交状态未知时只返回原调用，不产生新的 Provider 出站。
 - 只有 Provider 明确支持幂等机制时才自动重试写操作。Provider 可能已执行但结果无法确认时记录 `UNCERTAIN`，不伪造失败或成功。
 - 用户主动重试是新的 tool call；系统不得把授权修复、重连或进程重启解释为自动重放旧请求。
 
