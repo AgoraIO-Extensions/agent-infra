@@ -303,7 +303,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance 和 audience。Delegated Consumer 先认证注册 workload，再提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托令牌；令牌绑定稳定 Principal subject、组织或租户、workload、consumer、actor、audience、action、args hash、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance 和 audience。Delegated Consumer 先认证注册 workload，再提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托令牌；令牌绑定稳定 Principal subject、组织或租户、workload、consumer、actor、audience、action、args hash、业务幂等键 hash、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段，确认令牌中的业务幂等键 hash 与请求 `Idempotency-Key` 一致并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
 
 委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal、组织或租户；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 

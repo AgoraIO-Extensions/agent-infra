@@ -171,7 +171,7 @@ Direct MCP Client 通过 Connection MCP 调用。Connection 从 access token 解
 
 ### 6.2 Delegated Consumer
 
-Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文必须绑定稳定 Principal subject、组织或租户、Consumer、具体 ConsumerInstance、已认证 workload 的 sender identity、可选 Actor、Action、参数摘要、audience、有效期和一次性防重放标识；Connection 必须校验签发方、签名、这些绑定与当前连接身份及当前组织关系一致。具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结，在契约冻结前不开放 Delegated 调用。
+Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文必须绑定稳定 Principal subject、组织或租户、Consumer、具体 ConsumerInstance、已认证 workload 的 sender identity、可选 Actor、Action、参数摘要、业务幂等键摘要、audience、有效期和一次性防重放标识；Connection 必须校验签发方、签名、这些绑定与当前连接身份及当前组织关系一致，并确认幂等键摘要与请求的 `Idempotency-Key` 一致。具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结，在契约冻结前不开放 Delegated 调用。
 
 Agent Platform 在发起调用前仍执行自己的用户、Agent、渠道和 Owner Action 策略；这些检查只能收紧调用。Connection 独立执行当前 ConsumerGrant 和 Connection 状态检查，任何一侧拒绝都不调用 Provider。
 
