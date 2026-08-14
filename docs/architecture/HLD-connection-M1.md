@@ -16,9 +16,9 @@
 
 本文把 Connection M1 产品要求细化为可以进入设计评审、拆分实施任务、冻结契约并编写测试的 High-Level Design。本文回答：
 
-1. Connection 如何作为独立服务被 Codex、Agent Platform、CI/CD 和内部应用消费。
+1. Connection 如何作为独立服务被 Direct MCP Client、Agent Platform、CI/CD 和内部应用消费。
 2. Principal、Consumer、Actor、Connection、Credential、Grant 和 Invocation 如何建模。
-3. 本地 Codex 如何只配置 Connection，完成登录、连接 GitHub 和创建 Pull Request。
+3. Codex、Claude App、Cursor 等 Direct MCP Client 如何只配置 Connection，完成登录、连接 GitHub 和创建 Pull Request。
 4. Direct 和 Delegated 两种入口如何共享同一授权和执行核心。
 5. 多用户、多外部账号和多 Credential 版本如何隔离。
 6. 写 Action 如何避免盲目重试，并在未知结果、崩溃和恢复后保持安全。
@@ -47,7 +47,7 @@
 | 目标 | 来源 | 设计落点 |
 | --- | --- | --- |
 | Consumer 使用外部 API但拿不到原始 Credential | [PRD] | Credential Boundary、Provider Executor |
-| 用户只配置 Connection 即可在本地 Codex 使用 | [PRD] | remote MCP OAuth、Direct Session |
+| 用户只配置 Connection 即可在 Direct MCP Client 使用 | [PRD] | MCP、remote OAuth、Direct Session |
 | Connection 独立保存和校验 Consumer 授权 | [PRD] | ConnectionGrant、AuthorizationRoot |
 | 支持多用户、同用户多账号和多 Credential 版本 | [PRD] | Principal、ConnectionAccount、CredentialVersion |
 | Direct 与 Delegated Consumer 使用同一执行核心 | [PRD] | AuthorizedInvocation |
@@ -101,7 +101,7 @@
 | --- | --- | --- |
 | A-01 | Connection 是独立多 Consumer 服务 | Connection PRD、工程 Spec |
 | A-02 | Connection DB 是 Consumer 授权权威 | Connection PRD、工程 Spec |
-| A-03 | Codex 可以只配置 Connection MCP | Connection PRD、工程 Spec |
+| A-03 | Direct MCP Client 可以只配置 Connection MCP | Connection PRD、工程 Spec |
 | A-04 | Direct/Delegated 入口收敛到 AuthorizedInvocation | Connection PRD、工程 Spec |
 | A-05 | Consumer 不能提交可信 Principal 或 Connection | Connection PRD、工程 Spec |
 | A-06 | Connection 保存多账号、多 Credential 版本 | Connection PRD、工程 Spec |
@@ -111,7 +111,7 @@
 
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
-| G-01 | 公司 OIDC、目标 Codex 版本的 remote MCP OAuth 和 workload identity 精确契约 | 只使用 Fake Identity，不发布 Direct 登录 | Identity/Security |
+| G-01 | 公司 OIDC、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity 精确契约 | 只使用 Fake Identity，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
 | G-02 | 初期 Provider 的 exact deployment、认证方式、测试账号、Action/scope，以及 Outlook 是否纳入 | 对应 ProviderRelease 不得进入 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 只使用 Fake Adapter | Security/SRE |
@@ -147,7 +147,7 @@
 ```mermaid
 flowchart LR
     User["公司用户"]
-    Codex["Local Codex"]
+    Direct["Direct MCP Client"]
     Platform["Agora Agent Platform"]
     CI["CI/CD / Internal App"]
     Web["Connection Web"]
@@ -160,9 +160,9 @@ flowchart LR
     Egress["Controlled Egress"]
     Provider["GitHub / Jira / ..."]
 
-    User --> Codex
+    User --> Direct
     User --> Web
-    Codex --> MCP
+    Direct --> MCP
     Platform --> HTTP
     CI --> HTTP
     Web --> HTTP
@@ -204,7 +204,7 @@ flowchart LR
 | 边界 | 调用主体 | 认证 | 授权依据 | 禁止行为 |
 | --- | --- | --- | --- | --- |
 | Browser -> Connection | 公司用户 | OIDC/Identity Gateway session | 当前 Principal、RBAC、组织关系 | 接受 body 中的 userId |
-| Codex -> MCP | Direct ConsumerInstance | remote MCP OAuth user session；客户端支持时增加 sender constraint | ConnectionGrant current revision | 传 connectionId 或 Provider token |
+| Direct MCP Client -> MCP | Direct ConsumerInstance | remote MCP OAuth user session；客户端支持时增加 sender constraint | ConnectionGrant current revision | 传 connectionId 或 Provider token |
 | Delegated Consumer -> HTTP | 注册 workload | mTLS + signed assertion | ConnectionGrant + actor constraint | assertion 创建或扩大 Grant |
 | Connection -> Identity | connection workload | workload identity | 请求期 current identity | 把缓存当永久资格 |
 | Connection -> KMS | connection workload | KMS workload identity | key policy、environment、purpose | Consumer 使用解密权限 |
@@ -232,7 +232,7 @@ flowchart TB
         Proxy["provider-egress-proxy"]
     end
 
-    Codex["Local Codex"] --> GW
+    Direct["Direct MCP Client"] --> GW
     Consumer["Delegated Consumer"] --> GW
     Browser["Connection Web"] --> GW
     GW --> API
@@ -426,8 +426,9 @@ type ConsumerInstance = {
 };
 ```
 
-- 本地 Codex 是 `DIRECT_CLIENT`，每个设备登录形成一个 `DEVICE` instance。
+- Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant。
 - Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。
+- `Consumer.type` 表示信任与调用模式，不编码客户端品牌。产品名、版本和已验证能力属于注册元数据与 conformance evidence；Connection Core 不按 Codex、Claude App 或 Cursor 分支授权规则。
 - `authenticationBindingHash` 绑定 OAuth client/session 或 workload mTLS identity；客户端支持 sender-constrained token 时同时绑定 key thumbprint，不保存 private key或 bearer token。
 - Consumer disable 同步阻止全部实例、新授权和调用；不能只依赖 token expiry。
 
@@ -864,7 +865,7 @@ Alice
 ├── github/alice-personal  (Connection A)
 ├── github/alice-company   (Connection B)
 │
-├── Codex root -> Grant -> Connection B
+├── Direct Client root -> Grant -> Connection B
 └── Release CI root -> Grant -> Connection A
 ```
 
@@ -872,20 +873,20 @@ Alice
 
 ## 18. Direct Session、Delegated Assertion 与 AuthorizedInvocation
 
-### 18.1 Direct User Session
+### 18.1 Direct MCP Client Session
 
-本地 Codex 通过 remote MCP transport 使用其目标版本支持的标准 OAuth 登录。Connection 把公司 OIDC 作为上游身份来源，MCP OAuth 层只建立受限的 Direct Session：
+Direct MCP Client 通过 remote MCP transport 使用其目标版本支持的标准 OAuth 登录。Connection 把公司 OIDC 作为上游身份来源，MCP OAuth 层只建立受限的 Direct Session：
 
-1. Codex 从 MCP authorization metadata 发现 Connection 的授权服务和资源标识。
+1. 客户端从 MCP authorization metadata 发现 Connection 的授权服务和资源标识。
 2. 用户在系统浏览器完成公司登录、ConsumerInstance 绑定和最小 MCP scope 授权；不会获得 Provider Credential。
 3. Connection 把 OAuth subject 映射为 Principal，并将 session/token 绑定 Consumer、Instance、audience、scope 和 expiry。
-4. Codex 使用该 session 调用 MCP；Connection 每次检查 session/Instance/Principal current status。
-5. 若目标 Codex 版本支持 sender-constrained token，Connection 必须启用并验证 key thumbprint；否则使用短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
+4. 客户端使用该 session 调用 MCP；Connection 每次检查 session/Instance/Principal current status。
+5. 若目标客户端版本支持 sender-constrained token，Connection 必须启用并验证 key thumbprint；否则使用短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
 6. 用户可在 Connection 页面单独撤销该实例和所有关联 session。
 
 Direct session 只证明当前 Principal/Instance，不包含 Connection 或 Action 授权副本。
 
-G-01 必须以拟上线 Codex 版本完成 conformance，冻结实际 authorization metadata、redirect、token storage/refresh、scope 和 sender-constraint 能力。本文不声称 Codex 支持私有 device authorization 或自定义逐请求 PoP 协议；不满足标准 remote MCP OAuth 时不得用长期静态 token 替代。
+G-01 必须对每个拟支持的 Codex、Claude App、Cursor 等客户端版本分别完成 conformance，冻结实际 authorization metadata、redirect、dynamic registration、token storage/refresh、稳定请求键、scope、撤销和 sender-constraint 能力。一个客户端版本通过不能外推到其他产品或版本；本文不声称任何客户端支持私有 device authorization 或自定义逐请求 PoP 协议，不满足标准 remote MCP OAuth 时不得用长期静态 token 替代。
 
 ### 18.2 Delegated Assertion
 
@@ -973,12 +974,12 @@ principalId + consumerId + consumerInstanceId + actorKey
 
 ## 19. Action 调用完整时序
 
-### 19.1 本地 Codex 创建 GitHub PR
+### 19.1 Direct MCP Client 创建 GitHub PR
 
 ```mermaid
 sequenceDiagram
     participant U as Alice
-    participant X as Local Codex
+    participant X as Direct MCP Client
     participant M as Connection MCP
     participant C as Connection Core
     participant D as Connection DB
@@ -1004,7 +1005,7 @@ sequenceDiagram
     X-->>U: PR #42 已创建，或结果待确认
 ```
 
-Bob 使用同一 MCP endpoint 时，其 Direct Session 解析到 Bob 的 Principal 和 Root。Alice 无法通过 args、tool name、repository owner 或猜测 ID使用 Bob 的 Connection。
+Codex、Claude App、Cursor 等产品使用同一 MCP endpoint 时仍是不同 Consumer；一个客户端的 Session/Grant 不能被另一个客户端使用。Bob 登录任一客户端时，其 Direct Session 解析到 Bob 的 Principal 和 Root；Alice 无法通过 args、tool name、repository owner 或猜测 ID使用 Bob 的 Connection。
 
 ### 19.2 Agora Agent Platform Delegated 调用
 
@@ -1183,7 +1184,7 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
 | `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、invocation_id、expires_at | unique instance+jti_hash |
 
-Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Codex 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
+Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
 
 ### 21.3 Catalog 表
 
@@ -1267,7 +1268,7 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
 - HTTP mutation 要求 `Idempotency-Key`。MCP mutation 要求 G-01 conformance 证明客户端提供并在 transport retry 时保留稳定 request key；可以映射受支持的 `_meta` 或客户端 request identity，但不能假定私有字段一定存在。
-- 目标 Codex 版本无法提供稳定 request key 时，Direct mutating Action 只有在 Provider 原生幂等或可证明 natural key 路径通过 WP10 验收后才能发布；客户端不得自动重复 `tools/call`，超时后通过可恢复的 Call handle 查询。
+- 目标 Direct MCP Client 版本无法提供稳定 request key 时，Direct mutating Action 只有在 Provider 原生幂等或可证明 natural key 路径通过 WP10 验收后才能发布；客户端不得自动重复 `tools/call`，超时后通过可恢复的 Call handle 查询。
 - Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。
 - 认证错误与资源不存在对跨主体请求使用相同外部状态，防止枚举。
@@ -1314,6 +1315,8 @@ MCP Server 暴露：
 | tools/call: control | `connection_status` 返回连接/授权入口；`get_action_call` 返回当前主体可见的 Call 状态和脱敏结果 |
 | tools/call: Action | 创建或复用 AuthorizedInvocation 和 ActionCall |
 
+所有 Direct MCP Client 使用相同的 tool 与错误契约；产品或版本差异只能影响 G-01 验证过的 OAuth、registration、token 和 request identity Adapter 行为，不能改变 ConnectionGrant、ActionVersion 或执行语义。
+
 每个 ActionVersion 映射为一个稳定 tool：
 
 ```json
@@ -1350,7 +1353,7 @@ POST /connection/oauth/token
 DELETE /connection/v1/consumer-instances/{instanceId}/session
 ```
 
-具体 endpoints 以 G-01 对目标 Codex 版本支持的 remote MCP OAuth profile 为准。授权请求不接收可信 userId；authorization code 使用 PKCE、短 TTL 和 take-once，token audience 固定 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software metadata 和注册生命周期，不能开放任意公共 client。
+具体 endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP OAuth profile 为准。授权请求不接收可信 userId；authorization code 使用 PKCE、短 TTL 和 take-once，token audience 固定 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software metadata 和注册生命周期，不能开放任意公共 client。
 
 ### 22.5 Browser API
 
@@ -1518,7 +1521,7 @@ environment + principalId + consumerId + actorKey
 + actionVersionId + all current revisions/fences
 ```
 
-不能因为当前产品只有一个 Consumer 或一个账号而省略维度。测试 fixture 必须至少有 Alice/Bob、Codex/Platform、Agent A/B、GitHub personal/company。
+不能因为当前产品只有一个 Consumer 或一个账号而省略维度。测试 fixture 必须至少有 Alice/Bob、Direct Client A/B、Platform、Agent A/B、GitHub personal/company。
 
 ### 24.2 服务端解析链
 
@@ -1541,7 +1544,7 @@ transport authentication
 | --- | --- | --- |
 | Alice 枚举 Bob connectionId | scoped repository query | `RESOURCE_NOT_FOUND` |
 | Alice 改 tool args 传 Bob userId | Schema/identity boundary | invalid args 或忽略身份字段 |
-| Codex A 重放 Codex B session | OAuth session/Instance/resource binding | authentication required |
+| Direct Client A 重放 Direct Client B session | OAuth session/Instance/resource binding | authentication required |
 | Platform A 重放 Platform B assertion | issuer/consumer/workload binding | authentication required |
 | Agent A 使用 Agent B Actor Grant | exact actor root lookup | action not granted |
 | 个人 GitHub 静默换公司 GitHub | Grant exact connection/fingerprint | consent required |
@@ -1558,7 +1561,7 @@ transport authentication
 
 ### 24.5 Consumer 间独立撤销
 
-撤销 Alice->Codex 不影响 Alice->Agent Platform；撤销 Agent A 不影响同 Platform Consumer 下 Agent B；断开底层 Connection 会暂停所有引用它的 Grant。三种动作使用不同 audit reason。
+撤销 Alice->Direct Client A 不影响 Alice->Direct Client B 或 Alice->Agent Platform；撤销 Agent A 不影响同 Platform Consumer 下 Agent B；断开底层 Connection 会暂停所有引用它的 Grant。三种动作使用不同 audit reason。
 
 ## 25. 错误、幂等、取消、限流与背压
 
@@ -1682,7 +1685,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 
 - Authorization Code + PKCE S256；state take-once；exact redirect URI。
 - issuer/authorization/token/profile endpoint来自 immutable ProviderRelease。
-- 不接受 password grant、implicit flow 或任意 callback。动态 client registration 默认关闭；仅在 G-01 证明目标 Codex 版本确有需要时，才按 22.4 的 redirect URI、software metadata 和注册生命周期约束启用。
+- 不接受 password grant、implicit flow 或任意 callback。动态 client registration 默认关闭；仅在 G-01 证明目标 Direct MCP Client 版本确有需要时，才按 22.4 的 redirect URI、software metadata 和注册生命周期约束启用。
 - login CSRF、session fixation、mix-up attack、code injection 和 open redirect 有专门测试。
 - OAuth client secret 在 KMS，不能进入 Web bundle、Consumer 或 repo。
 
@@ -1913,7 +1916,7 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 | Repository | FK/CHECK/partial unique/DEFERRABLE、lock order、CAS |
 | Contract | MCP/OpenAPI、assertion、canonicalization、Provider Adapter |
 | Integration | PostgreSQL、KMS Fake/real test、egress proxy、Identity Fake |
-| E2E | Codex Direct、Delegated Consumer、Connection Web、真实 Provider |
+| E2E | Direct MCP Client、Delegated Consumer、Connection Web、真实 Provider |
 | Fault injection | crash windows、network/KMS/DB/Provider、PITR |
 | Security | cross-principal/consumer/actor、SSRF、Secret canary、supply chain |
 | Load | sessions、invocations、Provider quota、DB/outbox/reconciliation |
@@ -1928,7 +1931,7 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ```text
 Principal: Alice | Bob | disabled
-Consumer: Codex | Agent Platform | disabled
+Consumer: Direct Client A | Direct Client B | Agent Platform | disabled
 Actor: none | Agent A | Agent B
 Connection: personal A | company A | Bob | disconnected
 Grant: active | paused | revoked | replaced
@@ -1939,24 +1942,25 @@ Recovery: open | read-only | quarantined
 
 所有 allow case 必须证明 exact tuple；所有 deny case检查无 Call/Effect/Provider request 和存在性隐藏。
 
-### 31.4 Direct Codex E2E
+### 31.4 Direct MCP Client Conformance 与 E2E
 
-1. Codex 只配置 Connection MCP endpoint。
-2. remote MCP OAuth 把 Alice、Codex ConsumerInstance 和目标 resource 绑定为 Direct Session。
-3. Alice 连接 personal/company 两个 GitHub账号。
-4. Alice 为 Codex选择 company账号并确认 create PR。
-5. tools/list 只显示授权 tool。
-6. 创建真实 test repository PR并返回 URL。
-7. 重放同 idempotency key返回同 PR。
-8. 撤销设备或 Grant 后新调用拒绝。
-9. Bob 登录同 endpoint只看到自己的账号/调用。
+1. 每个拟支持的 Codex、Claude App、Cursor 客户端版本分别完成 G-01 conformance；未通过的产品或版本不能标记为受支持。
+2. 目标客户端只配置 Connection MCP endpoint。
+3. remote MCP OAuth 把 Alice、目标 ConsumerInstance 和 Connection resource 绑定为 Direct Session。
+4. Alice 连接 personal/company 两个 GitHub账号。
+5. Alice 为目标 Direct Consumer 选择 company账号并确认 create PR。
+6. `tools/list` 只显示授权 tool；另一个 Direct Consumer 或设备不能复用其 Session/Grant。
+7. 创建真实 test repository PR并返回 URL。
+8. 重放同 idempotency key返回同 PR。
+9. 撤销设备或 Grant 后新调用拒绝。
+10. Bob 登录同 endpoint只看到自己的账号/调用。
 
 ### 31.5 Delegated E2E
 
 - 注册 Agent Platform Consumer/workload。
 - Alice 为 Agent A 授权 company GitHub，Agent B无授权。
 - Agent A assertion成功，Agent B和错误 subject/consumer/audience/jti失败。
-- Platform DB/服务不可用不影响 Codex Direct；Connection 不读取 Platform DB。
+- Platform DB/服务不可用不影响 Direct MCP Client；Connection 不读取 Platform DB。
 - Consumer 只保存 callId，不能用 callId查询 Bob或Agent B结果。
 
 ### 31.6 并发与 Crash
@@ -2036,15 +2040,15 @@ flowchart LR
 | --- | --- | --- | --- |
 | WP0 决策与契约 | Connection Owner | 关闭 G-01 至 G-08；冻结 OpenAPI/MCP、状态与错误 skeleton | PRD、工程 Spec、HLD、ADR 无冲突；初期 Provider 范围和 legacy 结论可追溯 |
 | WP1 工程与数据底座 | Connection Owner/DBA | `connection-api`、Connection DB、migration、ports、Fake Adapter | 空库和前一版本升级/回退验证；缺 DB/KMS/Identity 配置 fail readiness |
-| WP2 Identity 与 Consumer | Identity/Security | Principal、remote MCP OAuth session、Consumer、Instance、workload key | Codex OAuth conformance、mTLS/assertion、禁用与重放负向测试通过 |
+| WP2 Identity 与 Consumer | Identity/Security | Principal、remote MCP OAuth session、Consumer、Instance、workload key | 目标 Direct MCP Client 分别通过 OAuth conformance；mTLS/assertion、禁用与重放负向测试通过 |
 | WP3 Catalog 与 Kernel | Provider Owner | pinned Kernel、ProviderRelease、ActionVersion、发布/停用 | digest/SBOM/allowlist 可核验；任意 URL/script 和未签版本不能发布 |
 | WP4 Account 与 Credential | Connection Owner/Security | Personal/Shared、OAuth/PAT、stable identity、rotation | 多账号和 current Credential 约束通过；Secret canary 零命中 |
 | WP5 Grant 与 Consent | Connection Owner/Product | preview、Consent、AuthorizationRoot、immutable Grant | 换号/扩权/撤销竞态与 Alice/Bob/Consumer/Actor 负向矩阵通过 |
-| WP6 Consumer 接口 | Connection Owner | MCP、Direct Auth、Delegated OpenAPI、查询接口 | Codex 只配置 MCP 可登录；两入口产生相同内部授权语义 |
+| WP6 Consumer 接口 | Connection Owner | MCP、Direct Auth、Delegated OpenAPI、查询接口 | Direct MCP Client 只配置 Connection 可登录；两入口产生相同内部授权语义 |
 | WP7 Execution 与 Egress | Connection Owner/SRE | Invocation、Call、Effect、Dispatch、proxy、reconcile | 每个 crash window 经过 kill/restart；重复非幂等外部效果为零 |
 | WP8 Audit 与 Recovery | SRE/DBA/Security | outbox、审计、Recovery Control、PITR runbook | restore 演练保持 mutation closed，直到 continuity 或 Provider coverage 证据通过 |
 | WP9 Connection Web | Connection Owner/Product | 账号、授权、调用、Consumer、Catalog 和审计页面 | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential |
-| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Codex、Delegated、幂等和 response-lost |
+| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
 | WP11 生产加固 | SRE/Security | HA、容量、SLO、升级、回滚、DR 和 on-call | load/soak、N/N-1、backup/PITR、Secret 和安全评审通过，无未接受 P0 风险 |
 
 每个 WP 使用自己的 Issue 和验收证据；不能继续复用本 HLD 的 primary Issue 作为实现总包。实现 PR 必须遵循开发工作流 Spec 的 Issue-first 规则。
@@ -2053,8 +2057,8 @@ flowchart LR
 
 | ID | PRD 要求 | HLD 落点 | 主要契约/数据 | 验证证据 |
 | --- | --- | --- | --- | --- |
-| R-01 | 独立多 Consumer 服务 | 3、6、8、9 | MCP、Delegated HTTP、`consumer` | Codex 与 Delegated E2E；Consumer 故障互不影响 |
-| R-02 | Codex 只配置 Connection | 18.1、19.1、22.3 | remote MCP OAuth、MCP `tools/list/call` | 31.4 真实 E2E |
+| R-01 | 独立多 Consumer 服务 | 3、6、8、9 | MCP、Delegated HTTP、`consumer` | Direct MCP 与 Delegated E2E；Consumer 故障互不影响 |
+| R-02 | Direct MCP Client 只配置 Connection | 18.1、19.1、22.3 | remote MCP OAuth、MCP `tools/list/call` | 31.4 conformance 与真实 E2E |
 | R-03 | Connection 掌握授权权威 | 6.1、17、21.5 | `authorization_root`、`connection_grant`、`authorization_consent` | preview/confirm/revoke 和 stale revision 测试 |
 | R-04 | Direct/Delegated 统一执行 | 18、19、22 | `authorized_invocation`、两类认证 Adapter | 同 args/action 产生同 authorization/effect 语义 |
 | R-05 | 多用户和同用户多账号 | 14、15、17.7、24 | `connection_account`、`external_account_identity`、Root unique key | Alice/Bob 与 personal/company 账号矩阵 |
@@ -2167,7 +2171,7 @@ flowchart LR
 | D-01 | Connection 是独立多租户服务，所有上游统一为 Consumer | Product/Connection | 不需要；已写入 PRD/Spec |
 | D-02 | Connection DB 是 Principal、Consumer Grant、账号、Credential 和 Call 权威 | Product/Security/DBA | 需要 |
 | D-03 | Direct MCP 与 Delegated HTTP 收敛到 AuthorizedInvocation | Connection/Security | 需要 |
-| D-04 | Direct 使用标准 remote MCP OAuth 并在客户端支持时启用 sender constraint；Delegated 使用 mTLS + signed assertion | Identity/Security | 需要 |
+| D-04 | Direct MCP Client 使用标准 remote MCP OAuth 并按客户端 conformance 启用 sender constraint；Delegated 使用 mTLS + signed assertion | Identity/Security | 需要 |
 | D-05 | OpenConnector 只作为 pinned in-process Connector Kernel | Connection/Security/Legal | 需要 |
 | D-06 | 一个 AuthorizationRoot 只选择一个 current Connection | Product/Connection | 不需要；已写入 PRD |
 | D-07 | 每 Connection 多 CredentialVersion、最多一个 current | Security/DBA | 需要 |
@@ -2233,7 +2237,7 @@ Consumer 可以在自己的数据库保存内部 policy 和 `callId`，但这些
 | 方案 | 不采用原因 | 重新评估条件 |
 | --- | --- | --- |
 | 直接部署 OpenConnector Runtime | identity、alias、storage 和 token 模型不满足企业隔离 | 上游提供等价企业多租户契约并通过审计 |
-| Platform + Connection 作为固定组合 | 本地 Codex 和其他 Consumer 不能独立接入 | 不重新评估；违背已确认产品边界 |
+| Platform + Connection 作为固定组合 | Direct MCP Client 和其他 Consumer 不能独立接入 | 不重新评估；违背已确认产品边界 |
 | Consumer 保存 Provider Credential | Secret 会进入 Agent/runtime 边界 | 不重新评估 |
 | 每个 Consumer 各存一份 Connection Grant | 撤销、换号和审计出现多权威 | 不重新评估 |
 | 写 Action 普通队列自动重试 | 网络未知时可能重复创建外部效果 | Provider 对全部写 Action 提供可证明 exactly-once 合同 |

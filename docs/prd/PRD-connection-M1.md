@@ -4,9 +4,9 @@
 
 ## 1. 产品目标
 
-Connection 是可独立部署、可被多种客户端和服务消费的外部能力系统。它让员工连接自己的外部账号，或使用获准的公司共享账号，再把该 Connection 的指定 Action 授权给 Codex、Agent 平台、CI/CD 或内部应用等 Consumer。
+Connection 是可独立部署、可被多种客户端和服务消费的外部能力系统。它让员工连接自己的外部账号，或使用获准的公司共享账号，再把该 Connection 的指定 Action 授权给 Codex、Claude App、Cursor、Agent Platform、CI/CD 或内部应用等 Consumer。
 
-用户使用本地 Codex 时只配置 Connection，不需要同时配置 Agent Platform。Agora Agent Platform 是 Connection 的一个 Consumer，不是 Connection 的必经入口或授权权威。
+用户使用 Direct MCP Client 时只配置 Connection，不需要同时配置 Agent Platform。Codex、Claude App、Cursor 等客户端分别注册为独立 Consumer；Agora Agent Platform 是另一个 Consumer，不是 Connection 的必经入口或授权权威。
 
 M1 需要保证：
 
@@ -24,7 +24,7 @@ M1 需要保证：
 | Provider | Jira、GitHub、Outlook 等外部平台 |
 | Action | Provider 对外提供的一项受控能力，例如创建 Pull Request |
 | Principal | Connection 识别的员工或受管理服务主体 |
-| Consumer | 使用 Connection 的客户端或服务，例如 Codex、Agent Platform 或 CI/CD |
+| Consumer | 使用 Connection 的客户端或服务，例如 Codex、Claude App、Cursor、Agent Platform 或 CI/CD |
 | Actor | Delegated Consumer 内可选的细分使用单元，例如一个 Agent；对 Connection 是不透明稳定标识 |
 | Connection | 已完成鉴权、对应一个稳定外部账号的连接 |
 | Consumer 授权 | Principal 允许 Consumer 或其指定 Actor 使用某个 Connection 的已确认 Action 集合 |
@@ -52,13 +52,13 @@ Consumer 管理者只能管理自己的 Consumer 注册、显示信息和所需 
 - OAuth、API Key/PAT 等鉴权方式及 Credential 刷新、轮换和撤销。
 - 外部账号稳定识别、脱敏展示和 Connection 生命周期。
 - 个人 Connection 和公司共享 Connection。
-- MCP 与 HTTP/OpenAPI 接入。
+- Direct MCP Client 的 MCP 接入，以及 Delegated Service 和管理操作的 HTTP/OpenAPI 接入。
 - Action 参数校验、凭证注入、Provider API 调用和脱敏结果。
 - 幂等、未知结果处理、调用审计、限流和受控网络出口。
 
 ### 3.2 Consumer 负责
 
-- 使用 Connection 发布的 MCP 或 HTTP/OpenAPI 契约发现和调用 Action。
+- Direct MCP Client 使用 MCP；Delegated Service 使用 HTTP/OpenAPI。两者都通过 Connection 发布的契约发现和调用 Action。
 - 声明需要的 Action，并向用户解释自身用途。
 - 使用 Connection 支持的 Direct 或 Delegated 身份方式接入。
 - 只提交 Action 参数，不提交可信用户身份、目标 Connection 或原始凭证。
@@ -101,17 +101,19 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 ### 6.2 Consumer
 
 - Consumer 有稳定 ID、类型、名称、管理者、状态和已发布 Action 声明。
-- 同一 Consumer 可以有多个 ConsumerInstance，例如用户的不同 Codex 设备或服务的不同 workload。
+- 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
-- Direct Consumer 以当前用户会话调用；Delegated Consumer 以注册 workload 身份代表当前 Principal 调用。
+- Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
+- Direct MCP Consumer 通过 MCP 以当前用户会话调用；Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Delegated Consumer 可以传递稳定 Actor 标识以支持更细粒度授权，但不能要求 Connection 理解 Actor 的内部领域模型。
 
-### 6.3 本地 Codex
+### 6.3 Direct MCP Client
 
-- 用户只需在 Codex 中配置 Connection MCP endpoint。
+- 用户只需在 Direct MCP Client 中配置 Connection MCP endpoint。
 - 首次使用时由 Connection 提供浏览器或设备登录入口。
-- Codex 登录 Connection 后只发现当前用户已授权给该 Consumer 的 Action。
-- Codex 不保存 GitHub、Jira 等 Provider Credential，也不需要配置 Agora Agent Platform。
+- 客户端登录 Connection 后只发现当前用户已授权给该 Consumer 的 Action。
+- 客户端不保存 GitHub、Jira 等 Provider Credential，也不需要配置 Agora Agent Platform。
+- 拟支持的 Codex、Claude App、Cursor 等客户端版本必须分别通过 MCP/OAuth、请求幂等、刷新和撤销验收；一个客户端通过不能证明其他客户端兼容。
 
 ## 7. Connection 类型与多账号
 
@@ -177,7 +179,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 
 ### 9.3 Direct 与 Delegated 调用
 
-- Direct Consumer 使用 Connection 当前用户会话，Connection 自行解析 Principal 和授权。
+- Direct MCP Consumer 通过 MCP 使用 Connection 当前用户会话，Connection 自行解析 Principal 和授权。
 - Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托上下文；上下文绑定 workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
 - 委托上下文只能证明“谁在请求”，不能创建、替换或扩大 Connection 中的授权。
 - 两种调用最终使用同一授权校验、账号解析、执行、审计和错误语义。
@@ -221,13 +223,13 @@ Connection 在 M1 提供独立入口：
 - 公司共享 Connection 管理：管理员配置账号及员工或组织范围。
 - Connection 审计：管理员查询连接、授权和调用记录。
 
-Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证页面。Connection 页面不是 Agent Platform 页面的一部分，也可以被本地 Codex 等其他 Consumer 使用。
+Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证页面。Connection 页面不是 Agent Platform 页面的一部分，也可以被 Direct MCP Client 等其他 Consumer 使用。
 
 ## 13. M1 上线验收
 
 | 场景 | 验收结果 |
 | --- | --- |
-| Codex 独立接入 | 本地 Codex 只配置 Connection MCP，完成登录、GitHub 连接、授权和真实 PR 创建 |
+| Direct MCP Client 独立接入 | 拟支持的客户端版本分别完成 MCP/OAuth conformance；至少一个客户端只配置 Connection MCP，完成登录、GitHub 连接、授权和真实 PR 创建 |
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
