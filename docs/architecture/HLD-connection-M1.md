@@ -396,7 +396,7 @@ type Principal = {
 };
 ```
 
-- `identitySubjectHash` 使用环境独立 keyed HMAC，不能保存原始 bearer 或可枚举邮箱。
+- `identitySubjectHash` 使用按环境隔离的 keyed HMAC；每个环境使用独立 key，并对版本化 `canonical(environment, identityIssuer, identitySubject)` 计算摘要。不能保存原始 bearer 或可枚举邮箱，也不能跨环境复用或导出 HMAC key。
 - USER 的 display name/email 只作为受限 profile projection，不作为 join/unique/auth key。
 - SERVICE Principal 只能通过管理员注册和 workload identity 建立，不能模拟 USER。
 - 每个敏感操作都要求未超过 freshness budget 的 Identity assertion；禁用事件同时提升本地 revision/fence。
@@ -878,13 +878,13 @@ Alice
 Direct MCP Client 通过 remote MCP transport 使用其目标版本支持的标准 OAuth 登录。Connection 把公司 OIDC 作为上游身份来源，MCP OAuth 层只建立受限的 Direct Session：
 
 1. 客户端从 MCP authorization metadata 发现 Connection 的授权服务和资源标识。
-2. 用户在系统浏览器完成公司登录、ConsumerInstance 绑定和最小 MCP scope 授权；不会获得 Provider Credential。
-3. Connection 把 OAuth subject 映射为 Principal，并将 session/token 绑定 Consumer、Instance、audience、scope 和 expiry。
-4. 客户端使用该 session 调用 MCP；Connection 每次检查 session/Instance/Principal current status。
+2. 用户在系统浏览器完成公司登录、ConsumerInstance 绑定和最小 MCP scope 授权；浏览器会话只完成用户认证，不单独决定 Consumer 或 Instance，也不会获得 Provider Credential。
+3. Connection 把 OAuth issuer、组织或租户和 subject 映射为 Principal，并将 access/refresh token 绑定 Principal、已注册 Consumer、Instance、audience、scope、expiry 和 current recovery generation。
+4. 客户端使用 access token 调用 MCP；Connection 每次检查 token 绑定、session/Instance/Principal current status 和 PITR 域外的 current recovery generation，其他 Consumer 或 Instance 的 token 必须拒绝。
 5. 若目标客户端版本支持 sender-constrained token，Connection 必须启用并验证 key thumbprint；否则使用短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
 6. 用户可在 Connection 页面单独撤销该实例和所有关联 session。
 
-Direct session 只证明当前 Principal/Instance，不包含 Connection 或 Action 授权副本。
+Direct session 只证明当前 Principal/Consumer/Instance，不包含 Connection 或 Action 授权副本。authorization session、access/refresh token 和 refresh family 都必须携带或保存签发时的 recovery generation；generation 不等于 Recovery Control current 值时不得刷新或调用。
 
 G-01 必须对每个拟支持的 Codex、Claude App、Cursor 等客户端版本分别完成 conformance，冻结实际 authorization metadata、redirect、dynamic registration、token storage/refresh、稳定请求键、scope、撤销和 sender-constraint 能力。一个客户端版本通过不能外推到其他产品或版本；本文不声称任何客户端支持私有 device authorization 或自定义逐请求 PoP 协议，不满足标准 remote MCP OAuth 时不得用长期静态 token 替代。
 
@@ -894,7 +894,9 @@ G-01 必须对每个拟支持的 Codex、Claude App、Cursor 等客户端版本�
 type DelegatedInvocationAssertionV1 = {
   issuer: string;
   audience: "connection-api";
-  subject: string;
+  principalIssuer: string;
+  principalSubject: string;
+  organizationContext: string;
   consumerId: string;
   consumerInstanceId: string;
   workloadBindingHash: string;
@@ -903,6 +905,7 @@ type DelegatedInvocationAssertionV1 = {
   argsHash: string;
   idempotencyKeyHash: string;
   correlationId: string;
+  recoveryGeneration: bigint;
   issuedAt: string;
   notBefore: string;
   expiresAt: string;
@@ -910,8 +913,9 @@ type DelegatedInvocationAssertionV1 = {
 };
 ```
 
-- assertion 由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发，并绑定注册 workload 的 mTLS identity；workload 不能自签 Principal 身份。
-- `subject` 由受信 issuer 的声明经 Connection Identity Adapter 映射到 Principal，不能采用 Consumer body 中的 userId。
+- assertion 由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发，并绑定注册 workload 的 mTLS identity；workload 不能自签 Principal 身份、组织或租户。
+- 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
+- `recoveryGeneration` 必须来自 PITR 域外的 Recovery Control 并等于 current generation；旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
 - TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
 - `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试必须向受信 issuer 获取带新 `jti` 的令牌，并复用同一业务幂等键。
 - `actorId` 只参与 exact Grant lookup 和审计，不能用来查询 Consumer 内部对象。
@@ -948,21 +952,23 @@ AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consume
 
 ### 18.4 Idempotency Scope
 
-Direct：
+Direct stable subject scope：
 
 ```text
-principalId + consumerId + consumerInstanceId + connectionId
-+ actionVersionId + MCP stable request key
+principalId + consumerId + consumerInstanceId
 ```
 
-Delegated：
+request key 使用 MCP stable request key。
+
+Delegated stable subject scope：
 
 ```text
 principalId + consumerId + consumerInstanceId + actorKey
-+ connectionId + actionVersionId + Idempotency-Key
 ```
 
-相同 scope 且 args hash 相同返回原 Invocation/Call；args hash 不同返回 `IDEMPOTENCY_CONFLICT`，不能覆盖原调用。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
+request key 使用 HTTP `Idempotency-Key`。
+
+Connection 必须先按上述 stable subject scope + request key 查找 `idempotency_record`，再解析 current Grant、Connection 和 ActionVersion。首次请求在同一事务中冻结 versioned request hash、Connection 和 ActionVersion；后续同键、同请求返回原 Invocation/Call，不因换号、授权更新或版本发布重新解析，同键不同请求返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 不再次认证，同一 Idempotency-Key 即使携带新 `jti` 也不能创建第二个 Call。
 
 ### 18.5 撤销线性化
 
@@ -1180,11 +1186,11 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding |
 | `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current published |
 | `consumer_declared_action` | declaration_id、action_version_id | composite PK |
-| `user_session` | id、principal_id、instance_id、key_thumbprint、expires_at、revoked_at | session secret只存hash |
+| `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
 | `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、invocation_id、expires_at | unique instance+jti_hash |
 
-Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
+Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、recovery generation、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
 
 ### 21.3 Catalog 表
 
@@ -1228,7 +1234,7 @@ Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务�
 | 表 | 关键列 |
 | --- | --- |
 | `authorized_invocation` | 全部 18.3 frozen claims、status、created/expiry |
-| `idempotency_record` | scope_hash、args_hash、invocation_id、response_ref、expiry |
+| `idempotency_record` | stable_scope_hash、request_key_hash、request_hash、connection_id、action_version_id、invocation_id、response_ref、expiry；unique stable scope+request key |
 | `action_call` | call_id、invocation_id、status、first_submission_started_at、result/error refs |
 | `action_attempt` | attempt_id、call_id、ordinal、credential_version_id、executor_digest、status |
 | `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash |
