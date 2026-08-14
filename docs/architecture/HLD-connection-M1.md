@@ -111,7 +111,7 @@ Connection 不读取 Consumer 数据库，Consumer 不读取 Connection DB、KMS
 | Connection | 对应一个稳定外部账号的个人或公司共享连接 |
 | CredentialVersion | Connection 内部加密保存的 Credential 版本；最多一个 current |
 | ConsumerGrant | Principal 对 Consumer、可选 Actor、具体 Connection 和已确认 Action 集合的授权 |
-| AuthorizedInvocation | Connection 入口校验后形成的单请求授权与执行快照 |
+| AuthorizedInvocation | Connection 入口校验后形成的单请求授权与执行快照，包含固定的 `CredentialVersion` |
 | ActionCall / Effect | 稳定调用记录、Provider 出站意图、实际结果和未知结果事实 |
 
 M1 中，同一 `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。ConsumerGrant 不设置独立期限；撤销、换号、账号禁用或共享资格失效时终止，Connection 或 Credential 暂时失效时暂停。
@@ -128,11 +128,11 @@ sequenceDiagram
     U->>C: 用户会话或委托上下文 + Action + args
     C->>C: 认证 Principal / Consumer / Actor
     C->>D: 解析 current Grant 和唯一 Connection
-    C->>D: 入口重校验并持久化 Invocation / Call / Effect intent
+    C->>D: 入口重校验并持久化 Invocation / Call / Effect intent，绑定 exact CredentialVersion
     alt 入口检查失败
         C-->>U: 结构化拒绝，不产生 Provider 出站
     else 入口检查提交
-        C->>X: 使用请求快照和 current Credential 执行
+        C->>X: 使用请求快照固定的 exact CredentialVersion 执行
         X-->>C: 实际结果或错误
         C->>D: 保存脱敏结果、状态、审计和 outbox
         C-->>U: callId + 脱敏结果或错误
@@ -151,7 +151,7 @@ Agent Platform 在发起调用前仍执行自己的用户、Agent、渠道和 Ow
 
 ### 6.3 Connection 入口检查
 
-Connection 在 Provider 出站前完成一次当前状态检查，并在同一提交点持久化 AuthorizedInvocation、ActionCall 和写操作的 Effect intent：
+Connection 在 Provider 出站前完成一次当前状态检查，并在同一提交点持久化 AuthorizedInvocation、ActionCall、写操作的 Effect intent 和本次请求使用的准确 `CredentialVersion`：
 
 - Principal、Consumer、ConsumerInstance 和可选 Actor 仍有效；
 - Consumer 当前声明、用户最近确认和系统发布状态都包含目标 ActionVersion；
@@ -204,7 +204,7 @@ M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `
 - Credential 使用公司 KMS/Secret Service envelope encryption；数据库只保存密文、Key 版本和必要元数据。
 - refresh、rotation 和 revoke 使用 Connection 本地幂等键以及事务/CAS/lease，避免并发覆盖 current 版本。
 - refresh 明确失效时进入 `REAUTH_REQUIRED`；结果未知时不盲目重复使用可能旋转的 refresh token。
-- 新调用只使用 current Credential，不自动回退到历史版本。
+- 新调用在入口绑定当时的 current `CredentialVersion`；执行只使用该版本，不切换或自动回退到其他版本。
 
 ## 9. Provider、执行与可靠性
 
