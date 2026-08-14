@@ -1242,13 +1242,13 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 
 | 表 | 关键列 | 关键约束 |
 | --- | --- | --- |
-| `authorization_root` | id、principal_id、consumer_id、actor_key、provider_id、current_grant_id、fence、status | unique principal+consumer+actor+provider |
+| `authorization_root` | id、principal_id、consumer_id、actor_key、provider_id、current_grant_id、fence、status | unique principal+consumer+actor+provider；composite current pointer FK |
 | `authorization_preview` | id、root_id、connection_id、declaration_id、action_set_digest、source_revisions_json、expiry、consumed_at | opaque token hash unique |
 | `authorization_consent` | id、root_id、preview_id、display_snapshot_json、locale、confirmed_at | immutable |
 | `connection_grant` | id、root_id、connection_id、all frozen revisions/digests、status、consent_id | current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
 
-Root 的 `current_grant_id` 使用 DEFERRABLE FK 指向同 root Grant。事务末尾约束验证 pointer 与 Grant root一致。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
+Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
@@ -1362,7 +1362,7 @@ MCP Server 暴露：
       "base": { "type": "string", "maxLength": 255 },
       "title": { "type": "string", "maxLength": 256 },
       "body": { "type": "string", "maxLength": 65536 },
-      "draft": { "type": "boolean", "default": false }
+      "draft": { "type": "boolean" }
     }
   }
 }
