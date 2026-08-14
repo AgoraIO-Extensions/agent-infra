@@ -196,14 +196,13 @@ Connection 必须根据服务端认证结果和 Connection DB 中的当前授权
 - Delegated Consumer 使用未授权 Actor 或把授权从一个 Actor 转给另一个 Actor。
 - 已撤销 ConsumerInstance、授权或共享资格继续发起新调用。
 
-OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务。Connection 必须校验高熵 state、PKCE、Provider、发起 Principal、目标用途、过期时间和预注册返回地址；Consumer 发起的事务还必须校验 Consumer 和 ConsumerInstance。事务在首次处理后原子消费；任何适用字段不匹配、过期或重放都必须拒绝，且不能改变 Connection 的所有者、共享范围或目标 Consumer。
+OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务。Connection 必须校验高熵 state、PKCE、Provider、发起 Principal、目标用途、过期时间和预注册返回地址；Consumer 发起时还必须校验事务绑定的 Consumer 和 ConsumerInstance，独立 Connection 管理流程则不得在 callback 临时附加 Consumer。系统在首次处理后原子消费事务；任何字段缺失、不匹配、过期或重放都必须拒绝，且不能改变 Connection 的所有者、共享范围或事务中已绑定的目标 Consumer。
 
 ## 11. Action 执行、错误与审计
 
-- Consumer 只提交 Action 和参数。
+- Consumer 提交 Action 和参数；写 Action 还必须通过 MCP 或 HTTP 协议元数据提交由 Consumer 生成、跨重试稳定的幂等键，不能使用每次重试可能变化的传输层 request ID。
 - Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行只使用该版本注入凭证并调用 Provider，并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
-- 写 Action 在访问 Provider 前提交稳定调用 ID、调用记录和外部效果意图。
-- 写 Action 必须携带 Consumer 生成且在同一业务调用重试间保持稳定的幂等键，不能使用每次变化的传输 request ID 代替。
+- 写 Action 在访问 Provider 前，把幂等键与已认证 Principal、Consumer、ConsumerInstance、Actor（如有）、Action 和请求摘要绑定，并提交稳定调用 ID、调用记录和外部效果意图。
 - Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以这些稳定主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、ActionVersion 和请求摘要；命中同键、同请求时，当前身份、实例或授权已撤销则拒绝且绝不重新执行，否则返回原调用，不因换号、非撤销类授权更新或版本发布创建第二次调用；同键不同请求拒绝为冲突。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
 - Provider 拒绝、scope 不足、限流或暂时不可用时，返回稳定原因和可执行下一步。
