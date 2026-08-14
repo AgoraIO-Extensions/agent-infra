@@ -33,7 +33,7 @@ M1 采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程�
 | Web 数据 | TanStack Query | 管理服务端状态、缓存和请求失效 |
 | UI | Tailwind CSS + shadcn/ui | 构建平台工作台、表单、对话和管理页面 |
 | HTTP | Hono + Node.js 24 LTS | 平台和 Connection 的 HTTP 接入层 |
-| 契约 | Zod + OpenAPI 3.1 + MCP | HTTP 请求校验、客户端生成和 Codex 等 Direct Consumer 工具接入 |
+| 契约 | Zod + OpenAPI 3.1 + MCP | HTTP 请求校验、客户端生成和 Direct MCP Client 工具接入 |
 | 流式协议 | Server-Sent Events | 对话增量、处理状态和执行详情推送 |
 | 数据库 | PostgreSQL + Drizzle | 权威业务数据、事务、迁移和 outbox |
 | 文件 | 公司现有 S3 兼容对象存储 | 附件、结果文件和大体积中间结果 |
@@ -82,11 +82,11 @@ server-deploy: docker
 ```mermaid
 flowchart LR
     U[公司员工] --> W[Web SPA]
-    U --> LC[Local Codex]
+    U --> MC[Direct MCP Client]
     QW[企微] --> PA[Platform API]
     W --> PA
     W --> CA[Connection API]
-    LC --> CA
+    MC --> CA
 
     PA --> PD[(Platform DB)]
     PA --> OS[(Object Storage)]
@@ -266,10 +266,11 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 ### 8.3 Connection Consumer 接口
 
-Connection 对 Consumer 提供两个协议入口：
+Connection 对 Consumer 提供两个调用协议入口，并为管理操作提供独立 HTTP API：
 
-- Direct Consumer 使用 MCP 或用户态 HTTP，由 Connection 会话解析 Principal、ConsumerInstance 和 Grant。
+- Direct MCP Client 使用 MCP，由 Connection 用户会话解析 Principal、ConsumerInstance 和 Grant。
 - Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托断言。
+- Connection Web 和管理员工具使用用户态 HTTP/OpenAPI，不作为 Direct Action 调用协议。
 
 两种入口都调用同一 Connection application service，并收敛为同一 AuthorizedInvocation。内部接口通过 mTLS 或公司等价服务身份认证，不因位于集群内而跳过鉴权。
 
@@ -302,7 +303,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct Consumer 只提交 Action 和参数，Connection 从用户会话解析 Principal、Consumer 和授权目标。Delegated Consumer 先认证注册 workload，再提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托令牌；令牌绑定 workload、consumer、actor、audience、action、args hash、期限和一次性 `jti`。Connection 验签并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从用户会话解析 Principal、Consumer 和授权目标。Delegated Consumer 先认证注册 workload，再提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托令牌；令牌绑定 workload、consumer、actor、audience、action、args hash、期限和一次性 `jti`。Connection 验签并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection。
 
 委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 
@@ -600,7 +601,7 @@ Hermes 的群聊和线程规则保留在 Hermes Adapter 内。Codex 不绑定企
 - 所有入口使用公司身份和 TLS。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
-- Direct Consumer 可直接调用 Connection MCP/HTTP；Delegated Consumer 必须使用注册 workload 和委托断言。两种路径都不能直连 Connection DB、KMS 或 Provider Credential endpoint。
+- Direct MCP Client 通过 Connection MCP 调用；Delegated Consumer 必须使用注册 workload、委托断言和 HTTP/OpenAPI。两种路径都不能直连 Connection DB、KMS 或 Provider Credential endpoint。
 - 自定义镜像必须来自 Company Hub，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 模型 API Key 和企微凭证加密保存、不回显，只能替换。
@@ -668,7 +669,7 @@ Playwright 覆盖：
 - 三个模板的对话、模型切换、附件和长任务恢复。
 - 自定义 WebUI 直接访问不能绕过权限。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
-- 本地 Codex 只配置 Connection MCP 完成登录和真实 Provider 调用。
+- 拟支持的 Codex、Claude App、Cursor 等 Direct MCP Client 版本分别通过 conformance；至少一个客户端只配置 Connection MCP 完成登录和真实 Provider 调用。
 - Alice/Bob、同用户多账号、跨 Consumer/Actor 和 delegated replay 负向隔离。
 - 企微身份映射、群聊隔离和按发送者使用 Connection。
 
@@ -749,7 +750,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 3. Agent 停止、重启、升级和平台进程重启后，配置、历史和附件引用不丢失；Connection 重启后授权、Credential 和调用状态不丢失。
 4. Web 断线或离开页面不影响已提交长任务，返回后可以按游标恢复状态。
 5. 自定义 Agent 的直接 WebUI 地址不能绕过公司身份与 Agent 范围校验。
-6. 至少一个真实 Provider 同时完成 Codex Direct 和 Delegated Consumer 的鉴权、授权、Action、审计和撤销闭环。
+6. 至少一个真实 Provider 同时完成 Direct MCP Client 和 Delegated Consumer 的鉴权、授权、Action、审计和撤销闭环。
 7. 负载与故障测试中，所有消息都有可解释状态，不出现静默丢失和跨用户数据混用。
 
 ## 25. 评审结论记录

@@ -24,7 +24,7 @@
 
 1. Connection 是可独立部署、可被多种客户端和服务消费的外部能力系统。Agora Agent Platform 是一个 Delegated Consumer，不是 Connection 的必经入口或授权权威。
 2. Connection DB 独立保存并校验 Principal、Consumer、可选 Actor、具体 Connection 和已确认 Action 集合。Consumer 内部策略只能进一步收紧调用，不能扩大 Connection 授权。
-3. Direct Consumer 使用 Connection 当前用户会话；Delegated Consumer 使用注册 workload 和受信任的短期委托上下文。两种入口都由 Connection 服务端解析当前主体、授权和唯一目标 Connection。
+3. Direct MCP Consumer 使用 Connection 当前用户会话；Delegated Consumer 使用注册 workload 和受信任的短期委托上下文。两种入口都由 Connection 服务端解析当前主体、授权和唯一目标 Connection。
 4. Connection 在请求入口检查当前授权、Connection、Provider、Action、Credential 和外部 scope，并形成仅供本次请求使用的快照。
 5. 入口检查提交前已经生效的撤权、断开、停用或失效拒绝本次请求，且不产生 Provider 出站。入口检查提交后发生的变化不取消、不回滚已经进入执行的请求。
 6. Provider 返回的实际结果必须保留。结果未知的写操作不得盲目重放；用户修复授权或 Connection 后，只能主动创建新调用。
@@ -54,14 +54,25 @@ OpenConnector 不作为公司 Principal、组织、Consumer、Connection 授权�
 
 ### 3.1 M1 目标
 
-- Local Codex 只配置 Connection MCP，即可完成登录、连接真实 Provider、授权和 Action 调用。
+- Codex、Claude App、Cursor 等 Direct MCP Client 分别注册为独立 Consumer，只配置 Connection MCP 即可完成登录、连接真实 Provider、授权和 Action 调用。
+- 每个拟支持的 Direct MCP Client 产品和版本分别完成 MCP/OAuth、请求幂等、刷新和撤销 conformance；一个客户端通过不能证明其他客户端兼容。
 - Agent Platform 通过通用 Delegated 契约使用同一 Action，不获得特殊授权路径。
 - 用户明确选择 Consumer/Actor、外部账号和 Action；Consumer 不能选择默认账号或替换目标 Connection。
 - 个人 Connection、公司共享 Connection、跨用户、跨 Consumer、跨 Actor 和跨账号访问相互隔离。
 - 同一 Connection 支持多个 Credential 版本，但新调用只使用唯一 current 版本。
-- 至少一个真实 Provider 完成 Direct、Delegated、连接、刷新、授权、调用、审计和撤销闭环。
+- GitHub 完成 Direct、Delegated、连接、刷新、授权、调用、审计和撤销闭环；内部 Confluence、Jira 和 Bitbucket 完成获批 Action 的真实账号 E2E。
 
-### 3.2 M1 非目标
+### 3.2 初期 Provider 范围
+
+| Provider | 状态 | 初期实现要求 |
+| --- | --- | --- |
+| GitHub | 纳入 | 首个完整闭环，覆盖多账号、创建 Pull Request、撤销、幂等和结果待确认 |
+| 内部 Confluence、Jira、Bitbucket | 纳入 | 按各自公司内部 deployment 建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
+| Microsoft Outlook | 待定 | 确认具体 API、认证方式、Action 和 scope 后才纳入，不作为当前交付依赖 |
+
+不同 Provider 或 deployment 不共享 Credential、endpoint 或授权范围；每个纳入项都必须独立完成 Provider onboarding。
+
+### 3.3 M1 非目标
 
 - 任意 URL、任意 HTTP 模板、任意 Credential resolver、运行时上传脚本或动态加载未知 Provider；
 - Consumer 自主选择账号、默认账号或在多个账号间自动切换；
@@ -94,7 +105,7 @@ Connection 不读取 Consumer 数据库，Consumer 不读取 Connection DB、KMS
 ### 4.3 信任边界
 
 - Consumer 只提交 Action、参数和对应入口要求的认证材料；Action 参数中的用户、组织、Consumer、Actor、Connection 或账号字段都不是权限依据。
-- Direct 请求由 Connection 会话解析 Principal、ConsumerInstance 和授权目标。
+- Direct MCP 请求由 Connection 会话解析 Principal、ConsumerInstance 和授权目标；不同客户端产品不能共享 Consumer、Session 或 Grant。
 - Delegated 请求先认证注册 workload，再验证由 Connection 或其信任的公司身份系统签发的短期委托上下文；Consumer 不能自签或自报 Principal。
 - Connection 始终以 Connection DB 中的当前 Grant 解析唯一目标 Connection；委托上下文只能证明调用主体，不能创建、替换或扩大 Grant。
 - Provider 返回内容是不可信数据，不能改变主体、授权、Connection、Credential 或目标 endpoint。
@@ -105,7 +116,7 @@ Connection 不读取 Consumer 数据库，Consumer 不读取 Connection DB、KMS
 | 概念 | M1 职责 |
 | --- | --- |
 | Principal | Connection 识别的员工或受管理服务主体 |
-| Consumer / ConsumerInstance | 使用 Connection 的产品及其具体设备或 workload |
+| Consumer / ConsumerInstance | 使用 Connection 的产品及其具体设备或 workload；不同 Direct MCP Client 产品分别注册 Consumer |
 | Actor | Delegated Consumer 内可选的不透明稳定使用单元，例如一个 Agent |
 | ProviderRelease / ActionVersion | 不可变、可审核、可停用的 Provider 和 Action 发布版本 |
 | Connection | 对应一个稳定外部账号的个人或公司共享连接 |
@@ -132,18 +143,26 @@ sequenceDiagram
     alt 入口检查失败
         C-->>U: 结构化拒绝，不产生 Provider 出站
     else 幂等命中已有调用
-        C-->>U: 原 callId + 已保存状态、结果或错误，不产生 Provider 出站
+        alt 持久事实证明尚未开始 Provider 提交，且原子 claim 成功
+            C->>X: 使用原请求快照固定的 exact CredentialVersion 执行
+            X-->>C: 实际结果、错误或未知结果
+            C->>D: 保存脱敏结果、状态、审计和 outbox
+            C-->>U: 原 callId + 脱敏结果、错误或未知状态
+        else 已提交、已完成或提交状态未知
+            C-->>U: 原 callId + 已保存状态、结果或错误，不产生 Provider 出站
+        end
     else 新调用提交
+        C->>D: 原子标记 Provider 提交开始
         C->>X: 使用请求快照固定的 exact CredentialVersion 执行
-        X-->>C: 实际结果或错误
+        X-->>C: 实际结果、错误或未知结果
         C->>D: 保存脱敏结果、状态、审计和 outbox
-        C-->>U: callId + 脱敏结果或错误
+        C-->>U: callId + 脱敏结果、错误或未知状态
     end
 ```
 
-### 6.1 Direct Consumer
+### 6.1 Direct MCP Consumer
 
-Direct Consumer 使用 Connection 的用户态 MCP 或 HTTP 接口。Connection 从当前会话解析 Principal 和 ConsumerInstance，`tools/list` 只暴露当前授权可用的 Action。Local Codex 不需要经过 Agent Platform，也不保存 Provider Credential。
+Direct MCP Client 通过 Connection MCP 调用。Connection 从当前会话解析 Principal 和 ConsumerInstance，`tools/list` 只暴露当前授权可用的 Action。Codex、Claude App、Cursor 等客户端产品分别注册 Consumer，每个设备或安装形成独立 ConsumerInstance；它们不需要经过 Agent Platform，也不保存 Provider Credential。
 
 ### 6.2 Delegated Consumer
 
@@ -215,6 +234,7 @@ M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `
 - Provider 出站的 origin、path 模板和 Credential 注入来自已发布版本，不来自 Action 参数或 Provider 返回内容。
 - 写 Action 在访问 Provider 前提交稳定 `callId`、ActionCall 和 Effect intent。
 - 幂等作用域为 `Principal + Consumer + Actor（如有）+ Connection + ActionVersion + 幂等键`。相同参数摘要返回原调用；不同摘要返回冲突；不同作用域互不影响。
+- 幂等命中时，只有持久事实证明 Provider 提交尚未开始且能够原子 claim 原 ActionCall，才可继续执行该原调用一次；已经提交、已经完成或提交状态未知时只返回原调用，不产生新的 Provider 出站。
 - 只有 Provider 明确支持幂等机制时才自动重试写操作。Provider 可能已执行但结果无法确认时记录 `UNCERTAIN`，不伪造失败或成功。
 - 用户主动重试是新的 tool call；系统不得把授权修复、重连或进程重启解释为自动重放旧请求。
 
@@ -222,7 +242,7 @@ M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `
 
 M1 只冻结职责和可观察行为，不在本 HLD 固化内部 token、签名字段或数据库列名。具体契约由 `packages/contracts` 和对应 primary Issue 维护：
 
-- Direct Consumer 使用 MCP 或用户态 HTTP；Delegated Consumer 使用版本化 HTTP/OpenAPI；
+- Direct MCP Consumer 使用 MCP；Delegated Consumer 使用版本化 HTTP/OpenAPI；Connection Web 和管理操作使用独立的用户态 HTTP/OpenAPI；
 - Connection Web 提供账号、授权、调用记录、Consumer、Catalog、共享 Connection 和审计入口；
 - MCP 与 HTTP 入口调用同一 application service，使用相同授权、执行、审计和错误语义；
 - 服务端返回稳定错误码、用户可读消息、`traceId` 和可重试标记；
@@ -243,7 +263,7 @@ Connection 审计覆盖连接、重连、断开、Consumer 注册和停用、授
 
 ### 12.1 必测行为
 
-- Codex Direct：只配置 Connection MCP，完成登录、真实 Provider 连接、授权和写 Action；
+- Direct MCP Client：拟支持的产品和版本分别通过 conformance；至少一个客户端只配置 Connection MCP，完成登录、GitHub 连接、授权和真实写 Action；
 - Delegated Consumer：Agent Platform 使用同一 Action 和通用委托契约，不成为授权权威；
 - 多主体隔离：Alice/Bob、同用户多账号、跨 Consumer/Actor/Connection、委托重放和参数替换均拒绝且不枚举；
 - Connection：个人/共享、OAuth callback、refresh、同账号重连、不同账号切换、断开和账号禁用；
@@ -252,7 +272,7 @@ Connection 审计覆盖连接、重连、断开、Consumer 注册和停用、授
 - 调用：Provider 前持久化 ActionCall/Effect intent，幂等冲突、Provider 实际结果和脱敏审计；
 - 撤权竞态：入口提交前撤权拒绝，提交后撤权继续并保留实际结果；
 - 未知结果：不确定写操作不盲目重放，用户主动重试创建新调用；
-- 至少一个真实 Provider 同时完成 Direct 和 Delegated 的连接、刷新、授权、调用、撤销和错误闭环。
+- GitHub 同时完成 Direct 和 Delegated 的连接、刷新、授权、调用、撤销和错误闭环；内部 Confluence、Jira 和 Bitbucket 分别完成获批 Action 的真实账号 E2E。
 
 ### 12.2 不作为当前验收前置
 
@@ -264,7 +284,7 @@ Permit redeem、跨系统 epoch、Recovery Control、Evidence Journal、独立 E
 2. Catalog 与 Connection：Provider/Action 发布、个人/共享 Connection、OAuth/API Key、多账号和 Credential 版本。
 3. Consumer 授权：Consumer/Instance、Action 声明、ConsumerGrant、账号选择、确认和撤销。
 4. 接口与执行：Direct MCP、Delegated HTTP、入口 live check、ActionCall/Effect、幂等和审计。
-5. 真实闭环：一个真实 Provider 的 Direct/Delegated 连接、刷新、授权、调用、撤销和错误验证。
+5. 真实闭环：GitHub 的 Direct/Delegated 完整验证，以及内部 Confluence、Jira、Bitbucket 获批 Action 的真实账号 E2E；Outlook 仅在范围确认后纳入。
 6. 上线加固：负向隔离、故障注入、容量基线、备份恢复、运行手册和安全签收。
 
 每一步遵循 `Issue -> 实现与验证 -> PR`。改变授权、身份传递、数据权威、部署单元或 Agent Runtime Contract 前，先更新工程 Spec；需要冻结具体机制时再新增 ADR。
@@ -275,7 +295,7 @@ Permit redeem、跨系统 epoch、Recovery Control、Evidence Journal、独立 E
 
 - PRD、工程 Spec 与本文没有冲突；
 - 公司身份、Direct session 和 Delegated workload/委托契约有明确 Owner；
-- 首个真实 Provider、认证方式、Action、测试账号和最小 scope 已确定；
+- 初期 Provider 的 exact deployment、认证方式、Action、测试账号和最小 scope 已确定，Outlook 是否纳入已有结论；
 - Connection 授权权威、唯一账号选择、Credential current 约束和负向隔离测试已确定；
 - Connection 入口一次检查、请求快照、撤权竞态和不自动重放有可执行测试；
 - Provider 前持久化、`UNCERTAIN` 处理、真实 Provider 验收和审计关联有 Owner；
