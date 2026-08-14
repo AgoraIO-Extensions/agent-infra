@@ -68,6 +68,18 @@
 - AuthorizedInvocation、ActionCall、Effect Ledger、幂等和 reconciliation。
 - 受控 Provider egress、审计、观测、限流、备份和恢复。
 
+#### 3.2.1 初期 Provider 实现范围
+
+| 类别 | Provider | 状态 | 初期实现要求 |
+| --- | --- | --- | --- |
+| 外部网站 | GitHub | 纳入 | 作为首个完整闭环，覆盖连接、多账号授权、创建 Pull Request、撤销、幂等和结果待确认 |
+| 外部网站 | Microsoft Outlook | 待定 | G-02 确认具体 API、认证方式、Action 和 scope 后才纳入实现与交付承诺 |
+| 内部网站 | Confluence | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
+| 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
+| 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
+
+本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
+
 ### 3.3 非目标
 
 | 非目标 | 原因 |
@@ -100,7 +112,7 @@
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 OIDC、目标 Codex 版本的 remote MCP OAuth 和 workload identity 精确契约 | 只使用 Fake Identity，不发布 Direct 登录 | Identity/Security |
-| G-02 | 首个真实 Provider、认证方式、测试租户和最小 scope | ProviderRelease 不得进入 `PUBLISHED` | Product/Connection |
+| G-02 | 初期 Provider 的 exact deployment、认证方式、测试账号、Action/scope，以及 Outlook 是否纳入 | 对应 ProviderRelease 不得进入 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 只使用 Fake Adapter | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
@@ -1991,7 +2003,7 @@ Recovery: open | read-only | quarantined
 | Phase 1：领域底座 | 建立独立数据库、身份、Consumer、Catalog、Account 和 Credential | WP1-WP4 | migration、领域状态机、Fake Adapter 和负向隔离通过 |
 | Phase 2：授权与接入 | 打通 Direct MCP、Delegated HTTP 和 Connection Web 授权 | WP5-WP6 | 两个入口收敛到相同 AuthorizedInvocation，越权矩阵为零 |
 | Phase 3：可靠执行 | 实现 Call、Effect、egress、幂等、对账和审计 | WP7-WP8 | crash-window 测试无重复效果，UNCERTAIN 可查询和收敛 |
-| Phase 4：真实闭环 | 完成 Connection 页面、首个真实 Provider 和运维面 | WP9-WP10 | Codex 与一个 Delegated Consumer 完成真实验收 |
+| Phase 4：真实闭环 | 完成 Connection 页面、初期 Provider 范围和运维面 | WP9-WP10 | GitHub 完成完整验收；Confluence、Jira、Bitbucket 完成获批 Action 的真实账号 E2E |
 | Phase 5：生产加固 | 完成容量、安全、升级、备份和恢复演练 | WP11 | go-live 证据包获 Product、Security、SRE 和 Connection Owner 签署 |
 
 阶段是依赖顺序，不要求每个阶段单独发布。未关闭对应门禁时可以实现 Fake 和只读路径，但不能以 feature flag 绕过 Credential、egress、Effect Ledger 或 recovery gate。
@@ -2022,7 +2034,7 @@ flowchart LR
 
 | WP | Owner | 交付 | Definition of Done |
 | --- | --- | --- | --- |
-| WP0 决策与契约 | Connection Owner | 关闭 G-01 至 G-08；冻结 OpenAPI/MCP、状态与错误 skeleton | PRD、工程 Spec、HLD、ADR 无冲突；首个 Provider 和 legacy 结论可追溯 |
+| WP0 决策与契约 | Connection Owner | 关闭 G-01 至 G-08；冻结 OpenAPI/MCP、状态与错误 skeleton | PRD、工程 Spec、HLD、ADR 无冲突；初期 Provider 范围和 legacy 结论可追溯 |
 | WP1 工程与数据底座 | Connection Owner/DBA | `connection-api`、Connection DB、migration、ports、Fake Adapter | 空库和前一版本升级/回退验证；缺 DB/KMS/Identity 配置 fail readiness |
 | WP2 Identity 与 Consumer | Identity/Security | Principal、remote MCP OAuth session、Consumer、Instance、workload key | Codex OAuth conformance、mTLS/assertion、禁用与重放负向测试通过 |
 | WP3 Catalog 与 Kernel | Provider Owner | pinned Kernel、ProviderRelease、ActionVersion、发布/停用 | digest/SBOM/allowlist 可核验；任意 URL/script 和未签版本不能发布 |
@@ -2032,7 +2044,7 @@ flowchart LR
 | WP7 Execution 与 Egress | Connection Owner/SRE | Invocation、Call、Effect、Dispatch、proxy、reconcile | 每个 crash window 经过 kill/restart；重复非幂等外部效果为零 |
 | WP8 Audit 与 Recovery | SRE/DBA/Security | outbox、审计、Recovery Control、PITR runbook | restore 演练保持 mutation closed，直到 continuity 或 Provider coverage 证据通过 |
 | WP9 Connection Web | Connection Owner/Product | 账号、授权、调用、Consumer、Catalog 和审计页面 | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential |
-| WP10 真实 Provider 验收 | Provider Owner/QA | GitHub 或批准 Provider 的 read/write E2E | 两用户、多账号、Codex、Delegated、reauth、revoke、429、response-lost 全部留存脱敏证据 |
+| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Codex、Delegated、幂等和 response-lost |
 | WP11 生产加固 | SRE/Security | HA、容量、SLO、升级、回滚、DR 和 on-call | load/soak、N/N-1、backup/PITR、Secret 和安全评审通过，无未接受 P0 风险 |
 
 每个 WP 使用自己的 Issue 和验收证据；不能继续复用本 HLD 的 primary Issue 作为实现总包。实现 PR 必须遵循开发工作流 Spec 的 Issue-first 规则。
@@ -2170,7 +2182,7 @@ flowchart LR
 | 优先级 | Gate | 必须关闭时间 | 关闭证据 |
 | --- | --- | --- | --- |
 | P0 | G-01 Identity/session/workload 契约 | WP2 实现前 | Identity 与 Security 批准的协议和 test tenant |
-| P0 | G-02 首个 Provider、auth、scope、测试账号 | WP3 真实 Adapter 前 | Provider onboarding 表和 Product 签字 |
+| P0 | G-02 初期 Provider deployment、auth、Action/scope、测试账号与 Outlook 状态 | 对应 WP3 真实 Adapter 前 | 各 Provider onboarding 表和 Product/Provider 签字 |
 | P0 | G-05 Shared disable 语义 | Shared 管理实现前 | PRD 结论或 M1 明确禁用该操作 |
 | P0 | G-08 legacy inventory | migration 设计前 | Data Owner 的系统/数据/格式清单 |
 | P1 | G-03 UNCERTAIN 文案和人工处置 | mutating beta 前 | 产品文案、Support runbook、双人审批契约 |
