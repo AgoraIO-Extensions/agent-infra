@@ -3,258 +3,280 @@
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | Proposed for Design Review |
-| 版本 | v1.1 |
-| 日期 | 2026-08-13 |
-| 适用范围 | agent-infra M1 Connection 子系统 |
-| 产品依据 | [Agent 平台 M1 PRD](../prd/PRD-agent-platform-M1.md)、[Connection M1 PRD](../prd/PRD-connection-M1.md) |
+| 版本 | v2.1 |
+| 日期 | 2026-08-14 |
+| 适用范围 | 独立 Connection M1 服务 |
+| 关联 Issue | [#4](https://github.com/AgoraIO-Extensions/agent-infra/issues/4)、[#121](https://github.com/AgoraIO-Extensions/agent-infra/issues/121) |
+| 产品依据 | [Connection M1 PRD](../prd/PRD-connection-M1.md)、[Agent 平台 M1 PRD](../prd/PRD-agent-platform-M1.md) |
 | 工程依据 | [M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) |
+| 交付流程依据 | [AI 主导开发工作流 Spec](SPEC-ai-native-development-workflow.md) |
 | 参考实现 | [OpenConnector 固定 Commit `07f0a190`](https://github.com/oomol-lab/open-connector/tree/07f0a190a9815827d2d3ecae1e6ba7b8524662e8) |
 
 ## 1. 文档目的
 
-本文只冻结 Connection M1 进入实现所需的高层边界和可观察行为。它不替代两份 PRD、工程架构 Spec 或开发工作流 Spec，也不把尚未批准的跨系统授权协议、恢复协议或 Provider 出口协议写成 M1 契约。
+本文只冻结 Connection M1 进入实现所需的系统边界、核心模型和可观察行为。产品行为以两份 PRD 为准；部署、数据归属和身份边界以工程 Spec 为准。本文与权威文档冲突时，先修正权威文档，再更新本文。
 
-产品行为以 PRD 为准，部署、数据归属和身份边界以工程 Spec 为准。本文与权威文档冲突时，先修正权威文档，再更新本文。
+本文不设计 Consumer 内部的 Agent、Conversation、Task、Pipeline 或审批流程，也不把字段级协议、数据库列或尚未批准的恢复方案写成 M1 契约。
 
 ## 2. M1 结论
 
-### 2.1 OpenConnector 对齐范围
+### 2.1 当前 active contract
+
+1. Connection 是可独立部署、可被多种客户端和服务消费的外部能力系统。Agora Agent Platform 是一个 Delegated Consumer，不是 Connection 的必经入口或授权权威。
+2. Connection DB 独立保存并校验 Principal、Consumer、可选 Actor、具体 Connection 和已确认 Action 集合。Consumer 内部策略只能进一步收紧调用，不能扩大 Connection 授权。
+3. Direct Consumer 使用 Connection 当前用户会话；Delegated Consumer 使用注册 workload 和受信任的短期委托上下文。两种入口都由 Connection 服务端解析当前主体、授权和唯一目标 Connection。
+4. Connection 在请求入口检查当前授权、Connection、Provider、Action、Credential 和外部 scope，并形成仅供本次请求使用的快照。
+5. 入口检查提交前已经生效的撤权、断开、停用或失效拒绝本次请求，且不产生 Provider 出站。入口检查提交后发生的变化不取消、不回滚已经进入执行的请求。
+6. Provider 返回的实际结果必须保留。结果未知的写操作不得盲目重放；用户修复授权或 Connection 后，只能主动创建新调用。
+7. Consumer、Agent、模型、Sandbox、浏览器、日志和审计查询都不能获得原始 Credential。Credential 只在 Connection 内部解密和使用。
+
+### 2.2 OpenConnector 对齐范围
 
 **[OpenConnector 参考]** 固定 Commit 的托管 Action 请求在入口解析 runtime token 和 policy，形成当前请求快照，然后继续执行；执行过程中不会再次读取授权状态、主动取消 Provider 请求或回滚已经提交的外部操作。
 
-**[本项目设计决策]** M1 只对齐这一可观察行为。OpenConnector 仅作为 Provider、Action、OAuth、凭证刷新和执行机制的参考，不作为公司用户、组织、Agent 或授权关系的权威来源。
+**[本项目设计决策]** M1 对齐这一请求级行为，并参考其 Provider/Action 定义、OAuth、Credential 刷新和执行机制。经过固定版本、allowlist 和安全评审的代码可以作为 `connection-api` 进程内 Adapter 使用。
 
-### 2.2 当前 M1 active contract
-
-1. 平台托管的 Agent 外部系统调用必须经过 Platform Tool Gateway 和独立的 Connection 服务。
-2. Platform 服务端解析当前用户、Agent、渠道和 Platform 授权；调用方提交的身份、Connection、账号和授权字段不是权限依据。
-3. Connection 请求入口检查当前 Connection、Provider、Action、凭证和外部 scope 状态一次，并形成请求快照。
-4. 检查通过后按请求快照执行。入口检查之后发生的撤权、断开、停用或凭证状态变化，不取消、不回滚已经进入执行的请求；Provider 返回的实际结果仍需保留。
-5. 入口检查之前已经生效的撤权、断开、停用或失效，拒绝本次请求且不产生 Provider 出站。
-6. 用户修复授权或 Connection 后，主动重试创建新的 Action 调用；不自动重放旧请求。
-7. Agent、模型、Sandbox、浏览器和审计查询都不能获得原始凭证。Credential 只在 Connection 服务内部解密和使用。
+OpenConnector 不作为公司 Principal、组织、Consumer、Connection 授权、企业存储或审计的权威来源；不得把其 Runtime Server、Web Console、全局 alias 或 deployment token 直接暴露为本项目产品入口。
 
 ### 2.3 不属于当前 M1 contract
 
-以下内容不作为 Issue #4 或本 HLD 的 M1 前置：
+以下内容不作为本 HLD 的实现或上线前置：
 
-- `ExecutionPermit`、GrantSlot、在线 redeem、授权 revision fence 和跨系统撤权线性化；
-- Platform 与 Connection 之间的跨系统版本/epoch 协议或一次性调用许可协议；
-- 自动取消在途 Provider 请求或自动回滚外部副作用；
-- PITR 域外 Recovery Control、Evidence Journal、alternate-path acquisition、abandonment 和 terminal proof/delivery 协议；
-- 为解决上述候选协议新增的 Egress Proxy、Recovery Command listener 或独立 worker 部署单元。
+- Platform `GrantSlot`、Platform 签发的 `ExecutionPermit`、在线 redeem 或 Permit introspection；
+- Platform 与 Connection 之间的授权 epoch、跨系统 revision fence 或双向授权同步；
+- 请求进入执行后的重复授权检查、主动取消 Provider 请求或自动回滚外部副作用；
+- PITR 域外 Recovery Control、Evidence Journal、alternate-path acquisition、abandonment 或 terminal proof/delivery；
+- 为上述候选协议新增的独立 Egress Proxy、Recovery listener 或业务 Worker 部署单元。
 
-如果未来确实需要这些能力，必须单独创建 HLD/ADR，先更新工程 Spec，明确产品语义和 Owner，再进入实现。候选设计不得通过本 HLD 的合并或 CI 结果自动生效。
+这些能力未来只有在出现明确产品需求时，才通过独立 HLD/ADR 和 primary Issue 进入设计与实现。
 
 ## 3. 产品与工程范围
 
 ### 3.1 M1 目标
 
-- Agent 使用真实 Provider API，但永远看不到原始凭证。
-- Owner 选择 Agent 可用的已发布 Action；用户选择授权给 Agent 的 Connection 和已确认 Action 集合。
-- 个人 Connection、公司共享 Connection、跨用户和跨 Agent 访问相互隔离。
-- 至少一个真实 Provider 完成连接、刷新、授权、调用、审计和撤销闭环。
-- Platform 与 Connection 保持独立进程、镜像、数据库账号、数据权威和运行身份。
+- Local Codex 只配置 Connection MCP，即可完成登录、连接真实 Provider、授权和 Action 调用。
+- Agent Platform 通过通用 Delegated 契约使用同一 Action，不获得特殊授权路径。
+- 用户明确选择 Consumer/Actor、外部账号和 Action；Consumer 不能选择默认账号或替换目标 Connection。
+- 个人 Connection、公司共享 Connection、跨用户、跨 Consumer、跨 Actor 和跨账号访问相互隔离。
+- 同一 Connection 支持多个 Credential 版本，但新调用只使用唯一 current 版本。
+- 至少一个真实 Provider 完成 Direct、Delegated、连接、刷新、授权、调用、审计和撤销闭环。
 
 ### 3.2 M1 非目标
 
 - 任意 URL、任意 HTTP 模板、任意 Credential resolver、运行时上传脚本或动态加载未知 Provider；
-- Agent 自主选择账号、默认账号或在多个账号间切换；
+- Consumer 自主选择账号、默认账号或在多个账号间自动切换；
 - 每次写 Action 的逐次人工确认；
-- Webhook、定时任务、主动通知、事件型 Connector、平台级 Sandbox、Roadmap 多 Agent 协作、Skill Hub 和 Eval；
-- 把 OpenConnector Runtime Server 或 Web Console 作为本项目产品入口；
-- 引入 Redis、Kafka、NATS、Temporal 或独立 Connection Worker 服务。
+- Webhook、定时任务、主动通知或事件型 Connector；
+- Redis、Kafka、NATS、Temporal 或独立 Connection Worker；
+- 把 OpenConnector Runtime Server 或 Web Console 作为产品入口。
 
 ## 4. 系统边界与权威归属
 
 ### 4.1 部署边界
 
-`connection-api` 是独立部署单元，与 Platform 使用不同进程、镜像、运行身份、数据库账号和 PostgreSQL 数据库。应用入口只负责协议接入和依赖装配；领域规则位于 Connection core，Drizzle 只负责持久化适配。
+`connection-api` 是独立部署单元，与 Platform 使用不同进程、镜像、运行身份、数据库账号和 PostgreSQL 数据库。MCP、HTTP/OpenAPI、OAuth callback 和 PostgreSQL outbox/lease 处理可以由同一镜像承担，不增加没有独立扩缩容需求的业务服务。
 
-Connection 服务可在同一进程内装配经过 allowlist、固定版本和安全评审的 OpenConnector Provider/OAuth/Action 代码。不得部署或暴露 OpenConnector Runtime Server 的产品入口。
+应用入口只负责认证材料解析、协议接入和依赖装配；领域规则位于 Connection core，Drizzle、KMS、公司 Identity 和 OpenConnector 都是 Adapter。
 
 ### 4.2 数据权威
 
-| 数据 | 权威方 | 另一侧允许保存 |
+| 数据或决策 | 权威系统 | 其他系统允许保存 |
 | --- | --- | --- |
-| 公司用户、组织、Agent、Owner、渠道和 Agent 可用范围 | 公司身份系统 / Platform | 请求期解析结果和关联 ID |
-| 用户到 Agent/Connection 的授权和确认 Action 集合 | Platform DB | Connection 调用上下文中的必要引用、调用事实 |
-| Provider、Action、发布状态和执行版本 | Connection DB | Platform 的只读目录缓存或版本引用 |
-| Connection、外部账号、共享范围和凭证 | Connection DB + KMS | Platform 的稳定 Connection ID 和展示摘要 |
-| ActionCall、Provider 结果、脱敏调用审计 | Connection DB | Platform 的 callId、状态和时间线引用 |
+| 公司用户状态和组织关系 | Company Identity | Connection 的当前解析结果和稳定主体映射 |
+| Agent、Conversation、Task 和 Consumer 内部策略 | 对应 Consumer | Connection 的 opaque Actor/correlation ID |
+| Principal、Consumer、ConsumerInstance 和 Consumer Grant | Connection DB | Consumer 的稳定 ID 和只读展示引用 |
+| Provider、Action、发布状态和执行版本 | Connection DB | Consumer 的只读目录缓存或版本引用 |
+| Connection、外部账号、共享范围和 Credential | Connection DB + KMS | 脱敏账号摘要和稳定 Connection 引用 |
+| AuthorizedInvocation、ActionCall、Provider 结果和审计 | Connection DB | `callId`、状态和脱敏结果引用 |
 
-Platform 和 Connection 不直接读取对方数据库，不建立可写授权副本，不使用分布式事务。跨系统操作使用服务身份、版本化 HTTP、稳定 ID、幂等键、状态机和 outbox。
+Connection 不读取 Consumer 数据库，Consumer 不读取 Connection DB、KMS 或 Credential endpoint。两个系统不建立可写授权副本，也不使用分布式事务。
 
 ### 4.3 信任边界
 
-- Browser、Agent、模型和 Provider 返回内容均不可信，不能覆盖服务端解析出的主体或目标资源。
-- Agent Pod 只能通过 Platform Tool Gateway 使用 Connection，不能访问 Connection DB、KMS 或 Provider Credential endpoint。
-- Connection 是唯一能够解密和使用 Provider Credential 的运行身份。
-- 所有跨用户、跨 Agent、跨 Connection 的查询和调用失败都必须不泄露目标资源是否存在。
+- Consumer 只提交 Action、参数和对应入口要求的认证材料；Action 参数中的用户、组织、Consumer、Actor、Connection 或账号字段都不是权限依据。
+- Direct 请求由 Connection 会话解析 Principal、ConsumerInstance 和授权目标。
+- Delegated 请求先认证注册 workload，再验证由 Connection 或其信任的公司身份系统签发的短期委托上下文；Consumer 不能自签或自报 Principal。
+- Connection 始终以 Connection DB 中的当前 Grant 解析唯一目标 Connection；委托上下文只能证明调用主体，不能创建、替换或扩大 Grant。
+- Provider 返回内容是不可信数据，不能改变主体、授权、Connection、Credential 或目标 endpoint。
+- 只有 Connection workload identity 可以解密 Provider Credential。
 
-## 5. 核心调用流程
+## 5. 核心模型
+
+| 概念 | M1 职责 |
+| --- | --- |
+| Principal | Connection 识别的员工或受管理服务主体 |
+| Consumer / ConsumerInstance | 使用 Connection 的产品及其具体设备或 workload |
+| Actor | Delegated Consumer 内可选的不透明稳定使用单元，例如一个 Agent |
+| ProviderRelease / ActionVersion | 不可变、可审核、可停用的 Provider 和 Action 发布版本 |
+| Connection | 对应一个稳定外部账号的个人或公司共享连接 |
+| CredentialVersion | Connection 内部加密保存的 Credential 版本；最多一个 current |
+| ConsumerGrant | Principal 对 Consumer、可选 Actor、具体 Connection 和已确认 Action 集合的授权 |
+| AuthorizedInvocation | Connection 入口校验后形成的单请求授权与执行快照 |
+| ActionCall / Effect | 稳定调用记录、Provider 出站意图、实际结果和未知结果事实 |
+
+M1 中，同一 `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。ConsumerGrant 不设置独立期限；撤销、换号、账号禁用或共享资格失效时终止，Connection 或 Credential 暂时失效时暂停。
+
+## 6. 核心调用流程
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent Runtime
-    participant P as Platform Tool Gateway
+    participant U as Direct / Delegated Consumer
     participant C as Connection API
     participant D as Connection DB
     participant X as Provider
 
-    A->>P: toolName + args + execution context
-    P->>P: 服务端解析 user、Agent、channel、授权
-    P->>C: 受保护调用上下文 + toolName + args
-    C->>C: 入口检查 Connection/Provider/Action/Credential/scope
-    alt 检查失败
-        C-->>P: 结构化拒绝，不产生 Provider 出站
-    else 检查通过
-        C->>D: 持久化 ActionCall/Attempt/Effect intent
-        C->>X: 使用请求快照和 Connection Credential 执行
+    U->>C: 用户会话或委托上下文 + Action + args
+    C->>C: 认证 Principal / Consumer / Actor
+    C->>D: 解析 current Grant 和唯一 Connection
+    C->>D: 入口重校验并持久化 Invocation / Call / Effect intent
+    alt 入口检查失败
+        C-->>U: 结构化拒绝，不产生 Provider 出站
+    else 入口检查提交
+        C->>X: 使用请求快照和 current Credential 执行
         X-->>C: 实际结果或错误
-        C->>D: 保存脱敏结果、状态、审计和关联事件
-        C-->>P: callId + 脱敏结果或错误
-        P-->>A: 工具结果
+        C->>D: 保存脱敏结果、状态、审计和 outbox
+        C-->>U: callId + 脱敏结果或错误
     end
 ```
 
-### 5.1 Platform 入口
+### 6.1 Direct Consumer
 
-Platform 从受保护的 execution context 解析用户、Agent、渠道、Owner Action 选择和用户确认的 Connection 授权。Agent 只提交已发布的 `toolName` 和符合 Schema 的参数；不提交 `userId`、`agentId`、`connectionId`、外部账号或 Credential。
+Direct Consumer 使用 Connection 的用户态 MCP 或 HTTP 接口。Connection 从当前会话解析 Principal 和 ConsumerInstance，`tools/list` 只暴露当前授权可用的 Action。Local Codex 不需要经过 Agent Platform，也不保存 Provider Credential。
 
-Platform 入口负责平台侧的快速拒绝和统一错误映射，但不替代 Connection 的最终 live check。
+### 6.2 Delegated Consumer
 
-### 5.2 Connection 入口检查
+Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托上下文。委托上下文绑定当前调用主体、Consumer、可选 Actor、Action、参数摘要和有效期；具体签名字段、sender constraint 和 token 格式在 Identity 契约 Issue 中冻结。
 
-Connection 在真正创建 Provider 出站前，以一次一致的本地读取检查：
+Agent Platform 在发起调用前仍执行自己的用户、Agent、渠道和 Owner Action 策略；这些检查只能收紧调用。Connection 独立执行当前 ConsumerGrant 和 Connection 状态检查，任何一侧拒绝都不调用 Provider。
 
-- 受保护上下文中的目标 Connection、Provider/Action 与服务端解析结果；
-- Provider、Action 和对应发布版本的当前状态；
-- Connection 的 effective status、账号归属或共享范围；
-- 当前 Credential 状态和 Provider 所需外部 scope；
-- 当前请求的参数 Schema、ActionVersion 执行器和必要的限流/熔断条件。
+### 6.3 Connection 入口检查
 
-检查结果形成仅供本次请求使用的快照。检查通过后不再因为授权状态变化进行第二次权限检查；后续执行失败按 Provider/网络/凭证错误返回。
+Connection 在 Provider 出站前完成一次当前状态检查，并在同一提交点持久化 AuthorizedInvocation、ActionCall 和写操作的 Effect intent：
 
-### 5.3 ActionCall 持久化
+- Principal、Consumer、ConsumerInstance 和可选 Actor 仍有效；
+- Consumer 当前声明、用户最近确认和系统发布状态都包含目标 ActionVersion；
+- ConsumerGrant 仍指向当前唯一 Connection，个人归属或共享资格仍有效；
+- Connection、current Credential 和 Provider 外部 scope 仍允许该 Action；
+- 参数符合 ActionVersion Schema，执行器、endpoint 和必要网络规则均在 allowlist；
+- 幂等键、参数摘要、限流和熔断条件允许创建或读取本次调用。
 
-Connection 在 Provider 出站前获得稳定 `callId` 并持久化请求、状态和必要的脱敏参数摘要。至少保留：
+该数据库提交点是本次请求的授权判定点。实现可以使用事务、行锁或等价的原子条件更新，但本 HLD 不冻结 revision、fence 或 token 字段。
 
-- 一个逻辑 tool call 对应一个 ActionCall；重复请求读取或回放原调用；
-- Provider 出站前的 attempt/effect intent；
-- Provider 返回的脱敏结果、错误、状态和外部 request ID（如有）；
-- Platform execution、Connection call 和审计事件之间的关联 ID。
+## 7. 授权、撤权与生命周期
 
-Provider 超时或响应不确定时保留“结果待确认/`UNCERTAIN`”事实，不盲目重放可能产生副作用的写操作。只有 Provider 明确支持幂等机制时，才允许按工程 Spec 的规则自动重试。
+### 7.1 有效能力
 
-## 6. 授权、撤权与生命周期
-
-### 6.1 有效能力
-
-一次托管 Action 调用必须同时满足：
+一次 Action 调用必须同时满足：
 
 ```text
-已发布 Action
-∩ Owner 当前选择
-∩ 用户最近确认的 Action 集合
-∩ 当前用户对 Connection 的有效资格
-∩ Connection 当前外部 scope
+系统当前已发布 Action
+∩ Consumer 当前已发布 Action 声明
+∩ Principal 最近确认的 Consumer / Actor Action 集
+∩ Principal 对当前 Connection 的有效资格
+∩ Connection current Credential 的外部 scope
 ```
 
-任何一层只能缩小能力，不能因缓存缺失、调用方字段或 Provider 返回内容扩大能力。
+Consumer 内部 Agent policy 可以进一步缩小该集合，但不能扩大它。缓存缺失、调用方字段或 Provider 返回内容都不能扩大能力。
 
-### 6.2 Connection 状态
+### 7.2 账号与 Action 变化
 
-M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `DISABLED`。状态转换、账号重连、共享范围变化和凭证刷新由 Connection 负责持久化；平台通过稳定 ID、事件或查询同步展示。
+- 用户必须明确选择具体 Connection；同一 Provider 的多个账号不能自动切换或回退。
+- Consumer 新增 Action，或 Action 的 scope/effect 扩大时，旧授权不自动获得新增能力。
+- Consumer 移除 Action、Provider/Action 停用或权限收缩时，后续请求立即拒绝。
+- 同账号重连可以恢复因连接中断暂停的授权；不同账号重连终止旧授权并要求重新选择和确认。
+- 公司共享范围只表示 Principal 有资格选择该 Connection，不等于已经授权给任何 Consumer。
 
-### 6.3 撤权竞态
+### 7.3 撤权竞态
 
-| 变化何时生效 | 本次请求 | 后续请求 |
+| 变化何时提交 | 本次请求 | 后续请求 |
 | --- | --- | --- |
-| 入口检查之前已提交 | 拒绝，不产生 Provider 出站 | 继续拒绝，直到用户修复 |
-| 入口检查之后提交 | 继续执行，不主动取消、不回滚 | 新请求按当前状态重新检查 |
+| Connection 入口提交点之前 | 拒绝，不产生 Provider 出站 | 继续拒绝，直到用户修复 |
+| Connection 入口提交点之后 | 按请求快照继续，不主动取消、不回滚 | 新请求按当前状态重新检查 |
 
-这条规则同时适用于用户撤销 Agent 授权、断开 Connection、Provider/Action 停用、共享范围失效和凭证失效。不同外部账号重连不会迁移旧授权；同账号重连按 PRD 恢复原授权。
+这条规则适用于 ConsumerGrant 撤销、ConsumerInstance 撤销、Connection 断开、账号或共享资格失效、Provider/Action 停用和 Credential 失效。Consumer 自己的内部策略撤销负责阻止该 Consumer 发起新请求；已经进入 Connection 执行的请求仍遵循同一入口边界。
 
-## 7. 连接与凭证
+## 8. Connection 与 Credential
 
-### 7.1 OAuth 与 API Key
+M1 至少区分 `ACTIVE`、`DEGRADED`、`REAUTH_REQUIRED`、`DISCONNECTED` 和 `DISABLED`。状态转换、外部账号稳定识别、共享范围和 Credential 生命周期由 Connection 持久化。
 
-- OAuth 使用 Authorization Code + PKCE、一次性 state 和受控回跳地址；state 绑定发起用户、Connection scope 和目标 Connection。
-- API Key 只允许受控输入，提交后立即写入 Connection/KMS；API Key 不回显、不进入 Platform、Agent 或日志。
-- OAuth access/refresh token 和 API Key 使用公司 KMS/Secret Service envelope encryption；只有 Connection workload identity 可解密。
-- refresh、revoke 和 credential replacement 使用 Connection 本地幂等键、revision/CAS 或 PostgreSQL lease，避免并发覆盖。
+- OAuth 使用 Authorization Code、PKCE、一次性高熵 state 和预注册回跳地址；callback 校验 Provider、发起 Principal、Consumer、目标用途、过期时间并原子消费事务。
+- API Key/PAT 只允许受控输入，提交后立即加密保存，不回显。
+- Credential 使用公司 KMS/Secret Service envelope encryption；数据库只保存密文、Key 版本和必要元数据。
+- refresh、rotation 和 revoke 使用 Connection 本地幂等键以及事务/CAS/lease，避免并发覆盖 current 版本。
+- refresh 明确失效时进入 `REAUTH_REQUIRED`；结果未知时不盲目重复使用可能旋转的 refresh token。
+- 新调用只使用 current Credential，不自动回退到历史版本。
 
-### 7.2 外部账号身份
-
-Connection 保存 Provider 证明的稳定外部账号标识和脱敏展示信息。展示名、邮箱或 Connection alias 不能作为授权边界。不同外部账号重连创建新的 Connection identity，并要求用户重新授权 Agent。
-
-## 8. 目录与 Provider
+## 9. Provider、执行与可靠性
 
 - Connection 是 Provider/Action 目录的权威来源；发布对象使用不可变版本。
-- 只有经过代码、安全、网络出口和 Provider Owner 评审的 allowlist executor 可以执行；目录中存在的 Provider 不等于自动允许执行。
-- Agent Owner 只能选择已发布 Action，不能填写任意 URL、请求模板或自定义 Credential。
-- Provider/Action 停用在 Connection 入口拒绝新请求；不要求取消已进入执行的请求。
-- Action 的用途、参数、返回结果或外部权限发生实质变化时重新发布并要求 Owner/用户按 PRD 重新选择或确认。
+- 只有经过代码、安全、网络出口和 Provider Owner 评审的 allowlist executor 可以执行。目录存在不等于自动允许执行。
+- Provider 出站的 origin、path 模板和 Credential 注入来自已发布版本，不来自 Action 参数或 Provider 返回内容。
+- 写 Action 在访问 Provider 前提交稳定 `callId`、ActionCall 和 Effect intent。
+- 幂等作用域为 `Principal + Consumer + Actor（如有）+ Connection + ActionVersion + 幂等键`。相同参数摘要返回原调用；不同摘要返回冲突；不同作用域互不影响。
+- 只有 Provider 明确支持幂等机制时才自动重试写操作。Provider 可能已执行但结果无法确认时记录 `UNCERTAIN`，不伪造失败或成功。
+- 用户主动重试是新的 tool call；系统不得把授权修复、重连或进程重启解释为自动重放旧请求。
 
-## 9. API 与错误契约
+## 10. API 与错误契约
 
-M1 只冻结职责和可观察行为，不在本 HLD 固化内部 token、revision、签名字段或数据库列名。具体 OpenAPI contract 由 `packages/contracts` 和对应 primary Issue 维护，并遵守：
+M1 只冻结职责和可观察行为，不在本 HLD 固化内部 token、签名字段或数据库列名。具体契约由 `packages/contracts` 和对应 primary Issue 维护：
 
-- Browser 和内部接口使用版本化 HTTP/JSON；对话增量使用 SSE；
+- Direct Consumer 使用 MCP 或用户态 HTTP；Delegated Consumer 使用版本化 HTTP/OpenAPI；
+- Connection Web 提供账号、授权、调用记录、Consumer、Catalog、共享 Connection 和审计入口；
+- MCP 与 HTTP 入口调用同一 application service，使用相同授权、执行、审计和错误语义；
 - 服务端返回稳定错误码、用户可读消息、`traceId` 和可重试标记；
 - 认证失败、无权、资源不存在和跨主体访问使用不枚举的错误族；
-- Connection 返回的调用结果包含稳定 `callId` 和脱敏状态/结果/错误；
-- 同一逻辑请求重试读取原 ActionCall，不创建第二个外部效果；用户主动重试是新的 tool call。
+- 调用结果包含稳定 `callId` 和脱敏状态、结果或错误。
 
-当前 M1 不提供 `execution-permits:redeem`、Permit introspection 或跨系统授权版本接口。
+当前 M1 不提供 Permit redeem、Permit introspection 或 Platform/Connection 跨系统授权版本接口。
 
-## 10. 审计与可观测性
+## 11. 审计与安全
 
-Connection 审计覆盖连接、重连、断开、Provider/Action 发布和停用、授权相关调用、每次 ActionCall、Provider 状态、结果和错误。审计至少可通过 `executionId`、`callId`、`agentId`、`connectionId`、`actionId` 和时间关联一次调用；不记录原始凭证、聊天正文或模型思考原文。
+Connection 审计覆盖连接、重连、断开、Consumer 注册和停用、授权确认和撤销、Provider/Action 发布和停用，以及每次 ActionCall 的状态和结果。审计至少可通过 `Principal`、`Consumer`、可选 `Actor`、`connectionId`、`actionId`、`callId` 和时间关联一次调用。
 
-普通用户只能查看本人 Connection 和调用记录；管理员可以查看 Connection 审计，但不能通过 Connection 审计查看普通用户会话正文；Agent Owner 不能查看其他用户记录。
+普通用户只能查看本人 Connection、授权和调用记录；Consumer 管理者不能查看其他用户记录；管理员可以查看 Connection 管理审计和调用审计，但不能读取原始 Credential 或 Consumer 对话正文。
 
-最小运行指标包括入口拒绝、调用状态、Provider 限流/错误、凭证刷新失败、数据库连接池、outbox 积压和审计写入失败。指标使用低基数状态，不暴露用户、凭证或完整参数。
+所有跨 Principal、Consumer、Actor 和 Connection 的访问都必须 fail closed 且不泄露资源是否存在。日志、Trace、错误、指标和审计不记录原始 Credential、完整敏感参数、聊天正文或模型思考原文。
 
-## 11. 测试与验收
+## 12. 测试与验收
 
-### 11.1 必测行为
+### 12.1 必测行为
 
-- 个人 Connection：连接、OAuth callback、refresh、同账号重连、不同账号切换、断开；
-- Shared Connection：当前组织/用户资格、资格失效、仍需 Agent 单独授权；
-- Agent 隔离：跨用户、跨 Agent、跨 Connection、伪造主体字段和 alias/参数替换均拒绝且不枚举；
-- Credential：Agent、模型、Sandbox、页面、日志和审计均无法读取原始凭证；
-- Action：Owner 选择、用户确认新增 Action、停用后新请求拒绝；
-- 调用：Provider 前持久化 ActionCall/Effect intent、真实 Provider 结果和脱敏审计；
-- 撤权竞态：入口前撤权拒绝；入口后撤权继续并保留 Provider 实际结果；
-- 重试：不确定写操作不盲目重放；用户主动重试创建新调用；
-- 至少一个真实 Provider 的 OAuth/API/refresh/revoke/Action E2E。
+- Codex Direct：只配置 Connection MCP，完成登录、真实 Provider 连接、授权和写 Action；
+- Delegated Consumer：Agent Platform 使用同一 Action 和通用委托契约，不成为授权权威；
+- 多主体隔离：Alice/Bob、同用户多账号、跨 Consumer/Actor/Connection、委托重放和参数替换均拒绝且不枚举；
+- Connection：个人/共享、OAuth callback、refresh、同账号重连、不同账号切换、断开和账号禁用；
+- Credential：Consumer、Agent、模型、Sandbox、页面、日志和审计均无法读取原始值；
+- Action：Consumer 声明、用户确认新增/扩权、移除/收缩/停用后新请求拒绝；
+- 调用：Provider 前持久化 ActionCall/Effect intent，幂等冲突、Provider 实际结果和脱敏审计；
+- 撤权竞态：入口提交前撤权拒绝，提交后撤权继续并保留实际结果；
+- 未知结果：不确定写操作不盲目重放，用户主动重试创建新调用；
+- 至少一个真实 Provider 同时完成 Direct 和 Delegated 的连接、刷新、授权、调用、撤销和错误闭环。
 
-### 11.2 不作为当前验收前置
+### 12.2 不作为当前验收前置
 
-Permit redeem 竞态、跨系统 epoch、Recovery Control、Evidence Journal、Egress admission、alternate path、abandonment 和 terminal proof 不进入 M1 active 测试矩阵。它们未来单独立项后再增加契约、迁移和故障注入测试。
+Permit redeem、跨系统 epoch、Recovery Control、Evidence Journal、独立 Egress admission、alternate path、abandonment 和 terminal proof 不进入当前 M1 测试矩阵。未来单独立项后再增加契约、迁移和故障注入测试。
 
-## 12. 实施顺序
+## 13. 实施顺序
 
-1. 工程底座：`connection-api`、Connection core/store/contracts、独立数据库迁移、服务身份、KMS/Identity Fake 和 OpenConnector pinned Adapter。
-2. Provider 目录：目录导入、allowlist、Provider/Action 发布版本、停用和最小 Provider conformance。
-3. Connection 生命周期：个人/共享 Connection、OAuth/API Key、refresh/revoke、稳定账号识别和状态页。
-4. Platform 授权调用：Tool Gateway 受保护调用上下文、Connection 入口 live check、ActionCall/Effect 持久化和审计关联。
-5. 真实闭环：一个真实 Provider 的连接、刷新、授权、调用、撤销、错误和恢复验证。
+1. 工程与身份底座：`connection-api`、Connection core/store/contracts、独立数据库、Company Identity/KMS Fake 和 pinned OpenConnector Adapter。
+2. Catalog 与 Connection：Provider/Action 发布、个人/共享 Connection、OAuth/API Key、多账号和 Credential 版本。
+3. Consumer 授权：Consumer/Instance、Action 声明、ConsumerGrant、账号选择、确认和撤销。
+4. 接口与执行：Direct MCP、Delegated HTTP、入口 live check、ActionCall/Effect、幂等和审计。
+5. 真实闭环：一个真实 Provider 的 Direct/Delegated 连接、刷新、授权、调用、撤销和错误验证。
 6. 上线加固：负向隔离、故障注入、容量基线、备份恢复、运行手册和安全签收。
 
-每一步遵循 `Issue -> 实现与验证 -> PR`。改变授权、身份传递、数据权威、部署单元或 Agent Runtime Contract 前，先更新工程 Spec 并新增 ADR。
+每一步遵循 `Issue -> 实现与验证 -> PR`。改变授权、身份传递、数据权威、部署单元或 Agent Runtime Contract 前，先更新工程 Spec；需要冻结具体机制时再新增 ADR。
 
-## 13. 评审退出条件
+## 14. 评审退出条件
 
 设计评审通过前必须确认：
 
 - PRD、工程 Spec 与本文没有冲突；
-- 首个真实 Provider、Action、测试账号和最小 scope 已确定；
-- Platform 与 Connection 的数据权威、服务身份和负向隔离测试已确定；
-- Connection 入口一次检查、请求快照、撤权竞态和“不自动重放”已有可执行测试；
+- 公司身份、Direct session 和 Delegated workload/委托契约有明确 Owner；
+- 首个真实 Provider、认证方式、Action、测试账号和最小 scope 已确定；
+- Connection 授权权威、唯一账号选择、Credential current 约束和负向隔离测试已确定；
+- Connection 入口一次检查、请求快照、撤权竞态和不自动重放有可执行测试；
 - Provider 前持久化、`UNCERTAIN` 处理、真实 Provider 验收和审计关联有 Owner；
-- 没有把后续候选协议作为 M1 实现、API、Schema 或上线门禁的隐含前置。
+- 没有把后续候选协议作为 M1 API、Schema、实现或上线门禁的隐含前置。
 
-本文合并不等于产品或架构批准。批准后的结论必须回写 PRD、工程 Spec 或 ADR，并由对应 Owner 负责实现和验收。
+本文合并不等于所有字段级协议或恢复方案已经批准。后续实现通过各自 primary Issue 和必要 ADR 冻结细节。
