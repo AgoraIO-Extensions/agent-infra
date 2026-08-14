@@ -104,7 +104,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
 - Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
-- Direct MCP Consumer 通过 MCP 以当前用户会话调用；Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
+- Direct MCP Consumer 通过 MCP access token 调用；token 必须绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience，浏览器登录会话不能单独决定 Consumer 或实例。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Delegated Consumer 可以传递稳定 Actor 标识以支持更细粒度授权，但不能要求 Connection 理解 Actor 的内部领域模型。
 
 ### 6.3 Direct MCP Client
@@ -179,8 +179,8 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 
 ### 9.3 Direct 与 Delegated 调用
 
-- Direct MCP Consumer 通过 MCP 使用 Connection 当前用户会话，Connection 自行解析 Principal 和授权。
-- Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托上下文；上下文绑定 workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
+- Direct MCP Consumer 通过 MCP 使用绑定 Principal、Consumer、ConsumerInstance 和 audience 的 access token，Connection 自行解析身份和授权。
+- Delegated Consumer 使用注册 workload 身份，并提交由 Connection 或其信任的公司身份系统在验证当前 Principal 后签发的短期委托上下文；上下文绑定稳定 Principal subject、组织或租户、workload、Consumer、Actor、Action、参数摘要和期限，Consumer 不能自签或自报 Principal。
 - 委托上下文只能证明“谁在请求”，不能创建、替换或扩大 Connection 中的授权。
 - 两种调用最终使用同一授权校验、账号解析、执行、审计和错误语义。
 
@@ -203,7 +203,7 @@ OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务�
 - Consumer 只提交 Action 和参数。
 - Connection 解析唯一授权 Connection，选择其 current Credential，注入凭证并调用 Provider。
 - 写 Action 在访问 Provider 前提交稳定调用 ID、调用记录和外部效果意图。
-- Connection 以 `Principal + Consumer + Actor（如有）+ Connection + ActionVersion + 幂等键` 作为幂等作用域；同一作用域、幂等键和参数摘要返回原调用结果，参数摘要不同时拒绝为冲突，不同作用域互不影响。
+- Connection 先以 `Principal + Consumer + ConsumerInstance + Actor（如有）+ 幂等键` 查找原调用；首次请求冻结解析出的 Connection、ActionVersion 和请求摘要，后续同键、同请求始终返回原调用，不因换号、授权更新或版本发布重新执行，同键不同请求拒绝为冲突。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
 - Provider 拒绝、scope 不足、限流或暂时不可用时，返回稳定原因和可执行下一步。
 - 用户可以在 Connection 调用记录查看自己的 Provider、脱敏账号、Consumer、Actor、Action、时间、状态、结果和错误。
