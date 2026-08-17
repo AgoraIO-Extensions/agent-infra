@@ -674,8 +674,8 @@ fingerprint = HMAC-SHA-256(
 
 | 情况 | 处理 |
 | --- | --- |
-| fingerprint 相同，scope 足够 | 新 CredentialVersion，CAS current pointer，可恢复暂停 Grant |
-| fingerprint 相同，scope 缩小 | 新 CredentialVersion，受影响 Grant 保持暂停并要求重新确认 |
+| fingerprint 相同，scope 足够且原 Consent 授权摘要未变化 | 新 CredentialVersion，CAS current pointer；基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，旧 Grant 标记为 `REPLACED` |
+| fingerprint 相同但 scope 缩小或原 Consent 授权摘要变化 | 新 CredentialVersion，受影响 Grant 保持暂停并要求重新确认 |
 | fingerprint 不同 | 新 Connection 或切换到已有账号，旧 Grant 终结 |
 | Provider 无 stable identity proof | ProviderRelease 不得发布为可授权账号 |
 | identity endpoint 暂时不可用 | 保持原状态并返回 retryable，不猜测同账号 |
@@ -734,7 +734,7 @@ Credential plaintext
   -> encryptedDEK
 ```
 
-`encryptionContext` 固定绑定 environment、providerReleaseId、connectionId、credentialVersionId 和 purpose。解密后 plaintext 只存在于单次 executor 调用内存，使用后覆盖引用并不得进入 exception、dump、Trace 或 retry queue。
+`encryptionContext` 固定绑定 environment、providerReleaseId、connectionId、credentialVersionId 和 purpose。解密结果只在单次 executor 调用内通过可清零的 mutable byte buffer 或受限 Secret handle 传递，不转换为长期 JavaScript string；egress client 在请求构造边界消费，并在 `finally` 中清零所有可控 buffer。Node.js runtime 或 Provider SDK 产生的不可控副本不能声明已被擦除，因此必须缩短 executor 生命周期、执行 27.5 的生产 dump 隔离，并确保 plaintext 不进入 exception、Trace 或 retry queue。
 
 ### 16.4 CredentialVersion
 
@@ -759,12 +759,13 @@ type CredentialVersion = {
 ### 16.5 Refresh 与 Rotation
 
 1. Worker 以 `connectionId` 获取 DB lease，其他副本退避。
-2. 事务重读 exact current CredentialVersion ID/revision，创建绑定该版本的 refresh attempt，并将 attempt CAS 到 `SUBMISSION_STARTED`。
-3. 提交后解密该 exact 版本并访问 Provider；随后持久化 Provider response metadata，不记录 token。
-4. 成功时创建新版本；事务锁 Connection，比较 old version ID/revision 后 CAS。
-5. CAS 输家销毁候选 ciphertext 并读取新 current，不覆盖胜者。
-6. Provider 明确 `invalid_grant` 时标 old `INVALID`、清 pointer、提升 fence并进入 `REAUTH_REQUIRED`。
-7. timeout、进程崩溃或结果未知时 attempt 进入 `UNCERTAIN`，不得盲目重复使用旋转型 refresh token。
+2. 事务重读 exact current CredentialVersion ID/revision，创建绑定该版本且状态为 `PREPARED` 的 refresh attempt。
+3. 解密该 exact 版本；解密失败时记录为确定未提交。访问 Provider 前用短事务再次比较 current version ID/revision，并将 attempt 从 `PREPARED` CAS 到 `SUBMISSION_STARTED`；CAS 失败时清零可控 plaintext buffer 并停止。
+4. CAS 提交后才访问 Provider；随后持久化 Provider response metadata，不记录 token。
+5. 成功时创建新版本；事务锁 Connection，比较 old version ID/revision 后 CAS。
+6. CAS 输家销毁候选 ciphertext 并读取新 current，不覆盖胜者。
+7. Provider 明确 `invalid_grant` 时标 old `INVALID`、清 pointer、提升 fence并进入 `REAUTH_REQUIRED`。
+8. timeout、进程崩溃或结果未知时 attempt 进入 `UNCERTAIN`，不得盲目重复使用旋转型 refresh token。
 
 ### 16.6 Scope 变化
 
@@ -947,6 +948,7 @@ type DelegatedInvocationAssertionV1 = {
 ```
 
 - assertion 默认通过 Connection token exchange 签发：Connection 同时认证当前 Principal、注册 workload 的 mTLS identity 及其 Consumer/Instance 映射。若由受信公司身份系统签发，该系统也必须完成相同认证和注册映射校验，不能根据 Consumer 自报字段签发；workload 不能自签 Principal 身份、组织或租户。
+- token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；非交互渠道使用由 Connection 配置的受信身份签发方在校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后签发的短期断言。该 evidence 必须绑定来源事件、workload、Consumer/Instance、Actor、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。
 - 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
 - assertion 包含 `actorId` 时，token exchange 和最终校验都必须验证 Actor 已注册到该 Consumer，且 current ConsumerActorBinding 允许已认证 WORKLOAD instance 代表该 Actor；外部受信 signer 也必须认证同一 workload-to-actor 事实。Consumer 自报 Actor 不能进入授权上下文。
 - `recoveryGeneration` 必须来自 PITR 域外的 Recovery Control 并等于 current generation；旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
