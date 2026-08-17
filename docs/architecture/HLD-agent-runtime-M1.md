@@ -144,14 +144,14 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ### 8.2 事件去重
 
-- 每个 Adapter 必须为原生事件产生跨重连稳定的 `adapterEventKey`，优先使用原生事件 ID，否则由原生 Session、Turn 和序号稳定派生。
+- 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey`。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化分配单调事件 ID，并支持按该 ID 恢复。禁止使用重连后可能重置或重新分块的流内序号派生。
 - Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束；重复原生事件只返回已有平台事件。
-- 平台为首次保存的事件分配稳定 `eventId` 和 Execution 内递增 `sequence`。
+- 平台为首次保存的事件分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`。
 - 高频文本可以批量持久化，但不能先推送未保存内容，也不能因批量合并改变最终文本顺序。
 
 ### 8.3 SSE 补发
 
-- 浏览器以 `Last-Event-ID` 重连，`platform-api` 只补发当前 Conversation 中该游标之后已保存的事件。
+- 浏览器以 `Last-Event-ID` 重连。`platform-api` 先验证该事件属于当前用户有权访问的 Conversation，再按 `conversationCursor` 补发其后的已保存事件；未知、越界或属于其他 Conversation 的游标返回“重新加载时间线”信号。
 - 实时补发受服务端配置的数量和时间窗口限制，避免单次重连无限读取。
 - 游标超出补发窗口时，服务端返回明确的“重新加载时间线”信号；客户端先读取 Platform DB 中的持久化历史，再从新的游标继续 SSE。补发窗口不改变业务数据保留期限。
 
