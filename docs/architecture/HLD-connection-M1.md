@@ -421,6 +421,7 @@ type Principal = {
 type Consumer = {
   consumerId: string;
   type: "DIRECT_CLIENT" | "DELEGATED_SERVICE";
+  actorMode: "NONE" | "REQUIRED";
   name: string;
   ownerPrincipalIds: readonly string[];
   status: "DRAFT" | "ACTIVE" | "SUSPENDED" | "DISABLED";
@@ -448,11 +449,11 @@ type ConsumerActorBinding = {
 };
 ```
 
-- Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant。
-- Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。
+- Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant，`actorMode` 固定为 `NONE`。
+- Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。Delegated Consumer 注册时必须选择 `actorMode`；Agent Platform 使用 `REQUIRED`，以稳定 Agent ID 作为 opaque Actor。
 - `Consumer.type` 表示信任与调用模式，不编码客户端品牌。产品名、版本和已验证能力属于注册元数据与 conformance evidence；Connection Core 不按 Codex、Claude App 或 Cursor 分支授权规则。
 - `authenticationBindingHash` 绑定 OAuth client/session 或 workload mTLS identity；客户端支持 sender-constrained token 时同时绑定 key thumbprint，不保存 private key或 bearer token。
-- Delegated Consumer 使用 Actor 细分授权时，`actorKey` 必须由 current `ConsumerActorBinding` 证明当前 WORKLOAD instance 可以代表该 Actor；Consumer 请求体或未校验的 assertion claim 不能创建该绑定。
+- `actorMode = REQUIRED` 时，每次授权和调用都必须携带已注册 Actor，并由 current `ConsumerActorBinding` 证明当前 WORKLOAD instance 可以代表该 Actor；缺失、未注册或绑定失效时在 Root lookup 前拒绝，不能回退到 Consumer 级授权。`actorMode = NONE` 时拒绝 Actor claim。
 - Consumer disable 同步阻止全部实例、新授权和调用；不能只依赖 token expiry。
 
 ### 12.4 Consumer Action Declaration
@@ -515,7 +516,7 @@ type ActionVersion = {
 };
 ```
 
-- `toolName` 使用 `conn__{providerKey}__{actionKey}`，全局唯一且不包含用户数据。
+- `toolName` 使用 `conn__{providerKey}__{actionKey}` 且不包含用户数据。名称全局归属于一个 logical Action；同一 Action 的多个不可变版本可以复用该名称，其他 Action 不能占用。rename 创建使用新名称的 ActionVersion，旧名称继续保留给原 Action 的兼容版本。
 - Schema 使用受限 JSON Schema 2020-12 子集，拒绝远程 `$ref`、可执行默认值和未受限递归。
 - `authorizationDigest` 覆盖用途、effect class、required scopes、敏感参数提示和外部账号类型；变化时用户必须重新确认。
 - M1 的 MUTATING Action 只允许一个独立 LogicalEffect，避免部分成功产品状态。
@@ -778,7 +779,7 @@ type CredentialVersion = {
 
 ### 17.1 AuthorizationRoot
 
-每个 `(principalId, consumerId, actorKey, providerId)` 有一个稳定 AuthorizationRoot。`actorKey` 对 Direct Consumer 固定为空值，对 Delegated Consumer 是 opaque actor ID hash。
+每个 `(principalId, consumerId, actorKey, providerId)` 有一个稳定 AuthorizationRoot。`actorKey` 对 Direct Consumer 和 `actorMode = NONE` 的 Delegated Consumer 固定为空值，对 `actorMode = REQUIRED` 的 Delegated Consumer 是 opaque actor ID hash。
 
 ```ts
 type AuthorizationRoot = {
@@ -939,7 +940,7 @@ type DelegatedInvocationAssertionV1 = {
   argsHash: string;
   idempotencyKeyHash: string;
   correlationId: string;
-  recoveryGeneration: bigint;
+  recoveryGeneration: string; // canonical unsigned decimal integer
   issuedAt: string;
   notBefore: string;
   expiresAt: string;
@@ -950,8 +951,8 @@ type DelegatedInvocationAssertionV1 = {
 - assertion 默认通过 Connection token exchange 签发：Connection 同时认证当前 Principal、注册 workload 的 mTLS identity 及其 Consumer/Instance 映射。若由受信公司身份系统签发，该系统也必须完成相同认证和注册映射校验，不能根据 Consumer 自报字段签发；workload 不能自签 Principal 身份、组织或租户。
 - token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；非交互渠道使用由 Connection 配置的受信身份签发方在校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后签发的短期断言。该 evidence 必须绑定来源事件、workload、Consumer/Instance、Actor、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。
 - 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
-- assertion 包含 `actorId` 时，token exchange 和最终校验都必须验证 Actor 已注册到该 Consumer，且 current ConsumerActorBinding 允许已认证 WORKLOAD instance 代表该 Actor；外部受信 signer 也必须认证同一 workload-to-actor 事实。Consumer 自报 Actor 不能进入授权上下文。
-- `recoveryGeneration` 必须来自 PITR 域外的 Recovery Control 并等于 current generation；旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
+- `actorMode = REQUIRED` 时，assertion 必须包含 `actorId`，且 token exchange 和最终校验都必须验证 Actor 已注册到该 Consumer、current ConsumerActorBinding 允许已认证 WORKLOAD instance 代表该 Actor；外部受信 signer 也必须认证同一 workload-to-actor 事实。`actorMode = NONE` 时 assertion 不得包含 `actorId`；Consumer 自报 Actor 不能进入授权上下文。
+- `recoveryGeneration` wire claim 使用无符号十进制规范字符串，必须通过 22.9 的格式和范围校验后才能转换为内部 `bigint`；其值来自 PITR 域外的 Recovery Control 并等于 current generation。旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
 - TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
 - `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试必须向受信 issuer 获取带新 `jti` 的令牌，并复用同一业务幂等键。
 - `actorId` 只参与 exact Grant lookup 和审计，不能用来查询 Consumer 内部对象。
@@ -1231,12 +1232,12 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | --- | --- | --- |
 | `principal` | id、type、issuer、subject_hash、status、identity_revision | unique issuer+subject_hash |
 | `principal_profile` | principal_id、ciphertext、profile_revision | PK principal_id |
-| `consumer` | id、type、name、status、current_declaration_id、revision | name非授权键 |
+| `consumer` | id、type、actor_mode、name、status、current_declaration_id、revision | name非授权键；DIRECT 必须 NONE |
 | `consumer_owner` | consumer_id、principal_id | composite PK |
 | `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding；unique id+consumer |
 | `consumer_actor_binding` | consumer_id、actor_key、instance_id、status、revision | composite PK；composite FK instance+consumer；current binding required |
 | `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current published |
-| `consumer_declared_action` | declaration_id、action_version_id | composite PK |
+| `consumer_declared_action` | declaration_id、action_version_id、action_id、tool_name | composite PK；unique declaration+tool_name；composite FK 到 ActionVersion |
 | `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
 | `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、invocation_id、expires_at | unique instance+jti_hash |
@@ -1250,10 +1251,11 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `provider` | provider_id、key、display_name、status |
 | `provider_release` | release_id、provider_id、version、deployment_profile_json、auth_profile_json、executor_digest、checksum、state、revision |
 | `action` | action_id、provider_id、action_key |
+| `action_tool_name` | action_id、tool_name | PK tool_name；名称永久归属一个 Action |
 | `action_version` | action_version_id、release_id、action_id、version、tool_name、schemas、scopes、effect_class、idempotency_support、digests、state、revision |
 | `catalog_review` | object_type/id、reviewer、decision、evidence_ref、reviewed_checksum |
 
-`provider_release(provider_id, version)`、`action_version(action_id, version)` 和 `action_version(tool_name)` 唯一。发布后规范字段不可 UPDATE，只能变更 state/revision 或创建新版本。
+`provider_release(provider_id, version)` 和 `action_version(action_id, version)` 唯一。`action_version(action_id, tool_name)` 引用 `action_tool_name`，允许同一 Action 的多个版本复用名称，但不同 Action 不能共享；`consumer_declared_action(declaration_id, tool_name)` 唯一，发布事务不能把同名版本同时放入一个 declaration。发布后规范字段不可 UPDATE，只能变更 state/revision 或创建新版本。
 
 ### 21.4 Account 与 Credential 表
 
@@ -1326,8 +1328,8 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
-- HTTP mutation 要求 `Idempotency-Key`。MCP mutation 要求 G-01 conformance 证明客户端提供并在 transport retry 时保留稳定 request key；可以映射受支持的 `_meta` 或客户端 request identity，但不能假定私有字段一定存在。
-- 目标 Direct MCP Client 版本无法提供稳定 request key 时，Direct mutating Action 只有在 Provider 原生幂等或可证明 natural key 路径通过 WP10 验收后才能发布；客户端不得自动重复 `tools/call`，超时后通过可恢复的 Call handle 查询。
+- HTTP mutation 要求 `Idempotency-Key`。MCP mutation 要求 G-01 conformance 证明目标客户端版本提供并在响应丢失、transport retry 和用户重试时保留同一稳定 request key；只能映射已发布且验证过的 MCP 字段或客户端 request identity，不能假定私有字段一定存在。
+- 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发布或展示 Direct mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
 - Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。
 - 认证错误与资源不存在对跨主体请求使用相同外部状态，防止枚举。
@@ -1370,7 +1372,7 @@ MCP Server 暴露：
 | 能力 | 行为 |
 | --- | --- |
 | initialize/auth metadata | 返回 Connection service identity、支持的登录方式和 contract version |
-| tools/list | 固定返回少量 control tools；Action tools 只返回当前 Principal/Consumer 已授权的 Action |
+| tools/list | 固定返回少量 control tools；Action tools 只返回当前 Principal/Consumer 已授权的 Action，MUTATING 还要求当前客户端版本已通过稳定 request key conformance |
 | tools/call: control | `connection_status` 返回连接/授权入口；`get_action_call` 返回当前主体可见的 Call 状态和脱敏结果 |
 | tools/call: Action | 创建或复用 AuthorizedInvocation 和 ActionCall |
 
@@ -1489,7 +1491,7 @@ Adapter 输入包含 exact ProviderRelease、ActionVersion、Credential plaintex
 
 ### 22.9 Canonicalization 与 Hash
 
-args hash、declaration digest、authorization digest、assertion、dispatch request 和 receipts 使用独立 versioned canonicalization registry。JSON canonicalization 固定 Unicode、number、object key、array 和 absent/null 规则，提供跨语言 golden vectors；不能用普通 `JSON.stringify` 暗示稳定字节。
+args hash、declaration digest、authorization digest、assertion、dispatch request 和 receipts 使用独立 versioned canonicalization registry。JSON canonicalization 固定 Unicode、number、object key、array 和 absent/null 规则，提供跨语言 golden vectors；不能用普通 `JSON.stringify` 暗示稳定字节。JSON/JWT 中的 `bigint` 领域值使用无符号十进制规范字符串：只允许 `0` 或不以 `0` 开头的数字，范围不超过 PostgreSQL `bigint` 上限；验签和 canonicalization 通过后才转换为内部 `bigint`。
 
 ### 22.10 Egress Dispatch Assertion
 

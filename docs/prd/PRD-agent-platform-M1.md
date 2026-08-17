@@ -234,6 +234,7 @@ Agent 平台只作为一个 Delegated Consumer 接入 Connection，边界如下�
 - Connection 系统发布 Provider 和 Action，处理外部账户鉴权、凭证保管和 API 调用。
 - Agent Owner 选择 Agent 可以使用的 Action，但不能绑定普通使用者的个人外部账号。
 - 使用者在 Connection 中将个人或有资格使用的公司 Connection 授权给 Agent Platform Consumer 下的具体 Agent Actor。
+- Agent Platform Consumer 注册为要求 Actor；每个 Agent 使用独立且稳定的 ID 作为 Actor。缺失、未注册或未绑定当前 workload 的 Agent Actor 必须拒绝，不能回退到 Agent Platform Consumer 级授权。
 - Owner 新增 Action 后，Connection 中的已有授权不能自动获得该新增能力。使用者在 Connection 中确认更新后的能力范围后，Agent 才能代表该用户调用新增 Action。
 - Owner 移除 Action，或 Connection 系统停用 Provider 或 Action 后，对应能力立即停止使用。
 - Agent、模型和运行环境不能获得 Connection 保存的原始凭证。
