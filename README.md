@@ -1,6 +1,6 @@
 # agent-infra
 
-[![Docs CI](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml/badge.svg?branch=main&event=push)](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/docs-ci.yml?query=branch%3Amain+event%3Apush)
+[![CI](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/AgoraIO-Extensions/agent-infra/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
 
 企业级 Agent 平台 M1 的产品、工程设计与单仓库实现。
 

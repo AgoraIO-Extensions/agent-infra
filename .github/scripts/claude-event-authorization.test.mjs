@@ -128,14 +128,49 @@ test("fails closed when the repository permission lookup fails", async () => {
   );
 });
 
-test("authorizes only the claude label on labeled Issue events", () => {
+test("authorizes only verified labelers with the claude label on labeled Issue events", () => {
   assert.equal(
-    authorizeClaudeEvent("issues", { action: "labeled", label: { name: "claude" } }),
+    authorizeClaudeEvent(
+      "issues",
+      { action: "labeled", label: { name: "claude" }, issue: { author_association: "NONE" } },
+      { verifiedRepositoryPermission: "maintain" },
+    ),
     true,
   );
   assert.equal(
-    authorizeClaudeEvent("issues", { action: "labeled", label: { name: "bug" } }),
+    authorizeClaudeEvent("issues", {
+      action: "labeled",
+      label: { name: "claude" },
+      issue: { author_association: "MEMBER" },
+    }),
     false,
+  );
+  assert.equal(
+    authorizeClaudeEvent("issues", {
+      action: "labeled",
+      label: { name: "bug" },
+      issue: { author_association: "MEMBER" },
+    }),
+    false,
+  );
+});
+
+test("looks up the labeler rather than the Issue author for labeled events", () => {
+  assert.equal(
+    authorization.repositoryPermissionUsername({
+      action: "labeled",
+      sender: { login: "trusted-labeler" },
+      issue: { user: { login: "external-author" } },
+    }),
+    "trusted-labeler",
+  );
+  assert.equal(
+    authorization.repositoryPermissionUsername({
+      action: "opened",
+      sender: { login: "event-sender" },
+      issue: { user: { login: "issue-author" } },
+    }),
+    "issue-author",
   );
 });
 

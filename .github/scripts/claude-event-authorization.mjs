@@ -38,7 +38,11 @@ export function authorizeClaudeEvent(
         TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission)
       );
     }
-    return event.action === "labeled" && event.label?.name === "claude";
+    return (
+      event.action === "labeled" &&
+      event.label?.name === "claude" &&
+      TRUSTED_REPOSITORY_PERMISSIONS.has(verifiedRepositoryPermission)
+    );
   }
 
   if (eventName === "issue_comment" || eventName === "pull_request_review_comment") {
@@ -148,6 +152,12 @@ export async function fetchRepositoryPermission({
   return payload.role_name;
 }
 
+export function repositoryPermissionUsername(event) {
+  return event.action === "labeled"
+    ? event.sender?.login
+    : event.issue?.user?.login;
+}
+
 function requiredEnvironment(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -163,12 +173,12 @@ async function main() {
   let verifiedBlockerReview = false;
   if (
     eventName === "issues" &&
-    event.action === "opened" &&
+    (event.action === "opened" || event.action === "labeled") &&
     !authorizeClaudeEvent(eventName, event)
   ) {
     verifiedRepositoryPermission = await fetchRepositoryPermission({
       repository: requiredEnvironment("GITHUB_REPOSITORY"),
-      username: event.issue?.user?.login,
+      username: repositoryPermissionUsername(event),
       token: requiredEnvironment("GITHUB_TOKEN"),
     });
   }

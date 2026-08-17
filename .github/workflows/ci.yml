@@ -1,0 +1,124 @@
+name: CI
+run-name: >-
+  ${{
+    github.event_name == 'pull_request' &&
+    format('PR #{0} | ci | pull_request', github.event.pull_request.number) ||
+    'main | ci | push'
+  }}
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and lint
+        run: pnpm check
+
+      - name: Check TypeScript
+        run: pnpm check-types
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build applications
+        run: pnpm build
+
+      - name: Smoke test applications
+        run: pnpm smoke
+
+      - name: Build deployment images
+        run: pnpm docker:build
+
+      - name: Lint Markdown
+        run: >-
+          npx --yes markdownlint-cli2@0.23.2
+          README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
+
+      - name: Check Markdown links
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            npx --yes markdown-link-check@3.15.0 \
+              --config .markdown-link-check.json "$file"
+          done < <(find README.md AGENTS.md .github docs -type f -name '*.md' -print0)
+
+      - name: Verify workflow policy
+        run: node .github/scripts/verify-workflow-policy.mjs
+
+      - name: Lint workflows
+        run: .github/scripts/run-actionlint.sh
+
+      - name: Check whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            git show --check --format=fuller "$HEAD_SHA"
+          else
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          fi
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [ci]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ""
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: ci
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: "${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'main' }}"
+          SUMMARY_TARGET_URL: ${{ github.event_name == 'pull_request' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || format('{0}/{1}/tree/{2}', github.server_url, github.repository, github.event.repository.default_branch) }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

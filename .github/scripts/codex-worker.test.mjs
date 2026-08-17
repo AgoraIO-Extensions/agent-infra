@@ -47,6 +47,89 @@ test("parses deterministic Blocked by declarations", () => {
   );
 });
 
+test("resolves only the exact non-expired Review recovery Artifact", async () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+  const runId = 31481712298;
+  const artifact = {
+    id: 9099053062,
+    name: `claude-review-recovery-${runId}`,
+    expired: false,
+    workflow_run: { id: runId },
+  };
+  const paths = [];
+  const available = await worker.reviewRecoveryArtifactAvailable({
+    repository,
+    runId,
+    token: "test-token",
+    request: async (apiPath) => {
+      paths.push(apiPath);
+      return { artifacts: [artifact] };
+    },
+  });
+  assert.equal(available, true);
+  assert.deepEqual(paths, [
+    `/repos/${repository}/actions/runs/${runId}/artifacts?name=claude-review-recovery-${runId}&per_page=100`,
+  ]);
+
+  assert.equal(
+    await worker.reviewRecoveryArtifactAvailable({
+      repository,
+      runId,
+      token: "test-token",
+      request: async () => ({ artifacts: [{ ...artifact, expired: true }] }),
+    }),
+    false,
+  );
+  await assert.rejects(
+    worker.reviewRecoveryArtifactAvailable({
+      repository,
+      runId,
+      token: "test-token",
+      request: async () => ({ artifacts: [artifact, { ...artifact, id: artifact.id + 1 }] }),
+    }),
+    /ambiguous/,
+  );
+});
+
+test("no-ops a successful Claude Review run without a recovery Artifact", async () => {
+  const result = await worker.preparePullRequestRecovery({
+    repository: "AgoraIO-Extensions/agent-infra",
+    event: {
+      workflow_run: {
+        id: 31481712298,
+        name: "Claude PR Review",
+        event: "workflow_run",
+        conclusion: "success",
+      },
+    },
+    token: "test-token",
+    reviewRecoveryAvailable: false,
+  });
+  assert.deepEqual(result, {
+    operation: "noop",
+    reason: "review-infrastructure-failure",
+  });
+});
+
+test("accepts only same-repository workflow recovery sources", () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+  assert.equal(
+    worker.isTrustedWorkflowRunSource({
+      repository,
+      run: { head_repository: { full_name: repository } },
+    }),
+    true,
+  );
+  assert.equal(
+    worker.isTrustedWorkflowRunSource({
+      repository,
+      run: { head_repository: { full_name: "external/fork" } },
+    }),
+    false,
+  );
+  assert.equal(worker.isTrustedWorkflowRunSource({ repository, run: {} }), false);
+});
+
 test("rejects missing, duplicated, self-referential, or free-form blockers", () => {
   assert.throws(() => parseBlockedBy("## Scope\nNone"), /Blocked by/);
   assert.throws(() => parseBlockedBy("## Blocked by\nNone\n\n## Blocked by\nNone"));

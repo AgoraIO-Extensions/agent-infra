@@ -6,13 +6,156 @@ import YAML from "yaml";
 const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "blocker-reconciler.yml",
+  "ci.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
-  "docs-ci.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
+  "workflow-outcome.yml",
 ];
+const RUN_NAME_CONTRACTS = {
+  "auto-merge.yml": {
+    operation: "auto-merge",
+    references: ["github.event.action", "github.event.pull_request.number"],
+  },
+  "blocker-reconciler.yml": {
+    operation: "blocker-reconcile",
+    references: [
+      "github.event.action",
+      "github.event.issue.number",
+      "github.event_name",
+    ],
+  },
+  "claude-issue-review.yml": {
+    operation: "claude-issue-review",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.issue_number",
+      "github.event.issue.number",
+      "github.event.issue.pull_request",
+      "github.event.pull_request.number",
+      "github.event_name",
+    ],
+  },
+  "claude-pr-review.yml": {
+    operation: "claude-pr-review",
+    references: [
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+    ],
+  },
+  "codex-worker.yml": {
+    operation: "codex-worker",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.issue_number",
+      "github.event.issue.number",
+      "github.event.pull_request.number",
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+      "github.event_name",
+    ],
+  },
+  "ci.yml": {
+    operation: "ci",
+    references: ["github.event.pull_request.number", "github.event_name"],
+  },
+  "pr-agent-review.yml": {
+    operation: "pr-agent-review",
+    references: ["github.event.action", "github.event.pull_request.number"],
+  },
+  "pr-gates.yml": {
+    operation: "pr-gates",
+    references: [
+      "github.event.action",
+      "github.event.client_payload.pr_number",
+      "github.event.issue.number",
+      "github.event.issue.pull_request",
+      "github.event.pull_request.number",
+      "github.event_name",
+    ],
+  },
+  "workflow-outcome.yml": {
+    operation: "workflow-outcome",
+    references: [
+      "github.event.workflow_run.id",
+      "github.event.workflow_run.pull_requests[0].number",
+    ],
+  },
+};
+const SOURCE_OUTCOME_CONTRACTS = {
+  "auto-merge.yml": {
+    needs: ["enroll"],
+    operation: "auto-merge",
+  },
+  "blocker-reconciler.yml": {
+    needs: ["reconcile"],
+    operation: "blocker-reconcile",
+  },
+  "claude-issue-review.yml": {
+    needs: [
+      "automatic-issue-review",
+      "authorize-blocker-review",
+      "analyze-blocker-review",
+      "publish-blocker-review",
+      "mentions",
+    ],
+    operation: "claude-issue-review",
+  },
+  "claude-pr-review.yml": {
+    needs: ["analyze", "publish"],
+    operation: "claude-pr-review",
+  },
+  "codex-worker.yml": {
+    needs: ["base-update", "authorization", "prepare", "implement", "publish"],
+    operation: "codex-worker",
+  },
+  "ci.yml": {
+    needs: ["ci"],
+    operation: "ci",
+  },
+  "pr-agent-review.yml": {
+    needs: ["analyze", "suggestions"],
+    operation: "pr-agent-review",
+  },
+  "pr-gates.yml": {
+    needs: ["dispatch-issue-update", "gates"],
+    operation: "pr-gates",
+  },
+};
+const SOURCE_OUTCOME_ENV_KEYS = [
+  "SUMMARY_ACTION",
+  "SUMMARY_ATTEMPT",
+  "SUMMARY_CYCLE",
+  "SUMMARY_EVENT",
+  "SUMMARY_HEAD_SHA",
+  "SUMMARY_NEXT_OWNER",
+  "SUMMARY_OPERATION",
+  "SUMMARY_OUTCOME",
+  "SUMMARY_TARGET",
+  "SUMMARY_TARGET_URL",
+];
+const SOURCE_OUTCOME_NEXT_OWNER =
+  "${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}";
+const SOURCE_OUTCOME_RESULT =
+  "${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}";
+const SOURCE_OUTCOME_SUMMARY = [
+  "{",
+  '  echo "## Workflow terminal outcome"',
+  "  echo",
+  '  echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"',
+  '  echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"',
+  '  echo "- Operation: \\`$SUMMARY_OPERATION\\`"',
+  '  echo "- Event/action: \\`$SUMMARY_EVENT\\` / \\`$SUMMARY_ACTION\\`"',
+  '  echo "- Head SHA: \\`$SUMMARY_HEAD_SHA\\`"',
+  '  echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"',
+  '  echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"',
+  '  echo "- Terminal outcome: \\`$SUMMARY_OUTCOME\\`"',
+  '  echo "- Next owner: \\`$SUMMARY_NEXT_OWNER\\`"',
+  '} >> "$GITHUB_STEP_SUMMARY"',
+  "",
+].join("\n");
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 const CLAUDE_ACTION = "anthropics/claude-code-action@";
 const CLAUDE_SECRETS = [
@@ -205,6 +348,22 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (secret === "WECOM_BOT_WEBHOOK_URL") {
+      if (
+        workflowName !== "workflow-outcome.yml" ||
+        jobName !== "observe" ||
+        step.name !== "Record workflow outcome and notify" ||
+        step.run !== "node .github/scripts/workflow-outcome.mjs" ||
+        step.env?.WECOM_BOT_WEBHOOK_URL !==
+          "${{ secrets.WECOM_BOT_WEBHOOK_URL }}" ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: WECOM_BOT_WEBHOOK_URL is allowed only in the fixed outcome notification step`,
+        );
+      }
+      continue;
+    }
     if (PR_AGENT_SECRETS.includes(secret)) {
       const reference = `\${{ secrets.${secret} }}`;
       const envName = {
@@ -214,7 +373,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       if (
         workflowName !== "pr-agent-review.yml" ||
-        jobName !== "analyze" ||
+        !["analyze", "suggestions"].includes(jobName) ||
         step.uses !== PR_AGENT_ACTION ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
@@ -272,6 +431,7 @@ export function validateTrustedScriptSources(sources) {
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
   const blockerReconcilerSource = sources?.["blocker-reconciler.mjs"] ?? "";
+  const outcomeSource = sources?.["workflow-outcome.mjs"] ?? "";
   const claudeAuthorizationSource =
     sources?.["claude-event-authorization.mjs"] ?? "";
   const gateRequirements = [
@@ -333,13 +493,14 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Codex Worker must bind authorization, cycle, hash, and AC evidence");
   }
   if (
-    !/async function authorizeCommand\(\)[\s\S]{0,1500}if \(eventName === "workflow_run"\) \{\s+await writeOutput\("allowed", true\);\s+return;\s+\}/.test(
-      workerSource,
-    )
+    !workerSource.includes("isTrustedWorkflowRunSource({ repository, run: event.workflow_run })") ||
+    !workerSource.includes("run.head_repository.full_name.toLowerCase() === repository.toLowerCase()")
   ) {
     errors.push("Codex Worker workflow recovery must pass authorization");
   }
   const claudeRecoveryRequirements = [
+    "reviewRecoveryArtifactAvailable({",
+    'if (command === "resolve-review-recovery") return resolveReviewRecoveryCommand();',
     "readReviewRecoveryTarget({ repository, run })",
     "target.source_run_id !== run.id",
     "target.repository !== repository",
@@ -407,6 +568,51 @@ export function validateTrustedScriptSources(sources) {
   ) {
     errors.push("Blocker automation must preserve bounded proposals and signed reconciliation");
   }
+  const outcomeRequirements = [
+    "Math.min(Math.max(Number(maxAttempts) || 1, 1), 3)",
+    "agent-infra:workflow-outcome:",
+    "agent-infra-post-merge-failure",
+    'body: JSON.stringify({ state: "open" })',
+    'body: JSON.stringify({ labels: ["needs-triage"] })',
+    "is incomplete and requires recovery",
+    "Response text is intentionally discarded.",
+    "Source run operation does not match trusted workflow",
+    "Source pull request target does not match workflow_run metadata",
+    "workflowNotRun: true",
+    "allowNotFound: allowMissing",
+    "GATE_PUBLISHER_APP_ID = 4_503_079",
+    "Pull request Check Run pagination limit exceeded",
+    "canonicalClaim.id !== created.id",
+    "duplicateClaim",
+    "check_name=Workflow%20Outcome&filter=all&per_page=100&page=",
+    "Workflow outcome Check Run pagination limit exceeded",
+    "WECOM_BOT_WEBHOOK_URL",
+  ];
+  const summaryStart = outcomeSource.indexOf("export function renderJobSummary");
+  const summaryEnd = outcomeSource.indexOf("function wait(milliseconds)");
+  const hasTrustedSummaryWindow =
+    summaryStart >= 0 && summaryEnd > summaryStart;
+  const summarySource = hasTrustedSummaryWindow
+    ? outcomeSource.slice(summaryStart, summaryEnd)
+    : "";
+  if (
+    outcomeRequirements.some(
+      (requirement) => !outcomeSource.includes(requirement),
+    ) ||
+    /\/reverts?(?:\?|`|\")|\/merges(?:\?|`|\")/.test(outcomeSource)
+  ) {
+    errors.push(
+      "Workflow Outcome must preserve bounded dedupe and post-merge triage without auto-revert",
+    );
+  }
+  if (
+    !hasTrustedSummaryWindow ||
+    /\b(?:sourceRun|issue|comment|head_commit)\.(?:title|body|message)\b|\bmodel_output\b/.test(
+      summarySource,
+    )
+  ) {
+    errors.push("Workflow Outcome must use only trusted Summary sources");
+  }
   const reviewHeadRechecks =
     reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
   if (
@@ -442,6 +648,72 @@ export function validateWorkflowDocuments(workflows) {
   const names = Object.keys(workflows).sort();
   if (names.join("\0") !== REQUIRED_WORKFLOWS.join("\0")) {
     errors.push(`Expected workflows: ${REQUIRED_WORKFLOWS.join(", ")}`);
+  }
+  if (
+    workflows["ci.yml"]?.name !== "CI" ||
+    workflows["ci.yml"]?.jobs?.ci?.name !== "CI"
+  ) {
+    errors.push("CI workflow and required check must both use the CI name");
+  }
+
+  for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
+    const runName = workflows[name]?.["run-name"];
+    const references = typeof runName === "string"
+      ? [...new Set(
+          [...runName.matchAll(/github(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])+/g)]
+            .map((match) => match[0]),
+        )].sort()
+      : [];
+    if (
+      typeof runName !== "string" ||
+      !runName.includes(`| ${contract.operation} |`) ||
+      references.join("\0") !== [...contract.references].sort().join("\0") ||
+      referencedSecrets(runName).length > 0 ||
+      /\b(?:title|body|comment|message|prompt|transcript|model_output)\b/i.test(
+        runName,
+      )
+    ) {
+      errors.push(`${name} must use its fixed safe run-name contract`);
+    }
+  }
+
+  for (const [name, contract] of Object.entries(SOURCE_OUTCOME_CONTRACTS)) {
+    const outcomeJob = workflows[name]?.jobs?.outcome;
+    const outcomeStep = outcomeJob?.steps?.[0];
+    const needs = Array.isArray(outcomeJob?.needs)
+      ? outcomeJob.needs
+      : [outcomeJob?.needs].filter(Boolean);
+    const envKeys = Object.keys(outcomeStep?.env ?? {}).sort();
+    const jobKeys = Object.keys(outcomeJob ?? {}).sort();
+    const stepKeys = Object.keys(outcomeStep ?? {}).sort();
+    const summarySources = JSON.stringify(outcomeStep?.env ?? {});
+    const unsafeSummarySource =
+      /(?:github|needs|steps|vars)(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])*\.(?:title|body|comment|message|prompt|transcript|model(?:_output)?|structured_output)(?:\b|\.)/i;
+    if (
+      jobKeys.join("\0") !==
+        ["if", "name", "needs", "permissions", "runs-on", "steps", "timeout-minutes"]
+          .sort()
+          .join("\0") ||
+      outcomeJob?.name !== "Publish terminal outcome" ||
+      needs.join("\0") !== contract.needs.join("\0") ||
+      outcomeJob?.if !== "always()" ||
+      outcomeJob?.["runs-on"] !== "ubuntu-24.04" ||
+      outcomeJob?.["timeout-minutes"] !== 1 ||
+      !sameObject(outcomeJob?.permissions, {}) ||
+      outcomeJob?.steps?.length !== 1 ||
+      stepKeys.join("\0") !== ["env", "name", "run", "shell"].sort().join("\0") ||
+      outcomeStep?.name !== "Publish terminal Job Summary" ||
+      outcomeStep?.shell !== "bash" ||
+      outcomeStep?.run !== SOURCE_OUTCOME_SUMMARY ||
+      envKeys.join("\0") !== [...SOURCE_OUTCOME_ENV_KEYS].sort().join("\0") ||
+      outcomeStep?.env?.SUMMARY_OPERATION !== contract.operation ||
+      outcomeStep?.env?.SUMMARY_NEXT_OWNER !== SOURCE_OUTCOME_NEXT_OWNER ||
+      outcomeStep?.env?.SUMMARY_OUTCOME !== SOURCE_OUTCOME_RESULT ||
+      referencedSecrets(outcomeStep?.env).length > 0 ||
+      unsafeSummarySource.test(summarySources)
+    ) {
+      errors.push(`${name} must use its fixed safe terminal Job Summary`);
+    }
   }
 
   for (const [name, workflow] of Object.entries(workflows)) {
@@ -514,10 +786,61 @@ export function validateWorkflowDocuments(workflows) {
     }
   }
 
+  const outcomeWorkflow = workflows["workflow-outcome.yml"];
+  const outcomeJob = outcomeWorkflow?.jobs?.observe;
+  const outcomeSteps = outcomeJob?.steps ?? [];
+  const outcomeCheckout = outcomeSteps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const outcomeStep = outcomeSteps.find(
+    (step) => step.name === "Record workflow outcome and notify",
+  );
+  if (
+    JSON.stringify(outcomeWorkflow?.on?.workflow_run?.workflows) !==
+      JSON.stringify([
+        "Auto-merge Enrollment",
+        "Blocker Reconciler",
+        "Claude Issue Review",
+        "Claude PR Review",
+        "Codex Worker",
+        "CI",
+        "PR-Agent Review",
+        "PR Gates",
+      ]) ||
+    JSON.stringify(outcomeWorkflow?.on?.workflow_run?.types) !==
+      JSON.stringify(["completed"]) ||
+    !sameObject(outcomeWorkflow?.concurrency, {
+      group: "workflow-outcome-${{ github.event.workflow_run.id }}",
+      "cancel-in-progress": false,
+    }) ||
+    !sameObject(outcomeJob?.permissions, {
+      actions: "read",
+      checks: "write",
+      contents: "read",
+      issues: "write",
+      "pull-requests": "read",
+    }) ||
+    outcomeCheckout?.with?.ref !==
+      "${{ github.event.repository.default_branch }}" ||
+    outcomeCheckout?.with?.["persist-credentials"] !== false ||
+    outcomeStep?.run !== "node .github/scripts/workflow-outcome.mjs" ||
+    !sameObject(outcomeStep?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+    })
+  ) {
+    errors.push(
+      "Workflow Outcome must use fixed trusted triggers, permissions, checkout, and notification step",
+    );
+  }
+
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.on?.pull_request_target) continue;
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-      if (/pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))) {
+      if (
+        jobName !== "outcome" &&
+        /pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))
+      ) {
         errors.push(`${name}/${jobName}: pull_request_target jobs must not execute PR head`);
       }
       for (const checkout of (job.steps ?? []).filter((step) =>
@@ -653,6 +976,9 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("Codex Worker must record authorization-invalidating Issue edits");
   }
+  if (authorization?.if !== undefined) {
+    errors.push("Codex Worker authorization recorder must observe every source event");
+  }
   if (
     JSON.stringify(worker?.on?.repository_dispatch?.types) !==
       JSON.stringify(["codex-worker"])
@@ -721,6 +1047,11 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Claude recovery concurrency must not cancel another PR");
   }
   if (
+    !workerGroup.includes("github.event.workflow_run.head_repository.full_name == github.repository")
+  ) {
+    errors.push("Codex Worker Review recovery must require a same-repository source");
+  }
+  if (
     !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
     !workerCancellation.includes("github.repository") ||
     !workerCancellation.includes("github.event.client_payload.operation")
@@ -737,11 +1068,39 @@ export function validateWorkflowDocuments(workflows) {
   }
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
+  const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
+  const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
+    (step) => step.id === "pr-agent-suggestions",
+  );
   const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
     (step) => step.name === "Checkout trusted default branch",
   );
   const prAgentCondition = String(prAgentAnalyze?.if ?? "");
+  const prAgentSuggestionsCondition = String(prAgentSuggestions?.if ?? "");
+  const prAgentPermissions = {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  };
+  const prAgentCommonEnv = {
+    GITHUB_TOKEN: "${{ github.token }}",
+    OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
+    OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
+    "config.model": "${{ secrets.PR_AGENT_MODEL }}",
+    "config.propagate_tool_errors": "true",
+    "config.publish_output": "true",
+    "config.publish_output_progress": "false",
+    "config.restricted_mode": "true",
+    "config.use_repo_settings_file": "false",
+    "config.use_wiki_settings_file": "false",
+    "config.fallback_models": "[]",
+    "config.custom_model_max_tokens":
+      "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+    "github_action_config.auto_describe": "false",
+    "github_action_config.pr_actions":
+      '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+  };
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
       JSON.stringify([
@@ -762,13 +1121,13 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCondition.includes("github.event.pull_request.draft == false") ||
-    !sameObject(prAgentAnalyze?.permissions, {
-      contents: "read",
-      issues: "write",
-      "pull-requests": "write",
-    }) ||
-    Object.keys(prAgent?.jobs ?? {}).length !== 1 ||
+    prAgentSuggestionsCondition !== prAgentCondition ||
+    !sameObject(prAgentAnalyze?.permissions, prAgentPermissions) ||
+    !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
+    Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
+      ["analyze", "outcome", "suggestions"].join("\0") ||
     prAgentAnalyze?.steps?.length !== 2 ||
+    prAgentSuggestions?.steps?.length !== 1 ||
     prAgentAnalyzeCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
     !sameObject(prAgentAnalyzeCheckout?.with, {
@@ -777,20 +1136,10 @@ export function validateWorkflowDocuments(workflows) {
       "persist-credentials": false,
     }) ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
+    prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
+    prAgentSuggestionsAction?.["continue-on-error"] !== true ||
     !sameObject(prAgentAction?.env, {
-      GITHUB_TOKEN: "${{ github.token }}",
-      OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
-      OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
-      "config.model": "${{ secrets.PR_AGENT_MODEL }}",
-      "config.propagate_tool_errors": "true",
-      "config.publish_output": "true",
-      "config.publish_output_progress": "false",
-      "config.restricted_mode": "true",
-      "config.use_repo_settings_file": "false",
-      "config.use_wiki_settings_file": "false",
-      "config.fallback_models": "[]",
-      "config.custom_model_max_tokens":
-        "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+      ...prAgentCommonEnv,
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
@@ -804,10 +1153,13 @@ export function validateWorkflowDocuments(workflows) {
       "pr_reviewer.require_ticket_analysis_review": "false",
       "pr_reviewer.require_todo_scan": "false",
       "github_action_config.auto_review": "true",
-      "github_action_config.auto_describe": "false",
+      "github_action_config.auto_improve": "false",
+    }) ||
+    !sameObject(prAgentSuggestionsAction?.env, {
+      ...prAgentCommonEnv,
+      "pr_code_suggestions.commitable_code_suggestions": "true",
+      "github_action_config.auto_review": "false",
       "github_action_config.auto_improve": "true",
-      "github_action_config.pr_actions":
-        '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
     })
   ) {
     errors.push(
@@ -827,7 +1179,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(worker?.on?.push?.branches) !== JSON.stringify(["main"]) ||
     JSON.stringify(worker?.on?.workflow_run?.workflows) !==
-      JSON.stringify(["Docs CI", "Claude PR Review"]) ||
+      JSON.stringify(["CI", "Claude PR Review"]) ||
     JSON.stringify(worker?.on?.workflow_run?.types) !== JSON.stringify(["completed"]) ||
     baseUpdate?.if !== "github.event_name == 'push'" ||
     !sameObject(prepare?.permissions, {
@@ -1017,6 +1369,9 @@ export function validateWorkflowDocuments(workflows) {
   const reviewTargetUpload = reviewRecoverySteps.find(
     (step) => step.name === "Upload trusted Review recovery target",
   );
+  const reviewTargetResolve = (prepare?.steps ?? []).find(
+    (step) => step.name === "Resolve trusted Review recovery target",
+  );
   const reviewTargetDownload = (prepare?.steps ?? []).find(
     (step) => step.name === "Download trusted Review recovery target",
   );
@@ -1034,13 +1389,19 @@ export function validateWorkflowDocuments(workflows) {
       "if-no-files-found": "error",
       "retention-days": 1,
     }) ||
-    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
-    !String(reviewTargetDownload?.if ?? "").includes(
+    reviewTargetResolve?.id !== "resolve-review-recovery" ||
+    reviewTargetResolve?.run !==
+      "node trusted/.github/scripts/codex-worker.mjs resolve-review-recovery" ||
+    reviewTargetResolve?.env?.GITHUB_TOKEN !== "${{ github.token }}" ||
+    !String(reviewTargetResolve?.if ?? "").includes(
       "github.event.workflow_run.name == 'Claude PR Review'",
     ) ||
-    !String(reviewTargetDownload?.if ?? "").includes(
+    !String(reviewTargetResolve?.if ?? "").includes(
       "github.event.workflow_run.conclusion == 'success'",
     ) ||
+    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
+    reviewTargetDownload?.if !==
+      "steps.resolve-review-recovery.outputs.available == 'true'" ||
     !sameObject(reviewTargetDownload?.with, {
       name: "claude-review-recovery-${{ github.event.workflow_run.id }}",
       path: "${{ runner.temp }}/claude-review-recovery",
@@ -1056,6 +1417,12 @@ export function validateWorkflowDocuments(workflows) {
   );
   if (prepareConfig?.env?.CODEX_EFFORT !== "${{ vars.CODEX_EFFORT }}") {
     errors.push("Codex Worker effort must use the fixed repository Variable");
+  }
+  if (
+    prepareConfig?.env?.WORKER_REVIEW_RECOVERY_AVAILABLE !==
+    "${{ steps.resolve-review-recovery.outputs.available }}"
+  ) {
+    errors.push("Claude recovery Artifact availability must reach trusted preparation");
   }
   const codexIndex = implementSteps.findIndex((step) =>
     step.uses?.startsWith("openai/codex-action@"),
@@ -1192,7 +1559,7 @@ export function validateWorkflowDocuments(workflows) {
     (condition) => String(condition ?? ""),
   );
   if (
-    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["Docs CI"]) ||
+    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["CI"]) ||
     JSON.stringify(reviewTrigger?.types) !== JSON.stringify(["completed"]) ||
     reviewConcurrency?.group !==
       "claude-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}" ||
@@ -1201,7 +1568,10 @@ export function validateWorkflowDocuments(workflows) {
       (condition) =>
         !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
         !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
-        !condition.includes("github.event.workflow_run.pull_requests[0]"),
+        !condition.includes("github.event.workflow_run.pull_requests[0]") ||
+        !condition.includes(
+          "github.event.workflow_run.head_repository.full_name == github.repository",
+        ),
     ) ||
     !String(review?.jobs?.analyze?.if ?? "").includes(
       "vars.CLAUDE_REVIEW_ENABLED == 'true'",
@@ -1259,6 +1629,9 @@ export function validateWorkflowDocuments(workflows) {
   }
   const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
   const reviewConfig = analyzeSteps[reviewConfigIndex];
+  const reviewInputStage = analyzeSteps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
   const reviewConfigEnv = reviewConfig?.env ?? {};
   if (
     reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
@@ -1276,6 +1649,19 @@ export function validateWorkflowDocuments(workflows) {
     reviewConfigEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
     reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
     reviewActionIndex !== reviewConfigIndex + 1 ||
+    reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    reviewInputStage?.env?.EXPECTED_HEAD_SHA !==
+      "${{ github.event.workflow_run.head_sha }}" ||
+    reviewInputStage?.env?.PR_NUMBER !==
+      "${{ github.event.workflow_run.pull_requests[0].number }}" ||
+    reviewInputStage?.shell !== "bash" ||
+    !String(reviewInputStage?.run ?? "").includes('gh pr view "$PR_NUMBER"') ||
+    !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'gh pr diff "$PR_NUMBER" > .review-input/pr.diff',
+    ) ||
+    (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
+      .length !== 2 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
@@ -1331,13 +1717,11 @@ export function validateWorkflowDocuments(workflows) {
     reviewArgs.match(/--(?:disallowedTools|disallowed-tools)(?=\s|=|$)/g) ?? [];
   if (
     JSON.stringify(allowedToolFlags) !==
-      JSON.stringify([
-        '--allowedTools "Read,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)"',
-      ]) ||
+      JSON.stringify(['--allowedTools "Read,Grep,Glob"']) ||
     JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
     JSON.stringify(disallowedToolFlags) !==
       JSON.stringify([
-        '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       ]) ||
     JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
   ) {
@@ -1447,7 +1831,7 @@ export function validateWorkflowDocuments(workflows) {
         `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
       );
     }
-    if ((job.if ?? "").includes("author_association")) {
+    if ((job.if ?? "").includes("author_association") && jobName !== "automatic-issue-review") {
       errors.push(
         `claude-issue-review.yml/${jobName}: must authorize identity in a trusted step`,
       );
@@ -1463,6 +1847,9 @@ export function validateWorkflowDocuments(workflows) {
     const configIndex = (job.steps ?? []).findIndex((step) => step.id === "validate-config");
     const configStep = job.steps?.[configIndex];
     const modelStep = job.steps?.[modelIndex];
+    const reviewInputStage = (job.steps ?? []).find((step) =>
+      step.name?.startsWith("Stage untrusted "),
+    );
     const configEnv = configStep?.env ?? {};
     const splitBlockerReview = jobName === "analyze-blocker-review";
     if (
@@ -1486,10 +1873,15 @@ export function validateWorkflowDocuments(workflows) {
     if (
       modelIndex >= 0 &&
       (modelIndex !== configIndex + 1 ||
-        (!splitBlockerReview && configIndex !== authorizeIndex + 1) ||
+        (!splitBlockerReview && configIndex <= authorizeIndex) ||
         (!splitBlockerReview &&
           configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
         configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
+        (["automatic-issue-review", "analyze-blocker-review"].includes(jobName) &&
+          (reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
+            reviewInputStage?.shell !== "bash" ||
+            !String(reviewInputStage?.run ?? "").includes("gh issue view \"$ISSUE_NUMBER\"") ||
+            !String(reviewInputStage?.run ?? "").includes("> .review-input/issue.json"))) ||
         Object.keys(configEnv).sort().join("\0") !==
           [
             "ANTHROPIC_API_KEY",
@@ -1550,18 +1942,10 @@ export function validateWorkflowDocuments(workflows) {
     for (const step of job.steps ?? []) {
       if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
       const args = step.with?.claude_args ?? "";
-      const expectedAllowed =
-        jobName === "analyze-blocker-review"
-          ? '--allowedTools "Read,Grep,Glob,Bash(gh issue view:*)"'
-          : '--allowedTools "Read,Grep,Glob"';
+      const expectedAllowed = '--allowedTools "Read,Grep,Glob"';
       const expectedDisallowed =
-        jobName === "analyze-blocker-review"
-          ? '--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"'
-          : '--disallowedTools "Edit,Write,MultiEdit,Bash"';
-      const unsafeBash =
-        jobName === "analyze-blocker-review"
-          ? /--allowedTools\s+"[^"]*\bBash(?!\(gh issue view:\*\))/.test(args)
-          : /--allowedTools\s+"[^"]*\bBash\b/.test(args);
+        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"';
+      const unsafeBash = /--allowedTools\s+"[^"]*\bBash\b/.test(args);
       if (
         !args.includes(expectedAllowed) ||
         !args.includes(expectedDisallowed) ||
@@ -1599,6 +1983,7 @@ async function main() {
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
+        "workflow-outcome.mjs",
       ].map(async (name) => [
         name,
         await fs.readFile(path.join(scriptDirectory, name), "utf8"),

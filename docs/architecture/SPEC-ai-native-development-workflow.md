@@ -12,7 +12,8 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 
 ## 2. 基本原则
 
-- 所有开发工作从 GitHub Issue 开始，并通过一个 primary Issue、一个实现 PR 完成追踪。
+- 所有开发工作严格按 `Issue -> 实现与验证 -> PR` 执行，并通过一个 primary Issue、一个实现
+  PR 完成追踪。不得先创建任务分支、修改文件、提交代码或创建 PR，再补建 Issue。
 - AI 负责需求梳理、实现、自检和独立评审；人负责确认授权、必要的真实测试和最终批准。
 - GitHub Issue、PR、Check Run、Review、事件时间线和分支保护是流程状态的权威来源。
 - 确定性检查优先于模型判断。AI 不能覆盖 CI、人工批准或分支保护结果。
@@ -66,7 +67,7 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 - 选定仓库的控制 App `agora-agent-infra-team-membership` 具有 Organization
   `members:read` 和仓库 `checks:write`。可信 workflow 分别 mint membership-only token 与
   check-only token；任何单个 token 都不能同时获得两种能力，模型步骤不能获得任一 token。
-- `main` 分支保护将 `Docs CI` 绑定 GitHub Actions App `15368`，将四个自定义 Gate 绑定控制
+- `main` 分支保护将 `CI` 绑定 GitHub Actions App `15368`，将四个自定义 Gate 绑定控制
   App `4503079`，不接受同名但来源不明的 Check Run 或 legacy status。
 - 开发流程企微机器人使用轮换后的 GitHub Actions Secret `WECOM_BOT_WEBHOOK_URL`。该通知
   通道与产品 PRD 中的企微 Channel 无关。
@@ -81,6 +82,8 @@ Team 查询、Check Run 发布或配置读取失败时一律 fail closed。网�
 - Implementation Issue 必须包含唯一的 `Problem`、`Scope`、`Acceptance criteria`、`Validation`
   和 `Blocked by` 二级标题。
 - 每条验收标准使用稳定且唯一的 `AC-N`；编辑顺序时不能复用旧 ID 表达不同要求。
+- 上述契约必须在创建任务分支、修改文件或提交代码前明确。人工与 Agent 都不能用后补 Issue
+  或占位 PR 追认已经开始的实现。
 - 仓库成员创建 Issue 后，Claude 自动进行只读 advisory Review。外部用户创建的 Issue 只有在
   成员添加 `claude` 标签后才调用模型；Issue 中的 `@claude` 可以请求补充分析。
 - Claude Issue Review 不修改文件、标签、授权、Issue 状态、branch 或 PR。模型成功结束但未
@@ -215,6 +218,9 @@ Issue 进入 `needs-triage`。
   凭证，不获得 GitHub 写 Token；Publisher 只接受固定 Artifact，不执行 Patch 引入的代码。
 - 每个 Issue/cycle 使用唯一并发组、branch 和至多一个未合并 PR。全仓同时进入模型调用阶段的
   Worker 不超过 `2`；Publisher 和纯确定性检查不占模型 slot。
+- Worker 首次实现只有在模型返回完整 completed 结果、实现与自检完成且 commit 已 push 后才
+  创建 PR。Publisher 可以在代码 push 后短暂创建 Draft PR，以先添加必要标签，再立即转为
+  Ready；该 Draft 不是实现入口。已有 PR 的 repair 流程继续复用同一 PR。
 
 ### 6.2 Model attempt 与 Patch checkpoint
 
@@ -306,13 +312,13 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 ### 7.2 Current-head Check Runs
 
-`Docs CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
+`CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
 所有 Check Run 都绑定精确 head SHA、由 branch protection 锁定来源：
 
 | Check | 适用范围 | 校验内容 |
 | --- | --- | --- |
-| `Docs CI` | 所有 PR | 确定性仓库检查 |
-| `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，且不带 `wontfix` |
+| `CI` | 所有 PR | 确定性仓库检查 |
+| `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，不带 `wontfix`，且 Issue `created_at` 严格早于 PR `created_at` |
 | `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
 | `Claude Review Gate` | 所有 PR | 当前 head Review 成功完成、管理员显式停用 Review，或具有合法基础设施 waiver |
@@ -374,7 +380,7 @@ PR 正文列出验证内容。
 
 所有 PR 必须同时满足：
 
-- 当前 head 的 `Docs CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
+- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
   `Claude Review Gate` 通过。
 - 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
 - 所有阻塞 Review thread 已解决。
@@ -438,7 +444,7 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 | Stage | 交付内容 | 配置前置 |
 | --- | --- | --- |
 | Stage 1 | Issue/PR 模板、基础 Gate、Claude Issue/PR Review、原生 Auto-merge enrollment | 现有 branch protection |
-| Stage 2 | 初版 Codex Worker、Artifact/Publisher 隔离、固定 branch/Draft PR、受保护路径 | Codex 与 Publisher Secret |
+| Stage 2 | 初版 Codex Worker、Artifact/Publisher 隔离、固定 branch、代码 push 后短暂 Draft PR、受保护路径 | Codex 与 Publisher Secret |
 | Stage 3A（`#50`） | 本文目标契约、稳定 AC ID、模板与导航同步 | 无外部配置 |
 | Stage 3B（`#51`） | App-bound current-head gates、Claude Review gate/waiver、CODEOWNERS Team | Team、CODEOWNERS、branch protection |
 | Stage 3C（`#52`） | authorization record、cycle branch、execution hash、Issue Readiness/AC evidence | Stage 3B Team identity |
@@ -458,7 +464,8 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
   blocker completed 唤醒有效 dependent，not planned/wontfix 转人工 triage。
 - 同一 Issue/cycle 不产生并发执行或多个活动 PR，全仓模型调用并发不超过 `2`。
 - Worker run 最多三次 model attempt；CI 首次失败只 no-code retry；PR 最多两轮 code repair。
-- 每个 PR 只有一个 open primary Issue，并对每个稳定 `AC-N` 提供唯一 `status/evidence`。
+- 每个 PR 只有一个创建时间严格早于 PR 的 open primary Issue，并对每个稳定 `AC-N` 提供唯一
+  `status/evidence`；等时、晚建或时间缺失时 Issue Gate fail closed。
 - 每个 required Check Run、人工验证和 waiver 都绑定当前 head；旧 SHA 不能满足新 head 门禁。
 - 每个成功 CI 的新 head 自动触发 Claude Review；LEFT/RIGHT finding 都能发布，P0/P1 不可 waiver。
 - 需要人工验证的 PR 在 Team 人员完成当前-head 确认前不能合并；Approve 与验证互不替代。

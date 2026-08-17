@@ -37,6 +37,7 @@ async function actualTrustedScriptSources() {
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
+        "workflow-outcome.mjs",
       ].map(
         async (name) => [
           name,
@@ -49,6 +50,170 @@ async function actualTrustedScriptSources() {
 
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("publishes repository validation through the CI workflow and check", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(workflows["ci.yml"]?.name, "CI");
+  assert.equal(workflows["ci.yml"]?.jobs?.ci?.name, "CI");
+  assert.equal(workflows["docs-ci.yml"], undefined);
+
+  workflows["ci.yml"].jobs.ci.name = "Docs CI";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("CI workflow and required check"),
+    ),
+  );
+});
+
+test("starts review, recovery, and outcome handling from the CI workflow", async () => {
+  const workflows = await actualWorkflows();
+  assert.deepEqual(
+    workflows["claude-pr-review.yml"].on.workflow_run.workflows,
+    ["CI"],
+  );
+  assert.deepEqual(workflows["codex-worker.yml"].on.workflow_run.workflows, [
+    "CI",
+    "Claude PR Review",
+  ]);
+  assert.ok(
+    workflows["workflow-outcome.yml"].on.workflow_run.workflows.includes("CI"),
+  );
+  assert.ok(
+    !workflows["workflow-outcome.yml"].on.workflow_run.workflows.includes("Docs CI"),
+  );
+});
+
+test("requires safe machine-parseable run names for every workflow", async () => {
+  const workflows = await actualWorkflows();
+  assert.equal(Object.keys(workflows).length, 9);
+  assert.ok(
+    Object.values(workflows).every(
+      (workflow) =>
+        typeof workflow["run-name"] === "string" &&
+        workflow["run-name"].length > 0,
+    ),
+  );
+
+  delete workflows["ci.yml"]["run-name"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("safe run-name"),
+    ),
+  );
+});
+
+test("requires a safe terminal Job Summary in every source workflow", async () => {
+  const workflows = await actualWorkflows();
+  for (const [name, workflow] of Object.entries(workflows)) {
+    if (name === "workflow-outcome.yml") continue;
+    assert.ok(workflow.jobs.outcome, name);
+  }
+
+  workflows["ci.yml"].jobs.outcome.steps[0].env.SUMMARY_TARGET =
+    "${{ github.event.pull_request.title }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("terminal Job Summary"),
+    ),
+  );
+});
+
+test("rejects untrusted text and Secrets in workflow run names", async () => {
+  for (const unsafe of [
+    "${{ github.event.issue.title }}",
+    "${{ github.event.issue.body }}",
+    "${{ github.event.comment.body }}",
+    "${{ github.event.head_commit.message }}",
+    "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  ]) {
+    const workflows = await actualWorkflows();
+    workflows["ci.yml"]["run-name"] = unsafe;
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) =>
+        error.includes("safe run-name"),
+      ),
+      unsafe,
+    );
+  }
+});
+
+test("keeps the WeCom Secret only in the trusted outcome sender", async () => {
+  const workflows = await actualWorkflows();
+  workflows["ci.yml"].jobs.ci.steps[0].env = {
+    WECOM_BOT_WEBHOOK_URL: "${{ secrets.WECOM_BOT_WEBHOOK_URL }}",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("WECOM_BOT_WEBHOOK_URL"),
+    ),
+  );
+});
+
+test("requires bounded deduplicated outcome and post-merge behavior", async () => {
+  const sources = await actualTrustedScriptSources();
+  assert.deepEqual(validateTrustedScriptSources(sources), []);
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "Math.min(Math.max(Number(maxAttempts) || 1, 1), 3)",
+    "Number(maxAttempts)",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("bounded dedupe and post-merge triage"),
+    ),
+  );
+});
+
+test("isolates workflow outcome concurrency per source run", async () => {
+  const workflows = await actualWorkflows();
+  const workflow = workflows["workflow-outcome.yml"];
+  assert.deepEqual(workflow.concurrency, {
+    group: "workflow-outcome-${{ github.event.workflow_run.id }}",
+    "cancel-in-progress": false,
+  });
+
+  workflow.concurrency.group = "workflow-outcome-${{ github.repository }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("fixed trusted triggers"),
+    ),
+  );
+});
+
+test("rejects untrusted workflow Summary sources", async () => {
+  for (const unsafe of [
+    "sourceRun.title",
+    "issue.body",
+    "comment.body",
+    "head_commit.message",
+    "model_output",
+  ]) {
+    const sources = await actualTrustedScriptSources();
+    sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+      "  const targetLabel = record.target.number",
+      `  const unsafeSummary = ${unsafe};\n  const targetLabel = record.target.number`,
+    );
+    assert.ok(
+      validateTrustedScriptSources(sources).some((error) =>
+        error.includes("trusted Summary sources"),
+      ),
+      unsafe,
+    );
+  }
+});
+
+test("fails closed when the trusted workflow Summary window is missing", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "export function renderJobSummary",
+    "export function renamedJobSummary",
+  );
+
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("trusted Summary sources"),
+    ),
+  );
 });
 
 test("requires the serialized Blocker Reconciler workflow", async () => {
@@ -259,14 +424,14 @@ test("rejects duplicate PR Review model configuration arguments", async () => {
 
 test("locks Claude PR Review to bounded read-only tools", async () => {
   const mutations = [
-    (args) => args.replace("Read,Grep,Bash", "Read,Grep,Glob,Bash"),
+    (args) => args.replace("Read,Grep,Glob", "Read,Grep"),
     (args) => `${args}\n--allowedTools "Bash"`,
     (args) => `${args}\n--allowedTools="Bash"`,
     (args) => `${args}\n--allowed-tools=Bash`,
     (args) => `${args}\n--disallowedTools=""`,
     (args) => `${args}\n--disallowed-tools=`,
     (args) => args.replace(
-      '--disallowedTools "Glob,Edit,Write,MultiEdit,WebFetch,WebSearch"',
+      '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
       "",
     ),
   ];
@@ -340,7 +505,21 @@ test("cancels stale Claude Review runs by PR while reviewing every successful CI
   );
 });
 
-test("binds Claude Review analysis and publication to the completed CI head", async () => {
+test("binds staged Claude Review input to the completed CI head", async () => {
+  const workflows = await actualWorkflows();
+  const stage = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+    (step) => step.name === "Stage untrusted PR review data",
+  );
+  stage.env.EXPECTED_HEAD_SHA = "${{ github.sha }}";
+
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude PR Review model configuration must use validated settings"),
+    ),
+  );
+});
+
+test("binds Claude Review publication to the completed CI head", async () => {
   const workflows = await actualWorkflows();
   const publish = workflows["claude-pr-review.yml"].jobs.publish.steps.find(
     (step) => step.name === "Publish validated Review result",
@@ -380,7 +559,7 @@ test("requires an explicit Claude Review switch in analysis and publication", as
 
 test("rejects floating third-party Action references", async () => {
   const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.steps[0].uses = "actions/checkout@main";
+  workflows["ci.yml"].jobs.ci.steps[0].uses = "actions/checkout@main";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) => error.includes("full commit SHA")),
   );
@@ -389,7 +568,12 @@ test("rejects floating third-party Action references", async () => {
 test("uses pinned PR-Agent official inline publishing", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["pr-agent-review.yml"];
-  const action = workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent");
+  const reviewAction = workflow.jobs.analyze.steps.find(
+    (step) => step.id === "pr-agent",
+  );
+  const suggestionsAction = workflow.jobs.suggestions.steps.find(
+    (step) => step.id === "pr-agent-suggestions",
+  );
 
   assert.deepEqual(workflow.on.pull_request_target.types, [
     "opened",
@@ -403,62 +587,90 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     issues: "write",
     "pull-requests": "write",
   });
+  assert.deepEqual(workflow.jobs.suggestions.permissions, {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  });
   assert.match(
     workflow.jobs.analyze.if,
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
   );
+  assert.equal(suggestionsAction["continue-on-error"], true);
   assert.equal(
-    action.uses,
+    reviewAction.uses,
     "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
   );
-  assert.equal(action.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
+  assert.equal(suggestionsAction.uses, reviewAction.uses);
+  assert.equal(reviewAction.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
   assert.equal(
-    action.env.OPENAI__API_BASE,
+    reviewAction.env.OPENAI__API_BASE,
     "${{ secrets.PR_AGENT_API_BASE }}",
   );
-  assert.equal(action.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
-  assert.equal(action.env["config.propagate_tool_errors"], "true");
-  assert.equal(action.env["config.publish_output"], "true");
-  assert.equal(action.env["config.restricted_mode"], "true");
+  assert.equal(reviewAction.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
+  assert.equal(reviewAction.env["config.propagate_tool_errors"], "true");
+  assert.equal(reviewAction.env["config.publish_output"], "true");
+  assert.equal(reviewAction.env["config.restricted_mode"], "true");
   assert.equal(
-    action.env["pr_code_suggestions.commitable_code_suggestions"],
+    suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"],
     "true",
   );
-  assert.equal(action.env["github_action_config.auto_improve"], "true");
+  assert.equal(reviewAction.env["github_action_config.auto_review"], "true");
+  assert.equal(reviewAction.env["github_action_config.auto_improve"], "false");
+  assert.equal(suggestionsAction.env["github_action_config.auto_review"], "false");
+  assert.equal(suggestionsAction.env["github_action_config.auto_improve"], "true");
 
-  action.env["config.publish_output"] = "false";
+  reviewAction.env["config.publish_output"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["config.publish_output"] = "true";
-  action.env["config.propagate_tool_errors"] = "false";
+  reviewAction.env["config.publish_output"] = "true";
+  reviewAction.env["config.propagate_tool_errors"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["config.propagate_tool_errors"] = "true";
-  action.env["pr_code_suggestions.commitable_code_suggestions"] = "false";
+  reviewAction.env["config.propagate_tool_errors"] = "true";
+  suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"] =
+    "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["pr_code_suggestions.commitable_code_suggestions"] = "true";
-  action.env["github_action_config.auto_improve"] = "false";
+  suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"] =
+    "true";
+  suggestionsAction.env["github_action_config.auto_improve"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  action.env["github_action_config.auto_improve"] = "true";
+  suggestionsAction.env["github_action_config.auto_improve"] = "true";
   workflow.jobs.analyze.permissions["pull-requests"] = "read";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+
+  workflow.jobs.analyze.permissions["pull-requests"] = "write";
+  suggestionsAction["continue-on-error"] = false;
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+
+  suggestionsAction["continue-on-error"] = true;
+  suggestionsAction.env["github_action_config.auto_review"] = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
@@ -483,7 +695,7 @@ test("requires same-repository PR-Agent runs", async () => {
 
 test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
   const workflows = await actualWorkflows();
-  workflows["docs-ci.yml"].jobs.docs.steps[0].env = {
+  workflows["ci.yml"].jobs.ci.steps[0].env = {
     BAD: "${{ secrets.PR_AGENT_API_KEY }}",
   };
 
@@ -923,8 +1135,8 @@ test("allows trusted completed-workflow recovery to reach preparation", async ()
   const sources = await actualTrustedScriptSources();
   assert.deepEqual(validateTrustedScriptSources(sources), []);
   sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
-    'if (eventName === "workflow_run") {',
-    'if (eventName === "never") {',
+    'isTrustedWorkflowRunSource({ repository, run: event.workflow_run })',
+    'true',
   );
   assert.ok(
     validateTrustedScriptSources(sources).some((error) =>
@@ -941,10 +1153,22 @@ test("binds Claude repair recovery to a trusted source-run target Artifact", asy
   const workerDownload = workflows["codex-worker.yml"].jobs.prepare.steps.find(
     (step) => step.name === "Download trusted Review recovery target",
   );
+  const workerResolve = workflows["codex-worker.yml"].jobs.prepare.steps.find(
+    (step) => step.name === "Resolve trusted Review recovery target",
+  );
   assert.ok(reviewUpload);
+  assert.ok(workerResolve);
   assert.ok(workerDownload);
 
   workerDownload.with["run-id"] = "${{ github.run_id }}";
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("Claude recovery target Artifact must stay source-run bound"),
+    ),
+  );
+
+  workerDownload.with["run-id"] = "${{ github.event.workflow_run.id }}";
+  workerResolve.run = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("Claude recovery target Artifact must stay source-run bound"),
@@ -1200,7 +1424,9 @@ test("guards every Issue Review model step with the trusted authorizer", async (
   const workflows = await actualWorkflows();
   const workflow = workflows["claude-issue-review.yml"];
   for (const job of Object.values(workflow.jobs)) {
-    assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    if (job !== workflow.jobs["automatic-issue-review"]) {
+      assert.doesNotMatch(String(job.if ?? ""), /author_association/);
+    }
     const action = job.steps.find((step) => step.uses?.startsWith("anthropics/"));
     if (!action) continue;
     if (job === workflow.jobs["analyze-blocker-review"]) {
@@ -1243,8 +1469,8 @@ test("rejects collection membership checks for trusted actor associations", asyn
 
 test("rejects identity authorization in job-level expressions", async () => {
   const workflows = await actualWorkflows();
-  workflows["claude-issue-review.yml"].jobs["automatic-issue-review"].if =
-    "github.event.issue.author_association == 'MEMBER'";
+  workflows["claude-issue-review.yml"].jobs.mentions.if +=
+    " && github.event.issue.author_association == 'MEMBER'";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("must authorize identity in a trusted step"),
@@ -1724,12 +1950,7 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       candidate.uses?.startsWith("anthropics/"),
     );
     if (!action) continue;
-    assert.match(
-      action.with.claude_args,
-      jobName === "analyze-blocker-review"
-        ? /--disallowedTools "Edit,Write,MultiEdit,WebFetch,WebSearch"/
-        : /--disallowedTools "Edit,Write,MultiEdit,Bash"/,
-    );
+    assert.match(action.with.claude_args, /--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"/);
   }
   const step = issueWorkflow.jobs["automatic-issue-review"].steps.find((candidate) =>
     candidate.uses?.startsWith("anthropics/"),
