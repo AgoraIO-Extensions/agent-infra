@@ -138,7 +138,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 不同用户可以分别建立自己的 Connection。
 - 同一用户可以为同一 Provider 建立多个外部账号，例如个人 GitHub 和公司 GitHub。
 - 每个 Connection 有稳定内部 ID和稳定外部账号身份，展示名称不作为权限键。
-- M1 中，同一 `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。
+- M1 中，Direct Consumer 的同一 `Principal + Consumer + ConsumerInstance + Provider` 只能选择一个当前 Connection；Delegated Consumer 的同一 `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。
 - 更换账号必须由用户明确确认；Consumer 不能自行选择、轮换或降级到另一个账号。
 
 ## 8. 连接与 Credential
