@@ -486,14 +486,21 @@ Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Ac
 ```text
 Grant 与 Consumer declaration 共同引用的 exact ActionVersion 当前处于
 `PUBLISHED` 或 `DEPRECATED` 可执行态，且未 `DISABLED`
-∩ Consumer current published declaration 仍包含该 exact ActionVersion
+∩ Grant 冻结的 immutable declaration 仍可执行（`PUBLISHED` 或被该 Grant 引用的 `SUPERSEDED`）且包含该 exact ActionVersion
 ∩ Principal、Consumer 和适用的 ConsumerInstance 当前有效状态
 ∩ Principal 对个人 Connection 的所有权或公司共享 Connection 的当前使用资格
 ∩ Grant 固定的 Consumer/Actor、Connection、exact ActionVersion 和能力指纹
 ∩ 当前 Connection 与 current Credential 的外部权限
 ```
 
-Grant 和 Consumer declaration 都绑定不可变的 exact ActionVersion；发布新版本不会改写或替换旧版本，也不会让旧授权自动迁移。只有不扩大权限且不涉及安全修复的兼容旧版本可以进入 `DEPRECATED`，并在已有 declaration/Grant 中继续执行，但不能进入新 declaration。scope/effect 收缩、安全修复或其他强制限制必须由 Catalog 原子停用所有不再合规的旧版本；Consumer 移除该 version、Catalog 将其停用、主体失效或共享资格移除也都立即阻止新 dispatch。
+Grant 和 Consumer declaration 都绑定不可变的 exact ActionVersion；运行时校验 Grant 冻结的 declaration，而不是
+Consumer current declaration，因此无关 Action 发布不会使旧 Grant 失效。只有不扩大权限且不涉及安全修复的兼容旧
+版本可以进入 `DEPRECATED`，并在已有 declaration/Grant 中继续执行，但不能进入新 declaration。Consumer 要撤回
+已授权 version 时，必须原子终结受影响 Grant 或创建收缩 replacement Grant；scope/effect 收缩、安全修复或其他
+强制限制必须由 Catalog 原子停用所有不再合规的旧版本；Catalog 停用、主体失效或共享资格移除也都立即阻止新
+dispatch。
+被新 declaration 替换的 declaration 为 `SUPERSEDED`，仅可由其已绑定 Grant 执行，不能用于发现或新授权；
+`REVOKED` declaration 立即使其引用 Grant 不可执行。
 
 ### 13.3 调用链路
 

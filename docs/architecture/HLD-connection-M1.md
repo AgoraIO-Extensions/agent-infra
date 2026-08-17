@@ -549,6 +549,8 @@ type ConsumerActionDeclaration = {
 ```
 
 发布时验证所有 ActionVersion 当前存在、Schema 可生成 MCP/OpenAPI、Consumer 类型允许对应 effect class。声明只限制 Consumer 可以请求的最大集合，不授予任何 Principal 的账号。
+`PUBLISHED` 只用于 current declaration；它被新 declaration 替换后变为 `SUPERSEDED`。`SUPERSEDED` 仅当被
+未终结 Grant 精确引用时可继续执行，不能用于发现或新授权；`REVOKED` 立即使其引用 Grant 不可执行。
 
 ## 13. Provider 与 Action Catalog
 
@@ -856,13 +858,17 @@ type CredentialVersion = {
 
 ### 17.1 AuthorizationRoot
 
-每个 `(principalId, consumerId, actorKey, providerId)` 有一个稳定 AuthorizationRoot。`actorKey` 对 Direct Consumer 和 `actorMode = NONE` 的 Delegated Consumer 固定为空值，对 `actorMode = REQUIRED` 的 Delegated Consumer 是 opaque actor ID hash。
+Direct Consumer 的每个 `(principalId, consumerId, consumerInstanceId, providerId)` 有一个稳定 AuthorizationRoot，
+因此同一客户端产品的不同安装必须分别确认，不能复用 Grant。Delegated Consumer 的 Root 是
+`(principalId, consumerId, actorKey, providerId)`，不按 workload instance 拆分；`actorKey` 对
+`actorMode = NONE` 固定为空值，对 `actorMode = REQUIRED` 是 opaque actor ID hash。
 
 ```ts
 type AuthorizationRoot = {
   authorizationRootId: string;
   principalId: string;
   consumerId: string;
+  consumerInstanceId: string | null;
   actorKey: string;
   providerId: string;
   currentGrantId: string | null;
@@ -871,7 +877,9 @@ type AuthorizationRoot = {
 };
 ```
 
-Root 在 Grant 被替换或撤销后仍保留。授权、换号、扩权、撤销和 Invocation 创建都锁同一个 Root，避免不同 Grant 行之间出现竞态。
+Direct Root 的 `consumerInstanceId` 必须非空，Delegated Root 必须为空；数据库 unique constraint 按以上两种
+tuple 分别实现。Root 在 Grant 被替换或撤销后仍保留。授权、换号、扩权、撤销和 Invocation 创建都锁同一个
+Root，避免不同 Grant 行之间出现竞态。
 
 ### 17.2 ConnectionGrant
 
@@ -903,9 +911,9 @@ Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen
 ### 17.3 有效能力公式
 
 ```text
-Grant 与 Consumer declaration 共同引用的 exact ProviderRelease/ActionVersion
-current executable state (`PUBLISHED` or `DEPRECATED`)
-∩ Consumer current published declaration 仍包含该 exact ActionVersion
+Grant 冻结的 `consumerDeclarationId` 仍为可执行的 immutable declaration（`PUBLISHED` 或被该 Grant 引用的
+`SUPERSEDED`），且其中包含 exact
+ProviderRelease/ActionVersion；ActionVersion current executable state 为 `PUBLISHED` 或 `DEPRECATED`
 ∩ Principal current ConnectionGrant confirmed exact ActionVersion/capability digest
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
@@ -915,8 +923,12 @@ current executable state (`PUBLISHED` or `DEPRECATED`)
 
 工具“可发现”与“可执行”分开：
 
-- 可发现：ActionVersion 处于 `PUBLISHED` 或 `DEPRECATED` 可执行态、Consumer current declaration 仍包含该 exact version 且用户已授权；Connection 暂时需要 reauth 时仍可展示并提供下一步。`DEPRECATED` 不能进入新 declaration。
+- 可发现：ActionVersion 处于 `PUBLISHED` 或 `DEPRECATED` 可执行态、Consumer current declaration 包含该 exact version 且用户已授权；Connection 暂时需要 reauth 时仍可展示并提供下一步。`DEPRECATED` 不能进入新 declaration。
 - 可执行：除可发现条件外，所有实时身份、共享资格、Credential、scope、fence、limit 和 recovery gate 都通过。
+
+新 declaration 只控制后续发现和新授权，不会因无关 Action 变更使引用旧 declaration 的 Grant 失效。若
+Consumer 要撤回已授权 Action，必须在同一事务明确终结包含该 ActionVersion 的 Grant 或将其收缩为 replacement
+Grant；Catalog `DISABLED`、身份/共享资格失效和 Connection/Credential fence 仍立即阻止执行。
 
 ### 17.4 Authorization Preview
 
@@ -927,6 +939,7 @@ type AuthorizationPreview = {
   previewId: string;
   principalId: string;
   consumerId: string;
+  consumerInstanceId: string | null;
   actorKey: string;
   connectionId: string;
   externalAccountDisplayProfile: object;
@@ -948,7 +961,7 @@ Consent 保存用户看到并确认的 exact 事实：Consumer 名称/ID、Actor
 确认事务：
 
 1. 锁 AuthorizationRoot。
-2. 锁 preview 并检查未过期、未消费、Principal/Consumer/Actor 匹配。
+2. 锁 preview 并检查未过期、未消费、Principal/Consumer/Instance/Actor 匹配。
 3. 重新读取 Consumer declaration、Catalog、Connection、identity/shared eligibility 和 Credential scope。
 4. 任一 digest/revision 变化则 preview 失效，要求重新展示；不能静默确认新集合。
 5. 创建 Consent 和 immutable Grant，切换 Root pointer并提升 fence。
@@ -961,7 +974,7 @@ Consent 保存用户看到并确认的 exact 事实：Consumer 名称/ID、Actor
 | 同账号 reconnect，原确认集合未变 | 基于原 Consent 创建冻结 current revision/fence 的 replacement Grant；旧 Grant replaced |
 | 切换另一个 Connection | 新 preview/consent/Grant；旧 Grant replaced |
 | Consumer 新增 Action或Action扩权 | 新 preview/consent/Grant；旧集合继续有效直到替换 |
-| Consumer 移除 Action | effective set 立即收缩；可异步生成新 compact Grant |
+| Consumer 撤回已授权 Action | 同一事务终结受影响 Grant 或创建收缩 replacement Grant；不能只发布不含该 Action 的新 declaration |
 | 用户撤销 | Root fence 提升、current Grant revoked、pointer 清空 |
 | Principal/共享资格确定失效 | Grant terminated；重新获得资格也需新 consent |
 | Connection 暂时失效 | Grant paused；不得创建 Invocation |
@@ -1045,6 +1058,7 @@ type AuthorizedInvocation = {
   consumerId: string;
   consumerRevision: bigint;
   consumerDeclarationId: string;
+  consumerDeclarationVersion: bigint;
   consumerInstanceId: string;
   consumerInstanceRevision: bigint;
   actorKey: string;
@@ -1068,7 +1082,12 @@ type AuthorizedInvocation = {
 };
 ```
 
-AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、current declaration、ConsumerInstance、适用的 ConsumerActorBinding、Root、current Grant、Connection、current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration、instance/actor binding revision 和 `credentialVersionId` 并生成稳定 `invocationId`。Direct 调用的 `actorBindingRevision` 为空；Delegated Actor binding 缺失、撤销或变化都在出站前拒绝。后续 refresh/rotation 不能替换 frozen CredentialVersion。
+AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、
+Grant 冻结的 declaration、ConsumerInstance、适用的 ConsumerActorBinding、Root、current Grant、Connection、
+current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration/version、
+instance/actor binding revision 和 `credentialVersionId` 并生成稳定 `invocationId`。Direct 调用的
+`actorBindingRevision` 为空；Delegated Actor binding 缺失、撤销或变化都在出站前拒绝。后续 refresh/rotation
+不能替换 frozen CredentialVersion。
 
 ### 18.4 Idempotency Scope
 
@@ -1163,7 +1182,8 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 工具发现或授权 preview 的 preflight 只用于用户体验。Provider 出站前必须重新检查：
 
-- Principal 和 Consumer/Instance current status；Consumer/Instance revision 必须等于 Invocation 快照，current declaration ID 必须未变且仍包含 frozen ActionVersion；Delegated Actor binding 必须仍为 current 且 revision 匹配。
+- Principal 和 Consumer/Instance current status；Consumer/Instance revision 必须等于 Invocation 快照，Grant 冻结的
+  declaration/version 必须仍可执行且包含 frozen ActionVersion；Delegated Actor binding 必须仍为 current 且 revision 匹配。
 - AuthorizationRoot current Grant、fence、actor key 和 Action set。
 - Connection owner/shared eligibility、revision 和 execution fence。
 - ProviderRelease/ActionVersion state、digest 和 endpoint policy。
@@ -1172,7 +1192,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
 
-1. 事务 A 锁 Consumer -> current declaration -> ConsumerInstance -> applicable ActorBinding -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
+1. 事务 A 锁 Consumer -> Grant declaration -> ConsumerInstance -> applicable ActorBinding -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
 2. 事务 B 按相同顺序重读 current 状态，在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，然后创建 durable egress hop；任一状态已变化都失败。
 3. 提交后才签发绑定 exact dispatch 的短期 egress assertion。
 4. 任一校验失败都在 `SUBMISSION_STARTED` 前结束，证明没有本次外部副作用。
@@ -1313,7 +1333,7 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `consumer_owner` | consumer_id、principal_id | composite PK |
 | `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding；unique id+consumer |
 | `consumer_actor_binding` | consumer_id、actor_key、instance_id、status、revision | composite PK；composite FK instance+consumer；current binding required |
-| `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current published |
+| `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current `PUBLISHED`；`SUPERSEDED` only executes through exact existing Grant |
 | `consumer_declared_action` | declaration_id、action_version_id、action_id、tool_name | composite PK；unique declaration+tool_name；composite FK 到 ActionVersion |
 | `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
@@ -1646,7 +1666,7 @@ catalog.action-disabled.v1
 
 - 授权、Connection、Credential、Catalog 停用都在 Connection DB立即拒绝新调用。
 - Consumer 内部 policy 变化不需要回写 Connection；它只能停止自身调用。
-- Consumer declaration 变化在 Connection 内部事务更新并触发 Grant effective set 收缩/重确认。
+- 新 Consumer declaration 只影响后续发现和授权；撤回既有 Action 必须在同一事务显式终结或收缩受影响 Grant。
 - 不使用跨 Consumer 数据库事务或双向状态机。
 - Consumer correlation 与 Connection call 通过稳定 IDs 关联，不互相恢复业务状态。
 
@@ -1657,7 +1677,7 @@ catalog.action-disabled.v1
 授权查询必须同时包含：
 
 ```text
-environment + principalId + consumerId + actorKey
+environment + principalId + consumerId + directConsumerInstanceId? + actorKey
 + providerId + authorizationRootId + grantId + connectionId
 + actionVersionId + all current revisions/fences
 ```
@@ -1669,7 +1689,7 @@ environment + principalId + consumerId + actorKey
 ```text
 transport authentication
 -> Principal + ConsumerInstance
--> Consumer current state/declaration
+-> Consumer current state + Grant declaration
 -> Actor key (delegated only)
 -> AuthorizationRoot/current Grant
 -> exact Connection/current Credential
@@ -2094,7 +2114,7 @@ Recovery: open | read-only | quarantined
 3. remote MCP OAuth 把 Alice、目标 ConsumerInstance 和 Connection resource 绑定为 Direct Session。
 4. Alice 连接 personal/company 两个 GitHub账号。
 5. Alice 为目标 Direct Consumer 选择 company账号并确认 create PR。
-6. `tools/list` 只显示授权 tool；另一个 Direct Consumer 或设备不能复用其 Session/Grant。
+6. `tools/list` 只显示授权 tool；另一个 Direct Consumer 或设备不能复用其 Session/Grant，目标设备必须独立 consent。
 7. 创建真实 test repository PR并返回 URL。
 8. 重放同 idempotency key返回同 PR。
 9. 撤销设备或 Grant 后新调用拒绝。

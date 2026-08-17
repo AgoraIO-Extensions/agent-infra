@@ -104,7 +104,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
 - Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
-- Direct MCP Consumer 通过 MCP access token 调用；token 必须绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience，浏览器登录会话不能单独决定 Consumer 或实例。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
+- Direct MCP Consumer 通过 MCP access token 调用；token 必须绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience，浏览器登录会话不能单独决定 Consumer 或实例。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Direct Consumer 不使用 Actor。Delegated Consumer 注册时必须固定选择不使用 Actor 或要求 Actor；要求 Actor 时，每次授权和调用都必须携带已注册的稳定 Actor，缺失、未注册或当前 workload 无权代表该 Actor 时直接拒绝，不能回退到 Consumer 级授权。
 - Actor 对 Connection 是不透明稳定标识，不能要求 Connection 理解 Consumer 的内部领域模型。Agent Platform 必须要求 Actor，并以每个 Agent 的稳定 ID 作为 Actor。
 
@@ -164,7 +164,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 
 ### 9.1 授权单位
 
-- 授权由 Connection 保存，绑定 Principal、Consumer、可选 Actor、Provider、具体 Connection 和确认过的 Action 集合。
+- 授权由 Connection 保存，绑定 Principal、Consumer、Direct Consumer 的具体 ConsumerInstance（或 Delegated 的可选 Actor）、Provider、具体 Connection 和确认过的 Action 集合。
 - Consumer 只能调用自己已发布声明、用户已确认且 Connection 仍允许的 Action。
 - 授权界面同时展示 Consumer、Actor（如有）、外部账号、Action、外部效果和所需 scope。
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。
@@ -175,7 +175,8 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 
 - Consumer 新增 Action 或 Action scope/effect 扩大时，已有授权只覆盖上次确认集合。
 - 用户确认前，Consumer 不能调用新增或扩大的能力。
-- Consumer 移除 Action、Provider/Action 停用或权限收缩立即生效，不需要用户确认。
+- Consumer 撤回已授权 Action、Provider/Action 停用或权限收缩立即生效，不需要用户确认；仅发布不含该 Action 的新 declaration 不会隐式撤回既有 Grant。
+- 新 declaration 替换旧 declaration 后，旧 declaration 只能供其已绑定 Grant 继续执行，不能用于发现或新授权；显式撤回 declaration 或 Action 必须同时终结或收缩受影响 Grant。
 - 用户拒绝或关闭确认时，不执行该 Action，原授权范围不扩大。
 
 ### 9.3 Direct 与 Delegated 调用
