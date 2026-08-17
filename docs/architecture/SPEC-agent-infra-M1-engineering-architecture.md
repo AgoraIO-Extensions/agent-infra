@@ -304,13 +304,13 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Connection 仅在已注册客户端凭据认证客户端，或已注册 ConsumerInstance 验证其注册 key 的持有后签发该 token；浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为该证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
 
 Delegated Consumer 注册时固定选择 `NONE` 或 `REQUIRED` Actor 模式，再认证注册 workload 并通过 Connection token exchange 获取短期委托令牌。token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；企微等非交互渠道按 14.2 校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后，由 Connection 配置的受信身份签发方签发短期断言。该 evidence 必须绑定来源事件、workload、Consumer、ConsumerInstance、Actor（如适用）、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。身份签发方还必须校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。
 
 `REQUIRED` 模式下，token exchange 和最终调用必须在 Grant lookup 前校验 Actor claim 存在、Actor 已注册到该 Consumer，且由 Connection 保存的 current workload-to-actor binding 或受信签发方认证的等价事实证明本次 workload 可以代表该 Actor；任一条件不满足都直接拒绝，不能回退到 Consumer 级 Grant。`NONE` 模式下，出现 Actor claim 必须拒绝。Agent Platform Consumer 固定使用 `REQUIRED`，并以每个 Agent 的稳定 ID 作为 opaque Actor。Consumer 自报 Actor 不能进入授权上下文。
 
-委托令牌绑定稳定 Principal subject、组织或租户、workload、consumer、适用的 actor、audience、action、args hash、recovery generation、期限和一次性 `jti`。Connection 校验签发方、签名、全部绑定字段、注册映射、current recovery generation 并防重放后，仍以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。
+委托令牌绑定稳定 Principal subject、组织或租户、workload、consumer、适用的 actor、audience、action、args hash、业务幂等键 hash、recovery generation、期限和一次性 `jti`。Connection 每次先校验签发方、签名、全部绑定字段、注册映射、instance current status 和 current recovery generation；首次接受时再将 `jti`、认证 instance、Action、args hash、幂等键和 AuthorizedInvocation 原子绑定。通过前述校验的完全相同重放只能读取原 Invocation/Call，任一字段不同则拒绝，绝不再次执行。Connection 随后以 Connection DB 中的 Grant 解析唯一 Connection；普通用户登录令牌不能作为委托令牌使用。
 
 委托令牌只能证明调用主体，不能创建或扩大 Grant。Consumer 不能自签或自报 Principal、组织或租户；任何 Consumer 都不能提交或覆盖可信用户 ID、组织 ID、Connection ID 或外部账号。
 

@@ -529,7 +529,7 @@ type ConsumerActorBinding = {
 - Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant，`actorMode` 固定为 `NONE`。
 - Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。Delegated Consumer 注册时必须选择 `actorMode`；Agent Platform 使用 `REQUIRED`，以稳定 Agent ID 作为 opaque Actor。
 - `Consumer.type` 表示信任与调用模式，不编码客户端品牌。产品名、版本和已验证能力属于注册元数据与 conformance evidence；Connection Core 不按 Codex、Claude App 或 Cursor 分支授权规则。
-- `authenticationBindingHash` 绑定 OAuth client/session 或 workload mTLS identity；客户端支持 sender-constrained token 时同时绑定 key thumbprint，不保存 private key或 bearer token。
+- `authenticationBindingHash` 绑定经 Connection 验证的注册客户端凭据或 workload mTLS identity；Direct instance 注册和 token 签发必须由该凭据认证客户端，不能相信请求中的 Consumer ID、Instance ID 或公开 client ID。支持 sender-constrained token 的客户端还必须证明注册 key 的持有并绑定 key thumbprint；不保存 private key 或 bearer token。
 - `actorMode = REQUIRED` 时，每次授权和调用都必须携带已注册 Actor，并由 current `ConsumerActorBinding` 证明当前 WORKLOAD instance 可以代表该 Actor；缺失、未注册或绑定失效时在 Root lookup 前拒绝，不能回退到 Consumer 级授权。`actorMode = NONE` 时拒绝 Actor claim。
 - Consumer disable 同步阻止全部实例、新授权和调用；不能只依赖 token expiry。
 
@@ -834,7 +834,7 @@ type CredentialVersion = {
 };
 ```
 
-数据库约束保证每个 Connection 最多一个 `CURRENT`。current pointer、Credential lifecycle 和 `credentialSetRevision` 在同一事务修改。
+数据库约束保证每个 Connection 最多一个 `CURRENT`，且 `currentCredentialVersionId` 只能指向同一 Connection 的 CredentialVersion：`credential_version` 定义 `UNIQUE (id, connection_id)`，`connection_account` 以 `(current_credential_id, id)` 定义 `DEFERRABLE INITIALLY DEFERRED` 复合 FK 引用它。current pointer、Credential lifecycle 和 `credentialSetRevision` 在同一事务修改。
 
 ### 16.5 Refresh 与 Rotation
 
@@ -844,7 +844,7 @@ type CredentialVersion = {
 4. CAS 提交后才访问 Provider；随后持久化 Provider response metadata，不记录 token。
 5. 成功时创建新版本；事务锁 Connection，比较 old version ID/revision 后 CAS。
 6. CAS 输家销毁候选 ciphertext 并读取新 current，不覆盖胜者。
-7. Provider 明确 `invalid_grant` 时标 old `INVALID`、清 pointer、提升 fence并进入 `REAUTH_REQUIRED`。
+7. Provider 明确 `invalid_grant` 时，事务锁 Connection 并 CAS 校验 current pointer、`credentialSetRevision` 和 source Credential revision 仍与 attempt 冻结值相等；只有匹配时才标 source `INVALID`、清 pointer、提升 fence 并进入 `REAUTH_REQUIRED`。CAS 不匹配时只标 source `INVALID`，绝不修改新的 current Credential 或 Connection 状态。
 8. timeout、进程崩溃或结果未知时 attempt 进入 `UNCERTAIN`，不得盲目重复使用旋转型 refresh token。
 
 ### 16.6 Scope 变化
@@ -1010,7 +1010,7 @@ Direct MCP Client 通过 remote MCP transport 使用其目标版本支持的标�
 
 1. 客户端从 MCP authorization metadata 发现 Connection 的授权服务和资源标识。
 2. 用户在系统浏览器完成公司登录、ConsumerInstance 绑定和最小 MCP scope 授权；浏览器会话只完成用户认证，不单独决定 Consumer 或 Instance，也不会获得 Provider Credential。
-3. Connection 把 OAuth issuer、组织或租户和 subject 映射为 Principal，并将 access/refresh token 绑定 Principal、已注册 Consumer、Instance、audience、scope、expiry 和 current recovery generation。
+3. Connection 仅在已注册客户端凭据完成认证后创建或选择 ConsumerInstance，并从该验证结果而非请求字段解析 Consumer/Instance；随后把 OAuth issuer、组织或租户和 subject 映射为 Principal，并将 access/refresh token 绑定 Principal、已注册 Consumer、Instance、audience、scope、expiry 和 current recovery generation。
 4. 客户端使用 access token 调用 MCP；Connection 每次检查 token 绑定、session/Instance/Principal current status 和 PITR 域外的 current recovery generation，其他 Consumer 或 Instance 的 token 必须拒绝。
 5. 若目标客户端版本支持 sender-constrained token，Connection 必须启用并验证 key thumbprint；否则使用短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
 6. 用户可在 Connection 页面单独撤销该实例和所有关联 session。
@@ -1049,8 +1049,8 @@ type DelegatedInvocationAssertionV1 = {
 - 签名内的 `principalIssuer + organizationContext + principalSubject` 经 Connection Identity Adapter 映射到唯一 Principal，并重新校验当前组织关系；不能采用 Consumer body 中的 userId 或 organizationId。
 - `actorMode = REQUIRED` 时，assertion 必须包含 `actorId`，且 token exchange 和最终校验都必须验证 Actor 已注册到该 Consumer、current ConsumerActorBinding 允许已认证 WORKLOAD instance 代表该 Actor；外部受信 signer 也必须认证同一 workload-to-actor 事实。`actorMode = NONE` 时 assertion 不得包含 `actorId`；Consumer 自报 Actor 不能进入授权上下文。
 - `recoveryGeneration` wire claim 使用无符号十进制规范字符串，必须通过 22.9 的格式和范围校验后才能转换为内部 `bigint`；其值来自 PITR 域外的 Recovery Control 并等于 current generation。旧 generation assertion 即使其 `jti` 记录因恢复丢失也必须拒绝。
-- TTL 不超过 60 秒；`jti` 在 Connection DB take-once，只负责 assertion 防重放。
-- `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；Consumer 重试必须向受信 issuer 获取带新 `jti` 的令牌，并复用同一业务幂等键。
+- 每次调用先校验签名、期限、已认证 instance/current status 和 current recovery generation；TTL 不超过 60 秒。首次接受 assertion 时，在同一事务将 `jti`、已认证 instance、action/args/idempotency hash 与 AuthorizedInvocation 绑定。通过前述校验的完全相同重放只能读取该 Invocation/Call，绝不创建第二个 Call；任一绑定字段不同则拒绝。
+- `idempotencyKeyHash` 必须与 HTTP `Idempotency-Key` 一致并纳入签名；正常重试向受信 issuer 获取带新 `jti` 的令牌并复用同一业务幂等键；响应丢失后的同一 assertion 重放仅按上一条查询原 Invocation/Call。
 - `actorId` 只参与 exact Grant lookup 和审计，不能用来查询 Consumer 内部对象。
 - assertion 不携带 `connectionId`、grant、scope、Credential 或可替换 endpoint。
 
@@ -1113,7 +1113,7 @@ principalId + consumerId + consumerInstanceId + actorKey
 
 request key 使用 HTTP `Idempotency-Key`。
 
-Connection 先认证 current Principal、Consumer、ConsumerInstance 和 Actor，再按上述 stable subject scope + request key 查找 `idempotency_record`，命中前不能解析新的 current Grant、Connection 或 ActionVersion。首次请求在同一事务中冻结由协议 Action 标识与 canonical args 组成的 versioned request hash、Connection、CredentialVersion 和 ActionVersion。命中时必须校验当前身份、Instance 和 AuthorizationRoot 访问仍有效：已撤销则拒绝且不创建新 Call；仍有效且请求相同则返回原 Invocation/Call，不因换号、非撤销类授权更新或版本发布重新解析；请求不同返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：同一 `jti` 的重复 assertion 必须在 take-once 检查处拒绝；业务重试必须使用新 `jti` 并复用原 Idempotency-Key，由幂等记录返回原 Invocation/Call，且不能创建第二个 Call。
+Connection 先认证 current Principal、Consumer、ConsumerInstance 和 Actor，再按上述 stable subject scope + request key 查找 `idempotency_record`，命中前不能解析新的 current Grant、Connection 或 ActionVersion。首次请求在同一事务中冻结由协议 Action 标识与 canonical args 组成的 versioned request hash、Connection、CredentialVersion 和 ActionVersion。命中时必须校验当前身份、Instance 和 AuthorizationRoot 访问仍有效：已撤销则拒绝且不创建新 Call；仍有效且请求相同则返回原 Invocation/Call，不因换号、非撤销类授权更新或版本发布重新解析；请求不同返回 `IDEMPOTENCY_CONFLICT`。`jti` replay 与业务幂等分别落库：每次请求先完成签名、claims、instance status 和 recovery generation 校验；同一 `jti` 仅在 authenticated instance、Action、args hash 和 idempotency hash 全部相同的情况下查询其原 Invocation/Call，任何不匹配都拒绝且绝不创建第二个 Call。业务重试必须使用新 `jti` 并复用原 Idempotency-Key；由幂等记录返回原 Invocation/Call。
 
 ### 18.5 撤销线性化
 
@@ -1254,7 +1254,7 @@ stateDiagram-v2
 
 ```text
 LogicalEffect:
-  INTENT_RECORDED -> SUBMISSION_POSSIBLE
+  INTENT_RECORDED -> SUBMISSION_POSSIBLE | CANCELED_PRE_SUBMIT
   SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT
   SUBMISSION_POSSIBLE -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
   UNCERTAIN -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED
@@ -1266,7 +1266,7 @@ EffectDispatch:
   REQUEST_STARTED -> RESPONSE_RECEIVED | UNKNOWN
 ```
 
-只有 `FAILED_BEFORE_SUBMIT` 能证明该 dispatch 没有产生外部效果。进程在 `SUBMISSION_STARTED` 后崩溃，没有 Provider 证据时必须为 `UNKNOWN/UNCERTAIN`。
+`INTENT_RECORDED -> CANCELED_PRE_SUBMIT` 对应尚未创建 Dispatch 的 `AUTHORIZED` Call；取消事务必须原子 CAS Call 和 Effect。只有 `FAILED_BEFORE_SUBMIT` 或该无 Dispatch 取消路径能证明没有外部效果。进程在 `SUBMISSION_STARTED` 后崩溃，没有 Provider 证据时必须为 `UNKNOWN/UNCERTAIN`。
 
 ### 20.4 Crash Window
 
@@ -1285,7 +1285,7 @@ EffectDispatch:
 - READ_ONLY 在 deadline/retry budget 内可自动 retry。
 - MUTATING 只有 Provider 原生 idempotency key 或可证明 natural key 时可自动 retry。
 - Provider 原生 idempotency key 在首次 Dispatch 前与 LogicalEffect 一起持久化为包含 KMS key reference 的可恢复加密值、hash 和 codec version；相同 LogicalEffect 的 retry/recovery 解密并使用完全相同的 key，创建新 Attempt/Dispatch但不创建新 Call。仅保存 hash 不满足恢复要求。
-- 401 触发一次受控 refresh 后，只在确定请求未提交时 retry。
+- 401 只有在收到可信终态 receipt，且该 ProviderRelease 的已审核契约证明认证失败发生在 effect 应用前时，才可触发一次受控 refresh，并以同一 LogicalEffect、原 Provider 幂等键和新 Attempt/Dispatch retry；缺少该证据时进入 `UNCERTAIN`，不得自动重试。
 - 429/5xx 遵循 Provider retry-after、全局 budget 和 deadline。
 - `UNCERTAIN` 不进入普通 retry queue。
 
@@ -1343,7 +1343,7 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `consumer_declared_action` | declaration_id、action_version_id、action_id、tool_name | composite PK；unique declaration+tool_name；composite FK 到 ActionVersion |
 | `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
-| `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、invocation_id、expires_at | unique instance+jti_hash |
+| `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、action_version_id、invocation_id、expires_at | unique instance+jti_hash；相同绑定只查询原 Invocation，任一不匹配拒绝 |
 
 Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、recovery generation、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
 
@@ -1354,22 +1354,22 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `provider` | provider_id、key、display_name、status |
 | `provider_release` | release_id、provider_id、version、deployment_profile_json、auth_profile_json、executor_digest、checksum、state、revision |
 | `action` | action_id、provider_id、action_key |
-| `action_tool_name` | action_id、tool_name；PK tool_name，名称永久归属一个 Action |
+| `action_tool_name` | action_id、tool_name；PK tool_name；UNIQUE (action_id, tool_name)，名称永久归属一个 Action |
 | `action_version` | action_version_id、release_id、action_id、version、tool_name、schemas、scopes、effect_class、idempotency_support、digests、state、revision |
 | `catalog_review` | object_type/id、reviewer、decision、evidence_ref、reviewed_checksum |
 
-`provider_release(provider_id, version)` 和 `action_version(action_id, version)` 唯一。`action_version(action_id, tool_name)` 引用 `action_tool_name`，允许同一 Action 的多个版本复用名称，但不同 Action 不能共享；`consumer_declared_action(declaration_id, tool_name)` 唯一，发布事务不能把同名版本同时放入一个 declaration。发布后规范字段不可 UPDATE，只能变更 state/revision 或创建新版本。
+`provider_release(provider_id, version)` 和 `action_version(action_id, version)` 唯一。`action_version` 以 `(action_id, tool_name)` 复合 FK 引用 `action_tool_name(action_id, tool_name)`，允许同一 Action 的多个版本复用名称，但不同 Action 不能共享；`consumer_declared_action(declaration_id, tool_name)` 唯一，发布事务不能把同名版本同时放入一个 declaration。发布后规范字段不可 UPDATE，只能变更 state/revision 或创建新版本。
 
 ### 21.4 Account 与 Credential 表
 
 | 表 | 关键列 | 关键约束 |
 | --- | --- | --- |
-| `external_account_identity` | id、release_id、issuer_hash、tenant_hash、subject_hash、fingerprint、profile_ciphertext | unique release namespace+fingerprint |
+| `external_account_identity` | id、release_id、issuer_hash、tenant_hash、subject_hash、fingerprint、profile_ciphertext | unique release namespace+fingerprint；UNIQUE (id, release_id) |
 | `shared_scope` | id、state、revision | 不保存组织快照为永久权利 |
 | `shared_scope_principal` | scope_id、principal_id | direct path |
 | `shared_scope_org_ref` | scope_id、org_ref_hash | organization path |
-| `connection_account` | id、release_id、owner_type、owner_principal_id、shared_scope_id、external_identity_id、status、revisions/fences、current_credential_id | owner_type 与对应 owner 字段严格匹配 CHECK |
-| `credential_version` | id、connection_id、type、ciphertext、encrypted_dek、kms_ref、codec_version、scope_json、expiry、lifecycle、revision | one CURRENT per connection |
+| `connection_account` | id、release_id、owner_type、owner_principal_id、shared_scope_id、external_identity_id、status、revisions/fences、current_credential_id | owner_type 与对应 owner 字段严格匹配 CHECK；`(external_identity_id, release_id)` FK 至 identity；`(current_credential_id, id)` FK 至 CredentialVersion |
+| `credential_version` | id、connection_id、type、ciphertext、encrypted_dek、kms_ref、codec_version、scope_json、expiry、lifecycle、revision | one CURRENT per connection；UNIQUE (id, connection_id) |
 | `oauth_transaction` | id、principal_id、consumer_id?、consumer_instance_id?、release_id、purpose、state_hash、pkce_ciphertext、return_intent_id、expiry、status | unique state_hash；consumer/instance 同为空或同非空；take-once |
 | `credential_attempt` | id、connection_id、kind、source_version、status、provider_request_id、started/finished | refresh/replace/revoke durable evidence |
 
@@ -1379,7 +1379,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | --- | --- | --- |
 | `authorization_root` | id、principal_id、consumer_id、consumer_instance_id?、actor_key、provider_id、current_grant_id、fence、status | Direct: unique principal+consumer+instance+provider；Delegated: unique principal+consumer+actor+provider；composite current pointer FK |
 | `authorization_preview` | id、root_id、connection_id、declaration_id、action_set_digest、source_revisions_json、expiry、consumed_at | opaque token hash unique |
-| `authorization_consent` | id、root_id、preview_id、display_snapshot_json、locale、confirmed_at | immutable |
+| `authorization_consent` | id、root_id、preview_id、display_snapshot_ciphertext、snapshot_hash、codec_version、kms_key_ref、locale、confirmed_at | immutable；encryption context 绑定 environment/root/consent purpose |
 | `connection_grant` | id、root_id、consumer_instance_id?、connection_id、all frozen revisions/digests、status、consent_id | Direct instance must equal Root; Delegated is null; current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
 
@@ -1431,9 +1431,9 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
-- HTTP mutation 要求 `Idempotency-Key`。MCP mutation 要求 G-01 conformance 证明目标客户端版本提供并在响应丢失、transport retry 和用户重试时保留同一稳定 request key；只能映射已发布且验证过的 MCP 字段或客户端 request identity，不能假定私有字段一定存在。
+- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating tool 的已发布 input schema 必须包含 required `idempotencyKey`，由客户端生成并在响应丢失、transport retry 和用户重试中保持不变；Connection 拒绝缺失键的调用，先按该键查找幂等记录，再剥离该控制字段后校验 Provider args。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
 - 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发布或展示 Direct mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
-- Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等。
+- Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等，且完全相同的 `jti` 重放只可查询其原 Invocation。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。
 - 认证错误与资源不存在对跨主体请求使用相同外部状态，防止枚举。
 - `traceId`/`requestId` 由 edge 生成或验证，不采用任意长度用户输入。
@@ -1760,7 +1760,7 @@ messageKey 到用户文案的映射由 Connection Web/MCP client presentation �
 ### 25.2 Provider 错误映射
 
 - 400/422：若是已发布 Schema 与 Provider 合同不匹配，标记 Action regression并告警；不能全部归咎于用户。
-- 401：Credential invalid 或 refresh；精确区分确定未提交与可能已提交。
+- 401：Credential invalid 或 refresh；只有 ProviderRelease 已审核的终态 receipt 证明认证失败发生在 effect 应用前，才允许按 20.5 受控重试；否则视为可能已提交。
 - 403：scope/账号资源权限不足，不暴露其他账号。
 - 404：目标 Provider 资源不存在；与 Connection 资源不存在使用不同内部 code但谨慎文案。
 - 409：Provider natural conflict，可对账为 success 或 definite failure。
@@ -2264,7 +2264,7 @@ flowchart LR
 
 ### 34.3 Credential 失效或 KMS 故障
 
-- Provider 明确 `invalid_grant` 时原子标记 current Credential `INVALID`、清 current pointer、提升 Connection fence并进入 `REAUTH_REQUIRED`。
+- Provider 明确 `invalid_grant` 时，只有 refresh attempt 的 source 仍是 current pointer 且 Connection/credential revisions 的 CAS 匹配，才原子标记该 Credential `INVALID`、清 current pointer、提升 Connection fence 并进入 `REAUTH_REQUIRED`；否则只使 source 失效。
 - refresh timeout 或 commit unknown 不复用旋转型 refresh token；记录 uncertain attempt并要求 reauth或受控核验。
 - KMS 不可用时停止解密和全部新出站，不使用内存缓存或历史 Credential 降级。
 - 大面积异常先确认 OAuth client、KMS key policy、clock 和 egress，不能批量把 Credential 改成 `CURRENT`。

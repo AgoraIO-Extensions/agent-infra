@@ -104,7 +104,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
 - Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
-- Direct MCP Consumer 通过 MCP access token 调用；token 必须绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience，浏览器登录会话不能单独决定 Consumer 或实例。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
+- Direct MCP Consumer 通过 MCP access token 调用；Connection 只在已注册客户端凭据认证客户端，或已注册 ConsumerInstance 验证其注册密钥持有后，才签发绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience 的 token。浏览器登录会话、调用方提交的 Consumer/Instance ID 或公开 client ID 都不能单独决定 Consumer 或实例。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Direct Consumer 不使用 Actor。Delegated Consumer 注册时必须固定选择不使用 Actor 或要求 Actor；要求 Actor 时，每次授权和调用都必须携带已注册的稳定 Actor，缺失、未注册或当前 workload 无权代表该 Actor 时直接拒绝，不能回退到 Consumer 级授权。
 - Actor 对 Connection 是不透明稳定标识，不能要求 Connection 理解 Consumer 的内部领域模型。Agent Platform 必须要求 Actor，并以每个 Agent 的稳定 ID 作为 Actor。
 
@@ -204,7 +204,7 @@ OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务�
 ## 11. Action 执行、错误与审计
 
 - Consumer 提交 Action 和参数。HTTP 写 Action 必须通过 `Idempotency-Key` 提交由 Consumer 生成、跨重试稳定的业务幂等键，不能使用每次重试可能变化的传输层 request ID。
-- Direct MCP Client 版本只有在通过验收、证明其在响应丢失、传输重试和用户重试时提供并保留同一稳定 request key 后，才能发现和调用写 Action；没有该能力的客户端版本只能使用只读 Action。
+- 每个写 MCP tool 必须将客户端生成、跨响应丢失、传输重试和用户重试保持不变的 `idempotencyKey` 定义为必填输入；Connection 拒绝缺失键的写调用，并按该键查找幂等记录。Direct MCP Client 版本只有在通过验收、证明其实际提供并保留该稳定键后，才能发现和调用写 Action；没有该能力的客户端版本只能使用只读 Action。
 - Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行前校验该版本及其 fence 仍可用，再注入凭证并调用 Provider。并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
 - 写 Action 在访问 Provider 前，把幂等键与已认证 Principal、Consumer、ConsumerInstance、Actor（如有）、Action 和请求摘要绑定，并提交稳定调用 ID、调用记录和外部效果意图。
 - Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以这些稳定主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、ActionVersion 和请求摘要；命中同键、同请求时，当前身份、实例或授权已撤销则拒绝且绝不重新执行，否则返回原调用，不因换号、非撤销类授权更新或版本发布创建第二次调用；同键不同请求拒绝为冲突。
