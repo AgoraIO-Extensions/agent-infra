@@ -268,7 +268,7 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 Connection 对 Consumer 提供两个调用协议入口，并为管理操作提供独立 HTTP API：
 
-- Direct MCP Client 使用 MCP；MCP access token 必须绑定服务端解析的 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience。浏览器登录会话只完成用户认证，不能单独决定 Consumer、ConsumerInstance 或 Grant。
+- Direct MCP Client 使用 MCP；MCP access token 必须绑定服务端解析的 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience。G-01 验证目标客户端支持 sender-constrained token 时，token 还必须绑定实例公钥 thumbprint，且每次 MCP 调用验证对应 proof-of-possession；不支持该标准能力的客户端版本不得用私有 PoP 伪装为受支持，而使用短 TTL、refresh rotation、replay detection 和实例级撤销，并作为 G-01 conformance 的明确风险项。浏览器登录会话只完成用户认证，不能单独决定 Consumer、ConsumerInstance 或 Grant。
 - Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托断言。
 - Connection Web 和管理员工具使用用户态 HTTP/OpenAPI，不作为 Direct Action 调用协议。
 
@@ -304,7 +304,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。新 ConsumerInstance 注册先由该 Consumer 的注册客户端凭据认证调用端，并在同一事务绑定认证结果、当前 Principal 和实例公钥；已注册实例则验证其注册 key 的持有后才签发 token。浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为上述证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。新 ConsumerInstance 注册先由该 Consumer 的注册客户端凭据认证调用端，并在同一事务绑定认证结果、当前 Principal 和实例公钥；已注册实例则验证其注册 key 的持有后才签发 token。G-01 验证支持 sender-constrained token 时，Connection 将 token 绑定实例 key thumbprint 并在每个 MCP 请求验证 proof-of-possession；不支持时不得假称有 PoP。浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为上述证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
 
 Delegated Consumer 注册时固定选择 `NONE` 或 `REQUIRED` Actor 模式，再认证注册 workload 并通过 Connection token exchange 获取短期委托令牌。token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；企微等非交互渠道按 14.2 校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后，由 Connection 配置的受信身份签发方签发短期断言。该 evidence 必须绑定来源事件、workload、Consumer、ConsumerInstance、Actor（如适用）、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。身份签发方还必须校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。
 

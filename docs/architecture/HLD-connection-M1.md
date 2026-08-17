@@ -428,7 +428,7 @@ invocationId, callId, attemptId, effectId, dispatchId
 
 1. Action args 不能包含可信 identity、Connection 或 Credential。
 2. 一个 Grant 始终绑定一个 exact Connection 和不可变 ActionVersion 集。
-3. 同一 `principal + consumer + actor? + provider` 最多一个 current Grant。
+3. Direct 模式的同一 `principal + consumer + consumerInstance + provider` 最多一个 current Grant；Delegated 模式的同一 `principal + consumer + actorKey + provider` 最多一个 current Grant。
 4. 一个 Connection 最多一个 current CredentialVersion。
 5. 历史 Credential 不能被新 Invocation 自动选择。
 6. AuthorizedInvocation 一经创建不改变 Principal、Consumer、Actor、Connection、CredentialVersion、Action 或 args hash。
@@ -923,6 +923,7 @@ ProviderRelease/ActionVersion；ActionVersion current executable state 为 `PUBL
 ∩ Principal current ConnectionGrant confirmed exact ActionVersion/capability digest
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
+∩ `ActionVersion.providerReleaseId` 精确等于 ConnectionAccount 的 `providerReleaseId`
 ∩ current Credential scopes
 ∩ Connection/Credential/Catalog/recovery fences
 ```
@@ -1255,7 +1256,7 @@ stateDiagram-v2
 ```text
 LogicalEffect:
   INTENT_RECORDED -> SUBMISSION_POSSIBLE | CANCELED_PRE_SUBMIT
-  SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT
+  SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT: only when every Dispatch is PREPARED and cancellation atomically CASes them
   SUBMISSION_POSSIBLE -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED | UNCERTAIN
   UNCERTAIN -> CONFIRMED_APPLIED | CONFIRMED_NOT_APPLIED
 
@@ -1266,7 +1267,7 @@ EffectDispatch:
   REQUEST_STARTED -> RESPONSE_RECEIVED | UNKNOWN
 ```
 
-`INTENT_RECORDED -> CANCELED_PRE_SUBMIT` 对应尚未创建 Dispatch 的 `AUTHORIZED` Call；取消事务必须原子 CAS Call 和 Effect。只有 `FAILED_BEFORE_SUBMIT` 或该无 Dispatch 取消路径能证明没有外部效果。进程在 `SUBMISSION_STARTED` 后崩溃，没有 Provider 证据时必须为 `UNKNOWN/UNCERTAIN`。
+`INTENT_RECORDED -> CANCELED_PRE_SUBMIT` 对应尚未创建 Dispatch 的 `AUTHORIZED` Call；取消事务必须原子 CAS Call 和 Effect。`SUBMISSION_POSSIBLE -> CANCELED_PRE_SUBMIT` 仅在所有 Dispatch 仍为 `PREPARED` 且取消事务原子 CAS Call、Effect 和全部 Dispatch 时允许。任一 Dispatch 已到达 `SUBMISSION_STARTED` 或之后，永久禁止该取消转换；缺失终态证据时必须为 `UNKNOWN/UNCERTAIN`。只有 `FAILED_BEFORE_SUBMIT` 或该无 Dispatch 取消路径能证明没有外部效果。
 
 ### 20.4 Crash Window
 
@@ -1780,7 +1781,7 @@ deadline 取 Consumer 请求、Action 上限、Provider 上限和服务端最大
 ### 25.4 取消
 
 - `AUTHORIZED/PREPARED` 只能通过原子 pre-submit cancel 进入 `CANCELED_PRE_SUBMIT`，并确定没有外部效果。
-- 取消事务锁定 ActionCall、LogicalEffect 和 current EffectDispatch（如有）；Call 为 `AUTHORIZED` 且尚无 Dispatch 时可直接 CAS Call/Effect，已有 Dispatch 时仅在其仍为 `PREPARED` 时同时 CAS Call/Effect/Dispatch 到 `CANCELED_PRE_SUBMIT`。worker 必须在同一 CAS 中将 Call `DISPATCH_READY -> DISPATCHING`、保持 Effect `SUBMISSION_POSSIBLE`、Dispatch `PREPARED -> SUBMISSION_STARTED`，因此只有一方能成功。
+- 取消事务锁定 ActionCall、LogicalEffect 和全部 current EffectDispatch；Call 为 `AUTHORIZED` 且尚无 Dispatch 时可直接 CAS Call/Effect，已有 Dispatch 时只有全部仍为 `PREPARED` 才能同时 CAS Call/Effect/全部 Dispatch 到 `CANCELED_PRE_SUBMIT`。任一 Dispatch 已为 `SUBMISSION_STARTED` 或之后时取消不得改写为 pre-submit；worker 必须在同一 CAS 中将 Call `DISPATCH_READY -> DISPATCHING`、保持 Effect `SUBMISSION_POSSIBLE`、Dispatch `PREPARED -> SUBMISSION_STARTED`，因此只有一方能成功。
 - `SUBMISSION_STARTED` 后取消只停止等待和后续 retry，不撤回 Provider 请求。
 - Provider 提供明确 cancel API 时，它是另一个受控 Action/Effect，不是本地状态改写。
 - Call 最终状态保留实际结果，不能因用户取消伪装为未执行。
