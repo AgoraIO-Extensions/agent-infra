@@ -1199,7 +1199,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
 
 1. 事务 A 锁 Consumer -> Grant declaration -> ConsumerInstance -> applicable ActorBinding -> Root -> Grant -> Connection -> frozen CredentialVersion -> ActionVersion -> Call，固定 exact revisions并创建 Attempt/Effect/Dispatch `PREPARED`。
-2. 事务 B 按相同顺序重读 current 状态，在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，然后创建 durable egress hop；任一状态已变化都失败。
+2. 事务 B 按相同顺序重读 current 状态，并原子取得 dispatch admission lease：在同一 CAS 中把 Call `DISPATCH_READY -> DISPATCHING`、Dispatch `PREPARED -> SUBMISSION_STARTED`，创建不可发送的 durable egress hop 和 lease proof。该提交是 dispatch 的线性化点；撤销、断开、停用或 fence/revision 变化与它竞争同一行锁/CAS，任一方先提交后另一方必须失败。
 3. 提交后才签发绑定 exact dispatch 的短期 egress assertion。
 4. 任一校验失败都在 `SUBMISSION_STARTED` 前结束，证明没有本次外部副作用。
 
@@ -1493,14 +1493,20 @@ M1 不暴露上游的 `search_actions`、`get_action_guide` 或通用 `execute_a
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["repository", "head", "base", "title"],
+    "required": ["repository", "head", "base", "title", "idempotencyKey"],
     "properties": {
       "repository": { "type": "string", "maxLength": 256 },
       "head": { "type": "string", "maxLength": 255 },
       "base": { "type": "string", "maxLength": 255 },
       "title": { "type": "string", "maxLength": 256 },
       "body": { "type": "string", "maxLength": 65536 },
-      "draft": { "type": "boolean" }
+      "draft": { "type": "boolean" },
+      "idempotencyKey": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "description": "Stable client-generated key reused for retries of this logical request."
+      }
     }
   }
 }

@@ -304,7 +304,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。Connection 仅在已注册客户端凭据认证客户端，或已注册 ConsumerInstance 验证其注册 key 的持有后签发该 token；浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为该证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
+Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。新 ConsumerInstance 注册先由该 Consumer 的注册客户端凭据认证调用端，并在同一事务绑定认证结果、当前 Principal 和实例公钥；已注册实例则验证其注册 key 的持有后才签发 token。浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为上述证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
 
 Delegated Consumer 注册时固定选择 `NONE` 或 `REQUIRED` Actor 模式，再认证注册 workload 并通过 Connection token exchange 获取短期委托令牌。token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；企微等非交互渠道按 14.2 校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后，由 Connection 配置的受信身份签发方签发短期断言。该 evidence 必须绑定来源事件、workload、Consumer、ConsumerInstance、Actor（如适用）、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。身份签发方还必须校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。
 
@@ -517,7 +517,7 @@ sequenceDiagram
     C->>D: 解析 current Grant 和唯一 Connection
     C->>C: 校验 Action 参数和 egress policy
     C->>D: 冻结 Consumer/declaration/Instance revision、Grant、Credential 和 ActionVersion
-    C->>D: 出站前重校验 current revision、scope 和 fence，持久化 Call/Effect intent
+    C->>D: 原子取得 dispatch admission lease；重校验 current revision、scope 和 fence，并持久化 Call/Effect intent
     C->>X: 注入凭证并执行
     X-->>C: 结果或错误
     C->>D: 脱敏并完成 Call、Effect、审计和 outbox

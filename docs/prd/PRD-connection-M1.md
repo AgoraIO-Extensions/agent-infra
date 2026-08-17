@@ -104,7 +104,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
 - Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
-- Direct MCP Consumer 通过 MCP access token 调用；Connection 只在已注册客户端凭据认证客户端，或已注册 ConsumerInstance 验证其注册密钥持有后，才签发绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience 的 token。浏览器登录会话、调用方提交的 Consumer/Instance ID 或公开 client ID 都不能单独决定 Consumer 或实例。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
+- Direct MCP Consumer 通过 MCP access token 调用；新 ConsumerInstance 注册与后续 token 签发均须先由该 Consumer 的注册客户端凭据认证调用端：注册事务把该认证结果、实例公钥和当前 Principal 原子绑定；已注册实例则验证其注册密钥持有。Connection 只在此前提下签发绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience 的 token。浏览器登录会话、调用方提交的 Consumer/Instance ID 或公开 client ID 都不能单独创建或决定 Consumer、实例或实例密钥。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Direct Consumer 不使用 Actor。Delegated Consumer 注册时必须固定选择不使用 Actor 或要求 Actor；要求 Actor 时，每次授权和调用都必须携带已注册的稳定 Actor，缺失、未注册或当前 workload 无权代表该 Actor 时直接拒绝，不能回退到 Consumer 级授权。
 - Actor 对 Connection 是不透明稳定标识，不能要求 Connection 理解 Consumer 的内部领域模型。Agent Platform 必须要求 Actor，并以每个 Agent 的稳定 ID 作为 Actor。
 
