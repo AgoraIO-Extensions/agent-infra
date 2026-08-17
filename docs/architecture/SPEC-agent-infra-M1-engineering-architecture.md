@@ -472,6 +472,11 @@ M1 默认从精确上游 Commit 构建不可变私有 package，`connection-api`
 解决 Provider/OAuth/executor 通用缺口时，才建立保留上游历史的独立最小 Fork；Connection 领域模型和权威数据
 不得进入 Fork。升级必须经过隔离、供应链和契约测试。
 
+固定基线采用 Apache License 2.0 并包含 `NOTICE.md`。内部 package、镜像或 Fork 发布前必须验证实际产物随附
+适用的 `LICENSE.txt`、`NOTICE.md`、third-party notice 和修改声明，并生成依赖及 Provider metadata/schema/生成
+资产的许可证兼容性报告。SBOM 不能替代兼容性审查；Logo、Icon、截图等品牌资产默认排除，确需使用时单独取得
+授权。首次发布及基线、依赖或资产范围变化必须经过 Legal/开源合规签收。
+
 ### 13.2 授权模型
 
 Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Action 集合`、外部账号归属、Credential 和 Action 执行的权威来源。Platform DB 只保存 Agent 内部 policy、任务状态和 Connection `callId` 引用。
@@ -751,6 +756,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | --- | --- |
 | TypeScript 缺少 `controller-runtime` 同等级框架 | 控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用 `kind` 做完整生命周期测试 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；身份、授权和账号选择由 Connection Adapter/Core 强制；只有通用执行缺口满足最小 Fork 准入条件时才补丁；增加跨用户攻击测试 |
+| OpenConnector 或 Provider 资产合规义务遗漏 | 固定 Apache-2.0 与 NOTICE 基线；发布产物验证许可证、NOTICE、修改声明和 third-party notice；品牌资产默认排除；SBOM、兼容性报告和 Legal/开源合规签收共同作为门禁 |
 | 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
 | 自定义镜像无法自动识别端口和能力 | 使用 OCI Runtime Manifest；Owner 不填写技术参数；创建与运行时验证 Manifest |
 | Consumer 与 Connection 无分布式事务 | Connection 独立保存授权并在线校验；Consumer 仅保存稳定 `callId` 和脱敏结果引用 |
@@ -775,6 +781,8 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - 全 TypeScript 是否满足平台与运维团队的长期维护能力。
 - TypeScript Kubernetes 调谐器的测试与值班责任是否可接受。
 - OpenConnector 固定依赖的构建与升级责任，以及触发最小 Fork 时的维护归属和上游同步方式。
+- OpenConnector、依赖、Provider metadata/schema 和品牌资产的许可证兼容性、NOTICE/归属义务及 Legal/开源
+  合规签收责任。
 - OCI Runtime Manifest 是否能进入 Company Hub 的镜像发布规范。
 - 公司身份、KMS、对象存储、LLM Gateway 和企微现有接口是否满足本文所需契约。
 

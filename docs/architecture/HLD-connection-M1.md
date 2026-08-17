@@ -302,6 +302,11 @@ Domain 不依赖 Hono、MCP SDK、Drizzle、KMS SDK、OpenConnector 或 Provider
 
 - M1 默认不创建 Fork。构建流水线从精确上游 commit 生成不可变内部 package，记录 source commit、package
   digest、license 和 SBOM；`agent-infra` 只依赖该精确 digest，不使用 tag 或浮动 range，也不复制上游源码。
+- 固定 commit 的根许可证为 Apache License 2.0，并包含 `NOTICE.md`。内部 package、镜像或 Fork 必须随附适用的
+  `LICENSE.txt` 和 `NOTICE.md`，保留适用的版权、专利、商标与归属声明；修改上游文件时必须显著标明修改。
+- SBOM 只提供审查输入，不能替代许可证兼容性结论或义务履行。实际打包的依赖、Provider metadata/schema、
+  生成资产和 API 文档必须形成 third-party notice 与兼容性报告；Logo、Icon、截图等品牌资产默认不打包，确需
+  使用时单独取得授权并遵循 Provider 条款。首次发布及每次基线或资产范围变化都需 Legal/开源合规签收。
 - OpenConnector 只允许被 Infrastructure Adapter 依赖；Connection Domain、数据库和协议入口不能 import
   OpenConnector 类型或调用其 Runtime API。
 - 每次升级生成 source、Catalog、license/SBOM、executor digest 和兼容矩阵 diff。上游变更不能直接改变已发布
@@ -348,7 +353,8 @@ connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenC
 #### 10.5.2 Phase 1：固定依赖，不创建 Fork
 
 1. 构建流水线检出精确 commit，执行 source/license/SBOM 审计，只打包 10.1 允许复用的模块，生成不可变内部
-   package 和 digest；`agent-infra` 只记录并消费该 digest。
+   package 和 digest；产物随附适用的 `LICENSE.txt`、`NOTICE.md`、third-party notice 和修改声明，并通过
+   license compatibility 与 Legal/开源合规签收后，`agent-infra` 才能记录并消费该 digest。
 2. 在 `agent-infra` 实现薄 Adapter，先完成 GitHub PoC：导入 Provider/Action schema、用 Connection 选定的
    Credential 调用 read Action 和 create pull request，并把结果映射回 ActionCall。
 3. PoC 必须证明 executor 不读取上游 global alias 或 SQLite/D1，不启动 Runtime Server/Web Console，不接收账号
@@ -360,7 +366,7 @@ connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenC
 
 | ID | 额外研发项 | 代码归属与 OpenConnector 处理 | 完成条件 | 对应 WP |
 | --- | --- | --- | --- | --- |
-| OC-01 | 固定并审计上游基线 | 构建/供应链；直接使用精确上游 commit，不改代码 | 生成 source commit、内部 package digest、license、SBOM、依赖和动态加载清单；构建不装配 Runtime Server、Web Console、SQLite/D1、global alias 和动态代码入口 | WP0、WP3 |
+| OC-01 | 固定并审计上游基线 | 构建/供应链；直接使用精确上游 commit，不改代码 | 生成 source commit、内部 package digest、SBOM、license compatibility report、third-party notice 和依赖/动态加载清单；验证产物随附 `LICENSE.txt`、`NOTICE.md` 与修改声明，排除未授权品牌资产并取得 Legal/开源合规签收；构建不装配 Runtime Server、Web Console、SQLite/D1、global alias 和动态代码入口 | WP0、WP3 |
 | OC-02 | 建立企业身份与 Consumer 模型 | `connection-core`；不进入 OpenConnector | Principal、Consumer、ConsumerInstance、Actor、Direct Session、workload identity 和 delegated assertion 完成禁用、撤销及跨主体负向测试 | WP2 |
 | OC-03 | 建立独立权威数据库 | Connection Store/migration；不进入 OpenConnector | PostgreSQL 保存身份映射、Consumer、Catalog、账号、Credential、Grant、Call、Effect、审计与恢复状态；不复用 alias 或上游本地存储 | WP1-WP8 |
 | OC-04 | 建立受控 Catalog 发布链 | Adapter 转换上游 metadata；缺少结构化导出时才评估最小补丁 | ProviderRelease/ActionVersion 不可变；schema、scope/effect、declaration、digest、兼容和 kill switch 校验通过 | WP3 |
@@ -388,6 +394,8 @@ Fork 不是 Phase 1 前置条件。只有以下条件全部满足时才创建独
 允许的最小补丁仅包括：导出结构化 metadata/schema、注入 Credential handle 或 controlled fetch、配置企业
 endpoint/auth、修复 Provider adapter，以及阻断动态加载、网络旁路或 Secret 日志。补丁发布为新的不可变内部
 package；`agent-infra` 更新精确 digest 和兼容证据，不引用 Fork 分支或浮动 tag。
+Fork 构建还必须保留上游许可证和 NOTICE、为修改文件添加显著修改声明，并重新生成 third-party notice 与
+license compatibility report；这些证据未获 Legal/开源合规签收时不得发布 package 或镜像。
 
 ## 11. 标识、Revision 与全局不变量
 
@@ -1842,6 +1850,8 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 ### 27.6 供应链与运行身份
 
 - Connector Kernel、Provider adapter 和 image 使用 digest/signature/SBOM。
+- 构建门禁验证 OpenConnector `LICENSE.txt`、`NOTICE.md`、修改声明和 third-party notice 已进入实际发布产物；
+  SBOM 不替代许可证兼容性报告、品牌资产授权或 Legal/开源合规签收。
 - `connection-api`、egress、migration、diagnostic、recovery 使用不同 ServiceAccount。
 - 容器 non-root、read-only rootfs、drop capabilities、seccomp 和最小 writable volumes。
 - Dependency security update 不能绕过 Catalog compatibility tests。
@@ -2176,7 +2186,7 @@ flowchart LR
 | WP0 决策与契约 | Connection Owner | 关闭 G-01 至 G-08；冻结 OpenAPI/MCP、状态与错误 skeleton | PRD、工程 Spec、HLD、ADR 无冲突；初期 Provider 范围和 legacy 结论可追溯 |
 | WP1 工程与数据底座 | Connection Owner/DBA | `connection-api`、Connection DB、migration、ports、Fake Adapter | 空库和前一版本升级/回退验证；缺 DB/KMS/Identity 配置 fail readiness |
 | WP2 Identity 与 Consumer | Identity/Security | Principal、remote MCP OAuth session、Consumer、Instance、workload key | 目标 Direct MCP Client 分别通过 OAuth conformance；mTLS/assertion、禁用与重放负向测试通过 |
-| WP3 Catalog 与 Kernel | Provider Owner | pinned Kernel、ProviderRelease、ActionVersion、发布/停用 | digest/SBOM/allowlist 可核验；任意 URL/script 和未签版本不能发布 |
+| WP3 Catalog 与 Kernel | Provider Owner | pinned Kernel、ProviderRelease、ActionVersion、发布/停用 | digest/SBOM/allowlist 可核验；`LICENSE.txt`、`NOTICE.md`、修改声明、third-party notice 和兼容性报告随产物验证，Legal/开源合规签收完成；任意 URL/script、未授权品牌资产和未签版本不能发布 |
 | WP4 Account 与 Credential | Connection Owner/Security | Personal/Shared、OAuth/PAT、stable identity、rotation | 多账号和 current Credential 约束通过；Secret canary 零命中 |
 | WP5 Grant 与 Consent | Connection Owner/Product | preview、Consent、AuthorizationRoot、immutable Grant | 换号/扩权/撤销竞态与 Alice/Bob/Consumer/Actor 负向矩阵通过 |
 | WP6 Consumer 接口 | Connection Owner | MCP、Direct Auth、Delegated OpenAPI、查询接口 | Direct MCP Client 只配置 Connection 可登录；两入口产生相同内部授权语义 |
@@ -2381,6 +2391,11 @@ Consumer 可以在自己的数据库保存内部 policy 和 `callId`，但这些
 ### 37.2 OpenConnector 固定版本核验范围
 
 本 HLD 的参考基线固定为 commit `0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674`。设计评审只认可对该 commit 重新核验的以下事实：
+
+- 根 `LICENSE.txt` 是 Apache License 2.0；固定 commit 与核验时 `main` 指向同一 license blob
+  `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64`。
+- 固定 commit 包含 `NOTICE.md`，声明 OOMOL Connect 使用 Apache-2.0，但第三方 Provider/App 的名称、商标、
+  Logo、Icon、API、文档和品牌资产仍归各自权利人。该事实不替代公司 Legal 对具体发布物的审查。
 
 - Provider/Action schema 和 executor 组织方式。
 - OAuth PKCE/state helper、Credential public profile 和 refresh single-flight 思路。
