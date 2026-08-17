@@ -165,6 +165,7 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 ### 9.1 授权单位
 
 - 授权由 Connection 保存，绑定 Principal、Consumer、Direct Consumer 的具体 ConsumerInstance（或 Delegated 的可选 Actor）、Provider、具体 Connection 和确认过的 Action 集合。
+- Direct 调用只有认证出的 ConsumerInstance 与 Grant 绑定的实例精确相等时才能使用该 Grant；另一个活跃实例也必须单独确认。
 - Consumer 只能调用自己已发布声明、用户已确认且 Connection 仍允许的 Action。
 - 授权界面同时展示 Consumer、Actor（如有）、外部账号、Action、外部效果和所需 scope。
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。

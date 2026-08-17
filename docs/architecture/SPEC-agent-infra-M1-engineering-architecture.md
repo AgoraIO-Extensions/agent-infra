@@ -487,6 +487,7 @@ Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Ac
 Grant 与 Consumer declaration 共同引用的 exact ActionVersion 当前处于
 `PUBLISHED` 或 `DEPRECATED` 可执行态，且未 `DISABLED`
 ∩ Grant 冻结的 immutable declaration 仍可执行（`PUBLISHED` 或被该 Grant 引用的 `SUPERSEDED`）且包含该 exact ActionVersion
+∩ Direct 调用的已认证 ConsumerInstance 精确等于 Grant 绑定的 ConsumerInstance；Delegated Grant 不绑定实例
 ∩ Principal、Consumer 和适用的 ConsumerInstance 当前有效状态
 ∩ Principal 对个人 Connection 的所有权或公司共享 Connection 的当前使用资格
 ∩ Grant 固定的 Consumer/Actor、Connection、exact ActionVersion 和能力指纹

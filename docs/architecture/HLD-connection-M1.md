@@ -887,6 +887,7 @@ Root，避免不同 Grant 行之间出现竞态。
 type ConnectionGrant = {
   grantId: string;
   authorizationRootId: string;
+  consumerInstanceId: string | null;
   connectionId: string;
   connectionRevision: bigint;
   connectionExecutionFence: bigint;
@@ -906,7 +907,11 @@ type ConnectionGrant = {
 };
 ```
 
-Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一事务把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect 仅在 stable account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建 replacement Grant；否则必须重新 preview/consent。
+Direct Grant 的 `consumerInstanceId` 必须等于其 AuthorizationRoot 的实例；Delegated Grant 必须为空并按 Actor（如有）
+查找。Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一
+事务把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect 仅在 stable
+account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建 replacement Grant；否则必须
+重新 preview/consent。
 
 ### 17.3 有效能力公式
 
@@ -914,6 +919,7 @@ Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen
 Grant 冻结的 `consumerDeclarationId` 仍为可执行的 immutable declaration（`PUBLISHED` 或被该 Grant 引用的
 `SUPERSEDED`），且其中包含 exact
 ProviderRelease/ActionVersion；ActionVersion current executable state 为 `PUBLISHED` 或 `DEPRECATED`
+∩ Direct 调用的已认证 `consumerInstanceId` 精确等于 Grant 的 `consumerInstanceId`；Delegated Grant 的该字段为空
 ∩ Principal current ConnectionGrant confirmed exact ActionVersion/capability digest
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
@@ -1371,13 +1377,13 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 
 | 表 | 关键列 | 关键约束 |
 | --- | --- | --- |
-| `authorization_root` | id、principal_id、consumer_id、actor_key、provider_id、current_grant_id、fence、status | unique principal+consumer+actor+provider；composite current pointer FK |
+| `authorization_root` | id、principal_id、consumer_id、consumer_instance_id?、actor_key、provider_id、current_grant_id、fence、status | Direct: unique principal+consumer+instance+provider；Delegated: unique principal+consumer+actor+provider；composite current pointer FK |
 | `authorization_preview` | id、root_id、connection_id、declaration_id、action_set_digest、source_revisions_json、expiry、consumed_at | opaque token hash unique |
 | `authorization_consent` | id、root_id、preview_id、display_snapshot_json、locale、confirmed_at | immutable |
-| `connection_grant` | id、root_id、connection_id、all frozen revisions/digests、status、consent_id | current pointer only via root |
+| `connection_grant` | id、root_id、consumer_instance_id?、connection_id、all frozen revisions/digests、status、consent_id | Direct instance must equal Root; Delegated is null; current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
 
-Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
+Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。Direct Root/Grant 的 `consumer_instance_id` 必须非空且相等；Delegated Root/Grant 必须为空。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
