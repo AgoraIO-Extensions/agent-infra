@@ -255,8 +255,8 @@ Connection 在产品上是独立系统，但 M1 复用同一 Web Shell 和公司
 
 对话回复和状态流使用 `text/event-stream`：
 
-- 每个事件包含稳定 `eventId`、`executionId`、递增 `sequence`、`type`、`occurredAt` 和类型化 payload。
-- 浏览器通过 `Last-Event-ID` 或显式游标重连。
+- 每个事件包含稳定 `eventId`、`executionId`、Execution 内递增 `sequence`、Conversation 内严格递增 `conversationCursor`、`type`、`occurredAt` 和类型化 payload。
+- 浏览器通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前有权访问的 Conversation。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。
 - 心跳只用于保持连接，不进入业务时间线。
 - 同一事件可能被重复投递，前端按 `eventId` 去重。
