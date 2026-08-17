@@ -1251,7 +1251,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `provider` | provider_id、key、display_name、status |
 | `provider_release` | release_id、provider_id、version、deployment_profile_json、auth_profile_json、executor_digest、checksum、state、revision |
 | `action` | action_id、provider_id、action_key |
-| `action_tool_name` | action_id、tool_name | PK tool_name；名称永久归属一个 Action |
+| `action_tool_name` | action_id、tool_name；PK tool_name，名称永久归属一个 Action |
 | `action_version` | action_version_id、release_id、action_id、version、tool_name、schemas、scopes、effect_class、idempotency_support、digests、state、revision |
 | `catalog_review` | object_type/id、reviewer、decision、evidence_ref、reviewed_checksum |
 
