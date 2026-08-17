@@ -124,7 +124,7 @@
 
 | 方案 | 描述 | 优点 | 代价与风险 |
 | --- | --- | --- | --- |
-| A. 企业领域核心 + pinned OpenConnector Kernel | Connection 自己实现身份、授权、存储、审计和可靠性，只复用经过审核的 Provider/OAuth/executor | 独立服务边界清晰；保留上游 Provider 资产；可支持多 Consumer | 需要维护内部 Fork 和 Adapter |
+| A. 企业领域核心 + pinned OpenConnector Kernel | Connection 自己实现身份、授权、存储、审计和可靠性，只复用经过审核的 Provider/OAuth/executor | 独立服务边界清晰；保留上游 Provider 资产；可支持多 Consumer | 需要维护 Adapter、固定依赖和升级验证；只有真实缺口才维护最小 Fork |
 | B. 部署上游 Runtime | 把 OpenConnector Runtime Server 暴露给 Consumer | 初期接入快 | deployment token、global alias、SQLite/D1 和授权模型不满足企业隔离 |
 | C. 完全自研 Connector Engine | 所有 Provider、OAuth 和 executor 自研 | 控制最强 | M1 成本最高，重复实现大量 Provider 细节 |
 
@@ -298,13 +298,18 @@ Domain 不依赖 Hono、MCP SDK、Drizzle、KMS SDK、OpenConnector 或 Provider
 - 动态 JavaScript、npm package 或任意 Credential resolver。
 - Provider 返回后才 best-effort 写审计的流程。
 
-### 10.3 Fork 治理
+### 10.3 上游依赖与最小补丁治理
 
-- 依赖精确 commit 和私有 package digest，不使用 tag 或浮动 range。
-- 每次升级生成 Catalog diff、license/SBOM、executor digest 和兼容矩阵。
-- Provider adapter 需要代码、安全、scope、endpoint 和真实测试五项签收。
-- 上游变更不能直接改变已发布 ActionVersion；必须产生新版本。
-- 紧急安全停用通过 Connection Catalog kill switch，不能等待 Fork 发布。
+- M1 默认不创建 Fork。构建流水线从精确上游 commit 生成不可变内部 package，记录 source commit、package
+  digest、license 和 SBOM；`agent-infra` 只依赖该精确 digest，不使用 tag 或浮动 range，也不复制上游源码。
+- OpenConnector 只允许被 Infrastructure Adapter 依赖；Connection Domain、数据库和协议入口不能 import
+  OpenConnector 类型或调用其 Runtime API。
+- 每次升级生成 source、Catalog、license/SBOM、executor digest 和兼容矩阵 diff。上游变更不能直接改变已发布
+  ActionVersion；必须产生新版本。
+- 只有 10.5.4 的 Fork 准入条件全部满足时，才建立保留上游 Git 历史的独立 Fork 仓库并发布新的不可变内部
+  package。Fork 不与 `agent-infra` 混仓，也不能接收 Connection 领域代码。
+- Provider adapter 需要代码、安全、scope、endpoint 和真实测试五项签收。紧急安全停用通过 Connection
+  Catalog kill switch，不能等待依赖或 Fork 发布。
 
 ### 10.4 Action 说明与发现契约
 
@@ -319,6 +324,70 @@ Markdown；它不是原始 input/output schema 接口。AI 只负责选择 Actio
 
 M1 只复用 Provider/Action 元数据、schema 和 executor，不复用上述发现契约或 Markdown renderer，也不维护逐
 Action Guide。Direct MCP 按 22.3 节从版本化 ActionVersion 直接生成当前主体已授权的 Action tool。
+
+### 10.5 固定 Commit 基线上的增量研发清单
+
+本清单定义从 OpenConnector commit `0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674` 到可交付 Connection M1
+之间必须额外完成的工作。固定 Commit 只提供 10.1 所列参考资产；能够编译或运行上游 Runtime，不代表以下
+Connection 能力已经具备。每项只有在实现、自动化测试和对应评审证据齐全后才能关闭。
+
+#### 10.5.1 代码归属与依赖方向
+
+| 代码层 | 仓库与模块 | 负责内容 | OpenConnector 依赖规则 |
+| --- | --- | --- | --- |
+| Connection Domain | `agent-infra/packages/connection-core` | Principal、Consumer、Account、Grant、Call、Effect 和领域状态机 | 禁止依赖 |
+| OpenConnector Adapter | `agent-infra/packages/openconnector-adapter`，出现首个真实调用方时创建 | metadata/schema 转换、Credential handle 和 controlled fetch 注入、executor 调用与错误映射 | 唯一允许直接依赖内部 OpenConnector package 的业务模块 |
+| 进程装配 | `agent-infra/apps/connection-api` | 装配协议、Core ports、Adapter、Store、KMS 和 Egress | 只能通过 Adapter 使用，不直接调用上游 Runtime |
+| OpenConnector 基线 | 上游仓库的精确 commit；必要时为独立 Fork 仓库 | Provider、Action、OAuth helper 和 executor 的通用实现 | 不复制进 `agent-infra`，不保存 Connection 领域状态 |
+
+```text
+connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenConnector package
+                                      \-> KMS / Egress / Connection Store adapters
+```
+
+#### 10.5.2 Phase 1：固定依赖，不创建 Fork
+
+1. 构建流水线检出精确 commit，执行 source/license/SBOM 审计，只打包 10.1 允许复用的模块，生成不可变内部
+   package 和 digest；`agent-infra` 只记录并消费该 digest。
+2. 在 `agent-infra` 实现薄 Adapter，先完成 GitHub PoC：导入 Provider/Action schema、用 Connection 选定的
+   Credential 调用 read Action 和 create pull request，并把结果映射回 ActionCall。
+3. PoC 必须证明 executor 不读取上游 global alias 或 SQLite/D1，不启动 Runtime Server/Web Console，不接收账号
+   selector；Credential 由 Connection 注入，所有网络请求经过 controlled fetch/Egress。
+4. 对 metadata 导出、Credential 注入、endpoint 配置、Secret 日志、错误映射和网络旁路分别建立 conformance
+   测试。全部通过时继续使用上游固定依赖，不建立 Fork。
+
+#### 10.5.3 Connection 增量研发项
+
+| ID | 额外研发项 | 代码归属与 OpenConnector 处理 | 完成条件 | 对应 WP |
+| --- | --- | --- | --- | --- |
+| OC-01 | 固定并审计上游基线 | 构建/供应链；直接使用精确上游 commit，不改代码 | 生成 source commit、内部 package digest、license、SBOM、依赖和动态加载清单；构建不装配 Runtime Server、Web Console、SQLite/D1、global alias 和动态代码入口 | WP0、WP3 |
+| OC-02 | 建立企业身份与 Consumer 模型 | `connection-core`；不进入 OpenConnector | Principal、Consumer、ConsumerInstance、Actor、Direct Session、workload identity 和 delegated assertion 完成禁用、撤销及跨主体负向测试 | WP2 |
+| OC-03 | 建立独立权威数据库 | Connection Store/migration；不进入 OpenConnector | PostgreSQL 保存身份映射、Consumer、Catalog、账号、Credential、Grant、Call、Effect、审计与恢复状态；不复用 alias 或上游本地存储 | WP1-WP8 |
+| OC-04 | 建立受控 Catalog 发布链 | Adapter 转换上游 metadata；缺少结构化导出时才评估最小补丁 | ProviderRelease/ActionVersion 不可变；schema、scope/effect、declaration、digest、兼容和 kill switch 校验通过 | WP3 |
+| OC-05 | 建立账号与 Credential 生命周期 | 生命周期在 Core/Store；Adapter 只注入 Credential handle；上游不保存 Credential | personal/shared、多账号、stable identity、OAuth transaction、KMS、CredentialVersion、refresh/rotation/revoke 和 durable attempt 验收通过 | WP4 |
+| OC-06 | 建立授权与 consent | `connection-core`；不进入 OpenConnector | preview、AuthorizationRoot、Grant、账号选择、扩权、换号、暂停和撤销精确绑定并在线重校验 | WP5 |
+| OC-07 | 建立 Consumer 接入协议 | MCP/HTTP Adapter；不进入 OpenConnector | Direct MCP 的 OAuth、`tools/list`、Action tool 与 Delegated OpenAPI 收敛到同一 AuthorizedInvocation；不暴露上游 Runtime MCP | WP6 |
+| OC-08 | 补齐写操作可靠性 | Core/Store/Egress；不进入 OpenConnector | 入站幂等、Call、Effect、Dispatch、先持久化后出站、response-lost 和 reconciliation 通过 crash tests；无稳定 request key 不展示写 Action | WP7、WP8 |
+| OC-09 | 强制 Secret 与网络边界 | KMS/Egress + Adapter；只有上游无法注入 controlled fetch 或会泄露 Secret 时才评估补丁 | Credential 仅在执行边界注入；endpoint、redirect、DNS/TLS、响应大小、SSRF 和 Secret canary 验收通过，无网络旁路 | WP4、WP7、WP11 |
+| OC-10 | 建立审计、事件与恢复控制 | Core/Store/Operations；不进入 OpenConnector | audit/outbox 同事务，主体绑定查询、脱敏、保留、recovery generation、PITR mutation close 和恢复 runbook 通过 | WP8、WP11 |
+| OC-11 | 建立独立 Connection 产品入口 | `agent-infra` Web/API；不进入 OpenConnector | 账号、授权、调用记录、Consumer、Catalog 和审计页面只调用 Connection 契约，不依赖 Platform 或展示 Credential | WP9 |
+| OC-12 | 逐 Provider 完成企业适配 | 优先用 ProviderRelease 配置和 Adapter；硬编码 endpoint/auth/schema 且无法包装时才评估 Provider 补丁 | GitHub、Confluence、Jira、Bitbucket 及获批后的 Outlook 分别完成 deployment、认证、scope、identity、错误、限流、幂等、对账和真实账号 E2E | WP10 |
+| OC-13 | 建立升级与生产验收 | 构建/CI/Operations；不进入 OpenConnector | 每次升级生成 source/Catalog/API/security/digest diff，并通过 conformance、crash、负载、HA、PITR、SLO 和回滚门禁 | WP10、WP11 |
+
+#### 10.5.4 Fork 准入与允许范围
+
+Fork 不是 Phase 1 前置条件。只有以下条件全部满足时才创建独立仓库：
+
+1. 固定 commit 上有可复现的失败 conformance test，证明公开接口、Adapter、构建裁剪、ProviderRelease 配置或
+   Egress Proxy 不能解决问题。
+2. 修改位于 Provider、OAuth helper、metadata/schema export、executor、controlled fetch 或 Secret 日志等通用层；
+   不包含 Principal、Consumer、Actor、Grant、Connection DB、Call/Effect、审计、恢复或页面。
+3. 补丁有明确 Owner、上游基线、威胁分析和回归测试，并能作为独立变更向上游提交或长期 rebase。
+4. 设计评审确认建立 Fork 的维护成本低于重写对应 Adapter/Provider 的成本。
+
+允许的最小补丁仅包括：导出结构化 metadata/schema、注入 Credential handle 或 controlled fetch、配置企业
+endpoint/auth、修复 Provider adapter，以及阻断动态加载、网络旁路或 Secret 日志。补丁发布为新的不可变内部
+package；`agent-infra` 更新精确 digest 和兼容证据，不引用 Fork 分支或浮动 tag。
 
 ## 11. 标识、Revision 与全局不变量
 

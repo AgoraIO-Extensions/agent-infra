@@ -464,9 +464,13 @@ M1 基于 OpenConnector 的 TypeScript/Hono 实现构建 `connection-api`：
 - 复用 Provider、Action、OAuth、凭证刷新和 Action 执行语义。
 - 增加 Principal、Consumer、共享范围、Consumer 授权和多用户资源隔离。
 - 上游 Runtime HTTP 接口不直接暴露给 Agent 或浏览器。
-- 对上游的修改集中在 OpenConnector Adapter，不让其存储模型渗透到平台领域模块。
+- OpenConnector 只由 Connection Infrastructure Adapter 依赖，不让其存储模型或类型渗透到 Connection Domain。
 
-OpenConnector 采用内部 Fork 维护，并发布为固定版本的私有 package。`connection-api` 以精确版本依赖该 package，把 Provider、OAuth 和 Action 执行装配到同一个进程，不额外暴露或部署上游 Runtime Server。Fork 保留上游远端用于审查更新，升级必须经过隔离和契约测试。
+M1 默认从精确上游 Commit 构建不可变私有 package，`connection-api` 通过 OpenConnector Adapter 以精确 digest
+依赖该 package，把 Provider、OAuth 和 Action 执行装配到同一个进程，不复制上游源码，也不额外暴露或部署
+上游 Runtime Server。只有固定基线上的 conformance test 证明公开接口、Adapter、构建配置和受控 Egress 都无法
+解决 Provider/OAuth/executor 通用缺口时，才建立保留上游历史的独立最小 Fork；Connection 领域模型和权威数据
+不得进入 Fork。升级必须经过隔离、供应链和契约测试。
 
 ### 13.2 授权模型
 
@@ -746,7 +750,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | 风险 | 处理方式 |
 | --- | --- |
 | TypeScript 缺少 `controller-runtime` 同等级框架 | 控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用 `kind` 做完整生命周期测试 |
-| OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；内部 Fork 补 scope 与 Connection ID 强制校验；增加跨用户攻击测试 |
+| OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；身份、授权和账号选择由 Connection Adapter/Core 强制；只有通用执行缺口满足最小 Fork 准入条件时才补丁；增加跨用户攻击测试 |
 | 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
 | 自定义镜像无法自动识别端口和能力 | 使用 OCI Runtime Manifest；Owner 不填写技术参数；创建与运行时验证 Manifest |
 | Consumer 与 Connection 无分布式事务 | Connection 独立保存授权并在线校验；Consumer 仅保存稳定 `callId` 和脱敏结果引用 |
@@ -770,7 +774,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 - 全 TypeScript 是否满足平台与运维团队的长期维护能力。
 - TypeScript Kubernetes 调谐器的测试与值班责任是否可接受。
-- OpenConnector 内部 Fork 的维护归属和上游同步方式。
+- OpenConnector 固定依赖的构建与升级责任，以及触发最小 Fork 时的维护归属和上游同步方式。
 - OCI Runtime Manifest 是否能进入 Company Hub 的镜像发布规范。
 - 公司身份、KMS、对象存储、LLM Gateway 和企微现有接口是否满足本文所需契约。
 
