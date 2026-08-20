@@ -455,10 +455,11 @@ sequenceDiagram
 ### 12.2 可靠性规则
 
 - 消息写入数据库成功后才向用户显示“已提交”。
-- 已持久化的消息在后续投递失败时不会删除；状态变为繁忙、投递失败或暂时不可用，并提供重试。
+- 已持久化的消息在后续投递失败时不会删除；状态变为繁忙、投递失败或暂时不可用，并提供重试或重新发送入口。
 - 没有活跃 Turn 时，平台在同一事务中创建 Message、初始 Execution 和 Turn outbox；相同消息重试使用同一幂等键，不能重复创建初始 Execution。
 - 同一 Conversation 同时只有一个活跃 Turn，不同 Conversation 可以并行处理。
 - 活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令。平台在同一事务中创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；Adapter 以 `messageId` 幂等提交补充指令。
+- `platform-worker` 认领补充指令 outbox 时必须在 Conversation 锁内重验绑定 Execution 仍然活跃；Adapter 也必须拒绝向已经终止的原生 Turn 追加指令。任一处发现目标已终止时，平台在同一数据库事务中把 outbox 置为失败终态，并把 Message 标记为“投递失败：原回复已结束”；不能自动重试、创建 Execution/Turn 或改绑其他 Execution。用户重新发送时使用新的幂等键，重新执行消息准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台必须明确返回繁忙且不创建 Message、Execution 或 outbox；不能附加到当前 Turn 或复用其 Execution Grant。普通消息、补充指令和繁忙拒绝的分支判定与写入必须原子完成。
 - Worker 或 Pod 重启后按持久化状态恢复；对 Runtime 是否已接受 Turn 无法确认时不能盲目重复提交。
 - 重新生成创建新的回答版本，旧回答继续保留。
@@ -551,7 +552,7 @@ sequenceDiagram
 
 - 自有交互入口的流量、协议、Session 和历史由自定义 Agent 负责，不经过 Runtime Adapter。
 - `platform-worker` 根据 Owner 选择发布用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
-- 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信公司身份或 Execution Grant；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。
+- 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信公司身份、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要公司账号或 Agent 可用范围变化立即生效时必须选择平台身份入口。
 - 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围并传递短期签名用户上下文；权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。
 
 ## 15. 数据与一致性
@@ -682,7 +683,7 @@ sequenceDiagram
 ### 19.3 集成测试
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
-- 消息投递覆盖普通消息、补充指令和繁忙拒绝三个事务分支；补充指令重试或 Worker 重启不能重复投递，繁忙拒绝不能遗留孤儿 Execution 或 outbox。
+- 消息投递覆盖普通消息、补充指令和繁忙拒绝三个事务分支；补充指令重试或 Worker 重启不能重复投递，繁忙拒绝不能遗留孤儿 Execution 或 outbox。测试必须覆盖补充指令提交后、Worker 认领前原 Turn 结束，以及 Adapter 在提交时报告 Turn 已结束；两条路径都产生可见失败终态，不创建或改绑 Execution/Turn，Worker 重启后结果不变。
 - Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
 - `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
@@ -693,9 +694,9 @@ sequenceDiagram
 Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
-- Owner、范围、组织变化和账号禁用。
+- Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果。
 - 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
-- 自有身份入口不获得平台身份上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，且两类入口的历史都不进入平台。
+- 自有身份入口不获得平台身份或撤权上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，且两类入口的历史都不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability 和创建拒绝路径。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
 - 企微身份映射、群聊隔离、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
