@@ -16,7 +16,7 @@
 
 相关 Issue 只记录决策来源和交付状态，不覆盖正式文档：
 
-- [Issue #3 补充决策](https://github.com/AgoraIO-Extensions/agent-infra/issues/3#issuecomment-5279882787)：镜像、Digest、env/Secret、升级和回滚边界。
+- [Issue #3 补充决策](https://github.com/AgoraIO-Extensions/agent-infra/issues/3#issuecomment-5279882787)与[标准模板 env/Secret 更新](https://github.com/AgoraIO-Extensions/agent-infra/issues/3#issuecomment-5354328551)：镜像、Digest、env/Secret、升级和回滚边界。
 - [Issue #134](https://github.com/AgoraIO-Extensions/agent-infra/issues/134)：Runtime/Adapter 契约来源。
 - [Issue #135](https://github.com/AgoraIO-Extensions/agent-infra/issues/135)：本文与上位文档的对齐任务。
 
@@ -54,7 +54,7 @@ M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 | OpenCode | Generic ACP | Web、企微、模型、附件/结果、Connection |
 | Pi | Pi RPC | Web、企微、模型、附件/结果、Connection |
 
-Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查和 capability。Owner 不选择或覆盖标准模板的 Adapter。
+Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
 ### 3.2 自定义 Agent
 
@@ -63,7 +63,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `self-managed` | 镜像负责交互入口、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；平台只负责部署和可选 Auth Gateway |
 | `platform-adapter` | 平台负责 Web/企微入口、身份、Conversation、Execution、事件和历史 | `protocol` 必须是 ACP，并通过 Generic ACP Conformance Suite |
 
-没有可用的自有交互入口、又不能通过 Generic ACP 验证的镜像，在创建或审批阶段拒绝。M1 不为未知协议增加专用 Adapter。
+`platform-adapter` Manifest 未声明 ACP 时创建失败且不启动 Workload；实际 ACP 兼容性在 Workload 启动后的创建过程中验证。M1 不为未知协议增加专用 Adapter。
 
 ## 4. Runtime Manifest
 
@@ -78,14 +78,14 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `health.path` | 必填；不含凭证的 HTTP 健康检查路径 |
 | `capabilities` | 声明模型选择、附件、结果文件和 Connection 能力 |
 
-Owner 不在产品页面填写协议、端口或探针。平台按以下顺序验证：
+Owner 不在产品页面填写协议、端口或探针。审批通过后进入创建流程，平台按以下顺序验证：
 
 1. 校验 Company Hub 访问权，并把 Tag 解析为不可变 Digest。
 2. 读取并校验 Manifest Schema 和交互模式。
 3. 启动 Workload 并验证健康检查。
 4. 对 `platform-adapter` 执行 Generic ACP 核心探测；平台展示能力取 Manifest 声明与实际探测结果的交集。
 
-Manifest 缺失、不支持或探测失败时，创建状态为“创建失败”并返回可修复原因。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
+前两步在启动 Workload 前完成；失败时不启动 Workload。健康检查和 ACP 核心探测在启动后完成，不作为审批前门禁。任一步失败时，创建状态均为“创建失败”并返回可修复原因。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
 
 ## 5. Platform Conversation Contract
 
@@ -193,7 +193,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest 不匹配、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、重复消息、重复事件和同会话并发 Turn。
+- 负向测试覆盖未知协议、无交互入口、Manifest 不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、重复消息、重复事件和同会话并发 Turn。
 - `kind` 覆盖 Pod 重启恢复原 Session、恢复失败不新建 Session、旧 Digest 回滚、原 PVC 复用和 Adapter 不可达。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
