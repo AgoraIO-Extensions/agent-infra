@@ -98,9 +98,9 @@ flowchart LR
     AP --> PA
     PA --> CA
     CA --> CD[(Connection DB)]
-    PA --> KMS[KMS / Secret Service]
-    PW --> KMS
-    CA --> KMS
+    PA -.->|仅加密写入或生成引用| KMS[KMS / Secret Service]
+    PW -->|读取并装配 Agent Secret| KMS
+    CA -->|读取并使用 Connection 凭证| KMS
     CA --> EXT[外部 Provider]
 
     AP --> LLM[LLM Gateway]
