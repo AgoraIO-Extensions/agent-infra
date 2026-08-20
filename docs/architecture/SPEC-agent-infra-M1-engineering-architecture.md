@@ -368,14 +368,18 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 - Service 端口和健康检查路径。
 - 模型、附件、结果文件和 Connection capability。
 
-`self-managed` 自己提供人机交互入口、协议、Session、事件和历史，不进入平台 Conversation Contract。`platform-adapter` 使用平台 Web 或平台托管渠道，必须通过 Generic ACP 核心契约测试。两者都需要健康检查；没有自有入口又不能通过 ACP 验证时拒绝创建。
+`self-managed` 自己提供人机交互入口、协议、Session、事件和历史，不进入平台 Conversation Contract。`platform-adapter` 使用平台 Web 或平台托管渠道，并在 Workload 启动后执行 Generic ACP 核心探测。
+
+审批通过后的创建流程先校验 Manifest，再启动 Workload 并验证健康检查；`platform-adapter` 在健康检查通过后执行 ACP 核心探测。Manifest 缺失或不受支持时不启动 Workload；Manifest、健康检查或 ACP 核心探测任一步失败，产品状态均为“创建失败”。
 
 标准 Base Image 可以提供生成 Manifest 的构建辅助，但不赋予能力或准入资格。Owner 不填写协议、端口或探针；平台校验 Manifest 和实际探测结果，不检查源码。字段和验证规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。
 
 ### 10.6 环境变量与 Secret
 
-- 标准模板和自定义镜像都接受 Owner 配置的任意普通 env K/V；平台不为不同镜像维护变量白名单。
-- `AGENT_INFRA_*` 由平台保留并按执行环境注入，Owner 输入使用该前缀时在保存前拒绝。
+- 固定 Runtime Registry 为每个标准模板声明 Owner 可配置的 env/Secret 键。`platform-api` 在保存前拒绝该模板未声明的键，`platform-worker` 只装配已声明的键。
+- Registry 不得向 Owner 开放代理设置、进程加载器或 Runtime 启动选项等能够改变标准模板受信运行边界的键。
+- 自定义镜像接受 Owner 配置的任意 env/Secret K/V，但不能使用平台保留前缀。
+- `AGENT_INFRA_*` 由平台保留并按执行环境注入；标准模板或自定义镜像的 Owner 输入使用该前缀时均在保存前拒绝。
 - 普通 env 保存于 Platform DB。Secret 通过 KMS 加密保存，读取接口只返回“已设置”，不能返回明文。
 - `platform-worker` 将配置装配为 Agent 专属 Kubernetes 配置和 Secret；值不进入 annotation、日志、错误或模型上下文。
 
@@ -663,6 +667,7 @@ sequenceDiagram
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Adapter 运行同一 Agent Runtime Conformance Suite。
 - Generic ACP 自定义样例镜像验证无需新增平台专用 Adapter；未知协议不能使用平台交互入口。
 - Runtime 契约验证 Session 创建与恢复、Turn 串行、事件去重、停止、状态查询、capability 和逐 Turn 身份上下文。
+- Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
 - SSE 验证事件顺序、重复投递、断线重连和游标补发。
 
