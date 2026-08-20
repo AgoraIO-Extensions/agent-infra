@@ -65,7 +65,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 `platform-adapter` Manifest 未声明 ACP 时创建失败或升级被拒绝；实际 ACP 兼容性在创建或升级的 Workload 启动后验证。M1 不为未知协议增加专用 Adapter。
 
-`self-managed` 的应用接口由镜像负责，但 StatefulSet、Service、Ingress 和 NetworkPolicy 仍只由 `platform-worker` 调谐。自有身份入口不经过 Auth Gateway，也不获得可信平台身份上下文；平台身份入口必须经过 Auth Gateway。网络与鉴权细节见工程 Spec 14.3。
+`self-managed` 的应用接口由镜像负责，但 StatefulSet、Service、Ingress 和 NetworkPolicy 仍只由 `platform-worker` 调谐。自有身份入口不经过 Auth Gateway，也不获得可信平台身份或撤权上下文，账号生命周期由 Owner 的身份体系负责；平台身份入口必须经过 Auth Gateway。网络与鉴权细节见工程 Spec 14.3。
 
 ## 4. Runtime Manifest
 
@@ -145,6 +145,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 同一 `actorId` 下，同一 Key 和相同消息、附件、模型选择再次提交时，普通消息返回原 Message 与初始 Execution，补充指令返回原 Message 与原绑定的 Execution；同一 Key 对应不同内容时返回冲突。共享 Conversation 中不同发送者使用相同 Key 时互不影响。
 - 没有活跃 Turn 时，Message、初始 Execution 和 Turn outbox 在同一数据库事务中创建。
 - 活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同且 Adapter 支持补充指令时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。
+- `platform-worker` 认领补充指令 outbox 时在 Conversation 锁内重验绑定 Execution；只有仍活跃时才按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。任一检查发现目标已终止时，平台在同一数据库事务中将 outbox 置为失败终态，并将 Message 标记为“投递失败：原回复已结束”；不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台返回繁忙且不创建 Message、Execution 或 outbox。三条分支的判定和写入必须原子完成。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
@@ -199,7 +200,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、补充指令重试或 Worker 重启后重复投递、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。
+- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker 重启后重复投递、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。
 - `kind` 覆盖有效 Service/健康检查变化的候选 Workload，以及健康检查或 ACP 探测失败后恢复旧 Digest、渠道和平台历史，原 PVC 复用，Pod 重启恢复原 Session，并用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - 入口测试覆盖 Agent ServiceAccount 无法修改 Service、Ingress 或 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口，自有身份入口不获得平台身份上下文，平台身份入口强制 Auth Gateway 校验。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
