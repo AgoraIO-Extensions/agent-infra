@@ -313,6 +313,7 @@ Agent 调用 Tool Gateway 时只提交 Action 和参数。平台根据执行记�
 - 运行时为“可用”时副本为 1；已停止或已停用时副本为 0。
 - 每个 Agent 使用独立 Service、ServiceAccount 和持久卷。
 - ServiceAccount 默认没有 Kubernetes API 权限。
+- Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。StatefulSet、Service、Ingress 和 NetworkPolicy 只由 `platform-worker` 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
 - Agent 自有记忆或工作区通过独立持久卷保存，并由模板或自定义 Agent 负责用户隔离。
 
@@ -354,9 +355,11 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 - 标准模板目录保存当前镜像 Digest。模板更新后，所有关联 Agent 进入新修订并自动调谐。
 - 自定义 Agent 创建时把 Tag 解析为 Digest；只有 Owner 主动选择新镜像时更新 Digest。
 - 同名 Tag 指向新 Digest 时可以通知 Owner，但不能改变已有自定义 Agent 的期望 Digest。
+- 自定义 Agent 的新 Digest 先进入候选修订。平台重新读取并校验 Manifest；M1 不支持在升级中切换 `interactionMode`，Schema、Service 或健康检查字段无效，或模式与当前 Agent 不一致时不更新 Workload。有效的新 Service 和健康检查配置进入候选 Workload。
+- Manifest 预检通过后，`platform-worker` 应用候选 Workload 并验证健康检查；`platform-adapter` 还必须重新执行 ACP 核心探测。全部通过后才提升候选 Digest 并确认渠道绑定；失败时把旧 Digest 和 Workload 配置写成新的期望修订并重新调谐，保留原渠道绑定和平台历史。
 - 标准模板升级失败时，平台把旧 Digest 和 Workload 配置写成新的期望修订，再由 `platform-worker` 通过 Kubernetes API 重新调谐；不能把 Kubernetes 当前状态当作回滚来源。
 - 升级和回滚复用原 PVC，保留 Platform DB 中的配置、渠道和会话数据。M1 不自动创建 PVC 快照，也不承诺 Runtime 自有数据兼容旧版本。
-- Pod 不能提供服务时，产品显示“更新中”或“暂时不可用”，不能接受后静默丢弃消息。
+- 升级期间产品显示“更新中”；旧修订也无法恢复时才显示 Agent 级“暂时不可用”。任何阶段都不能接受后静默丢弃消息。
 
 ### 10.5 自定义 Agent Runtime Manifest
 
@@ -370,7 +373,7 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 
 `self-managed` 自己提供人机交互入口、协议、Session、事件和历史，不进入平台 Conversation Contract。`platform-adapter` 使用平台 Web 或平台托管渠道，并在 Workload 启动后执行 Generic ACP 核心探测。
 
-审批通过后的创建流程先校验 Manifest Schema、交互模式与 Owner 申请选择的一致性，再启动 Workload 并验证健康检查；`platform-adapter` 在健康检查通过后执行 ACP 核心探测。Manifest 缺失、不受支持或与申请不一致时不启动 Workload；Manifest、健康检查或 ACP 核心探测任一步失败，产品状态均为“创建失败”。
+审批通过后的创建流程先校验 Manifest Schema、交互模式与 Owner 申请选择的一致性，再启动 Workload 并验证健康检查；`platform-adapter` 在健康检查通过后执行 ACP 核心探测。Manifest 缺失、不受支持或与申请不一致时不启动 Workload；Manifest、健康检查或 ACP 核心探测任一步失败，产品状态均为“创建失败”。升级必须对候选 Digest 重新执行同一组 Manifest、健康检查和 ACP 验证，并保持当前交互模式；失败处理见 10.4。
 
 标准 Base Image 可以提供生成 Manifest 的构建辅助，但不赋予能力或准入资格。Owner 不填写协议、端口或探针；平台校验 Manifest、Owner 申请选择和实际探测结果，不检查源码。字段和验证规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。
 
@@ -547,9 +550,9 @@ sequenceDiagram
 ### 14.3 自有交互入口
 
 - 自有交互入口的流量、协议、Session 和历史由自定义 Agent 负责，不经过 Runtime Adapter。
-- 平台需要提供入口时，Agent Service 不直接暴露到公司网络，访问经过身份感知的 Ingress/Auth Gateway。
-- Gateway 每次请求校验公司账号和 Agent 可用范围，并传递短期签名用户上下文；镜像不能信任浏览器自行提交的用户 ID Header。
-- 权限撤销后，新请求立即失败；长连接按短期凭证到期或服务端主动关闭。
+- `platform-worker` 根据 Owner 选择发布用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
+- 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信公司身份或 Execution Grant；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。
+- 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围并传递短期签名用户上下文；权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。
 
 ## 15. 数据与一致性
 
@@ -600,6 +603,7 @@ sequenceDiagram
 | Workload 未就绪 | 启动中 |
 | 正在应用新修订 | 更新中 |
 | 探针失败或 Adapter 不可达 | 暂时不可用 |
+| 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响 |
 | Agent 明确拒绝新任务 | 繁忙，可重试 |
 | Provider 限流或短暂故障 | 明确提示稍后重试 |
 | Connection 失效 | 说明原因并提供重连入口 |
@@ -618,7 +622,7 @@ sequenceDiagram
 
 ## 17. 安全基线
 
-- 所有平台提供的入口使用公司身份和 TLS。
+- 所有用户访问路由使用 TLS；平台身份入口使用公司身份和 Agent 可用范围校验。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
 - Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
@@ -670,7 +674,7 @@ sequenceDiagram
 - OpenAPI Schema 变更必须通过兼容性检查。
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Adapter 运行同一 Agent Runtime Conformance Suite。
 - Generic ACP 自定义样例镜像验证无需新增平台专用 Adapter；未知协议不能使用平台交互入口。
-- Runtime 契约验证 Session 创建与恢复、Turn 串行、补充指令的发送者隔离、事件去重、停止、状态查询、capability 和逐 Turn 身份上下文。
+- Runtime 契约验证 Session 创建与恢复、单个 Conversation 恢复失败隔离、Turn 串行、补充指令的发送者隔离、事件去重、停止、状态查询、capability 和逐 Turn 身份上下文。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
 - SSE 验证事件顺序、重复投递、断线重连和游标补发。
@@ -679,7 +683,8 @@ sequenceDiagram
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - 消息投递覆盖普通消息、补充指令和繁忙拒绝三个事务分支；补充指令重试或 Worker 重启不能重复投递，繁忙拒绝不能遗留孤儿 Execution 或 outbox。
-- Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复。
+- Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
+- `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。
 
@@ -690,7 +695,7 @@ Playwright 覆盖：
 - 申请、撤回、审批、创建、停止、重启和停用。
 - Owner、范围、组织变化和账号禁用。
 - 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
-- 自有交互入口经平台 Auth Gateway 访问时不能绕过权限，且历史不进入平台。
+- 自有身份入口不获得平台身份上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，且两类入口的历史都不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability 和创建拒绝路径。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
 - 企微身份映射、群聊隔离、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
@@ -759,7 +764,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | TypeScript 缺少 `controller-runtime` 同等级框架 | 控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用 `kind` 做完整生命周期测试 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；内部 Fork 补 scope 与 Connection ID 强制校验；增加跨用户攻击测试 |
 | 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
-| 自定义镜像的入口或能力声明不真实 | 使用最小 OCI Runtime Manifest；创建时验证健康检查与 ACP capability；无有效交互入口则拒绝 |
+| 自定义镜像的入口或能力声明不真实 | 使用最小 OCI Runtime Manifest；创建和升级时验证健康检查与 ACP capability；无有效交互入口则拒绝 |
 | 原生 Runtime 的 Session 与事件语义不同 | 只维护四个固定 Adapter 和 Generic ACP；用统一 Conformance Suite 验证恢复、去重与并发，不建设动态协议矩阵 |
 | 平台与 Connection 无分布式事务 | 使用稳定 ID、幂等键、状态机和审计关联；停用与撤销在权威系统即时拒绝 |
 | 全 TypeScript 单仓库形成耦合 | 平台与 Connection 使用独立 core、store、数据库和部署单元；共享仅限契约与基础设施模块 |
@@ -773,8 +778,8 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 3. Agent 停止、重启、升级和平台进程重启后，配置、历史、附件引用和授权关系不丢失。
 4. Web 断线或离开页面不影响已提交长任务，返回后可以按游标恢复状态。
 5. Codex、Claude、OpenCode 和 Pi 通过统一 Runtime Conformance Suite；Generic ACP 自定义镜像无需新增 Adapter 即可使用平台入口。
-6. Pod 重启恢复原 Runtime Session；恢复失败时原 Conversation 保持不可用，不静默创建新 Session。
-7. 自有交互入口经平台 Auth Gateway 访问时不能绕过公司身份与 Agent 范围校验；其会话不进入平台历史。
+6. Pod 重启恢复原 Runtime Session；恢复失败时只有原 Conversation 保持不可用，不静默创建新 Session，其他 Conversation 和 Agent 服务保持正常。
+7. 自有交互入口只使用 `platform-worker` 发布的网络入口；自有身份入口由 Agent 服务端鉴权，平台身份入口不能绕过公司身份与 Agent 范围校验；其会话不进入平台历史。
 8. 至少一个真实 Provider 完成 OAuth/鉴权、授权、Action、审计和撤销闭环；Platform 和 Connection 任一授权失败都拒绝调用。
 9. 负载与故障测试中，所有消息都有可解释状态，不出现静默丢失、重复 Turn 和跨用户数据混用。
 
