@@ -60,10 +60,12 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
 | --- | --- | --- |
-| `self-managed` | 镜像负责交互入口、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；Owner 直连自行实施身份、权限和暴露策略，平台只负责部署和可选 Auth Gateway |
+| `self-managed` | 镜像负责交互应用、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；平台发布网络入口，Owner 选择由镜像服务端鉴权或使用平台 Auth Gateway |
 | `platform-adapter` | 平台负责 Web/企微入口、身份、Conversation、Execution、事件和历史 | `protocol` 必须是 ACP，并通过 Generic ACP Conformance Suite |
 
-`platform-adapter` Manifest 未声明 ACP 时创建失败且不启动 Workload；实际 ACP 兼容性在 Workload 启动后的创建过程中验证。M1 不为未知协议增加专用 Adapter。
+`platform-adapter` Manifest 未声明 ACP 时创建失败或升级被拒绝；实际 ACP 兼容性在创建或升级的 Workload 启动后验证。M1 不为未知协议增加专用 Adapter。
+
+`self-managed` 的应用接口由镜像负责，但 StatefulSet、Service、Ingress 和 NetworkPolicy 仍只由 `platform-worker` 调谐。自有身份入口不经过 Auth Gateway，也不获得可信平台身份上下文；平台身份入口必须经过 Auth Gateway。网络与鉴权细节见工程 Spec 14.3。
 
 ## 4. Runtime Manifest
 
@@ -78,14 +80,16 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `health.path` | 必填；不含凭证的 HTTP 健康检查路径 |
 | `capabilities` | 声明模型选择、附件、结果文件和 Connection 能力 |
 
-Owner 不在产品页面填写协议、端口或探针。审批通过后进入创建流程，平台按以下顺序验证：
+Owner 不在产品页面填写协议、端口或探针。创建或升级时，平台按以下顺序验证：
 
 1. 校验 Company Hub 访问权，并把 Tag 解析为不可变 Digest。
-2. 读取并校验 Manifest Schema、交互模式及其与 Owner 申请选择的一致性。
+2. 读取并校验 Manifest Schema、交互模式，以及创建时与 Owner 申请选择、升级时与当前 Agent 的一致性。
 3. 启动 Workload 并验证健康检查。
 4. 对 `platform-adapter` 执行 Generic ACP 核心探测；平台展示能力取 Manifest 声明与实际探测结果的交集。
 
 前两步在启动 Workload 前完成；失败时不启动 Workload。健康检查和 ACP 核心探测在启动后完成，不作为审批前门禁。任一步失败时，创建状态均为“创建失败”并返回可修复原因。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
+
+升级时新 Digest 先作为候选修订，并重新执行上述四步。候选 Manifest 的 `interactionMode` 必须与当前 Agent 一致，M1 不通过升级切换交互模式；Schema、Service 或健康检查字段无效，或模式不一致时不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 健康检查通过且 `platform-adapter` 再次通过 ACP 核心探测后才提升 Digest 并确认原渠道绑定；失败时恢复旧 Digest 和 Workload 配置，不修改渠道绑定和平台历史。只有旧修订也无法恢复时才进入 Agent 级“暂时不可用”。
 
 ## 5. Platform Conversation Contract
 
@@ -130,7 +134,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和 Session 映射。
 - Agent Pod 重启后复用原 PVC；Pod 就绪后，Adapter 必须使用已保存的原生 Session ID 恢复原 Session，并查询未完成 Turn 状态。
-- 恢复成功后继续接收事件。恢复失败时保留原 Conversation 和 Session 映射，将服务标记为“暂时不可用”，并向用户给出可重试或联系 Owner 的说明。
+- 恢复成功后继续接收事件。恢复失败时保留原 Conversation 和 Session 映射，只将该 Platform Conversation 标记为“会话不可用”；该会话历史只读且不能继续发送消息，其他 Conversation 和 Agent 服务保持正常。
 - 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能创建新的 Runtime Session。
 
 ## 8. 消息、事件与 SSE 可靠性
@@ -183,7 +187,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 ## 10. Pod 安全与网络
 
-- Agent 使用独立 ServiceAccount，默认没有 Kubernetes RBAC 权限。
+- Agent 使用独立 ServiceAccount，默认没有 Kubernetes RBAC 权限；不能创建或修改 Service、Ingress 和 NetworkPolicy。
 - NetworkPolicy 禁止 Agent Pod 访问 Platform DB、Connection DB、KMS/Secret Service 和 Kubernetes API。
 - 标准模板和 `platform-adapter` Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
 - `self-managed` Agent Pod 的其他出站访问遵循公司集群现有策略，但仍受上述敏感目标隔离约束；M1 不新增按 Agent 维护的 egress allowlist。
@@ -195,8 +199,9 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Owner 选择与 Manifest 交互模式不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、补充指令重试或 Worker 重启后重复投递、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。
-- `kind` 覆盖 Pod 重启恢复原 Session、恢复失败不新建 Session、旧 Digest 回滚、原 PVC 复用和 Adapter 不可达。
+- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、补充指令重试或 Worker 重启后重复投递、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。
+- `kind` 覆盖有效 Service/健康检查变化的候选 Workload，以及健康检查或 ACP 探测失败后恢复旧 Digest、渠道和平台历史，原 PVC 复用，Pod 重启恢复原 Session，并用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
+- 入口测试覆盖 Agent ServiceAccount 无法修改 Service、Ingress 或 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口，自有身份入口不获得平台身份上下文，平台身份入口强制 Auth Gateway 校验。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
 ## 12. 参考与非目标
