@@ -137,8 +137,8 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ### 8.1 消息幂等
 
-- `platform-api` 以 `(conversationId, Idempotency-Key)` 唯一约束消息提交。
-- 同一 Key 和相同消息、附件、模型选择再次提交时返回原 Message 与 Execution；同一 Key 对应不同内容时返回冲突。
+- `platform-api` 以 `(conversationId, actorId, Idempotency-Key)` 唯一约束消息提交；`actorId` 由服务端根据当前公司用户或可信 Channel 发送者映射生成，不能接受调用方提交的身份字段。
+- 同一 `actorId` 下，同一 Key 和相同消息、附件、模型选择再次提交时返回原 Message 与 Execution；同一 Key 对应不同内容时返回冲突。共享 Conversation 中不同发送者使用相同 Key 时互不影响。
 - Message、初始 Execution 和 outbox 在同一数据库事务中创建。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
@@ -183,7 +183,8 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - Agent 使用独立 ServiceAccount，默认没有 Kubernetes RBAC 权限。
 - NetworkPolicy 禁止 Agent Pod 访问 Platform DB、Connection DB、KMS/Secret Service 和 Kubernetes API。
-- Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
+- 标准模板和 `platform-adapter` Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
+- `self-managed` Agent Pod 的其他出站访问遵循公司集群现有策略，但仍受上述敏感目标隔离约束；M1 不新增按 Agent 维护的 egress allowlist。
 - Platform 和 Connection 的数据库账号、服务身份及 Secret 不挂载到 Agent Pod。
 - Owner Secret 只以 Agent 专属 Kubernetes Secret 注入，不进入 Workload annotation、日志、错误或 API 回显。
 - Runtime 事件在写入 Platform DB 前必须移除模型内部思考、原始凭证和未脱敏请求。
@@ -192,7 +193,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest 不匹配、跨用户/Agent/Connection、重复消息、重复事件和同会话并发 Turn。
+- 负向测试覆盖未知协议、无交互入口、Manifest 不匹配、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、重复消息、重复事件和同会话并发 Turn。
 - `kind` 覆盖 Pod 重启恢复原 Session、恢复失败不新建 Session、旧 Digest 回滚、原 PVC 复用和 Adapter 不可达。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 

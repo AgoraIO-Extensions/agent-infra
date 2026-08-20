@@ -382,6 +382,7 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 ### 10.7 标准模板模型配置
 
 - `platform-api` 校验 Owner 选择的 LLM Gateway Base URL、模型和推理强度，并通过 KMS 加密 API Key。
+- `platform-worker` 装配标准模板运行配置时，以平台模型配置为最终值；同名的 Owner env 或 Secret 不能覆盖 Base URL、API Key、模型和推理强度。
 - `platform-worker` 把标准模板当前需要的密钥作为 Agent 专属 Kubernetes Secret 挂载到 Pod，不写入 Workload annotation、日志或模型上下文。
 - Owner 替换密钥或模型配置后产生新配置修订，由调谐器安全更新 Agent。
 - 自定义 Agent 的模型配置默认属于镜像内部；通过 ACP 探测到的模型选择能力只按实际 capability 向平台入口开放。
@@ -524,6 +525,8 @@ sequenceDiagram
 
 企微 Adapter 位于平台侧：
 
+平台只为四个标准模板和通过 Generic ACP 验证的 `platform-adapter` 自定义 Agent 创建企微绑定；`self-managed` Agent 的绑定请求在保存前拒绝。
+
 1. 验证企微回调签名并解析绑定的 Agent。
 2. 把企微发送者映射为公司稳定用户 ID。
 3. 校验 Agent 可用范围和渠道绑定。
@@ -607,7 +610,7 @@ sequenceDiagram
 
 ## 17. 安全基线
 
-- 所有入口使用公司身份和 TLS。
+- 所有平台提供的入口使用公司身份和 TLS。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
 - Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
