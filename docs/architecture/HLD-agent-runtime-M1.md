@@ -153,7 +153,8 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 补充指令 outbox 只有在绑定 Execution 的初始 Turn 已被 Runtime 明确接受后才能投递；初始 Turn 尚未投递或接受结果不确定时保持待处理。同一 Execution 的补充指令按 outbox 创建顺序串行投递，不能抢在初始 Turn 前调用 Runtime。
 - `platform-worker` 认领补充指令 outbox 时在 Conversation 锁内重验绑定 Execution；只有仍活跃时才按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。任一检查发现目标已终止时，平台在同一数据库事务中将 outbox 置为失败终态，并将 Message 标记为“投递失败：原回复已结束”；不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台返回繁忙且不创建 Message、Execution 或 outbox。三条分支的判定和写入必须原子完成。
-- 停止命令不创建 Message 或新 Execution。`platform-api` 在 Conversation 锁内校验发送者 `actorId` 与活跃 Execution 相同，并原子创建绑定该 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，重复 HTTP 请求返回已有停止状态。没有活跃 Turn 时幂等返回“已结束”，其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验 Execution；仍活跃才按 `stopRequestId` 调用 Adapter，已经终止则将 outbox 置为成功终态。Adapter 和 Agent Service 把同一 `stopRequestId` 的重复停止视为同一命令。
+- 停止命令不创建 Message 或新 Execution。`platform-api` 在 Conversation 锁内校验发送者 `actorId` 与活跃 Execution 相同，并原子创建绑定该 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，重复 HTTP 请求返回已有停止状态。没有活跃 Turn 时幂等返回“已结束”，其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验 Execution；初始 Turn 已被 Runtime 接受且仍活跃时才按 `stopRequestId` 调用 Adapter，已经终止则将 outbox 置为成功终态。Adapter 和 Agent Service 把同一 `stopRequestId` 的重复停止视为同一命令。
+- 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox。若 stop 已存在且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”并把 stop outbox 置为成功终态，不调用 Adapter，初始 Turn 后续不得再投递。初始 Turn 正在投递或接受结果不确定时，stop outbox 保持待处理；Worker 先按原 `executionId` 恢复查询，确认已接受后才调用 Adapter，确认未接受时执行前述本地取消。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
 ### 8.2 事件去重

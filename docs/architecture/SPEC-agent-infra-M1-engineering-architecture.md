@@ -466,7 +466,8 @@ sequenceDiagram
 - 补充指令 outbox 只有在绑定 Execution 的初始 Turn 已被 Runtime 明确接受后才能投递；初始 Turn 尚未投递或接受结果不确定时保持待处理。同一 Execution 的补充指令按 outbox 创建顺序串行投递，不能抢在初始 Turn 前调用 Runtime。
 - `platform-worker` 认领补充指令 outbox 时必须在 Conversation 锁内重验绑定 Execution 仍然活跃；Adapter 也必须拒绝向已经终止的原生 Turn 追加指令。任一处发现目标已终止时，平台在同一数据库事务中把 outbox 置为失败终态，并把 Message 标记为“投递失败：原回复已结束”；不能自动重试、创建 Execution/Turn 或改绑其他 Execution。用户重新发送时使用新的幂等键，重新执行消息准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台必须明确返回繁忙且不创建 Message、Execution 或 outbox；不能附加到当前 Turn 或复用其 Execution Grant。普通消息、补充指令和繁忙拒绝的分支判定与写入必须原子完成。
-- 停止命令不创建 Message 或新 Execution。`platform-api` 必须在 Conversation 锁内校验发送者 `actorId` 与活跃 Execution 相同，并原子创建绑定该 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，重复 HTTP 请求返回已有停止状态。没有活跃 Turn 时幂等返回“已结束”，其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验 Execution，仍活跃才按 `stopRequestId` 调用 Adapter，已经终止则把 outbox 置为成功终态。Adapter 和 Agent Service 必须把同一 `stopRequestId` 的重复停止视为同一命令。
+- 停止命令不创建 Message 或新 Execution。`platform-api` 必须在 Conversation 锁内校验发送者 `actorId` 与活跃 Execution 相同，并原子创建绑定该 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，重复 HTTP 请求返回已有停止状态。没有活跃 Turn 时幂等返回“已结束”，其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验 Execution；初始 Turn 已被 Runtime 接受且仍活跃时才按 `stopRequestId` 调用 Adapter，已经终止则把 outbox 置为成功终态。Adapter 和 Agent Service 必须把同一 `stopRequestId` 的重复停止视为同一命令。
+- 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox。若 stop 已存在且 Runtime 明确未接受初始 Turn，Worker 必须在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”并把 stop outbox 置为成功终态，不调用 Adapter，初始 Turn 后续不得再投递。初始 Turn 正在投递或接受结果不确定时，stop outbox 保持待处理；Worker 先按原 `executionId` 恢复查询，确认已接受后才调用 Adapter，确认未接受时执行前述本地取消。
 - Worker 或 Pod 重启后按持久化状态恢复；对 Runtime 是否已接受 Turn 无法确认时不能盲目重复提交。
 - 重新生成创建新的回答版本，旧回答继续保留。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
@@ -691,7 +692,7 @@ sequenceDiagram
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - 消息投递覆盖普通消息、补充指令和繁忙拒绝三个事务分支；补充指令重试或 Worker 重启不能重复投递，繁忙拒绝不能遗留孤儿 Execution 或 outbox。测试必须覆盖两个 API 请求同时进入空闲 Conversation、初始 Turn outbox 尚未认领时立即提交第二条消息、补充指令 outbox 被先认领、初始 Turn 接受后再投递补充指令、初始 Turn 投递失败、补充指令提交后 Worker 认领前原 Turn 结束，以及 Adapter 在提交时报告 Turn 已结束；所有路径都只有一个 Execution，第二个请求只进入补充指令或繁忙分支，补充指令不能早于初始 Turn 到达 Runtime，失败进入可见终态且不创建或改绑 Execution/Turn，Worker 重启和两个 Worker 竞争后结果不变。
 - 补充指令测试还必须覆盖 Worker 在 Agent Service 接受后崩溃，以及 Pod 重启后以同一 `messageId` 再次提交；两条路径都返回原结果且原生 Turn 只追加一次。不提供持久去重的 Runtime 不得声明补充指令 capability。
-- 停止测试覆盖 stop outbox 的事务写入、当前发送者校验、目标 Turn 先结束、重复 HTTP 请求和 Worker 重启；停止命令不丢失、不创建 Message/Execution，且同一 `stopRequestId` 只产生一次停止效果。
+- 停止测试覆盖 stop outbox 的事务写入、当前发送者校验、停止先于初始 Turn 投递、初始 Turn 接受结果不确定、目标 Turn 先结束、重复 HTTP 请求和 Worker 重启；Runtime 明确未接受时，待投递 Turn 与 Execution 被原子取消且初始 Turn 永不进入 Runtime，接受结果不确定时先恢复查询，已接受时同一 `stopRequestId` 只产生一次停止效果。停止命令不丢失且不创建 Message 或新 Execution。
 - Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；创建健康检查或 ACP 探测失败后必须没有可路由入口、运行中 Workload 或遗留新 PVC，并保留 Platform DB 失败状态；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
 - `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
