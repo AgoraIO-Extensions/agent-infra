@@ -370,9 +370,9 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 
 `self-managed` 自己提供人机交互入口、协议、Session、事件和历史，不进入平台 Conversation Contract。`platform-adapter` 使用平台 Web 或平台托管渠道，并在 Workload 启动后执行 Generic ACP 核心探测。
 
-审批通过后的创建流程先校验 Manifest，再启动 Workload 并验证健康检查；`platform-adapter` 在健康检查通过后执行 ACP 核心探测。Manifest 缺失或不受支持时不启动 Workload；Manifest、健康检查或 ACP 核心探测任一步失败，产品状态均为“创建失败”。
+审批通过后的创建流程先校验 Manifest Schema、交互模式与 Owner 申请选择的一致性，再启动 Workload 并验证健康检查；`platform-adapter` 在健康检查通过后执行 ACP 核心探测。Manifest 缺失、不受支持或与申请不一致时不启动 Workload；Manifest、健康检查或 ACP 核心探测任一步失败，产品状态均为“创建失败”。
 
-标准 Base Image 可以提供生成 Manifest 的构建辅助，但不赋予能力或准入资格。Owner 不填写协议、端口或探针；平台校验 Manifest 和实际探测结果，不检查源码。字段和验证规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。
+标准 Base Image 可以提供生成 Manifest 的构建辅助，但不赋予能力或准入资格。Owner 不填写协议、端口或探针；平台校验 Manifest、Owner 申请选择和实际探测结果，不检查源码。字段和验证规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。
 
 ### 10.6 环境变量与 Secret
 
@@ -453,6 +453,7 @@ sequenceDiagram
 - 投递失败不会删除消息；状态变为繁忙、投递失败或暂时不可用，并提供重试。
 - 同一消息只产生一个初始执行；重试使用同一幂等键或明确创建新执行。
 - 同一 Conversation 同时只有一个活跃 Turn，不同 Conversation 可以并行处理。
+- 活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令；不同 `actorId` 的消息必须明确返回繁忙，不能附加到当前 Turn 或复用其 Execution Grant。
 - Worker 或 Pod 重启后按持久化状态恢复；对 Runtime 是否已接受 Turn 无法确认时不能盲目重复提交。
 - 重新生成创建新的回答版本，旧回答继续保留。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
@@ -666,7 +667,7 @@ sequenceDiagram
 - OpenAPI Schema 变更必须通过兼容性检查。
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Adapter 运行同一 Agent Runtime Conformance Suite。
 - Generic ACP 自定义样例镜像验证无需新增平台专用 Adapter；未知协议不能使用平台交互入口。
-- Runtime 契约验证 Session 创建与恢复、Turn 串行、事件去重、停止、状态查询、capability 和逐 Turn 身份上下文。
+- Runtime 契约验证 Session 创建与恢复、Turn 串行、补充指令的发送者隔离、事件去重、停止、状态查询、capability 和逐 Turn 身份上下文。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
 - SSE 验证事件顺序、重复投递、断线重连和游标补发。
@@ -688,7 +689,7 @@ Playwright 覆盖：
 - 自有交互入口经平台 Auth Gateway 访问时不能绕过权限，且历史不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability 和创建拒绝路径。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
-- 企微身份映射、群聊隔离和按发送者使用 Connection。
+- 企微身份映射、群聊隔离、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
 
 ### 19.5 负载与故障测试
 

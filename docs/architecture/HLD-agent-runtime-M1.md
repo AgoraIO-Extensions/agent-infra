@@ -81,7 +81,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 Owner 不在产品页面填写协议、端口或探针。审批通过后进入创建流程，平台按以下顺序验证：
 
 1. 校验 Company Hub 访问权，并把 Tag 解析为不可变 Digest。
-2. 读取并校验 Manifest Schema 和交互模式。
+2. 读取并校验 Manifest Schema、交互模式及其与 Owner 申请选择的一致性。
 3. 启动 Workload 并验证健康检查。
 4. 对 `platform-adapter` 执行 Generic ACP 核心探测；平台展示能力取 Manifest 声明与实际探测结果的交集。
 
@@ -123,7 +123,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 ### 7.2 并发
 
 - 同一 Conversation 同时只允许一个活跃 Turn。
-- 活跃 Turn 存在时，新消息按 capability 作为补充指令处理，或明确返回繁忙；不能启动第二个 Turn。
+- 活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令处理；同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台明确返回繁忙。任何新消息都不能启动第二个 Turn。
 - 不同 Conversation 可以并行，Adapter 不使用 Agent 级全局串行锁代替会话锁。
 
 ### 7.3 重启恢复
@@ -193,7 +193,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest 不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、重复消息、重复事件和同会话并发 Turn。
+- 负向测试覆盖未知协议、无交互入口、Owner 选择与 Manifest 交互模式不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、重复消息、重复事件和同会话并发 Turn。
 - `kind` 覆盖 Pod 重启恢复原 Session、恢复失败不新建 Session、旧 Digest 回滚、原 PVC 复用和 Adapter 不可达。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
