@@ -429,9 +429,9 @@ sequenceDiagram
     participant A as Platform Worker / Adapter
     participant R as Agent Pod
 
-    U->>W: 发送消息
+    U->>W: 发送无活跃 Turn 的新消息
     W->>P: POST message + Idempotency-Key
-    P->>D: 事务保存 Message、Execution 与 outbox
+    P->>D: 事务保存 Message、初始 Execution 与 Turn outbox
     P-->>W: 已提交
     A->>D: 认领 outbox 与 Execution
     A->>R: HTTP 提交 Turn
@@ -447,13 +447,16 @@ sequenceDiagram
     P-->>W: 补发事件与最终结果
 ```
 
+上图描述没有活跃 Turn 的普通消息路径。补充指令和繁忙拒绝按 12.2 的独立事务分支处理。
+
 ### 12.2 可靠性规则
 
 - 消息写入数据库成功后才向用户显示“已提交”。
-- 投递失败不会删除消息；状态变为繁忙、投递失败或暂时不可用，并提供重试。
-- 同一消息只产生一个初始执行；重试使用同一幂等键或明确创建新执行。
+- 已持久化的消息在后续投递失败时不会删除；状态变为繁忙、投递失败或暂时不可用，并提供重试。
+- 没有活跃 Turn 时，平台在同一事务中创建 Message、初始 Execution 和 Turn outbox；相同消息重试使用同一幂等键，不能重复创建初始 Execution。
 - 同一 Conversation 同时只有一个活跃 Turn，不同 Conversation 可以并行处理。
-- 活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令；不同 `actorId` 的消息必须明确返回繁忙，不能附加到当前 Turn 或复用其 Execution Grant。
+- 活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令。平台在同一事务中创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；Adapter 以 `messageId` 幂等提交补充指令。
+- 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台必须明确返回繁忙且不创建 Message、Execution 或 outbox；不能附加到当前 Turn 或复用其 Execution Grant。普通消息、补充指令和繁忙拒绝的分支判定与写入必须原子完成。
 - Worker 或 Pod 重启后按持久化状态恢复；对 Runtime 是否已接受 Turn 无法确认时不能盲目重复提交。
 - 重新生成创建新的回答版本，旧回答继续保留。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
@@ -675,6 +678,7 @@ sequenceDiagram
 ### 19.3 集成测试
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
+- 消息投递覆盖普通消息、补充指令和繁忙拒绝三个事务分支；补充指令重试或 Worker 重启不能重复投递，繁忙拒绝不能遗留孤儿 Execution 或 outbox。
 - Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。

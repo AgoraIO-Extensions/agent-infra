@@ -35,7 +35,7 @@ Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
 Agent Pod --Action + Execution Grant--> Platform Tool Gateway --> Connection API
 ```
 
-- `platform-api` 解析入口身份，在同一事务中保存 Message、Execution 和 outbox；它不直接调用 Agent Pod。
+- `platform-api` 解析入口身份并按消息路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox。它不直接调用 Agent Pod。
 - `platform-worker` 运行 Runtime Adapter，认领 Execution，并通过 Agent Service 的内部 HTTP/SSE 调用 Pod。
 - Adapter 将平台 Conversation/Execution 映射为 Runtime Session/Turn，将原生事件归一化后写回 Platform DB。
 - `platform-api` 只把已经持久化的事件推送给浏览器或渠道。
@@ -60,7 +60,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
 | --- | --- | --- |
-| `self-managed` | 镜像负责交互入口、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；平台只负责部署和可选 Auth Gateway |
+| `self-managed` | 镜像负责交互入口、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；Owner 直连自行实施身份、权限和暴露策略，平台只负责部署和可选 Auth Gateway |
 | `platform-adapter` | 平台负责 Web/企微入口、身份、Conversation、Execution、事件和历史 | `protocol` 必须是 ACP，并通过 Generic ACP Conformance Suite |
 
 `platform-adapter` Manifest 未声明 ACP 时创建失败且不启动 Workload；实际 ACP 兼容性在 Workload 启动后的创建过程中验证。M1 不为未知协议增加专用 Adapter。
@@ -138,8 +138,10 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 ### 8.1 消息幂等
 
 - `platform-api` 以 `(conversationId, actorId, Idempotency-Key)` 唯一约束消息提交；`actorId` 由服务端根据当前公司用户或可信 Channel 发送者映射生成，不能接受调用方提交的身份字段。
-- 同一 `actorId` 下，同一 Key 和相同消息、附件、模型选择再次提交时返回原 Message 与 Execution；同一 Key 对应不同内容时返回冲突。共享 Conversation 中不同发送者使用相同 Key 时互不影响。
-- Message、初始 Execution 和 outbox 在同一数据库事务中创建。
+- 同一 `actorId` 下，同一 Key 和相同消息、附件、模型选择再次提交时，普通消息返回原 Message 与初始 Execution，补充指令返回原 Message 与原绑定的 Execution；同一 Key 对应不同内容时返回冲突。共享 Conversation 中不同发送者使用相同 Key 时互不影响。
+- 没有活跃 Turn 时，Message、初始 Execution 和 Turn outbox 在同一数据库事务中创建。
+- 活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同且 Adapter 支持补充指令时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。
+- 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台返回繁忙且不创建 Message、Execution 或 outbox。三条分支的判定和写入必须原子完成。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
 ### 8.2 事件去重
@@ -193,7 +195,7 @@ Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Exe
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Owner 选择与 Manifest 交互模式不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、重复消息、重复事件和同会话并发 Turn。
+- 负向测试覆盖未知协议、无交互入口、Owner 选择与 Manifest 交互模式不匹配、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、共享 Conversation 不同发送者复用同一 Idempotency-Key、不同发送者向活跃 Turn 追加指令、补充指令重试或 Worker 重启后重复投递、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。
 - `kind` 覆盖 Pod 重启恢复原 Session、恢复失败不新建 Session、旧 Digest 回滚、原 PVC 复用和 Adapter 不可达。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
