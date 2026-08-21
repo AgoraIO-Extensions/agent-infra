@@ -177,7 +177,7 @@ agent-infra/
 | --- | --- | --- |
 | Agent Lifecycle | 申请、审批、撤回、停止、重启、停用、期望版本和状态迁移 | 直接操作 Kubernetes |
 | Agent Access | Owner、共同 Owner、员工与组织范围、账号禁用后的权限判断 | 保存公司用户目录 |
-| Agent Configuration | 模板、自定义镜像、交互模式、env/Secret、模型、渠道和 Action 选择 | 模型路由和 Provider 凭证 |
+| Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、模型、渠道和 Action 选择 | 模型路由和 Provider 凭证 |
 | Conversation | 会话、消息、回答版本、附件引用、执行事件和历史查询 | Agent 内部思考原文 |
 | Agent Dispatch | 持久化消息投递、幂等、繁忙反馈、取消和补充指令 | Agent 自身的任务调度算法 |
 | Channel | Web、企微机器人和企微应用的身份、会话与附件映射 | Runtime 原生 Session 和协议语义 |
@@ -534,7 +534,7 @@ sequenceDiagram
 ### 14.3 自有交互入口
 
 - 自有交互入口的流量、协议、Session 和历史由自定义 Agent 负责，不经过 Runtime Adapter。
-- `platform-worker` 根据 Owner 选择发布用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
+- `platform-worker` 根据 Platform DB 中保存的 Owner 身份责任选择只发布对应的一条用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
 - 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信公司身份、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要公司账号或 Agent 可用范围变化立即生效时必须选择平台身份入口。
 - 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围，移除或覆盖调用方提交的身份 Header，并传递绑定公司用户、受众、Agent 与有效期的短期签名上下文；自定义 Agent 服务端必须校验签名、签发者、受众、有效期和 Agent 绑定，不能信任浏览器字段。权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。
 
@@ -665,7 +665,7 @@ sequenceDiagram
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - Conversation、Execution、outbox、双 Worker 和 Pod 重启的集成与故障注入测试执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
-- Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，候选 Service/健康检查变更，升级失败后恢复旧 Digest、路由、渠道和平台历史，原 PVC 复用，以及第 17 节的安全与网络边界；Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
+- Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，候选 Service/健康检查变更，升级失败后恢复旧 Digest、路由、渠道和平台历史，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。
 
@@ -677,7 +677,7 @@ Playwright 覆盖：
 - Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果。
 - 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
 - 自有身份入口不获得平台身份或撤权上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝，且两类入口的历史都不进入平台。
-- Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；`self-managed` 的 capability 声明不能开放平台能力，平台不保存该 Runtime 的模型 Base URL 或凭证，选项失效时不能静默改用其他模型。
+- Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；`self-managed` 的 capability 声明不能开放平台能力，Adapter 不从 Runtime 模型选项读取或保存凭证，平台只按 10.6 把 Owner env/Secret 作为不透明配置保存和注入，选项失效时不能静默改用其他模型。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
 - 企微身份映射、群聊和线程按发送者隔离 Platform Conversation/Runtime Session、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
 
