@@ -155,7 +155,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同且 Adapter 支持补充指令时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。
 - Adapter 只有在原生协议提供持久幂等结果，或 Pod 内 Agent Service、Runtime Host 或 Bridge 能按 `messageId` 持久去重并恢复原提交结果时，才能声明补充指令 capability。Worker 或 Pod 重启后重复提交同一 `messageId` 必须返回原结果且不能再次追加；不能满足该约束的 Runtime 不开放补充指令。
 - 补充指令 outbox 只有在绑定 Execution 的初始 Turn 已被 Runtime 明确接受后才能投递；初始 Turn 尚未投递或接受结果不确定时保持待处理。同一 Execution 的补充指令按 outbox 创建顺序串行投递，不能抢在初始 Turn 前调用 Runtime。若初始 Execution 在 Runtime 明确接受前进入失败或取消终态，`platform-worker` 必须在同一 Conversation 锁内将其全部待处理补充指令 outbox 置为失败终态，并将对应 Message 标记为“投递失败：原回复未开始”；不得继续重试、创建新 Execution 或改绑其他 Execution。
-- `platform-worker` 认领补充指令 outbox 时，先按工程 Spec 的[调用时授权](SPEC-agent-infra-M1-engineering-architecture.md#92-调用时校验顺序)重新解析该 `actorId` 的当前授权，再在 Conversation 锁内重验绑定 Execution。权限已失效时，平台在同一数据库事务中将 outbox 置为失败终态、将 Message 标记为“投递失败：权限已失效”，且不调用 Adapter；Execution 已终止时，同样将 outbox 置为失败终态并将 Message 标记为“投递失败：原回复已结束”。只有权限仍有效且 Execution 仍活跃时，平台才签发符合工程 Spec 的新短期 Execution Grant 并按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。失败后不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
+- `platform-worker` 认领补充指令 outbox 时，先按工程 Spec 的[权限顺序](SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)重新解析该 `actorId` 的当前授权，再在 Conversation 锁内重验绑定 Execution。权限已失效时，平台在同一数据库事务中将 outbox 置为失败终态、将 Message 标记为“投递失败：权限已失效”，且不调用 Adapter；Execution 已终止时，同样将 outbox 置为失败终态并将 Message 标记为“投递失败：原回复已结束”。只有权限仍有效且 Execution 仍活跃时，平台才签发符合工程 Spec 的新短期 Execution Grant 并按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。失败后不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台返回繁忙且不创建 Message、Execution 或 outbox。普通消息、补充指令、重新生成和繁忙分支的判定与写入必须原子完成。
 - 停止命令必须携带 `targetExecutionId`，且不创建 Message 或新 Execution。`platform-api` 在 Conversation 锁内校验目标 Execution 属于该 Conversation、发送者 `actorId` 与目标 Execution 相同，并原子创建绑定目标 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，相同 `targetExecutionId` 的重复 HTTP 请求返回已有停止状态。目标 Execution 已经终止时幂等返回“已结束”；即使另一个 Execution 已经活跃，也不能把旧请求改绑到它。其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验目标 Execution；初始 Turn 已被 Runtime 接受且仍活跃时才按 `stopRequestId` 调用 Adapter，已经终止则将 outbox 置为成功终态。Adapter 和 Agent Service 把同一 `stopRequestId` 的重复停止视为同一命令。
 - 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox，并在同一事务中把 Turn outbox 从待投递原子迁移为“投递中、接受结果不确定”；事务提交并释放锁后才能调用 Adapter。若迁移前已有 stop 且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”、把 stop outbox 置为成功终态，并按前述规则结束全部待处理补充指令，不调用 Adapter，初始 Turn 后续不得再投递。Turn outbox 已进入“投递中、接受结果不确定”时，stop outbox 保持待处理；Worker 先按原 `executionId` 恢复查询，确认已接受后才调用 Adapter，只有在确认没有仍会提交该 Turn 的认领者且 Runtime 明确未接受时才能执行前述本地取消。
@@ -186,7 +186,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、KMS、Kubernetes 或原始凭证权限作为运行前提。
 
-Runtime 事件遵循工程 Spec 的[事件存储](SPEC-agent-infra-M1-engineering-architecture.md#123-事件存储)与脱敏边界。
+Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
 ## 11. 验证
 
