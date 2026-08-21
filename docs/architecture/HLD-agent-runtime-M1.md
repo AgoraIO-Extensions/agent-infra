@@ -76,8 +76,8 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `schemaVersion` | 必填；平台只接受明确支持的版本 |
 | `interactionMode` | 必填；`self-managed` 或 `platform-adapter` |
 | `protocol` | `platform-adapter` 必填且只能为 `acp`；`self-managed` 不读取该字段 |
-| `service.port` | 必填；Agent Service 和健康检查使用的容器端口 |
-| `health.path` | 必填；不含凭证的 HTTP 健康检查路径 |
+| `service.port` | 必填；整数 `1..65535`，Agent Service 和健康检查使用的容器端口 |
+| `health.path` | 必填；以 `/` 开头的本地 HTTP 路径，不允许外部 URL、查询参数、片段、控制字符或凭证 |
 | `capabilities` | 声明模型选择、附件、结果文件、Connection 和布尔值 `supplementaryInstruction`；缺失的 capability 按不支持处理 |
 
 Owner 不在产品页面填写协议、端口或探针。创建或升级时，平台按以下顺序验证：
@@ -103,6 +103,8 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 探测模型、附件、结果文件、Connection 和补充指令 capability。
 
 `packages/agent-runtime` 实现四个固定 Adapter。每个 Adapter 可以在 Pod 内使用 Runtime Host 或等价 Bridge 启动原生进程，但 Agent Service 对 `platform-worker` 始终提供内部 HTTP/SSE。
+
+`platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；平台不把它们写入标准模板模型配置，也不从 Runtime 读取或保存凭证。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
 标准模板的有效补充指令能力取 Registry 声明与 Adapter Conformance 结果；`platform-adapter` 自定义 Agent 取 Manifest 声明与实际探测结果的交集。缺失、声明为 `false`、探测失败或不能保证 `messageId` 持久去重时都按不支持处理，只影响补充指令分支并返回繁忙，不使 Agent 创建失败。
 
@@ -181,7 +183,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 - 当前公司用户与组织状态。
 - Agent、Conversation 和渠道绑定。
-- Agent 可用范围与当前模型选项。
+- Agent 可用范围，以及标准模板 Owner 当前允许的模型选项或自定义 Runtime 通过 ACP 返回的当前模型选项。
 - 当前允许的 Connection Action 集合版本。
 
 平台在每个 Turn 或补充指令实际投递前生成绑定用户、Agent、Conversation、Execution、Turn、渠道和 Action 集合版本的短期 Execution Grant。Agent Pod 只接收本次投递所需的签名上下文；固定 env、浏览器字段和 Runtime 返回值都不能替代当前身份。
