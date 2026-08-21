@@ -117,7 +117,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 | Runtime Session 映射 | Platform DB 的 Adapter 内部存储 | 保存单调递增的 `sessionGeneration`，原生 Session ID 不出 Adapter 边界 |
 | Runtime 工作区和原生 Session 数据 | Agent PVC | Runtime 自己解释，平台不读取内容 |
 
-一个 Platform Conversation 最多映射一个当前 Runtime Session。每个 outbox 在创建时保存当前 `sessionGeneration`；浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID 或代次。
+一个 Platform Conversation 最多映射一个当前 Runtime Session。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“原生 Session 未创建”状态；首个及后续 outbox 在创建时保存当前代次。浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID 或代次。
 
 企微群聊的 Channel 会话键必须包含服务端解析的 `actorId`。不同发送者映射到不同 Platform Conversation 和 Runtime Session；群内公开展示不等于共享 Runtime 上下文。
 
