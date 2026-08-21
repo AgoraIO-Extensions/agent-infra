@@ -95,7 +95,7 @@ flowchart LR
     K8S --> AP[Agent Pod]
     PW -->|Runtime Adapter / HTTP + SSE| AP
 
-    AP --> PA
+    AP -->|Action + Execution Grant / Tool Gateway| PA
     PA --> CA
     CA --> CD[(Connection DB)]
     PA -.->|仅加密写入或生成引用| KMS[KMS / Secret Service]
