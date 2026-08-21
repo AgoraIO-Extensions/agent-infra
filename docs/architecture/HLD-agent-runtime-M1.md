@@ -114,10 +114,10 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 | Conversation、Message | Platform DB | 浏览器和 Channel 只使用平台 ID |
 | Execution、回答版本 | Platform DB | 消息提交或重新生成重试不能产生重复 Execution |
 | 规范化事件与 SSE 游标 | Platform DB | 先持久化，再对外推送 |
-| Runtime Session 映射 | Platform DB 的 Adapter 内部存储 | 原生 Session ID 不出 Adapter 边界 |
+| Runtime Session 映射 | Platform DB 的 Adapter 内部存储 | 保存单调递增的 `sessionGeneration`，原生 Session ID 不出 Adapter 边界 |
 | Runtime 工作区和原生 Session 数据 | Agent PVC | Runtime 自己解释，平台不读取内容 |
 
-一个 Platform Conversation 最多映射一个当前 Runtime Session。浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID。
+一个 Platform Conversation 最多映射一个当前 Runtime Session。每个 outbox 在创建时保存当前 `sessionGeneration`；浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID 或代次。
 
 企微群聊的 Channel 会话键必须包含服务端解析的 `actorId`。不同发送者映射到不同 Platform Conversation 和 Runtime Session；群内公开展示不等于共享 Runtime 上下文。
 
@@ -139,8 +139,9 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 ### 7.3 重启恢复
 
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和 Session 映射。
+- Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令还携带自身的 `messageId` fence。Platform DB 只接受与当前 Conversation 代次和相应 fence 一致的条件写；Agent Service、Runtime Host 或 Bridge 在 PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Agent Pod 重启后复用原 PVC；Pod 就绪后，Adapter 必须使用已保存的原生 Session ID 恢复原 Session，并查询未完成 Turn 状态。
-- 恢复成功后继续接收事件。恢复失败时保留原 Conversation 和 Session 映射，只将该 Platform Conversation 标记为“会话不可用”；该会话历史只读且不能继续发送消息，其他 Conversation 和 Agent 服务保持正常。
+- 恢复成功后继续接收事件。恢复失败时，`platform-worker` 在 Conversation 锁内原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”、把活跃 Execution 和业务 outbox 置为带可审计原因的失败终态，并创建携带新代次的内部 generation tombstone 工作项。Platform DB 从该事务提交起拒绝旧代次的事件和状态写；Agent Service 持久化 tombstone 后拒绝旧代次调用，投递失败时继续重试且不能恢复业务投递。原 Session 映射和历史保留只读，其他 Conversation 和 Agent 服务保持正常。
 - 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能创建新的 Runtime Session。
 
 ## 8. 消息、事件与 SSE 可靠性
@@ -148,6 +149,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 ### 8.1 消息与命令幂等
 
 - `platform-api` 在同一 Conversation 数据库锁内完成活跃 Execution 查询、普通消息/补充指令/重新生成/繁忙分支判定及对应写入，提交事务后才释放锁；stop 命令复用同一把锁。两个并发请求都不能基于“无活跃 Execution”的旧快照各自创建 Execution。
+- 所有会调用 Runtime 的 outbox 使用 Platform DB 中的 durable lease，至少保存 `leaseOwner`、`leaseExpiresAt` 和操作作用域内单调递增的 `deliveryFence`。初始 Turn 与 stop 共享 `executionId` 作用域的 fence，使停止或接管可以阻断旧 Turn 提交；每条补充指令使用 `messageId` 作用域的独立 fence，不能提升 Execution fence 或阻断原 Turn 事件。Worker 通过条件更新认领或续租；首次认领和租约到期后的重新认领都提升对应 fence。租约过期只允许新 Worker 以更高 fence 接管，旧 Worker 后续的 Runtime 调用、事件和状态写入必须被 Agent Service 与 Platform DB 拒绝，不能仅凭进程内“正在处理”状态判断所有权。
 - 普通消息、补充指令和重新生成请求必须携带非空 `Idempotency-Key`，值只允许 `1..128` 个 ASCII 字母、数字、`.`、`_`、`~` 或 `-`，并作为区分大小写的不透明字符串处理。浏览器为一次逻辑提交生成 Key 并在传输重试时复用；Channel 层从可信渠道消息 ID 派生符合该格式的稳定 Key。`platform-api` 在任何写入前拒绝缺失或格式无效的 Key，并以非空字段建立 `(conversationId, actorId, Idempotency-Key)` 唯一约束；`actorId` 由服务端根据当前公司用户或可信 Channel 发送者映射生成，不能接受调用方提交的身份字段。
 - 同一 `actorId` 下，同一 Key 和相同消息、附件、模型选择再次提交时，普通消息返回原 Message 与初始 Execution，补充指令返回原 Message 与原绑定的 Execution；同一 Key 对应不同内容时返回冲突。不同 `actorId` 的 Key 独立生效。
 - 没有活跃 Turn 时，Message、初始 Execution 和 Turn outbox 在同一数据库事务中创建。
@@ -160,13 +162,13 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 使用者停止命令必须携带 `targetExecutionId`，且不创建 Message 或新 Execution。`platform-api` 在 Conversation 锁内校验目标 Execution 属于该 Conversation、发送者 `actorId` 与目标 Execution 相同，并原子创建绑定目标 Execution、来源为使用者的 stop outbox；每个 Execution 只有一个有效 stop outbox 和平台生成的稳定 `stopRequestId`，相同 `targetExecutionId` 的重复 HTTP 请求返回已有停止状态。目标 Execution 已经终止时幂等返回“已结束”；即使另一个 Execution 已经活跃，也不能把旧请求改绑到它。其他发送者无权停止且不创建 outbox。
 - `platform-worker` 认领使用者来源的 stop outbox 时，先按工程 Spec 的[权限顺序](SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)重新解析该 `actorId` 的当前授权，再在 Conversation 锁内重验目标 Execution。授权仍有效时，只有目标 Execution 属于该 Conversation、发送者 `actorId` 与目标 Execution 相同，且初始 Turn 已被 Runtime 接受并仍活跃，才按 `stopRequestId` 调用 Adapter；目标已经终止时将 outbox 置为成功终态。身份或权限依赖暂时不可用时保持待处理并重试，不能调用 Adapter 或把未知状态写成失败终态。
 - 公司账号被服务端确认禁用时，平台必须独立于使用者请求，为该 `actorId` 的全部活跃 Execution 幂等创建平台来源的 stop outbox；若仅有某个 Agent 的可用范围或某个渠道的权限被撤销，则只为服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution 创建 outbox。已有使用者来源 outbox 时复用其 `executionId` 和 `stopRequestId` 并把停止依据提升为平台确认的撤权事实。使用者命令本身不再提供调用权限，Worker 只根据平台来源、服务端撤权记录和目标 Execution 当前状态执行控制操作，不重新要求已撤权用户具备权限。初始 Turn 尚未被 Runtime 接受时按下一条规则本地取消；已接受且仍活跃时调用 Adapter，Adapter 或恢复查询确认停止后才把 Execution 置为“已取消：权限已失效”；Runtime 已经终止时保留其实际终态并完成 outbox。已经提交给外部 Provider 的操作不自动撤回。Adapter 和 Agent Service 把同一 `stopRequestId` 的重复停止视为同一命令。
-- 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox，并在同一事务中把 Turn outbox 从待投递原子迁移为“投递中、接受结果不确定”；事务提交并释放锁后才能调用 Adapter。若迁移前已有 stop 且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”、把 stop outbox 置为成功终态，并按前述规则结束全部待处理补充指令，不调用 Adapter，初始 Turn 后续不得再投递。Turn outbox 已进入“投递中、接受结果不确定”时，stop outbox 保持待处理；Worker 先按原 `executionId` 恢复查询，确认已接受后才调用 Adapter，只有在确认没有仍会提交该 Turn 的认领者且 Runtime 明确未接受时才能执行前述本地取消。
+- 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox，并在同一事务中取得 durable lease、提升 `deliveryFence`，再把 Turn outbox 从待投递原子迁移为“投递中、接受结果不确定”；事务提交并释放锁后才能携带当前 fence 调用 Adapter。若迁移前已有 stop 且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”、把 stop outbox 置为成功终态，并按前述规则结束全部待处理补充指令，不调用 Adapter，初始 Turn 后续不得再投递。Turn outbox 已进入“投递中、接受结果不确定”时，stop outbox 保持待处理；当前 Worker 先按原 `executionId` 和 fence 恢复查询。租约过期或释放后，接管 Worker 必须提升 fence，并由 Agent Service 持久化更高 fence 的取消标记；只有 Runtime 明确未接受且取消标记已经阻止旧 Worker 迟到提交时才能本地取消，无法确认时继续保持接受结果不确定。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
 ### 8.2 事件去重
 
 - 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey`。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化分配单调事件 ID，并支持按该 ID 恢复。禁止使用重连后可能重置或重新分块的流内序号派生。
-- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败不产生可见事件或游标。
+- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只接受当前 `sessionGeneration` 和 `deliveryFence` 的事件，并在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败或 token 过期不产生可见事件或游标。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
 - 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
 
@@ -194,7 +196,7 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失、未知或重复字段、非 `1` 的 Schema 版本、非法 capability 结构、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、事件事务失败重试、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
+- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失、未知或重复字段、非 `1` 的 Schema 版本、非法 capability 结构、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、事件事务失败重试、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
