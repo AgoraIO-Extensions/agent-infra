@@ -60,7 +60,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
 | --- | --- | --- |
-| `self-managed` | 镜像负责交互应用、身份、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；平台发布网络入口，Owner 选择由镜像服务端鉴权或使用平台 Auth Gateway |
+| `self-managed` | 镜像负责交互应用、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；身份责任选择和单一路由发布遵循工程 Spec 14.3 |
 | `platform-adapter` | 平台负责 Web/企微入口、身份、Conversation、Execution、事件和历史 | `protocol` 必须是 ACP，并通过 Generic ACP Conformance Suite |
 
 `platform-adapter` Manifest 未声明 ACP 时创建失败或升级被拒绝；实际 ACP 兼容性在创建或升级的 Workload 启动后验证。M1 不为未知协议增加专用 Adapter。
@@ -103,7 +103,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 `packages/agent-runtime` 实现四个固定 Adapter。每个 Adapter 可以在 Pod 内使用 Runtime Host 或等价 Bridge 启动原生进程，但 Agent Service 对 `platform-worker` 始终提供内部 HTTP/SSE。
 
-`platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；平台不把它们写入标准模板模型配置，也不从 Runtime 读取或保存凭证。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
+`platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；Owner 通过平台配置的相关 env/Secret 遵循工程 Spec 10.6 的通用规则，Adapter 不从 Runtime 的模型选项读取或保存凭证，也不把它们复制到标准模板模型配置。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
 标准模板的有效补充指令能力取 Registry 声明与 Adapter Conformance 结果；`platform-adapter` 自定义 Agent 取 Manifest 声明与实际探测结果的交集。缺失、声明为 `false`、探测失败或不能保证 `messageId` 持久去重时都按不支持处理，只影响补充指令分支并返回繁忙，不使 Agent 创建失败。
 
