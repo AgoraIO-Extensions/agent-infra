@@ -60,7 +60,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
 | --- | --- | --- |
-| `self-managed` | 镜像负责交互应用、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；身份责任选择和单一路由发布遵循工程 Spec 14.3 |
+| `self-managed` | 镜像负责交互应用、协议、Session、事件和历史 | 不进入 Platform Conversation Contract；Owner 必须在自有身份入口和平台身份入口中选择一种，并只发布对应路由。自有身份入口由镜像服务端鉴权；平台身份入口必须经过 Auth Gateway，详见工程 Spec 14.3 |
 | `platform-adapter` | 平台负责 Web/企微入口、身份、Conversation、Execution、事件和历史 | `protocol` 必须是 ACP，并通过 Generic ACP Conformance Suite |
 
 `platform-adapter` Manifest 未声明 ACP 时创建失败或升级被拒绝；实际 ACP 兼容性在创建或升级的 Workload 启动后验证。M1 不为未知协议增加专用 Adapter。
