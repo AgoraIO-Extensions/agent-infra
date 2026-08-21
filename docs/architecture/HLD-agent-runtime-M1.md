@@ -209,8 +209,8 @@ Owner 为 `self-managed` Agent 选择平台身份入口时，Auth Gateway 在每
 
 - Agent 使用独立 ServiceAccount，默认没有 Kubernetes RBAC 权限；不能创建或修改 Service、Ingress 和 NetworkPolicy。
 - NetworkPolicy 禁止 Agent Pod 访问 Platform DB、Connection DB、KMS/Secret Service 和 Kubernetes API。
-- 标准模板和 `platform-adapter` Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
-- `self-managed` Agent Pod 的其他出站访问遵循公司集群现有策略，但仍受上述敏感目标隔离约束；M1 不新增按 Agent 维护的 egress allowlist。
+- 标准模板 Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
+- `platform-adapter` 必须通过 Platform Tool Gateway 使用 Connection；对象存储仍使用平台签发的临时 URL。其 Owner 配置的模型端点和 `self-managed` 的其他出站访问遵循公司集群现有策略，但仍受上述敏感目标隔离约束；M1 不新增按 Agent 维护的 egress allowlist。
 - Platform 和 Connection 的数据库账号、服务身份及 Secret 不挂载到 Agent Pod。
 - Owner Secret 只以 Agent 专属 Kubernetes Secret 注入，不进入 Workload annotation、日志、错误或 API 回显。
 - Runtime 事件在写入 Platform DB 前必须移除模型内部思考、原始凭证和未脱敏请求。
@@ -220,7 +220,7 @@ Owner 为 `self-managed` Agent 选择平台身份入口时，Auth Gateway 在每
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
 - 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、企微群聊不同发送者映射到同一 Conversation/Session、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
-- `kind` 覆盖创建时健康检查或 ACP 探测失败后没有可路由入口、运行中 Workload 或遗留新 PVC，以及有效 Service/健康检查变化的候选 Workload、升级探测失败后恢复旧 Digest、渠道和平台历史、原 PVC 复用、Pod 重启恢复原 Session，并用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
+- `kind` 覆盖创建时健康检查或 ACP 探测失败后没有可路由入口、运行中 Workload 或遗留新 PVC，以及有效 Service/健康检查变化的候选 Workload、升级探测失败后恢复旧 Digest、渠道和平台历史、原 PVC 复用、Pod 重启恢复原 Session；NetworkPolicy 验证自定义 `platform-adapter` 可以按公司集群策略访问 Owner 配置的模型端点，同时不能访问 Platform DB、Connection DB、KMS/Secret Service 或 Kubernetes API；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - 入口测试覆盖 Agent ServiceAccount 无法修改 Service、Ingress 或 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口，自有身份入口不获得平台身份上下文；平台身份入口强制 Auth Gateway 校验，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 

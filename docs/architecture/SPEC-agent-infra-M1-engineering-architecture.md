@@ -636,6 +636,7 @@ sequenceDiagram
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
 - Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
+- 标准模板只通过平台认可的 LLM Gateway 使用模型；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循公司集群现有策略，M1 不新增按 Agent 维护的 egress allowlist。
 - 自定义镜像必须来自 Company Hub，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 模型 API Key、Owner Secret 和企微凭证加密保存、不回显，只能替换。
@@ -697,7 +698,7 @@ sequenceDiagram
 - 补充指令测试必须覆盖提交后、实际投递前发送者账号、组织成员关系或 Agent 可用范围失效，以及原 Grant 过期或授权范围缩小；Message 和 outbox 在权限失效时进入失败终态，Runtime 不收到该指令，有效指令只获得原 Execution 边界与当前授权交集的新 Grant。重新生成测试覆盖复用已有 Message、新建单一 Execution/Turn、重复请求、同一 Key 指向其他 Message，以及活跃 Turn 上返回繁忙且不创建任何记录。
 - 停止测试覆盖 stop outbox 的事务写入、当前发送者校验、停止先于初始 Turn 投递、初始 Turn 接受结果不确定、目标 Turn 先结束、重复 HTTP 请求和 Worker 重启；Runtime 明确未接受时，待投递 Turn 与 Execution 被原子取消，全部待处理补充指令进入失败终态，且初始 Turn 永不进入 Runtime；接受结果不确定时先恢复查询，已接受时同一 `stopRequestId` 只产生一次停止效果。停止命令不丢失且不创建 Message 或新 Execution。
 - Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、候选修订验证前无用户流量、验证成功后的路由切换、失败时旧路由恢复、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；非法端口或健康检查路径在启动 Workload 前被拒绝，创建健康检查或 ACP 探测失败后必须没有可路由入口、运行中 Workload 或遗留新 PVC，并保留 Platform DB 失败状态；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
-- `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口。
+- `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口；自定义 `platform-adapter` 可以按公司集群策略访问 Owner 模型端点，但不能访问 Platform DB、Connection DB、KMS/Secret Service 或 Kubernetes API。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。
 
