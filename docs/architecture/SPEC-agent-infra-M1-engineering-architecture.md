@@ -278,6 +278,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - Web 使用 HttpOnly、Secure、SameSite Cookie，不在 Local Storage 保存公司 Access Token。
 - 服务端根据公司稳定用户 ID 解析当前账号和组织关系。
 - 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。
+- 公司身份 Adapter 确认账号禁用，或平台确认用户失去 Agent 可用范围或当前渠道权限时，平台为该用户仍活跃的 Execution 幂等创建平台来源的停止工作项；该控制操作以服务端确认的撤权事实为依据，不借用已撤权用户的调用权限。身份或权限依赖暂时不可用时只重试检查，不能把未知状态当作已撤权或已授权。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
 ### 9.2 权限顺序
 
@@ -675,7 +676,7 @@ sequenceDiagram
 Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
-- Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果。
+- Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果，确认撤权后平台中止仍可中止的活跃 Execution。
 - 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
 - 自有身份入口不获得平台身份或撤权上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝，且两类入口的历史都不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；`self-managed` 的 capability 声明不能开放平台能力，Adapter 不从 Runtime 模型选项读取或保存凭证，平台只按 10.6 把 Owner env/Secret 作为不透明配置保存和注入，选项失效时不能静默改用其他模型。
