@@ -164,8 +164,8 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 ### 8.2 事件去重
 
 - 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey`。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化分配单调事件 ID，并支持按该 ID 恢复。禁止使用重连后可能重置或重新分块的流内序号派生。
-- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束；重复原生事件只返回已有平台事件。
-- 平台为首次保存的事件分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`。
+- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败不产生可见事件或游标。
+- 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
 - 高频文本可以批量持久化，但不能先推送未保存内容，也不能因批量合并改变最终文本顺序。
 
 ### 8.3 SSE 补发
@@ -192,7 +192,7 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
+- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、事件事务失败重试、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
