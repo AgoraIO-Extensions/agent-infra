@@ -12,7 +12,7 @@
 
 1. 产品行为以 Agent Platform PRD 为准。
 2. 部署单元、数据归属、身份和 Connection 边界以 M1 工程架构 Spec 为准。
-3. Runtime 内部实现遵循本文。
+3. Runtime 内部实现遵循本文；Session、Turn、事件、幂等、恢复的完整契约和 Runtime Contract/Conformance 详细验证矩阵只在本文维护。
 
 相关 Issue 只记录决策来源和交付状态，不覆盖正式文档：
 
@@ -80,16 +80,15 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `health.path` | 必填；以 `/` 开头的本地 HTTP 路径，不允许外部 URL、查询参数、片段、控制字符或凭证 |
 | `capabilities` | 仅 `platform-adapter` 读取；声明模型选择、附件、结果文件、Connection 和布尔值 `supplementaryInstruction`，缺失的 capability 按不支持处理；`self-managed` 的声明忽略，不能据此开放 Platform Conversation、Connection 或 Tool Gateway 能力 |
 
-Owner 不在产品页面填写协议、端口或探针。创建或升级时，平台按以下顺序验证：
+Owner 不在产品页面填写协议、端口或探针。创建或升级时，Runtime 按以下顺序验证：
 
-1. 校验 Company Hub 访问权，并把 Tag 解析为不可变 Digest。
-2. 读取并校验 Manifest Schema、交互模式，以及创建时与 Owner 申请选择、升级时与当前 Agent 的一致性。
-3. 启动 Workload 并验证健康检查。
-4. 对 `platform-adapter` 执行 Generic ACP 核心探测，再探测 Manifest 声明的可选 capability；平台展示能力取 Manifest 声明与实际探测结果的交集。
+1. 读取并校验 Manifest Schema、字段约束和交互模式，以及创建时与 Owner 申请选择、升级时与当前 Agent 的一致性。
+2. 候选 Runtime 健康后，对 `platform-adapter` 执行 Generic ACP 核心探测。
+3. 核心探测通过后，再探测 Manifest 声明的可选 capability；平台展示能力取 Manifest 声明与实际探测结果的交集。
 
-前两步在启动 Workload 前完成；失败时不启动 Workload。健康检查和 ACP 核心探测在启动后完成，不作为审批前门禁；访问路由只有在健康检查和所需核心探测通过后才接收用户流量。Manifest、健康检查或 ACP 核心探测失败时，创建状态为“创建失败”并返回可修复原因；可选 capability 探测失败只把对应能力记为不支持。启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等删除本次创建的 StatefulSet、Service、Ingress、NetworkPolicy、Kubernetes 配置与 Secret；首次创建且尚未进入“可用”的新 PVC 同时删除，重试时重新创建。Platform DB 中的申请、Agent 配置、失败原因和审计保留。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
+第一步失败时不请求部署候选 Runtime；核心探测失败时整个 Runtime 验证失败，可选 capability 探测失败时只把对应能力记为不支持。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
 
-升级时新 Digest 先作为候选修订，并重新执行上述四步。候选 Manifest 的 `interactionMode` 必须与当前 Agent 一致，M1 不通过升级切换交互模式；Schema、Service 或健康检查字段无效，或模式不一致时不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 在验证完成前不加入任何用户路由或原渠道；无法与旧修订隔离运行时，先关闭用户路由再应用候选 Workload。候选 Workload 健康检查通过且 `platform-adapter` 再次通过 ACP 核心探测后，才原子提升 Digest、切换路由并确认原渠道绑定；失败时保持或恢复旧 Digest、Workload 配置和路由，不修改渠道绑定和平台历史。只有旧修订也无法恢复时才进入 Agent 级“暂时不可用”。
+候选修订、Workload、健康检查、路由切换、失败清理、PVC 和回滚机制只在工程 Spec 的[模板与自定义镜像升级](SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)与[自定义 Agent Runtime Manifest](SPEC-agent-infra-M1-engineering-architecture.md#105-自定义-agent-runtime-manifest)中维护。
 
 ## 5. Platform Conversation Contract
 
@@ -156,7 +155,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同且 Adapter 支持补充指令时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。
 - Adapter 只有在原生协议提供持久幂等结果，或 Pod 内 Agent Service、Runtime Host 或 Bridge 能按 `messageId` 持久去重并恢复原提交结果时，才能声明补充指令 capability。Worker 或 Pod 重启后重复提交同一 `messageId` 必须返回原结果且不能再次追加；不能满足该约束的 Runtime 不开放补充指令。
 - 补充指令 outbox 只有在绑定 Execution 的初始 Turn 已被 Runtime 明确接受后才能投递；初始 Turn 尚未投递或接受结果不确定时保持待处理。同一 Execution 的补充指令按 outbox 创建顺序串行投递，不能抢在初始 Turn 前调用 Runtime。若初始 Execution 在 Runtime 明确接受前进入失败或取消终态，`platform-worker` 必须在同一 Conversation 锁内将其全部待处理补充指令 outbox 置为失败终态，并将对应 Message 标记为“投递失败：原回复未开始”；不得继续重试、创建新 Execution 或改绑其他 Execution。
-- `platform-worker` 认领补充指令 outbox 时，先从服务端权威数据重解析该 `actorId` 的当前公司账号、组织、Agent、Conversation、渠道绑定和 Agent 可用范围，再在 Conversation 锁内重验绑定 Execution。权限已失效时，平台在同一数据库事务中将 outbox 置为失败终态、将 Message 标记为“投递失败：权限已失效”，且不调用 Adapter；Execution 已终止时，同样将 outbox 置为失败终态并将 Message 标记为“投递失败：原回复已结束”。只有权限仍有效且 Execution 仍活跃时，平台才签发新的短期 Execution Grant 并按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。失败后不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
+- `platform-worker` 认领补充指令 outbox 时，先按工程 Spec 的[调用时授权](SPEC-agent-infra-M1-engineering-architecture.md#92-调用时校验顺序)重新解析该 `actorId` 的当前授权，再在 Conversation 锁内重验绑定 Execution。权限已失效时，平台在同一数据库事务中将 outbox 置为失败终态、将 Message 标记为“投递失败：权限已失效”，且不调用 Adapter；Execution 已终止时，同样将 outbox 置为失败终态并将 Message 标记为“投递失败：原回复已结束”。只有权限仍有效且 Execution 仍活跃时，平台才签发符合工程 Spec 的新短期 Execution Grant 并按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn。失败后不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
 - 同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台返回繁忙且不创建 Message、Execution 或 outbox。普通消息、补充指令、重新生成和繁忙分支的判定与写入必须原子完成。
 - 停止命令必须携带 `targetExecutionId`，且不创建 Message 或新 Execution。`platform-api` 在 Conversation 锁内校验目标 Execution 属于该 Conversation、发送者 `actorId` 与目标 Execution 相同，并原子创建绑定目标 Execution 的 stop outbox；每个 Execution 只有一个 stop outbox 和平台生成的稳定 `stopRequestId`，相同 `targetExecutionId` 的重复 HTTP 请求返回已有停止状态。目标 Execution 已经终止时幂等返回“已结束”；即使另一个 Execution 已经活跃，也不能把旧请求改绑到它。其他发送者无权停止且不创建 outbox。`platform-worker` 认领时重验目标 Execution；初始 Turn 已被 Runtime 接受且仍活跃时才按 `stopRequestId` 调用 Adapter，已经终止则将 outbox 置为成功终态。Adapter 和 Agent Service 把同一 `stopRequestId` 的重复停止视为同一命令。
 - 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox，并在同一事务中把 Turn outbox 从待投递原子迁移为“投递中、接受结果不确定”；事务提交并释放锁后才能调用 Adapter。若迁移前已有 stop 且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”、把 stop outbox 置为成功终态，并按前述规则结束全部待处理补充指令，不调用 Adapter，初始 Turn 后续不得再投递。Turn outbox 已进入“投递中、接受结果不确定”时，stop outbox 保持待处理；Worker 先按原 `executionId` 恢复查询，确认已接受后才调用 Adapter，只有在确认没有仍会提交该 Turn 的认领者且 Runtime 明确未接受时才能执行前述本地取消。
@@ -175,53 +174,26 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 实时补发受服务端配置的数量和时间窗口限制，避免单次重连无限读取。
 - 游标超出补发窗口时，服务端返回明确的“重新加载时间线”信号；客户端先读取 Platform DB 中的持久化历史，再从新的游标继续 SSE。补发窗口不改变业务数据保留期限。
 
-## 9. 身份、授权与 Connection
+## 9. Runtime 身份上下文
 
-### 9.1 逐 Turn 与补充指令身份
+身份解析、Execution Grant、Connection 双重授权和自有交互入口的 Auth Gateway 以工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)、[Connection 架构](SPEC-agent-infra-M1-engineering-architecture.md#13-connection-架构)和[自有交互入口](SPEC-agent-infra-M1-engineering-architecture.md#143-自有交互入口)为唯一权威。Runtime 和 Adapter 只消费这些边界：
 
-`platform-api` 在消息或命令提交时校验入口身份，`platform-worker` 在提交每个 Turn 和每条补充指令前再次从服务端权威数据解析：
+- 每个 Turn 和每条补充指令只接受本次投递新签发的短期 Execution Grant。固定 env、浏览器字段和 Runtime 返回值都不能替代当前身份或扩大 Grant 范围。
+- Runtime 只向 Platform Tool Gateway 提交 Action 和参数，不接收 Connection 原始凭证；Platform 或 Connection 任一方拒绝都终止调用。
+- `self-managed` 使用平台身份入口时，自定义 Agent 服务端只信任 Auth Gateway 传递的短期签名上下文并负责校验；浏览器身份字段不能改变最终身份。该上下文不创建 Platform Conversation、Execution 或 Execution Grant。
 
-- 当前公司用户与组织状态。
-- Agent、Conversation 和渠道绑定。
-- Agent 可用范围，以及标准模板 Owner 当前允许的模型选项或自定义 Runtime 通过 ACP 返回的当前模型选项。
-- 当前允许的 Connection Action 集合版本。
+## 10. Runtime 安全约束
 
-平台在每个 Turn 或补充指令实际投递前生成绑定用户、Agent、Conversation、Execution、Turn、渠道和 Action 集合版本的短期 Execution Grant。Agent Pod 只接收本次投递所需的签名上下文；固定 env、浏览器字段和 Runtime 返回值都不能替代当前身份。
+Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、KMS、Kubernetes 或原始凭证权限作为运行前提。
 
-补充指令在重验当前授权后签发新的 Grant，其用户、Agent、Conversation、Execution、渠道和 Action 范围取原 Execution 授权边界与当前授权的交集，不能扩大原范围；Platform Tool Gateway 仍按调用时的当前授权独立拒绝 Connection 请求。
-
-### 9.2 两个独立拒绝门
-
-| 拒绝门 | 当前调用时校验 |
-| --- | --- |
-| Platform | 公司账号、Agent 可用范围、渠道、模型、Owner 允许的 Action、Execution Grant |
-| Connection | Connection 归属或共享范围、用户授权、Action、外部账号、凭证状态和 Provider 权限 |
-
-任一系统拒绝都终止调用。Platform 通过不代表 Connection 必须执行；Connection 也不能根据 Agent 提交的用户、Connection 或外部账号字段绕过自身校验。
-
-Agent 只向 Platform Tool Gateway 提交 Action 和参数。Platform 根据 Execution 解析当前授权并调用 Connection API；Connection 注入凭证、执行和脱敏。原始凭证不进入 Agent Pod、Adapter 或模型上下文。
-
-### 9.3 自有交互的平台身份入口
-
-Owner 为 `self-managed` Agent 选择平台身份入口时，Auth Gateway 在每次请求校验公司账号和 Agent 可用范围，移除调用方提供的身份 Header，并传递包含签发者、公司用户、受众、Agent ID、签发时间和过期时间的短期签名上下文。自定义 Agent 服务端必须校验签名、签发者、受众、有效期和 Agent 绑定；可信上下文缺失、签名无效、过期或绑定错误时均拒绝。调用方提供的身份 Header 不能改变 Gateway 签发的最终身份。该上下文只用于自有交互应用鉴权，不创建 Platform Conversation、Execution 或 Execution Grant。
-
-## 10. Pod 安全与网络
-
-- Agent 使用独立 ServiceAccount，默认没有 Kubernetes RBAC 权限；不能创建或修改 Service、Ingress 和 NetworkPolicy。
-- NetworkPolicy 禁止 Agent Pod 访问 Platform DB、Connection DB、KMS/Secret Service 和 Kubernetes API。
-- 标准模板 Agent Pod 只能通过明确允许的内部入口使用 Platform Tool Gateway、LLM Gateway、对象存储临时 URL 和必要基础服务。
-- `platform-adapter` 必须通过 Platform Tool Gateway 使用 Connection；对象存储仍使用平台签发的临时 URL。其 Owner 配置的模型端点和 `self-managed` 的其他出站访问遵循公司集群现有策略，但仍受上述敏感目标隔离约束；M1 不新增按 Agent 维护的 egress allowlist。
-- Platform 和 Connection 的数据库账号、服务身份及 Secret 不挂载到 Agent Pod。
-- Owner Secret 只以 Agent 专属 Kubernetes Secret 注入，不进入 Workload annotation、日志、错误或 API 回显。
-- Runtime 事件在写入 Platform DB 前必须移除模型内部思考、原始凭证和未脱敏请求。
+Runtime 事件遵循工程 Spec 的[事件存储](SPEC-agent-infra-M1-engineering-architecture.md#123-事件存储)与脱敏边界。
 
 ## 11. 验证
 
-- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态、capability、平台 Web/企微和 Connection。
+- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、标准模板未声明的 env/Secret（包括代理、加载器和 Runtime 启动选项）、跨用户/Agent/Connection、企微群聊不同发送者映射到同一 Conversation/Session、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
-- `kind` 覆盖创建时健康检查或 ACP 探测失败后没有可路由入口、运行中 Workload 或遗留新 PVC，以及有效 Service/健康检查变化的候选 Workload、升级探测失败后恢复旧 Digest、渠道和平台历史、原 PVC 复用、Pod 重启恢复原 Session；NetworkPolicy 验证自定义 `platform-adapter` 可以按公司集群策略访问 Owner 配置的模型端点，同时不能访问 Platform DB、Connection DB、KMS/Secret Service 或 Kubernetes API；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
-- 入口测试覆盖 Agent ServiceAccount 无法修改 Service、Ingress 或 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口，自有身份入口不获得平台身份上下文；平台身份入口强制 Auth Gateway 校验，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝。
+- 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
+- `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
 
 ## 12. 参考与非目标
