@@ -78,7 +78,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 | `protocol` | `platform-adapter` 必填且只能为 `acp`；`self-managed` 不读取该字段 |
 | `service.port` | 必填；整数 `1..65535`，Agent Service 和健康检查使用的容器端口 |
 | `health.path` | 必填；以 `/` 开头的本地 HTTP 路径，不允许外部 URL、查询参数、片段、控制字符或凭证 |
-| `capabilities` | 声明模型选择、附件、结果文件、Connection 和布尔值 `supplementaryInstruction`；缺失的 capability 按不支持处理 |
+| `capabilities` | 仅 `platform-adapter` 读取；声明模型选择、附件、结果文件、Connection 和布尔值 `supplementaryInstruction`，缺失的 capability 按不支持处理；`self-managed` 的声明忽略，不能据此开放 Platform Conversation、Connection 或 Tool Gateway 能力 |
 
 Owner 不在产品页面填写协议、端口或探针。创建或升级时，平台按以下顺序验证：
 
@@ -89,7 +89,7 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，�
 
 前两步在启动 Workload 前完成；失败时不启动 Workload。健康检查和 ACP 核心探测在启动后完成，不作为审批前门禁；访问路由只有在健康检查和所需核心探测通过后才接收用户流量。Manifest、健康检查或 ACP 核心探测失败时，创建状态为“创建失败”并返回可修复原因；可选 capability 探测失败只把对应能力记为不支持。启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等删除本次创建的 StatefulSet、Service、Ingress、NetworkPolicy、Kubernetes 配置与 Secret；首次创建且尚未进入“可用”的新 PVC 同时删除，重试时重新创建。Platform DB 中的申请、Agent 配置、失败原因和审计保留。Base Image 可以提供生成辅助，但继承关系不赋予 capability 或准入资格。
 
-升级时新 Digest 先作为候选修订，并重新执行上述四步。候选 Manifest 的 `interactionMode` 必须与当前 Agent 一致，M1 不通过升级切换交互模式；Schema、Service 或健康检查字段无效，或模式不一致时不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 健康检查通过且 `platform-adapter` 再次通过 ACP 核心探测后才提升 Digest 并确认原渠道绑定；失败时恢复旧 Digest 和 Workload 配置，不修改渠道绑定和平台历史。只有旧修订也无法恢复时才进入 Agent 级“暂时不可用”。
+升级时新 Digest 先作为候选修订，并重新执行上述四步。候选 Manifest 的 `interactionMode` 必须与当前 Agent 一致，M1 不通过升级切换交互模式；Schema、Service 或健康检查字段无效，或模式不一致时不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 在验证完成前不加入任何用户路由或原渠道；无法与旧修订隔离运行时，先关闭用户路由再应用候选 Workload。候选 Workload 健康检查通过且 `platform-adapter` 再次通过 ACP 核心探测后，才原子提升 Digest、切换路由并确认原渠道绑定；失败时保持或恢复旧 Digest、Workload 配置和路由，不修改渠道绑定和平台历史。只有旧修订也无法恢复时才进入 Agent 级“暂时不可用”。
 
 ## 5. Platform Conversation Contract
 
