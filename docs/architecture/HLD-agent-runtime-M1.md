@@ -166,11 +166,11 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey`。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化分配单调事件 ID，并支持按该 ID 恢复。禁止使用重连后可能重置或重新分块的流内序号派生。
 - Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败不产生可见事件或游标。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
-- 高频文本可以批量持久化，但不能先推送未保存内容，也不能因批量合并改变最终文本顺序。
+- 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
 
 ### 8.3 SSE 补发
 
-- 浏览器以 `Last-Event-ID` 重连。`platform-api` 先验证该事件属于当前用户有权访问的 Conversation，再按 `conversationCursor` 补发其后的已保存事件；未知、越界或属于其他 Conversation 的游标返回“重新加载时间线”信号。
+- SSE 的 `id` 字段和浏览器重连时的 `Last-Event-ID` 都使用稳定 `eventId`。`platform-api` 必须先在当前用户有权访问的 Conversation 内查询该 `eventId` 对应的 `conversationCursor`，再按游标补发其后的已保存事件；显式游标请求直接使用 `conversationCursor`，并执行相同的 Conversation 权限校验。未知、超出补发窗口或属于其他 Conversation 的 `eventId` 或游标统一返回“重新加载时间线”信号。
 - 实时补发受服务端配置的数量和时间窗口限制，避免单次重连无限读取。
 - 游标超出补发窗口时，服务端返回明确的“重新加载时间线”信号；客户端先读取 Platform DB 中的持久化历史，再从新的游标继续 SSE。补发窗口不改变业务数据保留期限。
 
@@ -194,7 +194,7 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
 - 负向测试覆盖未知协议、无交互入口、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Schema/Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、检查 stop 后到调用 Runtime 前的并发停止、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、事件事务失败重试、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
-- SSE 覆盖持久化后推送、重复事件、窗口内补发和超出窗口后重载时间线。
+- SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
 ## 12. 参考与非目标
 
