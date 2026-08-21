@@ -286,7 +286,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 1. 公司账号仍然有效。
 2. 用户属于 Agent 当前可用范围，或是当前有效 Owner。
 3. 当前渠道已绑定并支持目标操作。
-4. 模型选项属于 Owner 当前允许清单。
+4. 模型选项属于标准模板 Owner 当前允许清单，或属于 `platform-adapter` 自定义 Runtime 通过 ACP 返回的当前选项集合。
 5. 若调用 Connection，Action 属于 Owner 当前选择范围。
 6. 用户对目标 Connection 的授权仍有效，且已确认该 Action。
 
@@ -394,7 +394,7 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 - `platform-worker` 装配标准模板运行配置时，以平台模型配置为最终值；同名的 Owner env 或 Secret 不能覆盖 Base URL、API Key、模型和推理强度。
 - `platform-worker` 把标准模板当前需要的密钥作为 Agent 专属 Kubernetes Secret 挂载到 Pod，不写入 Workload annotation、日志或模型上下文。
 - Owner 替换密钥或模型配置后产生新配置修订，由调谐器安全更新 Agent。
-- 自定义 Agent 的模型配置默认属于镜像内部；通过 ACP 探测到的模型选择能力只按实际 capability 向平台入口开放。
+- 自定义 Agent 的模型配置属于镜像内部；通过 ACP 探测到模型选择能力时，平台入口读取 Runtime 当前提供的选项和默认项并转发使用者选择，不配置或读取其 Base URL 与凭证。提交 Turn 前必须确认选项仍有效，不能在选项失效时静默改用其他模型。
 
 ## 11. Agent Runtime 边界
 
@@ -696,7 +696,7 @@ sequenceDiagram
 - 补充指令测试还必须覆盖 Worker 在 Agent Service 接受后崩溃，以及 Pod 重启后以同一 `messageId` 再次提交；两条路径都返回原结果且原生 Turn 只追加一次。不提供持久去重的 Runtime 不得声明补充指令 capability。
 - 补充指令测试必须覆盖提交后、实际投递前发送者账号、组织成员关系或 Agent 可用范围失效，以及原 Grant 过期或授权范围缩小；Message 和 outbox 在权限失效时进入失败终态，Runtime 不收到该指令，有效指令只获得原 Execution 边界与当前授权交集的新 Grant。重新生成测试覆盖复用已有 Message、新建单一 Execution/Turn、重复请求、同一 Key 指向其他 Message，以及活跃 Turn 上返回繁忙且不创建任何记录。
 - 停止测试覆盖 stop outbox 的事务写入、当前发送者校验、停止先于初始 Turn 投递、初始 Turn 接受结果不确定、目标 Turn 先结束、重复 HTTP 请求和 Worker 重启；Runtime 明确未接受时，待投递 Turn 与 Execution 被原子取消，全部待处理补充指令进入失败终态，且初始 Turn 永不进入 Runtime；接受结果不确定时先恢复查询，已接受时同一 `stopRequestId` 只产生一次停止效果。停止命令不丢失且不创建 Message 或新 Execution。
-- Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；创建健康检查或 ACP 探测失败后必须没有可路由入口、运行中 Workload 或遗留新 PVC，并保留 Platform DB 失败状态；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
+- Kubernetes 使用 `kind` 验证 StatefulSet 创建、缩容、自定义 Agent 候选 Manifest 与 Workload 升级、旧 Digest 回滚、原 PVC 复用和 Pod 重启后的原 Session 恢复；非法端口或健康检查路径在启动 Workload 前被拒绝，创建健康检查或 ACP 探测失败后必须没有可路由入口、运行中 Workload 或遗留新 PVC，并保留 Platform DB 失败状态；用两个 Conversation 验证单个 Session 恢复失败不影响另一会话。
 - `kind` 同时验证 Agent ServiceAccount 不能创建或修改 Service、Ingress 和 NetworkPolicy，Pod 与 Service 地址不直接作为用户入口。
 - 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。
@@ -709,7 +709,7 @@ Playwright 覆盖：
 - Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果。
 - 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
 - 自有身份入口不获得平台身份或撤权上下文；自有交互入口经平台 Auth Gateway 访问时不能绕过权限，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝，且两类入口的历史都不进入平台。
-- Generic ACP 自定义 Agent 的平台入口、capability 和创建拒绝路径。
+- Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；平台不保存该 Runtime 的模型 Base URL 或凭证，选项失效时不能静默改用其他模型。
 - Connection 连接、Action 扩权确认、调用、换账号和撤销。
 - 企微身份映射、群聊和线程按发送者隔离 Platform Conversation/Runtime Session、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
 
