@@ -167,8 +167,9 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ### 8.2 事件去重
 
-- 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey`。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化分配单调事件 ID，并支持按该 ID 恢复。禁止使用重连后可能重置或重新分块的流内序号派生。
-- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只接受当前 `sessionGeneration` 和 `deliveryFence` 的事件，并在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败或 token 过期不产生可见事件或游标。
+- 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey` 和可持久化的 Runtime 事件恢复游标。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID 和重放，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化事件日志并分配单调事件 ID，保留未确认事件并支持按该 ID 重放。禁止使用重连后可能重置或重新分块的流内序号派生。
+- Platform DB 对 `(executionId, adapterEventKey)` 建立唯一约束。平台只接受当前 `sessionGeneration` 和 `deliveryFence` 的事件，并在事件首次插入成功时，通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件、推进该 Execution 的已确认 Runtime 事件游标，并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败或 token 过期不产生可见事件、游标推进或平台确认。
+- Worker 只能在上述事务提交后向 Runtime Host、Bridge 或原生 Runtime 确认已处理游标。Runtime 事件连接中断、Worker/Pod 重启或事件事务失败时，Adapter 从 Platform DB 最后已确认游标重放；事务已提交但 Runtime 确认前崩溃会产生可去重的重放，不能丢失事件。浏览器 SSE 连接状态不得推进该 Runtime 游标。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
 - 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
 
@@ -194,9 +195,9 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 ## 11. 验证
 
-- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件、停止、状态和 capability。
+- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失、未知或重复字段、非 `1` 的 Schema 版本、非法 capability 结构、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、事件事务失败重试、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
+- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失、未知或重复字段、非 `1` 的 Schema 版本、非法 capability 结构、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、重复事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
