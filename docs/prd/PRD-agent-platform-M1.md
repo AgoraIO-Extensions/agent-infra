@@ -128,9 +128,9 @@ M1 的 Base Image 不要求预集成身份、消息、Connection 或其他平台
 
 自定义 Agent 默认保持当前固定的镜像版本，不自动跟随 Hub 中 Tag 的变化。只有 Owner 明确选择或重新选择 Tag 并执行升级时，平台才解析新 Digest。同名 Tag 指向新 Digest 时可以提示 Owner，但不能自动切换。
 
-新 Digest 先作为候选版本重新读取并校验 Runtime Manifest。M1 升级不能切换交互入口归属；Manifest Schema、Service 或健康检查字段无效，或交互入口归属与当前 Agent 不一致时，平台拒绝升级且不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 通过健康检查，且使用平台交互入口时再次通过 ACP 核心探测后，平台才完成升级并保留原渠道绑定。
+新 Digest 先作为候选版本重新读取并校验 Runtime Manifest。M1 升级不能切换交互入口归属；Manifest Schema、Service 或健康检查字段无效，或交互入口归属与当前 Agent 不一致时，平台拒绝升级且不更新 Workload。有效的新 Service 和健康检查配置用于候选 Workload。候选 Workload 在验证完成前不接入用户访问路由或原渠道；无法与旧版本隔离验证时，平台先关闭用户路由并显示“更新中”。候选 Workload 通过健康检查，且使用平台交互入口时再次通过 ACP 核心探测后，平台才切换路由、完成升级并保留原渠道绑定。
 
-候选 Workload 的健康检查或 ACP 核心探测失败时，平台恢复旧 Digest 和 Workload 配置，不更新渠道绑定；只有旧版本也无法恢复时，Agent 才进入“暂时不可用”。升级和回滚保留平台管理的 Owner、可用范围、渠道绑定、平台会话历史、平台数据和原 PVC。平台不自动创建 PVC 快照，也不保证 Runtime 自有数据能够兼容旧版本；Owner 主动降级前必须看到该风险。
+候选 Workload 的健康检查或 ACP 核心探测失败时，平台恢复旧 Digest、Workload 配置和用户路由，不更新渠道绑定；只有旧版本也无法恢复时，Agent 才进入“暂时不可用”。升级和回滚保留平台管理的 Owner、可用范围、渠道绑定、平台会话历史、平台数据和原 PVC。平台不自动创建 PVC 快照，也不保证 Runtime 自有数据能够兼容旧版本；Owner 主动降级前必须看到该风险。
 
 ## 6. 创建与审批
 
