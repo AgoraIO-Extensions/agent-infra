@@ -278,7 +278,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - Web 使用 HttpOnly、Secure、SameSite Cookie，不在 Local Storage 保存公司 Access Token。
 - 服务端根据公司稳定用户 ID 解析当前账号和组织关系。
 - 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。
-- 公司身份 Adapter 确认账号禁用，或平台确认用户失去 Agent 可用范围或当前渠道权限时，平台为该用户仍活跃的 Execution 幂等创建平台来源的停止工作项；该控制操作以服务端确认的撤权事实为依据，不借用已撤权用户的调用权限。身份或权限依赖暂时不可用时只重试检查，不能把未知状态当作已撤权或已授权。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
+- 公司身份 Adapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。身份或权限依赖暂时不可用时只重试检查，不能把未知状态当作已撤权或已授权。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
 ### 9.2 权限顺序
 
