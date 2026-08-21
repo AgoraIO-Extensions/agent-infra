@@ -69,7 +69,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 ## 4. Runtime Manifest
 
-自定义镜像通过固定 OCI Image Label `io.agora.agent.runtime.manifest` 提供 JSON Runtime Manifest。Label 值必须是 UTF-8 JSON Object；重复键无效，M1 只接受整数 `schemaVersion: 1`，根对象以及 `service`、`health`、`capabilities` 对象中的未知字段均拒绝。实现阶段必须在 `packages/contracts` 维护与本节一致的版本化 JSON Schema，并以该 Schema 作为创建、升级和契约测试的机器校验入口。
+自定义镜像通过固定 OCI Image Label `io.agora.agent.runtime.manifest` 提供 JSON Runtime Manifest。Label 值必须先使用能够检测重复键的 UTF-8 JSON Object 解析器读取；根对象或任意嵌套对象存在重复键时，在 Schema 校验前拒绝。M1 只接受整数 `schemaVersion: 1`，根对象以及 `service`、`health`、`capabilities` 对象中的未知字段均拒绝。实现阶段必须在 `packages/contracts` 维护与本节一致的版本化 JSON Schema，并以该 Schema 作为创建、升级和契约测试的机器校验入口。
 
 | 字段 | 规则 |
 | --- | --- |
