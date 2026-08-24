@@ -8,7 +8,9 @@
 	],
 	"scripts": {
 		"build": "tsdown",
+		"bootstrap:production": "node dist/bootstrap-production.mjs",
 		"check-types": "tsc --noEmit",
+		"conformance": "tsx --env-file-if-exists=../../.env.production --env-file-if-exists=../../.env.conformance.local src/conformance.ts",
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.mjs",
 		"test": "vitest run src"
@@ -19,6 +21,10 @@
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
+		"@agent-infra/connection-core": "workspace:*",
+		"@agent-infra/connection-identity": "workspace:*",
+		"@agent-infra/connection-store": "workspace:*",
+		"@agent-infra/openconnector-adapter": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "^0.22.14",
 		"tsx": "^4.23.1",

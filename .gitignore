@@ -6,6 +6,7 @@
 **/node_modules/
 /.worktrees/
 **/.turbo/
+**/.tanstack/
 **/dist/
 **/coverage/
 **/playwright-report/
@@ -13,11 +14,13 @@
 /apps/web/src/routeTree.gen.ts
 *.tsbuildinfo
 *.log
+/.codebase-memory/
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
+!.env.conformance.example
 *.local
 
 # Editors and operating systems

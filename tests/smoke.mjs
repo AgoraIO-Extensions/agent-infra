@@ -25,7 +25,19 @@ async function verifyApi(start, expectedService) {
 }
 
 await verifyApi(startPlatformApi, "platform-api");
-await verifyApi(startConnectionApi, "connection-api");
+await verifyApi(
+	(options) =>
+		startConnectionApi({
+			...options,
+			app: {
+				fetch: (request) =>
+					new URL(request.url).pathname === "/healthz"
+						? Response.json({ service: "connection-api", status: "ok" })
+						: new Response(null, { status: 404 }),
+			},
+		}),
+	"connection-api",
+);
 
 const workerMessages = [];
 const worker = startPlatformWorker({

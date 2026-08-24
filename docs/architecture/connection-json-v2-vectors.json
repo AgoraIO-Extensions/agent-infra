@@ -1,0 +1,29 @@
+{
+  "version": "connection-json-v2",
+  "rules": {
+    "arrayOrder": "preserved",
+    "objectKeyOrder": "Unicode scalar value after NFC normalization",
+    "strings": "NFC; unpaired UTF-16 surrogates rejected",
+    "values": "null, boolean, finite number, string, array, plain object only"
+  },
+  "vectors": [
+    {
+      "name": "nested-key-order",
+      "input": { "b": [true, null], "a": { "y": 2, "x": 1 } },
+      "canonicalJson": "{\"a\":{\"x\":1,\"y\":2},\"b\":[true,null]}",
+      "hash": "connection-json-v2:68565b48b5332c3d10db8250dfc2d5f1a952823e0f5046eefa4a9be222c1911f"
+    },
+    {
+      "name": "nfc-composition",
+      "input": { "b": [true, null], "e\u0301": "e\u0301" },
+      "canonicalJson": "{\"b\":[true,null],\"é\":\"é\"}",
+      "hash": "connection-json-v2:d6f069a8f2b97ab44cc307a465f10e687b92cad2758c69793bc446d4bc5c5a30"
+    },
+    {
+      "name": "unicode-scalar-key-order",
+      "input": { "\ud800\udc00": "supplementary", "\ue000": "bmp" },
+      "canonicalJson": "{\"\":\"bmp\",\"𐀀\":\"supplementary\"}",
+      "hash": "connection-json-v2:86bdba0ed34949959bf5a6edccd82f9670fd3a28cd39367250ddbad56b024fab"
+    }
+  ]
+}

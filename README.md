@@ -11,21 +11,41 @@
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
 - [Connection M1 HLD（Proposed for Design Review）](docs/architecture/HLD-connection-M1.md)
+- [Connection 生产部署](docs/architecture/connection-production.md)
+- [OpenConnector Kernel 构建记录](docs/architecture/openconnector-kernel-build.md)
 
 ## 当前状态
 
-仓库已进入 M1 工程底座阶段。当前提交提供可安装、构建、测试和独立生成镜像的工程骨架，
-尚未实现领域功能。
+仓库包含 M1 工程底座，以及基于 PostgreSQL、公司 LDAP、Connection OAuth/PAT 和 pinned
+OpenConnector GitHub kernel 的统一 Connection account 架构。所有 Consumer 都通过 Connection
+识别 Principal；同一 Principal 在多台设备共享个人 Connection 和 Direct Consumer Grant。OAuth
+设备会话和命名 PAT 可以单独撤销；同一 PAT 跨端复用时共享一个撤销与审计边界。OpenConnector
+只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
 | Web | `apps/web` | React、TanStack Router、Vite 与最小启动页 |
 | Platform API | `apps/platform-api` | Hono 进程与健康检查 |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
-| Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
+| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub Adapter、Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
+| OpenConnector Kernel | `packages/openconnector-kernel` | 仅由 `openconnector-adapter` 使用的受控 Provider execution closure |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
 工程架构 Spec 保持独立部署、运行身份和数据边界。
+
+## 生产骨架
+
+`docker-compose.production.yml` 定义门禁期生产骨架。由部署 Secret Manager 向进程环境注入
+`DATABASE_URL` 并准备 PostgreSQL，然后运行：
+
+```bash
+pnpm connection:production:bootstrap
+pnpm connection:production:up
+```
+
+bootstrap 只执行正式 migration。G-01 未关闭时，生产 API 只提供容器内部健康检查，不发布 LDAP、
+OAuth、MCP、Provider、Credential 或 Action 路由。详见
+[Connection 生产部署](docs/architecture/connection-production.md)。
 
 ## 本地验证
 
@@ -40,6 +60,38 @@ pnpm build
 pnpm smoke
 pnpm docker:build
 ```
+
+真实账号 conformance 使用本机忽略的 `.env.conformance.local`，或由 Secret Manager 注入
+`.env.conformance.example` 中列出的参数后运行 `pnpm connection:conformance`。该命令启动
+`runtime-app.ts` 定义的正式 Connection runtime 并采集验收证据；conformance 是测试过程，不是第二套
+部署 profile 或业务实现。门禁关闭前该启动器与正式 runtime factory 都不进入生产镜像，测试结果也
+不能替代 G-01/G-02 的审批与验收记录。
+
+本机开发也使用 PostgreSQL 和同一账号模型，不启动 OpenConnector Runtime 或本机 Credential store。
+完成公司 LDAP、Connection identity key、Credential 加密和 HTTPS 配置后，Codex 或其他 MCP
+Consumer 只配置 Connection。支持 OAuth 的客户端使用：
+
+```toml
+[mcp_servers.connection]
+url = "https://connection.example.com/mcp"
+```
+
+执行 `codex mcp login connection` 后，Codex 通过 Connection OAuth 打开浏览器登录页。公司 LDAP
+密码只提交给 Connection，不进入 Codex 配置。Provider OAuth callback、真实 LDAP 和目标 Codex
+版本仍需按 HLD 记录脱敏 conformance 证据。
+
+需要跨客户端或无头部署时，用户先访问 `https://connection.example.com/connection/login` 完成 LDAP
+登录，再从控制台的 Access tokens 页面签发一次性展示的 Connection PAT。签发表单不会再次要求
+LDAP 密码。消费端只引用 Secret Manager 或进程环境中的 token：
+
+```toml
+[mcp_servers.connection]
+url = "https://connection.example.com/mcp"
+bearer_token_env_var = "CONNECTION_TOKEN"
+```
+
+PAT 明文不写入仓库、普通配置文件或日志。多个客户端复用同一 PAT 时无法分别撤销或审计；需要独立
+边界时分别签发命名 PAT。
 
 ## 开发工作流
 

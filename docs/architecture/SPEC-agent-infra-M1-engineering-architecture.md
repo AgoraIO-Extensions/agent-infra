@@ -70,12 +70,16 @@ server-deploy: docker
 ## 3. 架构原则
 
 1. **产品状态与集群状态分离。** PostgreSQL 保存 Agent 期望状态，Kubernetes 保存实际运行状态，调谐进程负责持续收敛。
-2. **平台与 Connection 各自保持权威数据。** Agent、平台可用范围和任务执行属于 Platform；Principal、Consumer、Connection 授权、外部账号、凭证和 Action 调用属于 Connection。
-3. **凭证不进入 Consumer。** Consumer 只能提交 Action 和参数，不能读取外部 Access Token、Refresh Token 或 API Key。
+2. **平台与 Connection 各自保持权威数据。** Agent、平台可用范围和任务执行属于 Platform；
+   Principal、Consumer、Connection 授权、外部账号、凭证和 Action 调用属于 Connection。
+3. **凭证不进入 Consumer。** Consumer 只提交 Action 和参数，不能读取外部 Access Token、
+   Refresh Token 或 API Key。
 4. **先持久化再异步处理。** 消息、审批、生命周期命令和 Action 调用先获得稳定 ID 与状态，再触发后续处理。
-5. **接口也是测试面。** Hono、Drizzle、Kubernetes Client 和 OpenConnector 都位于 Adapter 层，领域模块不依赖这些实现。
+5. **接口也是测试面。** Hono、Drizzle、Kubernetes Client、LDAP 和 OpenConnector 都位于 Adapter
+   层，Connection 领域模块不依赖这些实现。
 6. **M1 不预建扩展基础设施。** PostgreSQL 足以支持当前事务、outbox、任务认领和事件回放；不预先引入 Redis、Kafka、NATS 或 Temporal。
-7. **用户隔离由 Connection 服务端决定。** Consumer、浏览器、Agent 和模型传入的用户 ID、Connection ID 或组织信息不能成为授权依据。
+7. **用户隔离只由 Connection 服务端决定。** Consumer、浏览器、Agent 和模型传入的用户 ID、
+   Connection ID、设备 ID 或组织信息不能成为授权依据；本机部署不能降级为 installation identity。
 
 ## 4. 系统结构
 
@@ -101,6 +105,7 @@ flowchart LR
     PA --> CA
     CA --> CD[(Connection DB)]
     CA --> KMS[KMS / Secret Service]
+    CA --> LDAP[公司 LDAP]
     CA --> EXT[外部 Provider]
 
     AP --> LLM[LLM Gateway]
@@ -114,12 +119,14 @@ flowchart LR
 | `web` | Agent 平台页面和独立 Connection 页面 Shell | 否 |
 | `platform-api` | 身份入口、Agent 管理、权限、对话、SSE、企微回调、Agent Tool Gateway | 否 |
 | `platform-worker` | Agent Workload 调谐、模板升级、消息投递、outbox 处理 | 否 |
-| `connection-api` | MCP 与 HTTP/OpenAPI、Principal/Consumer 授权、Provider/Action、OAuth、凭证、Action 执行和审计 | 否 |
+| `connection-api` | 唯一 Consumer MCP/HTTP 入口；Connection OAuth、LDAP 身份、Principal/Consumer 授权、Provider/Action、凭证、Action 执行和审计 | 否 |
 | `agent pod` | Hermes、Codex、组合模板或完全自定义 Agent 的实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件和平台审计 | 是 |
-| `connection database` | Principal、Consumer、Grant、Provider、Action、外部账号、Credential、调用和审计 | 是 |
+| `connection database` | 所有部署的 Principal、identity mapping、OAuth session、Consumer、Grant、Provider、Action、外部账号、Credential、调用和审计 | 是 |
 
-`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署。Connection 使用独立
+数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。本机部署也
+连接同一 Connection account authority；可选 local edge 不保存账号、Credential 或授权状态。
 
 ### 4.2 不拆分的部署单元
 
@@ -140,11 +147,12 @@ agent-infra/
     contracts/               OpenAPI、Zod Schema、SSE 事件 Schema
     platform-store/          Platform DB 的 Drizzle Adapter
     connection-store/        Connection DB 的 Drizzle Adapter
+    openconnector-adapter/   pinned Provider/Action/executor Adapter
     identity/                公司账户与组织体系 Adapter
     agent-runtime/           Hermes、Codex、自定义 Agent Runtime Adapter
     kubernetes-runtime/      Kubernetes 调谐 Adapter
     observability/           Trace、Metric、日志和关联 ID
-    test-support/            Fake Adapter、fixture 和契约测试工具
+    test-support/            不进入运行产物的 test double 和契约测试工具
   migrations/
     platform/
     connection/
@@ -167,6 +175,11 @@ agent-infra/
 ```
 
 `apps/*` 只负责进程启动、依赖装配和协议接入。领域规则不能直接写在 Hono 路由、React 页面或 Drizzle 查询中。`packages` 不设置无边界的 `shared-utils`；只有被多个明确调用方复用且接口稳定的能力才进入公共 package。
+
+OpenConnector Runtime Server、local store、OAuth state、Runtime token 和 global alias 不进入正式
+Connection 拓扑。当前仓库的 `openconnector-kernel` 是从固定上游 Commit 导出的 Provider execution
+closure，只能由 `openconnector-adapter` 在 `connection-api` 进程内调用；账号、Credential、OAuth
+transaction、授权和审计始终由 Connection 自己保存。
 
 ## 6. 工程模块
 
@@ -228,7 +241,9 @@ Web 按产品入口划分路由：
 
 Connection 是独立系统。M1 可以复用同一 Web 静态资源构建和公司登录网关，但 Connection 页面、路由和服务端会话必须能独立部署、独立访问。页面分别调用 `platform-api` 和 `connection-api`，不能通过前端把两个系统的数据拼成授权结论。
 
-个人 Connection、OAuth、Consumer 授权、Action 确认、撤销和调用记录都写入 `connection-api`。Platform 页面如需展示这些能力，只能跳转或调用 Connection 的公开契约，不能维护第二份可写授权。
+个人/共享 Connection、OAuth、Consumer 授权、Action 确认、撤销和调用记录都写入 Connection
+PostgreSQL。Platform 页面如需展示这些能力，只能跳转或调用 Connection 的公开契约，不能维护第二份
+可写授权。
 
 ### 7.2 状态管理
 
@@ -268,7 +283,11 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 Connection 对 Consumer 提供两个调用协议入口，并为管理操作提供独立 HTTP API：
 
-- Direct MCP Client 使用 MCP；MCP access token 必须绑定服务端解析的 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience。G-01 验证目标客户端支持 sender-constrained token 时，token 还必须绑定实例公钥 thumbprint，且每次 MCP 调用验证对应 proof-of-possession；不支持该标准能力的客户端版本不得用私有 PoP 伪装为受支持，而使用短 TTL、refresh rotation、replay detection 和实例级撤销，并作为 G-01 conformance 的明确风险项。浏览器登录会话只完成用户认证，不能单独决定 Consumer、ConsumerInstance 或 Grant。
+- Direct MCP Client 使用 MCP，并通过 Connection OAuth access token 或 Connection PAT 认证。OAuth
+  token 必须绑定服务端解析的 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience；
+  G-01 验证目标客户端支持 sender-constrained token 时还必须绑定实例公钥 thumbprint。Connection PAT
+  绑定 Principal、内建 Portable PAT Consumer 和 TOKEN instance；同一 PAT 跨客户端使用时共享撤销、
+  Grant 和审计边界。两种模式都不能从请求中的 Principal/Consumer/Instance 字段决定身份。
 - Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托断言。
 - Connection Web 和管理员工具使用用户态 HTTP/OpenAPI，不作为 Direct Action 调用协议。
 
@@ -283,9 +302,20 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 ### 9.1 Web 登录
 
 - `platform-api` 接入公司 OIDC 或现有身份网关。
-- `connection-api` 验证同一公司会话或由身份网关签发的等价服务端身份，不能接受前端自行传入用户 ID。
-- Web 使用 HttpOnly、Secure、SameSite Cookie，不在 Local Storage 保存公司 Access Token。
-- 服务端根据公司稳定用户 ID 解析当前账号和组织关系。
+- `connection-api` 作为 OAuth Authorization Server，通过独立 HTTPS 登录页使用公司 LDAP 认证员工，
+  再以 LDAP issuer + 稳定 `uid` 映射 Principal；不能接受前端自行传入用户 ID。
+- LDAP 成功后，`connection-api` 建立 PostgreSQL-backed 浏览器会话。浏览器只持有 HttpOnly、
+  Secure、SameSite Cookie，数据库只保存 session hash、Principal、identity issuer、有效期、
+  recovery generation、最近访问和撤销状态。
+- `connection-api` 在已认证控制台提供 PAT 管理页；签发只提交 PAT 名称，不再次提交 LDAP 凭证。
+  PAT 明文只展示一次，数据库只保存 hash、Principal、token instance、有效期和撤销状态，不建立
+  第二套账号。
+- LDAP egress 使用部署批准的固定 transport profile。当前 Agora 目录因不提供可用 TLS，批准仅在
+  公司私网使用 `ldap://` direct bind；不允许请求选择 endpoint、自动 downgrade 或 fallback，目录
+  服务提供可用 TLS 后必须迁移。
+- Web 使用 HttpOnly、Secure、SameSite=Strict Cookie，不在 Local Storage 保存公司 Access Token；
+  仅 conformance 本机精确 loopback HTTP origin 可省略 Secure，生产和非 loopback 入口必须 HTTPS。
+- 服务端根据稳定 LDAP `uid` 解析当前账号；显示名和邮箱只作为可变 profile projection。
 - 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。
 
 ### 9.2 权限顺序
@@ -304,7 +334,12 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-Direct MCP Client 通过 MCP 只提交 Action 和参数，Connection 从 access token 解析并校验 Principal、Consumer、ConsumerInstance、audience 和 recovery generation。新 ConsumerInstance 注册先由该 Consumer 的注册客户端凭据认证调用端，并在同一事务绑定认证结果、当前 Principal 和实例公钥；已注册实例则验证其注册 key 的持有后才签发 token。G-01 验证支持 sender-constrained token 时，Connection 将 token 绑定实例 key thumbprint 并在每个 MCP 请求验证 proof-of-possession；不支持时不得假称有 PoP。浏览器会话、请求中的 Consumer/Instance ID 或公开 client ID 不能作为上述证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
+Direct MCP Client 通过 MCP 只提交 Action 和参数。OAuth 模式从 access token 解析并校验 Principal、
+Consumer、ConsumerInstance、audience 和 recovery generation；新实例注册、sender constraint、refresh
+rotation 和实例撤销按目标客户端 G-01 profile 执行。PAT 模式按 token hash 解析 Principal、内建
+Portable PAT Consumer 和 TOKEN instance，并检查有效期、撤销、identity freshness 与 recovery
+generation。浏览器会话、请求中的 Consumer/Instance ID、公开 client ID 或客户端产品名不能作为上述
+证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
 
 Delegated Consumer 注册时固定选择 `NONE` 或 `REQUIRED` Actor 模式，再认证注册 workload 并通过 Connection token exchange 获取短期委托令牌。token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；企微等非交互渠道按 14.2 校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后，由 Connection 配置的受信身份签发方签发短期断言。该 evidence 必须绑定来源事件、workload、Consumer、ConsumerInstance、Actor（如适用）、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。身份签发方还必须校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。
 
@@ -458,17 +493,19 @@ sequenceDiagram
 
 ### 13.1 OpenConnector 使用方式
 
-M1 基于 OpenConnector 的 TypeScript/Hono 实现构建 `connection-api`：
+Connection 的所有部署都只暴露 `connection-api` 拥有的契约：
 
 - 固定使用经评审的上游版本或 Commit，不跟随浮动分支。
 - 复用 Provider、Action、OAuth、凭证刷新和 Action 执行语义。
 - 增加 Principal、Consumer、共享范围、Consumer 授权和多用户资源隔离。
-- 上游 Runtime HTTP 接口不直接暴露给 Agent 或浏览器。
+- 上游 Runtime HTTP/MCP 接口不直接暴露给任何 Consumer、Agent 或浏览器。
 - OpenConnector 只由 Connection Infrastructure Adapter 依赖，不让其存储模型或类型渗透到 Connection Domain。
 
-M1 默认从精确上游 Commit 构建不可变私有 package，`connection-api` 通过 OpenConnector Adapter 以精确 digest
-依赖该 package，把 Provider、OAuth 和 Action 执行装配到同一个进程，不复制上游源码，也不额外暴露或部署
-上游 Runtime Server。只有固定基线上的 conformance test 证明公开接口、Adapter、构建配置和受控 Egress 都无法
+默认从精确上游 Commit 导出 allowlist 审核后的 Provider execution closure，形成
+`packages/openconnector-kernel` 受控源码 package；该 package 记录来源 Commit、复制文件清单和 digest，
+保留许可证与 notice。`connection-api` 只通过 OpenConnector Adapter 依赖它，把 Provider、OAuth 和
+Action 执行装配到同一个进程，不额外暴露或部署上游 Runtime Server。
+只有固定基线上的 conformance test 证明公开接口、Adapter、构建配置和受控 Egress 都无法
 解决 Provider/OAuth/executor 通用缺口时，才建立保留上游历史的独立最小 Fork；Connection 领域模型和权威数据
 不得进入 Fork。升级必须经过隔离、供应链和契约测试。
 
@@ -487,7 +524,7 @@ Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Ac
 Grant 与 Consumer declaration 共同引用的 exact ActionVersion 当前处于
 `PUBLISHED` 或 `DEPRECATED` 可执行态，且未 `DISABLED`
 ∩ Grant 冻结的 immutable declaration 仍可执行（`PUBLISHED` 或被该 Grant 引用的 `SUPERSEDED`）且包含该 exact ActionVersion
-∩ Direct 调用的已认证 ConsumerInstance 精确等于 Grant 绑定的 ConsumerInstance；Delegated Grant 不绑定实例
+∩ Direct 调用来自绑定同一 Principal + Consumer 的 ACTIVE ConsumerInstance；Grant 不绑定实例
 ∩ Principal、Consumer 和适用的 ConsumerInstance 当前有效状态
 ∩ Principal 对个人 Connection 的所有权或公司共享 Connection 的当前使用资格
 ∩ Grant 固定的 Consumer/Actor、Connection、exact ActionVersion 和能力指纹
@@ -626,7 +663,8 @@ Hermes 的群聊和线程规则保留在 Hermes Adapter 内。Codex 不绑定企
 
 ## 17. 安全基线
 
-- 所有入口使用公司身份和 TLS。
+- 所有用户与服务入口使用公司身份和 TLS；公司 LDAP egress 仅允许 9.1 节记录的固定 transport
+  profile 与例外。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
 - Direct MCP Client 通过 Connection MCP 调用；Delegated Consumer 必须使用注册 workload、委托断言和 HTTP/OpenAPI。两种路径都不能直连 Connection DB、KMS 或 Provider Credential endpoint。
@@ -669,14 +707,16 @@ Hermes 的群聊和线程规则保留在 Hermes Adapter 内。Codex 不绑定企
 
 ### 19.1 模块测试
 
-- 领域模块使用 Fake Adapter 验证状态机、权限交集、授权扩展和幂等。
+- 领域模块使用仅测试进程可装配的 test double 验证状态机、权限交集、授权扩展和幂等；
+  test double 不得进入应用启动路径、镜像或发布产物。
 - React 使用 Vitest 与 Testing Library 验证关键交互和错误状态。
 - 不以大量 Hono 路由快照代替领域测试。
 
 ### 19.2 契约测试
 
 - OpenAPI Schema 变更必须通过兼容性检查。
-- MCP tool Schema 必须与同一 ActionVersion/OpenAPI domain contract 一致。
+- MCP `tools/list` 固定暴露 OpenConnector 兼容的五个通用 tool，不为每个 ActionVersion 新增 tool；
+  `get_action_guide` 返回的 Action input Schema 必须与同一 ActionVersion/OpenAPI domain contract 一致。
 - Hermes、Codex、组合模板和自定义样例镜像运行同一 Agent Runtime Conformance Suite。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
 - SSE 验证事件顺序、重复投递、断线重连和游标补发。

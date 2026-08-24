@@ -6,7 +6,7 @@
 | 版本 | v2.0 |
 | 日期 | 2026-08-13 |
 | 适用范围 | 独立 Connection M1 服务 |
-| Primary Issue | [#121](https://github.com/AgoraIO-Extensions/agent-infra/issues/121) |
+| Primary Issue | [#140](https://github.com/AgoraIO-Extensions/agent-infra/issues/140) |
 | 产品依据 | [Connection M1 产品需求](../prd/PRD-connection-M1.md) |
 | 工程依据 | [agent-infra M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) |
 | 交付流程依据 | [AI 主导开发工作流 Spec](SPEC-ai-native-development-workflow.md) |
@@ -62,7 +62,8 @@
 - Provider/Action Catalog 导入、审核、发布、停用和不可变版本。
 - 个人与公司共享 Connection。
 - 同一 Principal 在同一 Provider 下的多个外部账号。
-- OAuth Authorization Code + PKCE、API Key/PAT 和 Credential rotation。
+- Connection OAuth Authorization Code + PKCE、Portable Connection PAT，以及 Provider API Key/PAT
+  和 Credential rotation。
 - Consumer Action 声明、ConnectionGrant、授权确认、换号和撤销。
 - MCP 工具发现与调用；HTTP/OpenAPI 浏览器、管理和 Delegated 接口。
 - AuthorizedInvocation、ActionCall、Effect Ledger、幂等和 reconciliation。
@@ -91,7 +92,28 @@
 | 每次写 Action 都要求人工确认 | M1 在授权和扩权时确认，不新增逐次确认 |
 | 自动回滚已提交给 Provider 的外部操作 | 外部副作用通常不可事务回滚 |
 | Redis、Kafka、NATS、Temporal 或独立 Connection Worker | PostgreSQL lease/outbox 足以满足 M1 |
-| OpenConnector Runtime Server 或 Web Console | 不满足企业身份、授权和隔离边界 |
+| 把 OpenConnector Runtime Server 或 Web Console 暴露给 Consumer | 绕过 Connection 唯一入口、账号、审计与 Credential 边界 |
+
+### 3.4 统一账号权威与部署拓扑
+
+Connection M1 只有一套身份、授权、Connection、Credential 和审计语义。所有 Consumer 都先由
+Connection 认证为 Principal；所有正式部署都以 Connection PostgreSQL 为权威。部署位置不能改变
+身份和数据归属。
+
+| 拓扑组件 | 适用场景 | 身份与状态 |
+| --- | --- | --- |
+| Connection control plane | 本机或远程 Consumer、团队和服务接入 | 唯一 Principal、Consumer、Grant、Connection、Credential 与审计权威 |
+| 可选 local edge | 需要 loopback/Unix socket 的本机 Consumer | 无状态转发；只持有短期 Connection session，不保存 Provider Credential 或本机账号 |
+
+Codex 等 Direct MCP Client 使用标准 OAuth 登录 Connection。员工也可以在 Connection 登录页完成
+公司 LDAP 认证并建立控制台浏览器会话。两条路径都使用受信 issuer 与稳定 LDAP `uid` 映射同一
+Principal。每台 OAuth 客户端安装登记为独立 ConsumerInstance，实例会话可单独撤销；控制台会话
+只管理当前 Principal 的 Connection 资源，不代表 MCP ConsumerInstance。同一 Principal 的个人
+Connection 和 Direct Consumer Grant 在该用户的活跃实例间共享。新增设备不重复 Provider OAuth。
+
+OpenConnector Runtime Server、Runtime token、global alias 和 SQLite 不进入正式拓扑。已构建的
+本机 Runtime 只保留为 Provider 来源与兼容性证据。未配置 PostgreSQL、Credential 加密、HTTPS、
+LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 
 ## 4. 关键架构决策与门禁
 
@@ -111,10 +133,10 @@
 
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
-| G-01 | 公司 OIDC、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity 精确契约 | 只使用 Fake Identity，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
+| G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
 | G-02 | 初期 Provider 的 exact deployment、认证方式、测试账号、Action/scope，以及 Outlook 是否纳入 | 对应 ProviderRelease 不得进入 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
-| G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 只使用 Fake Adapter | Security/SRE |
+| G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | Credential 和 Provider 执行业务路由不启动，缺少正式 Adapter 时启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
 | G-06 | Effect Ledger acknowledged commit 的生产 RPO | 写 Action 保持关闭 | SRE/DBA |
 | G-07 | Provider 完整审计能否覆盖数据恢复风险窗口 | 不能以抽样解冻写能力 | SRE/Provider Owner |
@@ -124,8 +146,8 @@
 
 | 方案 | 描述 | 优点 | 代价与风险 |
 | --- | --- | --- | --- |
-| A. 企业领域核心 + pinned OpenConnector Kernel | Connection 自己实现身份、授权、存储、审计和可靠性，只复用经过审核的 Provider/OAuth/executor | 独立服务边界清晰；保留上游 Provider 资产；可支持多 Consumer | 需要维护 Adapter、固定依赖和升级验证；只有真实缺口才维护最小 Fork |
-| B. 部署上游 Runtime | 把 OpenConnector Runtime Server 暴露给 Consumer | 初期接入快 | deployment token、global alias、SQLite/D1 和授权模型不满足企业隔离 |
+| A. 统一 Connection Account + pinned OpenConnector Kernel | Connection 自己实现身份、授权、存储、审计和可靠性，只复用经过审核的 Provider/OAuth/executor | 跨设备共享；独立服务边界清晰；保留上游 Provider 资产；可支持多 Consumer | 需要维护 Adapter、固定依赖和升级验证；只有真实缺口才维护最小 Fork |
+| B. 本机 Runtime 账号与 SQLite | 每台设备独立保存账号和 Credential | 初期本机接入快 | 无法跨设备共享；撤销和审计割裂；重复 Provider OAuth |
 | C. 完全自研 Connector Engine | 所有 Provider、OAuth 和 executor 自研 | 控制最强 | M1 成本最高，重复实现大量 Provider 细节 |
 
 评分按 1 至 5：
@@ -140,7 +162,8 @@
 | 契约测试能力 | 10% | 5 | 3 | 4 |
 | **折算总分** | **100%** | **95** | **47** | **76** |
 
-选择方案 A。OpenConnector 只作为 `connection-api` 进程内高权限 Connector Kernel，不作为网络边界或授权权威。
+选择方案 A。OpenConnector 只作为 `connection-api` 进程内高权限 Connector Kernel，通过
+`openconnector-adapter` 使用，不成为 Consumer 网络边界、身份、授权或 Credential 权威。
 
 ## 6. 系统上下文与权威边界
 
@@ -203,8 +226,9 @@ flowchart LR
 
 | 边界 | 调用主体 | 认证 | 授权依据 | 禁止行为 |
 | --- | --- | --- | --- | --- |
-| Browser -> Connection | 公司用户 | OIDC/Identity Gateway session | 当前 Principal、RBAC、组织关系 | 接受 body 中的 userId |
-| Direct MCP Client -> MCP | Direct ConsumerInstance | remote MCP OAuth user session；客户端支持时增加 sender constraint | ConnectionGrant current revision | 传 connectionId 或 Provider token |
+| Browser -> Connection | 公司用户 | LDAP login 后的 hash-only HttpOnly browser session | 当前 Principal、RBAC、组织关系 | 接受 body 中的 userId；保存或记录 LDAP 密码 |
+| Direct MCP Client -> MCP | Direct ConsumerInstance | remote MCP OAuth user session，或 Connection PAT；客户端支持时增加 sender constraint | ConnectionGrant current revision | 传 Principal/Consumer/connectionId 或 Provider token |
+| Local MCP Client -> optional edge | 已登录 Direct ConsumerInstance | Connection OAuth token/session 或 Connection PAT | 与远程 Direct MCP 相同的 Grant | 本机 installation 身份、账号 alias 或 Credential store |
 | Delegated Consumer -> HTTP | 注册 workload | mTLS + signed assertion | ConnectionGrant + actor constraint | assertion 创建或扩大 Grant |
 | Connection -> Identity | connection workload | workload identity | 请求期 current identity | 把缓存当永久资格 |
 | Connection -> KMS | connection workload | KMS workload identity | key policy、environment、purpose | Consumer 使用解密权限 |
@@ -243,9 +267,16 @@ flowchart TB
     Proxy --> Provider["External Provider"]
 ```
 
-M1 只有一个 Connection 业务部署单元 `connection-api`。MCP、HTTP、OAuth callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立业务 Worker 服务。Egress Proxy 是网络安全边界，不拥有领域状态。
+M1 只有一个 Connection 业务部署单元 `connection-api`。MCP、HTTP、OAuth
+callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
+业务 Worker 服务。Egress Proxy 是网络安全边界，不拥有领域状态。
 
-本地开发可以在同一机器运行 API、PostgreSQL、Fake KMS 和 Fake Provider，但使用独立进程、数据库账号和端口，不能以本地模式跳过 Principal/Grant 校验。
+本地开发可以在同一机器运行 API 和 PostgreSQL，但 LDAP、KMS 与 Provider
+业务路由在正式 Adapter 未配置时保持不启动；不能以本地模式跳过 Principal/Grant 校验。
+
+可选 local edge 只在客户端必须连接 loopback/Unix socket 时部署。它把标准 Connection OAuth
+会话转发到 control plane，不创建 Principal、Grant、Connection 或 Credential，也不部署
+OpenConnector Runtime。不能根据环境变量缺失隐式降级为 installation 身份或匿名模式。
 
 ## 9. Connection Bounded Context
 
@@ -253,7 +284,7 @@ M1 只有一个 Connection 业务部署单元 `connection-api`。MCP、HTTP、OA
 
 | 模块 | 负责 | 不负责 |
 | --- | --- | --- |
-| Identity Access | Principal、session、workload、ConsumerInstance | 公司用户目录权威 |
+| Identity Access | Principal、LDAP identity mapping、OAuth session、Connection PAT、workload、ConsumerInstance | 公司用户目录权威与 LDAP 密码 |
 | Consumer Registry | Consumer、Action 声明、callback、实例状态 | Consumer 内部 Agent/Task |
 | Catalog | ProviderRelease、ActionVersion、发布和停用 | 用户授权 |
 | Account | Connection、ExternalAccountIdentity、scope | Consumer policy |
@@ -298,17 +329,22 @@ Domain 不依赖 Hono、MCP SDK、Drizzle、KMS SDK、OpenConnector 或 Provider
 - 动态 JavaScript、npm package 或任意 Credential resolver。
 - Provider 返回后才 best-effort 写审计的流程。
 
+上述禁止装配适用于所有正式 Connection 部署。当前 `agent-infra` 的 `openconnector-kernel` 只包含
+Provider execution closure；完整 Runtime 的本机构建只保留为来源与兼容性证据，不得成为账号、
+Credential、OAuth transaction 或 Consumer endpoint。
+
 ### 10.3 上游依赖与最小补丁治理
 
-- M1 默认不创建 Fork。构建流水线从精确上游 commit 生成不可变内部 package，记录 source commit、package
-  digest、license 和 SBOM；`agent-infra` 只依赖该精确 digest，不使用 tag 或浮动 range，也不复制上游源码。
+- M1 默认不创建 Fork。构建流水线从精确上游 commit 导出经过 allowlist 审核的 Provider execution
+  closure，作为 `agent-infra` 内受控源码 package；记录 source commit、复制文件清单及 digest、package
+  digest、license 和 SBOM，不使用 tag 或浮动 range。复制内容保持可追溯，任何修改都必须进入显式审查。
 - 固定 commit 的根许可证为 Apache License 2.0，并包含 `NOTICE.md`。内部 package、镜像或 Fork 必须随附适用的
   `LICENSE.txt` 和 `NOTICE.md`，保留适用的版权、专利、商标与归属声明；修改上游文件时必须显著标明修改。
 - SBOM 只提供审查输入，不能替代许可证兼容性结论或义务履行。实际打包的依赖、Provider metadata/schema、
   生成资产和 API 文档必须形成 third-party notice 与兼容性报告；Logo、Icon、截图等品牌资产默认不打包，确需
   使用时单独取得授权并遵循 Provider 条款。首次发布及每次基线或资产范围变化都需 Legal/开源合规签收。
-- OpenConnector 只允许被 Infrastructure Adapter 依赖；Connection Domain、数据库和协议入口不能 import
-  OpenConnector 类型或调用其 Runtime API。
+- OpenConnector 只允许被 Infrastructure Adapter 依赖；Connection Domain、
+  数据库和协议入口不能 import OpenConnector 类型或调用其 Runtime API。
 - 每次升级生成 source、Catalog、license/SBOM、executor digest 和兼容矩阵 diff。上游变更不能直接改变已发布
   ActionVersion；必须产生新版本。
 - 只有 10.5.4 的 Fork 准入条件全部满足时，才建立保留上游 Git 历史的独立 Fork 仓库并发布新的不可变内部
@@ -327,8 +363,9 @@ input schema、scope，以及当前 Connection 摘要和执行策略，确定性
 Markdown；它不是原始 input/output schema 接口。AI 只负责选择 Action，并从用户请求和可见上下文中寻找业务
 参数；Credential、账号选择、endpoint、HTTP method 和鉴权 header 仍由 Runtime 与 executor 处理。
 
-M1 只复用 Provider/Action 元数据、schema 和 executor，不复用上述发现契约或 Markdown renderer，也不维护逐
-Action Guide。Direct MCP 按 22.3 节从版本化 ActionVersion 直接生成当前主体已授权的 Action tool。
+Connection 复用 Provider/Action 元数据、schema 和 executor，但不复用上游 Runtime 的
+Credential、SQLite 或 Server。Direct MCP 复用上述五个稳定发现 tool；Action Guide 由 Connection
+依据当前已授权 ActionVersion 确定性生成，执行仍经过 Connection 的 Grant、幂等和审计边界。
 
 ### 10.5 固定 Commit 基线上的增量研发清单
 
@@ -343,7 +380,7 @@ Connection 能力已经具备。每项只有在实现、自动化测试和对应
 | Connection Domain | `agent-infra/packages/connection-core` | Principal、Consumer、Account、Grant、Call、Effect 和领域状态机 | 禁止依赖 |
 | OpenConnector Adapter | `agent-infra/packages/openconnector-adapter`，出现首个真实调用方时创建 | metadata/schema 转换、Credential handle 和 controlled fetch 注入、executor 调用与错误映射 | 唯一允许直接依赖内部 OpenConnector package 的业务模块 |
 | 进程装配 | `agent-infra/apps/connection-api` | 装配协议、Core ports、Adapter、Store、KMS 和 Egress | 只能通过 Adapter 使用，不直接调用上游 Runtime |
-| OpenConnector 基线 | 上游仓库的精确 commit；必要时为独立 Fork 仓库 | Provider、Action、OAuth helper 和 executor 的通用实现 | 不复制进 `agent-infra`，不保存 Connection 领域状态 |
+| OpenConnector Kernel | `agent-infra/packages/openconnector-kernel` 的受控源码副本；来源为上游精确 commit | allowlist 内 Provider、Action、OAuth helper 和 executor 通用实现 | 保留 provenance/license/notice；不包含 Runtime Server 或 Connection 领域状态 |
 
 ```text
 connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenConnector package
@@ -366,13 +403,13 @@ connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenC
 
 | ID | 额外研发项 | 代码归属与 OpenConnector 处理 | 完成条件 | 对应 WP |
 | --- | --- | --- | --- | --- |
-| OC-01 | 固定并审计上游基线 | 构建/供应链；直接使用精确上游 commit，不改代码 | 生成 source commit、内部 package digest、SBOM、license compatibility report、third-party notice 和依赖/动态加载清单；验证产物随附 `LICENSE.txt`、`NOTICE.md` 与修改声明，排除未授权品牌资产并取得 Legal/开源合规签收；构建不装配 Runtime Server、Web Console、SQLite/D1、global alias 和动态代码入口 | WP0、WP3 |
-| OC-02 | 建立企业身份与 Consumer 模型 | `connection-core`；不进入 OpenConnector | Principal、Consumer、ConsumerInstance、Actor、Direct Session、workload identity 和 delegated assertion 完成禁用、撤销及跨主体负向测试 | WP2 |
+| OC-01 | 固定并审计上游基线 | 构建/供应链；从精确上游 commit 维护 allowlist 受控源码副本 | 生成 source commit、复制文件清单及 digest、内部 package digest、SBOM、license compatibility report、third-party notice 和依赖/动态加载清单；验证产物随附 `LICENSE.txt`、`NOTICE.md` 与修改声明，排除未授权品牌资产并取得 Legal/开源合规签收；构建不装配 Runtime Server、Web Console、SQLite/D1、global alias 和动态代码入口 | WP0、WP3 |
+| OC-02 | 建立账号身份与 Consumer 模型 | `connection-core`；不进入 OpenConnector | LDAP issuer+uid 映射 Principal；Connection OAuth、Consumer、ConsumerInstance、Actor、Direct Session、workload identity 和 delegated assertion 完成禁用、撤销及跨主体负向测试 | WP2 |
 | OC-03 | 建立独立权威数据库 | Connection Store/migration；不进入 OpenConnector | PostgreSQL 保存身份映射、Consumer、Catalog、账号、Credential、Grant、Call、Effect、审计与恢复状态；不复用 alias 或上游本地存储 | WP1-WP8 |
 | OC-04 | 建立受控 Catalog 发布链 | Adapter 转换上游 metadata；缺少结构化导出时才评估最小补丁 | ProviderRelease/ActionVersion 不可变；schema、scope/effect、declaration、digest、兼容和 kill switch 校验通过 | WP3 |
 | OC-05 | 建立账号与 Credential 生命周期 | 生命周期在 Core/Store；Adapter 只注入 Credential handle；上游不保存 Credential | personal/shared、多账号、stable identity、OAuth transaction、KMS、CredentialVersion、refresh/rotation/revoke 和 durable attempt 验收通过 | WP4 |
 | OC-06 | 建立授权与 consent | `connection-core`；不进入 OpenConnector | preview、AuthorizationRoot、Grant、账号选择、扩权、换号、暂停和撤销精确绑定并在线重校验 | WP5 |
-| OC-07 | 建立 Consumer 接入协议 | MCP/HTTP Adapter；不进入 OpenConnector | Direct MCP 的 OAuth、`tools/list`、Action tool 与 Delegated OpenAPI 收敛到同一 AuthorizedInvocation；不暴露上游 Runtime MCP | WP6 |
+| OC-07 | 建立 Consumer 接入协议 | MCP/HTTP Adapter；不进入 OpenConnector | Direct MCP 的 OAuth、固定五个通用 `tools/list` tool 与 Delegated OpenAPI 收敛到同一 AuthorizedInvocation；不暴露上游 Runtime MCP | WP6 |
 | OC-08 | 补齐写操作可靠性 | Core/Store/Egress；不进入 OpenConnector | 入站幂等、Call、Effect、Dispatch、先持久化后出站、response-lost 和 reconciliation 通过 crash tests；无稳定 request key 不展示写 Action | WP7、WP8 |
 | OC-09 | 强制 Secret 与网络边界 | KMS/Egress + Adapter；只有上游无法注入 controlled fetch 或会泄露 Secret 时才评估补丁 | Credential 仅在执行边界注入；endpoint、redirect、DNS/TLS、响应大小、SSRF 和 Secret canary 验收通过，无网络旁路 | WP4、WP7、WP11 |
 | OC-10 | 建立审计、事件与恢复控制 | Core/Store/Operations；不进入 OpenConnector | audit/outbox 同事务，主体绑定查询、脱敏、保留、recovery generation、PITR mutation close 和恢复 runbook 通过 | WP8、WP11 |
@@ -428,7 +465,7 @@ invocationId, callId, attemptId, effectId, dispatchId
 
 1. Action args 不能包含可信 identity、Connection 或 Credential。
 2. 一个 Grant 始终绑定一个 exact Connection 和不可变 ActionVersion 集。
-3. Direct 模式的同一 `principal + consumer + consumerInstance + provider` 最多一个 current Grant；Delegated 模式的同一 `principal + consumer + actorKey + provider` 最多一个 current Grant。
+3. Direct 模式的同一 `principal + consumer + provider` 最多一个 current Grant，活跃 ConsumerInstance 共享该 Grant；Delegated 模式的同一 `principal + consumer + actorKey + provider` 最多一个 current Grant。
 4. 一个 Connection 最多一个 current CredentialVersion。
 5. 历史 Credential 不能被新 Invocation 自动选择。
 6. AuthorizedInvocation 一经创建不改变 Principal、Consumer、Actor、Connection、CredentialVersion、Action 或 args hash。
@@ -487,7 +524,7 @@ type Principal = {
 };
 ```
 
-- `identitySubjectHash` 使用按环境隔离的 keyed HMAC；每个环境使用独立 key，并对版本化 `canonical(environment, identityIssuer, identitySubject)` 计算摘要。不能保存原始 bearer 或可枚举邮箱，也不能跨环境复用或导出 HMAC key。
+- `identitySubjectHash` 使用按环境隔离的 keyed HMAC；每个环境使用独立 key，并对版本化 `canonical(environment, identityIssuer, identitySubject)` 计算摘要。M1 以 Connection issuer origin 作为 environment namespace，避免额外配置漂移。不能保存原始 bearer 或可枚举邮箱，也不能跨环境复用或导出 HMAC key。
 - USER 的 display name/email 只作为受限 profile projection，不作为 join/unique/auth key。
 - SERVICE Principal 只能通过管理员注册和 workload identity 建立，不能模拟 USER。
 - 每个敏感操作都要求未超过 freshness budget 的 Identity assertion；禁用事件同时提升本地 revision/fence。
@@ -510,7 +547,7 @@ type ConsumerInstance = {
   consumerInstanceId: string;
   consumerId: string;
   ownerPrincipalId: string | null;
-  instanceType: "DEVICE" | "WORKLOAD";
+  instanceType: "DEVICE" | "WORKLOAD" | "TOKEN";
   authenticationBindingHash: string;
   status: "ACTIVE" | "REVOKED";
   instanceRevision: bigint;
@@ -526,10 +563,20 @@ type ConsumerActorBinding = {
 };
 ```
 
-- Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant，`actorMode` 固定为 `NONE`。
+- Codex、Claude App、Cursor 等客户端产品分别注册为 `DIRECT_CLIENT` Consumer，每个设备或安装
+  登录形成一个 `DEVICE` instance；产品间不能共享 Consumer、Session 或 Grant，`actorMode` 固定
+  为 `NONE`。同一 Principal 的同一 Direct Consumer 的活跃实例共享 Principal 级 Grant，但 session、
+  refresh family、实例状态与审计彼此独立。
+- Connection 内建一个 `DIRECT_CLIENT` 类型的 Portable PAT Consumer。每枚 PAT 建立一个 `TOKEN`
+  instance，token hash 是其 authentication binding；调用方不能用 header 或 body 声明客户端产品
+  身份。同一 PAT 可部署到多个客户端，但这些客户端在 Connection 看来是同一个 instance，共享
+  Consumer Grant、撤销和审计边界。需要独立边界时签发不同 PAT。
 - Agent Platform、CI/CD 是 `DELEGATED_SERVICE`，每个部署 workload 形成 `WORKLOAD` instance。Delegated Consumer 注册时必须选择 `actorMode`；Agent Platform 使用 `REQUIRED`，以稳定 Agent ID 作为 opaque Actor。
 - `Consumer.type` 表示信任与调用模式，不编码客户端品牌。产品名、版本和已验证能力属于注册元数据与 conformance evidence；Connection Core 不按 Codex、Claude App 或 Cursor 分支授权规则。
-- `authenticationBindingHash` 绑定经 Connection 验证的注册客户端凭据或 workload mTLS identity；Direct instance 注册和 token 签发必须由该凭据认证客户端，不能相信请求中的 Consumer ID、Instance ID 或公开 client ID。支持 sender-constrained token 的客户端还必须证明注册 key 的持有并绑定 key thumbprint；不保存 private key 或 bearer token。
+- `authenticationBindingHash` 绑定 Connection OAuth 已验证的 client registration、redirect 与可用
+  实例 key、Connection PAT hash，或 workload mTLS identity；不能相信请求中的 Consumer ID、
+  Instance ID 或公开 client ID。支持 sender-constrained token 的客户端还必须证明注册 key 的持有
+  并绑定 key thumbprint；不保存 private key 或 bearer token 明文。
 - `actorMode = REQUIRED` 时，每次授权和调用都必须携带已注册 Actor，并由 current `ConsumerActorBinding` 证明当前 WORKLOAD instance 可以代表该 Actor；缺失、未注册或绑定失效时在 Root lookup 前拒绝，不能回退到 Consumer 级授权。`actorMode = NONE` 时拒绝 Actor claim。
 - Consumer disable 同步阻止全部实例、新授权和调用；不能只依赖 token expiry。
 
@@ -581,7 +628,6 @@ type ActionVersion = {
   providerReleaseId: string;
   actionId: string;
   version: string;
-  toolName: string;
   inputSchema: object;
   outputSchema: object;
   requiredScopes: readonly string[];
@@ -595,7 +641,9 @@ type ActionVersion = {
 };
 ```
 
-- `toolName` 使用 `conn__{providerKey}__{actionKey}` 且不包含用户数据。名称全局归属于一个 logical Action；同一 Action 的多个不可变版本可以复用该名称，其他 Action 不能占用。rename 创建使用新名称的 ActionVersion，旧名称继续保留给原 Action 的兼容版本。
+- `actionId` 使用不包含用户数据的稳定 Provider Action 标识；同一 Action 的多个不可变版本通过
+  `actionVersionId` 区分。Direct MCP 不为每个 Action 注册独立 tool，统一通过 `execute_action`
+  携带 `actionId`，因此新增 Action 不改变 MCP `tools/list` 契约。
 - Schema 使用受限 JSON Schema 2020-12 子集，拒绝远程 `$ref`、可执行默认值和未受限递归。
 - `authorizationDigest` 覆盖用途、effect class、required scopes、敏感参数提示和外部账号类型；变化时用户必须重新确认。
 - M1 的 MUTATING Action 只允许一个独立 LogicalEffect，避免部分成功产品状态。
@@ -626,7 +674,7 @@ stateDiagram-v2
 3. OAuth/API Key refresh、revoke、expiry 和错误映射。
 4. endpoint/DNS/redirect/TLS allowlist。
 5. rate limit、provider request ID 和 idempotency contract。
-6. input/output Schema golden fixture。
+6. input/output Schema golden vector。
 7. read-only 与 mutating Action 真实测试账号。
 8. license、SBOM、executor signature/digest 和安全评审。
 
@@ -858,8 +906,8 @@ type CredentialVersion = {
 
 ### 17.1 AuthorizationRoot
 
-Direct Consumer 的每个 `(principalId, consumerId, consumerInstanceId, providerId)` 有一个稳定 AuthorizationRoot，
-因此同一客户端产品的不同安装必须分别确认，不能复用 Grant。Delegated Consumer 的 Root 是
+Direct Consumer 的每个 `(principalId, consumerId, providerId)` 有一个稳定 AuthorizationRoot，
+同一 Principal 的同一客户端产品的活跃安装复用该 Grant。Delegated Consumer 的 Root 是
 `(principalId, consumerId, actorKey, providerId)`，不按 workload instance 拆分；`actorKey` 对
 `actorMode = NONE` 固定为空值，对 `actorMode = REQUIRED` 是 opaque actor ID hash。
 
@@ -868,7 +916,6 @@ type AuthorizationRoot = {
   authorizationRootId: string;
   principalId: string;
   consumerId: string;
-  consumerInstanceId: string | null;
   actorKey: string;
   providerId: string;
   currentGrantId: string | null;
@@ -877,9 +924,14 @@ type AuthorizationRoot = {
 };
 ```
 
-Direct Root 的 `consumerInstanceId` 必须非空，Delegated Root 必须为空；数据库 unique constraint 按以上两种
-tuple 分别实现。Root 在 Grant 被替换或撤销后仍保留。授权、换号、扩权、撤销和 Invocation 创建都锁同一个
-Root，避免不同 Grant 行之间出现竞态。
+数据库 unique constraint 按以上 Direct 与 Delegated tuple 分别实现。Root 在 Grant 被替换或撤销
+后仍保留。授权、换号、扩权、撤销和 Invocation 创建都锁同一个 Root，避免不同 Grant 行之间
+出现竞态。Direct Invocation 仍须验证当前 session 的 ConsumerInstance 绑定同一 Principal 与
+Consumer 且状态为 ACTIVE，但实例不是 Grant 的组成部分。
+
+同一事务同时触及 Principal、Root、Grant 与 Connection 时统一按 `Principal -> Root -> Grant ->
+Connection` 加锁；同类资源按稳定 ID 排序。审计写入依赖 Principal 外键，不能在持有 Root 后再反向
+等待 Principal。reconnect、disconnect、revoke、授权确认和 Invocation 必须遵守同一顺序。
 
 ### 17.2 ConnectionGrant
 
@@ -887,7 +939,6 @@ Root，避免不同 Grant 行之间出现竞态。
 type ConnectionGrant = {
   grantId: string;
   authorizationRootId: string;
-  consumerInstanceId: string | null;
   connectionId: string;
   connectionRevision: bigint;
   connectionExecutionFence: bigint;
@@ -907,11 +958,13 @@ type ConnectionGrant = {
 };
 ```
 
-Direct Grant 的 `consumerInstanceId` 必须等于其 AuthorizationRoot 的实例；Delegated Grant 必须为空并按 Actor（如有）
-查找。Grant 是不可变确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一
-事务把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect 仅在 stable
-account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建 replacement Grant；否则必须
-重新 preview/consent。
+Direct Grant 按 Principal + Consumer 查找，Delegated Grant 另按 Actor（如有）查找。Grant 是不可变
+确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一事务
+把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect
+仅在 stable account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建
+replacement Grant；否则必须重新 preview/consent。
+Grant 状态只允许保持不变，或从 `ACTIVE` 单向进入任一非活动状态；`PAUSED_*`、`REPLACED`、
+`REVOKED` 和 `TERMINATED` 都不能原地恢复为 `ACTIVE`。
 
 ### 17.3 有效能力公式
 
@@ -919,7 +972,7 @@ account proof、Credential scope 和原 Consent 授权摘要均未变化时复�
 Grant 冻结的 `consumerDeclarationId` 仍为可执行的 immutable declaration（`PUBLISHED` 或被该 Grant 引用的
 `SUPERSEDED`），且其中包含 exact
 ProviderRelease/ActionVersion；ActionVersion current executable state 为 `PUBLISHED` 或 `DEPRECATED`
-∩ Direct 调用的已认证 `consumerInstanceId` 精确等于 Grant 的 `consumerInstanceId`；Delegated Grant 的该字段为空
+∩ Direct 调用来自绑定同一 Principal + Consumer 的 ACTIVE ConsumerInstance
 ∩ Principal current ConnectionGrant confirmed exact ActionVersion/capability digest
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
@@ -1007,18 +1060,60 @@ Alice
 
 ### 18.1 Direct MCP Client Session
 
-Direct MCP Client 通过 remote MCP transport 使用其目标版本支持的标准 OAuth 登录。Connection 把公司 OIDC 作为上游身份来源，MCP OAuth 层只建立受限的 Direct Session：
+Direct MCP Client 通过 remote MCP transport 使用标准 OAuth Authorization Code + PKCE 登录。
+Connection 同时扮演 MCP Resource Server 与 OAuth Authorization Server，公司 LDAP 只位于浏览器
+登录后的 Identity Adapter 中：
 
-1. 客户端从 MCP authorization metadata 发现 Connection 的授权服务和资源标识。
-2. 用户在系统浏览器完成公司登录、ConsumerInstance 绑定和最小 MCP scope 授权；浏览器会话只完成用户认证，不单独决定 Consumer 或 Instance，也不会获得 Provider Credential。
-3. Connection 仅在已注册客户端凭据完成认证后创建或选择 ConsumerInstance，并从该验证结果而非请求字段解析 Consumer/Instance；随后把 OAuth issuer、组织或租户和 subject 映射为 Principal，并将 access/refresh token 绑定 Principal、已注册 Consumer、Instance、audience、scope、expiry 和 current recovery generation。
-4. 客户端使用 access token 调用 MCP；Connection 每次检查 token 绑定、session/Instance/Principal current status 和 PITR 域外的 current recovery generation，其他 Consumer 或 Instance 的 token 必须拒绝。
-5. 若目标客户端版本支持 sender-constrained token，Connection 必须启用并验证 key thumbprint；否则使用短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
-6. 用户可在 Connection 页面单独撤销该实例和所有关联 session。
+1. 客户端从 Protected Resource Metadata 发现 Connection Authorization Server 和 resource。
+2. 客户端通过预注册、Client ID Metadata Document 或受限 DCR 获得 client identity，生成 PKCE
+   S256，并携带精确 redirect URI、resource、scope、state 和 code challenge 打开浏览器。
+3. Connection 浏览器页通过 HTTPS 收集 LDAP 用户名和密码。Identity Adapter 对用户名执行 DN/filter
+   转义，以 bounded deadline 按部署批准的固定 transport profile 完成 LDAP bind 和用户查询，使用
+   canonical LDAP issuer + 稳定 `uid` 查找或创建 Principal；密码在 bind 返回后立即丢弃。
+4. Connection 根据已验证 client registration 创建或选择 Consumer 与 ConsumerInstance，签发短期、
+   take-once Authorization Code。Code 绑定 client、redirect、PKCE、resource、scope、Principal、
+   Consumer、Instance、expiry 和 recovery generation，并在 redirect 中返回精确 issuer。
+5. token endpoint 校验所有绑定与 code verifier，原子消费 code，签发短期 access token 与只存 hash
+   的 rotation refresh token。Token 绑定 Principal、Consumer、Instance、audience、scope、session
+   family、expiry 和 current recovery generation。
+6. 客户端使用 access token 调用 MCP；Connection 每次检查 token audience、session、Instance、
+   Principal 与 recovery generation。Provider token 或其他 resource token 必须拒绝。
+7. 若目标客户端版本支持 sender-constrained token，Connection 启用并验证 key thumbprint；否则使用
+   短 TTL、refresh rotation、replay detection 和实例级撤销降低 bearer 风险。
+8. 用户可单独撤销某个 ConsumerInstance 与 session family；这不撤销 Principal 的 Provider
+   Credential 或同一 Consumer 的 Grant。Provider disconnect 则阻止所有实例的新调用。
 
-Direct session 只证明当前 Principal/Consumer/Instance，不包含 Connection 或 Action 授权副本。authorization session、access/refresh token 和 refresh family 都必须携带或保存签发时的 recovery generation；generation 不等于 Recovery Control current 值时不得刷新或调用。
+Direct session 只证明当前 Principal/Consumer/Instance，不包含 Connection 或 Action 授权副本。
+同一 Principal 的活跃实例解析同一个 Direct AuthorizationRoot/current Grant。authorization session、
+access/refresh token 和 refresh family 都必须保存签发时的 recovery generation；generation 不等于
+Recovery Control current 值时不得刷新或调用。
 
-G-01 必须对每个拟支持的 Codex、Claude App、Cursor 等客户端版本分别完成 conformance，冻结实际 authorization metadata、redirect、dynamic registration、token storage/refresh、稳定请求键、scope、撤销和 sender-constraint 能力。一个客户端版本通过不能外推到其他产品或版本；本文不声称任何客户端支持私有 device authorization 或自定义逐请求 PoP 协议，不满足标准 remote MCP OAuth 时不得用长期静态 token 替代。
+#### 18.1.1 Portable Connection PAT
+
+不支持 MCP OAuth 或需要无头部署的 Consumer 可以使用 Connection PAT。用户先访问 Connection
+HTTPS 登录页并以 LDAP 建立控制台浏览器会话，再在 Access tokens 页面只提交 PAT 名称。签发前
+Connection 重新校验 browser session、Principal、identity freshness 和 recovery generation，不再次
+收集 LDAP 密码。高熵 opaque PAT 明文只在成功页面显示一次，PostgreSQL 只保存 hash、Principal、
+内建 Portable PAT Consumer、TOKEN instance、名称、有效期、撤销和最近使用时间。
+
+PAT 只在 Connection MCP resource 上解析，不能作为 Provider token、LDAP session 或 Delegated
+assertion 使用。每次调用仍检查 Principal、identity freshness、PAT expiry/revocation、Portable PAT
+Consumer 和 TOKEN instance 状态，再进入同一 AuthorizationRoot/current Grant 与
+`AuthorizedInvocation`。同一 PAT 被多个客户端复用时，Connection 无法区分具体客户端，因此它们
+共享 Grant、撤销、限流和审计边界；页面必须提示为需要独立边界的部署分别签发 PAT。PAT 明文、LDAP
+密码和 Provider Credential 均不得进入数据库、日志、trace、audit 或模型上下文。
+
+LDAP password、bind Credential 和原始 LDAP response 不得进入 PostgreSQL、token、Cookie、日志、
+trace、audit、错误或模型上下文。LDAP endpoint 使用部署批准的固定 transport profile，不允许请求
+选择 endpoint、自动 downgrade 或 fallback。当前 Agora 目录不提供可用的 LDAPS/StartTLS，产品
+负责人已批准仅在公司私网使用与 Rehoboam 一致的 `ldap://` direct bind，并明确接受该链路上的
+credential 明文传输风险；目录服务提供可用 TLS 后必须迁移并关闭该例外。Rehoboam 自定义应用 Token
+仍不得进入 Connection。
+
+G-01 必须对每个拟支持的 Codex、Claude App、Cursor 等客户端版本分别完成 conformance，冻结实际
+authorization metadata、redirect、client registration、token storage/refresh、稳定请求键、scope、
+撤销和 sender-constraint 能力。一个客户端版本通过不能外推到其他产品或版本；不满足标准 remote
+MCP OAuth 时不得用长期静态 token 替代。
 
 ### 18.2 Delegated Assertion
 
@@ -1090,7 +1185,7 @@ type AuthorizedInvocation = {
 ```
 
 AuthorizedInvocation 是 Connection 内部的单次授权快照，不是 Consumer 签发的 Permit。创建事务锁 Consumer、
-Grant 冻结的 declaration、ConsumerInstance、适用的 ConsumerActorBinding、Root、current Grant、Connection、
+Grant 冻结的 declaration、当前 ConsumerInstance、适用的 ConsumerActorBinding、Root、current Grant、Connection、
 current CredentialVersion 和 idempotency record，重读所有 current revision/fence，冻结具体 declaration/version、
 instance/actor binding revision 和 `credentialVersionId` 并生成稳定 `invocationId`。Direct 调用的
 `actorBindingRevision` 为空；Delegated Actor binding 缺失、撤销或变化都在出站前拒绝。后续 refresh/rotation
@@ -1101,7 +1196,7 @@ instance/actor binding revision 和 `credentialVersionId` 并生成稳定 `invoc
 Direct stable subject scope：
 
 ```text
-principalId + consumerId + consumerInstanceId
+principalId + consumerId
 ```
 
 request key 使用 MCP stable request key。
@@ -1109,7 +1204,7 @@ request key 使用 MCP stable request key。
 Delegated stable subject scope：
 
 ```text
-principalId + consumerId + consumerInstanceId + actorKey
+principalId + consumerId + actorKey
 ```
 
 request key 使用 HTTP `Idempotency-Key`。
@@ -1342,11 +1437,17 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | `consumer_actor_binding` | consumer_id、actor_key、instance_id、status、revision | composite PK；composite FK instance+consumer；current binding required |
 | `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current `PUBLISHED`；`SUPERSEDED` only executes through exact existing Grant |
 | `consumer_declared_action` | declaration_id、action_version_id、action_id、tool_name | composite PK；unique declaration+tool_name；composite FK 到 ActionVersion |
-| `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | session secret只存hash |
+| `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | MCP session secret只存hash |
+| `browser_session` | id、session_hash、principal_id、identity_issuer、recovery_generation、expires_at、last_seen_at、revoked_at | Cookie明文不落库；仅控制台使用 |
+| `personal_access_token` | id、token_hash、principal_id、consumer_id、instance_id、name、expires_at、revoked_at、last_used_at | token_hash unique；明文只展示一次；instance unique |
 | `workload_identity` | id、instance_id、issuer、subject、key_set_ref、audience、status | exact issuer+subject+audience |
 | `delegation_replay` | instance_id、jti_hash、args_hash、idempotency_key_hash、action_version_id、invocation_id、expires_at | unique instance+jti_hash；相同绑定只查询原 Invocation，任一不匹配拒绝 |
 
-Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、recovery generation、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
+Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorization code hash、PKCE challenge、client/redirect/resource/scope、recovery generation、expiry、approved Principal 和 take-once 状态；原始 code/token 不落库。Connection PAT 使用独立 hash-only 表和 TOKEN instance，不伪装成 OAuth session。若目标 Direct MCP Client 只支持外部 authorization server，Connection 改存 subject/session binding，不复制上游 token。
+
+以上表属于所有正式 Connection 部署共用的 PostgreSQL 权威模型。本机 Consumer 与远程 Consumer
+使用相同的 Principal、Consumer、Grant、Connection、Credential 和 OAuth session 语义；部署位置
+不能改变数据归属。可选 local edge 只转发短期 Connection session，不保存这些权威数据。
 
 ### 21.3 Catalog 表
 
@@ -1378,13 +1479,13 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 
 | 表 | 关键列 | 关键约束 |
 | --- | --- | --- |
-| `authorization_root` | id、principal_id、consumer_id、consumer_instance_id?、actor_key、provider_id、current_grant_id、fence、status | Direct: unique principal+consumer+instance+provider；Delegated: unique principal+consumer+actor+provider；composite current pointer FK |
+| `authorization_root` | id、principal_id、consumer_id、actor_key、provider_id、current_grant_id、fence、status | Direct: unique principal+consumer+provider；Delegated: unique principal+consumer+actor+provider；composite current pointer FK |
 | `authorization_preview` | id、root_id、connection_id、declaration_id、action_set_digest、source_revisions_json、expiry、consumed_at | opaque token hash unique |
 | `authorization_consent` | id、root_id、preview_id、display_snapshot_ciphertext、snapshot_hash、codec_version、kms_key_ref、locale、confirmed_at | immutable；encryption context 绑定 environment/root/consent purpose |
-| `connection_grant` | id、root_id、consumer_instance_id?、connection_id、all frozen revisions/digests、status、consent_id | Direct instance must equal Root; Delegated is null; current pointer only via root |
+| `connection_grant` | id、root_id、connection_id、all frozen revisions/digests、status、consent_id | 不绑定 ConsumerInstance；current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
 
-Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。Direct Root/Grant 的 `consumer_instance_id` 必须非空且相等；Delegated Root/Grant 必须为空。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
+Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
@@ -1432,8 +1533,8 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
-- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating tool 的已发布 input schema 必须包含 required `idempotencyKey`，由客户端生成并在响应丢失、transport retry 和用户重试中保持不变；Connection 拒绝缺失键的调用，先按该键查找幂等记录，再剥离该控制字段后校验 Provider args。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
-- 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发布或展示 Direct mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
+- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating Action 的 `get_action_guide` schema 必须包含 required `idempotencyKey`；客户端通过通用 `execute_action` 提交该字段，并在响应丢失、transport retry 和用户重试中保持不变。Connection 拒绝缺失键的调用，先按该键查找幂等记录，再剥离该控制字段后校验 Provider args。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
+- 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发现或执行 mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
 - Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等，且完全相同的 `jti` 重放只可查询其原 Invocation。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。
 - 认证错误与资源不存在对跨主体请求使用相同外部状态，防止枚举。
@@ -1476,38 +1577,33 @@ MCP Server 暴露：
 | 能力 | 行为 |
 | --- | --- |
 | initialize/auth metadata | 返回 Connection service identity、支持的登录方式和 contract version |
-| tools/list | 固定返回少量 control tools；Action tools 只返回当前 Principal/Consumer 已授权的 Action，MUTATING 还要求当前客户端版本已通过稳定 request key conformance |
-| tools/call: control | `connection_status` 返回连接/授权入口；`get_action_call` 返回当前主体可见的 Call 状态和脱敏结果 |
-| tools/call: Action | 创建或复用 AuthorizedInvocation 和 ActionCall |
+| tools/list | 固定返回 OpenConnector 兼容的 `list_apps`、`list_connections`、`search_actions`、`get_action_guide` 和 `execute_action` 五个 tool；不把每个 Action 注册为独立 tool |
+| tools/call: discovery | `list_apps`、`list_connections`、`search_actions` 和 `get_action_guide` 只返回当前 Principal/Consumer 可见的脱敏授权投影 |
+| tools/call: execute_action | 以 `actionId` 和业务参数创建或复用 AuthorizedInvocation 和 ActionCall；ActionVersion、Grant、幂等和凭证仍由 Connection 服务端解析 |
 
-M1 不暴露上游的 `search_actions`、`get_action_guide` 或通用 `execute_action`；Action description 和 input schema
-直接映射到 `tools/list` 返回的已授权 Action tool。
+`get_action_guide` 返回的 `inputSchema` 属于被发现的 ActionVersion，而不是新的 MCP tool schema；对
+`WRITE` Action 必须包含 required `idempotencyKey`。固定的五个 MCP tool schema 不随 Action catalog 数量变化。
+
+Connection 不把 Provider credential、账号选择器或 endpoint 放入上述 tool 参数。新增 Kernel Action
+只需要进入受控 catalog 发布链，不需要新增 MCP tool 或路由映射。
+MCP 协议 Adapter 只负责 JSON-RPC 解析、固定 tool schema、参数校验、tool dispatch 和结果/错误映射；
+Action 搜索与过滤、public Action ID 解析、Guide 生成和执行选择属于 Connection application service，
+不能写入 Hono 路由。
 
 所有 Direct MCP Client 使用相同的 tool 与错误契约；产品或版本差异只能影响 G-01 验证过的 OAuth、registration、token 和 request identity Adapter 行为，不能改变 ConnectionGrant、ActionVersion 或执行语义。
 
-每个 ActionVersion 映射为一个稳定 tool：
+Direct MCP 的固定工具契约示例：
 
 ```json
 {
-  "name": "conn__github__create_pull_request",
-  "description": "Create a pull request using your authorized GitHub account.",
+  "name": "execute_action",
+  "description": "Execute one authorized provider action by id with a JSON input object.",
   "inputSchema": {
     "type": "object",
-    "additionalProperties": false,
-    "required": ["repository", "head", "base", "title", "idempotencyKey"],
+    "required": ["actionId"],
     "properties": {
-      "repository": { "type": "string", "maxLength": 256 },
-      "head": { "type": "string", "maxLength": 255 },
-      "base": { "type": "string", "maxLength": 255 },
-      "title": { "type": "string", "maxLength": 256 },
-      "body": { "type": "string", "maxLength": 65536 },
-      "draft": { "type": "boolean" },
-      "idempotencyKey": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 256,
-        "description": "Stable client-generated key reused for retries of this logical request."
-      }
+      "actionId": { "type": "string", "minLength": 1 },
+      "input": { "type": "object", "additionalProperties": true }
     }
   }
 }
@@ -1515,19 +1611,46 @@ M1 不暴露上游的 `search_actions`、`get_action_guide` 或通用 `execute_a
 
 Tool Schema 不包含 user、consumer、actor、connection、grant、credential、endpoint 或 access token。`repository` 是 Action 参数，不是账号选择依据；executor 仍校验当前 Credential 对目标 repository 的权限。
 
-Control tool 不能接受 Principal、Consumer、Connection 或 Grant selector。`connection_status` 只返回当前 session 的脱敏状态和短期 Connection Web URL；`get_action_call` 只接受本次 session 可见的 opaque `callId`，repository 查询仍附加完整主体 scope。
+Discovery tool 不能接受 Principal、Consumer、Connection 或 Grant selector。`list_connections` 只返回当前主体的脱敏账号摘要；`get_action_guide` 和 `search_actions` 只返回当前授权 ActionVersion，`execute_action` 的主体与账号由服务端从 token 和 Grant 解析。
 
 ### 22.4 Direct Auth API
 
 ```text
-GET  /.well-known/oauth-protected-resource
+GET  /.well-known/oauth-protected-resource/mcp
 GET  /.well-known/oauth-authorization-server
-GET  /connection/oauth/authorize
-POST /connection/oauth/token
+POST /oauth/register
+GET  /oauth/authorize
+POST /oauth/token
+POST /oauth/revoke
+GET  /connection/login
+POST /connection/login
+POST /connection/logout
+GET  /connection/tokens
+POST /connection/tokens
+POST /connection/tokens/{tokenId}/revoke
 DELETE /connection/v1/consumer-instances/{instanceId}/session
 ```
 
-具体 endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP OAuth profile 为准。授权请求不接收可信 userId；authorization code 使用 PKCE、短 TTL 和 take-once，token audience 固定 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software metadata 和注册生命周期，不能开放任意公共 client。
+OAuth endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP OAuth profile 为准。授权
+请求不接收可信 userId；authorization code 使用 PKCE、短 TTL 和 take-once，token audience 固定
+Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software
+metadata 和注册生命周期，不能开放任意公共 client。
+
+`/connection/login` 是 Connection 自有 HTML 登录页。POST 只接受 LDAP 用户名/密码，成功后设置
+HttpOnly、Secure、SameSite=Strict 的高熵 opaque Cookie；PostgreSQL 只保存 session hash，浏览器
+sessionStorage、localStorage 和页面脚本均不能读取 session。仅本机 conformance 的精确 loopback HTTP
+origin 可省略 Secure，生产和非 loopback 入口必须 HTTPS。
+
+`/connection/tokens` 是登录后控制台中的 Access tokens 页面。POST 只接受 PAT 名称并使用当前
+browser session 绑定的 Principal，返回 `Cache-Control: no-store` 的一次性明文展示；列表和撤销
+query 必须同时限定该 Principal，跨 Principal token ID 与不存在 token 使用相同行为。所有 Connection
+自有 credential-bearing form POST（包括 `/connection/login`、`/oauth/login`、PAT 签发/撤销和退出）
+必须优先校验精确 same-origin `Origin`。若目标 WebKit 浏览器运行于 opaque-origin
+环境并发送字面量 `Origin: null`，仅当 `Sec-Fetch-Site` 精确为 `same-origin` 且请求 `Host`
+精确等于 Connection issuer host 时允许继续；缺失 `Origin`、缺失 Fetch Metadata、非
+`same-origin` 或 Host 不匹配均 fail closed。该兼容路径不能接受调用方提供的 public base、
+forwarded host 或任意 Origin allowlist。
+`/oauth/revoke` 同时识别 OAuth token 和 Connection PAT hash，并只执行幂等撤销。
 
 ### 22.5 Browser API
 
@@ -1695,7 +1818,8 @@ environment + principalId + consumerId + directConsumerInstanceId? + actorKey
 + actionVersionId + all current revisions/fences
 ```
 
-不能因为当前产品只有一个 Consumer 或一个账号而省略维度。测试 fixture 必须至少有 Alice/Bob、Direct Client A/B、Platform、Agent A/B、GitHub personal/company。
+不能因为当前产品只有一个 Consumer 或一个账号而省略维度。隔离测试矩阵必须至少覆盖
+Alice/Bob、Direct Client A/B、Platform、Agent A/B、GitHub personal/company。
 
 ### 24.2 服务端解析链
 
@@ -2065,10 +2189,11 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ### 30.5 API/MCP Compatibility
 
-- OpenAPI/MCP tool schema 以 ActionVersion 固定，不原地改 required fields。
+- 固定的 MCP tool schema 保持兼容；`get_action_guide` 返回的 Action input schema 以 ActionVersion 固定，
+  不原地改 required fields。
 - 新错误 enum 旧 client必须 fail closed或映射通用错误。
 - Consumer assertion version 支持 N/N-1 reader；未知 security field不得忽略。
-- MCP tool rename 产生新 ActionVersion，旧 tool按 deprecation周期保留。
+- ActionId rename 产生新 ActionVersion；固定 MCP tool 契约不变，旧 ActionVersion 按 deprecation 周期保留。
 
 ### 30.6 Credential/KMS Rotation
 
@@ -2127,7 +2252,8 @@ Recovery: open | read-only | quarantined
 3. remote MCP OAuth 把 Alice、目标 ConsumerInstance 和 Connection resource 绑定为 Direct Session。
 4. Alice 连接 personal/company 两个 GitHub账号。
 5. Alice 为目标 Direct Consumer 选择 company账号并确认 create PR。
-6. `tools/list` 只显示授权 tool；另一个 Direct Consumer 或设备不能复用其 Session/Grant，目标设备必须独立 consent。
+6. `tools/list` 固定显示五个通用 tool，`search_actions`/`get_action_guide` 只显示授权 Action；另一个 Direct Consumer 不能复用 Session 或 Grant。同一 Principal +
+   Direct Consumer 的另一设备必须使用自己的 Session，但共享该 Consumer 的 current Grant，不重复 consent。
 7. 创建真实 test repository PR并返回 URL。
 8. 重放同 idempotency key返回同 PR。
 9. 撤销设备或 Grant 后新调用拒绝。
@@ -2182,7 +2308,7 @@ Recovery: open | read-only | quarantined
 | 阶段 | 目标 | Work Package | 退出条件 |
 | --- | --- | --- | --- |
 | Phase 0：决策冻结 | 关闭身份、Provider、KMS、恢复和 legacy 前置问题 | WP0 | P0 门禁有结论，必要 ADR 与契约 skeleton 获批 |
-| Phase 1：领域底座 | 建立独立数据库、身份、Consumer、Catalog、Account 和 Credential | WP1-WP4 | migration、领域状态机、Fake Adapter 和负向隔离通过 |
+| Phase 1：领域底座 | 建立独立数据库、身份、Consumer、Catalog、Account 和 Credential | WP1-WP4 | migration、领域状态机、进程内 test double 和负向隔离通过；test double 不进入运行产物 |
 | Phase 2：授权与接入 | 打通 Direct MCP、Delegated HTTP 和 Connection Web 授权 | WP5-WP6 | 两个入口收敛到相同 AuthorizedInvocation，越权矩阵为零 |
 | Phase 3：可靠执行 | 实现 Call、Effect、egress、幂等、对账和审计 | WP7-WP8 | crash-window 测试无重复效果，UNCERTAIN 可查询和收敛 |
 | Phase 4：真实闭环 | 完成 Connection 页面、初期 Provider 范围和运维面 | WP9-WP10 | GitHub 完成完整验收；Confluence、Jira、Bitbucket 完成获批 Action 的真实账号 E2E |
@@ -2217,7 +2343,7 @@ flowchart LR
 | WP | Owner | 交付 | Definition of Done |
 | --- | --- | --- | --- |
 | WP0 决策与契约 | Connection Owner | 关闭 G-01 至 G-08；冻结 OpenAPI/MCP、状态与错误 skeleton | PRD、工程 Spec、HLD、ADR 无冲突；初期 Provider 范围和 legacy 结论可追溯 |
-| WP1 工程与数据底座 | Connection Owner/DBA | `connection-api`、Connection DB、migration、ports、Fake Adapter | 空库和前一版本升级/回退验证；缺 DB/KMS/Identity 配置 fail readiness |
+| WP1 工程与数据底座 | Connection Owner/DBA | `connection-api`、Connection DB、migration、ports、仅测试进程可用的 Adapter test double | 空库和前一版本升级/回退验证；缺 DB/KMS/Identity 配置 fail readiness |
 | WP2 Identity 与 Consumer | Identity/Security | Principal、remote MCP OAuth session、Consumer、Instance、workload key | 目标 Direct MCP Client 分别通过 OAuth conformance；mTLS/assertion、禁用与重放负向测试通过 |
 | WP3 Catalog 与 Kernel | Provider Owner | pinned Kernel、ProviderRelease、ActionVersion、发布/停用 | digest/SBOM/allowlist 可核验；`LICENSE.txt`、`NOTICE.md`、修改声明、third-party notice 和兼容性报告随产物验证，Legal/开源合规签收完成；任意 URL/script、未授权品牌资产和未签版本不能发布 |
 | WP4 Account 与 Credential | Connection Owner/Security | Personal/Shared、OAuth/PAT、stable identity、rotation | 多账号和 current Credential 约束通过；Secret canary 零命中 |
@@ -2298,7 +2424,7 @@ flowchart LR
 - 立即 `DISABLED` 目标 ActionVersion 或 ProviderRelease，提升 Catalog revision，fence 新 dispatch。
 - 保留旧版本和既有 Call 证据，不原地覆盖 Schema、scope、endpoint 或 executor digest。
 - 回滚到上一已发布版本必须作为新的发布指针变更，并验证 Credential 和 external identity compatibility。
-- 重新开放前运行 golden fixture、egress、scope、真实 read-only 和最小 mutating canary。
+- 重新开放前运行 golden vector、egress、scope、真实 read-only 和最小 mutating canary。
 
 ### 34.7 DB、Identity 或 Consumer 身份事故
 
@@ -2350,7 +2476,7 @@ flowchart LR
 | D-02 | Connection DB 是 Principal、Consumer Grant、账号、Credential 和 Call 权威 | Product/Security/DBA | 需要 |
 | D-03 | Direct MCP 与 Delegated HTTP 收敛到 AuthorizedInvocation | Connection/Security | 需要 |
 | D-04 | Direct MCP Client 使用标准 remote MCP OAuth 并按客户端 conformance 启用 sender constraint；Delegated 使用 mTLS + signed assertion | Identity/Security | 需要 |
-| D-05 | OpenConnector 只作为 pinned in-process Connector Kernel | Connection/Security/Legal | 需要 |
+| D-05 | 所有正式部署只装配 pinned in-process Connector Kernel；OpenConnector Runtime、SQLite、alias 和 Runtime token 不进入产品拓扑 | Connection/Security/Legal | [ADR-connection-account-ldap](../adr/ADR-connection-account-ldap.md)、[ADR-connection-openconnector-kernel-boundary](../adr/ADR-connection-openconnector-kernel-boundary.md) |
 | D-06 | 一个 AuthorizationRoot 只选择一个 current Connection | Product/Connection | 不需要；已写入 PRD |
 | D-07 | 每 Connection 多 CredentialVersion、最多一个 current | Security/DBA | 需要 |
 | D-08 | 写 Action 使用 Call + Effect + Dispatch，`SUBMISSION_STARTED` 后未知即 UNCERTAIN | Connection/SRE | 需要 |
@@ -2414,7 +2540,7 @@ Consumer 可以在自己的数据库保存内部 policy 和 `callId`，但这些
 
 | 方案 | 不采用原因 | 重新评估条件 |
 | --- | --- | --- |
-| 直接部署 OpenConnector Runtime | identity、alias、storage 和 token 模型不满足企业隔离 | 上游提供等价企业多租户契约并通过审计 |
+| 部署 OpenConnector Runtime 或把它暴露给 Consumer | 绕过 Connection 唯一入口、账号、授权、Credential 和审计权威 | 不重新评估；正式路径只使用进程内 Kernel Adapter |
 | Platform + Connection 作为固定组合 | Direct MCP Client 和其他 Consumer 不能独立接入 | 不重新评估；违背已确认产品边界 |
 | Consumer 保存 Provider Credential | Secret 会进入 Agent/runtime 边界 | 不重新评估 |
 | 每个 Consumer 各存一份 Connection Grant | 撤销、换号和审计出现多权威 | 不重新评估 |

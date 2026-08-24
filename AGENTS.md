@@ -15,6 +15,8 @@
 
 PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源，开发工作流 Spec 是交付流程的权威来源。文档冲突时不要自行选择，先明确冲突并修正文档。
 
+Connection 相关工作还必须遵守 [Connection M1 HLD](docs/architecture/HLD-connection-M1.md)。实现、测试、部署配置和文档都要先映射到适用的 HLD 条款；发现与 HLD、PRD 或工程 Spec 的偏差、缺失门禁或相互冲突时，先报告并取得 HLD/ADR 的明确更新或评审批准。不得以开发 fixture、环境变量、部署说明或兼容性开关绕过 HLD 的门禁。
+
 本地 `archive/` 与 `research/` 已被 Git 忽略，只用于保留历史和调研证据，不是当前需求或架构依据。不要把其中的旧结论恢复到正式文档。
 
 ## Agent skills

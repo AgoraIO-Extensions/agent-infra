@@ -15,6 +15,7 @@
 			"*.jsonc",
 			"!**/dist",
 			"!**/.turbo",
+			"!packages/openconnector-kernel/src",
 			"!**/routeTree.gen.ts",
 			"!bts.jsonc",
 			"!pnpm-lock.yaml",

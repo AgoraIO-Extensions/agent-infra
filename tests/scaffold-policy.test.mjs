@@ -84,26 +84,41 @@ test("Node runtime images contain only production deployment artifacts", async (
 	}
 });
 
-test("Compose runs every deployment image with a read-only root filesystem", async () => {
-	const compose = parse(await readFile("docker-compose.yml", "utf8"));
+test("the production Connection builder excludes development fixture source", async () => {
+	const dockerfile = await readFile("apps/connection-api/Dockerfile", "utf8");
 
-	for (const service of dockerfiles.keys()) {
-		assert.equal(
-			compose.services[service]?.read_only,
-			true,
-			`${service} must set read_only: true`,
-		);
-	}
-
+	assert.doesNotMatch(dockerfile, /^COPY . .$/m);
+	assert.doesNotMatch(dockerfile, /fixture|stub/i);
+	assert.doesNotMatch(dockerfile, /src\/conformance(?:-app)?\.ts/);
+	assert.doesNotMatch(dockerfile, /Dockerfile.development/);
 	assert.ok(
-		compose.services.web.tmpfs.some((mount) => mount.startsWith("/tmp:")),
-		"web must declare an explicit writable tmpfs for nginx runtime files",
+		dockerfile.includes("COPY migrations/connection migrations/connection"),
+		"production migrations must remain part of the controlled build input",
 	);
-	assert.deepEqual(compose.services.web.healthcheck.test, [
-		"CMD",
-		"wget",
-		"-q",
-		"--spider",
-		"http://127.0.0.1:8080/",
-	]);
+});
+
+test("the production Connection image excludes development provider fixtures", async () => {
+	const dockerfile = await readFile("apps/connection-api/Dockerfile", "utf8");
+	const productionCompose = parse(
+		await readFile("docker-compose.production.yml", "utf8"),
+	);
+
+	assert.match(
+		dockerfile,
+		/^COPY apps\/connection-api\/src\/bootstrap-production\.ts /m,
+	);
+	assert.doesNotMatch(
+		dockerfile,
+		/^COPY apps\/connection-api\/src\/development\.ts /m,
+	);
+	assert.doesNotMatch(
+		JSON.stringify(productionCompose.services),
+		/CONNECTION_BUILD_MODE.*development/,
+	);
+});
+
+test("local Compose exposes only the real PostgreSQL dependency", async () => {
+	const compose = parse(await readFile("docker-compose.yml", "utf8"));
+	assert.deepEqual(Object.keys(compose.services), ["postgres"]);
+	assert.ok(compose.services.postgres.healthcheck);
 });

@@ -21,9 +21,12 @@
 		"dev:platform-api": "turbo run dev -F @agent-infra/platform-api",
 		"dev:platform-worker": "turbo run dev -F @agent-infra/platform-worker",
 		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
-		"docker:build": "docker compose build",
+		"connection:conformance": "pnpm --filter @agent-infra/connection-api conformance",
+		"docker:build": "docker build -f apps/connection-api/Dockerfile -t agent-infra-connection-api:local .",
 		"docker:up": "docker compose up -d --build",
 		"docker:down": "docker compose down",
+		"connection:production:up": "docker compose -f docker-compose.production.yml up -d --build",
+		"connection:production:bootstrap": "docker compose -f docker-compose.production.yml run --rm connection-bootstrap",
 		"docker:logs": "docker compose logs -f"
 	},
 	"devDependencies": {
@@ -35,5 +38,5 @@
 		"vitest": "catalog:",
 		"yaml": "2.8.3"
 	},
-	"packageManager": "pnpm@11.20.0"
+	"packageManager": "pnpm@10.28.2"
 }

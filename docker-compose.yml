@@ -1,68 +1,19 @@
 name: agent-infra
 
 services:
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    init: true
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    ports:
-      - "3001:8080"
+  postgres:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    environment:
+      POSTGRES_DB: connection
+      POSTGRES_PASSWORD: connection
+      POSTGRES_USER: connection
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      test: ["CMD-SHELL", "pg_isready -U connection -d connection"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - connection-postgres:/var/lib/postgresql/data
 
-  platform-api:
-    build:
-      context: .
-      dockerfile: apps/platform-api/Dockerfile
-    init: true
-    read_only: true
-    ports:
-      - "3000:3000"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://localhost:3000/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  platform-worker:
-    build:
-      context: .
-      dockerfile: apps/platform-worker/Dockerfile
-    init: true
-    read_only: true
-
-  connection-api:
-    build:
-      context: .
-      dockerfile: apps/connection-api/Dockerfile
-    init: true
-    read_only: true
-    ports:
-      - "3002:3002"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://localhost:3002/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+volumes:
+  connection-postgres:

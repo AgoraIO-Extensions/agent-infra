@@ -1,0 +1,19 @@
+{
+	"name": "@agent-infra/openconnector-adapter",
+	"private": true,
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": {
+		"check-types": "tsc --noEmit",
+		"test": "node --test"
+	},
+	"dependencies": {
+		"@agent-infra/connection-core": "workspace:*",
+		"@agent-infra/openconnector-kernel": "workspace:*"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:"
+	}
+}

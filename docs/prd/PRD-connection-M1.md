@@ -12,10 +12,17 @@ M1 需要保证：
 
 1. Consumer 可以使用外部平台 API，但不能获得外部账号原始凭证。
 2. 使用者决定哪个 Consumer 可以使用自己的哪个 Connection 和哪些 Action。
-3. Connection 独立保存并校验 Consumer 授权，不依赖 Consumer 内部数据库作授权结论。
+3. Connection 是所有 Consumer 的唯一入口和账号、授权、Connection、Credential 与审计权威；
+   本机 Consumer 也必须先登录 Connection Account，不能以安装身份替代用户身份。
 4. 不同用户、Consumer、Consumer 内部 Actor 和 Connection 的授权相互隔离。
 5. 同一 Provider 支持多用户分别连接账号，也支持同一用户连接多个外部账号。
-6. 至少一个真实 Provider 完成连接、授权、调用、审计和撤销的完整闭环。
+6. 同一员工在多台设备登录 Connection 后，共享本人已有的第三方 Connection 与 Consumer 授权，
+   不重复执行 Provider OAuth；每台设备仍可单独退出或撤销。
+7. 至少一个真实 Provider 完成连接、授权、跨设备调用、审计和撤销的完整闭环。
+
+M1 只有一套账号语义：Consumer 必须通过 Connection OAuth 或 Connection PAT 认证为稳定
+Principal；Connection 在服务端解析该 Principal 的 Consumer、访问凭据、授权和第三方账号。部署
+可以包含中央 control plane 和可选本机 edge，但本机 edge 不拥有用户、Credential 或授权状态。
 
 ## 2. 核心概念
 
@@ -23,7 +30,7 @@ M1 需要保证：
 | --- | --- |
 | Provider | Jira、GitHub、Outlook 等外部平台 |
 | Action | Provider 对外提供的一项受控能力，例如创建 Pull Request |
-| Principal | Connection 识别的员工或受管理服务主体 |
+| Principal | Connection Account 中识别的员工或受管理服务主体；由受信身份源的稳定 subject 映射 |
 | Consumer | 使用 Connection 的客户端或服务，例如 Codex、Claude App、Cursor、Agent Platform 或 CI/CD |
 | Actor | Delegated Consumer 内可选的细分使用单元，例如一个 Agent；对 Connection 是不透明稳定标识 |
 | Connection | 已完成鉴权、对应一个稳定外部账号的连接 |
@@ -46,6 +53,10 @@ Consumer 管理者只能管理自己的 Consumer 注册、显示信息和所需 
 
 ### 3.1 Connection 负责
 
+- 提供唯一的 Consumer MCP/HTTP endpoint，并隐藏内部 Provider executor 和 Credential。
+- 通过 Connection OAuth 或 Connection PAT 识别 Principal，并管理可撤销的 Direct Consumer
+  session 或 token instance。
+- 通过公司 LDAP 认证员工，使用稳定 LDAP `uid` 映射 Principal；不保存 LDAP 密码。
 - Provider 和 Action 目录及不可变发布版本。
 - Principal 身份接入、Consumer 注册和 ConsumerInstance 管理。
 - Consumer 授权、Action 确认、账号选择、撤销和审计。
@@ -72,9 +83,13 @@ Consumer 管理者只能管理自己的 Consumer 注册、显示信息和所需 
 - 任意 URL、通用 HTTP Proxy、Webhook、定时任务或主动通知。
 - 向 Consumer、模型、Sandbox 或浏览器导出外部账号原始凭证。
 
-## 4. OpenConnector 参考范围
+## 4. OpenConnector 复用范围
 
-M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](https://github.com/oomol-lab/open-connector)。OpenConnector 不是公司 Principal、Consumer、组织、授权和审计的权威来源，也不能仅凭多个命名 Connection 满足企业多用户隔离要求。
+M1 复用固定版本 [OpenConnector](https://github.com/oomol-lab/open-connector) 中经过审核的
+Provider/Action/OAuth/executor 资产。OpenConnector 不直接面向 Consumer，也不是 Principal、
+Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢复权威。Connection 必须
+在自己的 control plane 解析身份、授权和目标账号；不能用 Runtime token、本机 alias、SQLite 或
+多个命名 Connection 代替账号体系。
 
 本 PRD 的独立服务、Consumer 授权、多账号和隔离要求是 M1 产品规范。OpenConnector 的具体固定版本、复用范围、Fork、内部令牌和存储字段属于工程设计，不在本 PRD 规定。
 
@@ -89,32 +104,61 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - Consumer 新声明 Action 或 Action 权限范围扩大时，已有授权不能自动获得新增能力，必须由用户重新确认。
 - M1 至少接入一个真实 Provider；至少一个写 Action 必须完成真实调用，不以模拟结果代替验收。
 
-## 6. Principal 与 Consumer
+## 6. Principal、身份与 Consumer
 
 ### 6.1 Principal
 
-- 普通员工通过公司身份登录 Connection。
-- Connection 使用公司稳定用户 ID，不以邮箱、显示名或 Consumer 提交的 `userId` 作为授权依据。
+- 普通员工通过 Connection 的浏览器登录入口使用公司 LDAP 登录；MCP Client 不接收 LDAP 密码。
+- Connection 使用受信 LDAP issuer 与稳定 `uid` 映射 Principal，不以邮箱、`cn`、显示名或
+  Consumer 提交的 `userId` 作为授权依据。
+- LDAP 登录成功后，Connection 建立只保存 hash 的 HttpOnly 浏览器会话；控制台后续操作使用该
+  会话，不重复收集 LDAP 密码。
 - 公司账号禁用后，该 Principal 的个人 Connection、会话和 Consumer 授权立即停止使用。
 - 组织成员关系用于公司共享 Connection 的当前资格判断，不复制成永久权限。
+- LDAP 密码只用于当次 bind，不保存、不记录、不进入 token、错误、审计或模型上下文。
 
 ### 6.2 Consumer
 
 - Consumer 有稳定 ID、类型、名称、管理者、状态和已发布 Action 声明。
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
-- Codex、Claude App、Cursor 等客户端产品分别注册为 Direct Consumer，不能共享 Consumer 身份、用户会话或授权。
-- Direct MCP Consumer 通过 MCP access token 调用；新 ConsumerInstance 注册与后续 token 签发均须先由该 Consumer 的注册客户端凭据认证调用端：注册事务把该认证结果、实例公钥和当前 Principal 原子绑定；已注册实例则验证其注册密钥持有。Connection 只在此前提下签发绑定当前 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience 的 token。G-01 验证目标客户端支持 sender-constrained token 时，token 必须绑定实例公钥 thumbprint，且每次 MCP 调用都验证对应 proof-of-possession；不支持该标准能力的客户端版本不以私有 PoP 协议冒充支持，而使用短 TTL、refresh rotation、replay detection 和实例级撤销，并须通过 G-01 conformance。浏览器登录会话、调用方提交的 Consumer/Instance ID 或公开 client ID 都不能单独创建或决定 Consumer、实例或实例密钥。同一 Direct Consumer 的不同 ConsumerInstance 不共享会话或授权，必须分别确认。Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
+- Codex、Claude App、Cursor 等支持 OAuth 的客户端产品分别注册为 Direct Consumer，不能共享
+  OAuth Consumer 身份、用户会话或授权。PAT 模式统一使用 Connection 内建的 Portable PAT
+  Consumer，不信任调用方自报客户端产品身份。
+- Direct MCP Consumer 可以通过 OAuth Authorization Code + PKCE 登录并使用 MCP access token
+  调用，也可以使用用户登录 Connection 控制台后签发的 Connection PAT 调用。
+  每次客户端安装登记为独立 ConsumerInstance，token 绑定 Principal、Consumer、ConsumerInstance
+  和 Connection audience。不同实例不共享 session 或 refresh token，可分别撤销；同一 Principal
+  的活跃实例共享该 Principal 已授予同一 Direct Consumer 的 Connection 与 Action 授权，不需要
+  重复执行 Provider OAuth 或逐设备重新确认。每枚 PAT 是 Portable PAT Consumer 下的独立 token
+  instance；同一枚 PAT 可以部署到多个消费端，这些消费端共享授权、撤销和审计边界。需要独立边界
+  时必须分别签发 PAT。调用方提交的 Principal/Consumer/Instance ID 不能决定身份。
+  Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
 - Direct Consumer 不使用 Actor。Delegated Consumer 注册时必须固定选择不使用 Actor 或要求 Actor；要求 Actor 时，每次授权和调用都必须携带已注册的稳定 Actor，缺失、未注册或当前 workload 无权代表该 Actor 时直接拒绝，不能回退到 Consumer 级授权。
 - Actor 对 Connection 是不透明稳定标识，不能要求 Connection 理解 Consumer 的内部领域模型。Agent Platform 必须要求 Actor，并以每个 Agent 的稳定 ID 作为 Actor。
 
 ### 6.3 Direct MCP Client
 
 - 用户只需在 Direct MCP Client 中配置 Connection MCP endpoint。
-- 首次使用时由 Connection 提供浏览器或设备登录入口。
+- 支持 OAuth 的客户端首次使用时由 Connection 提供浏览器登录入口并在服务端完成公司 LDAP
+  认证；其他客户端可以配置 Connection 控制台一次性展示的 PAT。
 - 客户端登录 Connection 后只发现当前用户已授权给该 Consumer 的 Action。
 - 客户端不保存 GitHub、Jira 等 Provider Credential，也不需要配置 Agora Agent Platform。
+- 用户在第二台及后续设备登录同一 Connection Account 后，可以使用已有个人 Connection；只有
+  Connection 尚未连接对应 Provider 时才进入 Provider OAuth。
 - 拟支持的 Codex、Claude App、Cursor 等客户端版本必须分别通过 MCP/OAuth、请求幂等、刷新和撤销验收；一个客户端通过不能证明其他客户端兼容。
+
+### 6.4 Connection PAT
+
+- 用户先在 Connection 的 HTTPS 登录页完成公司 LDAP 登录，再从已认证控制台为 PAT 命名和签发；
+  PAT 表单不再次收集 LDAP 密码。LDAP 密码不进入 PAT、Consumer 配置、日志或数据库。
+- 浏览器会话使用高熵 opaque Cookie，明文只存在于 HttpOnly Cookie，PostgreSQL 只保存 hash、
+  Principal、identity issuer、有效期、最近访问、撤销状态和 recovery generation；退出登录后失效。
+- PAT 明文只展示一次，可部署到 Codex、Claude、Agent Platform 或其他支持 Bearer token 的
+  Consumer。Connection 只把 PAT 解析为当前 Principal 和 token instance，不接受消费端自报身份。
+- PAT 可以撤销并有明确有效期。多端复用同一 PAT 时无法区分具体消费端，且任一泄露会影响所有
+  复用端；需要单端审计和撤销时必须为每个部署分别签发 PAT。
+- PAT 只授权访问 Connection，不能读取或导出 GitHub、Jira 等 Provider Credential。
 
 ## 7. Connection 类型与多账号
 
@@ -138,7 +182,9 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 - 不同用户可以分别建立自己的 Connection。
 - 同一用户可以为同一 Provider 建立多个外部账号，例如个人 GitHub 和公司 GitHub。
 - 每个 Connection 有稳定内部 ID和稳定外部账号身份，展示名称不作为权限键。
-- M1 中，Direct Consumer 的同一 `Principal + Consumer + ConsumerInstance + Provider` 只能选择一个当前 Connection；Delegated Consumer 的同一 `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。
+- M1 中，Direct Consumer 的同一 `Principal + Consumer + Provider` 只能选择一个当前 Connection，
+  该选择在同一 Principal 的活跃 ConsumerInstance 间共享；Delegated Consumer 的同一
+  `Principal + Consumer + Actor（如有）+ Provider` 只能选择一个当前 Connection。
 - 更换账号必须由用户明确确认；Consumer 不能自行选择、轮换或降级到另一个账号。
 
 ## 8. 连接与 Credential
@@ -164,8 +210,10 @@ M1 的 Provider、Action、外部鉴权和执行模型参考 [OpenConnector](htt
 
 ### 9.1 授权单位
 
-- 授权由 Connection 保存，绑定 Principal、Consumer、Direct Consumer 的具体 ConsumerInstance（或 Delegated 的可选 Actor）、Provider、具体 Connection 和确认过的 Action 集合。
-- Direct 调用只有认证出的 ConsumerInstance 与 Grant 绑定的实例精确相等时才能使用该 Grant；另一个活跃实例也必须单独确认。
+- 授权由 Connection 保存。Direct 授权绑定 Principal、Consumer、Provider、具体 Connection 和
+  确认过的 Action 集合，不绑定 ConsumerInstance；Delegated 授权另绑定可选 Actor。
+- Direct 调用必须来自绑定同一 Principal 与 Consumer 的活跃 ConsumerInstance。撤销某个实例只
+  终止该实例的会话，不改变其他实例使用同一 Grant 的资格。
 - Consumer 只能调用自己已发布声明、用户已确认且 Connection 仍允许的 Action。
 - 授权界面同时展示 Consumer、Actor（如有）、外部账号、Action、外部效果和所需 scope。
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。
@@ -193,21 +241,30 @@ Connection 必须根据服务端认证结果和 Connection DB 中的当前授权
 
 以下行为必须被拒绝，且不能泄露目标资源是否存在：
 
-- Alice 修改 ID、名称、参数或 MCP tool name 尝试使用 Bob 的 Connection。
+- Alice 修改 `actionId`、名称或参数，或把账号/Connection selector 塞入通用 tool 参数，尝试使用 Bob 的 Connection。
 - Consumer A 重放 Consumer B 的会话、委托令牌或调用 ID。
 - 同一用户的个人账号和公司账号未经确认互换。
 - Delegated Consumer 使用未授权 Actor 或把授权从一个 Actor 转给另一个 Actor。
 - 已撤销 ConsumerInstance、授权或共享资格继续发起新调用。
 
-OAuth callback 只能完成 Connection 服务端创建且尚未消费的事务。Connection 必须校验高熵 state、PKCE、Provider、发起 Principal、目标用途、过期时间和预注册返回地址；Consumer 发起时还必须校验事务绑定的 Consumer 和 ConsumerInstance，独立 Connection 管理流程则不得在 callback 临时附加 Consumer。系统在首次处理后原子消费事务；任何字段缺失、不匹配、过期或重放都必须拒绝，且不能改变 Connection 的所有者、共享范围或事务中已绑定的目标 Consumer。
+Connection 登录与 Provider OAuth 是两套独立事务。Connection OAuth Authorization Code 必须绑定
+client、精确 redirect URI、PKCE S256、resource、scope、Principal、Consumer、ConsumerInstance
+和过期时间，并且只能兑换一次。Provider OAuth callback 只能完成 Connection 服务端创建且尚未
+消费的 Provider 事务；必须校验高熵 state、Provider、发起 Principal、用途、过期时间和返回地址。
+任何字段缺失、不匹配、过期或重放都必须拒绝，且不能改变 Connection 所有者或共享范围。
 
 ## 11. Action 执行、错误与审计
 
 - Consumer 提交 Action 和参数。HTTP 写 Action 必须通过 `Idempotency-Key` 提交由 Consumer 生成、跨重试稳定的业务幂等键，不能使用每次重试可能变化的传输层 request ID。
-- 每个写 MCP tool 必须将客户端生成、跨响应丢失、传输重试和用户重试保持不变的 `idempotencyKey` 定义为必填输入；Connection 拒绝缺失键的写调用，并按该键查找幂等记录。Direct MCP Client 版本只有在通过验收、证明其实际提供并保留该稳定键后，才能发现和调用写 Action；没有该能力的客户端版本只能使用只读 Action。
+- 每个写 Action 必须在 Connection 返回的 Action guide 中将客户端生成、跨响应丢失、传输重试和用户重试保持不变的 `idempotencyKey` 定义为必填输入；客户端通过通用 `execute_action` 提交该字段。Connection 拒绝缺失键的写调用，并按该键查找幂等记录。Direct MCP Client 版本只有在通过验收、证明其实际提供并保留该稳定键后，才能发现和调用写 Action；没有该能力的客户端版本只能使用只读 Action。
 - Connection 解析唯一授权 Connection，并在首次接受调用时冻结当时的 current CredentialVersion；执行前校验该版本及其 fence 仍可用，再注入凭证并调用 Provider。并发 refresh/rotation 不得让已接受调用自动切换或回退到其他 CredentialVersion。
-- 写 Action 在访问 Provider 前，把幂等键与已认证 Principal、Consumer、ConsumerInstance、Actor（如有）、Action 和请求摘要绑定，并提交稳定调用 ID、调用记录和外部效果意图。
-- Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以这些稳定主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、ActionVersion 和请求摘要；命中同键、同请求时，当前身份、实例或授权已撤销则拒绝且绝不重新执行，否则返回原调用，不因换号、非撤销类授权更新或版本发布创建第二次调用；同键不同请求拒绝为冲突。
+- 写 Action 在访问 Provider 前，把幂等键与已认证 Principal、Consumer、Actor（如有）、Action 和
+  请求摘要绑定，并把发起 ConsumerInstance 记录为审计维度。Direct 幂等键不以实例分区，因此同一
+  Principal 可以从另一台活跃设备查询同一调用结果，而不会重复产生副作用。
+- Connection 认证当前 Principal、Consumer、ConsumerInstance 和 Actor（如有）后，先以稳定授权
+  主体和幂等键查找原调用，再决定是否解析新目标。首次请求冻结 Connection、CredentialVersion、
+  ActionVersion 和请求摘要；命中同键、同请求时，当前身份、发起实例或授权已撤销则拒绝且绝不
+  重新执行，否则返回原调用；同键不同请求拒绝为冲突。
 - Provider 可能已执行但结果无法确认时，产品显示“结果待确认”，不能直接按失败自动重试。
 - Provider 原生幂等键或可证明的 natural key 只能保护同一已接受调用的 Provider 重试，不能替代 HTTP 或 MCP 的入站业务幂等键。
 - Provider 拒绝、scope 不足、限流或暂时不可用时，返回稳定原因和可执行下一步。
@@ -235,6 +292,9 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | 场景 | 验收结果 |
 | --- | --- |
 | Direct MCP Client 独立接入 | 拟支持的客户端版本分别完成 MCP/OAuth conformance；至少一个客户端只配置 Connection MCP，完成登录、GitHub 连接、授权和真实 PR 创建 |
+| 公司账号登录 | 员工通过 Connection 浏览器页完成真实 LDAP 登录；LDAP 密码不进入客户端、持久化、日志或审计 |
+| 跨设备共享 | 同一员工在两个独立 ConsumerInstance 登录后使用同一 GitHub Connection；第二个实例不重复 GitHub OAuth |
+| 设备撤销 | 撤销一个 ConsumerInstance 后该实例立即失效，另一个实例及 GitHub Connection 继续有效 |
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |

@@ -1,0 +1,20 @@
+{
+	"name": "@agent-infra/openconnector-kernel",
+	"private": true,
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": {
+		"build": "pnpm verify-provenance",
+		"check-types": "tsc --noEmit",
+		"verify-provenance": "node scripts/verify-provenance.mjs",
+		"test": "pnpm verify-provenance && node --test"
+	},
+	"dependencies": {
+		"@cfworker/json-schema": "4.1.1"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:"
+	}
+}

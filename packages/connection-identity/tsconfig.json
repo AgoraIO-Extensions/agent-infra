@@ -1,0 +1,7 @@
+{
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"compilerOptions": {
+		"types": ["node"]
+	},
+	"include": ["src"]
+}

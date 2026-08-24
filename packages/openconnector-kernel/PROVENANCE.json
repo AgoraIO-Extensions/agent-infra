@@ -1,0 +1,43 @@
+{
+	"source": {
+		"repository": "https://github.com/oomol-lab/open-connector.git",
+		"commit": "0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674",
+		"version": "1.3.4",
+		"artifact": "archive/openconnector/oomol-lab-open-connector-1.3.4.tgz",
+		"artifactSha256": "a7cf39cd73ca10fd3965611c02887c7d552c906fa0620db9e47a52600db12cba",
+		"copiedFilesSha256": "e5c68a129da8d4a64a70275e634ac1cc1d9786e07b09d554e006d84148006856"
+	},
+	"policy": "Controlled source copy of the GitHub provider kernel. The upstream runtime server, SQLite store, provider loader, and credential store are intentionally excluded. Changes must be reviewed against the pinned source before upgrading.",
+	"modifications": [
+		{
+			"file": "src/providers/provider-runtime.ts",
+			"reason": "Normalize an ArrayBuffer to Uint8Array for the Node 24 BlobPart type."
+		}
+	],
+	"copiedFiles": [
+		"LICENSE.txt",
+		"NOTICE.md",
+		"src/core/cast.ts",
+		"src/core/credential-fields.ts",
+		"src/core/execution.ts",
+		"src/core/guarded-fetch.ts",
+		"src/core/json-schema.ts",
+		"src/core/provider-definition.ts",
+		"src/core/request.ts",
+		"src/core/types.ts",
+		"src/core/validation.ts",
+		"src/oauth/oauth-token.ts",
+		"src/providers/provider-runtime.ts",
+		"src/providers/github/actions.ts",
+		"src/providers/github/definition.ts",
+		"src/providers/github/executors.ts",
+		"src/providers/github/runtime-activity.ts",
+		"src/providers/github/runtime-issue.ts",
+		"src/providers/github/runtime-pull-request.ts",
+		"src/providers/github/runtime-release.ts",
+		"src/providers/github/runtime-repository.ts",
+		"src/providers/github/runtime-search.ts",
+		"src/providers/github/runtime-shared.ts",
+		"src/providers/github/scopes.ts"
+	]
+}

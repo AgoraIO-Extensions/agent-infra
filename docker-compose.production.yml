@@ -1,0 +1,39 @@
+name: agent-infra-connection-production
+
+services:
+  connection-bootstrap:
+    build:
+      context: .
+      dockerfile: apps/connection-api/Dockerfile
+    command: ["node", "dist/bootstrap-production.mjs"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    init: true
+    read_only: true
+    restart: "no"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+  connection-api:
+    build:
+      context: .
+      dockerfile: apps/connection-api/Dockerfile
+    depends_on:
+      connection-bootstrap:
+        condition: service_completed_successfully
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3002/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

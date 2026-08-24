@@ -11,7 +11,8 @@
 			"dependsOn": ["^check-types"]
 		},
 		"test": {
-			"dependsOn": ["^test"]
+			"dependsOn": ["^test"],
+			"env": ["CONNECTION_TEST_DATABASE_URL"]
 		},
 		"dev": {
 			"cache": false,
