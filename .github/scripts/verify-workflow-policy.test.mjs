@@ -533,23 +533,31 @@ test("binds Claude Review publication to the completed CI head", async () => {
   );
 });
 
-test("requires an explicit Claude Review switch in analysis and publication", async () => {
+test("requires the Claude provider selector in analysis and publication", async () => {
   const workflows = await actualWorkflows();
   const review = workflows["claude-pr-review.yml"];
   const publish = review.jobs.publish.steps.find(
     (step) => step.name === "Publish validated Review result",
   );
-  const enabledCondition = "vars.CLAUDE_REVIEW_ENABLED == 'true' &&";
+  const selector = "vars.PR_REVIEW_PROVIDER == 'claude' &&";
 
-  review.jobs.analyze.if = review.jobs.analyze.if.replace(enabledCondition, "");
+  review.jobs.analyze.if = review.jobs.analyze.if.replace(selector, "");
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("trigger and concurrency must stay current-head bound"),
     ),
   );
 
-  review.jobs.analyze.if = `${enabledCondition}\n${review.jobs.analyze.if}`;
-  delete publish.env.REVIEW_ENABLED;
+  review.jobs.analyze.if = `${selector}\n${review.jobs.analyze.if}`;
+  review.jobs.publish.if = review.jobs.publish.if.replace(selector, "");
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("trigger and concurrency must stay current-head bound"),
+    ),
+  );
+
+  review.jobs.publish.if = `${selector}\n${review.jobs.publish.if}`;
+  publish.env.REVIEW_ENABLED = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("publish only the completed CI head"),
@@ -592,6 +600,10 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     issues: "write",
     "pull-requests": "write",
   });
+  assert.match(
+    workflow.jobs.analyze.if,
+    /vars\.PR_REVIEW_PROVIDER != 'claude'/,
+  );
   assert.match(
     workflow.jobs.analyze.if,
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,

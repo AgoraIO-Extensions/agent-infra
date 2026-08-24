@@ -312,7 +312,8 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 ### 7.2 Current-head Check Runs
 
-`CI` 由 GitHub Actions App 发布；四个自定义 Gate 由 check-only 控制 App token 发布。
+`CI` 由 GitHub Actions App 发布；branch protection 要求的三个自定义 Gate 由 check-only
+控制 App token 发布。
 所有 Check Run 都绑定精确 head SHA、由 branch protection 锁定来源：
 
 | Check | 适用范围 | 校验内容 |
@@ -321,9 +322,8 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 | `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，不带 `wontfix`，且 Issue `created_at` 严格早于 PR `created_at` |
 | `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
-| `Claude Review Gate` | 所有 PR | 当前 head Review 成功完成、管理员显式停用 Review，或具有合法基础设施 waiver |
 
-head 更新后，旧 head 的 Check Run、Claude Review、CODEOWNER Approve、人工验证和 waiver 都
+head 更新后，旧 head 的 Check Run、CODEOWNER Approve、人工验证和确认记录都
 不能让新 head 通过。Gate 未创建、pending、运行中、失败、取消或输出未发布时都不能合并。
 
 Worker PR 有活动 PR 时处于 Ready for review，而不是 Frontier；`Issue Readiness Gate` 直接重算
@@ -331,23 +331,18 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 未关闭的 `needs-triage` 会阻塞 Gate；确定性原因消失后，由 CODEOWNERS Team 成员或只处理系统
 派生状态的 Reconciler 记录关闭，不自动消费仍有效的 cycle，也不重置 attempt 或 repair 预算。
 
-### 7.3 Claude PR Review
+### 7.3 Automated PR Review
 
-- 每个新 PR head 的确定性 CI 成功后自动启动一次 Claude Review。较新的 head 取消同一 PR 的
-  stale run；stale/cancelled 结果不能发布到新 head 或更新当前结论。
-- repository admin 通过 `CLAUDE_REVIEW_ENABLED` 显式控制全仓 Review；只接受 `true` 或
-  `false`。设为 `false` 时跳过模型，但可信 Publisher 仍校验当前 head，并以 `reason_code:
-  disabled` 完成 Gate；配置缺失或非法时失败关闭。停用不能覆盖已发布的 P0/P1、未解决 thread
-  或其他 Gate，PR Gates 必须在这些状态出现时把 Gate 降为失败。
-- Claude 只读分析 PR diff 和必要上下文。finding 可以定位 GitHub diff 的 LEFT 或 RIGHT 行；
-  Publisher 验证 path、side、line 和 reviewed head 后发布。
-- `P0`、`P1` finding 创建阻塞 Review thread，必须通过代码修复和正常 conversation resolution
-  闭环；`P2` 只进入 Review 摘要。
-- Review 模型调用、结构化输出或 Publisher 基础设施失败时 `Claude Review Gate` 失败。只有
-  CODEOWNERS Team 中的非 Bot 人员能为当前 head 创建带非空原因的基础设施 waiver。
-- waiver 不能覆盖已经发布的 P0/P1 finding、未解决阻塞线程、确定性 CI failure 或无效输出；
-  新 commit 自动使 waiver 失效。
-- Claude 不 Approve、不 Merge、不修改 branch/label、不创建 waiver，也不解决自己的线程。
+- repository admin 通过 `PR_REVIEW_PROVIDER` 选择唯一 Automated Reviewer。值为 `claude` 时
+  运行 Claude；变量未设置或为其他值时默认运行 PR-Agent。`CLAUDE_REVIEW_ENABLED` 和
+  `PR_AGENT_ENABLED` 不再参与选择。
+- 每个适用的 PR 只运行选定 Reviewer；较新的 head 取消同一 PR 的 stale run。Claude 在确定性
+  CI 成功后启动，PR-Agent 在适用的 PR head 事件上启动。
+- 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
+  闭环；Review 摘要不阻塞合并，不新增统一 Review Gate。
+- Claude 的结构化输出和可信 Publisher 校验只属于 Claude Adapter 的内部安全机制，不构成
+  Automated Reviewer 的统一输出契约。
+- Automated Reviewer 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。
 
 ### 7.4 人工验证
 
@@ -380,10 +375,9 @@ PR 正文列出验证内容。
 
 所有 PR 必须同时满足：
 
-- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和
-  `Claude Review Gate` 通过。
+- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate` 和 `Human Validation Gate` 通过。
 - 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
-- 所有阻塞 Review thread 已解决。
+- 所有 Review thread 已解决。
 
 同仓库、目标为默认分支的非 Draft PR 自动幂等启用 GitHub 原生 Squash Auto-merge。自动化只
 负责 enrollment，不重复判断门禁，不调用直接 Merge 或管理员绕过接口。人工关闭 PR 后，新增
@@ -467,7 +461,7 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 - 每个 PR 只有一个创建时间严格早于 PR 的 open primary Issue，并对每个稳定 `AC-N` 提供唯一
   `status/evidence`；等时、晚建或时间缺失时 Issue Gate fail closed。
 - 每个 required Check Run、人工验证和 waiver 都绑定当前 head；旧 SHA 不能满足新 head 门禁。
-- 每个成功 CI 的新 head 自动触发 Claude Review；LEFT/RIGHT finding 都能发布，P0/P1 不可 waiver。
+- 每个适用的 PR 只触发由 `PR_REVIEW_PROVIDER` 选定的 Automated Reviewer；未设置时使用 PR-Agent。
 - 需要人工验证的 PR 在 Team 人员完成当前-head 确认前不能合并；Approve 与验证互不替代。
 - 所有门禁通过后只由 GitHub 原生 Squash Auto-merge 合并；AI 不能 Approve、直接 Merge 或绕过。
 - 失败、取消、跳过和异常中断都有可回读 terminal outcome；企微失败永远不阻塞 GitHub 流程。
