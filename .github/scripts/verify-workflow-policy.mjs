@@ -1555,6 +1555,8 @@ export function validateWorkflowDocuments(workflows) {
   const review = workflows["claude-pr-review.yml"];
   const reviewTrigger = review?.on?.workflow_run;
   const reviewConcurrency = review?.concurrency;
+  const reviewAnalyzeCondition = String(review?.jobs?.analyze?.if ?? "");
+  const reviewPublishCondition = String(review?.jobs?.publish?.if ?? "");
   const reviewJobConditions = [review?.jobs?.analyze?.if, review?.jobs?.publish?.if].map(
     (condition) => String(condition ?? ""),
   );
@@ -1566,14 +1568,15 @@ export function validateWorkflowDocuments(workflows) {
     reviewConcurrency?.["cancel-in-progress"] !== true ||
     reviewJobConditions.some(
       (condition) =>
-        !condition.includes("vars.PR_REVIEW_PROVIDER == 'claude'") ||
         !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
         !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
         !condition.includes("github.event.workflow_run.pull_requests[0]") ||
         !condition.includes(
           "github.event.workflow_run.head_repository.full_name == github.repository",
         ),
-    )
+    ) ||
+    !reviewAnalyzeCondition.includes("vars.PR_REVIEW_PROVIDER == 'claude'") ||
+    !reviewPublishCondition.includes("needs.analyze.result != 'skipped'")
   ) {
     errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
   }

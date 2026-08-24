@@ -533,7 +533,7 @@ test("binds Claude Review publication to the completed CI head", async () => {
   );
 });
 
-test("requires the Claude provider selector in analysis and publication", async () => {
+test("requires the Claude provider selector and same-run publication", async () => {
   const workflows = await actualWorkflows();
   const review = workflows["claude-pr-review.yml"];
   const publish = review.jobs.publish.steps.find(
@@ -549,14 +549,18 @@ test("requires the Claude provider selector in analysis and publication", async 
   );
 
   review.jobs.analyze.if = `${selector}\n${review.jobs.analyze.if}`;
-  review.jobs.publish.if = review.jobs.publish.if.replace(selector, "");
+  review.jobs.publish.if = review.jobs.publish.if.replace(
+    "needs.analyze.result != 'skipped' &&",
+    "",
+  );
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("trigger and concurrency must stay current-head bound"),
     ),
   );
 
-  review.jobs.publish.if = `${selector}\n${review.jobs.publish.if}`;
+  review.jobs.publish.if =
+    `needs.analyze.result != 'skipped' &&\n${review.jobs.publish.if}`;
   publish.env.REVIEW_ENABLED = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>

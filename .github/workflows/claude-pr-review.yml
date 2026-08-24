@@ -137,7 +137,7 @@ jobs:
     needs: analyze
     if: >-
       always() &&
-      vars.PR_REVIEW_PROVIDER == 'claude' &&
+      needs.analyze.result != 'skipped' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0] &&
