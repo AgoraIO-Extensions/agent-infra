@@ -38,7 +38,7 @@ Agent Pod --Action + Execution Grant--> Platform Tool Gateway --> Connection API
 - `platform-api` 解析入口身份并按命令路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。它不直接调用 Agent Pod。
 - `platform-worker` 运行 Runtime Adapter，认领 Execution，并通过 Agent Service 的内部 HTTP/SSE 调用 Pod。
 - Adapter 将平台 Conversation/Execution 映射为 Runtime Session/Turn，将原生事件归一化后写回 Platform DB。
-- `platform-api` 只把已经持久化的事件推送给浏览器或渠道。
+- `platform-api` 只把已经持久化且通过与历史读取相同的当前连接主体授权校验的事件推送给浏览器或渠道；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化后，服务端必须关闭或暂停对应连接；继续推送前必须重新鉴权。
 - Agent Pod 保存 Runtime 自有工作区和 Session 数据，但不保存平台权威会话或授权。
 
 ## 3. Runtime Registry 与交互模式
@@ -119,7 +119,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 一个 Platform Conversation 最多映射一个当前 Runtime Session。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“原生 Session 未创建”状态；首个及后续 outbox 在创建时保存当前代次。浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID 或代次。
 
-企微群聊的 Channel 会话键必须包含服务端解析的 `actorId`。不同发送者映射到不同 Platform Conversation 和 Runtime Session；群内公开展示不等于共享 Runtime 上下文。
+企微群聊的 Channel 会话键必须包含服务端解析的 `actorId`，且调用方不能提交或覆盖 `actorId`。不同发送者映射到不同 Platform Conversation 和 Runtime Session；消息、历史、SSE、附件和结果文件的读取都必须在服务端校验当前 `actorId` 与目标 Conversation 的绑定关系。群内公开展示只允许当前群和 Agent 授权范围内显式标记为群内公开的事件，不得暴露其他发送者的 Conversation 或 Runtime 上下文。
 
 ## 7. Session、Turn 与恢复
 
@@ -197,9 +197,9 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
+- 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
-- SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
+- SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
 ## 12. 参考与非目标
 
