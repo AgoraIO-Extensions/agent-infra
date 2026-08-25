@@ -215,8 +215,8 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 ### 12.1 Module、Interface 与依赖方向
 
 - `apps/agent-runtime-host` 保持薄入口，只处理进程启动、依赖装配、配置读取和 HTTP/SSE 协议接入；Runtime 生命周期、Session mapping、Driver 选择、事件归一化、fence、恢复和错误语义属于 `packages/agent-runtime`。
-- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、fence、Execution Grant、capability、状态和规范化事件；Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
-- Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
+- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、fence、capability、状态和规范化事件。Host 不通过引用回读 Platform DB 或 Connection DB；附件引用只允许访问当前 Agent、Conversation 和 Execution 绑定的对象，过期、越界或绑定不匹配时拒绝。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
+- Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；Driver 只能由已部署且校验通过的标准模板 Registry 或自定义 Agent Manifest 固定绑定，不能由请求方选择或覆盖。上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
 - `packages/agent-runtime` 只能依赖 Node.js/TypeScript 标准能力、经过批准且版本固定的 runtime/protocol library，以及 `packages/contracts` 中的 Host/Driver 契约。它不能依赖 `platform-core`、`platform-store`、`identity`、Connection Module、`kubernetes-runtime`、Web/Channel 或应用入口。
 - 平台身份和 Connection 授权在 RuntimeHost 外解析；Host 只消费当前调用附带的版本化短期 Grant 和已裁剪 capability，不能读取企业目录、Platform DB、Connection DB、KMS 或 Kubernetes API。
 
