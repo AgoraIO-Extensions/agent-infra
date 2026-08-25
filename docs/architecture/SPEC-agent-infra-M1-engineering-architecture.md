@@ -36,12 +36,12 @@ M1 采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程�
 | 契约 | Zod + OpenAPI 3.1 | 请求校验、接口文档和 TypeScript 客户端生成 |
 | 流式协议 | Server-Sent Events | 对话增量、处理状态和执行详情推送 |
 | 数据库 | PostgreSQL + Drizzle | 权威业务数据、事务、迁移和 outbox |
-| 文件 | 公司现有 S3 兼容对象存储 | 附件、结果文件和大体积中间结果 |
+| 文件 | S3 兼容对象存储 Adapter | 附件、结果文件和大体积中间结果 |
 | Kubernetes | `@kubernetes/client-node` | Agent Workload、Service 和访问入口调谐 |
 | 工程 | pnpm workspace + Turborepo | 多应用构建、测试和缓存 |
 | 质量 | Biome、Vitest、Playwright | 静态检查、模块测试和端到端测试 |
 | 可观测性 | OpenTelemetry + Pino | Trace、Metric 和结构化日志 |
-| 部署 | Docker + Helm + Kubernetes | 所有平台部署单元进入公司集群 |
+| 部署 | Docker + Helm + Kubernetes | Web/API 位置无关；Worker 与 Agent Workload 进入 Kubernetes Workload Plane |
 
 初始化依赖以固定版本 Better-T-Stack 的生成结果为基线，并写入 lockfile。Node.js 使用公司支持的 LTS 版本；Kubernetes JavaScript Client 与目标集群版本配套，不使用浮动 `latest`。
 
@@ -63,7 +63,7 @@ web-deploy: docker
 server-deploy: docker
 ```
 
-选择 `auth=none` 是因为公司账户和组织体系是唯一身份来源。选择 `api=none` 是为了避免同时维护 tRPC/oRPC 与 OpenAPI 两套契约；M1 的浏览器接口、内部接口和 Agent Runtime Contract 统一以 HTTP/OpenAPI 为主，SSE 事件单独定义 Schema。
+选择 `auth=none` 是因为认证实现由部署环境通过 IdentityAdapter 提供，主系统只消费可信 IdentityContext。选择 `api=none` 是为了避免同时维护 tRPC/oRPC 与 OpenAPI 两套契约；M1 的浏览器接口、内部接口和 Agent Runtime Contract 统一以 HTTP/OpenAPI 为主，SSE 事件单独定义 Schema。
 
 脚手架版本固定为 `create-better-t-stack@3.38.1`。生成依赖作为项目初始化基线；生成后代码归本项目维护，不通过重复运行脚手架升级项目，也不在初始化过程中主动升级生成依赖。
 
@@ -76,6 +76,8 @@ server-deploy: docker
 5. **接口也是测试面。** Hono、Drizzle、Kubernetes Client 和 OpenConnector 都位于 Adapter 层，领域模块不依赖这些实现。
 6. **M1 不预建扩展基础设施。** PostgreSQL 足以支持当前事务、outbox、任务认领和事件回放；不预先引入 Redis、Kafka、NATS 或 Temporal。
 7. **用户隔离由服务端决定。** 浏览器、Agent 和模型传入的用户 ID、Connection ID 或组织信息不能成为授权依据。
+8. **部署能力通过 Port 接入。** 身份、OCI Registry、模型端点、Kubernetes 和对象存储的具体产品属于部署环境，领域模块只依赖稳定 Adapter 契约。
+9. **只冻结跨模块契约。** Wire Schema、数据权威、事务和安全不变量属于 Architecture Baseline；数据库表、UI 结构和 Adapter 内部算法可以在模块内演进。
 
 ## 4. 系统结构
 
@@ -88,7 +90,7 @@ flowchart LR
 
     PA --> PD[(Platform DB)]
     PA --> OS[(Object Storage)]
-    PA --> IDP[公司身份与组织体系]
+    PA --> IDP[IdentityAdapter]
     PW[Platform Worker] --> PD
 
     PW --> K8S[Kubernetes]
@@ -98,28 +100,29 @@ flowchart LR
     AP -->|Action + Execution Grant / Tool Gateway| PA
     PA --> CA
     CA --> CD[(Connection DB)]
-    PA -.->|仅加密写入或生成引用| KMS[KMS / Secret Service]
-    PW -->|读取并装配 Agent Secret| KMS
-    CA -->|读取并使用 Connection 凭证| KMS
+    PA -.->|写入版本化 Secret 密文| PD
+    PW -.->|读取 active Secret 密文| PD
+    KEY[Deployment Keyring] --> PA
+    KEY --> PW
     CA --> EXT[外部 Provider]
 
-    AP --> LLM[LLM Gateway]
-    PW --> HUB[Company Hub]
+    AP --> MODEL[Deployment-approved Model Endpoint]
+    PW --> REG[OCI Registry]
 ```
 
 ### 4.1 部署单元
 
 | 部署单元 | 职责 | 是否保存权威状态 |
 | --- | --- | --- |
-| `web` | Agent 列表、配置、审批、对话和 Connection 页面 | 否 |
-| `platform-api` | 身份入口、Agent 管理、权限、消息、命令与 outbox 持久化、浏览器 SSE、企微回调、Agent Tool Gateway | 否 |
-| `platform-worker` | Agent Workload 调谐、模板升级、outbox 认领、RuntimeHost Client 和消息投递 | 否 |
+| `web` | Agent 列表、配置、审批、对话和 Connection 页面；可独立静态托管 | 否 |
+| `platform-api` | IdentityContext 接入、Agent 管理、权限、消息、命令与 outbox 持久化、浏览器 SSE、企微回调、Agent Tool Gateway；部署位置无关 | 否 |
+| `platform-worker` | Kubernetes Workload Plane 中的 Agent Workload 调谐、模板升级、outbox 认领、RuntimeHost Client 和消息投递 | 否 |
 | `connection-api` | Provider/Action、OAuth、凭证、Connection 授权校验、Action 执行和调用审计 | 否 |
 | `agent pod` | 标准模板与 `platform-adapter` 的 RuntimeHost/Driver，或 `self-managed` Agent 的自有服务与实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件、授权关系和平台审计 | 是 |
 | `connection database` | Provider、Action、外部账号、加密凭证、OAuth 状态和调用审计 | 是 |
 
-`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
 
 ### 4.2 不拆分的部署单元
 
@@ -136,14 +139,17 @@ agent-infra/
     agent-runtime-host/      Agent Pod 内的薄 RuntimeHost 进程入口
     connection-api/          Connection HTTP 与 Action 执行
   packages/
-    platform-core/           Agent 平台领域规则与用例
+    platform-core/           单一深 Platform 领域 Module、Use Case 与 Port
     connection-core/         Connection 领域规则与用例
-    contracts/               OpenAPI、Zod Schema、SSE 事件 Schema
-    platform-store/          Platform DB 的 Drizzle Adapter
+    contracts/               Wire-only OpenAPI、内部 HTTP、SSE 与 RuntimeHost Schema
+    platform-store/          用例级事务 Port 的 Drizzle/PostgreSQL Adapter
     connection-store/        Connection DB 的 Drizzle Adapter
-    identity/                公司账户与组织体系 Adapter
+    identity/                IdentityAdapter、IdentityContext 与测试 Fake
+    image-registry/          ImageRegistryAdapter、OCI Digest/Manifest 与测试 Fake
+    secret-store/            版本化 AEAD 密文、部署 keyring 与轮换
+    model-catalog/           ModelCatalogAdapter 与模型端点政策
     agent-runtime/           RuntimeHost 深 Module、固定 Driver 和 Conversation Contract
-    kubernetes-runtime/      Kubernetes 调谐 Adapter
+    kubernetes-runtime/      KubernetesRuntimeAdapter 与部署路由 Adapter
     observability/           Trace、Metric、日志和关联 ID
     test-support/            Fake Adapter、fixture 和契约测试工具
   migrations/
@@ -196,19 +202,24 @@ agent-infra/
 
 ### 6.3 Adapter 接口
 
-以下位置必须形成明确接口，并至少提供生产 Adapter 和测试 Fake：
+以下位置必须形成明确接口，并至少提供部署 Adapter 或项目实现，以及测试 Fake：
 
-- 公司身份与组织目录。
-- Company Hub 镜像解析。
-- Kubernetes Agent Runtime。
+- IdentityAdapter 与可信 IdentityContext。
+- ImageRegistryAdapter、OCI Digest 与 Runtime Manifest 准入。
+- ModelCatalogAdapter 与获准模型端点政策。
+- KubernetesRuntimeAdapter 与部署访问路由。
 - 对象存储。
-- KMS/Secret Service。
+- 部署 keyring 来源；Secret 密文、轮换和候选激活由项目实现。
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Runtime。
 - worker 侧 RuntimeHost Client 与 Agent Pod 内 RuntimeHost/Driver。
 - 企微机器人与企微应用。
 - OpenConnector Provider/Action 执行。
 
 领域模块只接收业务 ID、命令和结果，不接收 Hono Context、数据库连接、Kubernetes 对象或 Provider Token。
+
+`packages/platform-core` 是单一 Platform bounded context，对外只暴露版本化 Use Case、领域结果和窄 Port；Lifecycle、Access、Configuration、Conversation、Dispatch、Channel 和 Audit 只作为内部模块，不拆成 workspace package。Core 定义“业务状态 + outbox + 必要审计”的原子性，`platform-store` 以用例级事务实现；不创建通用 CRUD Repository，也不允许 Hono 路由或 Worker 编排领域 Drizzle 查询。
+
+`packages/contracts` 只保存跨进程 wire DTO/Schema，不依赖 React、Hono、Drizzle、Kubernetes 或应用入口，也不复用数据库实体作为协议类型。Web、API、Worker、RuntimeHost 和 Connection Client 在边界显式映射协议 DTO 与领域对象。
 
 ## 7. Web 架构
 
@@ -238,6 +249,7 @@ Connection 在产品上是独立系统，但 M1 复用同一 Web Shell 和公司
 - 对话时间线使用独立 reducer 合并持久化消息、SSE 增量和重连补发事件。
 - 表单使用 Schema 校验；服务端重复执行同一校验，不能信任浏览器结果。
 - 不预装全局状态库。只有出现跨路由、非服务端且难以由 React Context 管理的状态后再引入。
+- Web 使用 OpenAPI 生成的 TypeScript Client，并通过同一 Contract Schema 校验的 Mock Server 和场景 fixture 独立开发。Mock 必须覆盖正常、无权限、启动中、繁忙、失败和 SSE 重连，不能维护另一套手写假接口。
 
 ### 7.3 前端安全职责
 
@@ -267,26 +279,26 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 ### 8.3 内部接口
 
-平台到 Connection、`platform-worker` 到 Agent Pod 均使用版本化 HTTP 契约；Runtime 增量事件使用内部 SSE。内部接口通过服务身份和 mTLS 或公司现有等价机制认证，不因位于集群内而跳过鉴权。
+平台到 Connection、`platform-worker` 到 Agent Pod 均使用版本化 HTTP 契约；Runtime 增量事件使用内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，不因位于集群内而跳过鉴权。
 
 M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其他语言客户端和测试工具共同使用同一份契约。
 
 ## 9. 身份与权限
 
-### 9.1 Web 登录
+### 9.1 IdentityAdapter
 
-- `platform-api` 接入公司 OIDC 或现有身份网关。
-- `connection-api` 验证同一公司会话或由身份网关签发的等价服务端身份，不能接受前端自行传入用户 ID。
-- Web 使用 HttpOnly、Secure、SameSite Cookie，不在 Local Storage 保存公司 Access Token。
-- 服务端根据公司稳定用户 ID 解析当前账号和组织关系。
-- 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。
-- 公司身份 Adapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。身份或权限依赖暂时不可用时只重试检查，不能把未知状态当作已撤权或已授权。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
+- 开源主系统不实现或限定 OAuth、OIDC、LDAP、登录页面、redirect 或目录产品。部署环境通过 IdentityAdapter 向 `platform-api` 提供经过完整性保护的当前 IdentityContext。
+- IdentityContext 至少包含稳定且不透明的用户 ID、当前账号状态、组织成员关系、平台角色，以及足以判断上下文是否仍有效的版本或时效信息。
+- 浏览器、Agent、模型和普通调用方不能提交、覆盖或伪造这些字段；`platform-api` 必须验证部署身份边界后才创建 HttpOnly、Secure、SameSite 会话，且不在 Local Storage 保存上游身份凭证。
+- 平台不维护独立用户目录，只保存业务记录所需的稳定用户引用。具体认证、组织查询和账号生命周期实现属于部署 Adapter。
+- 账号状态与组织关系在每次敏感操作前重新解析；短期缓存不能成为独立权限来源。IdentityAdapter 缺失、返回非法结果或暂时不可用时，敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
+- IdentityAdapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
 ### 9.2 权限顺序
 
 每次 Agent 使用按以下顺序判断：
 
-1. 公司账号仍然有效。
+1. IdentityContext 表示当前账号仍然有效。
 2. 用户属于 Agent 当前可用范围，或是当前有效 Owner。
 3. 当前渠道已绑定并支持目标操作。
 4. 模型选项属于标准模板 Owner 当前允许清单，或属于 `platform-adapter` 自定义 Runtime 通过 ACP 返回的当前选项集合。
@@ -301,7 +313,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 - 当前执行。
 - 当前 Agent。
-- 当前公司用户。
+- 当前平台用户。
 - 当前渠道。
 - 当前 Conversation 与 Turn。
 - 本次 RuntimeHost 调用允许的命令、附件引用集合及其允许操作。
@@ -317,11 +329,15 @@ Agent 调用 Tool Gateway 时只提交 Action 和参数。平台根据执行记�
 
 ### 10.1 Workload 形态
 
+Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、KubernetesRuntimeAdapter、Agent Workload 和部署访问路由组成 Kubernetes Workload Plane。只有 `platform-worker` 的部署身份可以访问 Kubernetes API，并且权限限制在目标 namespace 内。Web、`platform-api`、Connection 和 Agent Pod 都不能持有 Kubernetes API credential。取舍见 [ADR: Platform 服务与 Kubernetes Workload Plane 分离](../adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)。
+
+开源实现只使用受维护 Kubernetes 版本中的 GA capability baseline：`apps/v1` StatefulSet、core/v1 Service/ServiceAccount/PVC/Secret、`networking.k8s.io/v1` NetworkPolicy，以及 `networking.k8s.io/v1` Ingress 或部署 Adapter 提供的等价受控路由。每个 release 记录经过 `kind` 和真实部署验证的版本矩阵；不为 Kubernetes 1.16、`networking.k8s.io/v1beta1` Ingress 或超出支持 skew 的客户端维护兼容分支。
+
 - 一个 Agent 对应一个副本为 0 或 1 的 StatefulSet。
 - 运行时为“可用”时副本为 1；已停止或已停用时副本为 0。
 - 每个 Agent 使用独立 Service、ServiceAccount 和持久卷。
 - ServiceAccount 默认没有 Kubernetes API 权限。
-- Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。StatefulSet、Service、Ingress 和 NetworkPolicy 只由 `platform-worker` 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
+- Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。StatefulSet、Service、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
 - Agent 自有记忆或工作区通过独立持久卷保存，并由模板或自定义 Agent 负责用户隔离。
 
@@ -336,13 +352,13 @@ Platform DB 保存：
 - 配置修订号。
 - 资源 Profile。
 - 交互模式、渠道和 Runtime 能力声明。
-- 普通 env 与加密 Secret 引用。
+- 普通 env、版本化 Secret 密文状态和 active/pending 配置修订。
 
 `platform-worker` 通过幂等调谐完成：
 
 1. 读取待处理修订号。
-2. 从 Company Hub 校验 Digest 和访问权限。
-3. 生成或更新 StatefulSet、Service、PVC 和访问入口。
+2. 通过 ImageRegistryAdapter 解析并校验获准 OCI Digest、Runtime Manifest 和访问政策。
+3. 生成或更新 StatefulSet、Service、PVC 和部署访问路由。
 4. 根据探针和 Workload 状态计算产品服务可用性。
 5. 写回已应用修订号、可用性和脱敏失败原因。
 
@@ -374,25 +390,31 @@ Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部
 
 Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#4-runtime-manifest) 中维护。
 
-审批通过后，只有 Manifest 预检通过才启动 Workload。`platform-worker` 创建 StatefulSet、Service、Ingress、NetworkPolicy、Kubernetes 配置、Secret 和新 PVC，验证健康检查，再请求 HLD 定义的 Runtime 探测；访问路由只有在健康检查和所需核心探测通过后才接收用户流量。任一步失败时产品状态为“创建失败”，并返回脱敏且可修复的原因。
+审批通过后，只有 ImageRegistryAdapter 准入与 Manifest 预检通过才启动 Workload。`platform-worker` 创建 StatefulSet、Service、部署访问路由、NetworkPolicy、Kubernetes 配置、Secret 和新 PVC，验证健康检查，再请求 HLD 定义的 Runtime 探测；访问路由只有在健康检查和所需核心探测通过后才接收用户流量。任一步失败时产品状态为“创建失败”，并返回脱敏且可修复的原因。
 
 启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等清理本次创建的 Kubernetes Workload、访问资源、配置、Secret 和尚未进入“可用”的新 PVC；Platform DB 中的申请、Agent 配置、失败原因和审计保留，重试时重新创建运行资源。升级的候选修订、路由切换和失败恢复见 10.4。
 
 ### 10.6 环境变量与 Secret
 
+Platform Secret 使用项目内置密文与部署 keyring，取舍见 [ADR: Platform Secret 使用项目内置密文存储](../adr/0002-store-platform-secrets-as-application-ciphertext.md)。该模型不自动扩展到 Connection Provider 凭证。
+
 - 固定 Runtime Registry 为每个标准模板声明 Owner 可配置的 env/Secret 键。`platform-api` 在保存前拒绝该模板未声明的键，`platform-worker` 只装配已声明的键。
 - Registry 不得向 Owner 开放代理设置、进程加载器或 Runtime 启动选项等能够改变标准模板受信运行边界的键。
 - 自定义镜像接受 Owner 配置的任意 env/Secret K/V，但不能使用平台保留前缀。
 - `AGENT_INFRA_*` 由平台保留并按执行环境注入；标准模板或自定义镜像的 Owner 输入使用该前缀时均在保存前拒绝。
-- 普通 env 保存于 Platform DB。Secret 通过 KMS 加密保存，读取接口只返回“已设置”，不能返回明文。
-- `platform-worker` 将配置装配为 Agent 专属 Kubernetes 配置和 Secret；值不进入 annotation、日志、错误或模型上下文。
+- 普通 env 保存于 Platform DB。项目使用版本化 AEAD 将 Secret 密文、随机 nonce、认证 tag、`algorithmVersion`、`keyVersion`、Agent/Owner 绑定和生命周期状态保存在 Platform DB；附加认证数据绑定 Secret ID、主体、名称和版本，防止跨主体调换密文。
+- 部署向 `platform-api` 和 `platform-worker` 注入版本化主密钥组与 active `keyVersion`。主密钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标密钥、认证失败或密文元数据非法时 fail closed。
+- 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 受控解密、写入目标 Agent 专属 Kubernetes Secret，并在候选 Workload 验证通过后原子提升为 active；失败时新版本标记 failed，旧 Workload 与旧 active Secret 继续有效。
+- Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 主密钥后，项目通过幂等、可恢复任务重新加密历史密文；数据库不再引用旧 `keyVersion` 后，部署才能移除旧密钥。
+- `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问主密钥或其他 Agent Secret。
 
 ### 10.7 标准模板模型配置
 
-- `platform-api` 校验 Owner 选择的 LLM Gateway Base URL、模型和推理强度，并通过 KMS 加密 API Key。
-- `platform-worker` 装配标准模板运行配置时，以平台模型配置为最终值；同名的 Owner env 或 Secret 不能覆盖 Base URL、API Key、模型和推理强度。
-- `platform-worker` 把标准模板当前需要的密钥作为 Agent 专属 Kubernetes Secret 挂载到 Pod，不写入 Workload annotation、日志或模型上下文。
-- Owner 替换密钥或模型配置后产生新配置修订，由调谐器安全更新 Agent。
+- 部署通过 ModelCatalogAdapter 提供稳定 `endpointId`、获准的精确 Base URL/origin、protocol profile 和流式/tool/reasoning capability policy。目录不保存或下发 API Key，也不强制固定模型名单；Owner 不能提交或覆盖目录外的 Base URL。
+- 每个标准模板 Agent 的 Owner 独立配置 `endpointId`、加密 credential reference、允许的模型 ID、默认模型和 reasoning 档位。普通使用者只选择 Owner 已允许且通过验证的模型/reasoning，看不到 Base URL 或 credential。
+- 对应 Runtime Driver 在候选配置生效前验证 credential、模型存在性和目录要求的 capability，并把配置翻译为 Runtime 实际参数。失败时新配置不激活，旧配置继续有效。
+- `platform-worker` 装配标准模板运行配置时，以当前 active 模型配置为最终值；同名 Owner env 或 Secret 不能覆盖 endpoint、credential、模型和 reasoning。
+- Platform 不代理模型流量，也不负责供应商路由、成本、预算、配额或故障切换。Agent Pod 只获得本 Agent 当前 active credential；endpoint、认证、模型、额度和 capability 错误映射为稳定、脱敏且可操作的产品错误。
 - 自定义 Agent 的模型配置属于镜像内部；通过 ACP 探测到模型选择能力时，平台入口读取 Runtime 当前提供的选项和默认项并转发使用者选择，不配置或读取其 Base URL 与凭证。提交 Turn 前必须确认选项仍有效，不能在选项失效时静默改用其他模型。
 
 ## 11. Agent Runtime 边界
@@ -511,8 +533,8 @@ sequenceDiagram
 
 ### 13.4 凭证
 
-- 外部凭证使用公司 KMS 或 Secret Service 做 envelope encryption。
-- 数据库只保存密文、Key 版本和必要元数据。
+- Connection 系统负责保护外部凭证，具体密文、主密钥和轮换模型由 Connection 的独立 Source of Truth 决定，不复用或覆盖 Platform Secret 模型。
+- Connection DB 只保存受保护的凭证记录和必要元数据，Platform DB 不复制 Provider 凭证。
 - 只有 `connection-api` 运行身份可以解密。
 - OAuth state 为一次性、短期有效，并绑定发起用户、Connection scope 和受控回跳地址。
 - 日志、Trace、错误和审计都经过统一脱敏。
@@ -542,7 +564,7 @@ sequenceDiagram
 
 - 自有交互入口的流量、协议、Session 和历史由自定义 Agent 负责，不经过 Runtime Adapter。
 - `platform-worker` 根据 Platform DB 中保存的 Owner 身份责任选择只发布对应的一条用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
-- 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信公司身份、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要公司账号或 Agent 可用范围变化立即生效时必须选择平台身份入口。
+- 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信 IdentityContext、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要部署身份状态或 Agent 可用范围变化立即生效时必须选择平台身份入口。
 - 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围，移除或覆盖调用方提交的身份 Header，并传递绑定公司用户、受众、Agent 与有效期的短期签名上下文；自定义 Agent 服务端必须校验签名、签发者、受众、有效期和 Agent 绑定，不能信任浏览器字段。权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。
 
 ## 15. 数据与一致性
@@ -550,8 +572,8 @@ sequenceDiagram
 ### 15.1 Platform DB 主要实体
 
 - Agent 申请、Agent、Owner、可用范围。
-- 模板版本、自定义镜像 Digest、Runtime Manifest、env、加密 Secret 引用和资源 Profile。
-- 模型选项、渠道绑定、Owner Action 选择。
+- 模板版本、自定义镜像 Digest、Runtime Manifest、env、版本化 Secret 密文状态和资源 Profile。
+- 模型 endpoint、加密 credential reference、模型选项、渠道绑定、Owner Action 选择。
 - 会话、消息、回答版本、执行和执行事件。
 - worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态。
 - 附件与结果文件元数据。
@@ -613,19 +635,19 @@ sequenceDiagram
 
 ## 17. 安全基线
 
-- 所有用户访问路由使用 TLS；平台身份入口使用公司身份和 Agent 可用范围校验。
+- 所有用户访问路由使用 TLS；平台身份入口使用可信 IdentityContext 和 Agent 可用范围校验。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
-- Agent Pod 不能访问 Platform DB、Connection DB、KMS 或 Kubernetes API。
+- Agent Pod 不能访问 Platform DB、Connection DB、部署主密钥或 Kubernetes API。
 - Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
-- 标准模板只通过平台认可的 LLM Gateway 使用模型；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循公司集群现有策略，M1 不新增按 Agent 维护的 egress allowlist。
-- 自定义镜像必须来自 Company Hub，并使用不可变 Digest。
+- 标准模板只使用 ModelCatalogAdapter 返回的获准模型端点；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循部署网络策略，M1 不新增按 Agent 维护的 egress allowlist。
+- 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 模型 API Key、Owner Secret 和企微凭证加密保存、不回显，只能替换。
 - 审计和日志不记录聊天正文、模型思考原文和原始凭证。
 - 所有跨用户资源访问测试按“资源不存在”返回，避免枚举。
 - 会话和附件查询始终以当前使用者为主体；Agent Owner 身份本身不授予查看其他使用者内容的权限。
 
-网络策略、KMS 选型和公司身份网关的具体产品由部署环境决定，但上述访问结果是 M1 的硬性要求。
+网络、IdentityAdapter、OCI Registry、模型目录、主密钥注入和对象存储的具体产品或配置由部署环境决定，但上述访问结果是 M1 的硬性要求。
 
 ## 18. 可观测性
 
@@ -657,13 +679,15 @@ sequenceDiagram
 
 ### 19.1 模块测试
 
-- 领域模块使用 Fake Adapter 验证状态机、权限交集、授权扩展和幂等。
+- `platform-core` 使用 Fake Port 验证状态机、权限交集、授权扩展、用例级事务和幂等，不依赖 Hono、Drizzle 或 Kubernetes。
 - React 使用 Vitest 与 Testing Library 验证关键交互和错误状态。
 - 不以大量 Hono 路由快照代替领域测试。
 
 ### 19.2 契约测试
 
 - OpenAPI Schema 变更必须通过兼容性检查。
+- `packages/contracts` 的浏览器 OpenAPI、SSE、内部 HTTP 和 RuntimeHost Schema 必须通过生成漂移、consumer contract 和 breaking-change 检查；数据库/领域类型不能绕过映射直接成为 wire contract。
+- IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
@@ -673,7 +697,7 @@ sequenceDiagram
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - Conversation、Execution、outbox、双 Worker 和 Pod 重启的集成与故障注入测试执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
 - Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，停止或停用后 StatefulSet 缩容到 0、重启后从 0 恢复且保留原 PVC 与 Platform DB 状态，候选 Service/健康检查变更，候选提升任一步骤的 Worker 重启和部分切换恢复，升级失败后恢复旧 Digest、路由、渠道和平台历史，切换期间不出现双路由或失败候选继续接收流量，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
-- 公司身份、Hub、LLM Gateway 和企微提供可控 Fake Server。
+- Identity、OCI Registry、模型端点、对象存储和企微边界提供可控 Fake；Fake 使用与正式 Contract 相同的 Schema，不维护第二套接口。
 - 至少一个真实 Provider 在受控测试账号完成 Connection 端到端调用。
 
 ### 19.4 端到端测试
@@ -696,7 +720,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 | 领域 | 前端交付 | 后端交付 |
 | --- | --- | --- |
-| 身份与权限 | 登录态、无权限页面、Owner/范围配置 | 公司身份 Adapter、组织解析、RBAC 和每次操作校验 |
+| 身份与权限 | 登录态、无权限页面、Owner/范围配置 | IdentityAdapter、IdentityContext、RBAC 和每次操作校验 |
 | Agent 生命周期 | 申请、审批、状态和操作入口 | 状态机、资源 Profile、outbox 和 Kubernetes 调谐 |
 | Agent 使用 | 对话时间线、SSE、停止、重生成、模型选择 | 会话存储、outbox、RuntimeHost/固定 Driver、事件保存和恢复 |
 | 附件 | 上传、预览、限制和下载 | 预签名地址、对象权限、元数据和 Agent 临时访问 |
@@ -705,7 +729,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | 自有交互入口 | 入口、不可用与无权限状态 | Auth Gateway、Runtime Manifest、Service 和访问调谐 |
 | 管理与审计 | 审批、Provider/Action、共享 Connection 和审计页面 | 管理接口、审计事件、脱敏与跨系统关联 |
 
-前后端共同维护 `packages/contracts`，但后端是权限和数据结果的权威方。
+前后端共同维护 `packages/contracts`，但后端是权限和数据结果的权威方。Web 从 OpenAPI 生成 Client，并使用同一 Schema 校验的 Mock/fixture 并行开发；后端通过 consumer contract 证明实现一致。
 
 ## 21. CI/CD 与环境
 
@@ -722,15 +746,15 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 ### 21.2 发布
 
-- 每个部署单元生成独立镜像并推送 Company Hub。
+- 每个部署单元生成独立镜像并推送部署批准的 OCI Registry。
 - 镜像按 Commit SHA 和不可变 Digest 部署。
-- Helm 管理平台部署单元，Agent Workload 由 `platform-worker` 调谐。
+- Web 和 `platform-api` 可以由部署环境独立发布；Helm 管理 Kubernetes 中的平台部署单元，Agent Workload 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐。
 - 数据库迁移使用独立 Job，先执行向后兼容迁移，再发布应用。
-- 环境配置只保存非敏感值；Secret 由公司 Secret Service 注入。
+- 环境配置只保存非敏感值；部署向 `platform-api` 和 `platform-worker` 注入版本化主密钥组，Secret 明文不进入 values、镜像或仓库。
 
 ### 21.3 本地开发
 
-- Docker Compose 提供 PostgreSQL、对象存储和 Fake 外部依赖。
+- Docker Compose 提供 PostgreSQL、对象存储和部署边界 Fake。
 - Web、API 和 Worker 由 Turborepo 启动。
 - Kubernetes 调谐通过 `kind` 环境验证，不要求日常页面开发连接共享集群。
 
@@ -738,8 +762,8 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 本节只定义依赖顺序，不替代后续实施计划。
 
-1. **工程底座：** monorepo、契约、身份 Fake、数据库迁移、可观测性和 CI。
-2. **Agent 生命周期：** 申请审批、权限、Hub Digest、Worker 调谐和状态展示。
+1. **工程底座：** monorepo、wire contracts、单一 `platform-core`、用例级 Store ports、部署边界 Fake、数据库迁移、可观测性和 CI。
+2. **Agent 生命周期：** 申请审批、权限、OCI Digest、Secret 修订、Worker 调谐和状态展示。
 3. **Runtime 与 Web 对话：** Conversation/outbox、SSE、RuntimeHost、四个固定 Runtime Driver、Generic ACP 样例、附件和长任务恢复。
 4. **Connection 闭环：** OpenConnector Adapter、一个真实 Provider、授权与 Action 调用。
 5. **渠道与自定义 Agent：** 企微 Channel、Runtime Manifest、自有交互入口 Auth Gateway。
@@ -749,7 +773,9 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 | 风险 | 处理方式 |
 | --- | --- |
-| TypeScript 缺少 `controller-runtime` 同等级框架 | 控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用 `kind` 做完整生命周期测试 |
+| TypeScript 缺少 `controller-runtime` 同等级框架 | Worker 与 API 分离，控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用受支持版本的 `kind` 做完整生命周期测试 |
+| 部署产品渗入开源领域边界 | Identity、OCI Registry、模型目录、对象存储和 Kubernetes 路由通过窄 Adapter 接入，核心只保存稳定 ID、准入结果和业务状态 |
+| Secret 外部服务成为强制依赖 | 项目使用版本化 AEAD 密文与部署 keyring，候选修订成功后再激活，并通过可恢复重新加密退役旧密钥 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；内部 Fork 补 scope 与 Connection ID 强制校验；增加跨用户攻击测试 |
 | 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
 | 自定义镜像的入口或能力声明不真实 | 使用最小 OCI Runtime Manifest；创建和升级时验证健康检查与 ACP capability；无有效交互入口则拒绝 |
@@ -767,18 +793,19 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 4. Web 断线或离开页面不影响已提交长任务，返回后可以按游标恢复状态。
 5. Codex、Claude、OpenCode 和 Pi 通过统一 Runtime Conformance Suite；Generic ACP 自定义镜像无需新增 Adapter 即可使用平台入口。
 6. Pod 重启恢复原 Runtime Session；恢复失败时只有原 Conversation 保持不可用，不静默创建新 Session，其他 Conversation 和 Agent 服务保持正常。
-7. 自有交互入口只使用 `platform-worker` 发布的网络入口；自有身份入口由 Agent 服务端鉴权，平台身份入口不能绕过公司身份与 Agent 范围校验；其会话不进入平台历史。
+7. 自有交互入口只使用 `platform-worker` 发布的网络入口；自有身份入口由 Agent 服务端鉴权，平台身份入口不能绕过可信 IdentityContext 与 Agent 范围校验；其会话不进入平台历史。
 8. 至少一个真实 Provider 完成 OAuth/鉴权、授权、Action、审计和撤销闭环；Platform 和 Connection 任一授权失败都拒绝调用。
 9. 负载与故障测试中，所有消息都有可解释状态，企微群聊会话按发送者隔离，不出现静默丢失、重复 Turn 和跨用户数据混用。
+10. Web、API、Worker、RuntimeHost 和 Delivery 只通过版本化 Contract 与窄 Port 汇合；架构测试阻止应用入口、Drizzle/Kubernetes 对象和部署产品类型进入 `platform-core` 或 wire contracts。
+11. Web/API 位置无关，只有 Kubernetes Workload Plane 中的 Worker 持有 namespace-scoped Kubernetes authority；部署在现代 GA API 上通过生命周期、安全和失败恢复验证。
 
 ## 25. 评审结论记录
 
 团队评审应围绕以下已选方案提出异议或确认，不在同一轮扩展 Roadmap 范围：
 
 - 全 TypeScript 是否满足平台与运维团队的长期维护能力。
-- TypeScript Kubernetes 调谐器的测试与值班责任是否可接受。
+- TypeScript Kubernetes 调谐器的测试与值班责任是否可接受，部署是否提供受支持的现代 Kubernetes capability baseline。
 - OpenConnector 内部 Fork 的维护归属和上游同步方式。
-- 最小 OCI Runtime Manifest 是否能进入 Company Hub 的镜像发布规范。
-- 公司身份、KMS、对象存储、LLM Gateway 和企微现有接口是否满足本文所需契约。
+- 部署的 IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、对象存储、keyring 注入和企微 Adapter 是否满足本文 conformance。
 
-评审通过后，任何改变部署单元、权威数据归属、身份传递、Connection 授权或 Agent Runtime Contract 的修改都应新增 ADR，不通过零散代码变更隐式改变架构。
+产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。

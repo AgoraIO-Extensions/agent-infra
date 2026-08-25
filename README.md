@@ -10,6 +10,8 @@
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
 - [Agent Runtime M1 HLD](docs/architecture/HLD-agent-runtime-M1.md)
+- [ADR: Platform 服务与 Kubernetes Workload Plane 分离](docs/adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)
+- [ADR: Platform Secret 使用项目内置密文存储](docs/adr/0002-store-platform-secrets-as-application-ciphertext.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
 
 ## 当前状态
