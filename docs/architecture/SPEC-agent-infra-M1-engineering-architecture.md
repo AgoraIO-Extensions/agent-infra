@@ -287,7 +287,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.1 IdentityAdapter
 
-- 开源主系统不实现或限定 OAuth、OIDC、LDAP、登录页面、redirect 或目录产品。部署环境通过 IdentityAdapter 向 `platform-api` 提供经过完整性保护的当前 IdentityContext。
+- 开源主系统不实现或限定 OAuth、OIDC、LDAP、登录页面、redirect 或目录产品。部署环境通过进程内可信 Adapter、经过认证的服务边界或版本化签名信封向 `platform-api` 提供当前 IdentityContext；跨进程传递时必须校验签发方、audience、签发/过期时间、唯一 context ID、keyVersion 和部署身份绑定，并在缺失、过期、重放或验证失败时 fail closed。
 - IdentityContext 至少包含稳定且不透明的用户 ID、当前账号状态、组织成员关系、平台角色，以及足以判断上下文是否仍有效的版本或时效信息。
 - 浏览器、Agent、模型和普通调用方不能提交、覆盖或伪造这些字段；`platform-api` 必须验证部署身份边界后才创建 HttpOnly、Secure、SameSite 会话，且不在 Local Storage 保存上游身份凭证。
 - 平台不维护独立用户目录，只保存业务记录所需的稳定用户引用。具体认证、组织查询和账号生命周期实现属于部署 Adapter。
@@ -402,7 +402,7 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 - Registry 不得向 Owner 开放代理设置、进程加载器或 Runtime 启动选项等能够改变标准模板受信运行边界的键。
 - 自定义镜像接受 Owner 配置的任意 env/Secret K/V，但不能使用平台保留前缀。
 - `AGENT_INFRA_*` 由平台保留并按执行环境注入；标准模板或自定义镜像的 Owner 输入使用该前缀时均在保存前拒绝。
-- 普通 env 保存于 Platform DB。`platform-api` 为每个 Secret 生成随机 DEK，用版本化 AEAD 加密明文，再用部署 active 公钥封装 DEK。Platform DB 保存随机 nonce、ciphertext、认证 tag、wrapped DEK、`algorithmVersion`、`wrappingKeyVersion`、Agent/Owner 绑定和生命周期状态；附加认证数据绑定 Secret ID、主体、名称和版本，防止跨主体调换密文。
+- 普通 env 保存于 Platform DB。Secret `algorithmVersion = aes-256-gcm:v1` 固定使用 CSPRNG 生成的 256-bit DEK、每条记录唯一的 96-bit nonce、128-bit authentication tag 和版本化 canonical AAD；AAD 按固定顺序对 Secret ID、Owner 类型/ID、Agent ID、Secret 名称、Secret 版本和 `algorithmVersion` 做无歧义的长度前缀 UTF-8 编码。`platform-api` 用 DEK 加密明文，再用部署 active 公钥按 `wrappingAlgorithmVersion = rsa-oaep-sha256:v1` 和至少 3072-bit RSA key 封装 DEK。Platform DB 保存 nonce、ciphertext、authentication tag、wrapped DEK、`algorithmVersion`、`wrappingAlgorithmVersion`、`wrappingKeyVersion` 和生命周期状态；任何字段或 AAD 绑定不一致都必须认证失败。
 - 部署只向 `platform-api` 注入版本化加密公钥，向 `platform-worker` 注入对应私钥 keyring；API 不持有可解密历史 Secret 的私钥。私钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标私钥、DEK 解封或 AEAD 认证失败、密文元数据非法时 fail closed。
 - 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 解封 DEK、受控解密，并写入带 Secret 版本与配置修订标识的 Agent 专属 Kubernetes Secret，再调谐引用该版本的候选 Workload。
 - Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应 Secret 版本并通过健康检查后，才能携带 generation/fence 条件更新将 pending 版本提升为 active；Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效前不得回收旧版本。
@@ -690,7 +690,9 @@ sequenceDiagram
 - OpenAPI Schema 变更必须通过兼容性检查。
 - `packages/contracts` 的浏览器 OpenAPI、SSE、内部 HTTP 和 RuntimeHost Schema 必须通过生成漂移、consumer contract 和 breaking-change 检查；数据库/领域类型不能绕过映射直接成为 wire contract。
 - IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署加密公钥/Worker-only 解密 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
-- Platform Secret 负向测试覆盖 API 进程无解密私钥、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingKeyVersion`、AEAD 认证失败、Worker 在写 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 stale generation/fence 试图激活候选版本；任何路径都不能泄露明文、错误提升 active 或提前回收旧版本。
+- IdentityAdapter 负向测试覆盖签发方、audience、签发/过期时间、context ID、keyVersion、部署身份绑定和重放；调用方提交的身份字段、过期/重复信封或身份依赖不可用都不能形成授权。
+- Platform Secret 负向测试覆盖 API 进程无解密私钥、非 CSPRNG/错误长度或重复 nonce、非 canonical AAD、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingAlgorithmVersion`/`wrappingKeyVersion`、AEAD 认证失败、Worker 在写 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 stale generation/fence 试图激活候选版本；任何路径都不能泄露明文、错误提升 active 或提前回收旧版本。
+- Model Contract 负向测试覆盖目录外 Base URL、credential 被当作普通字段读取/返回、credential 跨 Agent 复用、模型或 reasoning 未获 Owner 允许，以及 Runtime capability 验证失败；浏览器与普通使用者响应中不得出现 API Key 或 Secret 明文。
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。

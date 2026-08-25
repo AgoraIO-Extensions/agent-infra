@@ -225,7 +225,7 @@ Owner 配置的是部署提供的模型端点目录中的访问选项。Agent �
 ### 8.1 Owner 配置
 
 - Owner 配置允许使用的模型清单。
-- 每个选项引用目录中获准的 Base URL，并包含该 Agent 独立配置的 API Key、模型名和允许的推理强度。
+- 每个选项引用目录中获准的 Base URL 和该 Agent 独立配置的加密 credential，并包含模型名和允许的推理强度。API Key 只作为一次性 Secret 输入提交，不能出现在模型选项响应或普通配置读取结果中。
 - Base URL 只能从部署提供的目录中选择，Owner 不能提交或覆盖任意地址。
 - API Key 加密保存且不回显，只能替换。
 - 普通使用者看不到 Base URL 和 API Key。
