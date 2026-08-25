@@ -102,8 +102,8 @@ flowchart LR
     CA --> CD[(Connection DB)]
     PA -.->|写入版本化 Secret 密文| PD
     PW -.->|读取 active Secret 密文| PD
-    KEY[Deployment Keyring] --> PA
-    KEY --> PW
+    PUB[Deployment Encryption Public Keys] --> PA
+    PRIV[Deployment Decryption Keyring] --> PW
     CA --> EXT[外部 Provider]
 
     AP --> MODEL[Deployment-approved Model Endpoint]
@@ -146,7 +146,7 @@ agent-infra/
     connection-store/        Connection DB 的 Drizzle Adapter
     identity/                IdentityAdapter、IdentityContext 与测试 Fake
     image-registry/          ImageRegistryAdapter、OCI Digest/Manifest 与测试 Fake
-    secret-store/            版本化 AEAD 密文、部署 keyring 与轮换
+    secret-store/            版本化 AEAD 密文、DEK 封装与密钥轮换
     model-catalog/           ModelCatalogAdapter 与模型端点政策
     agent-runtime/           RuntimeHost 深 Module、固定 Driver 和 Conversation Contract
     kubernetes-runtime/      KubernetesRuntimeAdapter 与部署路由 Adapter
@@ -209,7 +209,7 @@ agent-infra/
 - ModelCatalogAdapter 与获准模型端点政策。
 - KubernetesRuntimeAdapter 与部署访问路由。
 - 对象存储。
-- 部署 keyring 来源；Secret 密文、轮换和候选激活由项目实现。
+- 部署加密公钥与 Worker-only 解密 keyring；Secret 密文、DEK 封装、轮换和候选激活由项目实现。
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Runtime。
 - worker 侧 RuntimeHost Client 与 Agent Pod 内 RuntimeHost/Driver。
 - 企微机器人与企微应用。
@@ -396,17 +396,19 @@ Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则
 
 ### 10.6 环境变量与 Secret
 
-Platform Secret 使用项目内置密文与部署 keyring，取舍见 [ADR: Platform Secret 使用项目内置密文存储](../adr/0002-store-platform-secrets-as-application-ciphertext.md)。该模型不自动扩展到 Connection Provider 凭证。
+Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解密 keyring，取舍见 [ADR: Platform Secret 使用项目内置密文存储](../adr/0002-store-platform-secrets-as-application-ciphertext.md)。该模型不自动扩展到 Connection Provider 凭证。
 
 - 固定 Runtime Registry 为每个标准模板声明 Owner 可配置的 env/Secret 键。`platform-api` 在保存前拒绝该模板未声明的键，`platform-worker` 只装配已声明的键。
 - Registry 不得向 Owner 开放代理设置、进程加载器或 Runtime 启动选项等能够改变标准模板受信运行边界的键。
 - 自定义镜像接受 Owner 配置的任意 env/Secret K/V，但不能使用平台保留前缀。
 - `AGENT_INFRA_*` 由平台保留并按执行环境注入；标准模板或自定义镜像的 Owner 输入使用该前缀时均在保存前拒绝。
-- 普通 env 保存于 Platform DB。项目使用版本化 AEAD 将 Secret 密文、随机 nonce、认证 tag、`algorithmVersion`、`keyVersion`、Agent/Owner 绑定和生命周期状态保存在 Platform DB；附加认证数据绑定 Secret ID、主体、名称和版本，防止跨主体调换密文。
-- 部署向 `platform-api` 和 `platform-worker` 注入版本化主密钥组与 active `keyVersion`。主密钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标密钥、认证失败或密文元数据非法时 fail closed。
-- 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 受控解密、写入目标 Agent 专属 Kubernetes Secret，并在候选 Workload 验证通过后原子提升为 active；失败时新版本标记 failed，旧 Workload 与旧 active Secret 继续有效。
-- Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 主密钥后，项目通过幂等、可恢复任务重新加密历史密文；数据库不再引用旧 `keyVersion` 后，部署才能移除旧密钥。
-- `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问主密钥或其他 Agent Secret。
+- 普通 env 保存于 Platform DB。`platform-api` 为每个 Secret 生成随机 DEK，用版本化 AEAD 加密明文，再用部署 active 公钥封装 DEK。Platform DB 保存随机 nonce、ciphertext、认证 tag、wrapped DEK、`algorithmVersion`、`wrappingKeyVersion`、Agent/Owner 绑定和生命周期状态；附加认证数据绑定 Secret ID、主体、名称和版本，防止跨主体调换密文。
+- 部署只向 `platform-api` 注入版本化加密公钥，向 `platform-worker` 注入对应私钥 keyring；API 不持有可解密历史 Secret 的私钥。私钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标私钥、DEK 解封或 AEAD 认证失败、密文元数据非法时 fail closed。
+- 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 解封 DEK、受控解密，并写入带 Secret 版本与配置修订标识的 Agent 专属 Kubernetes Secret，再调谐引用该版本的候选 Workload。
+- Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应 Secret 版本并通过健康检查后，才能携带 generation/fence 条件更新将 pending 版本提升为 active；Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效前不得回收旧版本。
+- Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 公钥/私钥版本后，由 Worker 执行幂等、可恢复的历史 Secret 重新加密或 DEK 重新封装；数据库不再引用旧 `wrappingKeyVersion` 后，部署才能移除旧私钥。
+- `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问解密私钥或其他 Agent Secret。
+- Worker 解封、解密、重新加密/封装和 keyVersion 退役都记录不含值的审计事件，至少关联 Secret ID、Agent ID、`wrappingKeyVersion`、操作、结果和 `traceId`；主体绑定或附加认证数据不匹配时拒绝并审计，不能返回明文。
 
 ### 10.7 标准模板模型配置
 
@@ -637,7 +639,7 @@ sequenceDiagram
 
 - 所有用户访问路由使用 TLS；平台身份入口使用可信 IdentityContext 和 Agent 可用范围校验。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
-- Agent Pod 不能访问 Platform DB、Connection DB、部署主密钥或 Kubernetes API。
+- Agent Pod 不能访问 Platform DB、Connection DB、部署解密私钥或 Kubernetes API。
 - Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
 - 标准模板只使用 ModelCatalogAdapter 返回的获准模型端点；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循部署网络策略，M1 不新增按 Agent 维护的 egress allowlist。
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
@@ -647,7 +649,7 @@ sequenceDiagram
 - 所有跨用户资源访问测试按“资源不存在”返回，避免枚举。
 - 会话和附件查询始终以当前使用者为主体；Agent Owner 身份本身不授予查看其他使用者内容的权限。
 
-网络、IdentityAdapter、OCI Registry、模型目录、主密钥注入和对象存储的具体产品或配置由部署环境决定，但上述访问结果是 M1 的硬性要求。
+网络、IdentityAdapter、OCI Registry、模型目录、加密公钥/解密 keyring 注入和对象存储的具体产品或配置由部署环境决定，但上述访问结果是 M1 的硬性要求。
 
 ## 18. 可观测性
 
@@ -687,7 +689,8 @@ sequenceDiagram
 
 - OpenAPI Schema 变更必须通过兼容性检查。
 - `packages/contracts` 的浏览器 OpenAPI、SSE、内部 HTTP 和 RuntimeHost Schema 必须通过生成漂移、consumer contract 和 breaking-change 检查；数据库/领域类型不能绕过映射直接成为 wire contract。
-- IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
+- IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署加密公钥/Worker-only 解密 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
+- Platform Secret 负向测试覆盖 API 进程无解密私钥、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingKeyVersion`、AEAD 认证失败、Worker 在写 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 stale generation/fence 试图激活候选版本；任何路径都不能泄露明文、错误提升 active 或提前回收旧版本。
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
@@ -750,7 +753,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - 镜像按 Commit SHA 和不可变 Digest 部署。
 - Web 和 `platform-api` 可以由部署环境独立发布；Helm 管理 Kubernetes 中的平台部署单元，Agent Workload 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐。
 - 数据库迁移使用独立 Job，先执行向后兼容迁移，再发布应用。
-- 环境配置只保存非敏感值；部署向 `platform-api` 和 `platform-worker` 注入版本化主密钥组，Secret 明文不进入 values、镜像或仓库。
+- 环境配置只保存非敏感值；部署向 `platform-api` 注入版本化加密公钥、向 `platform-worker` 注入 Worker-only 解密 keyring，Secret 明文和私钥不进入 values、镜像或仓库。
 
 ### 21.3 本地开发
 
@@ -775,7 +778,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | --- | --- |
 | TypeScript 缺少 `controller-runtime` 同等级框架 | Worker 与 API 分离，控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用受支持版本的 `kind` 做完整生命周期测试 |
 | 部署产品渗入开源领域边界 | Identity、OCI Registry、模型目录、对象存储和 Kubernetes 路由通过窄 Adapter 接入，核心只保存稳定 ID、准入结果和业务状态 |
-| Secret 外部服务成为强制依赖 | 项目使用版本化 AEAD 密文与部署 keyring，候选修订成功后再激活，并通过可恢复重新加密退役旧密钥 |
+| Secret 外部服务成为强制依赖 | 项目使用随机 DEK、版本化 AEAD 和公钥封装；API 只能加密、Worker 独占解密私钥，候选修订通过可恢复两阶段协议激活 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游接口不直接暴露；内部 Fork 补 scope 与 Connection ID 强制校验；增加跨用户攻击测试 |
 | 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
 | 自定义镜像的入口或能力声明不真实 | 使用最小 OCI Runtime Manifest；创建和升级时验证健康检查与 ACP capability；无有效交互入口则拒绝 |
@@ -806,6 +809,6 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - 全 TypeScript 是否满足平台与运维团队的长期维护能力。
 - TypeScript Kubernetes 调谐器的测试与值班责任是否可接受，部署是否提供受支持的现代 Kubernetes capability baseline。
 - OpenConnector 内部 Fork 的维护归属和上游同步方式。
-- 部署的 IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、对象存储、keyring 注入和企微 Adapter 是否满足本文 conformance。
+- 部署的 IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、对象存储、加密公钥/Worker-only 解密 keyring 注入和企微 Adapter 是否满足本文 conformance。
 
 产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。
