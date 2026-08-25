@@ -297,16 +297,19 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.3 服务端授权上下文
 
-平台在每个 Turn 或补充指令实际投递前重新解析授权，并生成新的短期、不可篡改的 Execution Grant，绑定：
+平台在每个 Turn 或补充指令实际投递前重新解析授权，并生成新的短期、不可篡改且版本化的 Execution Grant。Grant 必须包含可验证的签发方、目标服务 audience、签发与过期时间和唯一 `grantId`；RuntimeHost 与 Platform Tool Gateway 只接受包含自身 audience 的 Grant，并在访问对象或产生 Runtime/Connection 副作用前校验签名、签发方、audience、有效期及下列全部绑定：
 
 - 当前执行。
 - 当前 Agent。
 - 当前公司用户。
 - 当前渠道。
 - 当前 Conversation 与 Turn。
+- 本次 RuntimeHost 调用允许的命令、附件引用集合及其允许操作。
 - 当前允许的 Action 集合版本。
 
 补充指令 Grant 的范围取原 Execution 授权边界与当前授权的交集，不能扩大原用户、Agent、Conversation、渠道或 Action 范围。
+
+服务身份、请求字段、Host Session Ref、附件引用或 Runtime 返回值都不能单独作为授权依据，也不能扩大 Grant。任一请求字段与 Grant 绑定不一致、Grant 过期或 audience 不匹配时必须在读取附件、调用 Runtime 或调用 Connection 前拒绝；日志只记录 `grantId` 和脱敏的拒绝原因，不记录原始 Grant。
 
 Agent 调用 Tool Gateway 时只提交 Action 和参数。平台根据执行记录解析 Connection，随后由平台服务端调用 Connection。Agent 不能提交或覆盖用户 ID、组织 ID、Connection ID 或外部账号。
 
@@ -406,7 +409,7 @@ Web 和平台托管渠道只面对统一 Platform Conversation Contract。该 Co
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。Host Session Ref 到 Native Session ID 的映射属于 Agent PVC 上的 RuntimeHost 状态；Native Session ID 和原生事件细节不能跨出 RuntimeHost，也不能成为浏览器、渠道或 Agent 请求中的身份与授权依据。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在 Agent PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration` 及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、渠道或 Agent 请求中的身份与授权依据。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
