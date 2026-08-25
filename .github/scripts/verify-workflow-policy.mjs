@@ -1576,13 +1576,18 @@ export function validateWorkflowDocuments(workflows) {
         ),
     ) ||
     !reviewAnalyzeCondition.includes("vars.PR_REVIEW_PROVIDER == 'claude'") ||
-    !reviewPublishCondition.includes("needs.analyze.result != 'skipped'")
+    !reviewPublishCondition.includes(
+      "needs.analyze.outputs.selected_provider == 'claude'",
+    )
   ) {
     errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
   }
   const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
   const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
   const reviewAction = analyzeSteps[reviewActionIndex];
+  const selectedReviewProvider = analyzeSteps.find(
+    (step) => step.id === "selected-provider",
+  );
   const reviewDataCheckout = analyzeSteps.find(
     (step) => step.name === "Checkout untrusted PR head as review data",
   );
@@ -1594,6 +1599,10 @@ export function validateWorkflowDocuments(workflows) {
     (step) => step.id === "gate-publisher-token",
   );
   if (
+    review?.jobs?.analyze?.outputs?.selected_provider !==
+      "${{ steps.selected-provider.outputs.selected_provider }}" ||
+    selectedReviewProvider?.run !==
+      'echo "selected_provider=claude" >> "$GITHUB_OUTPUT"' ||
     reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||
     reviewDataCheckout?.with?.path !== "pr-head" ||
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||

@@ -550,7 +550,7 @@ test("requires the Claude provider selector and same-run publication", async () 
 
   review.jobs.analyze.if = `${selector}\n${review.jobs.analyze.if}`;
   review.jobs.publish.if = review.jobs.publish.if.replace(
-    "needs.analyze.result != 'skipped' &&",
+    "needs.analyze.outputs.selected_provider == 'claude' &&",
     "",
   );
   assert.ok(
@@ -560,7 +560,7 @@ test("requires the Claude provider selector and same-run publication", async () 
   );
 
   review.jobs.publish.if =
-    `needs.analyze.result != 'skipped' &&\n${review.jobs.publish.if}`;
+    `needs.analyze.outputs.selected_provider == 'claude' &&\n${review.jobs.publish.if}`;
   publish.env.REVIEW_ENABLED = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
