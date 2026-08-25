@@ -344,6 +344,10 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   Automated Reviewer 的统一输出契约。
 - 只有选中 Claude 时，其 P0/P1 finding 才能进入现有无人值守 code-repair；PR-Agent finding
   只通过 Review thread 进入正常处理流程，不触发结构化 repair。
+- 现有 `Claude Review Gate` Check Run 和基础设施 waiver 仅作为 Claude Adapter 的过渡期
+  operational signal，不属于 required checks 或 Automated Reviewer 统一契约。waiver 只接受
+  CODEOWNERS Team 中非 Bot 成员对当前 head 的基础设施失败确认，不能覆盖未解决 Review thread、
+  CI failure 或其他 Gate；新 commit 使其失效。
 - Automated Reviewer 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。
 
 ### 7.4 人工验证
@@ -443,7 +447,7 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 | Stage 1 | Issue/PR 模板、基础 Gate、Claude Issue/PR Review、原生 Auto-merge enrollment | 现有 branch protection |
 | Stage 2 | 初版 Codex Worker、Artifact/Publisher 隔离、固定 branch、代码 push 后短暂 Draft PR、受保护路径 | Codex 与 Publisher Secret |
 | Stage 3A（`#50`） | 本文目标契约、稳定 AC ID、模板与导航同步 | 无外部配置 |
-| Stage 3B（`#51`） | App-bound current-head gates、Claude Review gate、CODEOWNERS Team | Team、CODEOWNERS、branch protection |
+| Stage 3B（`#51`） | App-bound current-head gates、Automated PR Review provider selection、CODEOWNERS Team | Team、CODEOWNERS、branch protection |
 | Stage 3C（`#52`） | authorization record、cycle branch、execution hash、Issue Readiness/AC evidence | Stage 3B Team identity |
 | Stage 3D（`#53`） | blocker proposal、同仓库 DAG、completed/not planned 语义、15 分钟 Reconciler | Stage 3C cycle |
 | Stage 3E（`#54`） | 三次 attempt、Patch checkpoint、全局并发 2、CI retry、两轮 repair、base update | Stage 3C cycle |
