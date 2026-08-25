@@ -1601,6 +1601,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     review?.jobs?.analyze?.outputs?.selected_provider !==
       "${{ steps.selected-provider.outputs.selected_provider }}" ||
+    analyzeSteps[0] !== selectedReviewProvider ||
     selectedReviewProvider?.run !==
       'echo "selected_provider=claude" >> "$GITHUB_OUTPUT"' ||
     reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||

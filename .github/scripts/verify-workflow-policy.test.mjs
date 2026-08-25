@@ -561,6 +561,16 @@ test("requires the Claude provider selector and same-run publication", async () 
 
   review.jobs.publish.if =
     `needs.analyze.outputs.selected_provider == 'claude' &&\n${review.jobs.publish.if}`;
+  const [selectedProvider] = review.jobs.analyze.steps.splice(0, 1);
+  review.jobs.analyze.steps.splice(1, 0, selectedProvider);
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("publish only the completed CI head"),
+    ),
+  );
+
+  review.jobs.analyze.steps.splice(1, 1);
+  review.jobs.analyze.steps.unshift(selectedProvider);
   publish.env.REVIEW_ENABLED = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>

@@ -35,16 +35,16 @@ jobs:
       selected_provider: ${{ steps.selected-provider.outputs.selected_provider }}
       structured_output: ${{ steps.claude.outputs.structured_output }}
     steps:
+      - name: Record selected provider
+        id: selected-provider
+        run: echo "selected_provider=claude" >> "$GITHUB_OUTPUT"
+
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Record selected provider
-        id: selected-provider
-        run: echo "selected_provider=claude" >> "$GITHUB_OUTPUT"
 
       - name: Checkout untrusted PR head as review data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

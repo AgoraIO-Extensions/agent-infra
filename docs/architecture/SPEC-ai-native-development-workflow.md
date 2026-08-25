@@ -46,7 +46,7 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 | 参与方 | 可信身份 | 可以执行 | 禁止执行 |
 | --- | --- | --- | --- |
 | Repository human | GitHub User 及仓库权限 | 创建/编辑/关闭/重开 Issue、选择本地实现、提交 PR、移除标签以暂停执行 | 非 Team 成员不能创建/恢复 Worker 授权或确认验证 |
-| CODEOWNERS Team 成员 | Organization Team 中的非 Bot 人员 | 确认 Issue、创建/暂停/恢复/终止 cycle、关闭/重开 triage、Approve、确认人工验证 | 以 Bot 身份替代人工确认、复用已消费 cycle 或旧 head 确认 |
+| CODEOWNERS Team 成员 | Organization Team 中的非 Bot 人员 | 确认 Issue、创建/暂停/恢复/终止 cycle、关闭/重开 triage、Approve、确认人工验证、创建受限基础设施 waiver | 以 Bot 身份替代人工确认、复用已消费 cycle、旧 head 确认或 waiver |
 | 本地 Codex | 当前操作者的 GitHub 身份 | 需求 grilling、本地 `implement`、提交人工 PR、协助操作者执行授权动作 | 独立获得人工权限、把本地辅助描述为无人值守授权、绕过 Review |
 | authorization recorder | 受策略限制的 GitHub Actions App | 校验 labeled event/Team/hash，记录授权、暂停、恢复、消费和失效 | 生成原始人工意图、替人授权、修改 execution content |
 | Codex implement job | 只读 GitHub Token 和隔离工作区 | 读取授权范围、生成受限文本 Patch、AC evidence、implementation blocker proposal 或 human handoff | 获得发布凭证、调用任意 GitHub 写 API、Approve、Merge、创建授权 |
