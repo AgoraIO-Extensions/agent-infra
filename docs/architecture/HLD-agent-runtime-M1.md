@@ -28,16 +28,21 @@ Web / 平台托管企微
         v
 Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
         |                                                   |
-        +--读取已保存事件并 SSE 推送                         +--Runtime Adapter
+        +--读取已保存事件并 SSE 推送                         +--RuntimeHost Client
                                                             |
-                                                            +--内部 HTTP/SSE--> Agent Service --> Agent Pod
+                                                            +--内部 HTTP/SSE--> Agent Service
+                                                                                  |
+                                                                                  v
+                                                                      Agent Pod / RuntimeHost
+                                                                                  |
+                                                                      Runtime Driver --> Runtime
 
 Agent Pod --Action + Execution Grant--> Platform Tool Gateway --> Connection API
 ```
 
 - `platform-api` 解析入口身份并按命令路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。它不直接调用 Agent Pod。
-- `platform-worker` 运行 Runtime Adapter，认领 Execution，并通过 Agent Service 的内部 HTTP/SSE 调用 Pod。
-- Adapter 将平台 Conversation/Execution 映射为 Runtime Session/Turn，将原生事件归一化后写回 Platform DB。
+- `platform-worker` 认领 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface；worker 不启动 Runtime 子进程，也不加载 Native/ACP Driver。
+- Agent Pod 内的 RuntimeHost 运行固定 Runtime Driver，将平台 Conversation/Execution 映射为 Runtime Session/Turn，并把原生事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
 - `platform-api` 只把已经持久化且通过与历史读取相同的当前连接主体授权校验的事件推送给浏览器或渠道；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化后，服务端必须关闭或暂停对应连接；继续推送前必须重新鉴权。
 - Agent Pod 保存 Runtime 自有工作区和 Session 数据，但不保存平台权威会话或授权。
 
@@ -101,7 +106,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 - 订阅并归一化文本、状态、工具、文件、完成和错误事件。
 - 探测模型、附件、结果文件、Connection 和补充指令 capability。
 
-`packages/agent-runtime` 实现四个固定 Adapter。每个 Adapter 可以在 Pod 内使用 Runtime Host 或等价 Bridge 启动原生进程，但 Agent Service 对 `platform-worker` 始终提供内部 HTTP/SSE。
+`packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
 `platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；Owner 通过平台配置的相关 env/Secret 遵循工程 Spec 10.6 的通用规则，Adapter 不从 Runtime 的模型选项读取或保存凭证，也不把它们复制到标准模板模型配置。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
@@ -114,10 +119,11 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 | Conversation、Message | Platform DB | 浏览器和 Channel 只使用平台 ID |
 | Execution、回答版本 | Platform DB | 消息提交或重新生成重试不能产生重复 Execution |
 | 规范化事件与 SSE 游标 | Platform DB | 先持久化，再对外推送 |
-| Runtime Session 映射 | Platform DB 的 Adapter 内部存储 | 保存单调递增的 `sessionGeneration`，原生 Session ID 不出 Adapter 边界 |
+| RuntimeHost Session 引用 | Platform DB 的 Client Adapter 内部存储 | 保存不透明 Host Session Ref 和单调递增的 `sessionGeneration`，调用方不能解释或覆盖该引用 |
+| Host Session 到原生 Session 的映射 | Agent PVC 上的 RuntimeHost 状态 | 只有对应 Driver 解释原生 Session ID；该 ID 不跨出 RuntimeHost |
 | Runtime 工作区和原生 Session 数据 | Agent PVC | Runtime 自己解释，平台不读取内容 |
 
-一个 Platform Conversation 最多映射一个当前 Runtime Session。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“原生 Session 未创建”状态；首个及后续 outbox 在创建时保存当前代次。浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖原生 Session ID 或代次。
+一个 Platform Conversation 最多映射一个当前 RuntimeHost Session Ref。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“Host Session 未创建”状态；RuntimeHost 创建或恢复 Session 时在 PVC 中维护该引用到原生 Session 的映射，worker 只持久化和回传不透明引用。首个及后续 outbox 在创建时保存当前代次。浏览器、Channel、自定义镜像和 Connection 请求都不能提交或覆盖 Host Session Ref、原生 Session ID 或代次。
 
 企微群聊的 Channel 会话键必须包含服务端解析的 `actorId`，且调用方不能提交或覆盖 `actorId`。不同发送者映射到不同 Platform Conversation 和 Runtime Session；消息、历史、SSE、附件和结果文件的读取都必须在服务端校验当前 `actorId` 与目标 Conversation 的绑定关系。群内公开展示只允许当前群和 Agent 授权范围内显式标记为群内公开的事件，不得暴露其他发送者的 Conversation 或 Runtime 上下文。
 
@@ -125,7 +131,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ### 7.1 Session 生命周期
 
-1. 首个 Execution 由 Adapter 创建 Runtime Session，并持久化 Conversation 到原生 Session 的映射。
+1. 首个 Execution 由 RuntimeHost Driver 创建 Runtime Session；RuntimeHost 在 PVC 中持久化 Host Session Ref 到原生 Session 的映射，worker 侧 Client Adapter 只保存 Conversation 到不透明 Host Session Ref 的映射。
 2. 后续 Execution 必须恢复同一个 Session，不能以新 Session 代替恢复。
 3. Conversation 关闭或 Agent 停用时，Adapter 可以关闭原生 Session；M1 不向用户提供删除 Conversation。
 
@@ -138,10 +144,10 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ### 7.3 重启恢复
 
-- `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和 Session 映射。
+- `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在 PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
-- Agent Pod 重启后复用原 PVC；Pod 就绪后，Adapter 必须使用已保存的原生 Session ID 恢复原 Session，并查询未完成 Turn 状态。
-- 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution 和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。原 Session 映射和历史保留只读，其他 Conversation 和 Agent 服务保持正常。
+- Agent Pod 重启后复用原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
+- 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution 和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
 - 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能创建新的 Runtime Session。
 
 ## 8. 消息、事件与 SSE 可靠性
@@ -202,7 +208,34 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
-## 12. 参考与非目标
+## 12. RuntimeHost 未来抽取与维护标准
+
+RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来可能抽取的开源库候选维护。这个方向用于约束当前依赖、Interface 和验证质量，不构成 M1 必须建立独立仓库、发布公共 package、接受外部贡献或提供公共兼容承诺的验收项。是否抽取必须由后续独立 Issue 和 ADR 决定。
+
+### 12.1 Module、Interface 与依赖方向
+
+- `apps/agent-runtime-host` 保持薄入口，只处理进程启动、依赖装配、配置读取和 HTTP/SSE 协议接入；Runtime 生命周期、Session mapping、Driver 选择、事件归一化、fence、恢复和错误语义属于 `packages/agent-runtime`。
+- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、fence、Execution Grant、capability、状态和规范化事件；Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
+- Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
+- `packages/agent-runtime` 只能依赖 Node.js/TypeScript 标准能力、经过批准且版本固定的 runtime/protocol library，以及 `packages/contracts` 中的 Host/Driver 契约。它不能依赖 `platform-core`、`platform-store`、`identity`、Connection Module、`kubernetes-runtime`、Web/Channel 或应用入口。
+- 平台身份和 Connection 授权在 RuntimeHost 外解析；Host 只消费当前调用附带的版本化短期 Grant 和已裁剪 capability，不能读取企业目录、Platform DB、Connection DB、KMS 或 Kubernetes API。
+
+### 12.2 独立维护质量
+
+- RuntimeHost Interface 与 Driver Interface 使用版本化 Schema，并为 accepted/busy/rejected/unknown、取消、权限、终态、恢复失败和不支持 capability 定义稳定且可测试的错误语义。M1 内部版本可以演进，但变更必须更新消费者、Schema 和 conformance，不能依赖调用方解析日志文本。
+- Conformance 通过同一 Interface 运行 Fake Driver 和每个真实 Driver；fixture 必须脱敏、自包含、可离线重放，不依赖 Platform DB、公司身份服务、真实企业凭证或个人工作目录。
+- 每个 Driver 记录精确的上游 package/CLI 版本、生成 Schema 的来源 commit、已验证 capability 和兼容矩阵。标准镜像使用 frozen lockfile 和不可变 Digest，不在启动时解析 `latest` 或下载依赖。
+- 第三方依赖必须保留 license、NOTICE、生成物 provenance 和 SBOM 所需信息。RuntimeHost 源码、测试、日志、错误和 fixture 不得包含 Token、API Key、OAuth Secret、普通用户会话正文或本机绝对路径。
+- Module 文档应让不熟悉 Agent Infra 产品层的维护者只通过 Host/Driver Interface、生命周期和 conformance 理解 Runtime 行为；平台专有授权、outbox 和产品状态只作为外部调用约束引用，不复制进 Runtime core。
+
+### 12.3 M1 非目标
+
+- M1 不创建独立开源仓库，不发布公共 npm package，不选择开源 license，也不承诺公共 SemVer 或跨仓支持周期。
+- M1 不为未来开源增加本机 Desktop daemon、通用远程 daemon、ContainerLauncher、调度器、warm pool、动态 Driver/plugin registry 或任意 persistence/transport 抽象。
+- M1 不因为潜在抽取而改变 PRD、四个标准模板、Platform/Connection 授权、Kubernetes 部署、平台历史权威或现有验收范围。
+- 只有出现 Agent Infra 以外的真实 consumer、内部 Interface 经多个上游升级保持稳定，并完成独立安全、维护和供应链评审后，后续决策才能批准抽取。
+
+## 13. 参考与非目标
 
 M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生命周期、事件归一化和 capability 分层：
 

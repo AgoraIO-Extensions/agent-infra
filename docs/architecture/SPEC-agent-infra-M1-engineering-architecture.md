@@ -93,7 +93,7 @@ flowchart LR
 
     PW --> K8S[Kubernetes]
     K8S --> AP[Agent Pod]
-    PW -->|Runtime Adapter / HTTP + SSE| AP
+    PW -->|RuntimeHost Client / HTTP + SSE| AP
 
     AP -->|Action + Execution Grant / Tool Gateway| PA
     PA --> CA
@@ -113,9 +113,9 @@ flowchart LR
 | --- | --- | --- |
 | `web` | Agent 列表、配置、审批、对话和 Connection 页面 | 否 |
 | `platform-api` | 身份入口、Agent 管理、权限、消息、命令与 outbox 持久化、浏览器 SSE、企微回调、Agent Tool Gateway | 否 |
-| `platform-worker` | Agent Workload 调谐、模板升级、outbox 认领、Runtime Adapter 和消息投递 | 否 |
+| `platform-worker` | Agent Workload 调谐、模板升级、outbox 认领、RuntimeHost Client 和消息投递 | 否 |
 | `connection-api` | Provider/Action、OAuth、凭证、Connection 授权校验、Action 执行和调用审计 | 否 |
-| `agent pod` | Codex、Claude、OpenCode、Pi 或自定义 Agent 的实际运行环境 | 仅保存 Agent 自有运行数据 |
+| `agent pod` | 标准模板与 `platform-adapter` 的 RuntimeHost/Driver，或 `self-managed` Agent 的自有服务与实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件、授权关系和平台审计 | 是 |
 | `connection database` | Provider、Action、外部账号、加密凭证、OAuth 状态和调用审计 | 是 |
 
@@ -132,7 +132,8 @@ agent-infra/
   apps/
     web/                     React SPA
     platform-api/            Hono HTTP、SSE、企微和 Tool Gateway
-    platform-worker/         调谐、outbox、Runtime Adapter 和投递
+    platform-worker/         调谐、outbox、RuntimeHost Client 和投递
+    agent-runtime-host/      Agent Pod 内的薄 RuntimeHost 进程入口
     connection-api/          Connection HTTP 与 Action 执行
   packages/
     platform-core/           Agent 平台领域规则与用例
@@ -141,7 +142,7 @@ agent-infra/
     platform-store/          Platform DB 的 Drizzle Adapter
     connection-store/        Connection DB 的 Drizzle Adapter
     identity/                公司账户与组织体系 Adapter
-    agent-runtime/           固定 Runtime Adapter、平台 Conversation Contract
+    agent-runtime/           RuntimeHost 深 Module、固定 Driver 和 Conversation Contract
     kubernetes-runtime/      Kubernetes 调谐 Adapter
     observability/           Trace、Metric、日志和关联 ID
     test-support/            Fake Adapter、fixture 和契约测试工具
@@ -203,6 +204,7 @@ agent-infra/
 - 对象存储。
 - KMS/Secret Service。
 - Codex Native、Claude Native、Generic ACP 和 Pi RPC Runtime。
+- worker 侧 RuntimeHost Client 与 Agent Pod 内 RuntimeHost/Driver。
 - 企微机器人与企微应用。
 - OpenConnector Provider/Action 执行。
 
@@ -400,11 +402,11 @@ Web 和平台托管渠道只面对统一 Platform Conversation Contract。该 Co
 
 ### 11.2 Adapter 部署与 Registry 边界
 
-Adapter 由 `platform-worker` 运行，并通过 Agent Service 的内部 HTTP/SSE 调用 Pod。M1 使用固定 Registry，不动态发现或加载 Adapter；标准模板绑定、自定义交互模式和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#3-runtime-registry-与交互模式) 中完整维护。
+`platform-worker` 只运行 RuntimeHost Client Adapter，并通过 Agent Service 的内部 HTTP/SSE Interface 调用 Pod；RuntimeHost 和 Native/ACP Driver 在 Agent Pod 内运行。M1 使用固定 Registry，不动态发现或加载 Driver；标准模板绑定、自定义交互模式和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#3-runtime-registry-与交互模式) 中完整维护。RuntimeHost 的依赖方向和未来抽取维护标准见 [RuntimeHost 未来抽取与维护标准](HLD-agent-runtime-M1.md#12-runtimehost-未来抽取与维护标准)，工程 Spec 不重复定义。
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源。Runtime Session ID 及原生事件细节只在 Adapter 内部使用，不能成为浏览器、渠道或 Agent 请求中的身份与授权依据。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。Host Session Ref 到 Native Session ID 的映射属于 Agent PVC 上的 RuntimeHost 状态；Native Session ID 和原生事件细节不能跨出 RuntimeHost，也不能成为浏览器、渠道或 Agent 请求中的身份与授权依据。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
@@ -443,7 +445,7 @@ sequenceDiagram
 
 ### 12.2 可靠性规则
 
-- `platform-api` 在 Conversation 数据库锁内完成命令准入，并把平台业务记录与 outbox 原子写入 Platform DB；`platform-worker` 只认领已提交的 outbox，再调用 Runtime Adapter。
+- `platform-api` 在 Conversation 数据库锁内完成命令准入，并把平台业务记录与 outbox 原子写入 Platform DB；`platform-worker` 只认领已提交的 outbox，再通过 RuntimeHost Client 调用 Agent Pod 内的固定 Driver。
 - 消息持久化成功后才向用户显示“已提交”。后续投递失败不能删除消息或静默丢弃，必须收敛为可解释状态。
 - 同一 Conversation 同时只有一个活跃 Turn。普通消息、补充指令、重新生成和停止的重试不能产生重复 Execution、越过发送者边界，或改绑到后续 Execution。
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
@@ -453,7 +455,7 @@ sequenceDiagram
 
 ### 12.3 事件保存
 
-平台保存用户可见消息、最终回答、状态变化、模型调用摘要和 Connection 调用引用。Runtime 原生事件经 Adapter 归一化并去重，保存成功后才由 `platform-api` 推送给浏览器；有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
+平台保存用户可见消息、最终回答、状态变化、模型调用摘要和 Connection 调用引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
 
 ## 13. Connection 架构
 
@@ -528,7 +530,7 @@ sequenceDiagram
 2. 把企微发送者映射为公司稳定用户 ID。
 3. 校验 Agent 可用范围和渠道绑定。
 4. 按单聊、群聊和线程规则生成稳定的 Platform Conversation 映射；群聊和线程的映射键必须包含服务端解析的发送者 ID。
-5. 持久化消息和 outbox，由 `platform-worker` 交给固定 Runtime Adapter。
+5. 持久化消息和 outbox，由 `platform-worker` 通过 RuntimeHost Client 交给 Agent Pod 内的固定 Driver。
 6. 使用触发消息发送者的 Connection 授权。
 
 群聊、线程和附件映射由 Channel 层负责；同一群或线程中的不同发送者必须映射到不同 Platform Conversation 和 Runtime Session。Runtime Adapter 不感知企微身份或自行改变会话键。四个标准模板和通过 ACP 验证的自定义 Agent 使用同一渠道链路。Web 与企微会话不合并。
@@ -548,7 +550,7 @@ sequenceDiagram
 - 模板版本、自定义镜像 Digest、Runtime Manifest、env、加密 Secret 引用和资源 Profile。
 - 模型选项、渠道绑定、Owner Action 选择。
 - 会话、消息、回答版本、执行和执行事件。
-- Adapter 内部 Runtime Session 映射。
+- worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态。
 - 附件与结果文件元数据。
 - 用户对 Agent/Connection 的授权及 Action 确认快照。
 - Agent 期望状态、已应用修订和平台审计。
@@ -693,7 +695,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | --- | --- | --- |
 | 身份与权限 | 登录态、无权限页面、Owner/范围配置 | 公司身份 Adapter、组织解析、RBAC 和每次操作校验 |
 | Agent 生命周期 | 申请、审批、状态和操作入口 | 状态机、资源 Profile、outbox 和 Kubernetes 调谐 |
-| Agent 使用 | 对话时间线、SSE、停止、重生成、模型选择 | 会话存储、outbox、固定 Runtime Adapter、事件保存和恢复 |
+| Agent 使用 | 对话时间线、SSE、停止、重生成、模型选择 | 会话存储、outbox、RuntimeHost/固定 Driver、事件保存和恢复 |
 | 附件 | 上传、预览、限制和下载 | 预签名地址、对象权限、元数据和 Agent 临时访问 |
 | Connection | 连接、授权、扩权确认和调用记录 | OAuth、凭证、scope、授权校验、Action 执行和审计 |
 | 企微渠道 | Owner 绑定配置和状态 | 回调校验、身份映射、Channel 会话键和消息持久化 |
@@ -735,7 +737,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 1. **工程底座：** monorepo、契约、身份 Fake、数据库迁移、可观测性和 CI。
 2. **Agent 生命周期：** 申请审批、权限、Hub Digest、Worker 调谐和状态展示。
-3. **Runtime 与 Web 对话：** Conversation/outbox、SSE、四个固定 Runtime Adapter、Generic ACP 样例、附件和长任务恢复。
+3. **Runtime 与 Web 对话：** Conversation/outbox、SSE、RuntimeHost、四个固定 Runtime Driver、Generic ACP 样例、附件和长任务恢复。
 4. **Connection 闭环：** OpenConnector Adapter、一个真实 Provider、授权与 Action 调用。
 5. **渠道与自定义 Agent：** 企微 Channel、Runtime Manifest、自有交互入口 Auth Gateway。
 6. **上线加固：** 审计、故障注入、隔离测试、负载基线和运维手册。
