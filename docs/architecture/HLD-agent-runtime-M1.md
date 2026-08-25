@@ -61,6 +61,8 @@ M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
+标准 Runtime 只接收 Platform 当前 active 的模型 endpoint、模型、reasoning 和注入到本 Agent 的运行凭证。获准 endpoint 与 Owner 配置、Secret 密文和候选修订的权威边界见工程 Spec 10.6 和 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
+
 ### 3.2 自定义 Agent
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
@@ -74,7 +76,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 ## 4. Runtime Manifest
 
-自定义镜像通过固定 OCI Image Label `io.agora.agent.runtime.manifest` 提供 JSON Runtime Manifest。平台必须在解析前拒绝超过 64 KiB 的 UTF-8 Label，并使用最大嵌套深度为 8、能够检测重复键的 JSON Object 解析器读取；根对象或任意嵌套对象存在重复键时，在 Schema 校验前拒绝。M1 只接受整数 `schemaVersion: 1`，根对象以及 `service`、`health`、`capabilities` 对象中的未知字段均拒绝。实现阶段必须在 `packages/contracts` 维护与本节一致的版本化 JSON Schema，并以该 Schema 作为创建、升级和契约测试的机器校验入口。
+自定义镜像通过固定 OCI Image Label `io.agora.agent.runtime.manifest` 提供 JSON Runtime Manifest。ImageRegistryAdapter 只为已准入的不可变 Digest 返回 OCI config 和该 Label；具体 Registry、credential、签名与扫描政策不进入 Runtime 契约。平台必须在解析前拒绝超过 64 KiB 的 UTF-8 Label，并使用最大嵌套深度为 8、能够检测重复键的 JSON Object 解析器读取；根对象或任意嵌套对象存在重复键时，在 Schema 校验前拒绝。M1 只接受整数 `schemaVersion: 1`，根对象以及 `service`、`health`、`capabilities` 对象中的未知字段均拒绝。实现阶段必须在 `packages/contracts` 维护与本节一致的版本化 JSON Schema，并以该 Schema 作为创建、升级和契约测试的机器校验入口。
 
 | 字段 | 规则 |
 | --- | --- |
@@ -197,7 +199,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 ## 10. Runtime 安全约束
 
-Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、KMS、Kubernetes 或原始凭证权限作为运行前提。
+Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、部署解密私钥、Kubernetes 或原始凭证权限作为运行前提。
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
@@ -221,14 +223,14 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 - worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、fence、capability、状态和规范化事件。Host 不通过引用回读 Platform DB 或 Connection DB；Grant 的权威结构和校验规则见工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，Host 必须在读取附件或产生 Runtime 副作用前验证其签名、签发方、audience、有效期，以及 Agent、Conversation、Execution、附件引用和操作绑定，不能信任单独提交的身份或对象 ID。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
 - Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；Driver 只能由已部署且校验通过的标准模板 Registry 或自定义 Agent Manifest 固定绑定，不能由请求方选择或覆盖。上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
 - `packages/agent-runtime` 只能依赖 Node.js/TypeScript 标准能力、经过批准且版本固定的 runtime/protocol library，以及 `packages/contracts` 中的 Host/Driver 契约。它不能依赖 `platform-core`、`platform-store`、`identity`、Connection Module、`kubernetes-runtime`、Web/Channel 或应用入口。
-- 平台身份和 Connection 授权在 RuntimeHost 外解析；Host 只消费当前调用附带的版本化短期 Grant 和已裁剪 capability，不能读取企业目录、Platform DB、Connection DB、KMS 或 Kubernetes API。
+- 平台身份和 Connection 授权在 RuntimeHost 外解析；Host 只消费当前调用附带的版本化短期 Grant 和已裁剪 capability，不能读取 IdentityAdapter、Platform DB、Connection DB、部署解密 keyring 或 Kubernetes API。
 
 ### 12.2 独立维护质量
 
 - RuntimeHost Interface 与 Driver Interface 使用版本化 Schema，并为 accepted/busy/rejected/unknown、取消、权限、终态、恢复失败和不支持 capability 定义稳定且可测试的错误语义；请求持久化、fence 和 crash-window 恢复遵循 8.1 的统一契约。M1 内部版本可以演进，但变更必须更新消费者、Schema 和 conformance，不能依赖调用方解析日志文本。
-- Conformance 通过同一 Interface 运行 Fake Driver 和每个真实 Driver；fixture 必须脱敏、自包含、可离线重放，不依赖 Platform DB、公司身份服务、真实企业凭证或个人工作目录。
+- Conformance 通过同一 Interface 运行 Fake Driver 和每个真实 Driver；fixture 必须脱敏、自包含、可离线重放，不依赖 Platform DB、部署 IdentityAdapter、真实企业凭证或个人工作目录。
 - 每个 Driver 记录精确的上游 package/CLI 版本、生成 Schema 的来源 commit、已验证 capability 和兼容矩阵。标准镜像使用 frozen lockfile 和不可变 Digest，不在启动时解析 `latest` 或下载依赖。
-- 第三方依赖必须保留 license、NOTICE、生成物 provenance 和 SBOM 所需信息。RuntimeHost 源码、测试、日志、错误和 fixture 不得包含 Token、API Key、OAuth Secret、普通用户会话正文或本机绝对路径。
+- 第三方依赖必须保留 license、NOTICE、生成物 provenance 和 SBOM 所需信息。RuntimeHost 源码、测试、日志、错误和 fixture 不得包含 Token、API Key、第三方 Secret、普通用户会话正文或本机绝对路径。
 - Module 文档应让不熟悉 Agent Infra 产品层的维护者只通过 Host/Driver Interface、生命周期和 conformance 理解 Runtime 行为；平台专有授权、outbox 和产品状态只作为外部调用约束引用，不复制进 Runtime core。
 
 ### 12.3 M1 非目标
