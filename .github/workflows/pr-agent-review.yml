@@ -16,7 +16,7 @@ jobs:
   analyze:
     name: PR-Agent Analysis
     if: >-
-      vars.PR_AGENT_ENABLED == 'true' &&
+      vars.PR_REVIEW_PROVIDER != 'claude' &&
       github.event.sender.type != 'Bot' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -72,7 +72,7 @@ jobs:
   suggestions:
     name: PR-Agent Suggestions
     if: >-
-      vars.PR_AGENT_ENABLED == 'true' &&
+      vars.PR_REVIEW_PROVIDER != 'claude' &&
       github.event.sender.type != 'Bot' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository

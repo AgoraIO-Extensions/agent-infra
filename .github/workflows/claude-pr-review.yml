@@ -21,7 +21,7 @@ jobs:
   analyze:
     name: Claude Review Analysis
     if: >-
-      vars.CLAUDE_REVIEW_ENABLED == 'true' &&
+      vars.PR_REVIEW_PROVIDER == 'claude' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0] &&
@@ -32,8 +32,13 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      selected_provider: ${{ steps.selected-provider.outputs.selected_provider }}
       structured_output: ${{ steps.claude.outputs.structured_output }}
     steps:
+      - name: Record selected provider
+        id: selected-provider
+        run: echo "selected_provider=claude" >> "$GITHUB_OUTPUT"
+
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,6 +142,7 @@ jobs:
     needs: analyze
     if: >-
       always() &&
+      needs.analyze.outputs.selected_provider == 'claude' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0] &&
@@ -179,7 +185,7 @@ jobs:
           GATE_CHECK_TOKEN: ${{ steps.gate-publisher-token.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          REVIEW_ENABLED: ${{ vars.CLAUDE_REVIEW_ENABLED }}
+          REVIEW_ENABLED: "true"
           STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}
         run: node .github/scripts/claude-review.mjs
 

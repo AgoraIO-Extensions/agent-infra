@@ -1115,7 +1115,7 @@ export function validateWorkflowDocuments(workflows) {
       group: "pr-agent-review-${{ github.event.pull_request.number }}",
       "cancel-in-progress": true,
     }) ||
-    !prAgentCondition.includes("vars.PR_AGENT_ENABLED == 'true'") ||
+    !prAgentCondition.includes("vars.PR_REVIEW_PROVIDER != 'claude'") ||
     !prAgentCondition.includes(
       "github.event.pull_request.head.repo.full_name == github.repository",
     ) ||
@@ -1555,6 +1555,8 @@ export function validateWorkflowDocuments(workflows) {
   const review = workflows["claude-pr-review.yml"];
   const reviewTrigger = review?.on?.workflow_run;
   const reviewConcurrency = review?.concurrency;
+  const reviewAnalyzeCondition = String(review?.jobs?.analyze?.if ?? "");
+  const reviewPublishCondition = String(review?.jobs?.publish?.if ?? "");
   const reviewJobConditions = [review?.jobs?.analyze?.if, review?.jobs?.publish?.if].map(
     (condition) => String(condition ?? ""),
   );
@@ -1573,8 +1575,9 @@ export function validateWorkflowDocuments(workflows) {
           "github.event.workflow_run.head_repository.full_name == github.repository",
         ),
     ) ||
-    !String(review?.jobs?.analyze?.if ?? "").includes(
-      "vars.CLAUDE_REVIEW_ENABLED == 'true'",
+    !reviewAnalyzeCondition.includes("vars.PR_REVIEW_PROVIDER == 'claude'") ||
+    !reviewPublishCondition.includes(
+      "needs.analyze.outputs.selected_provider == 'claude'",
     )
   ) {
     errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
@@ -1582,6 +1585,9 @@ export function validateWorkflowDocuments(workflows) {
   const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
   const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
   const reviewAction = analyzeSteps[reviewActionIndex];
+  const selectedReviewProvider = analyzeSteps.find(
+    (step) => step.id === "selected-provider",
+  );
   const reviewDataCheckout = analyzeSteps.find(
     (step) => step.name === "Checkout untrusted PR head as review data",
   );
@@ -1593,6 +1599,11 @@ export function validateWorkflowDocuments(workflows) {
     (step) => step.id === "gate-publisher-token",
   );
   if (
+    review?.jobs?.analyze?.outputs?.selected_provider !==
+      "${{ steps.selected-provider.outputs.selected_provider }}" ||
+    analyzeSteps[0] !== selectedReviewProvider ||
+    selectedReviewProvider?.run !==
+      'echo "selected_provider=claude" >> "$GITHUB_OUTPUT"' ||
     reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||
     reviewDataCheckout?.with?.path !== "pr-head" ||
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
@@ -1611,7 +1622,7 @@ export function validateWorkflowDocuments(workflows) {
       GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
-      REVIEW_ENABLED: "${{ vars.CLAUDE_REVIEW_ENABLED }}",
+      REVIEW_ENABLED: "true",
       STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     }) ||
     !sameObject(review?.jobs?.publish?.permissions, {
