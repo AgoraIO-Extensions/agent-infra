@@ -8,6 +8,7 @@
 	],
 	"scripts": {
 		"build": "tsdown",
+		"admin:bootstrap": "tsx --env-file-if-exists=../../.env.production --env-file-if-exists=../../.env.conformance.local src/bootstrap-admin.ts",
 		"bootstrap:production": "node dist/bootstrap-production.mjs",
 		"check-types": "tsc --noEmit",
 		"conformance": "tsx --env-file-if-exists=../../.env.production --env-file-if-exists=../../.env.conformance.local src/conformance.ts",

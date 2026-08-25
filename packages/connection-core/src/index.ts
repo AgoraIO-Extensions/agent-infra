@@ -96,6 +96,7 @@ export type ConnectionOverview = {
 		displayName: string;
 		externalAccount: string;
 		id: string;
+		ownerType: "PERSONAL" | "SHARED";
 		requiresReconnect: boolean;
 		status: "ACTIVE" | "DISCONNECTED";
 	}>;
@@ -115,6 +116,34 @@ export type ConnectionOverview = {
 			| "TERMINATED";
 	}>;
 	principal: { displayName: string; id: string };
+};
+
+export type ConnectionPrincipalSummary = {
+	displayName: string;
+	email: string | null;
+	principalId: string;
+};
+
+export type ConnectionAdministrator = ConnectionPrincipalSummary;
+
+export type ConnectionAdministratorCandidate = ConnectionPrincipalSummary & {
+	isAdministrator: boolean;
+};
+
+export type SharedGithubAdministration = {
+	principals: ConnectionPrincipalSummary[];
+	scopes: Array<{
+		connections: Array<{
+			displayName: string;
+			externalAccount: string;
+			id: string;
+			status: "ACTIVE" | "DISCONNECTED";
+		}>;
+		displayName: string;
+		members: string[];
+		sharedScopeId: string;
+		state: "ACTIVE" | "SUSPENDED" | "DISABLED";
+	}>;
 };
 
 export type CurrentConsumerAuthorizationPreview = {
@@ -478,6 +507,7 @@ export type OAuthTransaction = {
 	codeVerifier: string;
 	principalId: string;
 	redirectUri: string;
+	sharedScopeId?: string;
 };
 
 export type ReconciliationJob = {
@@ -490,6 +520,41 @@ export type ReconciliationJob = {
 
 export interface ConnectionRepository {
 	ensurePrincipal(input: { principalId: string }): Promise<void>;
+	authorizeConnectionAdministration(principalId: string): Promise<boolean>;
+	isConnectionAdministrator(principalId: string): Promise<boolean>;
+	grantConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}): Promise<void>;
+	listConnectionAdministratorCandidates(
+		principalId: string,
+	): Promise<ConnectionAdministratorCandidate[]>;
+	listConnectionAdministrators(
+		principalId: string,
+	): Promise<ConnectionAdministrator[]>;
+	revokeConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}): Promise<void>;
+	createSharedScope(input: {
+		actorPrincipalId: string;
+		displayName: string;
+	}): Promise<{ sharedScopeId: string }>;
+	grantSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}): Promise<void>;
+	revokeSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}): Promise<void>;
+	renameSharedScope(input: {
+		actorPrincipalId: string;
+		displayName: string;
+		sharedScopeId: string;
+	}): Promise<void>;
 	confirmCurrentConsumerAuthorization(input: {
 		confirmationToken: string;
 		idempotencyKey: string;
@@ -525,6 +590,10 @@ export interface ConnectionRepository {
 		connectionId: string;
 		principalId: string;
 	}): Promise<void>;
+	disconnectSharedConnection(input: {
+		actorPrincipalId: string;
+		connectionId: string;
+	}): Promise<void>;
 	consumeOAuthTransaction(state: string): Promise<OAuthTransaction>;
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
@@ -535,6 +604,14 @@ export interface ConnectionRepository {
 		externalAccount: string;
 		grantedScopes: readonly string[];
 		principalId: string;
+	}): Promise<{ connectionId: string }>;
+	storeSharedGithubOAuthCredential(input: {
+		accessToken: string;
+		actorPrincipalId: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		sharedScopeId: string;
 	}): Promise<{ connectionId: string }>;
 	findIdempotentCall(input: {
 		action: GitHubActionName;
@@ -549,6 +626,9 @@ export interface ConnectionRepository {
 	listAuthorizedActions(
 		invocation: InvocationContext,
 	): Promise<ActionDefinition[]>;
+	sharedGithubAdministration(
+		actorPrincipalId: string,
+	): Promise<SharedGithubAdministration>;
 	resolveDelegatedWorkload(
 		workload: string | undefined,
 	): Promise<InvocationContext>;
@@ -621,6 +701,17 @@ export class ConnectionError extends Error {
 	}
 }
 
+export function normalizeSharedScopeDisplayName(value: string) {
+	const displayName = value.trim();
+	if (!displayName || displayName.length > 120) {
+		throw new ConnectionError(
+			"INVALID_REQUEST",
+			"Shared group name is invalid",
+		);
+	}
+	return displayName;
+}
+
 function assertRecord(
 	value: unknown,
 ): asserts value is Record<string, unknown> {
@@ -690,6 +781,86 @@ export class ConnectionApplicationService {
 
 	async overview(principalId: string) {
 		return this.repository.getOverview(principalId);
+	}
+
+	isConnectionAdministrator(principalId: string) {
+		return this.repository.isConnectionAdministrator(principalId);
+	}
+
+	authorizeConnectionAdministration(principalId: string) {
+		return this.repository.authorizeConnectionAdministration(principalId);
+	}
+
+	grantConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}) {
+		return this.repository.grantConnectionAdministrator(input);
+	}
+
+	listConnectionAdministratorCandidates(principalId: string) {
+		return this.repository.listConnectionAdministratorCandidates(principalId);
+	}
+
+	listConnectionAdministrators(principalId: string) {
+		return this.repository.listConnectionAdministrators(principalId);
+	}
+
+	revokeConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}) {
+		return this.repository.revokeConnectionAdministrator(input);
+	}
+
+	createSharedScope(input: { actorPrincipalId: string; displayName: string }) {
+		return this.repository.createSharedScope(input);
+	}
+
+	grantSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}) {
+		return this.repository.grantSharedScopePrincipal(input);
+	}
+
+	revokeSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}) {
+		return this.repository.revokeSharedScopePrincipal(input);
+	}
+
+	renameSharedScope(input: {
+		actorPrincipalId: string;
+		displayName: string;
+		sharedScopeId: string;
+	}) {
+		return this.repository.renameSharedScope(input);
+	}
+
+	disconnectSharedConnection(input: {
+		actorPrincipalId: string;
+		connectionId: string;
+	}) {
+		return this.repository.disconnectSharedConnection(input);
+	}
+
+	sharedGithubAdministration(actorPrincipalId: string) {
+		return this.repository.sharedGithubAdministration(actorPrincipalId);
+	}
+
+	storeSharedGithubOAuthCredential(input: {
+		accessToken: string;
+		actorPrincipalId: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		sharedScopeId: string;
+	}) {
+		return this.repository.storeSharedGithubOAuthCredential(input);
 	}
 
 	async listDirectActions(session: string | undefined) {
@@ -922,6 +1093,32 @@ export class ConnectionApplicationService {
 		};
 	}
 
+	async startSharedGithubOAuth(
+		actorPrincipalId: string,
+		sharedScopeId: string,
+		redirectUri: string,
+	) {
+		const oauth = this.requireOAuth();
+		await this.repository.ensurePrincipal({ principalId: actorPrincipalId });
+		const state = randomToken();
+		const codeVerifier = randomToken();
+		const codeChallenge = base64UrlHash(codeVerifier);
+		await this.repository.createOAuthTransaction({
+			codeVerifier,
+			principalId: actorPrincipalId,
+			redirectUri,
+			sharedScopeId,
+			state,
+		});
+		return {
+			authorizationUrl: oauth.getAuthorizationUrl({
+				codeChallenge,
+				redirectUri,
+				state,
+			}),
+		};
+	}
+
 	async completeGithubOAuth(code: string, state: string) {
 		if (!code || !state) {
 			throw new ConnectionError(
@@ -935,10 +1132,16 @@ export class ConnectionApplicationService {
 			codeVerifier: transaction.codeVerifier,
 			redirectUri: transaction.redirectUri,
 		});
-		return this.repository.storeGithubOAuthCredential({
-			...identity,
-			principalId: transaction.principalId,
-		});
+		return transaction.sharedScopeId
+			? this.repository.storeSharedGithubOAuthCredential({
+					...identity,
+					actorPrincipalId: transaction.principalId,
+					sharedScopeId: transaction.sharedScopeId,
+				})
+			: this.repository.storeGithubOAuthCredential({
+					...identity,
+					principalId: transaction.principalId,
+				});
 	}
 
 	private requireOAuth(): GitHubOAuthProvider {

@@ -22,6 +22,7 @@
 		"dev:platform-worker": "turbo run dev -F @agent-infra/platform-worker",
 		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
 		"connection:conformance": "pnpm --filter @agent-infra/connection-api conformance",
+		"connection:admin:bootstrap": "pnpm --filter @agent-infra/connection-api admin:bootstrap",
 		"docker:build": "docker build -f apps/connection-api/Dockerfile -t agent-infra-connection-api:local .",
 		"docker:up": "docker compose up -d --build",
 		"docker:down": "docker compose down",

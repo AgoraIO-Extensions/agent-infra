@@ -43,6 +43,13 @@ LDAP credential 明文传输风险。
    Adapter 后。OpenConnector Runtime token、global alias、Web Console 和 SQLite 不属于正式路径。
 8. 团队或公司共享 Connection 是同一账号模型上的 SharedScope/Grant 策略，不是另一种 runtime
    profile 或 Credential store。
+9. LDAP 只认证 Principal，不声明 Connection 管理权限。Connection PostgreSQL 保存可撤销、可审计的
+   `CONNECTION_ADMIN` role binding；管理路由每次按当前 Principal 和 role revision 在服务端授权，
+   不信任邮箱、显示名、请求字段或前端菜单状态。第一个管理员只能由持有部署权限的操作员使用稳定
+   LDAP subject 执行一次性 bootstrap；系统已有管理员后，该入口不能再授予角色。
+10. 共享 GitHub Connection 属于 SharedScope，不属于创建它的管理员。管理员角色不自动获得共享
+    使用资格；SharedScope 资格也不授予管理权限。当前 M1 实现只装配显式 Principal membership，
+    LDAP Group 和组织单元的 current eligibility Adapter 仍需另行验收。
 
 ## OAuth、PAT 与实例语义
 
@@ -90,6 +97,8 @@ LDAP credential 明文传输风险。
 ## 证据与后续工作
 
 - Primary Issue：[#140](https://github.com/AgoraIO-Extensions/agent-infra/issues/140)
+- 管理员与共享 GitHub Issue：
+  [#158](https://github.com/AgoraIO-Extensions/agent-infra/issues/158)
 - Rehoboam 参考实现：`justinia/server/services/auth.py`，仅用于确认 LDAP bind、目录 DN 与 `uid`
   语义及当前 Agora LDAP transport；不复制应用 Token、硬编码配置或应用会话。
 - MCP Authorization：<https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization>

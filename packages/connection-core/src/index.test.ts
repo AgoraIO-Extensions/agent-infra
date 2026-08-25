@@ -15,10 +15,12 @@ import {
 	canonicalJson,
 	canonicalJsonVersions,
 	decideReconnectAuthorization,
+	deriveConnectionIdentitySubjectHash,
 	type GitHubExecutor,
 	type GitHubOAuthProvider,
 	type GitHubReconciler,
 	type InvocationContext,
+	normalizeSharedScopeDisplayName,
 	type ReconciliationJob,
 	type StoredCall,
 } from "./index";
@@ -57,6 +59,39 @@ const actions: ActionDefinition[] = [
 	},
 ];
 
+describe("SharedScope display names", () => {
+	it("normalizes valid names and rejects empty or oversized names", () => {
+		expect(normalizeSharedScopeDisplayName("  Release Engineering  ")).toBe(
+			"Release Engineering",
+		);
+		expect(() => normalizeSharedScopeDisplayName("   ")).toThrowError(
+			ConnectionError,
+		);
+		expect(() => normalizeSharedScopeDisplayName("x".repeat(121))).toThrowError(
+			ConnectionError,
+		);
+	});
+});
+
+describe("Connection identity authority", () => {
+	it("derives a stable environment-bound LDAP subject hash for administrator bootstrap", () => {
+		const input = {
+			environment: "https://connection.example/",
+			identity: { issuer: "urn:company:ldap", subject: "employee-123" },
+			key: Buffer.alloc(32, 17),
+		};
+		const first = deriveConnectionIdentitySubjectHash(input);
+		expect(first).toMatch(/^v1:[a-f0-9]{64}$/);
+		expect(deriveConnectionIdentitySubjectHash(input)).toBe(first);
+		expect(
+			deriveConnectionIdentitySubjectHash({
+				...input,
+				environment: "https://other-connection.example/",
+			}),
+		).not.toBe(first);
+	});
+});
+
 const direct: InvocationContext = {
 	connectionId: "connection-alice",
 	consumerId: "consumer-codex",
@@ -85,10 +120,23 @@ class MemoryRepository implements ConnectionRepository {
 		externalAccount: string;
 		principalId: string;
 	};
+	storedSharedOAuthCredential?: {
+		accessToken: string;
+		actorPrincipalId: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		sharedScopeId: string;
+	};
 	private sequence = 0;
 	private oauthTransactions = new Map<
 		string,
-		{ codeVerifier: string; principalId: string; redirectUri: string }
+		{
+			codeVerifier: string;
+			principalId: string;
+			redirectUri: string;
+			sharedScopeId?: string;
+		}
 	>();
 	private callInputs = new Map<string, Record<string, unknown>>();
 	private leaseSequence = 0;
@@ -96,6 +144,40 @@ class MemoryRepository implements ConnectionRepository {
 	failSuccessfulFinalization = false;
 	rejectNextDispatch = false;
 	async ensurePrincipal() {}
+	async authorizeConnectionAdministration() {
+		return false;
+	}
+	async isConnectionAdministrator() {
+		return false;
+	}
+	async grantConnectionAdministrator() {}
+	async grantSharedScopePrincipal() {}
+	async listConnectionAdministratorCandidates() {
+		return [];
+	}
+	async listConnectionAdministrators() {
+		return [];
+	}
+	async revokeConnectionAdministrator() {}
+	async revokeSharedScopePrincipal() {}
+	async renameSharedScope() {}
+	async sharedGithubAdministration() {
+		return { principals: [], scopes: [] };
+	}
+	async createSharedScope() {
+		return { sharedScopeId: "shared-scope-test" };
+	}
+	async storeSharedGithubOAuthCredential(input: {
+		accessToken: string;
+		actorPrincipalId: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		sharedScopeId: string;
+	}) {
+		this.storedSharedOAuthCredential = input;
+		return { connectionId: "connection-shared-test" };
+	}
 	async createCall(input: {
 		action: "github.getRepository" | "github.createPullRequest";
 		argsHash: string;
@@ -160,10 +242,12 @@ class MemoryRepository implements ConnectionRepository {
 		return { declarationId: "declaration-test" };
 	}
 	async disconnectConnection() {}
+	async disconnectSharedConnection() {}
 	async createOAuthTransaction(input: {
 		codeVerifier: string;
 		principalId: string;
 		redirectUri: string;
+		sharedScopeId?: string;
 		state: string;
 	}) {
 		this.oauthTransactions.set(input.state, input);
@@ -225,6 +309,7 @@ class MemoryRepository implements ConnectionRepository {
 				displayName: "Alice GitHub",
 				externalAccount: "alice-github",
 				id: direct.connectionId,
+				ownerType: "PERSONAL" as const,
 				requiresReconnect: false,
 				status: "ACTIVE" as const,
 			},
@@ -765,6 +850,24 @@ describe("Connection application service", () => {
 		await expect(
 			service.completeGithubOAuth("authorization-code", state ?? ""),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+		const shared = await service.startSharedGithubOAuth(
+			"admin",
+			"shared-scope-company",
+			"https://connection.test/oauth/github/callback",
+		);
+		const sharedState = new URL(shared.authorizationUrl).searchParams.get(
+			"state",
+		);
+		await service.completeGithubOAuth("authorization-code", sharedState ?? "");
+		expect(repository.storedSharedOAuthCredential).toEqual({
+			accessToken: "provider-secret",
+			actorPrincipalId: "admin",
+			displayName: "Alice GitHub",
+			externalAccount: "alice-github",
+			grantedScopes: ["repo"],
+			sharedScopeId: "shared-scope-company",
+		});
 	});
 
 	it("reconciles an admitted write with missing terminal evidence", async () => {

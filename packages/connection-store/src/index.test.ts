@@ -54,6 +54,9 @@ describe("Connection store migrations", () => {
 			"0015_consumer_declaration_authority",
 			"0016_grant_pause_states",
 			"0017_grant_status_transitions",
+			"0018_connection_administrators",
+			"0019_shared_github_connections",
+			"0020_connection_owner_immutability",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

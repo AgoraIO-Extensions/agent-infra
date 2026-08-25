@@ -70,6 +70,32 @@ class TestRepository implements ConnectionRepository {
 	}
 
 	async ensurePrincipal() {}
+	async authorizeConnectionAdministration() {
+		return false;
+	}
+	async isConnectionAdministrator() {
+		return false;
+	}
+	async grantConnectionAdministrator() {}
+	async grantSharedScopePrincipal() {}
+	async listConnectionAdministratorCandidates() {
+		return [];
+	}
+	async listConnectionAdministrators() {
+		return [];
+	}
+	async revokeConnectionAdministrator() {}
+	async revokeSharedScopePrincipal() {}
+	async renameSharedScope() {}
+	async sharedGithubAdministration() {
+		return { principals: [], scopes: [] };
+	}
+	async createSharedScope() {
+		return { sharedScopeId: "shared-scope-test" };
+	}
+	async storeSharedGithubOAuthCredential() {
+		return { connectionId: "connection-shared-test" };
+	}
 
 	async createCall(input: {
 		action: StoredCall["action"];
@@ -119,6 +145,7 @@ class TestRepository implements ConnectionRepository {
 	async completeReconciliationJob() {}
 
 	async disconnectConnection() {}
+	async disconnectSharedConnection() {}
 	async createOAuthTransaction(input: {
 		codeVerifier: string;
 		principalId: string;
@@ -182,6 +209,7 @@ class TestRepository implements ConnectionRepository {
 					displayName: "Alice GitHub",
 					externalAccount: "alice-demo",
 					id: "connection-alice",
+					ownerType: "PERSONAL" as const,
 					requiresReconnect: false,
 					status: "ACTIVE" as const,
 				},
@@ -502,6 +530,7 @@ describe("Connection API", () => {
 			}),
 		} as unknown as ConnectionOAuthService;
 		const management = {
+			isConnectionAdministrator: async () => false,
 			confirmCurrentConsumerAuthorization: async (value: unknown) => {
 				if (
 					typeof value === "object" &&
@@ -572,6 +601,7 @@ describe("Connection API", () => {
 						displayName: "GitHub",
 						externalAccount: "octocat",
 						id: "connection-github",
+						ownerType: "PERSONAL" as const,
 						requiresReconnect: false,
 						status: "ACTIVE" as const,
 					},
@@ -580,7 +610,17 @@ describe("Connection API", () => {
 						displayName: "Old GitHub",
 						externalAccount: "octocat-old",
 						id: "connection-old",
+						ownerType: "PERSONAL" as const,
 						requiresReconnect: true,
+						status: "ACTIVE" as const,
+					},
+					{
+						actionVersionIds: [actions[0]?.id ?? ""],
+						displayName: "Agora GitHub",
+						externalAccount: "agora-release-bot",
+						id: "connection-shared",
+						ownerType: "SHARED" as const,
+						requiresReconnect: false,
 						status: "ACTIVE" as const,
 					},
 				],
@@ -638,6 +678,11 @@ describe("Connection API", () => {
 			'action="/connection/grants/grant-existing/revoke"',
 		);
 		expect(body).toContain("Reconnect GitHub");
+		expect(body).toContain("SHARED");
+		expect(body).toContain("GitHub account agora-release-bot");
+		expect(body).not.toContain(
+			'action="/connection/connections/connection-shared/disconnect"',
+		);
 		expect(body).toContain(
 			'href="/connection/connections/github" target="_blank" rel="noopener noreferrer">Add GitHub account</a>',
 		);
@@ -780,6 +825,397 @@ describe("Connection API", () => {
 				value: { code: "github-code", state: "oauth-state" },
 			},
 		]);
+	});
+
+	it("allows only Connection administrators to open the administrator console", async () => {
+		const mutations: Array<{ action: string; targetPrincipalId: string }> = [];
+		const accounts = new Map([
+			[
+				"admin-session",
+				{
+					displayName: "Connection Admin",
+					email: "admin@example.invalid",
+					principalId: "principal-admin",
+				},
+			],
+			[
+				"user-session",
+				{
+					displayName: "Connection User",
+					email: "user@example.invalid",
+					principalId: "principal-user",
+				},
+			],
+		]);
+		const oauth = {
+			getBrowserAccount: async (sessionToken: string | undefined) => {
+				const account = sessionToken ? accounts.get(sessionToken) : undefined;
+				if (!account)
+					throw new OAuthProtocolError("invalid_token", "denied", 401);
+				return account;
+			},
+		} as unknown as ConnectionOAuthService;
+		const management = {
+			authorizeConnectionAdministration: async (principalId: string) =>
+				principalId === "principal-admin",
+			grantConnectionAdministrator: async (input: {
+				actorPrincipalId: string;
+				targetPrincipalId: string;
+			}) => {
+				expect(input.actorPrincipalId).toBe("principal-admin");
+				mutations.push({
+					action: "grant",
+					targetPrincipalId: input.targetPrincipalId,
+				});
+			},
+			isConnectionAdministrator: async (principalId: string) =>
+				principalId === "principal-admin",
+			listConnectionAdministratorCandidates: async (principalId: string) => {
+				expect(principalId).toBe("principal-admin");
+				return [
+					{
+						displayName: "Connection Admin",
+						email: "admin@example.invalid",
+						isAdministrator: true,
+						principalId: "principal-admin",
+					},
+					{
+						displayName: "Connection User",
+						email: "user@example.invalid",
+						isAdministrator: false,
+						principalId: "principal-user",
+					},
+				];
+			},
+			revokeConnectionAdministrator: async (input: {
+				actorPrincipalId: string;
+				targetPrincipalId: string;
+			}) => {
+				expect(input.actorPrincipalId).toBe("principal-admin");
+				mutations.push({
+					action: "revoke",
+					targetPrincipalId: input.targetPrincipalId,
+				});
+			},
+		} as unknown as ConnectionApplicationService;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: management,
+			},
+			resource: "https://connection.example/mcp",
+			service: oauth,
+		});
+
+		const userResponse = await app.request("/connection/admin/administrators", {
+			headers: { cookie: "connection_session=user-session" },
+		});
+		expect(userResponse.status).toBe(403);
+		const denied = await userResponse.json();
+		expect(denied).toMatchObject({
+			error: "forbidden",
+			message: "Connection administration is not authorized",
+			retryable: false,
+			traceId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+		});
+		expect(JSON.stringify(denied)).not.toContain("admin@example.invalid");
+
+		const adminResponse = await app.request(
+			"/connection/admin/administrators",
+			{ headers: { cookie: "connection_session=admin-session" } },
+		);
+		expect(adminResponse.status).toBe(200);
+		const body = await adminResponse.text();
+		expect(body).toContain("Administrators");
+		expect(body).toContain("admin@example.invalid");
+		expect(body).toContain("user@example.invalid");
+		expect(body).toContain(
+			'action="/connection/admin/administrators/principal-user/grant"',
+		);
+		expect(body).toContain(
+			'action="/connection/admin/administrators/principal-admin/revoke"',
+		);
+
+		const formHeaders = {
+			cookie: "connection_session=admin-session",
+			origin: "https://connection.example",
+		};
+		const adminMutations = await Promise.all([
+			app.request("/connection/admin/administrators/principal-user/grant", {
+				headers: formHeaders,
+				method: "POST",
+			}),
+			app.request("/connection/admin/administrators/principal-admin/revoke", {
+				headers: formHeaders,
+				method: "POST",
+			}),
+		]);
+		expect(adminMutations.map((response) => response.status)).toEqual([
+			303, 303,
+		]);
+		expect(mutations).toEqual([
+			{ action: "grant", targetPrincipalId: "principal-user" },
+			{ action: "revoke", targetPrincipalId: "principal-admin" },
+		]);
+
+		const userMutations = await Promise.all([
+			app.request("/connection/admin/administrators/principal-user/grant", {
+				headers: {
+					cookie: "connection_session=user-session",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
+			app.request("/connection/admin/administrators/principal-admin/revoke", {
+				headers: {
+					cookie: "connection_session=user-session",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
+		]);
+		expect(userMutations.map((response) => response.status)).toEqual([
+			403, 403,
+		]);
+		expect(mutations).toHaveLength(2);
+	});
+
+	it("manages Shared GitHub Connections without granting administrators implicit eligibility", async () => {
+		const sessionToken = "shared-admin-session";
+		const calls: Array<{ action: string; value: unknown }> = [];
+		const oauth = {
+			getBrowserAccount: async (value: string | undefined) => {
+				if (value === "shared-user-session") {
+					return {
+						displayName: "Shared User",
+						email: "shared-user@example.invalid",
+						principalId: "principal-user",
+					};
+				}
+				if (value !== sessionToken)
+					throw new OAuthProtocolError("invalid_token", "denied", 401);
+				return {
+					displayName: "Shared Admin",
+					email: "shared-admin@example.invalid",
+					principalId: "principal-admin",
+				};
+			},
+		} as unknown as ConnectionOAuthService;
+		const management = {
+			authorizeConnectionAdministration: async (principalId: string) =>
+				principalId === "principal-admin",
+			createSharedScope: async (value: unknown) => {
+				calls.push({ action: "create-scope", value });
+				return { sharedScopeId: "scope-company" };
+			},
+			disconnectSharedConnection: async (value: unknown) => {
+				calls.push({ action: "disconnect", value });
+			},
+			grantSharedScopePrincipal: async (value: unknown) => {
+				calls.push({ action: "grant", value });
+			},
+			isConnectionAdministrator: async (principalId: string) =>
+				principalId === "principal-admin",
+			revokeSharedScopePrincipal: async (value: unknown) => {
+				calls.push({ action: "revoke", value });
+			},
+			renameSharedScope: async (value: unknown) => {
+				calls.push({ action: "rename", value });
+			},
+			sharedGithubAdministration: async (principalId: string) => {
+				expect(principalId).toBe("principal-admin");
+				return {
+					principals: [
+						{
+							displayName: "Shared Admin",
+							email: "shared-admin@example.invalid",
+							principalId: "principal-admin",
+						},
+						{
+							displayName: "Eligible User",
+							email: "eligible@example.invalid",
+							principalId: "principal-eligible",
+						},
+					],
+					scopes: [
+						{
+							connections: [
+								{
+									displayName: "Agora GitHub",
+									externalAccount: "agora-release-bot",
+									id: "connection-shared",
+									status: "ACTIVE" as const,
+								},
+							],
+							displayName: "Agora Engineering",
+							members: ["principal-eligible"],
+							sharedScopeId: "scope-company",
+							state: "ACTIVE" as const,
+						},
+					],
+				};
+			},
+			startSharedGithubOAuth: async (
+				actorPrincipalId: string,
+				sharedScopeId: string,
+				redirectUri: string,
+			) => {
+				calls.push({
+					action: "connect",
+					value: { actorPrincipalId, redirectUri, sharedScopeId },
+				});
+				return {
+					authorizationUrl: "https://github.test/login/oauth/authorize",
+				};
+			},
+		} as unknown as ConnectionApplicationService;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: management,
+			},
+			resource: "https://connection.example/mcp",
+			service: oauth,
+		});
+		const cookie = `connection_session=${sessionToken}`;
+		expect(
+			(
+				await app.request("/connection/admin/shared-connections", {
+					headers: { cookie: "connection_session=shared-user-session" },
+				})
+			).status,
+		).toBe(403);
+
+		const page = await app.request("/connection/admin/shared-connections", {
+			headers: { cookie },
+		});
+		expect(page.status).toBe(200);
+		const body = await page.text();
+		expect(body).toContain("Shared GitHub Connections");
+		expect(body).toContain("Agora Engineering");
+		expect(body).toContain(
+			'action="/connection/admin/shared-connections/scope-company/rename"',
+		);
+		expect(body).toContain('value="Agora Engineering"');
+		expect(body).toContain("agora-release-bot");
+		expect(body).toContain("Eligible User");
+		expect(body).toContain(
+			'href="/connection/admin/shared-connections/scope-company/github"',
+		);
+		expect(body).toContain(
+			'action="/connection/admin/shared-connections/scope-company/principals/principal-admin/grant"',
+		);
+		expect(body).toContain(
+			'action="/connection/admin/shared-connections/scope-company/principals/principal-eligible/revoke"',
+		);
+
+		const formHeaders = {
+			"content-type": "application/x-www-form-urlencoded",
+			cookie,
+			origin: "https://connection.example",
+		};
+		const mutations = await Promise.all([
+			app.request("/connection/admin/shared-connections", {
+				body: new URLSearchParams({ display_name: "New shared scope" }),
+				headers: formHeaders,
+				method: "POST",
+			}),
+			app.request(
+				"/connection/admin/shared-connections/scope-company/principals/principal-admin/grant",
+				{ headers: formHeaders, method: "POST" },
+			),
+			app.request(
+				"/connection/admin/shared-connections/scope-company/principals/principal-eligible/revoke",
+				{ headers: formHeaders, method: "POST" },
+			),
+			app.request(
+				"/connection/admin/shared-connections/connections/connection-shared/disconnect",
+				{ headers: formHeaders, method: "POST" },
+			),
+			app.request("/connection/admin/shared-connections/scope-company/rename", {
+				body: new URLSearchParams({ display_name: "Release Engineering" }),
+				headers: formHeaders,
+				method: "POST",
+			}),
+		]);
+		expect(mutations.map((response) => response.status)).toEqual([
+			303, 303, 303, 303, 303,
+		]);
+		const connect = await app.request(
+			"/connection/admin/shared-connections/scope-company/github",
+			{ headers: { cookie } },
+		);
+		expect(connect.status).toBe(303);
+		expect(connect.headers.get("location")).toBe(
+			"https://github.test/login/oauth/authorize",
+		);
+		expect(calls).toHaveLength(6);
+		expect(calls).toEqual(
+			expect.arrayContaining([
+				{
+					action: "create-scope",
+					value: {
+						actorPrincipalId: "principal-admin",
+						displayName: "New shared scope",
+					},
+				},
+				{
+					action: "grant",
+					value: {
+						actorPrincipalId: "principal-admin",
+						sharedScopeId: "scope-company",
+						targetPrincipalId: "principal-admin",
+					},
+				},
+				{
+					action: "revoke",
+					value: {
+						actorPrincipalId: "principal-admin",
+						sharedScopeId: "scope-company",
+						targetPrincipalId: "principal-eligible",
+					},
+				},
+				{
+					action: "disconnect",
+					value: {
+						actorPrincipalId: "principal-admin",
+						connectionId: "connection-shared",
+					},
+				},
+				{
+					action: "connect",
+					value: {
+						actorPrincipalId: "principal-admin",
+						redirectUri: "https://connection.example/oauth/callback",
+						sharedScopeId: "scope-company",
+					},
+				},
+				{
+					action: "rename",
+					value: {
+						actorPrincipalId: "principal-admin",
+						displayName: "Release Engineering",
+						sharedScopeId: "scope-company",
+					},
+				},
+			]),
+		);
+		const deniedRename = await app.request(
+			"/connection/admin/shared-connections/scope-company/rename",
+			{
+				body: new URLSearchParams({ display_name: "Unauthorized rename" }),
+				headers: {
+					"content-type": "application/x-www-form-urlencoded",
+					cookie: "connection_session=shared-user-session",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(deniedRename.status).toBe(403);
+		expect(calls).toHaveLength(6);
 	});
 
 	it("limits DCR to the measured Codex native-client profile", async () => {

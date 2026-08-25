@@ -219,6 +219,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .consumer-name { margin: 0; color: #343b36; font-size: 13px; font-weight: 650; }
 .secondary-button { min-height: 32px; padding: 0 11px; border: 1px solid #8ca394; border-radius: 5px; background: #ffffff; color: #245434; font-size: 12px; font-weight: 650; }
 .secondary-button:hover { background: #f0f6f1; }
+.scope-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.scope-actions { display: flex; align-items: start; gap: 8px; }
+.rename-control summary { display: inline-flex; align-items: center; list-style: none; cursor: pointer; }
+.rename-control summary::-webkit-details-marker { display: none; }
+.rename-form { display: grid; position: absolute; z-index: 1; width: min(360px, calc(100vw - 40px)); margin-top: 8px; margin-left: -230px; padding: 14px; border: 1px solid #cbd3cd; border-radius: 6px; background: #ffffff; box-shadow: 0 8px 24px rgb(31 45 35 / 14%); }
+.rename-form input { margin-bottom: 12px; }
+.rename-form-actions { display: flex; align-items: center; gap: 12px; }
 .action-list { max-height: 180px; margin: 12px 0 0; overflow-y: auto; padding-right: 8px; padding-left: 18px; color: #5b655e; font-size: 12px; line-height: 1.6; }
 @media (max-width: 760px) {
   .login-shell { grid-template-columns: 1fr; }
@@ -236,16 +243,18 @@ tbody tr:last-child td { border-bottom: 0; }
 	.connection-item { grid-template-columns: 1fr; }
 	.connection-actions { justify-content: start; }
 	.consumer-list { grid-column: 1; }
-	.consumer-row { align-items: start; flex-direction: column; }
+  .consumer-row { align-items: start; flex-direction: column; }
+  .scope-header, .scope-actions { align-items: stretch; flex-direction: column; }
+  .rename-form { position: static; width: 100%; margin-left: 0; box-shadow: none; }
   .primary-button { width: 100%; }
   .issued { margin-right: 14px; margin-left: 14px; }
   .panel-header, .issue-form { padding-right: 14px; padding-left: 14px; }
   .table-wrap { padding-right: 8px; padding-left: 8px; }
-  th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) { display: none; }
-  th:nth-child(1) { width: 36%; }
-  th:nth-child(2) { width: 24%; }
-  th:nth-child(5) { width: 20%; }
-  th:nth-child(6) { width: 20%; }
+  .token-table th:nth-child(3), .token-table td:nth-child(3), .token-table th:nth-child(4), .token-table td:nth-child(4) { display: none; }
+  .token-table th:nth-child(1) { width: 36%; }
+  .token-table th:nth-child(2) { width: 24%; }
+  .token-table th:nth-child(5) { width: 20%; }
+  .token-table th:nth-child(6) { width: 20%; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
@@ -291,10 +300,21 @@ function timestamp(value: Date | null) {
 	return `<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`;
 }
 
-function consoleNavigation(current: "connections" | "tokens") {
+function consoleNavigation(
+	current: "administrators" | "connections" | "shared-connections" | "tokens",
+	isAdministrator = false,
+) {
+	const adminNavigation =
+		isAdministrator ||
+		current === "administrators" ||
+		current === "shared-connections"
+			? `<a class="nav-link" href="/connection/admin/shared-connections"${current === "shared-connections" ? ' aria-current="page"' : ""}>Shared Connections</a>
+<a class="nav-link" href="/connection/admin/administrators"${current === "administrators" ? ' aria-current="page"' : ""}>Administrators</a>`
+			: "";
 	return `<nav aria-label="Connection navigation">
 <a class="nav-link" href="/connection/connections"${current === "connections" ? ' aria-current="page"' : ""}>Connections</a>
 <a class="nav-link" href="/connection/tokens"${current === "tokens" ? ' aria-current="page"' : ""}>Access tokens</a>
+${adminNavigation}
 </nav>`;
 }
 
@@ -302,7 +322,7 @@ function tokenRows(tokens: PersonalAccessTokenRecord[]) {
 	if (tokens.length === 0) {
 		return '<p class="empty">No access tokens have been issued.</p>';
 	}
-	return `<div class="table-wrap"><table>
+	return `<div class="table-wrap"><table class="token-table">
 <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
 <tbody>${tokens
 		.map(
@@ -381,6 +401,7 @@ ${tokenRows(input.tokens)}
 
 function connectionConsolePage(input: {
 	account: { displayName: string; email: string | null };
+	isAdministrator: boolean;
 	overview: ConnectionOverview;
 }) {
 	const actionList = input.overview.actions
@@ -421,13 +442,15 @@ function connectionConsolePage(input: {
 								.join("")
 						: '<p class="connection-meta">Issue an access token or sign in from a Direct MCP client before authorizing it.</p>';
 					return `<article class="connection-item">
-<div><h3 class="connection-title">${html(connection.displayName)}</h3><p class="connection-meta">GitHub account ${html(connection.externalAccount)}</p></div>
+<div><h3 class="connection-title">${html(connection.displayName)}${connection.ownerType === "SHARED" ? ' <span class="status">SHARED</span>' : ""}</h3><p class="connection-meta">${connection.ownerType === "SHARED" ? "Shared " : ""}GitHub account ${html(connection.externalAccount)}</p></div>
 <div class="connection-actions"><span class="status status-${connection.requiresReconnect ? "expired" : connection.status.toLowerCase()}">${connection.requiresReconnect ? "RECONNECT REQUIRED" : html(connection.status)}</span>${
-						connection.requiresReconnect
-							? '<a class="secondary-button" href="/connection/connections/github">Reconnect GitHub</a>'
-							: connection.status === "ACTIVE"
-								? `<form method="post" action="/connection/connections/${encodeURIComponent(connection.id)}/disconnect"><button class="danger-button" type="submit">Disconnect</button></form>`
-								: ""
+						connection.ownerType === "SHARED"
+							? ""
+							: connection.requiresReconnect
+								? '<a class="secondary-button" href="/connection/connections/github">Reconnect GitHub</a>'
+								: connection.status === "ACTIVE"
+									? `<form method="post" action="/connection/connections/${encodeURIComponent(connection.id)}/disconnect"><button class="danger-button" type="submit">Disconnect</button></form>`
+									: ""
 					}</div>
 <div class="consumer-list">${consumers}</div>
 </article>`;
@@ -446,7 +469,7 @@ function connectionConsolePage(input: {
 <div class="app-shell">
 <aside class="sidebar">
 <div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("connections")}
+${consoleNavigation("connections", input.isAdministrator)}
 <div class="account">
 <p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
 <p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
@@ -460,6 +483,145 @@ ${consoleNavigation("connections")}
 <div class="issue-form"><div></div><a class="primary-button" href="/connection/connections/github" target="_blank" rel="noopener noreferrer">Add GitHub account</a></div>
 ${connections}
 </section>
+</main>
+</div>
+</body>
+</html>`;
+}
+
+function administratorConsolePage(input: {
+	account: { displayName: string; email: string | null };
+	administrators: readonly {
+		displayName: string;
+		email: string | null;
+		isAdministrator: boolean;
+		principalId: string;
+	}[];
+}) {
+	const rows = input.administrators
+		.map(
+			(administrator) => `<tr>
+<td>${html(administrator.displayName)}</td>
+<td>${html(administrator.email ?? "Company account")}</td>
+<td>${
+				administrator.isAdministrator
+					? '<span class="status status-active">ADMIN</span>'
+					: '<span class="status">USER</span>'
+			}</td>
+<td><form method="post" action="/connection/admin/administrators/${encodeURIComponent(administrator.principalId)}/${administrator.isAdministrator ? "revoke" : "grant"}"><button class="${administrator.isAdministrator ? "danger-button" : "secondary-button"}" type="submit">${administrator.isAdministrator ? "Revoke" : "Grant"}</button></form></td>
+</tr>`,
+		)
+		.join("");
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Administrators | Connection</title>
+<style>${consoleStyles}</style>
+</head>
+<body>
+<div class="app-shell">
+<aside class="sidebar">
+<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
+${consoleNavigation("administrators")}
+<div class="account">
+<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
+<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
+<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
+</div>
+</aside>
+<main class="content">
+<header class="page-header"><h1>Administrators</h1></header>
+<section class="panel">
+<div class="table-wrap"><table><thead><tr><th>Name</th><th>Account</th><th>Role</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>
+</section>
+</main>
+</div>
+</body>
+</html>`;
+}
+
+function sharedGithubAdministrationPage(input: {
+	account: { displayName: string; email: string | null };
+	overview: {
+		principals: readonly {
+			displayName: string;
+			email: string | null;
+			principalId: string;
+		}[];
+		scopes: readonly {
+			connections: readonly {
+				displayName: string;
+				externalAccount: string;
+				id: string;
+				status: "ACTIVE" | "DISCONNECTED";
+			}[];
+			displayName: string;
+			members: readonly string[];
+			sharedScopeId: string;
+			state: "ACTIVE" | "SUSPENDED" | "DISABLED";
+		}[];
+	};
+}) {
+	const scopes = input.overview.scopes.length
+		? input.overview.scopes
+				.map((scope) => {
+					const members = new Set(scope.members);
+					const principalRows = input.overview.principals
+						.map((principal) => {
+							const eligible = members.has(principal.principalId);
+							return `<tr>
+<td>${html(principal.displayName)}</td>
+<td>${html(principal.email ?? "Company account")}</td>
+<td><span class="status ${eligible ? "status-active" : ""}">${eligible ? "ELIGIBLE" : "NOT ELIGIBLE"}</span></td>
+<td><form method="post" action="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/principals/${encodeURIComponent(principal.principalId)}/${eligible ? "revoke" : "grant"}"><button class="${eligible ? "danger-button" : "secondary-button"}" type="submit">${eligible ? "Revoke" : "Grant"}</button></form></td>
+</tr>`;
+						})
+						.join("");
+					const connections = scope.connections.length
+						? scope.connections
+								.map(
+									(connection) => `<div class="consumer-row">
+<div><p class="consumer-name">${html(connection.displayName)}</p><p class="connection-meta">GitHub account ${html(connection.externalAccount)}</p></div>
+<div class="connection-actions"><span class="status status-${connection.status.toLowerCase()}">${html(connection.status)}</span>${connection.status === "ACTIVE" ? `<form method="post" action="/connection/admin/shared-connections/connections/${encodeURIComponent(connection.id)}/disconnect"><button class="danger-button" type="submit">Disconnect</button></form>` : ""}</div>
+</div>`,
+								)
+								.join("")
+						: '<p class="empty">No GitHub account is connected.</p>';
+					return `<section class="panel" aria-labelledby="${html(scope.sharedScopeId)}-title">
+<div class="panel-header scope-header"><div><h2 id="${html(scope.sharedScopeId)}-title">${html(scope.displayName)}</h2><span class="status status-${scope.state.toLowerCase()}">${html(scope.state)}</span></div><div class="scope-actions"><a class="primary-button" href="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/github" target="_blank" rel="noopener noreferrer">Connect GitHub account</a><details class="rename-control"><summary class="secondary-button">Rename</summary><form class="rename-form" method="post" action="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/rename"><label for="rename-${html(scope.sharedScopeId)}">Shared group name</label><input id="rename-${html(scope.sharedScopeId)}" name="display_name" value="${html(scope.displayName)}" maxlength="120" required><div class="rename-form-actions"><button class="primary-button" type="submit">Save</button><a href="/connection/admin/shared-connections">Cancel</a></div></form></details></div></div>
+<div class="connection-list">${connections}</div>
+<h3>Who can use this connection</h3>
+<p class="connection-meta">Only employees who have signed in to Connection appear here.</p>
+<div class="table-wrap"><table><thead><tr><th>Name</th><th>Account</th><th>Eligibility</th><th>Action</th></tr></thead><tbody>${principalRows}</tbody></table></div>
+</section>`;
+				})
+				.join("")
+		: '<p class="empty">No Shared GitHub scope exists.</p>';
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared GitHub Connections | Connection</title>
+<style>${consoleStyles}</style>
+</head>
+<body>
+<div class="app-shell">
+<aside class="sidebar">
+<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
+${consoleNavigation("shared-connections")}
+<div class="account">
+<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
+<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
+<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
+</div>
+</aside>
+<main class="content">
+<header class="page-header"><h1>Shared GitHub Connections</h1></header>
+<section class="panel"><form method="post" action="/connection/admin/shared-connections"><label for="display_name">Shared group name</label><div class="issue-form"><input id="display_name" name="display_name" maxlength="120" placeholder="e.g. Agora Engineering" required><button class="primary-button" type="submit">Create shared group</button></div></form></section>
+${scopes}
 </main>
 </div>
 </body>
@@ -535,6 +697,19 @@ function secureHtmlHeaders(
 	context.header("referrer-policy", "no-referrer");
 	context.header("x-content-type-options", "nosniff");
 	context.header("x-frame-options", "DENY");
+}
+
+function administrationForbidden(context: Context) {
+	context.header("cache-control", "no-store");
+	return context.json(
+		{
+			error: "forbidden",
+			message: "Connection administration is not authorized",
+			retryable: false,
+			traceId: randomUUID(),
+		},
+		403,
+	);
 }
 
 function formValue(form: FormData, name: string) {
@@ -815,13 +990,179 @@ export function createConnectionOAuthApp(
 
 	if (options.management) {
 		const management = options.management;
+		const currentAdministrator = async (context: Context) => {
+			const session = await currentBrowserAccount(context);
+			if (!session) return context.redirect("/connection/login");
+			if (
+				!(await management.service.authorizeConnectionAdministration(
+					session.account.principalId,
+				))
+			) {
+				return administrationForbidden(context);
+			}
+			return session;
+		};
+		app.get("/connection/admin/administrators", async (context) => {
+			const session = await currentAdministrator(context);
+			if (session instanceof Response) return session;
+			const administrators =
+				await management.service.listConnectionAdministratorCandidates(
+					session.account.principalId,
+				);
+			secureHtmlHeaders(context);
+			return context.html(
+				administratorConsolePage({
+					account: session.account,
+					administrators,
+				}),
+			);
+		});
+		app.post(
+			"/connection/admin/administrators/:principalId/grant",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				await authorizationRequest(() =>
+					management.service.grantConnectionAdministrator({
+						actorPrincipalId: session.account.principalId,
+						targetPrincipalId: context.req.param("principalId"),
+					}),
+				);
+				return context.redirect("/connection/admin/administrators", 303);
+			},
+		);
+		app.post(
+			"/connection/admin/administrators/:principalId/revoke",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				await authorizationRequest(() =>
+					management.service.revokeConnectionAdministrator({
+						actorPrincipalId: session.account.principalId,
+						targetPrincipalId: context.req.param("principalId"),
+					}),
+				);
+				return context.redirect("/connection/admin/administrators", 303);
+			},
+		);
+		app.get("/connection/admin/shared-connections", async (context) => {
+			const session = await currentAdministrator(context);
+			if (session instanceof Response) return session;
+			secureHtmlHeaders(context);
+			return context.html(
+				sharedGithubAdministrationPage({
+					account: session.account,
+					overview: await management.service.sharedGithubAdministration(
+						session.account.principalId,
+					),
+				}),
+			);
+		});
+		app.post("/connection/admin/shared-connections", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentAdministrator(context);
+			if (session instanceof Response) return session;
+			const form = await context.req.raw.formData();
+			await authorizationRequest(() =>
+				management.service.createSharedScope({
+					actorPrincipalId: session.account.principalId,
+					displayName: formValue(form, "display_name"),
+				}),
+			);
+			return context.redirect("/connection/admin/shared-connections", 303);
+		});
+		app.post(
+			"/connection/admin/shared-connections/:sharedScopeId/rename",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				const form = await context.req.raw.formData();
+				await authorizationRequest(() =>
+					management.service.renameSharedScope({
+						actorPrincipalId: session.account.principalId,
+						displayName: formValue(form, "display_name"),
+						sharedScopeId: context.req.param("sharedScopeId"),
+					}),
+				);
+				return context.redirect("/connection/admin/shared-connections", 303);
+			},
+		);
+		app.get(
+			"/connection/admin/shared-connections/:sharedScopeId/github",
+			async (context) => {
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				const authorization = await management.service.startSharedGithubOAuth(
+					session.account.principalId,
+					context.req.param("sharedScopeId"),
+					management.githubRedirectUri,
+				);
+				return context.redirect(authorization.authorizationUrl, 303);
+			},
+		);
+		app.post(
+			"/connection/admin/shared-connections/:sharedScopeId/principals/:principalId/grant",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				await authorizationRequest(() =>
+					management.service.grantSharedScopePrincipal({
+						actorPrincipalId: session.account.principalId,
+						sharedScopeId: context.req.param("sharedScopeId"),
+						targetPrincipalId: context.req.param("principalId"),
+					}),
+				);
+				return context.redirect("/connection/admin/shared-connections", 303);
+			},
+		);
+		app.post(
+			"/connection/admin/shared-connections/:sharedScopeId/principals/:principalId/revoke",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				await authorizationRequest(() =>
+					management.service.revokeSharedScopePrincipal({
+						actorPrincipalId: session.account.principalId,
+						sharedScopeId: context.req.param("sharedScopeId"),
+						targetPrincipalId: context.req.param("principalId"),
+					}),
+				);
+				return context.redirect("/connection/admin/shared-connections", 303);
+			},
+		);
+		app.post(
+			"/connection/admin/shared-connections/connections/:connectionId/disconnect",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentAdministrator(context);
+				if (session instanceof Response) return session;
+				await authorizationRequest(() =>
+					management.service.disconnectSharedConnection({
+						actorPrincipalId: session.account.principalId,
+						connectionId: context.req.param("connectionId"),
+					}),
+				);
+				return context.redirect("/connection/admin/shared-connections", 303);
+			},
+		);
+
 		app.get("/connection/connections", async (context) => {
 			const session = await currentBrowserAccount(context);
 			if (!session) return context.redirect("/connection/login");
+			const isAdministrator =
+				await management.service.isConnectionAdministrator(
+					session.account.principalId,
+				);
 			secureHtmlHeaders(context);
 			return context.html(
 				connectionConsolePage({
 					account: session.account,
+					isAdministrator,
 					overview: await management.service.overview(
 						session.account.principalId,
 					),

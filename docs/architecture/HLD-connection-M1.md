@@ -765,6 +765,24 @@ type SharedScope = {
 
 每次授权 preview 和调用前都用当前身份系统解析 Principal 是否仍命中 direct 或 organization path。Grant 冻结用户确认时使用的 exact eligibility path hash；该 path 失效时不自动切换另一条 path，用户需重新确认，以免静默替换授权证据。
 
+M1 的首个实现只装配 `directPrincipalIds` 路径。Connection admin 通过管理员页面维护显式 Principal
+membership；LDAP Group/organization-unit Adapter 未验收前，`organizationUnitRefs` 保持不可配置且
+fail closed。管理员角色和 SharedScope eligibility 是两个独立维度，任何一方都不能推出另一方。
+
+### 14.5 Connection 管理员
+
+- LDAP 只建立稳定 Principal；`CONNECTION_ADMIN` 由 Connection PostgreSQL role binding 授权。
+- 首个 role binding 只能由部署操作员以稳定 LDAP subject 执行一次性 bootstrap。第一个登录者、邮箱
+  allowlist、前端字段和 Provider 账号不能创建管理员；已有管理员后 bootstrap fail closed。
+- 后续 grant/revoke 只能由当前管理员发起并写 audit；最后一个 active 管理员不能撤销。
+- 管理路由在每个请求重新检查 company session、Principal current 状态和 active role binding。隐藏菜单
+  只用于用户体验，不是授权控制。
+- 管理员可管理 Shared GitHub Credential 和 eligibility，但不能读取 Credential 明文，也不能替 Principal
+  确认 Consumer Grant。
+- SharedScope `displayName` 是可修改的展示元数据，不是授权键。Rename 保持 `sharedScopeId`、membership、
+  Connection、Credential、Consent 和 Grant 不变，只提升 metadata revision并写审计；不得通过删除重建
+  实现改名。
+
 ## 15. 外部账号稳定身份与重连
 
 ### 15.1 ExternalAccountIdentity

@@ -20,7 +20,9 @@
 OpenConnector GitHub kernel 的统一 Connection account 架构。所有 Consumer 都通过 Connection
 识别 Principal；同一 Principal 在多台设备共享个人 Connection 和 Direct Consumer Grant。OAuth
 设备会话和命名 PAT 可以单独撤销；同一 PAT 跨端复用时共享一个撤销与审计边界。OpenConnector
-只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。
+只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。Connection
+管理员使用 PostgreSQL role binding 管理共享 GitHub账号和显式 Principal eligibility；管理员角色不自动
+获得共享账号使用资格，每个 eligible Principal 仍需独立确认 Consumer Grant。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |

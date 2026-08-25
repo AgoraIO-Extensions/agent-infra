@@ -668,14 +668,13 @@ describe("PostgreSQL Connection OAuth", () => {
 					.digest("hex"),
 			};
 			const cascadeConstraints = [
-				"connection_accounts_principal_id_fkey",
+				"connection_accounts_owner_principal_fkey",
 				"connection_audit_records_principal_id_fkey",
 				"connection_authorization_roots_principal_id_fkey",
 				"connection_browser_sessions_identity_fkey",
 				"connection_browser_sessions_principal_id_fkey",
 				"connection_calls_principal_id_fkey",
 				"connection_consumer_instances_principal_id_fkey",
-				"connection_grants_connection_subject_fkey",
 				"connection_grants_direct_root_subject_fkey",
 				"connection_grants_principal_id_fkey",
 				"connection_oauth_authorizations_instance_subject_fkey",
@@ -686,6 +685,13 @@ describe("PostgreSQL Connection OAuth", () => {
 				"connection_personal_access_tokens_instance_subject_fkey",
 				"connection_personal_access_tokens_principal_id_fkey",
 				"connection_principal_identities_principal_id_fkey",
+				"connection_principal_roles_granted_by_fkey",
+				"connection_principal_roles_principal_id_fkey",
+				"connection_principal_roles_revoked_by_fkey",
+				"connection_shared_scope_principals_granted_by_fkey",
+				"connection_shared_scope_principals_principal_id_fkey",
+				"connection_shared_scope_principals_revoked_by_fkey",
+				"connection_shared_scopes_created_by_fkey",
 			];
 
 			try {
@@ -734,12 +740,14 @@ describe("PostgreSQL Connection OAuth", () => {
 					`;
 					await transaction`
 						INSERT INTO connection_accounts (
-							id, principal_id, provider_release_id, external_account,
-							display_name, status, provider_id
+							id, owner_type, owner_principal_id, shared_scope_id,
+							provider_release_id, external_account, display_name, status,
+							provider_id
 						)
 						VALUES (
-							${ids.account}, ${oldPrincipalId}, ${ids.release}, ${`external-${suffix}`},
-							'Cascade Review', 'ACTIVE', ${ids.provider}
+							${ids.account}, 'PERSONAL', ${oldPrincipalId}, NULL,
+							${ids.release}, ${`external-${suffix}`}, 'Cascade Review',
+							'ACTIVE', ${ids.provider}
 						)
 					`;
 					await transaction`
@@ -879,7 +887,7 @@ describe("PostgreSQL Connection OAuth", () => {
 					const references = await transaction<
 						{ principal_id: string; source: string }[]
 					>`
-						SELECT 'accounts' AS source, principal_id FROM connection_accounts WHERE id = ${ids.account}
+						SELECT 'accounts' AS source, owner_principal_id AS principal_id FROM connection_accounts WHERE id = ${ids.account}
 						UNION ALL SELECT 'audit_records', principal_id FROM connection_audit_records WHERE call_id = ${ids.call}
 						UNION ALL SELECT 'authorization_roots', principal_id FROM connection_authorization_roots WHERE id = ${ids.root}
 						UNION ALL SELECT 'browser_sessions', principal_id FROM connection_browser_sessions WHERE id = ${ids.browser}

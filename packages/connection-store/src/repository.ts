@@ -18,6 +18,7 @@ import {
 	decideReconnectAuthorization,
 	type GitHubActionName,
 	type InvocationContext,
+	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
 	type ReconciliationJob,
 	type StoredCall,
@@ -84,6 +85,12 @@ type AuthorizationTarget = {
 	providerId: string;
 	providerReleaseId: string;
 	providerReleaseRevision: string;
+	sharedEligibilityPathHash: string | null;
+};
+
+type ConnectionEligibility = {
+	ownerType: "PERSONAL" | "SHARED";
+	providerId: string;
 	sharedEligibilityPathHash: string | null;
 };
 
@@ -439,6 +446,954 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		if (!principal) forbidden();
 	}
 
+	async isConnectionAdministrator(principalId: string) {
+		const [administrator] = await this.sql<{ allowed: boolean }[]>`
+			SELECT true AS allowed
+			FROM connection_principal_roles role_binding
+			JOIN connection_principals principal
+				ON principal.id = role_binding.principal_id
+			WHERE role_binding.principal_id = ${principalId}
+				AND role_binding.role = 'CONNECTION_ADMIN'
+				AND role_binding.status = 'ACTIVE'
+				AND principal.status = 'ACTIVE'
+		`;
+		return administrator?.allowed === true;
+	}
+
+	async authorizeConnectionAdministration(principalId: string) {
+		if (await this.isConnectionAdministrator(principalId)) return true;
+		await this.recordConnectionAdministratorDenial(principalId);
+		return false;
+	}
+
+	private async recordConnectionAdministratorDenial(principalId: string) {
+		await this.sql`
+			INSERT INTO connection_audit_records (principal_id, event, detail)
+			SELECT id, 'CONNECTION_ADMIN_DENIED', '{}'::jsonb
+			FROM connection_principals
+			WHERE id = ${principalId} AND status = 'ACTIVE'
+		`;
+	}
+
+	private async requireConnectionAdministrator(
+		sql: postgres.TransactionSql,
+		principalId: string,
+	) {
+		const [administrator] = await sql<{ allowed: boolean }[]>`
+			SELECT true AS allowed
+			FROM connection_principal_roles role_binding
+			JOIN connection_principals principal
+				ON principal.id = role_binding.principal_id
+			WHERE role_binding.principal_id = ${principalId}
+				AND role_binding.role = 'CONNECTION_ADMIN'
+				AND role_binding.status = 'ACTIVE'
+				AND principal.status = 'ACTIVE'
+			FOR SHARE OF role_binding, principal
+		`;
+		if (!administrator?.allowed) {
+			await this.recordConnectionAdministratorDenial(principalId);
+			forbidden();
+		}
+	}
+
+	async bootstrapConnectionAdministrator(input: {
+		identityIssuer: string;
+		identitySubjectHash: string;
+	}) {
+		return this.sql.begin(async (sql) => {
+			await sql`LOCK TABLE connection_principal_roles IN SHARE ROW EXCLUSIVE MODE`;
+			const [identity] = await sql<
+				{
+					display_name: string;
+					email: string | null;
+					principal_id: string;
+				}[]
+			>`
+				SELECT identity.principal_id, principal.display_name, principal.email
+				FROM connection_principal_identities identity
+				JOIN connection_principals principal ON principal.id = identity.principal_id
+				WHERE identity.identity_issuer = ${input.identityIssuer}
+					AND identity.identity_subject_hash = ${input.identitySubjectHash}
+					AND identity.status = 'ACTIVE'
+					AND principal.status = 'ACTIVE'
+				FOR UPDATE OF identity, principal
+			`;
+			if (!identity) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"LDAP identity has not authenticated with Connection",
+				);
+			}
+			const [existing] = await sql<{ principal_id: string; status: string }[]>`
+				SELECT principal_id, status FROM connection_principal_roles
+				WHERE role = 'CONNECTION_ADMIN'
+				ORDER BY principal_id
+				LIMIT 1
+				FOR UPDATE
+			`;
+			if (existing?.principal_id === identity.principal_id) {
+				if (existing.status !== "ACTIVE") {
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Administrator bootstrap is no longer available",
+					);
+				}
+				return {
+					displayName: identity.display_name,
+					email: identity.email,
+					principalId: identity.principal_id,
+				};
+			}
+			if (existing) {
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Administrator bootstrap is no longer available",
+				);
+			}
+			await sql`
+				INSERT INTO connection_principal_roles (
+					principal_id, role, status, grant_source
+				)
+				VALUES (
+					${identity.principal_id}, 'CONNECTION_ADMIN', 'ACTIVE', 'BOOTSTRAP'
+				)
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${identity.principal_id},
+					'CONNECTION_ADMIN_BOOTSTRAPPED',
+					${sql.json({ grantSource: "BOOTSTRAP" })}
+				)
+			`;
+			return {
+				displayName: identity.display_name,
+				email: identity.email,
+				principalId: identity.principal_id,
+			};
+		});
+	}
+
+	async listConnectionAdministrators(principalId: string) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			const administrators = await sql<
+				{ display_name: string; email: string | null; principal_id: string }[]
+			>`
+				SELECT principal.id AS principal_id, principal.display_name, principal.email
+				FROM connection_principal_roles role_binding
+				JOIN connection_principals principal
+					ON principal.id = role_binding.principal_id
+				WHERE role_binding.role = 'CONNECTION_ADMIN'
+					AND role_binding.status = 'ACTIVE'
+					AND principal.status = 'ACTIVE'
+				ORDER BY principal.display_name, principal.id
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'CONNECTION_ADMINISTRATORS_QUERIED', '{}'::jsonb)
+			`;
+			return administrators.map((administrator) => ({
+				displayName: administrator.display_name,
+				email: administrator.email,
+				principalId: administrator.principal_id,
+			}));
+		});
+	}
+
+	async listConnectionAdministratorCandidates(principalId: string) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			const principals = await sql<
+				{
+					display_name: string;
+					email: string | null;
+					is_administrator: boolean;
+					principal_id: string;
+				}[]
+			>`
+				SELECT principal.id AS principal_id, principal.display_name,
+					principal.email, role_binding.principal_id IS NOT NULL AS is_administrator
+				FROM connection_principals principal
+				LEFT JOIN connection_principal_roles role_binding
+					ON role_binding.principal_id = principal.id
+					AND role_binding.role = 'CONNECTION_ADMIN'
+					AND role_binding.status = 'ACTIVE'
+				WHERE principal.status = 'ACTIVE'
+				ORDER BY principal.display_name, principal.id
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'CONNECTION_ADMIN_CANDIDATES_QUERIED', '{}'::jsonb)
+			`;
+			return principals.map((principal) => ({
+				displayName: principal.display_name,
+				email: principal.email,
+				isAdministrator: principal.is_administrator,
+				principalId: principal.principal_id,
+			}));
+		});
+	}
+
+	async grantConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			await sql`LOCK TABLE connection_principal_roles IN SHARE ROW EXCLUSIVE MODE`;
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [target] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_principals
+				WHERE id = ${input.targetPrincipalId} AND status = 'ACTIVE'
+				FOR SHARE
+			`;
+			if (!target) forbidden();
+			const [existing] = await sql<{ status: string }[]>`
+				SELECT status FROM connection_principal_roles
+				WHERE principal_id = ${input.targetPrincipalId}
+					AND role = 'CONNECTION_ADMIN'
+				FOR UPDATE
+			`;
+			if (existing?.status === "ACTIVE") return;
+			await sql`
+				INSERT INTO connection_principal_roles (
+					principal_id, role, status, grant_source,
+					granted_by_principal_id
+				)
+				VALUES (
+					${input.targetPrincipalId}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN',
+					${input.actorPrincipalId}
+				)
+				ON CONFLICT (principal_id, role) DO UPDATE SET
+					status = 'ACTIVE',
+					grant_source = 'ADMIN',
+					granted_by_principal_id = EXCLUDED.granted_by_principal_id,
+					revoked_by_principal_id = NULL,
+					granted_at = now(),
+					revoked_at = NULL,
+					revision = connection_principal_roles.revision + 1
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId},
+					'CONNECTION_ADMIN_GRANTED',
+					${sql.json({ targetPrincipalId: input.targetPrincipalId })}
+				)
+			`;
+		});
+	}
+
+	async revokeConnectionAdministrator(input: {
+		actorPrincipalId: string;
+		targetPrincipalId: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			await sql`LOCK TABLE connection_principal_roles IN SHARE ROW EXCLUSIVE MODE`;
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [target] = await sql<{ status: string }[]>`
+				SELECT status FROM connection_principal_roles
+				WHERE principal_id = ${input.targetPrincipalId}
+					AND role = 'CONNECTION_ADMIN'
+				FOR UPDATE
+			`;
+			if (target?.status !== "ACTIVE") return;
+			const [active] = await sql<{ count: string }[]>`
+				SELECT count(*)::text AS count
+				FROM connection_principal_roles role_binding
+				JOIN connection_principals principal
+					ON principal.id = role_binding.principal_id
+				WHERE role_binding.role = 'CONNECTION_ADMIN'
+					AND role_binding.status = 'ACTIVE'
+					AND principal.status = 'ACTIVE'
+			`;
+			if (Number(active?.count ?? 0) <= 1) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"At least one Connection administrator is required",
+				);
+			}
+			await sql`
+				UPDATE connection_principal_roles SET
+					status = 'REVOKED',
+					revoked_by_principal_id = ${input.actorPrincipalId},
+					revoked_at = now(),
+					revision = revision + 1
+				WHERE principal_id = ${input.targetPrincipalId}
+					AND role = 'CONNECTION_ADMIN'
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId},
+					'CONNECTION_ADMIN_REVOKED',
+					${sql.json({ targetPrincipalId: input.targetPrincipalId })}
+				)
+			`;
+		});
+	}
+
+	async createSharedScope(input: {
+		actorPrincipalId: string;
+		displayName: string;
+	}) {
+		const displayName = normalizeSharedScopeDisplayName(input.displayName);
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const sharedScopeId = `shared-scope-${randomUUID()}`;
+			await sql`
+				INSERT INTO connection_shared_scopes (
+					id, display_name, state, created_by_principal_id
+				)
+				VALUES (
+					${sharedScopeId}, ${displayName}, 'ACTIVE', ${input.actorPrincipalId}
+				)
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_SCOPE_CREATED',
+					${sql.json({ sharedScopeId })}
+				)
+			`;
+			return { sharedScopeId };
+		});
+	}
+
+	async grantSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [scope] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_shared_scopes
+				WHERE id = ${input.sharedScopeId} AND state = 'ACTIVE'
+				FOR UPDATE
+			`;
+			const [target] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_principals
+				WHERE id = ${input.targetPrincipalId} AND status = 'ACTIVE'
+				FOR SHARE
+			`;
+			if (!scope || !target) forbidden();
+			const [existing] = await sql<{ status: string }[]>`
+				SELECT status FROM connection_shared_scope_principals
+				WHERE shared_scope_id = ${input.sharedScopeId}
+					AND principal_id = ${input.targetPrincipalId}
+				FOR UPDATE
+			`;
+			if (existing?.status === "ACTIVE") return;
+			await sql`
+				INSERT INTO connection_shared_scope_principals (
+					shared_scope_id, principal_id, status, granted_by_principal_id
+				)
+				VALUES (
+					${input.sharedScopeId}, ${input.targetPrincipalId}, 'ACTIVE',
+					${input.actorPrincipalId}
+				)
+				ON CONFLICT (shared_scope_id, principal_id) DO UPDATE SET
+					status = 'ACTIVE',
+					granted_by_principal_id = EXCLUDED.granted_by_principal_id,
+					revoked_by_principal_id = NULL,
+					granted_at = now(),
+					revoked_at = NULL,
+					revision = connection_shared_scope_principals.revision + 1
+			`;
+			await sql`
+				UPDATE connection_shared_scopes
+				SET revision = revision + 1, updated_at = now()
+				WHERE id = ${input.sharedScopeId}
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_SCOPE_PRINCIPAL_GRANTED',
+					${sql.json({
+						sharedScopeId: input.sharedScopeId,
+						targetPrincipalId: input.targetPrincipalId,
+					})}
+				)
+			`;
+		});
+	}
+
+	async revokeSharedScopePrincipal(input: {
+		actorPrincipalId: string;
+		sharedScopeId: string;
+		targetPrincipalId: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [scope] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_shared_scopes
+				WHERE id = ${input.sharedScopeId} AND state = 'ACTIVE'
+				FOR UPDATE
+			`;
+			if (!scope) forbidden();
+			const [target] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_principals
+				WHERE id = ${input.targetPrincipalId}
+				FOR UPDATE
+			`;
+			if (!target) forbidden();
+			await sql`
+				SELECT root.id
+				FROM connection_authorization_roots root
+				JOIN connection_grants current_grant
+					ON current_grant.id = root.current_grant_id
+				JOIN connection_accounts account
+					ON account.id = current_grant.connection_id
+				WHERE root.principal_id = ${input.targetPrincipalId}
+					AND account.owner_type = 'SHARED'
+					AND account.shared_scope_id = ${input.sharedScopeId}
+				ORDER BY root.id
+				FOR UPDATE OF root
+			`;
+			await sql`
+				SELECT stored_grant.id
+				FROM connection_grants stored_grant
+				JOIN connection_accounts account
+					ON account.id = stored_grant.connection_id
+				WHERE stored_grant.principal_id = ${input.targetPrincipalId}
+					AND account.owner_type = 'SHARED'
+					AND account.shared_scope_id = ${input.sharedScopeId}
+					AND stored_grant.status IN (
+						'ACTIVE', 'PAUSED_CONNECTION', 'PAUSED_CREDENTIAL'
+					)
+				ORDER BY stored_grant.id
+				FOR UPDATE OF stored_grant
+			`;
+			const changed = await sql`
+				UPDATE connection_shared_scope_principals SET
+					status = 'REVOKED',
+					revoked_by_principal_id = ${input.actorPrincipalId},
+					revoked_at = now(),
+					revision = revision + 1
+				WHERE shared_scope_id = ${input.sharedScopeId}
+					AND principal_id = ${input.targetPrincipalId}
+					AND status = 'ACTIVE'
+			`;
+			if (changed.count === 0) return;
+			await sql`
+				UPDATE connection_grants stored_grant SET status = 'TERMINATED'
+				FROM connection_accounts account
+				WHERE account.id = stored_grant.connection_id
+					AND stored_grant.principal_id = ${input.targetPrincipalId}
+					AND account.owner_type = 'SHARED'
+					AND account.shared_scope_id = ${input.sharedScopeId}
+					AND stored_grant.status IN (
+						'ACTIVE', 'PAUSED_CONNECTION', 'PAUSED_CREDENTIAL'
+					)
+			`;
+			await sql`
+				UPDATE connection_authorization_roots root
+				SET current_grant_id = NULL, fence = fence + 1
+				WHERE root.principal_id = ${input.targetPrincipalId}
+					AND EXISTS (
+						SELECT 1 FROM connection_grants stored_grant
+						JOIN connection_accounts account
+							ON account.id = stored_grant.connection_id
+						WHERE stored_grant.id = root.current_grant_id
+							AND account.owner_type = 'SHARED'
+							AND account.shared_scope_id = ${input.sharedScopeId}
+					)
+			`;
+			await sql`
+				UPDATE connection_shared_scopes
+				SET revision = revision + 1, updated_at = now()
+				WHERE id = ${input.sharedScopeId}
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_SCOPE_PRINCIPAL_REVOKED',
+					${sql.json({
+						sharedScopeId: input.sharedScopeId,
+						targetPrincipalId: input.targetPrincipalId,
+					})}
+				)
+			`;
+		});
+	}
+
+	async renameSharedScope(input: {
+		actorPrincipalId: string;
+		displayName: string;
+		sharedScopeId: string;
+	}) {
+		const displayName = normalizeSharedScopeDisplayName(input.displayName);
+		await this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [scope] = await sql<{ display_name: string }[]>`
+				SELECT display_name FROM connection_shared_scopes
+				WHERE id = ${input.sharedScopeId}
+				FOR UPDATE
+			`;
+			if (!scope) forbidden();
+			if (scope.display_name === displayName) return;
+			await sql`
+				UPDATE connection_shared_scopes SET
+					display_name = ${displayName},
+					revision = revision + 1,
+					updated_at = now()
+				WHERE id = ${input.sharedScopeId}
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_SCOPE_RENAMED',
+					${sql.json({ sharedScopeId: input.sharedScopeId })}
+				)
+			`;
+		});
+	}
+
+	async storeSharedGithubOAuthCredential(input: {
+		accessToken: string;
+		actorPrincipalId: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		sharedScopeId: string;
+	}) {
+		const grantedScopes = [...new Set(input.grantedScopes)].sort();
+		if (grantedScopes.length === 0) forbidden();
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [scope] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_shared_scopes
+				WHERE id = ${input.sharedScopeId} AND state = 'ACTIVE'
+				FOR UPDATE
+			`;
+			if (!scope) forbidden();
+			const providerReleaseId = this.publishedGithubProviderReleaseId;
+			if (!providerReleaseId) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"GitHub catalog is unavailable",
+				);
+			}
+			const [release] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_provider_releases
+				WHERE id = ${providerReleaseId}
+					AND provider = ${githubProvider}
+					AND status = 'PUBLISHED'
+			`;
+			if (!release) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"GitHub catalog is unavailable",
+				);
+			}
+			const [existing] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_accounts
+				WHERE owner_type = 'SHARED'
+					AND shared_scope_id = ${input.sharedScopeId}
+					AND provider_id = ${githubProvider}
+					AND external_account = ${input.externalAccount}
+			`;
+			const connectionId = existing?.id ?? `connection-${randomUUID()}`;
+			if (existing) {
+				await sql`
+					SELECT root.id
+					FROM connection_authorization_roots root
+					JOIN connection_grants active_grant
+						ON active_grant.id = root.current_grant_id
+					WHERE active_grant.connection_id = ${connectionId}
+						AND active_grant.status = 'ACTIVE'
+					ORDER BY root.principal_id, root.id
+					FOR UPDATE OF root
+				`;
+				await sql`
+					SELECT active_grant.id
+					FROM connection_authorization_roots root
+					JOIN connection_grants active_grant
+						ON active_grant.id = root.current_grant_id
+					WHERE active_grant.connection_id = ${connectionId}
+						AND active_grant.status = 'ACTIVE'
+					ORDER BY active_grant.principal_id, root.id
+					FOR UPDATE OF active_grant
+				`;
+				const [lockedAccount] = await sql<{ id: string }[]>`
+					SELECT id FROM connection_accounts
+					WHERE id = ${connectionId}
+						AND owner_type = 'SHARED'
+						AND shared_scope_id = ${input.sharedScopeId}
+						AND external_account = ${input.externalAccount}
+					FOR UPDATE
+				`;
+				if (!lockedAccount) forbidden();
+				await sql`
+					UPDATE connection_accounts SET
+						provider_release_id = ${release.id},
+						display_name = ${input.displayName},
+						status = 'ACTIVE', revision = revision + 1,
+						execution_fence = execution_fence + 1
+					WHERE id = ${connectionId}
+				`;
+			} else {
+				await sql`
+					INSERT INTO connection_accounts (
+						id, owner_type, owner_principal_id, shared_scope_id,
+						provider_release_id, provider_id, external_account,
+						display_name, status
+					)
+					VALUES (
+						${connectionId}, 'SHARED', NULL, ${input.sharedScopeId},
+						${release.id}, ${githubProvider}, ${input.externalAccount},
+						${input.displayName}, 'ACTIVE'
+					)
+				`;
+			}
+			await sql`
+				UPDATE connection_credential_versions
+				SET status = 'REVOKED', revision = revision + 1
+				WHERE connection_id = ${connectionId} AND status = 'ACTIVE'
+			`;
+			const credentialId = `credential-${randomUUID()}`;
+			const protectedCredential = this.protector.encrypt(
+				input.accessToken,
+				`credential:${credentialId}:${connectionId}`,
+			);
+			await sql`
+				INSERT INTO connection_credential_versions (
+					id, connection_id, ciphertext, nonce, tag, scope_json, status
+				)
+				VALUES (
+					${credentialId}, ${connectionId}, ${protectedCredential.ciphertext},
+					${protectedCredential.nonce}, ${protectedCredential.tag},
+					${sql.json(grantedScopes)}, 'ACTIVE'
+				)
+			`;
+			if (existing) {
+				await this.restoreGrantsAfterReconnect(sql, connectionId);
+			}
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_CONNECTION_CONNECTED',
+					${sql.json({ connectionId, provider: githubProvider })}
+				)
+			`;
+			return { connectionId };
+		});
+	}
+
+	private async restoreGrantsAfterReconnect(
+		sql: postgres.TransactionSql,
+		connectionId: string,
+	) {
+		const currentGrants = await sql<
+			{
+				action_version_ids: unknown;
+				actor_key: string;
+				confirmed_action_set_digest: string | null;
+				consent_id: string | null;
+				consumer_id: string;
+				credential_scope_digest: string | null;
+				declaration_id: string | null;
+				external_account_fingerprint: string | null;
+				id: string;
+				principal_id: string;
+				provider_id: string;
+				provider_release_id: string | null;
+				root_fence: string;
+				root_id: string;
+				root_status: string;
+				shared_eligibility_path_hash: string | null;
+			}[]
+		>`
+			SELECT active_grant.id, active_grant.root_id, active_grant.consent_id,
+				active_grant.principal_id, active_grant.consumer_id,
+				active_grant.actor_key, active_grant.provider_id,
+				active_grant.declaration_id,
+				active_grant.external_account_fingerprint,
+				active_grant.shared_eligibility_path_hash,
+				active_grant.credential_scope_digest,
+				active_grant.provider_release_id,
+				active_grant.confirmed_action_set_digest,
+				root.fence::text AS root_fence, root.status AS root_status,
+				COALESCE(
+					(
+						SELECT jsonb_agg(action_version_id ORDER BY action_version_id)
+						FROM connection_grant_actions
+						WHERE grant_id = active_grant.id
+					),
+					'[]'::jsonb
+				) AS action_version_ids
+			FROM connection_authorization_roots root
+			JOIN connection_grants active_grant
+				ON active_grant.id = root.current_grant_id
+				AND active_grant.root_id = root.id
+				AND active_grant.status = 'ACTIVE'
+			WHERE active_grant.connection_id = ${connectionId}
+			ORDER BY active_grant.principal_id, root.id
+			FOR UPDATE OF root, active_grant
+		`;
+		for (const grant of currentGrants) {
+			let target: AuthorizationTarget | undefined;
+			try {
+				target = await this.loadAuthorizationTarget(sql, {
+					connectionId,
+					consumerId: grant.consumer_id,
+					principalId: grant.principal_id,
+				});
+			} catch (error) {
+				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
+					throw error;
+				}
+			}
+			const decision = decideReconnectAuthorization({
+				current: {
+					actionVersionIds: grant.action_version_ids,
+					actorKey: grant.actor_key,
+					confirmedActionSetDigest: grant.confirmed_action_set_digest,
+					consentId: grant.consent_id,
+					consumerDeclarationId: grant.declaration_id,
+					credentialScopeDigest: grant.credential_scope_digest,
+					externalAccountFingerprint: grant.external_account_fingerprint,
+					providerId: grant.provider_id,
+					providerReleaseId: grant.provider_release_id,
+					rootStatus: grant.root_status,
+					sharedEligibilityPathHash: grant.shared_eligibility_path_hash,
+				},
+				target,
+			});
+			if (decision === "REPLACE_GRANT" && target) {
+				const grantId = `grant-${randomUUID()}`;
+				const snapshot = this.authorizationSnapshot(
+					grant.principal_id,
+					{
+						currentGrantId: grant.id,
+						fence: grant.root_fence,
+						id: grant.root_id,
+						providerId: grant.provider_id,
+						status: grant.root_status,
+					},
+					target,
+				);
+				await sql`
+					INSERT INTO connection_grants (
+						id, principal_id, consumer_id, connection_id, status,
+						root_id, consent_id, actor_key, provider_id, declaration_id,
+						connection_revision, connection_execution_fence,
+						external_account_fingerprint, shared_eligibility_path_hash,
+						credential_version_id, credential_revision,
+						credential_scope_digest, provider_release_id,
+						confirmed_action_set_digest
+					)
+					VALUES (
+						${grantId}, ${grant.principal_id}, ${grant.consumer_id},
+						${connectionId}, 'ACTIVE', ${grant.root_id}, ${grant.consent_id},
+						'', ${target.providerId}, ${target.consumerDeclarationId},
+						${target.connectionRevision}, ${target.connectionExecutionFence},
+						${target.externalAccountFingerprint},
+						${target.sharedEligibilityPathHash}, ${target.credentialVersionId},
+						${target.credentialRevision}, ${target.credentialScopeDigest},
+						${target.providerReleaseId}, ${snapshot.actionSetDigest}
+					)
+				`;
+				for (const action of target.actions) {
+					await sql`
+						INSERT INTO connection_grant_actions (
+							grant_id, action_version_id, authorization_digest
+						)
+						VALUES (${grantId}, ${action.id}, ${snapshot.authorizationDigest})
+					`;
+				}
+				await sql`
+					UPDATE connection_grants SET status = 'REPLACED'
+					WHERE id = ${grant.id} AND status = 'ACTIVE'
+				`;
+				const updatedRoots = await sql`
+					UPDATE connection_authorization_roots
+					SET current_grant_id = ${grantId}, fence = fence + 1
+					WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
+				`;
+				if (updatedRoots.count !== 1) {
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Authorization changed during reconnect",
+					);
+				}
+				await sql`
+					INSERT INTO connection_audit_records (principal_id, event, detail)
+					VALUES (
+						${grant.principal_id}, 'GRANT_RESTORED_AFTER_RECONNECT',
+						${sql.json({
+							connectionId,
+							consumerId: grant.consumer_id,
+							grantId,
+							replacedGrantId: grant.id,
+						})}
+					)
+				`;
+			} else {
+				await sql`
+					UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
+					WHERE id = ${grant.id} AND status = 'ACTIVE'
+				`;
+				const updatedRoots = await sql`
+					UPDATE connection_authorization_roots
+					SET current_grant_id = NULL, fence = fence + 1
+					WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
+				`;
+				if (updatedRoots.count !== 1) {
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Authorization changed during reconnect",
+					);
+				}
+				await sql`
+					INSERT INTO connection_audit_records (principal_id, event, detail)
+					VALUES (
+						${grant.principal_id},
+						'GRANT_RECONFIRMATION_REQUIRED_AFTER_RECONNECT',
+						${sql.json({
+							connectionId,
+							consumerId: grant.consumer_id,
+							grantId: grant.id,
+							reason: "AUTHORIZATION_PROOF_CHANGED",
+						})}
+					)
+				`;
+			}
+		}
+	}
+
+	async sharedGithubAdministration(actorPrincipalId: string) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, actorPrincipalId);
+			const principals = await sql<
+				{ display_name: string; email: string | null; principal_id: string }[]
+			>`
+				SELECT id AS principal_id, display_name, email
+				FROM connection_principals
+				WHERE status = 'ACTIVE'
+				ORDER BY display_name, id
+			`;
+			const scopes = await sql<
+				{
+					display_name: string;
+					shared_scope_id: string;
+					state: "ACTIVE" | "SUSPENDED" | "DISABLED";
+				}[]
+			>`
+				SELECT id AS shared_scope_id, display_name, state
+				FROM connection_shared_scopes
+				ORDER BY display_name, id
+			`;
+			const members = await sql<
+				{ principal_id: string; shared_scope_id: string }[]
+			>`
+				SELECT principal_id, shared_scope_id
+				FROM connection_shared_scope_principals
+				WHERE status = 'ACTIVE'
+				ORDER BY shared_scope_id, principal_id
+			`;
+			const connections = await sql<
+				{
+					display_name: string;
+					external_account: string;
+					id: string;
+					shared_scope_id: string;
+					status: "ACTIVE" | "DISCONNECTED";
+				}[]
+			>`
+				SELECT id, shared_scope_id, display_name, external_account, status
+				FROM connection_accounts
+				WHERE owner_type = 'SHARED'
+				ORDER BY display_name, id
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${actorPrincipalId}, 'SHARED_GITHUB_ADMINISTRATION_QUERIED',
+					'{}'::jsonb
+				)
+			`;
+			return {
+				principals: principals.map((principal) => ({
+					displayName: principal.display_name,
+					email: principal.email,
+					principalId: principal.principal_id,
+				})),
+				scopes: scopes.map((scope) => ({
+					connections: connections
+						.filter(
+							(connection) =>
+								connection.shared_scope_id === scope.shared_scope_id,
+						)
+						.map((connection) => ({
+							displayName: connection.display_name,
+							externalAccount: connection.external_account,
+							id: connection.id,
+							status: connection.status,
+						})),
+					displayName: scope.display_name,
+					members: members
+						.filter(
+							(member) => member.shared_scope_id === scope.shared_scope_id,
+						)
+						.map((member) => member.principal_id),
+					sharedScopeId: scope.shared_scope_id,
+					state: scope.state,
+				})),
+			};
+		});
+	}
+
+	private async loadConnectionEligibility(
+		sql: postgres.TransactionSql,
+		input: { connectionId: string; principalId: string },
+	): Promise<ConnectionEligibility> {
+		const [account] = await sql<
+			{
+				owner_principal_id: string | null;
+				owner_type: "PERSONAL" | "SHARED";
+				provider_id: string;
+				shared_scope_id: string | null;
+			}[]
+		>`
+			SELECT owner_principal_id, owner_type, provider_id, shared_scope_id
+			FROM connection_accounts
+			WHERE id = ${input.connectionId} AND status = 'ACTIVE'
+			FOR SHARE
+		`;
+		if (!account) forbidden();
+		if (account.owner_type === "PERSONAL") {
+			if (account.owner_principal_id !== input.principalId) forbidden();
+			return {
+				ownerType: "PERSONAL",
+				providerId: account.provider_id,
+				sharedEligibilityPathHash: null,
+			};
+		}
+		if (!account.shared_scope_id) forbidden();
+		const [eligibility] = await sql<{ membership_revision: string }[]>`
+			SELECT membership.revision::text AS membership_revision
+			FROM connection_shared_scopes scope
+			JOIN connection_shared_scope_principals membership
+				ON membership.shared_scope_id = scope.id
+				AND membership.principal_id = ${input.principalId}
+				AND membership.status = 'ACTIVE'
+			WHERE scope.id = ${account.shared_scope_id} AND scope.state = 'ACTIVE'
+			FOR SHARE OF scope, membership
+		`;
+		if (!eligibility) forbidden();
+		return {
+			ownerType: "SHARED",
+			providerId: account.provider_id,
+			sharedEligibilityPathHash: canonicalHash({
+				membershipRevision: eligibility.membership_revision,
+				principalId: input.principalId,
+				sharedScopeId: account.shared_scope_id,
+			}),
+		};
+	}
+
 	private async loadAuthorizationTarget(
 		sql: postgres.TransactionSql,
 		input: { connectionId: string; consumerId: string; principalId: string },
@@ -453,6 +1408,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			FOR SHARE
 		`;
 		if (!instance) forbidden();
+		const eligibility = await this.loadConnectionEligibility(sql, input);
 		const [subject] = await sql<
 			{
 				connection_display_name: string;
@@ -498,7 +1454,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON credential.connection_id = account.id
 				AND credential.status = 'ACTIVE'
 			WHERE account.id = ${input.connectionId}
-				AND account.principal_id = ${input.principalId}
 				AND account.status = 'ACTIVE'
 				AND release.status = 'PUBLISHED'
 				AND consumer.status = 'ACTIVE'
@@ -579,7 +1534,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			providerId: subject.provider_id,
 			providerReleaseId: subject.provider_release_id,
 			providerReleaseRevision: subject.provider_release_revision,
-			sharedEligibilityPathHash: null,
+			sharedEligibilityPathHash: eligibility.sharedEligibilityPathHash,
 		};
 	}
 
@@ -630,13 +1585,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE
 			`;
 			if (!principal) forbidden();
-			const [connectionIdentity] = await sql<{ provider_id: string }[]>`
-				SELECT provider_id FROM connection_accounts
-				WHERE id = ${input.connectionId}
-					AND principal_id = ${input.principalId}
-					AND status = 'ACTIVE'
-			`;
-			if (!connectionIdentity) forbidden();
+			const connectionIdentity = await this.loadConnectionEligibility(
+				sql,
+				input,
+			);
 			await sql`
 				INSERT INTO connection_authorization_roots (
 					id, principal_id, consumer_id, current_grant_id,
@@ -644,7 +1596,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				)
 				VALUES (
 					${`root-${randomUUID()}`}, ${input.principalId}, ${input.consumerId},
-					NULL, 'ACTIVE', '', ${connectionIdentity.provider_id}
+					NULL, 'ACTIVE', '', ${connectionIdentity.providerId}
 				)
 				ON CONFLICT DO NOTHING
 			`;
@@ -662,7 +1614,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				WHERE principal_id = ${input.principalId}
 					AND consumer_id = ${input.consumerId}
 					AND actor_key = ''
-					AND provider_id = ${connectionIdentity.provider_id}
+					AND provider_id = ${connectionIdentity.providerId}
 				FOR UPDATE
 			`;
 			if (!rootRow)
@@ -1012,9 +1964,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND active_grant.status = 'ACTIVE'
 			JOIN connection_accounts account
 				ON account.id = active_grant.connection_id
-				AND account.principal_id = active_grant.principal_id
 				AND account.provider_id = active_grant.provider_id
 				AND account.status = 'ACTIVE'
+				AND (
+					(
+						account.owner_type = 'PERSONAL'
+						AND account.owner_principal_id = active_grant.principal_id
+					) OR (
+						account.owner_type = 'SHARED'
+						AND EXISTS (
+							SELECT 1 FROM connection_shared_scopes shared_scope
+							JOIN connection_shared_scope_principals membership
+								ON membership.shared_scope_id = shared_scope.id
+								AND membership.principal_id = active_grant.principal_id
+								AND membership.status = 'ACTIVE'
+							WHERE shared_scope.id = account.shared_scope_id
+								AND shared_scope.state = 'ACTIVE'
+						)
+					)
+				)
 			JOIN connection_credential_versions credential
 				ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
 			JOIN connection_principals principal
@@ -1113,11 +2081,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				display_name: string;
 				external_account: string;
 				id: string;
+				owner_type: "PERSONAL" | "SHARED";
 				release_status: "DISABLED" | "PUBLISHED";
 				status: "ACTIVE" | "DISCONNECTED";
 			}[]
 		>`
 			SELECT account.id, account.external_account, account.display_name,
+				account.owner_type,
 				account.status, release.status AS release_status,
 				COALESCE(
 					jsonb_agg(action.id ORDER BY action.id)
@@ -1149,6 +2119,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			displayName: connection.display_name,
 			externalAccount: connection.external_account,
 			id: connection.id,
+			ownerType: connection.owner_type,
 			requiresReconnect: connection.release_status !== "PUBLISHED",
 			status: connection.status,
 		}));
@@ -1186,12 +2157,28 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON principal.id = active_grant.principal_id AND principal.status = 'ACTIVE'
 			JOIN connection_accounts account
 				ON account.id = active_grant.connection_id
-				AND account.principal_id = active_grant.principal_id
-					AND account.provider_id = active_grant.provider_id
+				AND account.provider_id = active_grant.provider_id
 					AND account.provider_release_id = active_grant.provider_release_id
 					AND account.revision = active_grant.connection_revision
 					AND account.execution_fence = active_grant.connection_execution_fence
 					AND account.status = 'ACTIVE'
+					AND (
+						(
+							account.owner_type = 'PERSONAL'
+							AND account.owner_principal_id = active_grant.principal_id
+						) OR (
+							account.owner_type = 'SHARED'
+							AND EXISTS (
+								SELECT 1 FROM connection_shared_scopes shared_scope
+								JOIN connection_shared_scope_principals membership
+									ON membership.shared_scope_id = shared_scope.id
+									AND membership.principal_id = active_grant.principal_id
+									AND membership.status = 'ACTIVE'
+								WHERE shared_scope.id = account.shared_scope_id
+									AND shared_scope.state = 'ACTIVE'
+							)
+						)
+					)
 				JOIN connection_credential_versions credential
 					ON credential.id = active_grant.credential_version_id
 					AND credential.id = ${input.credentialVersionId}
@@ -1259,17 +2246,29 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			input.codeVerifier,
 			`oauth:${stateHash}:${input.principalId}`,
 		);
-		await this.sql`
-			INSERT INTO connection_oauth_transactions (
-				state_hash, principal_id, verifier_ciphertext, verifier_nonce,
-				verifier_tag, redirect_uri, expires_at
-			)
-			VALUES (
-				${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
-				${protectedVerifier.nonce}, ${protectedVerifier.tag}, ${input.redirectUri},
-				now() + interval '10 minutes'
-			)
-		`;
+		await this.sql.begin(async (sql) => {
+			if (input.sharedScopeId) {
+				await this.requireConnectionAdministrator(sql, input.principalId);
+				const [scope] = await sql<{ id: string }[]>`
+					SELECT id FROM connection_shared_scopes
+					WHERE id = ${input.sharedScopeId} AND state = 'ACTIVE'
+					FOR SHARE
+				`;
+				if (!scope) forbidden();
+			}
+			await sql`
+				INSERT INTO connection_oauth_transactions (
+					state_hash, principal_id, verifier_ciphertext, verifier_nonce,
+					verifier_tag, redirect_uri, shared_scope_id, expires_at
+				)
+				VALUES (
+					${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
+					${protectedVerifier.nonce}, ${protectedVerifier.tag},
+					${input.redirectUri}, ${input.sharedScopeId ?? null},
+					now() + interval '10 minutes'
+				)
+			`;
+		});
 	}
 
 	async consumeOAuthTransaction(state: string) {
@@ -1279,6 +2278,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				{
 					principal_id: string;
 					redirect_uri: string;
+					shared_scope_id: string | null;
 					verifier_ciphertext: string;
 					verifier_nonce: string;
 					verifier_tag: string;
@@ -1289,7 +2289,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				WHERE state_hash = ${stateHash}
 					AND consumed_at IS NULL
 					AND expires_at > now()
-				RETURNING principal_id, redirect_uri, verifier_ciphertext,
+				RETURNING principal_id, redirect_uri, shared_scope_id, verifier_ciphertext,
 					verifier_nonce, verifier_tag
 			`;
 			if (!row) {
@@ -1309,6 +2309,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				),
 				principalId: row.principal_id,
 				redirectUri: row.redirect_uri,
+				...(row.shared_scope_id ? { sharedScopeId: row.shared_scope_id } : {}),
 			};
 		});
 	}
@@ -1355,9 +2356,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					ORDER BY id
 					FOR UPDATE
 				`;
+			await sql`
+				SELECT active_grant.id
+				FROM connection_authorization_roots root
+				JOIN connection_grants active_grant
+					ON active_grant.id = root.current_grant_id
+					AND active_grant.root_id = root.id
+					AND active_grant.status = 'ACTIVE'
+				WHERE root.principal_id = ${input.principalId}
+					AND root.provider_id = ${githubProvider}
+				ORDER BY root.id
+				FOR UPDATE OF active_grant
+			`;
 			const [existing] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_accounts
-				WHERE principal_id = ${input.principalId}
+				WHERE owner_type = 'PERSONAL'
+					AND owner_principal_id = ${input.principalId}
 					AND provider_id = ${githubProvider}
 					AND external_account = ${input.externalAccount}
 				FOR UPDATE
@@ -1374,11 +2388,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			} else {
 				await sql`
 					INSERT INTO connection_accounts (
-						id, principal_id, provider_release_id, provider_id,
+						id, owner_type, owner_principal_id, shared_scope_id,
+						provider_release_id, provider_id,
 						external_account, display_name, status
 					)
 					VALUES (
-						${connectionId}, ${input.principalId}, ${release.id}, ${githubProvider},
+						${connectionId}, 'PERSONAL', ${input.principalId}, NULL,
+						${release.id}, ${githubProvider},
 						${input.externalAccount}, ${input.displayName}, 'ACTIVE'
 					)
 				`;
@@ -1403,185 +2419,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${sql.json(grantedScopes)}, 'ACTIVE'
 				)
 			`;
-			const currentGrants = await sql<
-				{
-					action_version_ids: unknown;
-					actor_key: string;
-					confirmed_action_set_digest: string | null;
-					consent_id: string | null;
-					consumer_id: string;
-					credential_scope_digest: string | null;
-					declaration_id: string | null;
-					external_account_fingerprint: string | null;
-					id: string;
-					provider_id: string;
-					provider_release_id: string | null;
-					root_fence: string;
-					root_id: string;
-					root_status: string;
-					shared_eligibility_path_hash: string | null;
-				}[]
-			>`
-					SELECT active_grant.id, active_grant.root_id, active_grant.consent_id,
-						active_grant.consumer_id, active_grant.actor_key,
-						active_grant.provider_id, active_grant.declaration_id,
-						active_grant.external_account_fingerprint,
-						active_grant.shared_eligibility_path_hash,
-						active_grant.credential_scope_digest,
-						active_grant.provider_release_id,
-						active_grant.confirmed_action_set_digest,
-						root.fence::text AS root_fence, root.status AS root_status,
-						COALESCE(
-							(
-								SELECT jsonb_agg(action_version_id ORDER BY action_version_id)
-								FROM connection_grant_actions
-								WHERE grant_id = active_grant.id
-							),
-							'[]'::jsonb
-						) AS action_version_ids
-					FROM connection_authorization_roots root
-					JOIN connection_grants active_grant
-						ON active_grant.id = root.current_grant_id
-						AND active_grant.root_id = root.id
-						AND active_grant.status = 'ACTIVE'
-					WHERE root.principal_id = ${input.principalId}
-						AND root.provider_id = ${githubProvider}
-						AND active_grant.connection_id = ${connectionId}
-					ORDER BY root.id
-					FOR UPDATE OF active_grant
-				`;
-			for (const grant of currentGrants) {
-				let target: AuthorizationTarget | undefined;
-				try {
-					target = await this.loadAuthorizationTarget(sql, {
-						connectionId,
-						consumerId: grant.consumer_id,
-						principalId: input.principalId,
-					});
-				} catch (error) {
-					if (
-						!(error instanceof ConnectionError) ||
-						error.code !== "FORBIDDEN"
-					) {
-						throw error;
-					}
-				}
-				const decision = decideReconnectAuthorization({
-					current: {
-						actionVersionIds: grant.action_version_ids,
-						actorKey: grant.actor_key,
-						confirmedActionSetDigest: grant.confirmed_action_set_digest,
-						consentId: grant.consent_id,
-						consumerDeclarationId: grant.declaration_id,
-						credentialScopeDigest: grant.credential_scope_digest,
-						externalAccountFingerprint: grant.external_account_fingerprint,
-						providerId: grant.provider_id,
-						providerReleaseId: grant.provider_release_id,
-						rootStatus: grant.root_status,
-						sharedEligibilityPathHash: grant.shared_eligibility_path_hash,
-					},
-					target,
-				});
-				if (decision === "REPLACE_GRANT" && target) {
-					const grantId = `grant-${randomUUID()}`;
-					const snapshot = this.authorizationSnapshot(
-						input.principalId,
-						{
-							currentGrantId: grant.id,
-							fence: grant.root_fence,
-							id: grant.root_id,
-							providerId: grant.provider_id,
-							status: grant.root_status,
-						},
-						target,
-					);
-					await sql`
-							INSERT INTO connection_grants (
-								id, principal_id, consumer_id, connection_id, status,
-								root_id, consent_id, actor_key, provider_id, declaration_id,
-								connection_revision, connection_execution_fence,
-								external_account_fingerprint, shared_eligibility_path_hash,
-								credential_version_id, credential_revision,
-								credential_scope_digest, provider_release_id,
-								confirmed_action_set_digest
-							)
-							VALUES (
-								${grantId}, ${input.principalId}, ${grant.consumer_id},
-								${connectionId}, 'ACTIVE', ${grant.root_id}, ${grant.consent_id},
-								'', ${target.providerId}, ${target.consumerDeclarationId},
-								${target.connectionRevision}, ${target.connectionExecutionFence},
-								${target.externalAccountFingerprint},
-								${target.sharedEligibilityPathHash}, ${target.credentialVersionId},
-								${target.credentialRevision}, ${target.credentialScopeDigest},
-								${target.providerReleaseId}, ${snapshot.actionSetDigest}
-							)
-						`;
-					for (const action of target.actions) {
-						await sql`
-								INSERT INTO connection_grant_actions (
-									grant_id, action_version_id, authorization_digest
-								)
-								VALUES (${grantId}, ${action.id}, ${snapshot.authorizationDigest})
-							`;
-					}
-					await sql`
-							UPDATE connection_grants SET status = 'REPLACED'
-							WHERE id = ${grant.id} AND status = 'ACTIVE'
-						`;
-					const updatedRoots = await sql`
-							UPDATE connection_authorization_roots
-							SET current_grant_id = ${grantId}, fence = fence + 1
-							WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
-						`;
-					if (updatedRoots.count !== 1) {
-						throw new ConnectionError(
-							"PROVIDER_FAILED",
-							"Authorization changed during reconnect",
-						);
-					}
-					await sql`
-							INSERT INTO connection_audit_records (principal_id, event, detail)
-							VALUES (
-								${input.principalId}, 'GRANT_RESTORED_AFTER_RECONNECT',
-								${sql.json({
-									connectionId,
-									consumerId: grant.consumer_id,
-									grantId,
-									replacedGrantId: grant.id,
-								})}
-							)
-						`;
-				} else {
-					await sql`
-							UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
-							WHERE id = ${grant.id} AND status = 'ACTIVE'
-						`;
-					const updatedRoots = await sql`
-							UPDATE connection_authorization_roots
-							SET current_grant_id = NULL, fence = fence + 1
-							WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
-						`;
-					if (updatedRoots.count !== 1) {
-						throw new ConnectionError(
-							"PROVIDER_FAILED",
-							"Authorization changed during reconnect",
-						);
-					}
-					await sql`
-							INSERT INTO connection_audit_records (principal_id, event, detail)
-							VALUES (
-								${input.principalId},
-								'GRANT_RECONFIRMATION_REQUIRED_AFTER_RECONNECT',
-								${sql.json({
-									connectionId,
-									consumerId: grant.consumer_id,
-									grantId: grant.id,
-									reason: "AUTHORIZATION_PROOF_CHANGED",
-								})}
-							)
-						`;
-				}
-			}
+			await this.restoreGrantsAfterReconnect(sql, connectionId);
 			await sql`
 				INSERT INTO connection_audit_records (principal_id, event, detail)
 				VALUES (
@@ -1608,11 +2446,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						credential_scope_known: boolean;
 						external_account: string;
 						id: string;
+						owner_type: "PERSONAL" | "SHARED";
 						release_status: "DISABLED" | "PUBLISHED";
 						status: "ACTIVE" | "DISCONNECTED";
 					}[]
 				>`
 					SELECT account.id, account.external_account, account.display_name,
+						account.owner_type,
 						account.status, release.status AS release_status,
 						credential.scope_json IS NOT NULL AS credential_scope_known,
 						COALESCE(
@@ -1629,9 +2469,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					LEFT JOIN connection_credential_versions credential
 						ON credential.connection_id = account.id
 						AND credential.status = 'ACTIVE'
-					WHERE account.principal_id = ${principalId}
+					LEFT JOIN connection_shared_scopes shared_scope
+						ON shared_scope.id = account.shared_scope_id
+					LEFT JOIN connection_shared_scope_principals membership
+						ON membership.shared_scope_id = shared_scope.id
+						AND membership.principal_id = ${principalId}
+						AND membership.status = 'ACTIVE'
+					WHERE (
+						account.owner_type = 'PERSONAL'
+						AND account.owner_principal_id = ${principalId}
+					) OR (
+						account.owner_type = 'SHARED'
+						AND shared_scope.state = 'ACTIVE'
+						AND membership.principal_id IS NOT NULL
+					)
 					GROUP BY account.id, account.external_account, account.display_name,
-						account.status, release.status, credential.scope_json
+						account.owner_type, account.status, release.status,
+						credential.scope_json
 					ORDER BY account.display_name, account.id
 				`,
 				this.sql<
@@ -1738,6 +2592,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				displayName: connection.display_name,
 				externalAccount: connection.external_account,
 				id: connection.id,
+				ownerType: connection.owner_type,
 				requiresReconnect:
 					connection.release_status !== "PUBLISHED" ||
 					!connection.credential_scope_known,
@@ -1761,6 +2616,73 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				id: principal[0].id,
 			},
 		};
+	}
+
+	async disconnectSharedConnection(input: {
+		actorPrincipalId: string;
+		connectionId: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			await sql`
+				SELECT root.id
+				FROM connection_authorization_roots root
+				JOIN connection_grants active_grant
+					ON active_grant.id = root.current_grant_id
+					AND active_grant.root_id = root.id
+				WHERE active_grant.connection_id = ${input.connectionId}
+					AND active_grant.status = 'ACTIVE'
+				ORDER BY root.id
+				FOR UPDATE OF root
+			`;
+			await sql`
+				SELECT active_grant.id
+				FROM connection_authorization_roots root
+				JOIN connection_grants active_grant
+					ON active_grant.id = root.current_grant_id
+					AND active_grant.root_id = root.id
+				WHERE active_grant.connection_id = ${input.connectionId}
+					AND active_grant.status = 'ACTIVE'
+				ORDER BY root.id
+				FOR UPDATE OF active_grant
+			`;
+			const [account] = await sql<{ id: string }[]>`
+				UPDATE connection_accounts SET
+					status = 'DISCONNECTED', revision = revision + 1,
+					execution_fence = execution_fence + 1
+				WHERE id = ${input.connectionId}
+					AND owner_type = 'SHARED'
+					AND status = 'ACTIVE'
+				RETURNING id
+			`;
+			if (!account) forbidden();
+			await sql`
+				UPDATE connection_credential_versions
+				SET status = 'REVOKED', revision = revision + 1
+				WHERE connection_id = ${input.connectionId} AND status = 'ACTIVE'
+			`;
+			await sql`
+				UPDATE connection_grants
+				SET status = 'PAUSED_CONNECTION'
+				WHERE connection_id = ${input.connectionId} AND status = 'ACTIVE'
+			`;
+			await sql`
+				UPDATE connection_authorization_roots root
+				SET current_grant_id = NULL, fence = fence + 1
+				WHERE EXISTS (
+					SELECT 1 FROM connection_grants stored_grant
+					WHERE stored_grant.id = root.current_grant_id
+						AND stored_grant.connection_id = ${input.connectionId}
+				)
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (
+					${input.actorPrincipalId}, 'SHARED_CONNECTION_DISCONNECTED',
+					${sql.json({ connectionId: input.connectionId })}
+				)
+			`;
+		});
 	}
 
 	async disconnectConnection(input: {
@@ -1803,7 +2725,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					SET status = 'DISCONNECTED', revision = revision + 1,
 						execution_fence = execution_fence + 1
 				WHERE id = ${input.connectionId}
-					AND principal_id = ${input.principalId}
+					AND owner_type = 'PERSONAL'
+					AND owner_principal_id = ${input.principalId}
 					AND status = 'ACTIVE'
 				RETURNING id
 			`;
@@ -2034,12 +2957,28 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND instance.status = 'ACTIVE'
 				AND principal.id = call.principal_id AND principal.status = 'ACTIVE'
 				AND account.id = call.connection_id
-				AND account.principal_id = call.principal_id
-					AND account.provider_id = active_grant.provider_id
+				AND account.provider_id = active_grant.provider_id
 					AND account.provider_release_id = active_grant.provider_release_id
 					AND account.revision = active_grant.connection_revision
 					AND account.execution_fence = active_grant.connection_execution_fence
 					AND account.status = 'ACTIVE'
+					AND (
+						(
+							account.owner_type = 'PERSONAL'
+							AND account.owner_principal_id = call.principal_id
+						) OR (
+							account.owner_type = 'SHARED'
+							AND EXISTS (
+								SELECT 1 FROM connection_shared_scopes shared_scope
+								JOIN connection_shared_scope_principals membership
+									ON membership.shared_scope_id = shared_scope.id
+									AND membership.principal_id = call.principal_id
+									AND membership.status = 'ACTIVE'
+								WHERE shared_scope.id = account.shared_scope_id
+									AND shared_scope.state = 'ACTIVE'
+							)
+						)
+					)
 					AND credential.id = call.credential_version_id
 					AND credential.id = active_grant.credential_version_id
 					AND credential.connection_id = account.id

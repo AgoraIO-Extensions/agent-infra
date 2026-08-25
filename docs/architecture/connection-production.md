@@ -24,6 +24,20 @@ pnpm connection:production:up
 
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
 
+## 首个 Connection 管理员
+
+目标员工必须先通过 LDAP 成功登录一次，使稳定 identity mapping 已存在。随后由持有部署权限的操作员
+在 Secret Manager 注入完整 Connection runtime 配置的环境中执行：
+
+```bash
+pnpm connection:admin:bootstrap -- --ldap-subject '<stable-ldap-uid>'
+```
+
+命令使用 Connection identity key计算与登录相同的 environment-bound subject hash，只写
+`CONNECTION_ADMIN` role binding 和脱敏审计；不接受邮箱，不读取 LDAP 密码，不输出 Principal ID或
+Credential。命令幂等，但系统已有其他管理员或目标 role 已撤销后 fail closed。后续管理员变更只能从
+`/connection/admin/administrators` 执行，且不能撤销最后一个 active 管理员。
+
 ## 门禁期 Runtime 契约
 
 - 当前生产镜像只启动 `/` 与 `/healthz`，且 Compose 不向主机发布端口。LDAP、OAuth metadata、DCR、
@@ -37,7 +51,9 @@ bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Con
   已实测 Codex native-client metadata 与受限 loopback redirect，注册在首次 code exchange 后失效。
   Connection 登录页建立 hash-only browser session；Access tokens 页面不重复收集 LDAP 密码，PAT
   只展示一次明文。PostgreSQL 保存 browser session hash，以及 PAT hash、Principal、token instance、
-  有效期与撤销状态。
+  有效期与撤销状态。管理员使用同一 LDAP 登录；服务端 PostgreSQL RBAC 控制 Administrators 和
+  Shared GitHub Connections 页面。SharedScope 当前只支持显式 Principal membership；管理员本身不会
+  自动获得共享 Connection 使用资格。
 - Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。正式 runtime 的本机
   通过只能形成实现证据，不能代替尚未关闭的生产身份、KMS、egress、Consent 和恢复门禁。
 

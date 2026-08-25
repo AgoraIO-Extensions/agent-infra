@@ -41,6 +41,539 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"bootstraps one audited Connection administrator without promoting ordinary Principals",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 31),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const adminPrincipalId = `principal-admin-${suffix}`;
+			const disabledAdminPrincipalId = `principal-disabled-admin-${suffix}`;
+			const userPrincipalId = `principal-user-${suffix}`;
+			const identityIssuer = "urn:test:company-ldap";
+			const identitySubjectHash = `v2:${"a".repeat(64)}${suffix}`;
+
+			try {
+				await sql`
+					INSERT INTO connection_principals (id, display_name, email)
+					VALUES
+						(${adminPrincipalId}, 'Connection Admin', 'admin@example.invalid'),
+						(${userPrincipalId}, 'Connection User', 'user@example.invalid')
+				`;
+				await sql`
+					INSERT INTO connection_principal_identities (
+						identity_issuer, identity_subject_hash, principal_id,
+						identity_reference, status, verified_at
+					)
+					VALUES (
+						${identityIssuer}, ${identitySubjectHash}, ${adminPrincipalId},
+						'protected-identity-reference', 'ACTIVE', now()
+					)
+				`;
+
+				expect(
+					await repository.isConnectionAdministrator(adminPrincipalId),
+				).toBe(false);
+				expect(
+					await repository.isConnectionAdministrator(userPrincipalId),
+				).toBe(false);
+
+				await repository.bootstrapConnectionAdministrator({
+					identityIssuer,
+					identitySubjectHash,
+				});
+				await repository.bootstrapConnectionAdministrator({
+					identityIssuer,
+					identitySubjectHash,
+				});
+				await sql`
+					INSERT INTO connection_principals (
+						id, display_name, email, status
+					)
+					VALUES (
+						${disabledAdminPrincipalId}, 'Disabled administrator',
+						'disabled-admin@example.invalid', 'DISABLED'
+					)
+				`;
+				await sql`
+					INSERT INTO connection_principal_roles (
+						principal_id, role, status, grant_source
+					)
+					VALUES (
+						${disabledAdminPrincipalId}, 'CONNECTION_ADMIN', 'ACTIVE', 'BOOTSTRAP'
+					)
+				`;
+
+				expect(
+					await repository.isConnectionAdministrator(adminPrincipalId),
+				).toBe(true);
+				expect(
+					await repository.listConnectionAdministrators(adminPrincipalId),
+				).toEqual([
+					{
+						displayName: "Connection Admin",
+						email: "admin@example.invalid",
+						principalId: adminPrincipalId,
+					},
+				]);
+				expect(
+					await repository.listConnectionAdministratorCandidates(
+						adminPrincipalId,
+					),
+				).toEqual(
+					expect.arrayContaining([
+						{
+							displayName: "Connection Admin",
+							email: "admin@example.invalid",
+							isAdministrator: true,
+							principalId: adminPrincipalId,
+						},
+						{
+							displayName: "Connection User",
+							email: "user@example.invalid",
+							isAdministrator: false,
+							principalId: userPrincipalId,
+						},
+					]),
+				);
+				await expect(
+					repository.listConnectionAdministrators(userPrincipalId),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(
+					await repository.authorizeConnectionAdministration(userPrincipalId),
+				).toBe(false);
+
+				await repository.grantConnectionAdministrator({
+					actorPrincipalId: adminPrincipalId,
+					targetPrincipalId: userPrincipalId,
+				});
+				expect(
+					await repository.authorizeConnectionAdministration(adminPrincipalId),
+				).toBe(true);
+				expect(
+					await repository.listConnectionAdministrators(userPrincipalId),
+				).toEqual([
+					{
+						displayName: "Connection Admin",
+						email: "admin@example.invalid",
+						principalId: adminPrincipalId,
+					},
+					{
+						displayName: "Connection User",
+						email: "user@example.invalid",
+						principalId: userPrincipalId,
+					},
+				]);
+				await repository.revokeConnectionAdministrator({
+					actorPrincipalId: userPrincipalId,
+					targetPrincipalId: adminPrincipalId,
+				});
+				expect(
+					await repository.isConnectionAdministrator(adminPrincipalId),
+				).toBe(false);
+				await expect(
+					repository.grantConnectionAdministrator({
+						actorPrincipalId: adminPrincipalId,
+						targetPrincipalId: userPrincipalId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await expect(
+					repository.revokeConnectionAdministrator({
+						actorPrincipalId: userPrincipalId,
+						targetPrincipalId: userPrincipalId,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const [auditCount] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id = ${adminPrincipalId}
+						AND event = 'CONNECTION_ADMIN_BOOTSTRAPPED'
+				`;
+				expect(auditCount?.count).toBe("1");
+				const [roleAuditCount] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id IN (${adminPrincipalId}, ${userPrincipalId})
+						AND event IN (
+							'CONNECTION_ADMIN_GRANTED',
+							'CONNECTION_ADMIN_REVOKED'
+						)
+				`;
+				expect(roleAuditCount?.count).toBe("2");
+				const [denialAuditCount] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id = ${userPrincipalId}
+						AND event = 'CONNECTION_ADMIN_DENIED'
+				`;
+				expect(denialAuditCount?.count).toBe("2");
+				const [staleAdministratorDenial] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id = ${adminPrincipalId}
+						AND event = 'CONNECTION_ADMIN_DENIED'
+				`;
+				expect(staleAdministratorDenial?.count).toBe("1");
+				const managementQueryAudits = await sql<{ event: string }[]>`
+					SELECT event FROM connection_audit_records
+					WHERE principal_id IN (${adminPrincipalId}, ${userPrincipalId})
+						AND event IN (
+							'CONNECTION_ADMINISTRATORS_QUERIED',
+							'CONNECTION_ADMIN_CANDIDATES_QUERIED'
+						)
+				`;
+				expect(
+					new Set(managementQueryAudits.map(({ event }) => event)),
+				).toEqual(
+					new Set([
+						"CONNECTION_ADMINISTRATORS_QUERIED",
+						"CONNECTION_ADMIN_CANDIDATES_QUERIED",
+					]),
+				);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
+		"keeps Shared GitHub eligibility separate from administration and revalidates it",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 31),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const adminPrincipalId = `shared-admin-${suffix}`;
+			const eligiblePrincipalA = `shared-user-a-${suffix}`;
+			const eligiblePrincipalB = `shared-user-b-${suffix}`;
+			const ineligiblePrincipal = `shared-user-c-${suffix}`;
+			const consumerId = `shared-consumer-${suffix}`;
+			const actionId = `github.shared_read_${suffix}@v1`;
+			const catalog = {
+				actions: [
+					{
+						description: "Read through a Shared GitHub Connection",
+						effect: "READ" as const,
+						id: actionId,
+						inputSchema: { required: [] },
+						name: `github.shared_read_${suffix}`,
+						requiredScopes: ["repo"],
+					},
+				],
+				provider: "github",
+				providerReleaseId: `github-shared-${suffix}`,
+				sourceCommit: "3".repeat(40),
+			};
+
+			try {
+				await sql`
+					INSERT INTO connection_principals (id, display_name, email)
+					VALUES
+						(${adminPrincipalId}, 'Shared admin', 'shared-admin@example.invalid'),
+						(${eligiblePrincipalA}, 'Shared user A', 'shared-a@example.invalid'),
+						(${eligiblePrincipalB}, 'Shared user B', 'shared-b@example.invalid'),
+						(${ineligiblePrincipal}, 'Shared user C', 'shared-c@example.invalid')
+				`;
+				await sql`
+					INSERT INTO connection_principal_roles (
+						principal_id, role, status, grant_source
+					)
+					VALUES (
+						${adminPrincipalId}, 'CONNECTION_ADMIN', 'ACTIVE', 'BOOTSTRAP'
+					)
+				`;
+				await repository.publishGithubCatalog(catalog);
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: [actionId],
+					consumer: { id: consumerId, name: "Shared test consumer" },
+					providerReleaseId: catalog.providerReleaseId,
+				});
+				for (const principalId of [
+					adminPrincipalId,
+					eligiblePrincipalA,
+					eligiblePrincipalB,
+					ineligiblePrincipal,
+				]) {
+					await sql`
+						INSERT INTO connection_consumer_instances (
+							id, consumer_id, kind, auth_subject, status, principal_id
+						)
+						VALUES (
+							${`instance-${principalId}`}, ${consumerId}, 'DEVICE',
+							${`subject-${principalId}`}, 'ACTIVE', ${principalId}
+						)
+					`;
+				}
+
+				const scope = await repository.createSharedScope({
+					actorPrincipalId: adminPrincipalId,
+					displayName: "Agora shared GitHub",
+				});
+				for (const targetPrincipalId of [
+					eligiblePrincipalA,
+					eligiblePrincipalB,
+				]) {
+					await repository.grantSharedScopePrincipal({
+						actorPrincipalId: adminPrincipalId,
+						sharedScopeId: scope.sharedScopeId,
+						targetPrincipalId,
+					});
+				}
+				const personalConnection = await repository.storeGithubOAuthCredential({
+					accessToken: `personal-provider-secret-${suffix}`,
+					displayName: "Personal GitHub",
+					externalAccount: `personal-github-${suffix}`,
+					grantedScopes: ["repo"],
+					principalId: adminPrincipalId,
+				});
+				await expect(
+					sql`
+						UPDATE connection_accounts
+						SET owner_type = 'SHARED', owner_principal_id = NULL,
+							shared_scope_id = ${scope.sharedScopeId}
+						WHERE id = ${personalConnection.connectionId}
+					`,
+				).rejects.toMatchObject({ code: "23514" });
+				await expect(
+					sql`
+						UPDATE connection_accounts
+						SET owner_principal_id = ${eligiblePrincipalA}
+						WHERE id = ${personalConnection.connectionId}
+					`,
+				).rejects.toMatchObject({ code: "23514" });
+				await expect(
+					repository.createOAuthTransaction({
+						codeVerifier: `ineligible-verifier-${suffix}`,
+						principalId: eligiblePrincipalA,
+						redirectUri: "https://connection.example/oauth/callback",
+						sharedScopeId: scope.sharedScopeId,
+						state: `ineligible-state-${suffix}`,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const sharedOAuthState = `shared-state-${suffix}`;
+				await repository.createOAuthTransaction({
+					codeVerifier: `shared-verifier-${suffix}`,
+					principalId: adminPrincipalId,
+					redirectUri: "https://connection.example/oauth/callback",
+					sharedScopeId: scope.sharedScopeId,
+					state: sharedOAuthState,
+				});
+				expect(
+					await repository.consumeOAuthTransaction(sharedOAuthState),
+				).toEqual({
+					codeVerifier: `shared-verifier-${suffix}`,
+					principalId: adminPrincipalId,
+					redirectUri: "https://connection.example/oauth/callback",
+					sharedScopeId: scope.sharedScopeId,
+				});
+				const connection = await repository.storeSharedGithubOAuthCredential({
+					accessToken: `shared-provider-secret-${suffix}`,
+					actorPrincipalId: adminPrincipalId,
+					displayName: "Agora GitHub",
+					externalAccount: `agora-github-${suffix}`,
+					grantedScopes: ["repo"],
+					sharedScopeId: scope.sharedScopeId,
+				});
+				await expect(
+					sql`
+						UPDATE connection_accounts
+						SET owner_type = 'PERSONAL',
+							owner_principal_id = ${adminPrincipalId},
+							shared_scope_id = NULL
+						WHERE id = ${connection.connectionId}
+					`,
+				).rejects.toMatchObject({ code: "23514" });
+
+				expect(
+					(await repository.getOverview(adminPrincipalId)).connections.filter(
+						(stored) => stored.ownerType === "SHARED",
+					),
+				).toEqual([]);
+				expect(
+					(await repository.getOverview(ineligiblePrincipal)).connections,
+				).toEqual([]);
+				for (const principalId of [eligiblePrincipalA, eligiblePrincipalB]) {
+					expect(
+						(await repository.getOverview(principalId)).connections,
+					).toMatchObject([
+						{
+							id: connection.connectionId,
+							ownerType: "SHARED",
+						},
+					]);
+				}
+				await expect(
+					repository.createCurrentConsumerAuthorizationPreview({
+						connectionId: connection.connectionId,
+						consumerId,
+						principalId: ineligiblePrincipal,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+				await authorizeCurrentConsumer(repository, {
+					connectionId: connection.connectionId,
+					consumerId,
+					principalId: eligiblePrincipalA,
+				});
+				const eligibleIdentityA = {
+					consumerId,
+					instanceId: `instance-${eligiblePrincipalA}`,
+					principalId: eligiblePrincipalA,
+				};
+				expect(
+					(
+						await repository.listAuthorizedActions(
+							await repository.resolveDirectIdentity(eligibleIdentityA),
+						)
+					).map((action) => action.id),
+				).toEqual([actionId]);
+
+				await repository.revokeSharedScopePrincipal({
+					actorPrincipalId: adminPrincipalId,
+					sharedScopeId: scope.sharedScopeId,
+					targetPrincipalId: eligiblePrincipalA,
+				});
+				const [terminated] = await sql<
+					{ current_grant_id: string | null; status: string }[]
+				>`
+					SELECT root.current_grant_id, stored_grant.status
+					FROM connection_grants stored_grant
+					JOIN connection_authorization_roots root ON root.id = stored_grant.root_id
+					WHERE stored_grant.principal_id = ${eligiblePrincipalA}
+						AND stored_grant.connection_id = ${connection.connectionId}
+				`;
+				expect(terminated).toEqual({
+					current_grant_id: null,
+					status: "TERMINATED",
+				});
+				await expect(
+					repository.resolveDirectIdentity(eligibleIdentityA),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await authorizeCurrentConsumer(repository, {
+					connectionId: connection.connectionId,
+					consumerId,
+					principalId: eligiblePrincipalB,
+				});
+				const eligibleIdentityB = {
+					consumerId,
+					instanceId: `instance-${eligiblePrincipalB}`,
+					principalId: eligiblePrincipalB,
+				};
+				const beforeReconnect =
+					await repository.resolveDirectIdentity(eligibleIdentityB);
+				await expect(
+					repository.renameSharedScope({
+						actorPrincipalId: eligiblePrincipalB,
+						displayName: "Unauthorized rename",
+						sharedScopeId: scope.sharedScopeId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await repository.renameSharedScope({
+					actorPrincipalId: adminPrincipalId,
+					displayName: "Release Engineering",
+					sharedScopeId: scope.sharedScopeId,
+				});
+				expect(
+					(
+						await repository.sharedGithubAdministration(adminPrincipalId)
+					).scopes.find((entry) => entry.sharedScopeId === scope.sharedScopeId),
+				).toMatchObject({ displayName: "Release Engineering" });
+				expect(
+					(await repository.resolveDirectIdentity(eligibleIdentityB)).grantId,
+				).toBe(beforeReconnect.grantId);
+				const [renameAudit] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id = ${adminPrincipalId}
+						AND event = 'SHARED_SCOPE_RENAMED'
+				`;
+				expect(renameAudit?.count).toBe("1");
+				const [managementQueryAudit] = await sql<{ count: string }[]>`
+					SELECT count(*)::text AS count FROM connection_audit_records
+					WHERE principal_id = ${adminPrincipalId}
+						AND event = 'SHARED_GITHUB_ADMINISTRATION_QUERIED'
+				`;
+				expect(managementQueryAudit?.count).toBe("1");
+				await repository.storeSharedGithubOAuthCredential({
+					accessToken: `shared-provider-secret-reconnected-${suffix}`,
+					actorPrincipalId: adminPrincipalId,
+					displayName: "Agora GitHub",
+					externalAccount: `agora-github-${suffix}`,
+					grantedScopes: ["repo"],
+					sharedScopeId: scope.sharedScopeId,
+				});
+				const afterReconnect =
+					await repository.resolveDirectIdentity(eligibleIdentityB);
+				expect(afterReconnect.grantId).not.toBe(beforeReconnect.grantId);
+				const [replacement] = await sql<
+					{ consent_reused: boolean; old_status: string }[]
+				>`
+					SELECT old_grant.status AS old_status,
+						old_grant.consent_id = new_grant.consent_id AS consent_reused
+					FROM connection_grants old_grant
+					JOIN connection_grants new_grant ON new_grant.id = ${afterReconnect.grantId}
+					WHERE old_grant.id = ${beforeReconnect.grantId}
+				`;
+				expect(replacement).toEqual({
+					consent_reused: true,
+					old_status: "REPLACED",
+				});
+				await expect(
+					repository.disconnectSharedConnection({
+						actorPrincipalId: eligiblePrincipalB,
+						connectionId: connection.connectionId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await repository.disconnectSharedConnection({
+					actorPrincipalId: adminPrincipalId,
+					connectionId: connection.connectionId,
+				});
+				await expect(
+					repository.resolveDirectIdentity(eligibleIdentityB),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const [disconnected] = await sql<
+					{
+						connection_status: string;
+						credential_status: string;
+						grant_status: string;
+					}[]
+				>`
+					SELECT account.status AS connection_status,
+						credential.status AS credential_status,
+						stored_grant.status AS grant_status
+					FROM connection_accounts account
+					JOIN connection_credential_versions credential
+						ON credential.connection_id = account.id
+					JOIN connection_grants stored_grant
+						ON stored_grant.id = ${afterReconnect.grantId}
+					WHERE account.id = ${connection.connectionId}
+						AND credential.id = ${afterReconnect.credentialVersionId}
+				`;
+				expect(disconnected).toEqual({
+					connection_status: "DISCONNECTED",
+					credential_status: "REVOKED",
+					grant_status: "PAUSED_CONNECTION",
+				});
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"keeps a Connection pinned to its exact release when a newer catalog is published",
 		async () => {
 			if (!databaseUrl) return;
@@ -692,6 +1225,30 @@ describe("PostgreSQL Connection business authority", () => {
 									`;
 							}),
 						).rejects.toMatchObject({ code: "23514" });
+					}
+					for (const pausedStatus of [
+						"PAUSED_CONNECTION",
+						"PAUSED_CREDENTIAL",
+					] as const) {
+						const rollback = new Error(`rollback-${pausedStatus}-terminated`);
+						await expect(
+							transaction.savepoint(async (savepoint) => {
+								await savepoint`
+										UPDATE connection_grants SET status = ${pausedStatus}
+										WHERE id = ${restoredInvocation.grantId}
+									`;
+								await savepoint`
+										UPDATE connection_grants SET status = 'TERMINATED'
+										WHERE id = ${restoredInvocation.grantId}
+									`;
+								const [grant] = await savepoint<{ status: string }[]>`
+										SELECT status FROM connection_grants
+										WHERE id = ${restoredInvocation.grantId}
+									`;
+								expect(grant?.status).toBe("TERMINATED");
+								throw rollback;
+							}),
+						).rejects.toBe(rollback);
 					}
 				});
 				const [replacement] = await sql<

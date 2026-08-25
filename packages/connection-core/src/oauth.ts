@@ -377,6 +377,17 @@ class IdentityProtector {
 	}
 }
 
+export function deriveConnectionIdentitySubjectHash(input: {
+	environment: string;
+	identity: { issuer: string; subject: string };
+	key: Uint8Array;
+}) {
+	return new IdentityProtector(input.key).subjectHash(
+		input.environment,
+		input.identity,
+	);
+}
+
 export class ConnectionOAuthService {
 	private readonly accessTokenTtlMs: number;
 	private readonly authorizationCodeTtlMs: number;

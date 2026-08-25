@@ -15,6 +15,7 @@ COPY packages/openconnector-kernel/package.json packages/openconnector-kernel/pa
 RUN pnpm install --frozen-lockfile
 
 COPY apps/connection-api/src/bootstrap-production.ts apps/connection-api/src/bootstrap-production.ts
+COPY apps/connection-api/src/bootstrap-admin.ts apps/connection-api/src/bootstrap-admin.ts
 COPY apps/connection-api/src/index.ts apps/connection-api/src/index.ts
 COPY apps/connection-api/src/app.ts apps/connection-api/src/app.ts
 COPY apps/connection-api/src/oauth-routes.ts apps/connection-api/src/oauth-routes.ts

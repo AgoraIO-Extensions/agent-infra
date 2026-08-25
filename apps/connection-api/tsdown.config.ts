@@ -1,7 +1,11 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-	entry: ["./src/bootstrap-production.ts", "./src/index.ts"],
+	entry: [
+		"./src/bootstrap-admin.ts",
+		"./src/bootstrap-production.ts",
+		"./src/index.ts",
+	],
 	deps: {
 		alwaysBundle: [
 			"@agent-infra/connection-core",
