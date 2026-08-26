@@ -277,6 +277,10 @@ client、精确 redirect URI、PKCE S256、resource、scope、Principal、Consum
 
 Connection 在 M1 提供独立入口：
 
+- Connection Web 是独立于 Agora Agent Platform 的产品入口和部署单元；Agent Platform 只能跳转或
+  调用 Connection 公开契约，不能承载或复制 Connection 管理页面。
+- M1 面向中国员工，Connection Web 与 OAuth 交互页默认使用简体中文；GitHub、OAuth、Connection、
+  Consumer、Action 等必要领域术语可保留英文。
 - 我的 Connection：连接、重连、断开和查看个人 Connection。
 - Consumer 授权：选择账号、确认 Action、切换账号和撤销授权。
 - 调用记录：普通用户查看自己的 Connection Action 调用。
@@ -293,6 +297,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | --- | --- |
 | Direct MCP Client 独立接入 | 拟支持的客户端版本分别完成 MCP/OAuth conformance；至少一个客户端只配置 Connection MCP，完成登录、GitHub 连接、授权和真实 PR 创建 |
 | 公司账号登录 | 员工通过 Connection 浏览器页完成真实 LDAP 登录；LDAP 密码不进入客户端、持久化、日志或审计 |
+| 中文 Connection Web | 独立 Connection Web 的登录、Connection、Access Token、管理员和共享 Connection 页面默认为简体中文，桌面与移动端无内容重叠 |
 | 跨设备共享 | 同一员工在两个独立 ConsumerInstance 登录后使用同一 GitHub Connection；第二个实例不重复 GitHub OAuth |
 | 设备撤销 | 撤销一个 ConsumerInstance 后该实例立即失效，另一个实例及 GitHub Connection 继续有效 |
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |

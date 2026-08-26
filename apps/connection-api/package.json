@@ -22,6 +22,7 @@
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
+		"@agent-infra/connection-contracts": "workspace:*",
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/connection-identity": "workspace:*",
 		"@agent-infra/connection-store": "workspace:*",

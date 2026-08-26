@@ -4,6 +4,7 @@ import { ConnectionOAuthService } from "@agent-infra/connection-core";
 import {
 	assertIsolatedTestDatabaseUrl,
 	migrateConnectionDatabase,
+	PostgresBrowserCommandIdempotency,
 	PostgresConnectionOAuthRepository,
 } from "@agent-infra/connection-store";
 import { describe, expect, it } from "vitest";
@@ -27,6 +28,11 @@ describe("Connection OAuth HTTP flow", () => {
 				resolve(import.meta.dirname, "../../../migrations/connection"),
 			);
 			const repository = new PostgresConnectionOAuthRepository(databaseUrl);
+			const browserCommands = new PostgresBrowserCommandIdempotency(
+				databaseUrl,
+				Buffer.alloc(32, 37),
+			);
+			const commandSuffix = randomUUID();
 			const oauth = new ConnectionOAuthService({
 				consumer: { id: "consumer-codex", name: "Codex" },
 				directory: {
@@ -51,6 +57,7 @@ describe("Connection OAuth HTTP flow", () => {
 				directMcpEnabled: true,
 				githubProviderEnabled: false,
 				oauthServer: {
+					browserCommands,
 					dynamicClientRegistration: { clientName: "Codex" },
 					issuer: "https://connection.example/",
 					resource: "https://connection.example/mcp",
@@ -59,86 +66,104 @@ describe("Connection OAuth HTTP flow", () => {
 			});
 
 			try {
-				const loginPage = await app.request("/connection/login");
-				expect(loginPage.status).toBe(200);
-				expect(await loginPage.text()).toContain("Sign in to Connection");
-				expect((await app.request("/connection/tokens")).status).toBe(302);
+				expect((await app.request("/api/v1/connection/tokens")).status).toBe(
+					401,
+				);
 
-				const crossOrigin = await app.request("/connection/login", {
-					body: new URLSearchParams({
+				const crossOrigin = await app.request("/api/v1/connection/session", {
+					body: JSON.stringify({
 						password: "integration-password",
 						username: "integration-user",
 					}),
 					headers: {
-						"content-type": "application/x-www-form-urlencoded",
+						"content-type": "application/json",
 						origin: "https://attacker.example",
 					},
 					method: "POST",
 				});
 				expect(crossOrigin.status).toBe(400);
 
-				const denied = await app.request("/connection/login", {
-					body: new URLSearchParams({
+				const denied = await app.request("/api/v1/connection/session", {
+					body: JSON.stringify({
 						password: "wrong-password",
 						username: "integration-user",
 					}),
 					headers: {
-						"content-type": "application/x-www-form-urlencoded",
+						"content-type": "application/json",
+						"idempotency-key": `integration-denied-login-${commandSuffix}`,
 						origin: "https://connection.example",
 					},
 					method: "POST",
 				});
 				expect(denied.status).toBe(401);
 
-				const login = await app.request("/connection/login", {
-					body: new URLSearchParams({
+				const login = await app.request("/api/v1/connection/session", {
+					body: JSON.stringify({
 						password: "integration-password",
 						username: "integration-user",
 					}),
 					headers: {
-						"content-type": "application/x-www-form-urlencoded",
+						"content-type": "application/json",
+						"idempotency-key": `integration-browser-login-${commandSuffix}`,
 						origin: "https://connection.example",
 					},
 					method: "POST",
 				});
-				expect(login.status).toBe(303);
+				expect(login.status).toBe(200);
 				const setCookie = login.headers.get("set-cookie") ?? "";
 				expect(setCookie).toContain("HttpOnly");
 				expect(setCookie).toContain("Secure");
 				expect(setCookie).toContain("SameSite=Strict");
 				const cookie = setCookie.split(";", 1)[0] ?? "";
-				const consolePage = await app.request("/connection/tokens", {
+				const tokenList = await app.request("/api/v1/connection/tokens", {
 					headers: { cookie },
 				});
-				expect(consolePage.status).toBe(200);
-				const consoleBody = await consolePage.text();
-				expect(consoleBody).toContain("Connection navigation");
-				expect(consoleBody).toContain("Access tokens");
-				expect(consoleBody).not.toContain('name="password"');
+				expect(tokenList.status).toBe(200);
+				expect(await tokenList.json()).toEqual({ tokens: [] });
 
-				const issued = await app.request("/connection/tokens", {
-					body: new URLSearchParams({
+				const issued = await app.request("/api/v1/connection/tokens", {
+					body: JSON.stringify({
 						name: "HTTP integration token",
 					}),
 					headers: {
-						"content-type": "application/x-www-form-urlencoded",
+						"content-type": "application/json",
 						cookie,
+						"idempotency-key": `integration-token-issue-${commandSuffix}`,
 						origin: "https://connection.example",
 					},
 					method: "POST",
 				});
 				expect(issued.status).toBe(201);
 				expect(issued.headers.get("cache-control")).toBe("no-store");
-				const issuedBody = await issued.text();
-				const token =
-					/<code class="token-value">(conn_pat_[A-Za-z0-9_-]+)<\/code>/.exec(
-						issuedBody,
-					)?.[1];
-				const tokenId = /\/connection\/tokens\/(pat-[0-9a-f-]+)\/revoke/.exec(
-					issuedBody,
-				)?.[1];
+				const issuedBody = (await issued.json()) as {
+					issued: { token: string; tokenId: string };
+				};
+				const { token, tokenId } = issuedBody.issued;
 				expect(token).toMatch(/^conn_pat_[A-Za-z0-9_-]{43}$/);
 				expect(tokenId).toMatch(/^pat-[0-9a-f-]{36}$/);
+				const replayedIssue = await app.request("/api/v1/connection/tokens", {
+					body: JSON.stringify({ name: "HTTP integration token" }),
+					headers: {
+						"content-type": "application/json",
+						cookie,
+						"idempotency-key": `integration-token-issue-${commandSuffix}`,
+						origin: "https://connection.example",
+					},
+					method: "POST",
+				});
+				expect(replayedIssue.status).toBe(409);
+				expect(await replayedIssue.json()).toMatchObject({
+					error: {
+						code: "RESULT_UNCERTAIN",
+						messageKey: "connection.error.result_uncertain",
+					},
+				});
+				const replayedList = await app.request("/api/v1/connection/tokens", {
+					headers: { cookie },
+				});
+				expect(
+					((await replayedList.json()) as { tokens: unknown[] }).tokens,
+				).toHaveLength(1);
 
 				const initialize = await app.request("/mcp", {
 					body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "initialize" }),
@@ -151,16 +176,17 @@ describe("Connection OAuth HTTP flow", () => {
 				expect(initialize.status).toBe(200);
 
 				const revoked = await app.request(
-					`/connection/tokens/${tokenId}/revoke`,
+					`/api/v1/connection/tokens/${tokenId}`,
 					{
 						headers: {
 							cookie,
+							"idempotency-key": `integration-token-revoke-${commandSuffix}`,
 							origin: "https://connection.example",
 						},
-						method: "POST",
+						method: "DELETE",
 					},
 				);
-				expect(revoked.status).toBe(303);
+				expect(revoked.status).toBe(204);
 				expect(
 					(
 						await app.request("/mcp", {
@@ -178,13 +204,18 @@ describe("Connection OAuth HTTP flow", () => {
 					).status,
 				).toBe(401);
 
-				const logout = await app.request("/connection/logout", {
-					headers: { cookie, origin: "https://connection.example" },
-					method: "POST",
+				const logout = await app.request("/api/v1/connection/session", {
+					headers: {
+						cookie,
+						"idempotency-key": `integration-browser-logout-${commandSuffix}`,
+						origin: "https://connection.example",
+					},
+					method: "DELETE",
 				});
-				expect(logout.status).toBe(303);
+				expect(logout.status).toBe(204);
 				expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
 			} finally {
+				await browserCommands.close();
 				await repository.close();
 			}
 		},
@@ -308,6 +339,8 @@ describe("Connection OAuth HTTP flow", () => {
 					"form-action 'self' http://127.0.0.1:*",
 				);
 				const page = await authorization.text();
+				expect(page).toContain('<html lang="zh-CN">');
+				expect(page).toContain("登录 Connection");
 				const requestId = /name="request_id" value="([A-Za-z0-9_-]+)"/.exec(
 					page,
 				)?.[1];
@@ -345,9 +378,7 @@ describe("Connection OAuth HTTP flow", () => {
 				});
 				expect(invalidLogin.status).toBe(400);
 				const invalidLoginBody = await invalidLogin.text();
-				expect(invalidLoginBody).toContain(
-					"Authorization request expired or is no longer valid. Start a new sign-in from your client.",
-				);
+				expect(invalidLoginBody).toContain("授权请求已失效");
 				expect(invalidLoginBody).not.toContain('name="password"');
 				expect(
 					invalidLogin.headers.get("content-security-policy"),

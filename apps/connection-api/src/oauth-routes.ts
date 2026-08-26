@@ -1,17 +1,36 @@
 import { randomUUID } from "node:crypto";
 import {
+	authorizationConsentRequestSchema,
+	authorizationPreviewRequestSchema,
+	connectionBrowserOpenApi,
+	idempotencyKeySchema,
+	issueTokenRequestSchema,
+	loginRequestSchema,
+	oauthTransactionRequestSchema,
+	sharedScopeNameSchema,
+} from "@agent-infra/connection-contracts";
+import {
 	type ConnectionApplicationService,
 	ConnectionError,
 	type ConnectionOAuthService,
-	type ConnectionOverview,
-	type CurrentConsumerAuthorizationPreview,
 	OAuthProtocolError,
-	type PersonalAccessTokenRecord,
 } from "@agent-infra/connection-core";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 export type ConnectionOAuthServerOptions = {
+	browserCommands?: {
+		execute: <T>(
+			input: {
+				idempotencyKey: string;
+				operation: string;
+				replayable?: boolean;
+				request: unknown;
+				subject: string;
+			},
+			command: () => Promise<T>,
+		) => Promise<T>;
+	};
 	dynamicClientRegistration?: { clientName: string };
 	issuer: string;
 	management?: {
@@ -23,7 +42,7 @@ export type ConnectionOAuthServerOptions = {
 };
 
 const browserSessionCookie = "connection_session";
-const browserSessionCookiePath = "/connection";
+const browserSessionCookiePath = "/";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -106,11 +125,11 @@ function loginPage(input: {
 	requestId?: string;
 }) {
 	return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in to Connection</title>
+<title>登录 Connection</title>
 <style>
 :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; color: #171717; background: #f5f5f4; }
 * { box-sizing: border-box; }
@@ -128,19 +147,19 @@ button:hover { background: #14532d; }
 </head>
 <body>
 <main>
-<h1>Sign in to Connection</h1>
-<p>Continue to ${html(input.clientName)}</p>
+<h1>登录 Connection</h1>
+<p>继续访问 ${html(input.clientName)}</p>
 ${input.error ? `<p class="error" role="alert">${html(input.error)}</p>` : ""}
 ${
 	input.requestId
 		? `
 <form method="post" action="/oauth/login">
 <input type="hidden" name="request_id" value="${html(input.requestId)}">
-<label for="username">Company username</label>
+<label for="username">公司账号</label>
 <input id="username" name="username" type="text" autocomplete="username" required maxlength="256" autofocus>
-<label for="password">Password</label>
+<label for="password">密码</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
-<button type="submit">Continue</button>
+<button type="submit">登录并继续</button>
 </form>
 		`
 		: ""
@@ -150,536 +169,11 @@ ${
 </html>`;
 }
 
-const consoleStyles = `
-:root { color-scheme: light; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #202522; background: #f4f6f4; }
-* { box-sizing: border-box; }
-body { min-height: 100vh; min-height: 100dvh; margin: 0; background: #f4f6f4; }
-button, input { font: inherit; }
-button { cursor: pointer; }
-a { color: inherit; }
-:focus-visible { outline: 3px solid #a8c7b0; outline-offset: 2px; }
-.brand { display: flex; align-items: center; gap: 10px; min-height: 40px; color: #f7faf7; font-size: 15px; font-weight: 700; }
-.brand-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; background: #dce9df; color: #173e25; font-size: 14px; }
-.login-shell { display: grid; min-height: 100vh; min-height: 100dvh; grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.1fr); }
-.login-brand { display: flex; flex-direction: column; justify-content: space-between; padding: 36px; background: #173e25; color: #dce9df; }
-.login-brand p { max-width: 380px; margin: 0; color: #bad0c0; font-size: 14px; line-height: 1.6; }
-.login-main { display: grid; place-items: center; padding: 32px; }
-.login-panel { width: min(100%, 390px); }
-h1 { margin: 0; color: #202522; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
-.lead { margin: 9px 0 26px; color: #5b655e; font-size: 14px; line-height: 1.55; }
-label { display: block; margin: 0 0 7px; color: #323a35; font-size: 13px; font-weight: 650; }
-input[type="text"], input[type="password"] { width: 100%; height: 44px; margin: 0 0 18px; padding: 0 12px; border: 1px solid #aab3ad; border-radius: 6px; background: #ffffff; color: #202522; }
-input::placeholder { color: #68736c; }
-.primary-button { display: inline-flex; min-width: 128px; height: 42px; align-items: center; justify-content: center; padding: 0 18px; border: 1px solid #173e25; border-radius: 6px; background: #173e25; color: #f7faf7; font-weight: 680; text-decoration: none; }
-.primary-button:hover { background: #0f321c; }
-.primary-button:active, .text-button:active, .danger-button:active { transform: translateY(1px); }
-.error { margin: 0 0 18px; padding: 10px 12px; border-left: 3px solid #a63e3e; background: #fbecec; color: #7d2525; font-size: 13px; line-height: 1.45; }
-.app-shell { display: grid; min-height: 100vh; min-height: 100dvh; grid-template-columns: 238px minmax(0, 1fr); }
-.sidebar { display: flex; position: sticky; top: 0; height: 100vh; height: 100dvh; flex-direction: column; padding: 22px 16px 16px; background: #173e25; color: #dce9df; }
-.sidebar nav { margin-top: 32px; }
-.nav-link { display: flex; min-height: 40px; align-items: center; padding: 0 12px; border-radius: 6px; color: #c7d9cc; font-size: 14px; font-weight: 600; text-decoration: none; }
-.nav-link[aria-current="page"] { background: #2a5437; color: #ffffff; }
-.account { margin-top: auto; padding: 14px 10px 0; border-top: 1px solid #3a6345; }
-.account-name { overflow: hidden; margin: 0; color: #ffffff; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.account-email { overflow: hidden; margin: 4px 0 10px; color: #a9c2b0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.text-button { padding: 0; border: 0; background: transparent; color: #dce9df; font-size: 12px; font-weight: 650; }
-.content { width: min(100%, 1120px); padding: 42px clamp(24px, 5vw, 64px) 64px; }
-.page-header { margin-bottom: 30px; }
-.page-header p { max-width: 620px; margin: 9px 0 0; color: #5b655e; font-size: 14px; line-height: 1.55; }
-.panel { margin-bottom: 28px; border: 1px solid #d2d8d4; border-radius: 7px; background: #ffffff; }
-.panel-header { padding: 20px 22px 0; }
-.panel-header h2 { margin: 0; color: #252b27; font-size: 16px; letter-spacing: 0; }
-.panel-header p { margin: 7px 0 0; color: #68716b; font-size: 13px; line-height: 1.5; }
-.issue-form { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 12px; align-items: end; padding: 18px 22px 22px; }
-.issue-form input { margin: 0; }
-.issued { margin: 0 22px 22px; padding: 16px; border: 1px solid #94b39c; border-radius: 6px; background: #edf6ef; }
-.issued h3 { margin: 0 0 7px; color: #173e25; font-size: 14px; }
-.issued p { margin: 0 0 12px; color: #425048; font-size: 13px; line-height: 1.5; }
-.token-value { display: block; width: 100%; min-height: 46px; padding: 12px; border: 1px solid #9eaaa2; border-radius: 5px; background: #ffffff; color: #202522; font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.45; overflow-wrap: anywhere; user-select: all; }
-.table-wrap { overflow-x: auto; padding: 8px 22px 18px; }
-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-th { padding: 11px 10px; border-bottom: 1px solid #dfe4e0; color: #68716b; font-size: 11px; font-weight: 700; text-align: left; }
-td { height: 62px; padding: 10px; border-bottom: 1px solid #edf0ee; color: #343b36; font-size: 12px; vertical-align: middle; }
-tbody tr:last-child td { border-bottom: 0; }
-.token-name { overflow: hidden; color: #252b27; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.status { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
-.status-active { background: #e5f1e8; color: #215a31; }
-.status-revoked, .status-expired { background: #ecefed; color: #5f6762; }
-.danger-button { min-height: 32px; padding: 0 10px; border: 1px solid #c9a3a3; border-radius: 5px; background: #ffffff; color: #8b3030; font-size: 12px; font-weight: 650; }
-.danger-button:hover { background: #fff3f3; }
-.empty { padding: 34px 22px 38px; color: #68716b; font-size: 13px; text-align: center; }
-.connection-list { display: grid; gap: 0; padding: 8px 22px 22px; }
-.connection-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 18px 0; border-bottom: 1px solid #edf0ee; }
-.connection-item:last-child { border-bottom: 0; }
-.connection-title { margin: 0 0 5px; color: #252b27; font-size: 14px; }
-.connection-meta { margin: 0; color: #68716b; font-size: 12px; }
-.connection-actions { display: flex; gap: 8px; align-items: start; }
-.consumer-list { grid-column: 1 / -1; display: grid; gap: 8px; }
-.consumer-row { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid #e1e5e2; border-radius: 5px; background: #f8faf8; }
-.consumer-name { margin: 0; color: #343b36; font-size: 13px; font-weight: 650; }
-.secondary-button { min-height: 32px; padding: 0 11px; border: 1px solid #8ca394; border-radius: 5px; background: #ffffff; color: #245434; font-size: 12px; font-weight: 650; }
-.secondary-button:hover { background: #f0f6f1; }
-.scope-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
-.scope-actions { display: flex; align-items: start; gap: 8px; }
-.rename-control summary { display: inline-flex; align-items: center; list-style: none; cursor: pointer; }
-.rename-control summary::-webkit-details-marker { display: none; }
-.rename-form { display: grid; position: absolute; z-index: 1; width: min(360px, calc(100vw - 40px)); margin-top: 8px; margin-left: -230px; padding: 14px; border: 1px solid #cbd3cd; border-radius: 6px; background: #ffffff; box-shadow: 0 8px 24px rgb(31 45 35 / 14%); }
-.rename-form input { margin-bottom: 12px; }
-.rename-form-actions { display: flex; align-items: center; gap: 12px; }
-.action-list { max-height: 180px; margin: 12px 0 0; overflow-y: auto; padding-right: 8px; padding-left: 18px; color: #5b655e; font-size: 12px; line-height: 1.6; }
-@media (max-width: 760px) {
-  .login-shell { grid-template-columns: 1fr; }
-  .login-brand { min-height: 132px; padding: 22px; }
-  .login-brand p { display: none; }
-  .login-main { align-items: start; padding: 40px 22px; }
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; padding: 14px 16px; }
-  .sidebar nav { margin-top: 12px; }
-  .account { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; align-items: center; margin-top: 12px; padding: 12px 10px 0; }
-  .account-email { margin-bottom: 0; }
-  .account form { grid-column: 2; grid-row: 1 / span 2; }
-  .content { padding: 28px 16px 48px; }
-  .issue-form { grid-template-columns: 1fr; }
-	.connection-item { grid-template-columns: 1fr; }
-	.connection-actions { justify-content: start; }
-	.consumer-list { grid-column: 1; }
-  .consumer-row { align-items: start; flex-direction: column; }
-  .scope-header, .scope-actions { align-items: stretch; flex-direction: column; }
-  .rename-form { position: static; width: 100%; margin-left: 0; box-shadow: none; }
-  .primary-button { width: 100%; }
-  .issued { margin-right: 14px; margin-left: 14px; }
-  .panel-header, .issue-form { padding-right: 14px; padding-left: 14px; }
-  .table-wrap { padding-right: 8px; padding-left: 8px; }
-  .token-table th:nth-child(3), .token-table td:nth-child(3), .token-table th:nth-child(4), .token-table td:nth-child(4) { display: none; }
-  .token-table th:nth-child(1) { width: 36%; }
-  .token-table th:nth-child(2) { width: 24%; }
-  .token-table th:nth-child(5) { width: 20%; }
-  .token-table th:nth-child(6) { width: 20%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  * { scroll-behavior: auto !important; }
-}`;
-
-function consoleLoginPage(error?: string) {
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in | Connection</title>
-<style>${consoleStyles}</style>
-</head>
-<body>
-<div class="login-shell">
-<aside class="login-brand">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-<p>Manage the credentials your approved clients use to access Connection.</p>
-</aside>
-<main class="login-main">
-<section class="login-panel" aria-labelledby="login-title">
-<h1 id="login-title">Sign in to Connection</h1>
-<p class="lead">Use your company account to continue.</p>
-${error ? `<p class="error" role="alert">${html(error)}</p>` : ""}
-<form method="post" action="/connection/login">
-<label for="username">Company username</label>
-<input id="username" name="username" type="text" autocomplete="username" required maxlength="256" autofocus>
-<label for="password">Password</label>
-<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
-<button class="primary-button" type="submit">Sign in</button>
-</form>
-</section>
-</main>
-</div>
-</body>
-</html>`;
-}
-
-function timestamp(value: Date | null) {
-	if (!value) return "Never";
-	const iso = value.toISOString();
-	return `<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`;
-}
-
-function consoleNavigation(
-	current: "administrators" | "connections" | "shared-connections" | "tokens",
-	isAdministrator = false,
-) {
-	const adminNavigation =
-		isAdministrator ||
-		current === "administrators" ||
-		current === "shared-connections"
-			? `<a class="nav-link" href="/connection/admin/shared-connections"${current === "shared-connections" ? ' aria-current="page"' : ""}>Shared Connections</a>
-<a class="nav-link" href="/connection/admin/administrators"${current === "administrators" ? ' aria-current="page"' : ""}>Administrators</a>`
-			: "";
-	return `<nav aria-label="Connection navigation">
-<a class="nav-link" href="/connection/connections"${current === "connections" ? ' aria-current="page"' : ""}>Connections</a>
-<a class="nav-link" href="/connection/tokens"${current === "tokens" ? ' aria-current="page"' : ""}>Access tokens</a>
-${adminNavigation}
-</nav>`;
-}
-
-function tokenRows(tokens: PersonalAccessTokenRecord[]) {
-	if (tokens.length === 0) {
-		return '<p class="empty">No access tokens have been issued.</p>';
-	}
-	return `<div class="table-wrap"><table class="token-table">
-<thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-<tbody>${tokens
-		.map(
-			(token) => `<tr>
-<td><div class="token-name" title="${html(token.name)}">${html(token.name)}</div></td>
-<td><span class="status status-${token.status.toLowerCase()}">${html(token.status[0] + token.status.slice(1).toLowerCase())}</span></td>
-<td>${timestamp(token.createdAt)}</td>
-<td>${timestamp(token.expiresAt)}</td>
-<td>${timestamp(token.lastUsedAt)}</td>
-<td>${
-				token.status === "ACTIVE"
-					? `<form method="post" action="/connection/tokens/${encodeURIComponent(token.tokenId)}/revoke"><button class="danger-button" type="submit">Revoke</button></form>`
-					: ""
-			}</td>
-</tr>`,
-		)
-		.join("")}</tbody>
-</table></div>`;
-}
-
-function tokenConsolePage(input: {
-	account: { displayName: string; email: string | null };
-	error?: string;
-	issued?: { expiresAt: Date; name: string; token: string };
-	tokens: PersonalAccessTokenRecord[];
+function browserAccountProjection(account: {
+	displayName: string;
+	email: string | null;
 }) {
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Access tokens | Connection</title>
-<style>${consoleStyles}.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }</style>
-</head>
-<body>
-<div class="app-shell">
-<aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("tokens")}
-<div class="account">
-<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
-<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
-<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
-</div>
-</aside>
-<main class="content">
-<header class="page-header">
-<h1>Access tokens</h1>
-<p>Issue a token for clients that cannot complete the Connection OAuth login.</p>
-</header>
-<section class="panel" aria-labelledby="issue-token-title">
-<div class="panel-header">
-<h2 id="issue-token-title">Issue a token</h2>
-<p>Use a separate token when a client needs its own revocation and audit boundary.</p>
-</div>
-${input.error ? `<p class="error" role="alert">${html(input.error)}</p>` : ""}
-<form class="issue-form" method="post" action="/connection/tokens">
-<div><label for="name">Token name</label><input id="name" name="name" type="text" autocomplete="off" placeholder="For example, Codex on MacBook" required maxlength="100"></div>
-<button class="primary-button" type="submit">Issue token</button>
-</form>
-${
-	input.issued
-		? `<div class="issued" role="status"><h3>Token issued</h3><p>${html(input.issued.name)} expires ${timestamp(input.issued.expiresAt)}. Copy it now. It will not be shown again.</p><code class="token-value">${html(input.issued.token)}</code></div>`
-		: ""
-}
-</section>
-<section class="panel" aria-labelledby="issued-tokens-title">
-<div class="panel-header"><h2 id="issued-tokens-title">Issued tokens</h2><p>Revoking a token stops every client currently sharing it.</p></div>
-${tokenRows(input.tokens)}
-</section>
-</main>
-</div>
-</body>
-</html>`;
-}
-
-function connectionConsolePage(input: {
-	account: { displayName: string; email: string | null };
-	isAdministrator: boolean;
-	overview: ConnectionOverview;
-}) {
-	const actionList = input.overview.actions
-		.map(
-			(action) =>
-				`<li>${html(action.description)} <span class="status status-${action.effect === "READ" ? "active" : "expired"}">${html(action.effect)}</span></li>`,
-		)
-		.join("");
-	const connections = input.overview.connections.length
-		? `<div class="connection-list">${input.overview.connections
-				.map((connection) => {
-					const canAuthorize =
-						connection.status === "ACTIVE" && !connection.requiresReconnect;
-					const activeGrants = input.overview.grants.filter(
-						(grant) =>
-							grant.connectionId === connection.id && grant.status === "ACTIVE",
-					);
-					const consumers = input.overview.consumers.length
-						? input.overview.consumers
-								.map((consumer) => {
-									const grant = activeGrants.find(
-										(entry) =>
-											entry.consumerId === consumer.id &&
-											entry.actionVersionIds.length ===
-												connection.actionVersionIds.length &&
-											entry.actionVersionIds.every((actionVersionId) =>
-												connection.actionVersionIds.includes(actionVersionId),
-											),
-									);
-									return `<div class="consumer-row"><p class="consumer-name">${html(consumer.name)}</p>${
-										grant
-											? `<form method="post" action="/connection/grants/${encodeURIComponent(grant.id)}/revoke"><button class="danger-button" type="submit">Revoke access</button></form>`
-											: canAuthorize
-												? `<form method="post" action="/connection/connections/${encodeURIComponent(connection.id)}/authorize"><input type="hidden" name="consumer_id" value="${html(consumer.id)}"><button class="secondary-button" type="submit">Use with ${html(consumer.name)}</button></form>`
-												: `<span class="status status-revoked">${connection.requiresReconnect ? "Reconnect required" : "Unavailable"}</span>`
-									}</div>`;
-								})
-								.join("")
-						: '<p class="connection-meta">Issue an access token or sign in from a Direct MCP client before authorizing it.</p>';
-					return `<article class="connection-item">
-<div><h3 class="connection-title">${html(connection.displayName)}${connection.ownerType === "SHARED" ? ' <span class="status">SHARED</span>' : ""}</h3><p class="connection-meta">${connection.ownerType === "SHARED" ? "Shared " : ""}GitHub account ${html(connection.externalAccount)}</p></div>
-<div class="connection-actions"><span class="status status-${connection.requiresReconnect ? "expired" : connection.status.toLowerCase()}">${connection.requiresReconnect ? "RECONNECT REQUIRED" : html(connection.status)}</span>${
-						connection.ownerType === "SHARED"
-							? ""
-							: connection.requiresReconnect
-								? '<a class="secondary-button" href="/connection/connections/github">Reconnect GitHub</a>'
-								: connection.status === "ACTIVE"
-									? `<form method="post" action="/connection/connections/${encodeURIComponent(connection.id)}/disconnect"><button class="danger-button" type="submit">Disconnect</button></form>`
-									: ""
-					}</div>
-<div class="consumer-list">${consumers}</div>
-</article>`;
-				})
-				.join("")}</div>`
-		: '<p class="empty">No GitHub account is connected.</p>';
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connections | Connection</title>
-<style>${consoleStyles}.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }</style>
-</head>
-<body>
-<div class="app-shell">
-<aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("connections", input.isAdministrator)}
-<div class="account">
-<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
-<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
-<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
-</div>
-</aside>
-<main class="content">
-<header class="page-header"><h1>Connections</h1></header>
-<section class="panel" aria-labelledby="github-title">
-<div class="panel-header"><h2 id="github-title">GitHub</h2><ul class="action-list">${actionList}</ul></div>
-<div class="issue-form"><div></div><a class="primary-button" href="/connection/connections/github" target="_blank" rel="noopener noreferrer">Add GitHub account</a></div>
-${connections}
-</section>
-</main>
-</div>
-</body>
-</html>`;
-}
-
-function administratorConsolePage(input: {
-	account: { displayName: string; email: string | null };
-	administrators: readonly {
-		displayName: string;
-		email: string | null;
-		isAdministrator: boolean;
-		principalId: string;
-	}[];
-}) {
-	const rows = input.administrators
-		.map(
-			(administrator) => `<tr>
-<td>${html(administrator.displayName)}</td>
-<td>${html(administrator.email ?? "Company account")}</td>
-<td>${
-				administrator.isAdministrator
-					? '<span class="status status-active">ADMIN</span>'
-					: '<span class="status">USER</span>'
-			}</td>
-<td><form method="post" action="/connection/admin/administrators/${encodeURIComponent(administrator.principalId)}/${administrator.isAdministrator ? "revoke" : "grant"}"><button class="${administrator.isAdministrator ? "danger-button" : "secondary-button"}" type="submit">${administrator.isAdministrator ? "Revoke" : "Grant"}</button></form></td>
-</tr>`,
-		)
-		.join("");
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Administrators | Connection</title>
-<style>${consoleStyles}</style>
-</head>
-<body>
-<div class="app-shell">
-<aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("administrators")}
-<div class="account">
-<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
-<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
-<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
-</div>
-</aside>
-<main class="content">
-<header class="page-header"><h1>Administrators</h1></header>
-<section class="panel">
-<div class="table-wrap"><table><thead><tr><th>Name</th><th>Account</th><th>Role</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>
-</section>
-</main>
-</div>
-</body>
-</html>`;
-}
-
-function sharedGithubAdministrationPage(input: {
-	account: { displayName: string; email: string | null };
-	overview: {
-		principals: readonly {
-			displayName: string;
-			email: string | null;
-			principalId: string;
-		}[];
-		scopes: readonly {
-			connections: readonly {
-				displayName: string;
-				externalAccount: string;
-				id: string;
-				status: "ACTIVE" | "DISCONNECTED";
-			}[];
-			displayName: string;
-			members: readonly string[];
-			sharedScopeId: string;
-			state: "ACTIVE" | "SUSPENDED" | "DISABLED";
-		}[];
-	};
-}) {
-	const scopes = input.overview.scopes.length
-		? input.overview.scopes
-				.map((scope) => {
-					const members = new Set(scope.members);
-					const principalRows = input.overview.principals
-						.map((principal) => {
-							const eligible = members.has(principal.principalId);
-							return `<tr>
-<td>${html(principal.displayName)}</td>
-<td>${html(principal.email ?? "Company account")}</td>
-<td><span class="status ${eligible ? "status-active" : ""}">${eligible ? "ELIGIBLE" : "NOT ELIGIBLE"}</span></td>
-<td><form method="post" action="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/principals/${encodeURIComponent(principal.principalId)}/${eligible ? "revoke" : "grant"}"><button class="${eligible ? "danger-button" : "secondary-button"}" type="submit">${eligible ? "Revoke" : "Grant"}</button></form></td>
-</tr>`;
-						})
-						.join("");
-					const connections = scope.connections.length
-						? scope.connections
-								.map(
-									(connection) => `<div class="consumer-row">
-<div><p class="consumer-name">${html(connection.displayName)}</p><p class="connection-meta">GitHub account ${html(connection.externalAccount)}</p></div>
-<div class="connection-actions"><span class="status status-${connection.status.toLowerCase()}">${html(connection.status)}</span>${connection.status === "ACTIVE" ? `<form method="post" action="/connection/admin/shared-connections/connections/${encodeURIComponent(connection.id)}/disconnect"><button class="danger-button" type="submit">Disconnect</button></form>` : ""}</div>
-</div>`,
-								)
-								.join("")
-						: '<p class="empty">No GitHub account is connected.</p>';
-					return `<section class="panel" aria-labelledby="${html(scope.sharedScopeId)}-title">
-<div class="panel-header scope-header"><div><h2 id="${html(scope.sharedScopeId)}-title">${html(scope.displayName)}</h2><span class="status status-${scope.state.toLowerCase()}">${html(scope.state)}</span></div><div class="scope-actions"><a class="primary-button" href="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/github" target="_blank" rel="noopener noreferrer">Connect GitHub account</a><details class="rename-control"><summary class="secondary-button">Rename</summary><form class="rename-form" method="post" action="/connection/admin/shared-connections/${encodeURIComponent(scope.sharedScopeId)}/rename"><label for="rename-${html(scope.sharedScopeId)}">Shared group name</label><input id="rename-${html(scope.sharedScopeId)}" name="display_name" value="${html(scope.displayName)}" maxlength="120" required><div class="rename-form-actions"><button class="primary-button" type="submit">Save</button><a href="/connection/admin/shared-connections">Cancel</a></div></form></details></div></div>
-<div class="connection-list">${connections}</div>
-<h3>Who can use this connection</h3>
-<p class="connection-meta">Only employees who have signed in to Connection appear here.</p>
-<div class="table-wrap"><table><thead><tr><th>Name</th><th>Account</th><th>Eligibility</th><th>Action</th></tr></thead><tbody>${principalRows}</tbody></table></div>
-</section>`;
-				})
-				.join("")
-		: '<p class="empty">No Shared GitHub scope exists.</p>';
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shared GitHub Connections | Connection</title>
-<style>${consoleStyles}</style>
-</head>
-<body>
-<div class="app-shell">
-<aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("shared-connections")}
-<div class="account">
-<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
-<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
-<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
-</div>
-</aside>
-<main class="content">
-<header class="page-header"><h1>Shared GitHub Connections</h1></header>
-<section class="panel"><form method="post" action="/connection/admin/shared-connections"><label for="display_name">Shared group name</label><div class="issue-form"><input id="display_name" name="display_name" maxlength="120" placeholder="e.g. Agora Engineering" required><button class="primary-button" type="submit">Create shared group</button></div></form></section>
-${scopes}
-</main>
-</div>
-</body>
-</html>`;
-}
-
-function authorizationPreviewPage(input: {
-	account: { displayName: string; email: string | null };
-	idempotencyKey: string;
-	preview: CurrentConsumerAuthorizationPreview;
-}) {
-	const currentAccount = input.preview.currentConnection
-		? `Current GitHub account ${html(input.preview.currentConnection.externalAccount)}`
-		: "No GitHub account is currently authorized";
-	const actionList = input.preview.actions
-		.map((action) => {
-			const scopes = action.requiredScopes.length
-				? ` <span class="connection-meta">Scopes: ${html(action.requiredScopes.join(", "))}</span>`
-				: ' <span class="connection-meta">Scopes: none</span>';
-			return `<li>${html(action.description)} <span class="status status-${action.effect === "READ" ? "active" : "expired"}">${html(action.effect)}</span>${scopes}</li>`;
-		})
-		.join("");
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Review access | Connection</title>
-<style>${consoleStyles}</style>
-</head>
-<body>
-<div class="app-shell">
-<aside class="sidebar">
-<div class="brand"><span class="brand-mark" aria-hidden="true">C</span>Connection</div>
-${consoleNavigation("connections")}
-<div class="account">
-<p class="account-name" title="${html(input.account.displayName)}">${html(input.account.displayName)}</p>
-<p class="account-email" title="${html(input.account.email ?? "Company account")}">${html(input.account.email ?? "Company account")}</p>
-<form method="post" action="/connection/logout"><button class="text-button" type="submit">Sign out</button></form>
-</div>
-</aside>
-<main class="content">
-<header class="page-header"><h1>Review access for ${html(input.preview.consumer.name)}</h1></header>
-<section class="panel" aria-labelledby="authorization-change-title">
-<div class="panel-header"><h2 id="authorization-change-title">Switch GitHub account</h2><p>${currentAccount}</p><p>New GitHub account ${html(input.preview.targetConnection.externalAccount)}</p></div>
-<p class="connection-meta">Required scopes: ${html(input.preview.requiredScopes.join(", ") || "none")}</p>
-<ul class="action-list">${actionList}</ul>
-<form class="issue-form" method="post" action="/connection/authorization-previews/${encodeURIComponent(input.preview.previewId)}/confirm">
-<input type="hidden" name="confirmation_token" value="${html(input.preview.confirmationToken)}">
-<input type="hidden" name="idempotency_key" value="${html(input.idempotencyKey)}">
-<a class="secondary-button" href="/connection/connections">Cancel</a>
-<button class="primary-button" type="submit">Confirm switch</button>
-</form>
-</section>
-</main>
-</div>
-</body>
-</html>`;
+	return { displayName: account.displayName, email: account.email };
 }
 
 function secureHtmlHeaders(
@@ -699,36 +193,121 @@ function secureHtmlHeaders(
 	context.header("x-frame-options", "DENY");
 }
 
-function administrationForbidden(context: Context) {
+function browserApiError(
+	context: Context,
+	input: {
+		code: string;
+		messageKey: string;
+		retryable?: boolean;
+		status: 400 | 401 | 403 | 404 | 409 | 500;
+	},
+) {
 	context.header("cache-control", "no-store");
 	return context.json(
 		{
-			error: "forbidden",
-			message: "Connection administration is not authorized",
-			retryable: false,
-			traceId: randomUUID(),
+			error: {
+				code: input.code,
+				messageKey: input.messageKey,
+				retryable: input.retryable ?? false,
+				traceId: randomUUID(),
+			},
 		},
-		403,
+		input.status,
 	);
+}
+
+function browserConnectionError(context: Context, error: ConnectionError) {
+	return browserApiError(context, {
+		code: error.code,
+		messageKey:
+			error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
+				? "connection.error.resource_not_found"
+				: error.code === "IDEMPOTENCY_CONFLICT"
+					? "connection.error.idempotency_conflict"
+					: error.code === "RESULT_UNCERTAIN"
+						? "connection.error.result_uncertain"
+						: "connection.error.request_failed",
+		status:
+			error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
+				? 404
+				: error.code === "INVALID_REQUEST"
+					? 400
+					: 409,
+	});
+}
+
+async function browserApiOperation<T>(
+	context: Context,
+	operation: () => Promise<T>,
+): Promise<Response | T> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (error instanceof ConnectionError) {
+			return browserConnectionError(context, error);
+		}
+		if (error instanceof OAuthProtocolError) {
+			return browserApiError(context, {
+				code:
+					error.error === "invalid_token"
+						? "AUTHENTICATION_REQUIRED"
+						: "INVALID_REQUEST",
+				messageKey:
+					error.error === "invalid_token"
+						? "connection.error.authentication_required"
+						: "connection.error.request_failed",
+				status: error.error === "invalid_token" ? 401 : 400,
+			});
+		}
+		throw error;
+	}
+}
+
+function parseJsonBody<T>(
+	schema: {
+		safeParse: (
+			value: unknown,
+		) => { data: T; success: true } | { error: unknown; success: false };
+	},
+	body: unknown,
+) {
+	const result = schema.safeParse(body);
+	if (!result.success) {
+		throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
+	}
+	return result.data;
+}
+
+function requireIdempotencyKey(context: Context) {
+	const result = idempotencyKeySchema.safeParse(
+		context.req.header("idempotency-key") ?? "",
+	);
+	if (!result.success) {
+		throw new OAuthProtocolError("invalid_request", "Invalid Idempotency-Key");
+	}
+	return result.data;
+}
+
+function browserCommand<T>(
+	options: ConnectionOAuthServerOptions,
+	context: Context,
+	input: {
+		operation: string;
+		replayable?: boolean;
+		request: unknown;
+		subject: string;
+	},
+	command: () => Promise<T>,
+) {
+	const idempotencyKey = requireIdempotencyKey(context);
+	return options.browserCommands
+		? options.browserCommands.execute({ ...input, idempotencyKey }, command)
+		: command();
 }
 
 function formValue(form: FormData, name: string) {
 	const value = form.get(name);
 	return typeof value === "string" ? value : "";
-}
-
-async function authorizationRequest<T>(operation: () => Promise<T>) {
-	try {
-		return await operation();
-	} catch (error) {
-		if (
-			error instanceof ConnectionError &&
-			(error.code === "INVALID_REQUEST" || error.code === "FORBIDDEN")
-		) {
-			throw new OAuthProtocolError("invalid_request", error.message);
-		}
-		throw error;
-	}
 }
 
 function endpoint(path: string, issuer: string) {
@@ -793,6 +372,36 @@ export function createConnectionOAuthApp(
 	};
 
 	app.onError((error, context) => {
+		if (context.req.path.startsWith("/api/v1/connection/")) {
+			if (error instanceof ConnectionError) {
+				return browserConnectionError(context, error);
+			}
+			if (error instanceof OAuthProtocolError) {
+				return browserApiError(context, {
+					code:
+						error.error === "invalid_token"
+							? "AUTHENTICATION_REQUIRED"
+							: "INVALID_REQUEST",
+					messageKey:
+						error.error === "invalid_token"
+							? "connection.error.authentication_required"
+							: "connection.error.invalid_request",
+					status: error.error === "invalid_token" ? 401 : 400,
+				});
+			}
+			console.error(
+				JSON.stringify({
+					errorType: error instanceof Error ? error.name : typeof error,
+					event: "connection_browser_api_request_failure",
+				}),
+			);
+			return browserApiError(context, {
+				code: "INTERNAL_ERROR",
+				messageKey: "connection.error.server_error",
+				retryable: true,
+				status: 500,
+			});
+		}
 		if (error instanceof OAuthProtocolError) {
 			context.header("cache-control", "no-store");
 			return context.json(oauthError(error), error.status === 401 ? 401 : 400);
@@ -871,30 +480,50 @@ export function createConnectionOAuthApp(
 		});
 	}
 
-	app.get("/connection", (context) =>
-		context.redirect(
-			options.management ? "/connection/connections" : "/connection/tokens",
-		),
-	);
-
-	app.get("/connection/login", async (context) => {
-		if (await currentBrowserAccount(context)) {
-			return context.redirect(
-				options.management ? "/connection/connections" : "/connection/tokens",
-			);
-		}
-		secureHtmlHeaders(context);
-		return context.html(consoleLoginPage());
+	app.get("/api/v1/connection/openapi.json", (context) => {
+		context.header("cache-control", "no-store");
+		return context.json(connectionBrowserOpenApi);
 	});
 
-	app.post("/connection/login", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
-		const form = await context.req.raw.formData();
-		try {
-			const login = await options.service.loginBrowserSession({
-				password: formValue(form, "password"),
-				username: formValue(form, "username"),
+	app.get("/api/v1/connection/session", async (context) => {
+		const session = await currentBrowserAccount(context);
+		if (!session) {
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
 			});
+		}
+		context.header("cache-control", "no-store");
+		return context.json({
+			account: browserAccountProjection(session.account),
+			isAdministrator: options.management
+				? await options.management.service.isConnectionAdministrator(
+						session.account.principalId,
+					)
+				: false,
+		});
+	});
+
+	app.post("/api/v1/connection/session", async (context) => {
+		requireSameOrigin(context.req.raw.headers, options.issuer);
+		const body = parseJsonBody(
+			loginRequestSchema,
+			await context.req.json().catch(() => undefined),
+		);
+		requireIdempotencyKey(context);
+		try {
+			const login = await browserCommand(
+				options,
+				context,
+				{
+					operation: "connection.session.login",
+					replayable: false,
+					request: body,
+					subject: `login:${body.username.trim().toLowerCase()}`,
+				},
+				() => options.service.loginBrowserSession(body),
+			);
 			setCookie(context, browserSessionCookie, login.sessionToken, {
 				...cookieOptions,
 				expires: login.expiresAt,
@@ -903,58 +532,97 @@ export function createConnectionOAuthApp(
 					Math.floor((login.expiresAt.getTime() - Date.now()) / 1_000),
 				),
 			});
-			return context.redirect(
-				options.management ? "/connection/connections" : "/connection/tokens",
-				303,
-			);
+			context.header("cache-control", "no-store");
+			return context.json({
+				account: browserAccountProjection(login.account),
+				isAdministrator: options.management
+					? await options.management.service.isConnectionAdministrator(
+							login.account.principalId,
+						)
+					: false,
+			});
 		} catch (error) {
 			if (
 				!(error instanceof OAuthProtocolError) ||
-				error.error !== "access_denied"
+				(error.error !== "access_denied" && error.error !== "invalid_request")
 			) {
 				throw error;
 			}
-			secureHtmlHeaders(context);
-			return context.html(consoleLoginPage("Authentication failed"), 401);
+			return browserApiError(context, {
+				code: "AUTHENTICATION_FAILED",
+				messageKey: "connection.error.authentication_failed",
+				status: 401,
+			});
 		}
 	});
 
-	app.post("/connection/logout", async (context) => {
+	app.delete("/api/v1/connection/session", async (context) => {
 		requireSameOrigin(context.req.raw.headers, options.issuer);
 		const sessionToken = getCookie(context, browserSessionCookie);
-		await options.service.logoutBrowserSession(sessionToken);
-		deleteCookie(context, browserSessionCookie, cookieOptions);
-		return context.redirect("/connection/login", 303);
-	});
-
-	app.get("/connection/tokens", async (context) => {
-		const session = await currentBrowserAccount(context);
-		if (!session) return context.redirect("/connection/login");
-		const tokens = await options.service.listPersonalAccessTokens(
-			session.sessionToken,
+		await browserCommand(
+			options,
+			context,
+			{
+				operation: "connection.session.logout",
+				request: {},
+				subject: `session:${sessionToken ?? "missing"}`,
+			},
+			() => options.service.logoutBrowserSession(sessionToken),
 		);
-		secureHtmlHeaders(context);
-		return context.html(tokenConsolePage({ account: session.account, tokens }));
+		deleteCookie(context, browserSessionCookie, cookieOptions);
+		context.header("cache-control", "no-store");
+		return context.body(null, 204);
 	});
 
-	app.post("/connection/tokens", async (context) => {
+	app.get("/api/v1/connection/tokens", async (context) => {
+		const session = await currentBrowserAccount(context);
+		if (!session) {
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
+			});
+		}
+		context.header("cache-control", "no-store");
+		return context.json({
+			tokens: await options.service.listPersonalAccessTokens(
+				session.sessionToken,
+			),
+		});
+	});
+
+	app.post("/api/v1/connection/tokens", async (context) => {
 		requireSameOrigin(context.req.raw.headers, options.issuer);
 		const session = await currentBrowserAccount(context);
-		if (!session) return context.redirect("/connection/login", 303);
-		const form = await context.req.raw.formData();
-		try {
-			const issued = await options.service.issuePersonalAccessToken({
-				name: formValue(form, "name"),
-				sessionToken: session.sessionToken,
+		if (!session) {
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
 			});
-			const tokens = await options.service.listPersonalAccessTokens(
-				session.sessionToken,
+		}
+		const body = parseJsonBody(
+			issueTokenRequestSchema,
+			await context.req.json().catch(() => undefined),
+		);
+		try {
+			const issued = await browserCommand(
+				options,
+				context,
+				{
+					operation: "connection.token.issue",
+					replayable: false,
+					request: body,
+					subject: session.account.principalId,
+				},
+				() =>
+					options.service.issuePersonalAccessToken({
+						name: body.name,
+						sessionToken: session.sessionToken,
+					}),
 			);
-			secureHtmlHeaders(context);
-			return context.html(
-				tokenConsolePage({ account: session.account, issued, tokens }),
-				201,
-			);
+			context.header("cache-control", "no-store");
+			return context.json({ issued }, 201);
 		} catch (error) {
 			if (
 				!(error instanceof OAuthProtocolError) ||
@@ -962,224 +630,485 @@ export function createConnectionOAuthApp(
 			) {
 				throw error;
 			}
-			const tokens = await options.service.listPersonalAccessTokens(
-				session.sessionToken,
-			);
-			secureHtmlHeaders(context);
-			return context.html(
-				tokenConsolePage({
-					account: session.account,
-					error: error.message,
-					tokens,
-				}),
-				400,
-			);
+			return browserApiError(context, {
+				code: "INVALID_REQUEST",
+				messageKey: "connection.error.invalid_token_name",
+				status: 400,
+			});
 		}
 	});
 
-	app.post("/connection/tokens/:tokenId/revoke", async (context) => {
+	app.delete("/api/v1/connection/tokens/:tokenId", async (context) => {
 		requireSameOrigin(context.req.raw.headers, options.issuer);
 		const session = await currentBrowserAccount(context);
-		if (!session) return context.redirect("/connection/login", 303);
-		await options.service.revokePersonalAccessToken({
-			sessionToken: session.sessionToken,
-			tokenId: context.req.param("tokenId"),
-		});
-		return context.redirect("/connection/tokens", 303);
+		if (!session) {
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
+			});
+		}
+		const tokenId = context.req.param("tokenId");
+		await browserCommand(
+			options,
+			context,
+			{
+				operation: "connection.token.revoke",
+				request: { tokenId },
+				subject: session.account.principalId,
+			},
+			() =>
+				options.service.revokePersonalAccessToken({
+					sessionToken: session.sessionToken,
+					tokenId,
+				}),
+		);
+		context.header("cache-control", "no-store");
+		return context.body(null, 204);
 	});
 
 	if (options.management) {
 		const management = options.management;
-		const currentAdministrator = async (context: Context) => {
+		const currentBrowserApiAccount = async (context: Context) => {
 			const session = await currentBrowserAccount(context);
-			if (!session) return context.redirect("/connection/login");
+			if (session) return session;
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
+			});
+		};
+		const currentBrowserApiAdministrator = async (context: Context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
 			if (
 				!(await management.service.authorizeConnectionAdministration(
 					session.account.principalId,
 				))
 			) {
-				return administrationForbidden(context);
+				return browserApiError(context, {
+					code: "RESOURCE_NOT_FOUND",
+					messageKey: "connection.error.resource_not_found",
+					status: 404,
+				});
 			}
 			return session;
 		};
-		app.get("/connection/admin/administrators", async (context) => {
-			const session = await currentAdministrator(context);
+
+		app.get("/api/v1/connection/connections", async (context) => {
+			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
-			const administrators =
-				await management.service.listConnectionAdministratorCandidates(
+			const { principal: _principal, ...overview } =
+				await management.service.overview(session.account.principalId);
+			context.header("cache-control", "no-store");
+			return context.json({
+				account: browserAccountProjection(session.account),
+				isAdministrator: await management.service.isConnectionAdministrator(
 					session.account.principalId,
-				);
-			secureHtmlHeaders(context);
-			return context.html(
-				administratorConsolePage({
-					account: session.account,
-					administrators,
-				}),
-			);
+				),
+				overview,
+			});
 		});
-		app.post(
-			"/connection/admin/administrators/:principalId/grant",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				await authorizationRequest(() =>
-					management.service.grantConnectionAdministrator({
-						actorPrincipalId: session.account.principalId,
-						targetPrincipalId: context.req.param("principalId"),
-					}),
-				);
-				return context.redirect("/connection/admin/administrators", 303);
-			},
-		);
-		app.post(
-			"/connection/admin/administrators/:principalId/revoke",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				await authorizationRequest(() =>
-					management.service.revokeConnectionAdministrator({
-						actorPrincipalId: session.account.principalId,
-						targetPrincipalId: context.req.param("principalId"),
-					}),
-				);
-				return context.redirect("/connection/admin/administrators", 303);
-			},
-		);
-		app.get("/connection/admin/shared-connections", async (context) => {
-			const session = await currentAdministrator(context);
-			if (session instanceof Response) return session;
-			secureHtmlHeaders(context);
-			return context.html(
-				sharedGithubAdministrationPage({
-					account: session.account,
-					overview: await management.service.sharedGithubAdministration(
-						session.account.principalId,
-					),
-				}),
-			);
-		});
-		app.post("/connection/admin/shared-connections", async (context) => {
+
+		app.post("/api/v1/connection/oauth-transactions", async (context) => {
 			requireSameOrigin(context.req.raw.headers, options.issuer);
-			const session = await currentAdministrator(context);
+			const body = parseJsonBody(
+				oauthTransactionRequestSchema,
+				await context.req.json().catch(() => ({})),
+			);
+			const sharedScopeId = body.sharedScopeId;
+			const session = sharedScopeId
+				? await currentBrowserApiAdministrator(context)
+				: await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
-			const form = await context.req.raw.formData();
-			await authorizationRequest(() =>
-				management.service.createSharedScope({
-					actorPrincipalId: session.account.principalId,
-					displayName: formValue(form, "display_name"),
-				}),
+			const authorization = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.github-oauth.start",
+						replayable: false,
+						request: body,
+						subject: session.account.principalId,
+					},
+					() =>
+						sharedScopeId
+							? management.service.startSharedGithubOAuth(
+									session.account.principalId,
+									sharedScopeId,
+									management.githubRedirectUri,
+								)
+							: management.service.startGithubOAuth(
+									session.account.principalId,
+									management.githubRedirectUri,
+								),
+				),
 			);
-			return context.redirect("/connection/admin/shared-connections", 303);
+			if (authorization instanceof Response) return authorization;
+			context.header("cache-control", "no-store");
+			return context.json({ authorizationUrl: authorization.authorizationUrl });
 		});
-		app.post(
-			"/connection/admin/shared-connections/:sharedScopeId/rename",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				const form = await context.req.raw.formData();
-				await authorizationRequest(() =>
-					management.service.renameSharedScope({
-						actorPrincipalId: session.account.principalId,
-						displayName: formValue(form, "display_name"),
-						sharedScopeId: context.req.param("sharedScopeId"),
-					}),
-				);
-				return context.redirect("/connection/admin/shared-connections", 303);
-			},
-		);
-		app.get(
-			"/connection/admin/shared-connections/:sharedScopeId/github",
-			async (context) => {
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				const authorization = await management.service.startSharedGithubOAuth(
-					session.account.principalId,
-					context.req.param("sharedScopeId"),
-					management.githubRedirectUri,
-				);
-				return context.redirect(authorization.authorizationUrl, 303);
-			},
-		);
-		app.post(
-			"/connection/admin/shared-connections/:sharedScopeId/principals/:principalId/grant",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				await authorizationRequest(() =>
-					management.service.grantSharedScopePrincipal({
-						actorPrincipalId: session.account.principalId,
-						sharedScopeId: context.req.param("sharedScopeId"),
-						targetPrincipalId: context.req.param("principalId"),
-					}),
-				);
-				return context.redirect("/connection/admin/shared-connections", 303);
-			},
-		);
-		app.post(
-			"/connection/admin/shared-connections/:sharedScopeId/principals/:principalId/revoke",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				await authorizationRequest(() =>
-					management.service.revokeSharedScopePrincipal({
-						actorPrincipalId: session.account.principalId,
-						sharedScopeId: context.req.param("sharedScopeId"),
-						targetPrincipalId: context.req.param("principalId"),
-					}),
-				);
-				return context.redirect("/connection/admin/shared-connections", 303);
-			},
-		);
-		app.post(
-			"/connection/admin/shared-connections/connections/:connectionId/disconnect",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentAdministrator(context);
-				if (session instanceof Response) return session;
-				await authorizationRequest(() =>
-					management.service.disconnectSharedConnection({
-						actorPrincipalId: session.account.principalId,
-						connectionId: context.req.param("connectionId"),
-					}),
-				);
-				return context.redirect("/connection/admin/shared-connections", 303);
-			},
-		);
 
-		app.get("/connection/connections", async (context) => {
-			const session = await currentBrowserAccount(context);
-			if (!session) return context.redirect("/connection/login");
-			const isAdministrator =
-				await management.service.isConnectionAdministrator(
-					session.account.principalId,
-				);
-			secureHtmlHeaders(context);
-			return context.html(
-				connectionConsolePage({
-					account: session.account,
-					isAdministrator,
-					overview: await management.service.overview(
-						session.account.principalId,
+		app.post("/api/v1/connection/authorization-previews", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const body = parseJsonBody(
+				authorizationPreviewRequestSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const previewResponse = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.authorization-preview.create",
+						replayable: false,
+						request: body,
+						subject: session.account.principalId,
+					},
+					async () => ({
+						idempotencyKey: randomUUID(),
+						preview:
+							await management.service.createCurrentConsumerAuthorizationPreview(
+								{
+									connectionId: body.connectionId,
+									consumerId: body.consumerId,
+									principalId: session.account.principalId,
+								},
+							),
+					}),
+				),
+			);
+			if (previewResponse instanceof Response) return previewResponse;
+			context.header("cache-control", "no-store");
+			return context.json(previewResponse, 201);
+		});
+
+		app.post("/api/v1/connection/authorization-consents", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const body = parseJsonBody(
+				authorizationConsentRequestSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const idempotencyKey = requireIdempotencyKey(context);
+			const confirmed = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.authorization-consent.confirm",
+						request: body,
+						subject: session.account.principalId,
+					},
+					() =>
+						management.service.confirmCurrentConsumerAuthorization({
+							confirmationToken: body.confirmationToken,
+							idempotencyKey,
+							previewId: body.previewId,
+							principalId: session.account.principalId,
+						}),
+				),
+			);
+			if (confirmed instanceof Response) return confirmed;
+			context.header("cache-control", "no-store");
+			return context.json(confirmed, 201);
+		});
+
+		app.delete("/api/v1/connection/grants/:grantId", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const grantId = context.req.param("grantId");
+			const revoked = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.grant.revoke",
+						request: { grantId },
+						subject: session.account.principalId,
+					},
+					() =>
+						management.service.revokeGrant(
+							session.account.principalId,
+							grantId,
+						),
+				),
+			);
+			if (revoked instanceof Response) return revoked;
+			context.header("cache-control", "no-store");
+			return context.body(null, 204);
+		});
+
+		app.delete(
+			"/api/v1/connection/connections/:connectionId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const connectionId = context.req.param("connectionId");
+				const disconnected = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.account.disconnect",
+							request: { connectionId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.disconnectConnection(
+								session.account.principalId,
+								connectionId,
+							),
 					),
-				}),
+				);
+				if (disconnected instanceof Response) return disconnected;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/administrators", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const administrators = await browserApiOperation(context, () =>
+				management.service.listConnectionAdministratorCandidates(
+					session.account.principalId,
+				),
 			);
+			if (administrators instanceof Response) return administrators;
+			context.header("cache-control", "no-store");
+			return context.json({ administrators });
 		});
 
-		app.get("/connection/connections/github", async (context) => {
-			const session = await currentBrowserAccount(context);
-			if (!session) return context.redirect("/connection/login");
-			const authorization = await management.service.startGithubOAuth(
-				session.account.principalId,
-				management.githubRedirectUri,
+		app.put(
+			"/api/v1/connection/admin/administrators/:principalId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const principalId = context.req.param("principalId");
+				const granted = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.administrator.grant",
+							request: { principalId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.grantConnectionAdministrator({
+								actorPrincipalId: session.account.principalId,
+								targetPrincipalId: principalId,
+							}),
+					),
+				);
+				if (granted instanceof Response) return granted;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.delete(
+			"/api/v1/connection/admin/administrators/:principalId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const principalId = context.req.param("principalId");
+				const revoked = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.administrator.revoke",
+							request: { principalId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.revokeConnectionAdministrator({
+								actorPrincipalId: session.account.principalId,
+								targetPrincipalId: principalId,
+							}),
+					),
+				);
+				if (revoked instanceof Response) return revoked;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/shared-connections", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const overview = await browserApiOperation(context, () =>
+				management.service.sharedGithubAdministration(
+					session.account.principalId,
+				),
 			);
-			return context.redirect(authorization.authorizationUrl, 303);
+			if (overview instanceof Response) return overview;
+			context.header("cache-control", "no-store");
+			return context.json({ overview });
 		});
 
+		app.post("/api/v1/connection/admin/shared-scopes", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const body = parseJsonBody(
+				sharedScopeNameSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const scope = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.shared-scope.create",
+						request: body,
+						subject: session.account.principalId,
+					},
+					() =>
+						management.service.createSharedScope({
+							actorPrincipalId: session.account.principalId,
+							displayName: body.displayName,
+						}),
+				),
+			);
+			if (scope instanceof Response) return scope;
+			context.header("cache-control", "no-store");
+			return context.json(scope, 201);
+		});
+
+		app.patch(
+			"/api/v1/connection/admin/shared-scopes/:sharedScopeId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const body = parseJsonBody(
+					sharedScopeNameSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const sharedScopeId = context.req.param("sharedScopeId");
+				const renamed = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.shared-scope.rename",
+							request: { ...body, sharedScopeId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.renameSharedScope({
+								actorPrincipalId: session.account.principalId,
+								displayName: body.displayName,
+								sharedScopeId,
+							}),
+					),
+				);
+				if (renamed instanceof Response) return renamed;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.put(
+			"/api/v1/connection/admin/shared-scopes/:sharedScopeId/principals/:principalId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const sharedScopeId = context.req.param("sharedScopeId");
+				const principalId = context.req.param("principalId");
+				const granted = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.shared-scope-principal.grant",
+							request: { principalId, sharedScopeId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.grantSharedScopePrincipal({
+								actorPrincipalId: session.account.principalId,
+								sharedScopeId,
+								targetPrincipalId: principalId,
+							}),
+					),
+				);
+				if (granted instanceof Response) return granted;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.delete(
+			"/api/v1/connection/admin/shared-scopes/:sharedScopeId/principals/:principalId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const sharedScopeId = context.req.param("sharedScopeId");
+				const principalId = context.req.param("principalId");
+				const revoked = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.shared-scope-principal.revoke",
+							request: { principalId, sharedScopeId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.revokeSharedScopePrincipal({
+								actorPrincipalId: session.account.principalId,
+								sharedScopeId,
+								targetPrincipalId: principalId,
+							}),
+					),
+				);
+				if (revoked instanceof Response) return revoked;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.delete(
+			"/api/v1/connection/admin/shared-connections/:connectionId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const connectionId = context.req.param("connectionId");
+				const disconnected = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.shared-account.disconnect",
+							request: { connectionId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.disconnectSharedConnection({
+								actorPrincipalId: session.account.principalId,
+								connectionId,
+							}),
+					),
+				);
+				if (disconnected instanceof Response) return disconnected;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
 		app.get("/oauth/callback", async (context) => {
 			await management.service.completeGithubOAuth(
 				context.req.query("code") ?? "",
@@ -1187,75 +1116,6 @@ export function createConnectionOAuthApp(
 			);
 			return context.redirect("/connection/connections", 303);
 		});
-
-		app.post(
-			"/connection/connections/:connectionId/authorize",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentBrowserAccount(context);
-				if (!session) return context.redirect("/connection/login", 303);
-				const form = await context.req.raw.formData();
-				const preview = await authorizationRequest(() =>
-					management.service.createCurrentConsumerAuthorizationPreview({
-						connectionId: context.req.param("connectionId"),
-						consumerId: formValue(form, "consumer_id"),
-						principalId: session.account.principalId,
-					}),
-				);
-				secureHtmlHeaders(context);
-				return context.html(
-					authorizationPreviewPage({
-						account: session.account,
-						idempotencyKey: randomUUID(),
-						preview,
-					}),
-				);
-			},
-		);
-
-		app.post(
-			"/connection/authorization-previews/:previewId/confirm",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentBrowserAccount(context);
-				if (!session) return context.redirect("/connection/login", 303);
-				const form = await context.req.raw.formData();
-				await authorizationRequest(() =>
-					management.service.confirmCurrentConsumerAuthorization({
-						confirmationToken: formValue(form, "confirmation_token"),
-						idempotencyKey: formValue(form, "idempotency_key"),
-						previewId: context.req.param("previewId"),
-						principalId: session.account.principalId,
-					}),
-				);
-				return context.redirect("/connection/connections", 303);
-			},
-		);
-
-		app.post("/connection/grants/:grantId/revoke", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
-			const session = await currentBrowserAccount(context);
-			if (!session) return context.redirect("/connection/login", 303);
-			await management.service.revokeGrant(
-				session.account.principalId,
-				context.req.param("grantId"),
-			);
-			return context.redirect("/connection/connections", 303);
-		});
-
-		app.post(
-			"/connection/connections/:connectionId/disconnect",
-			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
-				const session = await currentBrowserAccount(context);
-				if (!session) return context.redirect("/connection/login", 303);
-				await management.service.disconnectConnection(
-					session.account.principalId,
-					context.req.param("connectionId"),
-				);
-				return context.redirect("/connection/connections", 303);
-			},
-		);
 	}
 
 	app.get("/oauth/authorize", async (context) => {
@@ -1295,7 +1155,7 @@ export function createConnectionOAuthApp(
 			) {
 				secureHtmlHeaders(context);
 				return context.html(
-					loginPage({ clientName: "your client", error: error.message }),
+					loginPage({ clientName: "当前客户端", error: "授权请求已失效" }),
 					400,
 				);
 			}
@@ -1308,8 +1168,8 @@ export function createConnectionOAuthApp(
 			secureHtmlHeaders(context, { allowLoopbackFormRedirect: true });
 			return context.html(
 				loginPage({
-					clientName: "your client",
-					error: "Authentication failed",
+					clientName: "当前客户端",
+					error: "账号或密码错误",
 					requestId,
 				}),
 				401,
@@ -1357,9 +1217,17 @@ export function createConnectionOAuthApp(
 	app.delete(
 		"/connection/v1/consumer-instances/:instanceId/session",
 		async (context) => {
-			await options.service.revokeInstance(
-				context.req.header("authorization"),
-				context.req.param("instanceId"),
+			const authorization = context.req.header("authorization");
+			const instanceId = context.req.param("instanceId");
+			await browserCommand(
+				options,
+				context,
+				{
+					operation: "connection.consumer-instance.revoke",
+					request: { instanceId },
+					subject: `bearer:${authorization ?? "missing"}`,
+				},
+				() => options.service.revokeInstance(authorization, instanceId),
 			);
 			return context.body(null, 204);
 		},

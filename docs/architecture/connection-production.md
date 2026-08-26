@@ -1,6 +1,7 @@
 # Connection 生产部署
 
-`connection-api` 是唯一 Connection control plane。PostgreSQL 是唯一权威存储；OpenConnector
+`connection-api` 是唯一 Connection control plane，`connection-web` 是独立的无状态中文 React
+入口。PostgreSQL 是唯一权威存储；OpenConnector
 Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。G-01 未关闭期间，生产入口只提供
 容器内部健康检查，不发布身份或 MCP 业务路由。
 
@@ -23,6 +24,9 @@ pnpm connection:production:up
 ```
 
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
+Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection/*`、`/connection/v1/*`、
+`/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。G-01 未关闭时，即使 Web
+已部署，API 仍只提供健康检查，前端不能绕过该门禁。
 
 ## 首个 Connection 管理员
 
@@ -40,7 +44,7 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
 
 ## 门禁期 Runtime 契约
 
-- 当前生产镜像只启动 `/` 与 `/healthz`，且 Compose 不向主机发布端口。LDAP、OAuth metadata、DCR、
+- 当前 `connection-api` 生产镜像只启动 `/` 与 `/healthz`，且 Compose 不向主机发布 API 端口。LDAP、OAuth metadata、DCR、
   PAT 签发、token、MCP、Provider、Consent、管理与 Action 路由全部不注册，不能通过环境变量启用。
 - `apps/connection-api/src/runtime-app.ts` 是正式 Connection runtime 的唯一完整装配点，包含 LDAP、
   OAuth/PAT、PostgreSQL 账号与业务仓储、GitHub Kernel Adapter、Grant 和 Direct MCP。
@@ -49,10 +53,11 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
   生产镜像，只在受控 HTTPS 入口或精确 loopback 本机验收中运行。当前
   Agora profile 是公司私网 `ldap://` direct bind，不允许自动 downgrade 或 fallback；DCR 仅接受
   已实测 Codex native-client metadata 与受限 loopback redirect，注册在首次 code exchange 后失效。
-  Connection 登录页建立 hash-only browser session；Access tokens 页面不重复收集 LDAP 密码，PAT
+  `apps/connection-web` 提供简体中文登录、Connection、访问令牌、管理员和共享 Connection 页面；
+  浏览器只使用生成的 `/api/v1/connection/*` Client。登录建立 hash-only browser session；PAT
   只展示一次明文。PostgreSQL 保存 browser session hash，以及 PAT hash、Principal、token instance、
-  有效期与撤销状态。管理员使用同一 LDAP 登录；服务端 PostgreSQL RBAC 控制 Administrators 和
-  Shared GitHub Connections 页面。SharedScope 当前只支持显式 Principal membership；管理员本身不会
+  有效期与撤销状态。管理员使用同一 LDAP 登录；服务端 PostgreSQL RBAC 控制管理员和共享 Connection
+  API。SharedScope 当前只支持显式 Principal membership；管理员本身不会
   自动获得共享 Connection 使用资格。
 - Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。正式 runtime 的本机
   通过只能形成实现证据，不能代替尚未关闭的生产身份、KMS、egress、Consent 和恢复门禁。

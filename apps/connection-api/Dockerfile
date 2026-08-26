@@ -7,6 +7,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/connection-api/package.json apps/connection-api/package.json
 COPY packages/config/package.json packages/config/package.json
+COPY packages/connection-contracts/package.json packages/connection-contracts/package.json
 COPY packages/connection-core/package.json packages/connection-core/package.json
 COPY packages/connection-identity/package.json packages/connection-identity/package.json
 COPY packages/connection-store/package.json packages/connection-store/package.json
@@ -24,6 +25,10 @@ COPY apps/connection-api/src/runtime-config.ts apps/connection-api/src/runtime-c
 COPY apps/connection-api/tsconfig.json apps/connection-api/tsconfig.json
 COPY apps/connection-api/tsdown.config.ts apps/connection-api/tsdown.config.ts
 COPY packages/config/tsconfig.base.json packages/config/tsconfig.base.json
+COPY packages/connection-contracts/openapi.json packages/connection-contracts/openapi.json
+COPY packages/connection-contracts/src packages/connection-contracts/src
+COPY packages/connection-contracts/tsconfig.json packages/connection-contracts/tsconfig.json
+COPY packages/connection-contracts/tsdown.config.ts packages/connection-contracts/tsdown.config.ts
 COPY packages/connection-core/src packages/connection-core/src
 COPY packages/connection-core/tsconfig.json packages/connection-core/tsconfig.json
 COPY packages/connection-core/tsdown.config.ts packages/connection-core/tsdown.config.ts

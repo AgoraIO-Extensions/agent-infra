@@ -1530,6 +1530,7 @@ MUTATING 调用的 response payload 可以按 G-04 保留策略清理，但 stab
 | --- | --- |
 | `audit_event` | event_id、actor principal/consumer、operation、resource refs、result、trace_id、occurred_at、prev_hash、event_hash |
 | `outbox_event` | event_id、aggregate_type/id、sequence、schema_version、payload、available_at、delivered_at |
+| `browser_command_idempotency` | subject scope hash、operation、idempotency key hash、request hash、state、加密 response、expires_at |
 | `recovery_runtime` | environment、generation、phase、mutation_state、validation revisions、updated_at |
 | `validation_overlay` | object_type/id、generation、source_checksum、validated_at |
 | `recovery_operation` | id、type、idempotency_key、status、evidence_ref、result_checksum |
@@ -1654,15 +1655,16 @@ OAuth endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP 
 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software
 metadata 和注册生命周期，不能开放任意公共 client。
 
-`/connection/login` 是 Connection 自有 HTML 登录页。POST 只接受 LDAP 用户名/密码，成功后设置
+`/connection/login` 是 `apps/connection-web` 持有的中文登录页，表单只向
+`POST /api/v1/connection/session` 提交 LDAP 用户名/密码，成功后由 `connection-api` 设置
 HttpOnly、Secure、SameSite=Strict 的高熵 opaque Cookie；PostgreSQL 只保存 session hash，浏览器
 sessionStorage、localStorage 和页面脚本均不能读取 session。仅本机 conformance 的精确 loopback HTTP
 origin 可省略 Secure，生产和非 loopback 入口必须 HTTPS。
 
-`/connection/tokens` 是登录后控制台中的 Access tokens 页面。POST 只接受 PAT 名称并使用当前
-browser session 绑定的 Principal，返回 `Cache-Control: no-store` 的一次性明文展示；列表和撤销
+`/connection/tokens` 是 `apps/connection-web` 登录后控制台中的 Access Token 页面。对应 Browser API
+只接受 PAT 名称并使用当前 browser session 绑定的 Principal，返回 `Cache-Control: no-store` 的一次性明文展示；列表和撤销
 query 必须同时限定该 Principal，跨 Principal token ID 与不存在 token 使用相同行为。所有 Connection
-自有 credential-bearing form POST（包括 `/connection/login`、`/oauth/login`、PAT 签发/撤销和退出）
+自有 credential-bearing request（包括 session 建立、`/oauth/login`、PAT 签发/撤销和退出）
 必须优先校验精确 same-origin `Origin`。若目标 WebKit 浏览器运行于 opaque-origin
 环境并发送字面量 `Origin: null`，仅当 `Sec-Fetch-Site` 精确为 `same-origin` 且请求 `Host`
 精确等于 Connection issuer host 时允许继续；缺失 `Origin`、缺失 Fetch Metadata、非
@@ -1673,22 +1675,45 @@ forwarded host 或任意 Origin allowlist。
 ### 22.5 Browser API
 
 ```text
-GET  /connection/v1/me
-GET  /connection/v1/providers
-GET  /connection/v1/connections
-POST /connection/v1/oauth-transactions
-POST /connection/v1/api-key-connections
-POST /connection/v1/connections/{id}/reauthorize
-POST /connection/v1/connections/{id}/disconnect
-GET  /connection/v1/authorization-requirements
-POST /connection/v1/authorization-previews
-POST /connection/v1/authorization-consents
-DELETE /connection/v1/authorization-roots/{id}/current-grant
-GET  /connection/v1/action-calls
-GET  /connection/v1/action-calls/{callId}
+GET    /api/v1/connection/session
+POST   /api/v1/connection/session
+DELETE /api/v1/connection/session
+GET    /api/v1/connection/tokens
+POST   /api/v1/connection/tokens
+DELETE /api/v1/connection/tokens/{tokenId}
+GET    /api/v1/connection/connections
+POST   /api/v1/connection/oauth-transactions
+POST   /api/v1/connection/connections/{id}/reauthorize
+DELETE /api/v1/connection/connections/{id}
+POST   /api/v1/connection/authorization-previews
+POST   /api/v1/connection/authorization-consents
+DELETE /api/v1/connection/authorization-roots/{id}/current-grant
+GET    /api/v1/connection/action-calls
+GET    /api/v1/connection/action-calls/{callId}
+GET    /api/v1/connection/admin/administrators
+PUT    /api/v1/connection/admin/administrators/{principalId}
+DELETE /api/v1/connection/admin/administrators/{principalId}
+GET    /api/v1/connection/admin/shared-connections
+POST   /api/v1/connection/admin/shared-scopes
+PATCH  /api/v1/connection/admin/shared-scopes/{sharedScopeId}
+PUT    /api/v1/connection/admin/shared-scopes/{sharedScopeId}/principals/{principalId}
+DELETE /api/v1/connection/admin/shared-scopes/{sharedScopeId}/principals/{principalId}
 ```
 
 URL 中的 Connection/root/call ID 只是 selector；repository query 必须同时 scope 当前 Principal，跨主体统一返回 `RESOURCE_NOT_FOUND`。
+所有响应遵循同一 OpenAPI 3.1 契约；`apps/connection-web` 只能使用生成客户端。用户可见页面和错误文案
+默认 `zh-CN`，`messageKey` 到中文文案的映射属于 Connection Web presentation 层。独立部署与同源
+路由边界见 [Connection Web 独立部署边界 ADR](../adr/ADR-connection-web-boundary.md)。
+
+所有 Browser API mutation 要求 `Idempotency-Key`。Connection 先以 current subject、operation 和 key
+hash 在 PostgreSQL claim 命令，再执行领域操作；同 key 不同 request 返回 `IDEMPOTENCY_CONFLICT`。
+普通管理响应加密保存并可安全重放。登录、PAT 签发、OAuth URL 和授权 preview 等含 Secret
+或安全 token 的响应只保存“已完成但不可重放”的加密标记，Session Token、PAT、OAuth state 和
+confirmation token 不进入幂等表；同 key 重试返回 `RESULT_UNCERTAIN`，不得再次显示或重新签发 Secret。
+若进程在领域操作完成后、保存响应前退出，claim 保持 `STARTED` 并返回 `RESULT_UNCERTAIN`，不得自动
+重复副作用。只有明确证明领域操作未产生效果的校验/授权拒绝才可释放 claim。G-04 未关闭前，
+`STARTED`、不可重放完成标记和普通完成记录都使用不可过期 tombstone，不得因 TTL 自动删除或重新开放
+同一 key；后续清理必须先由 G-04 批准最大客户端重放、PITR 与审计窗口。
 
 ### 22.6 Delegated Invocation API
 
@@ -2369,7 +2394,7 @@ flowchart LR
 | WP6 Consumer 接口 | Connection Owner | MCP、Direct Auth、Delegated OpenAPI、查询接口 | Direct MCP Client 只配置 Connection 可登录；两入口产生相同内部授权语义 |
 | WP7 Execution 与 Egress | Connection Owner/SRE | Invocation、Call、Effect、Dispatch、proxy、reconcile | 每个 crash window 经过 kill/restart；重复非幂等外部效果为零 |
 | WP8 Audit 与 Recovery | SRE/DBA/Security | outbox、审计、Recovery Control、PITR runbook | restore 演练保持 mutation closed，直到 continuity 或 Provider coverage 证据通过 |
-| WP9 Connection Web | Connection Owner/Product | 账号、授权、调用、Consumer、Catalog 和审计页面 | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential |
+| WP9 Connection Web | Connection Owner/Product | 独立 `apps/connection-web`、中文账号/授权/调用/Consumer/Catalog/审计页面和生成 Browser Client | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential；不依赖 Agora Agent Platform Web |
 | WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
 | WP11 生产加固 | SRE/Security | HA、容量、SLO、升级、回滚、DR 和 on-call | load/soak、N/N-1、backup/PITR、Secret 和安全评审通过，无未接受 P0 风险 |
 

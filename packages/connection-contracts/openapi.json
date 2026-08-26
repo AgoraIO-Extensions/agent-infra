@@ -1,0 +1,898 @@
+{
+	"openapi": "3.1.0",
+	"info": {
+		"title": "Connection Browser API",
+		"version": "1.0.0",
+		"description": "Connection Web 使用的同源 HTTP/JSON 契约。当前身份只由 HttpOnly browser session 解析。"
+	},
+	"servers": [{ "url": "/" }],
+	"security": [{ "browserSession": [] }],
+	"paths": {
+		"/api/v1/connection/openapi.json": {
+			"get": {
+				"operationId": "getConnectionBrowserOpenApi",
+				"security": [],
+				"responses": { "200": { "description": "OpenAPI document" } }
+			}
+		},
+		"/api/v1/connection/session": {
+			"get": {
+				"operationId": "getSession",
+				"responses": {
+					"200": { "$ref": "#/components/responses/Session" },
+					"401": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"post": {
+				"operationId": "login",
+				"security": [],
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/LoginRequest" }
+						}
+					}
+				},
+				"responses": {
+					"200": { "$ref": "#/components/responses/Session" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"delete": {
+				"operationId": "logout",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"responses": {
+					"204": { "description": "Logged out" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/tokens": {
+			"get": {
+				"operationId": "listTokens",
+				"responses": {
+					"200": { "$ref": "#/components/responses/TokenList" },
+					"401": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"post": {
+				"operationId": "issueToken",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/IssueTokenRequest" }
+						}
+					}
+				},
+				"responses": {
+					"201": { "$ref": "#/components/responses/IssuedToken" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/tokens/{tokenId}": {
+			"delete": {
+				"operationId": "revokeToken",
+				"parameters": [
+					{ "$ref": "#/components/parameters/TokenId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Revoked" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/connections": {
+			"get": {
+				"operationId": "getConnections",
+				"responses": {
+					"200": { "$ref": "#/components/responses/Connections" },
+					"401": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/connections/{connectionId}": {
+			"delete": {
+				"operationId": "disconnectConnection",
+				"parameters": [
+					{ "$ref": "#/components/parameters/ConnectionId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Disconnected" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/oauth-transactions": {
+			"post": {
+				"operationId": "startGithubOAuth",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": false,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/OAuthTransactionRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": { "$ref": "#/components/responses/OAuthTransaction" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/authorization-previews": {
+			"post": {
+				"operationId": "createAuthorizationPreview",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/AuthorizationPreviewRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": { "$ref": "#/components/responses/AuthorizationPreview" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/authorization-consents": {
+			"post": {
+				"operationId": "confirmAuthorization",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/AuthorizationConsentRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": {
+						"description": "Confirmed",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/GrantCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/grants/{grantId}": {
+			"delete": {
+				"operationId": "revokeGrant",
+				"parameters": [
+					{ "$ref": "#/components/parameters/GrantId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Revoked" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/administrators": {
+			"get": {
+				"operationId": "listAdministrators",
+				"responses": {
+					"200": { "$ref": "#/components/responses/Administrators" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/administrators/{principalId}": {
+			"put": {
+				"operationId": "grantAdministrator",
+				"parameters": [
+					{ "$ref": "#/components/parameters/PrincipalId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Granted" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"delete": {
+				"operationId": "revokeAdministrator",
+				"parameters": [
+					{ "$ref": "#/components/parameters/PrincipalId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Revoked" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/shared-connections": {
+			"get": {
+				"operationId": "getSharedConnections",
+				"responses": {
+					"200": { "$ref": "#/components/responses/SharedConnections" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/shared-connections/{connectionId}": {
+			"delete": {
+				"operationId": "disconnectSharedConnection",
+				"parameters": [
+					{ "$ref": "#/components/parameters/ConnectionId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Disconnected" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/shared-scopes": {
+			"post": {
+				"operationId": "createSharedScope",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/SharedScopeName" }
+						}
+					}
+				},
+				"responses": {
+					"201": { "$ref": "#/components/responses/SharedScopeCreated" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/shared-scopes/{sharedScopeId}": {
+			"patch": {
+				"operationId": "renameSharedScope",
+				"parameters": [
+					{ "$ref": "#/components/parameters/SharedScopeId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/SharedScopeName" }
+						}
+					}
+				},
+				"responses": {
+					"204": { "description": "Renamed" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/shared-scopes/{sharedScopeId}/principals/{principalId}": {
+			"put": {
+				"operationId": "grantSharedScopePrincipal",
+				"parameters": [
+					{ "$ref": "#/components/parameters/SharedScopeId" },
+					{ "$ref": "#/components/parameters/PrincipalId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Granted" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"delete": {
+				"operationId": "revokeSharedScopePrincipal",
+				"parameters": [
+					{ "$ref": "#/components/parameters/SharedScopeId" },
+					{ "$ref": "#/components/parameters/PrincipalId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"204": { "description": "Revoked" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		}
+	},
+	"components": {
+		"securitySchemes": {
+			"browserSession": {
+				"type": "apiKey",
+				"in": "cookie",
+				"name": "connection_session"
+			}
+		},
+		"parameters": {
+			"IdempotencyKey": {
+				"name": "Idempotency-Key",
+				"in": "header",
+				"required": true,
+				"schema": {
+					"type": "string",
+					"minLength": 8,
+					"maxLength": 200,
+					"pattern": "^[\\x21-\\x7E]+$"
+				}
+			},
+			"ConnectionId": {
+				"name": "connectionId",
+				"in": "path",
+				"required": true,
+				"schema": { "type": "string", "minLength": 1 }
+			},
+			"GrantId": {
+				"name": "grantId",
+				"in": "path",
+				"required": true,
+				"schema": { "type": "string", "minLength": 1 }
+			},
+			"PrincipalId": {
+				"name": "principalId",
+				"in": "path",
+				"required": true,
+				"schema": { "type": "string", "minLength": 1 }
+			},
+			"SharedScopeId": {
+				"name": "sharedScopeId",
+				"in": "path",
+				"required": true,
+				"schema": { "type": "string", "minLength": 1 }
+			},
+			"TokenId": {
+				"name": "tokenId",
+				"in": "path",
+				"required": true,
+				"schema": { "type": "string", "minLength": 1 }
+			}
+		},
+		"responses": {
+			"Error": {
+				"description": "Stable browser error",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/Error" }
+					}
+				}
+			},
+			"Session": {
+				"description": "Current session",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/Session" }
+					}
+				}
+			},
+			"TokenList": {
+				"description": "Token records without plaintext",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/TokenList" }
+					}
+				}
+			},
+			"IssuedToken": {
+				"description": "One-time token plaintext",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/IssuedTokenResponse" }
+					}
+				}
+			},
+			"Connections": {
+				"description": "Connection overview",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/ConnectionsResponse" }
+					}
+				}
+			},
+			"OAuthTransaction": {
+				"description": "Authorization URL",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/OAuthTransaction" }
+					}
+				}
+			},
+			"AuthorizationPreview": {
+				"description": "Authorization preview",
+				"content": {
+					"application/json": {
+						"schema": {
+							"$ref": "#/components/schemas/AuthorizationPreviewResponse"
+						}
+					}
+				}
+			},
+			"Administrators": {
+				"description": "Administrator candidates",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/AdministratorsResponse" }
+					}
+				}
+			},
+			"SharedConnections": {
+				"description": "Shared Connection overview",
+				"content": {
+					"application/json": {
+						"schema": {
+							"$ref": "#/components/schemas/SharedConnectionsResponse"
+						}
+					}
+				}
+			},
+			"SharedScopeCreated": {
+				"description": "Created scope",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/SharedScopeCreated" }
+					}
+				}
+			}
+		},
+		"schemas": {
+			"Error": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["error"],
+				"properties": {
+					"error": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["code", "messageKey", "retryable", "traceId"],
+						"properties": {
+							"code": { "type": "string" },
+							"messageKey": { "type": "string" },
+							"retryable": { "type": "boolean" },
+							"traceId": { "type": "string" }
+						}
+					}
+				}
+			},
+			"Account": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["displayName", "email"],
+				"properties": {
+					"displayName": { "type": "string" },
+					"email": { "type": ["string", "null"] }
+				}
+			},
+			"Session": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["account", "isAdministrator"],
+				"properties": {
+					"account": { "$ref": "#/components/schemas/Account" },
+					"isAdministrator": { "type": "boolean" }
+				}
+			},
+			"LoginRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["username", "password"],
+				"properties": {
+					"username": { "type": "string", "minLength": 1, "maxLength": 256 },
+					"password": { "type": "string", "minLength": 1, "maxLength": 1024 }
+				}
+			},
+			"IssueTokenRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["name"],
+				"properties": {
+					"name": { "type": "string", "minLength": 1, "maxLength": 100 }
+				}
+			},
+			"TokenRecord": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"tokenId",
+					"name",
+					"status",
+					"createdAt",
+					"expiresAt",
+					"lastUsedAt"
+				],
+				"properties": {
+					"tokenId": { "type": "string" },
+					"name": { "type": "string" },
+					"status": { "type": "string" },
+					"createdAt": { "type": "string", "format": "date-time" },
+					"expiresAt": { "type": "string", "format": "date-time" },
+					"lastUsedAt": { "type": ["string", "null"] }
+				}
+			},
+			"TokenList": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["tokens"],
+				"properties": {
+					"tokens": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/TokenRecord" }
+					}
+				}
+			},
+			"IssuedToken": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["name", "token", "expiresAt"],
+				"properties": {
+					"name": { "type": "string" },
+					"token": { "type": "string" },
+					"tokenId": { "type": "string" },
+					"expiresAt": { "type": "string", "format": "date-time" }
+				}
+			},
+			"IssuedTokenResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["issued"],
+				"properties": {
+					"issued": { "$ref": "#/components/schemas/IssuedToken" }
+				}
+			},
+			"Action": {
+				"type": "object",
+				"additionalProperties": true,
+				"required": ["id", "name", "description", "effect", "requiredScopes"],
+				"properties": {
+					"id": { "type": "string" },
+					"name": { "type": "string" },
+					"description": { "type": "string" },
+					"effect": { "type": "string", "enum": ["READ", "WRITE"] },
+					"requiredScopes": { "type": "array", "items": { "type": "string" } }
+				}
+			},
+			"Connection": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"id",
+					"displayName",
+					"externalAccount",
+					"ownerType",
+					"status",
+					"requiresReconnect",
+					"actionVersionIds"
+				],
+				"properties": {
+					"id": { "type": "string" },
+					"displayName": { "type": "string" },
+					"externalAccount": { "type": "string" },
+					"ownerType": { "type": "string", "enum": ["PERSONAL", "SHARED"] },
+					"status": { "type": "string", "enum": ["ACTIVE", "DISCONNECTED"] },
+					"requiresReconnect": { "type": "boolean" },
+					"actionVersionIds": { "type": "array", "items": { "type": "string" } }
+				}
+			},
+			"ConnectionAccountSummary": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["id", "displayName", "externalAccount"],
+				"properties": {
+					"id": { "type": "string" },
+					"displayName": { "type": "string" },
+					"externalAccount": { "type": "string" }
+				}
+			},
+			"Consumer": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["id", "name"],
+				"properties": {
+					"id": { "type": "string" },
+					"name": { "type": "string" }
+				}
+			},
+			"Grant": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"id",
+					"connectionId",
+					"consumerId",
+					"consumerName",
+					"status",
+					"actionVersionIds"
+				],
+				"properties": {
+					"id": { "type": "string" },
+					"connectionId": { "type": "string" },
+					"consumerId": { "type": "string" },
+					"consumerName": { "type": "string" },
+					"status": { "type": "string" },
+					"actionVersionIds": { "type": "array", "items": { "type": "string" } }
+				}
+			},
+			"Call": {
+				"type": "object",
+				"additionalProperties": true,
+				"required": [
+					"callId",
+					"connectionId",
+					"grantId",
+					"action",
+					"status",
+					"createdAt"
+				],
+				"properties": {
+					"callId": { "type": "string" },
+					"connectionId": { "type": "string" },
+					"grantId": { "type": "string" },
+					"action": { "type": "string" },
+					"status": { "type": "string" },
+					"createdAt": { "type": "string" }
+				}
+			},
+			"Overview": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["actions", "calls", "connections", "consumers", "grants"],
+				"properties": {
+					"actions": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Action" }
+					},
+					"calls": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Call" }
+					},
+					"connections": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Connection" }
+					},
+					"consumers": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Consumer" }
+					},
+					"grants": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Grant" }
+					}
+				}
+			},
+			"ConnectionsResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["account", "isAdministrator", "overview"],
+				"properties": {
+					"account": { "$ref": "#/components/schemas/Account" },
+					"isAdministrator": { "type": "boolean" },
+					"overview": { "$ref": "#/components/schemas/Overview" }
+				}
+			},
+			"OAuthTransactionRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": { "sharedScopeId": { "type": "string" } }
+			},
+			"OAuthTransaction": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["authorizationUrl"],
+				"properties": {
+					"authorizationUrl": { "type": "string", "format": "uri" }
+				}
+			},
+			"AuthorizationPreviewRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["connectionId", "consumerId"],
+				"properties": {
+					"connectionId": { "type": "string" },
+					"consumerId": { "type": "string" }
+				}
+			},
+			"AuthorizationPreview": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"previewId",
+					"confirmationToken",
+					"consumer",
+					"targetConnection",
+					"actions",
+					"requiredScopes",
+					"effectSummary",
+					"expiresAt"
+				],
+				"properties": {
+					"previewId": { "type": "string" },
+					"confirmationToken": { "type": "string" },
+					"consumer": { "$ref": "#/components/schemas/Consumer" },
+					"currentConnection": {
+						"$ref": "#/components/schemas/ConnectionAccountSummary"
+					},
+					"targetConnection": {
+						"$ref": "#/components/schemas/ConnectionAccountSummary"
+					},
+					"actions": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Action" }
+					},
+					"requiredScopes": { "type": "array", "items": { "type": "string" } },
+					"effectSummary": {
+						"type": "array",
+						"items": { "type": "string", "enum": ["READ", "WRITE"] }
+					},
+					"expiresAt": { "type": "string" }
+				}
+			},
+			"AuthorizationPreviewResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["idempotencyKey", "preview"],
+				"properties": {
+					"idempotencyKey": { "type": "string" },
+					"preview": { "$ref": "#/components/schemas/AuthorizationPreview" }
+				}
+			},
+			"AuthorizationConsentRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["previewId", "confirmationToken"],
+				"properties": {
+					"previewId": { "type": "string" },
+					"confirmationToken": { "type": "string" }
+				}
+			},
+			"GrantCreated": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["grantId"],
+				"properties": { "grantId": { "type": "string" } }
+			},
+			"Administrator": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["principalId", "displayName", "email", "isAdministrator"],
+				"properties": {
+					"principalId": { "type": "string" },
+					"displayName": { "type": "string" },
+					"email": { "type": ["string", "null"] },
+					"isAdministrator": { "type": "boolean" }
+				}
+			},
+			"AdministratorsResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["administrators"],
+				"properties": {
+					"administrators": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Administrator" }
+					}
+				}
+			},
+			"SharedConnection": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["id", "displayName", "externalAccount", "status"],
+				"properties": {
+					"id": { "type": "string" },
+					"displayName": { "type": "string" },
+					"externalAccount": { "type": "string" },
+					"status": { "type": "string", "enum": ["ACTIVE", "DISCONNECTED"] }
+				}
+			},
+			"PrincipalSummary": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["principalId", "displayName", "email"],
+				"properties": {
+					"principalId": { "type": "string" },
+					"displayName": { "type": "string" },
+					"email": { "type": ["string", "null"] }
+				}
+			},
+			"SharedScope": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"sharedScopeId",
+					"displayName",
+					"state",
+					"members",
+					"connections"
+				],
+				"properties": {
+					"sharedScopeId": { "type": "string" },
+					"displayName": { "type": "string" },
+					"state": {
+						"type": "string",
+						"enum": ["ACTIVE", "SUSPENDED", "DISABLED"]
+					},
+					"members": { "type": "array", "items": { "type": "string" } },
+					"connections": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/SharedConnection" }
+					}
+				}
+			},
+			"SharedConnectionsResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["overview"],
+				"properties": {
+					"overview": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["principals", "scopes"],
+						"properties": {
+							"principals": {
+								"type": "array",
+								"items": { "$ref": "#/components/schemas/PrincipalSummary" }
+							},
+							"scopes": {
+								"type": "array",
+								"items": { "$ref": "#/components/schemas/SharedScope" }
+							}
+						}
+					}
+				}
+			},
+			"SharedScopeName": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["displayName"],
+				"properties": {
+					"displayName": { "type": "string", "minLength": 1, "maxLength": 120 }
+				}
+			},
+			"SharedScopeCreated": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["sharedScopeId"],
+				"properties": { "sharedScopeId": { "type": "string" } }
+			}
+		}
+	}
+}

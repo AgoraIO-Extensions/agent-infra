@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 const dockerfiles = new Map([
 	["web", "apps/web/Dockerfile"],
+	["connection-web", "apps/connection-web/Dockerfile"],
 	["platform-api", "apps/platform-api/Dockerfile"],
 	["platform-worker", "apps/platform-worker/Dockerfile"],
 	["connection-api", "apps/connection-api/Dockerfile"],
@@ -34,6 +35,7 @@ test("deployment images pin every base image by digest", async () => {
 test("deployment images select an explicit non-root runtime user", async () => {
 	const expectedUsers = new Map([
 		["web", "nginx"],
+		["connection-web", "nginx"],
 		["platform-api", "node"],
 		["platform-worker", "node"],
 		["connection-api", "node"],
@@ -121,4 +123,18 @@ test("local Compose exposes only the real PostgreSQL dependency", async () => {
 	const compose = parse(await readFile("docker-compose.yml", "utf8"));
 	assert.deepEqual(Object.keys(compose.services), ["postgres"]);
 	assert.ok(compose.services.postgres.healthcheck);
+});
+
+test("Connection Web preserves every same-origin API route family", async () => {
+	const nginx = await readFile("apps/connection-web/nginx.conf", "utf8");
+	const vite = await readFile("apps/connection-web/vite.config.ts", "utf8");
+	const directSessionApi = nginx.indexOf("location ^~ /connection/v1/");
+	const spaFallback = nginx.indexOf("location /connection/");
+
+	assert.ok(directSessionApi >= 0, "nginx must proxy the Direct Session API");
+	assert.ok(
+		directSessionApi < spaFallback,
+		"the Direct Session API must be matched before the Connection SPA",
+	);
+	assert.match(vite, /"\/connection\/v1"/);
 });

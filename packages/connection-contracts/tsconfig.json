@@ -1,0 +1,7 @@
+{
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true
+	},
+	"include": ["src/**/*.ts", "tsdown.config.ts"]
+}

@@ -84,6 +84,7 @@ test("production startup cannot opt into fixture invocation or provider routes",
 	assert.deepEqual(Object.keys(productionCompose.services), [
 		"connection-bootstrap",
 		"connection-api",
+		"connection-web",
 	]);
 	assert.equal(
 		productionCompose.services["connection-api"].environment,
@@ -117,4 +118,37 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.doesNotMatch(dockerfile, /local-runtime/);
 	assert.doesNotMatch(readme, /LOCAL_SINGLE_USER|REMOTE_SHARED/);
 	assert.match(readme, /codex mcp login connection/);
+});
+
+test("Connection management presentation belongs only to connection-web", async () => {
+	const apiRoutes = await read("apps/connection-api/src/oauth-routes.ts");
+	const webManifest = JSON.parse(
+		await read("apps/connection-web/package.json"),
+	);
+
+	assert.equal(webManifest.name, "@agent-infra/connection-web");
+	for (const legacyPage of [
+		"consoleLoginPage",
+		"tokenConsolePage",
+		"connectionConsolePage",
+		"administratorConsolePage",
+		"sharedGithubAdministrationPage",
+		"authorizationPreviewPage",
+	]) {
+		assert.doesNotMatch(apiRoutes, new RegExp(`function ${legacyPage}\\b`));
+	}
+	for (const legacyRoute of [
+		'app.get("/connection/login"',
+		'app.get("/connection/tokens"',
+		'app.get("/connection/connections"',
+		'app.get("/connection/admin/administrators"',
+		'app.get("/connection/admin/shared-connections"',
+	]) {
+		assert.doesNotMatch(
+			apiRoutes,
+			new RegExp(legacyRoute.replace(/[()/]/g, "\\$&")),
+		);
+	}
+	assert.match(apiRoutes, /app\.get\("\/api\/v1\/connection\/connections"/);
+	assert.match(apiRoutes, /function loginPage\b/);
 });

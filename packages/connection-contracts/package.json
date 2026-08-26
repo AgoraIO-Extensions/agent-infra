@@ -1,0 +1,22 @@
+{
+	"name": "@agent-infra/connection-contracts",
+	"private": true,
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"generate": "openapi-ts -i openapi.json -o src/generated",
+		"test": "vitest run src"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@hey-api/openapi-ts": "^0.99.0",
+		"tsdown": "^0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	},
+	"dependencies": {
+		"zod": "4.1.5"
+	}
+}

@@ -23,10 +23,13 @@ OpenConnector GitHub kernel 的统一 Connection account 架构。所有 Consume
 只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。Connection
 管理员使用 PostgreSQL role binding 管理共享 GitHub账号和显式 Principal eligibility；管理员角色不自动
 获得共享账号使用资格，每个 eligible Principal 仍需独立确认 Consumer Grant。
+独立 `connection-web` 使用 React 和生成的 OpenAPI Client 提供简体中文控制台，不属于 Agora Agent
+Platform Web；`connection-api` 不再拼接管理页面 HTML。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
-| Web | `apps/web` | React、TanStack Router、Vite 与最小启动页 |
+| Agent Platform Web | `apps/web` | React、TanStack Router、Vite 与平台最小启动页 |
+| Connection Web | `apps/connection-web` | 独立简体中文 React 控制台、生成 Browser Client 与同源 Nginx 入口 |
 | Platform API | `apps/platform-api` | Hono 进程与健康检查 |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
 | Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub Adapter、Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
@@ -70,6 +73,16 @@ pnpm docker:build
 不能替代 G-01/G-02 的审批与验收记录。
 
 本机开发也使用 PostgreSQL 和同一账号模型，不启动 OpenConnector Runtime 或本机 Credential store。
+本机由 Connection Web 占用 public origin `http://127.0.0.1:3002`，完整 Connection API 作为内部进程
+监听 `3013` 并由 Vite 同源代理。使用两个终端启动：
+
+```bash
+PORT=3013 pnpm connection:conformance
+pnpm dev:connection-web
+```
+
+浏览器访问 `http://127.0.0.1:3002/connection/login`。生产由 `connection-web` Nginx 对
+`/api/v1/connection/*`、`/oauth/*`、`/.well-known/*` 和 `/mcp` 反向代理到 `connection-api`。
 完成公司 LDAP、Connection identity key、Credential 加密和 HTTPS 配置后，Codex 或其他 MCP
 Consumer 只配置 Connection。支持 OAuth 的客户端使用：
 
@@ -83,7 +96,7 @@ url = "https://connection.example.com/mcp"
 版本仍需按 HLD 记录脱敏 conformance 证据。
 
 需要跨客户端或无头部署时，用户先访问 `https://connection.example.com/connection/login` 完成 LDAP
-登录，再从控制台的 Access tokens 页面签发一次性展示的 Connection PAT。签发表单不会再次要求
+登录，再从中文控制台的“访问令牌”页面签发一次性展示的 Connection PAT。签发表单不会再次要求
 LDAP 密码。消费端只引用 Secret Manager 或进程环境中的 token：
 
 ```toml

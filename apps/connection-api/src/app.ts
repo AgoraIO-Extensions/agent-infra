@@ -80,6 +80,8 @@ function errorStatus(error: ConnectionError) {
 	if (error.code === "AUTHENTICATION_FAILED") return 401;
 	if (error.code === "INVALID_REQUEST") return 400;
 	if (error.code === "IDEMPOTENCY_CONFLICT") return 409;
+	if (error.code === "RESULT_UNCERTAIN") return 409;
+	if (error.code === "RESOURCE_NOT_FOUND") return 404;
 	if (error.code === "PROVIDER_UNCERTAIN") return 202;
 	if (error.code === "PROVIDER_FAILED") return 502;
 	return 403;

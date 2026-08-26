@@ -290,6 +290,126 @@ function createTestApp(
 }
 
 describe("Connection API", () => {
+	it("exposes a Chinese browser-session JSON API for Connection Web", async () => {
+		const sessionToken = `conn_session_${"S".repeat(43)}`;
+		let logoutToken: string | undefined;
+		const account = {
+			displayName: "连接用户",
+			email: "connection-user@example.invalid",
+			principalId: "principal-user",
+		};
+		const publicAccount = {
+			displayName: account.displayName,
+			email: account.email,
+		};
+		const service = {
+			getBrowserAccount: async (value: string | undefined) => {
+				if (value !== sessionToken) {
+					throw new OAuthProtocolError("invalid_token", "denied", 401);
+				}
+				return account;
+			},
+			loginBrowserSession: async () => ({
+				account,
+				expiresAt: new Date(Date.now() + 60_000),
+				sessionToken,
+			}),
+			logoutBrowserSession: async (value: string | undefined) => {
+				logoutToken = value;
+			},
+		} as unknown as ConnectionOAuthService;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service,
+		});
+
+		const unauthorized = await app.request("/api/v1/connection/session");
+		expect(unauthorized.status).toBe(401);
+		expect(await unauthorized.json()).toMatchObject({
+			error: {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				retryable: false,
+				traceId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			},
+		});
+
+		const login = await app.request("/api/v1/connection/session", {
+			body: JSON.stringify({
+				password: "ldap-password",
+				username: "ldap-user",
+			}),
+			headers: {
+				"content-type": "application/json",
+				"idempotency-key": "test-browser-login",
+				origin: "https://connection.example",
+			},
+			method: "POST",
+		});
+		expect(login.status).toBe(200);
+		expect(await login.json()).toEqual({
+			account: publicAccount,
+			isAdministrator: false,
+		});
+		expect(login.headers.get("set-cookie")).toContain("Path=/");
+		const cookie =
+			(login.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+
+		const current = await app.request("/api/v1/connection/session", {
+			headers: { cookie },
+		});
+		expect(current.status).toBe(200);
+		expect(await current.json()).toEqual({
+			account: publicAccount,
+			isAdministrator: false,
+		});
+
+		const logout = await app.request("/api/v1/connection/session", {
+			headers: {
+				cookie,
+				"idempotency-key": "test-browser-logout",
+				origin: "https://connection.example",
+			},
+			method: "DELETE",
+		});
+		expect(logout.status).toBe(204);
+		expect(logoutToken).toBe(sessionToken);
+	});
+
+	it("maps direct Browser command replay failures to the stable 409 envelope", async () => {
+		const app = createConnectionOAuthApp({
+			browserCommands: {
+				execute: async () => {
+					throw new ConnectionError(
+						"RESULT_UNCERTAIN",
+						"secret response is not replayable",
+					);
+				},
+			},
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service: {} as ConnectionOAuthService,
+		});
+		const response = await app.request("/api/v1/connection/session", {
+			body: JSON.stringify({ password: "password", username: "user" }),
+			headers: {
+				"content-type": "application/json",
+				"idempotency-key": "test-secret-replay",
+				origin: "https://connection.example",
+			},
+			method: "POST",
+		});
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			error: {
+				code: "RESULT_UNCERTAIN",
+				messageKey: "connection.error.result_uncertain",
+				retryable: false,
+			},
+		});
+	});
+
 	it("logs in once and issues a portable PAT from the authenticated console", async () => {
 		const token = `conn_pat_${"A".repeat(43)}`;
 		const sessionToken = `conn_session_${"B".repeat(43)}`;
@@ -297,6 +417,7 @@ describe("Connection API", () => {
 		let issuance:
 			| { name: string; sessionToken: string | undefined }
 			| undefined;
+		let revokedTokenId: string | undefined;
 		const tokens: Array<{
 			createdAt: Date;
 			expiresAt: Date;
@@ -350,6 +471,12 @@ describe("Connection API", () => {
 					sessionToken,
 				};
 			},
+			revokePersonalAccessToken: async (input: {
+				sessionToken: string | undefined;
+				tokenId: string;
+			}) => {
+				revokedTokenId = input.tokenId;
+			},
 		} as unknown as ConnectionOAuthService;
 		const app = createConnectionOAuthApp({
 			dynamicClientRegistration: { clientName: "Codex" },
@@ -358,57 +485,63 @@ describe("Connection API", () => {
 			service,
 		});
 
-		expect((await app.request("/connection/tokens")).status).toBe(302);
-		const page = await app.request("/connection/login");
-		expect(page.status).toBe(200);
-		expect(await page.text()).toContain("Sign in to Connection");
-
-		const loggedIn = await app.request("/connection/login", {
-			body: new URLSearchParams({
+		const loggedIn = await app.request("/api/v1/connection/session", {
+			body: JSON.stringify({
 				password: "ldap-password-must-not-be-returned",
 				username: "ldap-user",
 			}),
 			headers: {
-				"content-type": "application/x-www-form-urlencoded",
+				"content-type": "application/json",
+				"idempotency-key": "test-pat-login",
 				origin: "https://connection.example",
 			},
 			method: "POST",
 		});
-		expect(loggedIn.status).toBe(303);
+		expect(loggedIn.status).toBe(200);
 		const cookie =
 			(loggedIn.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
-		const consolePage = await app.request("/connection/tokens", {
+		const apiTokens = await app.request("/api/v1/connection/tokens", {
 			headers: { cookie },
 		});
-		const consoleBody = await consolePage.text();
-		expect(consoleBody).toContain("Connection navigation");
-		expect(consoleBody).toContain("Use a separate token");
-		expect(consoleBody).not.toContain('name="password"');
-
-		const issued = await app.request("/connection/tokens", {
-			body: new URLSearchParams({
-				name: "Codex laptop",
-			}),
+		expect(apiTokens.status).toBe(200);
+		expect(await apiTokens.json()).toEqual({ tokens: [] });
+		const apiIssued = await app.request("/api/v1/connection/tokens", {
+			body: JSON.stringify({ name: "Connection Web" }),
 			headers: {
-				"content-type": "application/x-www-form-urlencoded",
+				"content-type": "application/json",
 				cookie,
+				"idempotency-key": "test-pat-issue",
 				origin: "https://connection.example",
 			},
 			method: "POST",
 		});
-		expect(issued.status).toBe(201);
-		expect(issued.headers.get("cache-control")).toBe("no-store");
-		const result = await issued.text();
-		expect(result).toContain(token);
-		expect(result).toContain("Codex laptop");
-		expect(result).toContain("It will not be shown again");
-		expect(result).not.toContain("ldap-password-must-not-be-returned");
+		expect(apiIssued.status).toBe(201);
+		expect(await apiIssued.json()).toMatchObject({
+			issued: { name: "Connection Web", token },
+		});
+		const listedAfterIssue = await app.request("/api/v1/connection/tokens", {
+			headers: { cookie },
+		});
+		expect(JSON.stringify(await listedAfterIssue.json())).not.toContain(token);
+		const apiRevoked = await app.request(
+			"/api/v1/connection/tokens/pat-11111111-1111-4111-8111-111111111111",
+			{
+				headers: {
+					cookie,
+					"idempotency-key": "test-pat-revoke",
+					origin: "https://connection.example",
+				},
+				method: "DELETE",
+			},
+		);
+		expect(apiRevoked.status).toBe(204);
+		expect(revokedTokenId).toBe("pat-11111111-1111-4111-8111-111111111111");
 		expect(login).toEqual({
 			password: "ldap-password-must-not-be-returned",
 			username: "ldap-user",
 		});
 		expect(issuance).toEqual({
-			name: "Codex laptop",
+			name: "Connection Web",
 			sessionToken,
 		});
 
@@ -417,40 +550,52 @@ describe("Connection API", () => {
 			resource: "http://127.0.0.1:3002/mcp",
 			service,
 		});
-		const loopbackLogin = await loopbackApp.request("/connection/login", {
-			body: new URLSearchParams({ password: "password", username: "user" }),
-			headers: {
-				"content-type": "application/x-www-form-urlencoded",
-				origin: "http://127.0.0.1:3002",
+		const loopbackLogin = await loopbackApp.request(
+			"/api/v1/connection/session",
+			{
+				body: JSON.stringify({ password: "password", username: "user" }),
+				headers: {
+					"content-type": "application/json",
+					"idempotency-key": "test-loopback-login",
+					origin: "http://127.0.0.1:3002",
+				},
+				method: "POST",
 			},
-			method: "POST",
-		});
+		);
 		expect(loopbackLogin.headers.get("set-cookie")).not.toContain("Secure");
-		const opaqueOriginLogin = await loopbackApp.request("/connection/login", {
-			body: new URLSearchParams({ password: "password", username: "user" }),
-			headers: {
-				"content-type": "application/x-www-form-urlencoded",
-				host: "127.0.0.1:3002",
-				origin: "null",
-				"sec-fetch-site": "same-origin",
+		const opaqueOriginLogin = await loopbackApp.request(
+			"/api/v1/connection/session",
+			{
+				body: JSON.stringify({ password: "password", username: "user" }),
+				headers: {
+					"content-type": "application/json",
+					host: "127.0.0.1:3002",
+					"idempotency-key": "test-opaque-login",
+					origin: "null",
+					"sec-fetch-site": "same-origin",
+				},
+				method: "POST",
 			},
-			method: "POST",
-		});
-		expect(opaqueOriginLogin.status).toBe(303);
+		);
+		expect(opaqueOriginLogin.status).toBe(200);
 		const opaqueCookie =
 			(opaqueOriginLogin.headers.get("set-cookie") ?? "").split(";", 1)[0] ??
 			"";
-		const opaqueOriginIssue = await loopbackApp.request("/connection/tokens", {
-			body: new URLSearchParams({ name: "Safari laptop" }),
-			headers: {
-				"content-type": "application/x-www-form-urlencoded",
-				cookie: opaqueCookie,
-				host: "127.0.0.1:3002",
-				origin: "null",
-				"sec-fetch-site": "same-origin",
+		const opaqueOriginIssue = await loopbackApp.request(
+			"/api/v1/connection/tokens",
+			{
+				body: JSON.stringify({ name: "Safari laptop" }),
+				headers: {
+					"content-type": "application/json",
+					cookie: opaqueCookie,
+					host: "127.0.0.1:3002",
+					"idempotency-key": "test-opaque-issue",
+					origin: "null",
+					"sec-fetch-site": "same-origin",
+				},
+				method: "POST",
 			},
-			method: "POST",
-		});
+		);
 		expect(opaqueOriginIssue.status).toBe(201);
 
 		for (const headers of [
@@ -467,10 +612,10 @@ describe("Connection API", () => {
 			},
 			{ host: "127.0.0.1:3002", "sec-fetch-site": "same-origin" },
 		] as Array<Record<string, string>>) {
-			const rejected = await loopbackApp.request("/connection/login", {
-				body: new URLSearchParams({ password: "password", username: "user" }),
+			const rejected = await loopbackApp.request("/api/v1/connection/session", {
+				body: JSON.stringify({ password: "password", username: "user" }),
 				headers: {
-					"content-type": "application/x-www-form-urlencoded",
+					"content-type": "application/json",
 					...headers,
 				},
 				method: "POST",
@@ -478,21 +623,33 @@ describe("Connection API", () => {
 			expect(rejected.status).toBe(400);
 		}
 
-		for (const path of [
-			"/connection/tokens",
-			"/connection/tokens/pat-other/revoke",
-			"/connection/logout",
+		for (const request of [
+			{
+				body: JSON.stringify({ name: "Rejected" }),
+				method: "POST",
+				path: "/api/v1/connection/tokens",
+			},
+			{
+				body: undefined,
+				method: "DELETE",
+				path: "/api/v1/connection/tokens/pat-other",
+			},
+			{
+				body: undefined,
+				method: "DELETE",
+				path: "/api/v1/connection/session",
+			},
 		]) {
 			for (const origin of [undefined, "https://attacker.invalid"]) {
 				const headers: Record<string, string> = {
-					"content-type": "application/x-www-form-urlencoded",
+					"content-type": "application/json",
 					cookie: opaqueCookie,
 				};
 				if (origin) headers.origin = origin;
-				const rejected = await loopbackApp.request(path, {
-					body: new URLSearchParams({ name: "Rejected" }),
+				const rejected = await loopbackApp.request(request.path, {
+					body: request.body,
 					headers,
-					method: "POST",
+					method: request.method,
 				});
 				expect(rejected.status).toBe(400);
 			}
@@ -656,143 +813,102 @@ describe("Connection API", () => {
 			resource: "https://connection.example/mcp",
 			service: oauth,
 		});
-		const login = await app.request("/connection/login", {
-			body: new URLSearchParams({ password: "password", username: "user" }),
+		const login = await app.request("/api/v1/connection/session", {
+			body: JSON.stringify({ password: "password", username: "user" }),
 			headers: {
-				"content-type": "application/x-www-form-urlencoded",
+				"content-type": "application/json",
+				"idempotency-key": "test-management-login",
 				origin: "https://connection.example",
 			},
 			method: "POST",
 		});
-		expect(login.headers.get("location")).toBe("/connection/connections");
+		expect(login.status).toBe(200);
 		const cookie =
 			(login.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
-		const page = await app.request("/connection/connections", {
+		const apiOverview = await app.request("/api/v1/connection/connections", {
 			headers: { cookie },
 		});
-		const body = await page.text();
-		expect(body).toContain("GitHub account octocat");
-		expect(body).toContain("Portable PAT");
-		expect(body).toContain("Use with Portable PAT");
-		expect(body).not.toContain(
-			'action="/connection/grants/grant-existing/revoke"',
-		);
-		expect(body).toContain("Reconnect GitHub");
-		expect(body).toContain("SHARED");
-		expect(body).toContain("GitHub account agora-release-bot");
-		expect(body).not.toContain(
-			'action="/connection/connections/connection-shared/disconnect"',
-		);
-		expect(body).toContain(
-			'href="/connection/connections/github" target="_blank" rel="noopener noreferrer">Add GitHub account</a>',
-		);
-
-		const formHeaders = {
-			"content-type": "application/x-www-form-urlencoded",
-			cookie,
-			origin: "https://connection.example",
+		expect(apiOverview.status).toBe(200);
+		const apiOverviewBody = (await apiOverview.json()) as {
+			overview: { principal?: unknown };
 		};
-		const preview = await app.request(
-			"/connection/connections/connection-github/authorize",
-			{
-				body: new URLSearchParams({ consumer_id: "consumer-portable-pat" }),
-				headers: formHeaders,
-				method: "POST",
+		expect(apiOverviewBody).toMatchObject({
+			account: { displayName: "Connection User" },
+			isAdministrator: false,
+			overview: {
+				connections: [
+					{ id: "connection-github", ownerType: "PERSONAL" },
+					{ id: "connection-old", requiresReconnect: true },
+					{ id: "connection-shared", ownerType: "SHARED" },
+				],
 			},
-		);
-		expect(preview.status).toBe(200);
-		const previewBody = await preview.text();
-		expect(previewBody).toContain("Review access for Portable PAT");
-		expect(previewBody).toContain("Current GitHub account octocat-old");
-		expect(previewBody).toContain("New GitHub account octocat");
-		expect(previewBody).toContain("READ");
-		expect(previewBody).toContain("Confirm switch");
-		expect(previewBody).toContain('href="/connection/connections">Cancel</a>');
-		expect(previewBody).not.toContain('name="connection_id"');
-		expect(previewBody).not.toContain('name="action_version_ids"');
-		expect(calls).toEqual([
-			{
-				name: "preview",
-				value: {
+		});
+		expect(apiOverviewBody.overview.principal).toBeUndefined();
+		const apiResponses = [
+			await app.request("/api/v1/connection/oauth-transactions", {
+				body: "{}",
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-github-oauth-start",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
+			await app.request("/api/v1/connection/authorization-previews", {
+				body: JSON.stringify({
 					connectionId: "connection-github",
 					consumerId: "consumer-portable-pat",
-					principalId: "principal-user",
-				},
-			},
-		]);
-
-		const responses = [
-			await app.request("/connection/connections/github", {
-				headers: { cookie },
-			}),
-			await app.request(
-				"/connection/authorization-previews/preview-1/confirm",
-				{
-					body: new URLSearchParams({
-						confirmation_token: "opaque-preview-token",
-						idempotency_key: "confirmation-1",
-					}),
-					headers: formHeaders,
-					method: "POST",
-				},
-			),
-			await app.request("/connection/grants/grant-existing/revoke", {
-				headers: formHeaders,
-				method: "POST",
-			}),
-			await app.request(
-				"/connection/connections/connection-github/disconnect",
-				{
-					headers: formHeaders,
-					method: "POST",
-				},
-			),
-			await app.request("/oauth/callback?code=github-code&state=oauth-state"),
-		];
-		expect(responses.map((response) => response.status)).toEqual([
-			303, 303, 303, 303, 303,
-		]);
-		expect(responses[0]?.headers.get("location")).toBe(
-			"https://github.test/login/oauth/authorize",
-		);
-		const expiredConfirmation = await app.request(
-			"/connection/authorization-previews/preview-expired/confirm",
-			{
-				body: new URLSearchParams({
-					confirmation_token: "expired-preview-token",
-					idempotency_key: "confirmation-expired",
 				}),
-				headers: formHeaders,
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-preview-create",
+					origin: "https://connection.example",
+				},
 				method: "POST",
-			},
-		);
-		expect(expiredConfirmation.status).toBe(400);
-		expect(await expiredConfirmation.json()).toEqual({
-			error: "invalid_request",
-			error_description: "Authorization preview has expired",
+			}),
+			await app.request("/api/v1/connection/authorization-consents", {
+				body: JSON.stringify({
+					confirmationToken: "opaque-preview-token",
+					previewId: "preview-1",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "confirmation-api",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
+			await app.request("/api/v1/connection/grants/grant-existing", {
+				headers: {
+					cookie,
+					"idempotency-key": "test-grant-revoke",
+					origin: "https://connection.example",
+				},
+				method: "DELETE",
+			}),
+			await app.request("/api/v1/connection/connections/connection-github", {
+				headers: {
+					cookie,
+					"idempotency-key": "test-connection-disconnect",
+					origin: "https://connection.example",
+				},
+				method: "DELETE",
+			}),
+		];
+		expect(apiResponses.map(({ status }) => status)).toEqual([
+			200, 201, 201, 204, 204,
+		]);
+		expect(await apiResponses[0]?.json()).toEqual({
+			authorizationUrl: "https://github.test/login/oauth/authorize",
 		});
-		const staleAuthorization = await app.request(
-			"/connection/connections/connection-old/authorize",
-			{
-				body: new URLSearchParams({ consumer_id: "consumer-portable-pat" }),
-				headers: formHeaders,
-				method: "POST",
-			},
-		);
-		expect(staleAuthorization.status).toBe(400);
-		expect(await staleAuthorization.json()).toEqual({
-			error: "invalid_request",
-			error_description: "Reconnect GitHub before authorizing this client",
+		expect(await apiResponses[1]?.json()).toMatchObject({
+			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			preview: { previewId: "preview-1" },
 		});
 		expect(calls).toEqual([
-			{
-				name: "preview",
-				value: {
-					connectionId: "connection-github",
-					consumerId: "consumer-portable-pat",
-					principalId: "principal-user",
-				},
-			},
 			{
 				name: "connect",
 				value: {
@@ -801,10 +917,18 @@ describe("Connection API", () => {
 				},
 			},
 			{
+				name: "preview",
+				value: {
+					connectionId: "connection-github",
+					consumerId: "consumer-portable-pat",
+					principalId: "principal-user",
+				},
+			},
+			{
 				name: "confirm",
 				value: {
 					confirmationToken: "opaque-preview-token",
-					idempotencyKey: "confirmation-1",
+					idempotencyKey: "confirmation-api",
 					previewId: "preview-1",
 					principalId: "principal-user",
 				},
@@ -819,10 +943,6 @@ describe("Connection API", () => {
 					connectionId: "connection-github",
 					principalId: "principal-user",
 				},
-			},
-			{
-				name: "callback",
-				value: { code: "github-code", state: "oauth-state" },
 			},
 		]);
 	});
@@ -908,77 +1028,48 @@ describe("Connection API", () => {
 			service: oauth,
 		});
 
-		const userResponse = await app.request("/connection/admin/administrators", {
-			headers: { cookie: "connection_session=user-session" },
+		const deniedApi = await app.request(
+			"/api/v1/connection/admin/administrators",
+			{ headers: { cookie: "connection_session=user-session" } },
+		);
+		expect(deniedApi.status).toBe(404);
+		expect(await deniedApi.json()).toMatchObject({
+			error: {
+				code: "RESOURCE_NOT_FOUND",
+				messageKey: "connection.error.resource_not_found",
+			},
 		});
-		expect(userResponse.status).toBe(403);
-		const denied = await userResponse.json();
-		expect(denied).toMatchObject({
-			error: "forbidden",
-			message: "Connection administration is not authorized",
-			retryable: false,
-			traceId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-		});
-		expect(JSON.stringify(denied)).not.toContain("admin@example.invalid");
-
-		const adminResponse = await app.request(
-			"/connection/admin/administrators",
+		const adminApi = await app.request(
+			"/api/v1/connection/admin/administrators",
 			{ headers: { cookie: "connection_session=admin-session" } },
 		);
-		expect(adminResponse.status).toBe(200);
-		const body = await adminResponse.text();
-		expect(body).toContain("Administrators");
-		expect(body).toContain("admin@example.invalid");
-		expect(body).toContain("user@example.invalid");
-		expect(body).toContain(
-			'action="/connection/admin/administrators/principal-user/grant"',
-		);
-		expect(body).toContain(
-			'action="/connection/admin/administrators/principal-admin/revoke"',
-		);
-
-		const formHeaders = {
+		expect(adminApi.status).toBe(200);
+		expect(await adminApi.json()).toMatchObject({
+			administrators: [
+				{ isAdministrator: true, principalId: "principal-admin" },
+				{ isAdministrator: false, principalId: "principal-user" },
+			],
+		});
+		const adminHeaders = {
 			cookie: "connection_session=admin-session",
+			"idempotency-key": "test-administrator-mutation",
 			origin: "https://connection.example",
 		};
-		const adminMutations = await Promise.all([
-			app.request("/connection/admin/administrators/principal-user/grant", {
-				headers: formHeaders,
-				method: "POST",
+		const apiMutations = await Promise.all([
+			app.request("/api/v1/connection/admin/administrators/principal-user", {
+				headers: adminHeaders,
+				method: "PUT",
 			}),
-			app.request("/connection/admin/administrators/principal-admin/revoke", {
-				headers: formHeaders,
-				method: "POST",
+			app.request("/api/v1/connection/admin/administrators/principal-admin", {
+				headers: adminHeaders,
+				method: "DELETE",
 			}),
 		]);
-		expect(adminMutations.map((response) => response.status)).toEqual([
-			303, 303,
-		]);
+		expect(apiMutations.map(({ status }) => status)).toEqual([204, 204]);
 		expect(mutations).toEqual([
 			{ action: "grant", targetPrincipalId: "principal-user" },
 			{ action: "revoke", targetPrincipalId: "principal-admin" },
 		]);
-
-		const userMutations = await Promise.all([
-			app.request("/connection/admin/administrators/principal-user/grant", {
-				headers: {
-					cookie: "connection_session=user-session",
-					origin: "https://connection.example",
-				},
-				method: "POST",
-			}),
-			app.request("/connection/admin/administrators/principal-admin/revoke", {
-				headers: {
-					cookie: "connection_session=user-session",
-					origin: "https://connection.example",
-				},
-				method: "POST",
-			}),
-		]);
-		expect(userMutations.map((response) => response.status)).toEqual([
-			403, 403,
-		]);
-		expect(mutations).toHaveLength(2);
 	});
 
 	it("manages Shared GitHub Connections without granting administrators implicit eligibility", async () => {
@@ -1080,108 +1171,94 @@ describe("Connection API", () => {
 			service: oauth,
 		});
 		const cookie = `connection_session=${sessionToken}`;
-		expect(
-			(
-				await app.request("/connection/admin/shared-connections", {
-					headers: { cookie: "connection_session=shared-user-session" },
-				})
-			).status,
-		).toBe(403);
-
-		const page = await app.request("/connection/admin/shared-connections", {
-			headers: { cookie },
+		const deniedApi = await app.request(
+			"/api/v1/connection/admin/shared-connections",
+			{ headers: { cookie: "connection_session=shared-user-session" } },
+		);
+		expect(deniedApi.status).toBe(404);
+		expect(await deniedApi.json()).toMatchObject({
+			error: {
+				code: "RESOURCE_NOT_FOUND",
+				messageKey: "connection.error.resource_not_found",
+			},
 		});
-		expect(page.status).toBe(200);
-		const body = await page.text();
-		expect(body).toContain("Shared GitHub Connections");
-		expect(body).toContain("Agora Engineering");
-		expect(body).toContain(
-			'action="/connection/admin/shared-connections/scope-company/rename"',
-		);
-		expect(body).toContain('value="Agora Engineering"');
-		expect(body).toContain("agora-release-bot");
-		expect(body).toContain("Eligible User");
-		expect(body).toContain(
-			'href="/connection/admin/shared-connections/scope-company/github"',
-		);
-		expect(body).toContain(
-			'action="/connection/admin/shared-connections/scope-company/principals/principal-admin/grant"',
-		);
-		expect(body).toContain(
-			'action="/connection/admin/shared-connections/scope-company/principals/principal-eligible/revoke"',
-		);
-
-		const formHeaders = {
-			"content-type": "application/x-www-form-urlencoded",
-			cookie,
-			origin: "https://connection.example",
-		};
-		const mutations = await Promise.all([
-			app.request("/connection/admin/shared-connections", {
-				body: new URLSearchParams({ display_name: "New shared scope" }),
-				headers: formHeaders,
-				method: "POST",
-			}),
-			app.request(
-				"/connection/admin/shared-connections/scope-company/principals/principal-admin/grant",
-				{ headers: formHeaders, method: "POST" },
-			),
-			app.request(
-				"/connection/admin/shared-connections/scope-company/principals/principal-eligible/revoke",
-				{ headers: formHeaders, method: "POST" },
-			),
-			app.request(
-				"/connection/admin/shared-connections/connections/connection-shared/disconnect",
-				{ headers: formHeaders, method: "POST" },
-			),
-			app.request("/connection/admin/shared-connections/scope-company/rename", {
-				body: new URLSearchParams({ display_name: "Release Engineering" }),
-				headers: formHeaders,
-				method: "POST",
-			}),
-		]);
-		expect(mutations.map((response) => response.status)).toEqual([
-			303, 303, 303, 303, 303,
-		]);
-		const connect = await app.request(
-			"/connection/admin/shared-connections/scope-company/github",
+		const sharedApi = await app.request(
+			"/api/v1/connection/admin/shared-connections",
 			{ headers: { cookie } },
 		);
-		expect(connect.status).toBe(303);
-		expect(connect.headers.get("location")).toBe(
-			"https://github.test/login/oauth/authorize",
-		);
-		expect(calls).toHaveLength(6);
+		expect(sharedApi.status).toBe(200);
+		expect(await sharedApi.json()).toMatchObject({
+			overview: {
+				scopes: [
+					{
+						displayName: "Agora Engineering",
+						sharedScopeId: "scope-company",
+					},
+				],
+			},
+		});
+		const apiHeaders = {
+			"content-type": "application/json",
+			cookie,
+			"idempotency-key": "test-shared-mutation",
+			origin: "https://connection.example",
+		};
+		const apiMutations = [
+			await app.request("/api/v1/connection/admin/shared-scopes", {
+				body: JSON.stringify({ displayName: "中国研发" }),
+				headers: apiHeaders,
+				method: "POST",
+			}),
+			await app.request(
+				"/api/v1/connection/admin/shared-scopes/scope-company",
+				{
+					body: JSON.stringify({ displayName: "发布工程" }),
+					headers: apiHeaders,
+					method: "PATCH",
+				},
+			),
+			await app.request(
+				"/api/v1/connection/admin/shared-scopes/scope-company/principals/principal-admin",
+				{ headers: apiHeaders, method: "PUT" },
+			),
+			await app.request(
+				"/api/v1/connection/admin/shared-scopes/scope-company/principals/principal-eligible",
+				{ headers: apiHeaders, method: "DELETE" },
+			),
+			await app.request("/api/v1/connection/oauth-transactions", {
+				body: JSON.stringify({ sharedScopeId: "scope-company" }),
+				headers: apiHeaders,
+				method: "POST",
+			}),
+			await app.request(
+				"/api/v1/connection/admin/shared-connections/connection-shared",
+				{ headers: apiHeaders, method: "DELETE" },
+			),
+		];
+		expect(apiMutations.map(({ status }) => status)).toEqual([
+			201, 204, 204, 204, 200, 204,
+		]);
+		expect(await apiMutations[0]?.json()).toEqual({
+			sharedScopeId: "scope-company",
+		});
+		expect(await apiMutations[4]?.json()).toEqual({
+			authorizationUrl: "https://github.test/login/oauth/authorize",
+		});
 		expect(calls).toEqual(
 			expect.arrayContaining([
 				{
 					action: "create-scope",
 					value: {
 						actorPrincipalId: "principal-admin",
-						displayName: "New shared scope",
+						displayName: "中国研发",
 					},
 				},
 				{
-					action: "grant",
+					action: "rename",
 					value: {
 						actorPrincipalId: "principal-admin",
+						displayName: "发布工程",
 						sharedScopeId: "scope-company",
-						targetPrincipalId: "principal-admin",
-					},
-				},
-				{
-					action: "revoke",
-					value: {
-						actorPrincipalId: "principal-admin",
-						sharedScopeId: "scope-company",
-						targetPrincipalId: "principal-eligible",
-					},
-				},
-				{
-					action: "disconnect",
-					value: {
-						actorPrincipalId: "principal-admin",
-						connectionId: "connection-shared",
 					},
 				},
 				{
@@ -1192,30 +1269,8 @@ describe("Connection API", () => {
 						sharedScopeId: "scope-company",
 					},
 				},
-				{
-					action: "rename",
-					value: {
-						actorPrincipalId: "principal-admin",
-						displayName: "Release Engineering",
-						sharedScopeId: "scope-company",
-					},
-				},
 			]),
 		);
-		const deniedRename = await app.request(
-			"/connection/admin/shared-connections/scope-company/rename",
-			{
-				body: new URLSearchParams({ display_name: "Unauthorized rename" }),
-				headers: {
-					"content-type": "application/x-www-form-urlencoded",
-					cookie: "connection_session=shared-user-session",
-					origin: "https://connection.example",
-				},
-				method: "POST",
-			},
-		);
-		expect(deniedRename.status).toBe(403);
-		expect(calls).toHaveLength(6);
 	});
 
 	it("limits DCR to the measured Codex native-client profile", async () => {
@@ -1268,6 +1323,57 @@ describe("Connection API", () => {
 				).status,
 			).toBe(400);
 		}
+	});
+
+	it("publishes the versioned Connection Browser OpenAPI contract", async () => {
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service: {} as ConnectionOAuthService,
+		});
+		const response = await app.request("/api/v1/connection/openapi.json");
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		const document = (await response.json()) as {
+			info: { title: string; version: string };
+			openapi: string;
+			paths: Record<string, unknown>;
+		};
+		expect(document).toMatchObject({
+			info: { title: "Connection Browser API", version: "1.0.0" },
+			openapi: "3.1.0",
+		});
+		expect(Object.keys(document.paths)).toEqual(
+			expect.arrayContaining([
+				"/api/v1/connection/session",
+				"/api/v1/connection/tokens",
+				"/api/v1/connection/connections",
+				"/api/v1/connection/authorization-previews",
+				"/api/v1/connection/admin/administrators",
+				"/api/v1/connection/admin/shared-connections",
+			]),
+		);
+	});
+
+	it("renders the retained OAuth security interaction in Chinese", async () => {
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service: {
+				beginAuthorization: async () => ({
+					clientName: "Codex",
+					requestId: "oauth-request-id",
+				}),
+			} as unknown as ConnectionOAuthService,
+		});
+		const response = await app.request("/oauth/authorize");
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain('<html lang="zh-CN">');
+		expect(body).toContain("登录 Connection");
+		expect(body).toContain("公司账号");
+		expect(body).toContain("密码");
+		expect(body).not.toContain("Company username");
 	});
 
 	it("identifies the issuer on OAuth authorization responses", async () => {

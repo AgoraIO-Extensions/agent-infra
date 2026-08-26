@@ -116,13 +116,17 @@ flowchart LR
 
 | 部署单元 | 职责 | 是否保存权威状态 |
 | --- | --- | --- |
-| `web` | Agent 平台页面和独立 Connection 页面 Shell | 否 |
+| `web` | Agora Agent Platform React SPA | 否 |
+| `connection-web` | 独立 Connection React SPA；中文控制台与 OAuth 交互入口 | 否 |
 | `platform-api` | 身份入口、Agent 管理、权限、对话、SSE、企微回调、Agent Tool Gateway | 否 |
 | `platform-worker` | Agent Workload 调谐、模板升级、消息投递、outbox 处理 | 否 |
 | `connection-api` | 唯一 Consumer MCP/HTTP 入口；Connection OAuth、LDAP 身份、Principal/Consumer 授权、Provider/Action、凭证、Action 执行和审计 | 否 |
 | `agent pod` | Hermes、Codex、组合模板或完全自定义 Agent 的实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件和平台审计 | 是 |
 | `connection database` | 所有部署的 Principal、identity mapping、OAuth session、Consumer、Grant、Provider、Action、外部账号、Credential、调用和审计 | 是 |
+
+Connection Web 的独立部署与同源路由决策见
+[Connection Web 独立部署边界 ADR](../adr/ADR-connection-web-boundary.md)。
 
 `platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署。Connection 使用独立
 数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。本机部署也
@@ -137,7 +141,8 @@ M1 不单独部署审批、企微、审计、附件或模型配置微服务。�
 ```text
 agent-infra/
   apps/
-    web/                     React SPA
+    web/                     Agora Agent Platform React SPA
+    connection-web/          Connection React SPA
     platform-api/            Hono HTTP、SSE、企微和 Tool Gateway
     platform-worker/         调谐、投递和 outbox
     connection-api/          Connection MCP、HTTP 与 Action 执行
@@ -225,21 +230,28 @@ transaction、授权和审计始终由 Connection 自己保存。
 
 ### 7.1 页面模块
 
-Web 按产品入口划分路由：
+`apps/web` 只承载 Agora Agent Platform 路由：
 
 - `/agents`：Agent 列表与详情。
 - `/chat/:agentId/:conversationId?`：对话与历史。
 - `/my-agents`：申请和 Owner 管理。
 - `/my-agents/:agentId/settings`：范围、模型、渠道和 Action 配置。
-- `/connections`：个人 Connection。
-- `/connections/grants`：Consumer/Actor 授权。
-- `/connections/consumers`：Consumer 和 ConsumerInstance 管理。
-- `/connections/calls`：个人调用记录。
 - `/admin/approvals`：系统管理员审批。
-- `/admin/connections`：Provider、Action 和共享 Connection。
-- `/admin/audit`：平台与 Connection 审计入口。
+- `/admin/audit`：平台审计入口。
 
-Connection 是独立系统。M1 可以复用同一 Web 静态资源构建和公司登录网关，但 Connection 页面、路由和服务端会话必须能独立部署、独立访问。页面分别调用 `platform-api` 和 `connection-api`，不能通过前端把两个系统的数据拼成授权结论。
+`apps/connection-web` 只承载 Connection 路由：
+
+- `/connection/login`：公司 LDAP 登录。
+- `/connection/connections`：个人与 eligible 共享 Connection。
+- `/connection/tokens`：Connection PAT 签发与撤销。
+- `/connection/admin/administrators`：Connection 管理员。
+- `/connection/admin/shared-connections`：共享 Connection 与 eligibility。
+
+Connection 是独立系统。`apps/connection-web` 与 `connection-api` 使用独立镜像和部署单元，但必须由
+同一 Connection public origin 反向代理：`/connection/*` 进入 Connection Web，`/api/v1/connection/*`、
+`/oauth/*` 和 `/mcp` 进入 `connection-api`。不得使用跨域 Cookie、Origin allowlist 或前端 token
+存储弥补错误路由。Agora Agent Platform 页面只能跳转或调用 Connection 公开契约，不能通过前端把
+两个系统的数据拼成授权结论。
 
 个人/共享 Connection、OAuth、Consumer 授权、Action 确认、撤销和调用记录都写入 Connection
 PostgreSQL。Platform 页面如需展示这些能力，只能跳转或调用 Connection 的公开契约，不能维护第二份
@@ -261,7 +273,8 @@ PostgreSQL。Platform 页面如需展示这些能力，只能跳转或调用 Con
 
 ### 8.1 浏览器接口
 
-- 管理和查询使用 `/api/v1/*` HTTP/JSON。
+- 管理和查询使用 `/api/v1/*` HTTP/JSON；Connection Browser API 固定在
+  `/api/v1/connection/*`。
 - 创建、更新和命令类请求支持 `Idempotency-Key`。
 - OpenAPI 3.1 是浏览器接口的规范来源。
 - TypeScript 客户端由 OpenAPI 生成，禁止手写重复的请求/响应类型。
@@ -302,18 +315,20 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 ### 9.1 Web 登录
 
 - `platform-api` 接入公司 OIDC 或现有身份网关。
-- `connection-api` 作为 OAuth Authorization Server，通过独立 HTTPS 登录页使用公司 LDAP 认证员工，
+- `connection-api` 作为 OAuth Authorization Server，通过独立 Connection Web 的 HTTPS 登录页使用
+  公司 LDAP 认证员工，
   再以 LDAP issuer + 稳定 `uid` 映射 Principal；不能接受前端自行传入用户 ID。
 - LDAP 成功后，`connection-api` 建立 PostgreSQL-backed 浏览器会话。浏览器只持有 HttpOnly、
   Secure、SameSite Cookie，数据库只保存 session hash、Principal、identity issuer、有效期、
   recovery generation、最近访问和撤销状态。
-- `connection-api` 在已认证控制台提供 PAT 管理页；签发只提交 PAT 名称，不再次提交 LDAP 凭证。
+- `connection-web` 在已认证控制台提供 PAT 管理页；`connection-api` 的 Browser API 签发时只接受
+  PAT 名称，不再次接收 LDAP 凭证。
   PAT 明文只展示一次，数据库只保存 hash、Principal、token instance、有效期和撤销状态，不建立
   第二套账号。
 - LDAP egress 使用部署批准的固定 transport profile。当前 Agora 目录因不提供可用 TLS，批准仅在
   公司私网使用 `ldap://` direct bind；不允许请求选择 endpoint、自动 downgrade 或 fallback，目录
   服务提供可用 TLS 后必须迁移。
-- Web 使用 HttpOnly、Secure、SameSite=Strict Cookie，不在 Local Storage 保存公司 Access Token；
+- Connection Web 使用 HttpOnly、Secure、SameSite=Strict Cookie，不在 Local Storage 保存公司 Access Token；
   仅 conformance 本机精确 loopback HTTP origin 可省略 Secure，生产和非 loopback 入口必须 HTTPS。
 - 服务端根据稳定 LDAP `uid` 解析当前账号；显示名和邮箱只作为可变 profile projection。
 - 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。

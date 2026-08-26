@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/connection-core";
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
+	PostgresBrowserCommandIdempotency,
 	PostgresConnectionOAuthRepository,
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
@@ -25,6 +26,10 @@ export async function createConnectionRuntimeApp(
 		config.databaseUrl,
 	);
 	const repository = new PostgresConnectionRepository(
+		config.databaseUrl,
+		config.credentialKey,
+	);
+	const browserCommands = new PostgresBrowserCommandIdempotency(
 		config.databaseUrl,
 		config.credentialKey,
 	);
@@ -60,6 +65,7 @@ export async function createConnectionRuntimeApp(
 		directMcpEnabled: true,
 		githubProviderEnabled: false,
 		oauthServer: {
+			browserCommands,
 			dynamicClientRegistration: {
 				clientName: config.directConsumer.name,
 			},

@@ -694,7 +694,9 @@ export class ConnectionError extends Error {
 			| "IDEMPOTENCY_CONFLICT"
 			| "INVALID_REQUEST"
 			| "PROVIDER_FAILED"
-			| "PROVIDER_UNCERTAIN",
+			| "PROVIDER_UNCERTAIN"
+			| "RESOURCE_NOT_FOUND"
+			| "RESULT_UNCERTAIN",
 		message: string,
 	) {
 		super(message);
