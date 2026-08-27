@@ -187,6 +187,12 @@ const GH_AW_POC_SOURCE_SHA256 =
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
 const MATT_SKILL_SOURCE = "https://github.com/mattpocock/skills.git";
 const MATT_SKILLS = ["code-review", "implement", "tdd"];
+const MATT_SKILL_REVISION = "6654f6b60cd9d5be8b54c6fafe44346dabeb3b76";
+const MATT_SKILL_TREES = {
+  "code-review": "d8e341cee7980127dddda05159bedf25dc853615",
+  implement: "f07d230f645fc9ac390cf13a450bbff12ad791a3",
+  tdd: "79288be15c67b849f22b6572056601090fd20913",
+};
 
 function gitObjectSha(type, content) {
   return createHash("sha1")
@@ -252,7 +258,7 @@ export async function validateMattSkillSnapshot(repositoryRoot = process.cwd()) 
   if (
     lock?.version !== 1 ||
     lock?.source !== MATT_SKILL_SOURCE ||
-    !/^[0-9a-f]{40}$/.test(lock?.revision ?? "") ||
+    lock?.revision !== MATT_SKILL_REVISION ||
     JSON.stringify(Object.keys(lock?.skills ?? {}).sort()) !==
       JSON.stringify(MATT_SKILLS)
   ) {
@@ -263,7 +269,7 @@ export async function validateMattSkillSnapshot(repositoryRoot = process.cwd()) 
     const record = lock.skills[skill];
     if (
       record?.sourcePath !== `skills/engineering/${skill}` ||
-      !/^[0-9a-f]{40}$/.test(record?.treeSha ?? "")
+      record?.treeSha !== MATT_SKILL_TREES[skill]
     ) {
       errors.push(`${skill}: invalid Matt Skill provenance`);
       continue;
@@ -272,9 +278,9 @@ export async function validateMattSkillSnapshot(repositoryRoot = process.cwd()) 
       const actual = (
         await gitTreeSha(path.join(repositoryRoot, ".agents/skills", skill))
       ).toString("hex");
-      if (actual !== record.treeSha) {
+      if (actual !== MATT_SKILL_TREES[skill]) {
         errors.push(
-          `${skill}: snapshot tree ${actual} does not match ${record.treeSha}`,
+          `${skill}: snapshot tree ${actual} does not match ${MATT_SKILL_TREES[skill]}`,
         );
       }
     } catch (error) {

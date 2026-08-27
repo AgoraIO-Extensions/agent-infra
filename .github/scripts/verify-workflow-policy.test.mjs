@@ -69,6 +69,18 @@ test("locks repository Matt Skills to pinned upstream trees", async () => {
     });
     assert.deepEqual(await validateMattSkillSnapshot(repositoryRoot), []);
 
+    const lockPath = path.join(
+      repositoryRoot,
+      ".agents/skills/mattpocock.lock.json",
+    );
+    const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ ...lock, revision: "0".repeat(40) }, null, 2)}\n`,
+    );
+    assert.ok((await validateMattSkillSnapshot(repositoryRoot)).length > 0);
+    await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+
     await fs.appendFile(
       path.join(repositoryRoot, ".agents/skills/tdd/SKILL.md"),
       "\n# drift\n",
