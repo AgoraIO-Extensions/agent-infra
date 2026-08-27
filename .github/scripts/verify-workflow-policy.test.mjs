@@ -155,6 +155,19 @@ test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () =>
   );
 });
 
+test("reserves concurrency queue for the generated gh-aw workflow", async () => {
+  const workflows = await actualWorkflows();
+  workflows["ci.yml"].jobs.ci.concurrency = {
+    group: "ci",
+    queue: "max",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("concurrency.queue is reserved"),
+    ),
+  );
+});
+
 test("publishes repository validation through the CI workflow and check", async () => {
   const workflows = await actualWorkflows();
   assert.equal(workflows["ci.yml"]?.name, "CI");

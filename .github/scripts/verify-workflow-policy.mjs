@@ -832,6 +832,15 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   for (const [name, workflow] of Object.entries(workflows)) {
+    if (
+      name !== "gh-aw-copilot-byok-poc.lock.yml" &&
+      (workflow?.concurrency?.queue !== undefined ||
+        Object.values(workflow?.jobs ?? {}).some(
+          (job) => job?.concurrency?.queue !== undefined,
+        ))
+    ) {
+      errors.push(`${name}: concurrency.queue is reserved for the generated gh-aw POC`);
+    }
     if (name === "gh-aw-copilot-byok-poc.lock.yml") {
       errors.push(...validateGhAwPocWorkflow(workflow));
       continue;
