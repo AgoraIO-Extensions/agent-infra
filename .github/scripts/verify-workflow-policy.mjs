@@ -181,9 +181,9 @@ const PR_AGENT_SECRETS = [
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const GH_AW_POC_SEMANTIC_SHA256 =
-  "5782bc284cca0eac0a40859ec47a2c1381f98592ab8aea67020d2556d11ca557";
+  "1c4405c96f475598e2f73f9953b9c5883bda1850352ca5135f3afb0c91d88076";
 const GH_AW_POC_SOURCE_SHA256 =
-  "531cc11b6c14d1f3815f00ec218b7d9d6409dd341827011f830f3cf0feb2d1b4";
+  "72e0969f14d6afc7e252502dd30752d5e68e163be164e257774fd55f13000eac";
 
 function workflowSteps(workflow) {
   return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
@@ -348,7 +348,7 @@ function validateGhAwPocWorkflow(workflow) {
     pullRequest?.fallback_as_issue !== false ||
     pullRequest?.auto_close_issue !== false ||
     pullRequest?.if_no_changes !== "error" ||
-    pullRequest?.protected_files_policy !== "fallback-to-issue" ||
+    pullRequest?.protected_files_policy !== "blocked" ||
     handlers?.merge_pull_request !== undefined ||
     workflow?.jobs?.threat_detection !== undefined ||
     !allActionsPinned ||
