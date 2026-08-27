@@ -134,11 +134,14 @@ function normalizeAcceptanceCriteria(section) {
   );
 }
 
-export function executionContent(issue) {
+export function executionContent(issue, { blockerNumbers = [] } = {}) {
   positiveInteger(issue?.number, "Issue number");
   const title = normalizeField(issue?.title);
   boundedString(title, "Issue title", 512);
   const lines = String(issue?.body ?? "").replace(/\r\n?/g, "\n").split("\n");
+  if (lines.filter((line) => line.trim() === "## Blocked by").length !== 1) {
+    throw new Error("Issue must contain exactly one ## Blocked by section");
+  }
   const sections = Object.fromEntries(
     EXECUTION_HEADINGS.map(([heading, key]) => [key, extractSection(lines, heading)]),
   );
@@ -157,7 +160,6 @@ export function executionContent(issue) {
     validation: normalizeField(sections.validation),
   };
   const preimage = JSON.stringify(canonical);
-  const blockerNumbers = parseBlockedBy(issue.body, { issueNumber: issue.number });
   return {
     version: EXECUTION_CONTENT_VERSION,
     canonical,
@@ -216,17 +218,6 @@ export function parseBlockedBy(body, { issueNumber } = {}) {
     throw new Error("Issue cannot block itself");
   }
   return blockers;
-}
-
-export function blockedByChanged(currentBody, previousBody, { issueNumber } = {}) {
-  if (typeof previousBody !== "string") return true;
-  try {
-    const current = parseBlockedBy(currentBody, { issueNumber });
-    const previous = parseBlockedBy(previousBody, { issueNumber });
-    return JSON.stringify(current) !== JSON.stringify(previous);
-  } catch {
-    return true;
-  }
 }
 
 export function validateAuthorizationRecord(record) {

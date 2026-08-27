@@ -6,14 +6,17 @@ import {
   gateExternalId,
   selectCurrentGateCheck,
 } from "./check-run-contract.mjs";
-import { blockerStatus } from "./blocker-contract.mjs";
+import {
+  blockerStatus,
+  hydrateNativeDependencies,
+  validatedExecutionIssue,
+} from "./blocker-contract.mjs";
 import {
   activeAuthorization,
   executionContent,
   latestAuthorizationRecord,
   parseAcceptanceCriteriaEvidence,
   parseAuthorizationRecords,
-  parseBlockedBy,
   WORKER_OWNERS_TEAM_SLUG,
 } from "./worker-contract.mjs";
 
@@ -671,18 +674,25 @@ async function readGateRecords(repository, prNumber, currentHead) {
 
 async function readIssueReadinessState(repository, pullRequest, issue) {
   if (!pullRequest.head?.ref?.startsWith("codex/issue-")) return {};
-  const contract = executionContent(issue);
-  const blockerNumbers = parseBlockedBy(issue.body, { issueNumber: issue.number });
-  const [comments, timelineEvents, blockers, pullRequests] = await Promise.all([
+  const [comments, timelineEvents, issues, pullRequests] = await Promise.all([
     paginate(`/repos/${repository}/issues/${issue.number}/comments`),
     paginate(`/repos/${repository}/issues/${issue.number}/events`),
-    Promise.all(
-      blockerNumbers.map((number) =>
-        githubRequest(`/repos/${repository}/issues/${number}`),
-      ),
-    ),
+    paginate(`/repos/${repository}/issues?state=all`),
     paginate(`/repos/${repository}/pulls?state=all`),
   ]);
+  const targetIndex = issues.findIndex((candidate) => candidate.number === issue.number);
+  if (targetIndex >= 0) issues[targetIndex] = { ...issues[targetIndex], ...issue };
+  const nativeDependencies = await hydrateNativeDependencies(issues, (candidate) =>
+    paginate(
+      `/repos/${repository}/issues/${candidate.number}/dependencies/blocked_by`,
+    ),
+  );
+  const graphState = validatedExecutionIssue(issues, issue.number, {
+    nativeDependencies,
+  });
+  const contract = executionContent(issue, {
+    blockerNumbers: graphState.blockerNumbers,
+  });
   const records = parseAuthorizationRecords(
     comments,
     issue.number,
@@ -693,7 +703,7 @@ async function readIssueReadinessState(repository, pullRequest, issue) {
   );
   return {
     contract,
-    blockers,
+    blockers: graphState.blockers,
     authorizationRecord: latestAuthorizationRecord(records),
     workerPullRequests: pullRequests.filter((candidate) =>
       pattern.test(candidate.head?.ref ?? ""),

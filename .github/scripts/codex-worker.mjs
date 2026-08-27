@@ -16,22 +16,22 @@ import {
   canRegisterBlockerIdentity,
   hasTrustedBlockerReviewAck,
   hasTrustedWorkerDispatchAck,
+  hydrateNativeDependencies,
   inspectBlockerGraph,
   isTrustedActionsObject,
   isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
-  nativeDependencyDecision,
   parseBlockerProposalRecord,
   parseHumanHandoffComment,
   replaceBlockedBy,
   sameBlockerProposalRecord,
   validateBlockerProposals,
   validateHumanHandoffs,
+  validatedExecutionIssue,
 } from "./blocker-contract.mjs";
 import {
   activeAuthorization,
   authorizeCycle,
-  blockedByChanged,
   buildAcceptanceCriteriaEvidenceMarker,
   buildAuthorizationRecordComment,
   executionContent,
@@ -113,25 +113,13 @@ export function classifyWorkerEvent({
 
 export function authorizationEditInvalidation({
   executionContentMatches,
+  blockerStateMatches,
   contractValid,
-  bodyWasEdited,
-  currentBody,
-  previousBody,
-  issueNumber,
-  actor,
 }) {
   if (!executionContentMatches) {
     return contractValid ? "content-changed" : "contract-invalid";
   }
-  if (
-    !bodyWasEdited ||
-    !blockedByChanged(currentBody, previousBody, { issueNumber })
-  ) {
-    return null;
-  }
-  return actor?.login === "github-actions[bot]" && actor?.type === "Bot"
-    ? "trusted-blocker-edit"
-    : "untrusted-blocker-edit";
+  return blockerStateMatches ? null : "native-dependencies-changed";
 }
 
 export function shouldConsumeAuthorization(current, { cycle } = {}) {
@@ -1476,7 +1464,21 @@ async function githubPaginate(apiPath, { token } = {}) {
 }
 
 async function fetchRepositoryIssues(repository, token) {
-  return githubPaginate(`/repos/${repository}/issues?state=all`, { token });
+  const issues = await githubPaginate(`/repos/${repository}/issues?state=all`, {
+    token,
+  });
+  const nativeDependencies = await hydrateNativeDependencies(issues, (issue) =>
+    githubPaginate(
+      `/repos/${repository}/issues/${issue.number}/dependencies/blocked_by`,
+      { token },
+    ),
+  );
+  for (const issue of issues) {
+    if (nativeDependencies.has(issue.number)) {
+      issue.native_blockers = nativeDependencies.get(issue.number);
+    }
+  }
+  return issues;
 }
 
 async function fetchBranchSha(repository, branch, token) {
@@ -1497,21 +1499,18 @@ async function fetchWorkerPullRequests(repository, issueNumber, token) {
 }
 
 async function fetchIssueState(repository, issueNumber, token) {
-  const issue = await githubRequest(`/repos/${repository}/issues/${issueNumber}`, {
-    token,
-  });
-  if (issue.pull_request) throw new Error("Worker target is not an Issue");
-  const contract = executionContent(issue);
-  const blockerNumbers = contract.blockerNumbers;
-  const [blockers, comments, timelineEvents] = await Promise.all([
-    Promise.all(
-      blockerNumbers.map((number) =>
-        githubRequest(`/repos/${repository}/issues/${number}`, { token }),
-      ),
-    ),
+  const [issues, comments, timelineEvents] = await Promise.all([
+    fetchRepositoryIssues(repository, token),
     githubPaginate(`/repos/${repository}/issues/${issueNumber}/comments`, { token }),
     githubPaginate(`/repos/${repository}/issues/${issueNumber}/events`, { token }),
   ]);
+  const { issue, blockers, blockerNumbers } = validatedExecutionIssue(
+    issues,
+    issueNumber,
+  );
+  const contract = executionContent(issue, {
+    blockerNumbers,
+  });
   const authorizationRecords = parseAuthorizationRecords(
     comments,
     issueNumber,
@@ -1551,17 +1550,22 @@ async function fetchWorkerState({ repository, issueNumber, defaultBranch, token 
 }
 
 async function fetchAuthorizationContext(repository, issueNumber, token) {
-  const [issue, comments, timelineEvents] = await Promise.all([
-    githubRequest(`/repos/${repository}/issues/${issueNumber}`, { token }),
+  const [issues, comments, timelineEvents] = await Promise.all([
+    fetchRepositoryIssues(repository, token),
     githubPaginate(`/repos/${repository}/issues/${issueNumber}/comments`, { token }),
     githubPaginate(`/repos/${repository}/issues/${issueNumber}/events`, { token }),
   ]);
-  if (issue.pull_request) throw new Error("Worker target is not an Issue");
   const records = parseAuthorizationRecords(comments, issueNumber, timelineEvents);
+  let issue = issues.find((candidate) => candidate.number === issueNumber);
+  if (!issue || issue.pull_request) throw new Error("Worker target is not an Issue");
   let contract;
   let contractError;
   try {
-    contract = executionContent(issue);
+    const graphState = validatedExecutionIssue(issues, issueNumber);
+    issue = graphState.issue;
+    contract = executionContent(issue, {
+      blockerNumbers: graphState.blockerNumbers,
+    });
   } catch (error) {
     contractError = error;
   }
@@ -1753,30 +1757,11 @@ async function recordIssueAuthorizationEvent({
     }
     const invalidationReason = authorizationEditInvalidation({
       executionContentMatches: Boolean(unchanged),
+      blockerStateMatches:
+        context.current.blockedByHash === context.contract?.blockedByHash,
       contractValid: Boolean(context.contract),
-      bodyWasEdited: Object.hasOwn(event.changes ?? {}, "body"),
-      currentBody: context.issue.body,
-      previousBody: event.changes?.body?.from,
-      issueNumber,
-      actor: event.sender,
     });
     if (!invalidationReason) return;
-    if (invalidationReason === "trusted-blocker-edit") {
-      const record = transitionAuthorization({
-        current: context.current,
-        state: context.current.state,
-        transition: "frontier-updated",
-        reason: invalidationReason,
-        actor: transitionActor(event),
-        eventId: `run-${requiredEnvironment("GITHUB_RUN_ID")}`,
-        eventAt: event.issue.updated_at,
-        eventUrl: event.issue.html_url,
-        recordedAt,
-        blockedByHash: context.contract.blockedByHash,
-      });
-      await publishAuthorizationRecord(repository, issueNumber, record, token);
-      return;
-    }
     const record = transitionAuthorization({
       current: context.current,
       state: "invalidated",
@@ -3279,33 +3264,24 @@ async function ensureBlockerReviewComment(repository, issue, token) {
   });
 }
 
-async function ensureNativeDependencyMirror({
+async function addNativeDependencies({
   repository,
   issueNumber,
-  blockerNumbers,
-  graph,
+  blockers,
   token,
+  request = githubRequest,
 }) {
-  const nativeBlockers = await githubPaginate(
-    `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
-    { token },
-  );
-  const decision = nativeDependencyDecision(
-    blockerNumbers,
-    nativeBlockers,
-    graph.issuesByNumber,
-  );
-  if (decision.status !== "sync") {
-    throw new Error(`Native blocked-by relation is inconsistent: ${decision.reason}`);
-  }
-  for (const dependency of decision.add) {
-    await githubRequest(
+  for (const blocker of blockers) {
+    if (!Number.isSafeInteger(blocker?.id) || blocker.id < 1) {
+      throw new Error("Native dependency target has no valid GitHub issue_id");
+    }
+    await request(
       `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
       {
         token,
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ issue_id: dependency.issueId }),
+        body: JSON.stringify({ issue_id: blocker.id }),
       },
     );
   }
@@ -3313,8 +3289,9 @@ async function ensureNativeDependencyMirror({
 
 async function recordPublishedBlockerTransition({
   plan,
-  previousSource,
-  nextBody,
+  source,
+  previousBlockerNumbers,
+  nextBlockerNumbers,
   token,
 }) {
   const context = await fetchAuthorizationContext(
@@ -3322,15 +3299,20 @@ async function recordPublishedBlockerTransition({
     plan.issueNumber,
     token,
   );
-  const previousContract = executionContent(previousSource);
-  const nextContract = executionContent({ ...previousSource, body: nextBody });
+  const previousContract = executionContent(source, {
+    blockerNumbers: previousBlockerNumbers,
+  });
+  const nextContract = executionContent(source, {
+    blockerNumbers: nextBlockerNumbers,
+  });
   const current = context.current;
   if (
     !current ||
     !["active", "paused"].includes(current.state) ||
     current.cycle !== plan.cycle ||
     current.executionContentHash !== plan.executionContentHash ||
-    current.executionContentHash !== nextContract.hash
+    current.executionContentHash !== nextContract.hash ||
+    context.contract.blockedByHash !== nextContract.blockedByHash
   ) {
     throw new Error("Blocker publication authorization changed before audit");
   }
@@ -3347,7 +3329,7 @@ async function recordPublishedBlockerTransition({
     actor: { login: "github-actions[bot]", type: "Bot" },
     eventId: `run-${requiredEnvironment("GITHUB_RUN_ID")}-blocker-publisher`,
     eventAt: recordedAt,
-    eventUrl: previousSource.html_url,
+    eventUrl: source.html_url,
     recordedAt,
     blockedByHash: nextContract.blockedByHash,
   });
@@ -3357,6 +3339,55 @@ async function recordPublishedBlockerTransition({
     record,
     token,
   );
+}
+
+export async function publishBlockerEdges({
+  plan,
+  source,
+  currentBlockerNumbers,
+  blockerIssues,
+  graph,
+  token,
+  request = githubRequest,
+  authorize = requirePublishAuthorization,
+  recordTransition = recordPublishedBlockerTransition,
+}) {
+  const newBlockers = blockerIssues.filter(
+    (issue) => !currentBlockerNumbers.includes(issue.number),
+  );
+  if (newBlockers.length === 0) {
+    return { nextBlockerNumbers: currentBlockerNumbers, replay: true };
+  }
+  const nextBlockerNumbers = assertCanAddBlockers(
+    graph,
+    plan.issueNumber,
+    newBlockers.map((issue) => issue.number),
+  );
+  await authorize(plan, token);
+  await addNativeDependencies({
+    repository: plan.repository,
+    issueNumber: plan.issueNumber,
+    blockers: newBlockers,
+    token,
+    request,
+  });
+  await recordTransition({
+    plan,
+    source,
+    previousBlockerNumbers: currentBlockerNumbers,
+    nextBlockerNumbers,
+    token,
+  });
+  const nextBody = replaceBlockedBy(source.body, nextBlockerNumbers, {
+    issueNumber: plan.issueNumber,
+  });
+  await request(`/repos/${plan.repository}/issues/${plan.issueNumber}`, {
+    token,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body: nextBody }),
+  });
+  return { nextBlockerNumbers, replay: false };
 }
 
 function sameHumanHandoffRecord(actual, expected) {
@@ -3451,9 +3482,9 @@ async function publishBlockerProposals({ plan, result, token }) {
     (candidate) => candidate.number === plan.issueNumber && !candidate.pull_request,
   );
   if (!source) throw new Error("Blocker source Issue is missing");
-  const currentBlockers = parseBlockedBy(source.body, {
-    issueNumber: plan.issueNumber,
-  });
+  const currentBlockers = (source.native_blockers ?? []).map(
+    (blocker) => blocker.number,
+  );
   const rendered = result.blocker_proposals.map((proposal) =>
     buildBlockerIssue({
       sourceIssue: plan.issueNumber,
@@ -3479,14 +3510,6 @@ async function publishBlockerProposals({ plan, result, token }) {
   if (initialGraph.errors.size > 0) {
     throw new Error("Existing Blocked by graph is invalid");
   }
-  await requirePublishAuthorization(plan, token);
-  await ensureNativeDependencyMirror({
-    repository: plan.repository,
-    issueNumber: plan.issueNumber,
-    blockerNumbers: currentBlockers,
-    graph: initialGraph,
-    token,
-  });
   if (replay) {
     for (const issue of existingIssues) {
       await ensureBlockerReviewComment(plan.repository, issue, token);
@@ -3515,6 +3538,7 @@ async function publishBlockerProposals({ plan, result, token }) {
       ) {
         throw new Error("GitHub did not return a valid blocker Issue");
       }
+      blockerIssue.native_blockers = [];
       issues = [...issues, blockerIssue];
     }
     await ensureBlockerIdentityComment({
@@ -3532,50 +3556,20 @@ async function publishBlockerProposals({ plan, result, token }) {
     `/repos/${plan.repository}/issues/${plan.issueNumber}`,
     { token },
   );
-  const liveBlockers = parseBlockedBy(liveSource.body, {
-    issueNumber: plan.issueNumber,
-  });
   const newEdges = blockerIssues
     .map((issue) => issue.number)
-    .filter((number) => !liveBlockers.includes(number));
+    .filter((number) => !currentBlockers.includes(number));
   if (newEdges.length === 0) {
-    const graph = inspectBlockerGraph(issues);
-    await ensureNativeDependencyMirror({
-      repository: plan.repository,
-      issueNumber: plan.issueNumber,
-      blockerNumbers: liveBlockers,
-      graph,
-      token,
-    });
     return { blockerNumbers: blockerIssues.map((issue) => issue.number), replay: true };
   }
   issues = await fetchRepositoryIssues(plan.repository, token);
   const graph = inspectBlockerGraph(issues);
-  const nextBlockers = assertCanAddBlockers(graph, plan.issueNumber, newEdges);
-  await requirePublishAuthorization(plan, token);
-  const nextBody = replaceBlockedBy(liveSource.body, nextBlockers, {
-    issueNumber: plan.issueNumber,
-  });
-  await githubRequest(`/repos/${plan.repository}/issues/${plan.issueNumber}`, {
-    token,
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      body: nextBody,
-    }),
-  });
-  await recordPublishedBlockerTransition({
+  await publishBlockerEdges({
     plan,
-    previousSource: liveSource,
-    nextBody,
-    token,
-  });
-  const nextIssues = await fetchRepositoryIssues(plan.repository, token);
-  await ensureNativeDependencyMirror({
-    repository: plan.repository,
-    issueNumber: plan.issueNumber,
-    blockerNumbers: nextBlockers,
-    graph: inspectBlockerGraph(nextIssues),
+    source: liveSource,
+    currentBlockerNumbers: currentBlockers,
+    blockerIssues,
+    graph,
     token,
   });
   return { blockerNumbers: blockerIssues.map((issue) => issue.number), replay: false };

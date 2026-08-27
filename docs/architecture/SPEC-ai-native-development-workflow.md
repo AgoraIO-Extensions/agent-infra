@@ -174,10 +174,10 @@ GitHub native issue dependencies 是依赖图的权威来源。依赖必须属�
 `needs-triage`。`## Blocked by` 只保留为迁移期投影，接受 `None` 或一行一个唯一的
 `- #<issue-number>`，不能独立创建、删除或改变依赖边。
 
-在 `#222` 合并前，现有 Worker 和 Reconciler 仍读取正文投影并镜像到 native dependencies；
-`#221` 不改变该运行时。迁移期间现有自动化仍先更新正文，再据此镜像 native dependency；这是
-兼容行为，不改变 native dependency 的目标权威地位。Stage 4B 才切换为先写 native dependency、
-再同步正文投影，并在不一致时以 native dependency 为准进入 `needs-triage`。
+Stage 4B 只从 native dependencies 构建 Execution Graph 和 `blockedByHash`。Publisher 先写 native
+dependency，再记录 authorization transition，最后更新正文投影；Reconciler 只从可信 proposal
+恢复缺失的 native edge，并把 native snapshot 投影到正文。正文缺失、过期或格式错误的 edge
+不会创建、删除或覆盖 native dependency。
 
 - Worker 的未完成结果必须显式且互斥地选择一种有界模式：`blocker_proposals` 表达可独立交付
   和验证的 implementation blocker，`human_handoffs` 表达权限、受保护路径、需求冲突、凭证或

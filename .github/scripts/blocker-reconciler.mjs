@@ -12,13 +12,13 @@ import {
   hasTrustedBlockerReviewAck,
   hasTrustedBlockerIdentityAudit,
   hasTrustedWorkerDispatchAck,
+  hydrateNativeDependencies,
   inspectBlockerGraph,
   isActionsCreatedBlockerIssue,
   isGitHubActionsBot,
   isTrustedActionsObject,
   isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
-  nativeDependencyDecision,
   parseBlockerProposalRecord,
   reconciliationIssueNumbers,
   replaceBlockedBy,
@@ -362,69 +362,73 @@ async function ensureReviewComment({
   });
 }
 
-async function reconcileNativeDependencies({
+async function reconcileBodyProjections({
   repository,
   graph,
   token,
   request,
-  paginate,
 }) {
-  let added = 0;
-  const triage = new Set();
-  if (graph.overflow) {
-    return {
-      added,
-      triage: [...graph.errors.keys()].sort((left, right) => left - right),
-    };
-  }
+  const repaired = [];
+  if (graph.overflow) return repaired;
   for (const [issueNumber, blockerNumbers] of graph.adjacency) {
     if (graph.errors.has(issueNumber)) continue;
-    let nativeBlockers;
     try {
-      nativeBlockers = await paginate(
-        `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
-        { token, request },
-      );
-    } catch {
-      graph.errors.set(issueNumber, "native-dependency-sync-failed");
-      triage.add(issueNumber);
-      continue;
-    }
-    const decision = nativeDependencyDecision(
-      blockerNumbers,
-      nativeBlockers,
-      graph.issuesByNumber,
-    );
-    if (decision.status === "triage") {
-      graph.errors.set(issueNumber, decision.reason);
-      triage.add(issueNumber);
-      continue;
-    }
-    for (const dependency of decision.add) {
-      try {
-        await request(
-          `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by`,
-          {
-            token,
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ issue_id: dependency.issueId }),
-          },
-        );
-        added += 1;
-      } catch {
-        graph.errors.set(issueNumber, "native-dependency-sync-failed");
-        triage.add(issueNumber);
-        break;
+      if (
+        JSON.stringify(parseBlockedBy(graph.issuesByNumber.get(issueNumber).body, {
+          issueNumber,
+        })) === JSON.stringify(blockerNumbers)
+      ) {
+        continue;
       }
+    } catch {
+      // A malformed projection is replaced from the native authority below.
     }
+    const issue = graph.issuesByNumber.get(issueNumber);
+    const nextBody = replaceBlockedBy(issue.body, blockerNumbers, { issueNumber });
+    try {
+      await request(`/repos/${repository}/issues/${issueNumber}`, {
+        token,
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: nextBody }),
+      });
+    } catch {
+      graph.errors.set(issueNumber, "body-projection-update-failed");
+      continue;
+    }
+    issue.body = nextBody;
+    repaired.push(issueNumber);
   }
-  return { added, triage: [...triage].sort((left, right) => left - right) };
+  return repaired;
+}
+
+async function readNativeDependencies({
+  repository,
+  issues,
+  token,
+  request,
+  paginate,
+}) {
+  return hydrateNativeDependencies(issues, (issue) =>
+    paginate(
+      `/repos/${repository}/issues/${issue.number}/dependencies/blocked_by`,
+      { token, request },
+    ),
+  );
+}
+
+function nativeBlockerNumbers(nativeDependencies, issueNumber) {
+  const blockers = nativeDependencies.get(issueNumber);
+  if (!Array.isArray(blockers)) {
+    throw new Error("Native dependency snapshot is unavailable");
+  }
+  return blockers.map((issue) => issue.number);
 }
 
 async function sourceAuthorization({
   repository,
   source,
+  blockerNumbers,
   token,
   request,
   paginate,
@@ -439,7 +443,7 @@ async function sourceAuthorization({
       request,
     }),
   ]);
-  const contract = executionContent(source);
+  const contract = executionContent(source, { blockerNumbers });
   const current = latestAuthorizationRecord(
     parseAuthorizationRecords(comments, source.number, timeline),
   );
@@ -461,7 +465,7 @@ async function repairAuthorizationRecord({
     current.executionContentHash !== contract.hash ||
     current.blockedByHash === contract.blockedByHash
   ) {
-    return false;
+    return null;
   }
   const trustedNumbers = new Set(
     proposalEntries
@@ -473,7 +477,7 @@ async function repairAuthorizationRecord({
       )
       .map(({ issue }) => issue.number),
   );
-  if (trustedNumbers.size === 0) return false;
+  if (trustedNumbers.size === 0) return null;
   const matchingSplits = contract.blockerNumbers
     .map((_, split) => split)
     .filter((split) => {
@@ -485,7 +489,7 @@ async function repairAuthorizationRecord({
       );
     });
   if (matchingSplits.length !== 1) {
-    return false;
+    return null;
   }
   const recordedAt = new Date().toISOString();
   const record = transitionAuthorization({
@@ -509,7 +513,7 @@ async function repairAuthorizationRecord({
     token,
     request,
   );
-  return true;
+  return record;
 }
 
 async function trustedProposalGroups({
@@ -568,6 +572,7 @@ async function trustedProposalGroups({
 async function repairProposalState({
   repository,
   issues,
+  nativeDependencies,
   token,
   request,
   paginate,
@@ -618,6 +623,10 @@ async function repairProposalState({
         ? await sourceAuthorization({
             repository,
             source,
+            blockerNumbers: nativeBlockerNumbers(
+              nativeDependencies,
+              source.number,
+            ),
             token,
             request,
             paginate,
@@ -687,6 +696,10 @@ async function repairProposalState({
         await sourceAuthorization({
           repository,
           source,
+          blockerNumbers: nativeBlockerNumbers(
+            nativeDependencies,
+            source.number,
+          ),
           token,
           request,
           paginate,
@@ -738,9 +751,12 @@ async function repairProposalState({
       continue;
     }
     const { contract, current } = authorization;
-    const currentBlockers = parseBlockedBy(source.body, {
-      issueNumber: sourceIssue,
-    });
+    const currentNativeBlockers = nativeDependencies.get(sourceIssue);
+    if (!Array.isArray(currentNativeBlockers)) {
+      triage.add(sourceIssue);
+      continue;
+    }
+    const currentBlockers = currentNativeBlockers.map((issue) => issue.number);
     const missing = activeEntries.filter(
       ({ issue }) => !currentBlockers.includes(issue.number),
     );
@@ -769,19 +785,40 @@ async function repairProposalState({
       triage.add(sourceIssue);
       continue;
     }
+    let recoveryCurrent = current;
     if (
-      !current ||
-      !["active", "paused"].includes(current.state) ||
-      current.cycle !== first.sourceCycle ||
-      current.executionContentHash !== first.executionContentHash ||
-      current.executionContentHash !== contract.hash ||
-      current.blockedByHash !== contract.blockedByHash
+      recoveryCurrent &&
+      recoveryCurrent.blockedByHash !== contract.blockedByHash
+    ) {
+      const repairedCurrent = await repairAuthorizationRecord({
+        repository,
+        source,
+        contract,
+        current: recoveryCurrent,
+        proposalEntries: activeEntries,
+        token,
+        request,
+      });
+      if (!repairedCurrent) {
+        triage.add(sourceIssue);
+        continue;
+      }
+      recoveryCurrent = repairedCurrent;
+      repairedAuthorizations += 1;
+    }
+    if (
+      !recoveryCurrent ||
+      !["active", "paused"].includes(recoveryCurrent.state) ||
+      recoveryCurrent.cycle !== first.sourceCycle ||
+      recoveryCurrent.executionContentHash !== first.executionContentHash ||
+      recoveryCurrent.executionContentHash !== contract.hash ||
+      recoveryCurrent.blockedByHash !== contract.blockedByHash
     ) {
       triage.add(sourceIssue);
       continue;
     }
 
-    const graph = inspectBlockerGraph(issues);
+    const graph = inspectBlockerGraph(issues, { nativeDependencies });
     let nextBlockers;
     try {
       nextBlockers = assertCanAddBlockers(
@@ -793,25 +830,42 @@ async function repairProposalState({
       triage.add(sourceIssue);
       continue;
     }
-    const nextBody = replaceBlockedBy(source.body, nextBlockers, {
-      issueNumber: sourceIssue,
-    });
-    await request(`/repos/${repository}/issues/${sourceIssue}`, {
-      token,
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        body: nextBody,
-      }),
-    });
-    const nextSource = { ...source, body: nextBody };
-    const nextContract = executionContent(nextSource);
+    let nativeWriteFailed = false;
+    for (const { issue } of missing) {
+      if (!Number.isSafeInteger(issue.id) || issue.id < 1) {
+        nativeWriteFailed = true;
+        break;
+      }
+      try {
+        await request(
+          `/repos/${repository}/issues/${sourceIssue}/dependencies/blocked_by`,
+          {
+            token,
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ issue_id: issue.id }),
+          },
+        );
+      } catch {
+        nativeWriteFailed = true;
+        break;
+      }
+    }
+    if (nativeWriteFailed) {
+      triage.add(sourceIssue);
+      continue;
+    }
+    nativeDependencies.set(sourceIssue, [
+      ...currentNativeBlockers,
+      ...missing.map(({ issue }) => issue),
+    ]);
+    const nextContract = executionContent(source, { blockerNumbers: nextBlockers });
     if (
       await repairAuthorizationRecord({
         repository,
-        source: nextSource,
+        source,
         contract: nextContract,
-        current,
+        current: recoveryCurrent,
         proposalEntries: activeEntries,
         token,
         request,
@@ -865,9 +919,17 @@ export async function reconcileRepository({
     token,
     request,
   });
+  let nativeSnapshot = await readNativeDependencies({
+    repository,
+    issues,
+    token,
+    request,
+    paginate,
+  });
   const repair = await repairProposalState({
     repository,
     issues,
+    nativeDependencies: nativeSnapshot,
     token,
     request,
     paginate,
@@ -877,22 +939,31 @@ export async function reconcileRepository({
       token,
       request,
     });
+    nativeSnapshot = await readNativeDependencies({
+      repository,
+      issues,
+      token,
+      request,
+      paginate,
+    });
   }
 
-  const graph = inspectBlockerGraph(issues, graphOptions);
+  const graph = inspectBlockerGraph(issues, {
+    ...graphOptions,
+    nativeDependencies: nativeSnapshot,
+  });
   const workerPullRequests = await paginate(
     `/repos/${repository}/pulls?state=all`,
     { token, request },
   );
-  const nativeDependencies = await reconcileNativeDependencies({
+  const bodyProjectionRepairs = await reconcileBodyProjections({
     repository,
     graph,
     token,
     request,
-    paginate,
   });
   let clearedTriage = 0;
-  if (nativeDependencies.triage.length === 0 && graph.errors.size === 0) {
+  if (graph.errors.size === 0) {
     for (const { blockerIssue, record, sourceIssue } of repair.recoveryPairs) {
       const source = issues.find((issue) => issue.number === sourceIssue);
       const blocker = issues.find((issue) => issue.number === blockerIssue);
@@ -911,6 +982,7 @@ export async function reconcileRepository({
           sourceAuthorization({
             repository,
             source,
+            blockerNumbers: nativeBlockerNumbers(nativeSnapshot, source.number),
             token,
             request,
             paginate,
@@ -973,7 +1045,19 @@ export async function reconcileRepository({
     }
   }
   const outcomes = [];
-  for (const issueNumber of reconciliationIssueNumbers(graph)) {
+  const reconciliationTargets = new Set([
+    ...reconciliationIssueNumbers(graph),
+    ...bodyProjectionRepairs,
+    ...[...graph.issuesByNumber.values()]
+      .filter(
+        (issue) =>
+          issue.state === "open" && labelsOf(issue).includes("ready-for-agent"),
+      )
+      .map((issue) => issue.number),
+  ]);
+  for (const issueNumber of [...reconciliationTargets].sort(
+    (left, right) => left - right,
+  )) {
     const issue = graph.issuesByNumber.get(issueNumber);
     if (!issue || issue.state !== "open") continue;
     const branchRefs = await paginate(
@@ -1038,9 +1122,8 @@ export async function reconcileRepository({
     repairedAuthorizations: repair.repairedAuthorizations,
     repairedIdentities: repair.repairedIdentities,
     repairedEdges: repair.changed,
-    repairedNativeDependencies: nativeDependencies.added,
+    repairedBodyProjections: bodyProjectionRepairs.length,
     clearedTriage,
-    nativeDependencyTriage: nativeDependencies.triage,
     triage: repair.triage,
   };
 }

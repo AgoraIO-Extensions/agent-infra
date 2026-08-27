@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   activeAuthorization,
   authorizeCycle,
-  blockedByChanged,
   blockedByStateHash,
   buildAcceptanceCriteriaEvidenceMarker,
   buildAuthorizationRecordComment,
@@ -62,7 +61,7 @@ function labeledEvent(overrides = {}) {
 }
 
 test("canonicalizes protected execution content and stable AC checkboxes", () => {
-  const first = executionContent(issue());
+  const first = executionContent(issue(), { blockerNumbers: [] });
   const second = executionContent(
     issue({
       body: issueBody
@@ -71,6 +70,7 @@ test("canonicalizes protected execution content and stable AC checkboxes", () =>
         .replace("- [x] **AC-1:**", "- [ ] **AC-1:**")
         .replace("None\r\n", "- #7\r\n"),
     }),
+    { blockerNumbers: [] },
   );
   assert.equal(first.version, "execution-content-v1");
   assert.deepEqual(first.acceptanceCriteriaIds, ["AC-1", "AC-2"]);
@@ -78,9 +78,10 @@ test("canonicalizes protected execution content and stable AC checkboxes", () =>
   assert.match(first.preimage, /"version":"execution-content-v1"/);
   assert.doesNotMatch(first.preimage, /Blocked by/);
   assert.equal(
-    executionContent(issue({ body: issueBody.replace("None", "- #7") })).blockedByHash,
+    executionContent(issue(), { blockerNumbers: [7] }).blockedByHash,
     blockedByStateHash([7]),
   );
+  assert.equal(second.blockedByHash, first.blockedByHash);
   assert.throws(() => blockedByStateHash([7, 7]), /invalid Issue numbers/);
 
   const changed = executionContent(
@@ -114,24 +115,19 @@ test("rejects missing protected sections and malformed or duplicate AC IDs", () 
     () => executionContent(issue({ body: issueBody.replace("AC-2", "AC-1") })),
     /unique/,
   );
-});
-
-test("detects only semantic Blocked by changes outside the execution hash", () => {
-  assert.equal(
-    blockedByChanged(issueBody, issueBody.replace("None", "- #7"), {
-      issueNumber: 42,
-    }),
-    true,
+  assert.throws(
+    () =>
+      executionContent(
+        issue({ body: issueBody.replace("## Blocked by", "## Dependencies") }),
+      ),
+    /Blocked by/,
   );
-  assert.equal(
-    blockedByChanged(
-      issueBody.replace("- [x] **AC-1:**", "- [ ] **AC-1:**"),
-      issueBody,
-      { issueNumber: 42 },
+  assert.doesNotThrow(() =>
+    executionContent(
+      issue({ body: issueBody.replace("None", "Migration projection pending") }),
+      { blockerNumbers: [7] },
     ),
-    false,
   );
-  assert.equal(blockedByChanged(issueBody, undefined, { issueNumber: 42 }), true);
 });
 
 test("creates monotonic authorization cycles and resumes an unchanged paused cycle", () => {
