@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 import YAML from "yaml";
 
 const REQUIRED_WORKFLOWS = [
@@ -10,6 +11,7 @@ const REQUIRED_WORKFLOWS = [
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
+  "gh-aw-copilot-byok-poc.lock.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
   "workflow-outcome.yml",
@@ -178,6 +180,10 @@ const PR_AGENT_SECRETS = [
 ];
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const GH_AW_POC_SEMANTIC_SHA256 =
+  "1c4405c96f475598e2f73f9953b9c5883bda1850352ca5135f3afb0c91d88076";
+const GH_AW_POC_SOURCE_SHA256 =
+  "72e0969f14d6afc7e252502dd30752d5e68e163be164e257774fd55f13000eac";
 
 function workflowSteps(workflow) {
   return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
@@ -222,6 +228,144 @@ function hasSingleFixedClaudeArgument(args, option, value) {
     ),
   ) ?? [];
   return optionOccurrences.length === 1 && fixedOccurrences.length === 1;
+}
+
+function validateGhAwPocWorkflow(workflow) {
+  const errors = [];
+  const semanticHash = createHash("sha256")
+    .update(JSON.stringify(workflow))
+    .digest("hex");
+  const membership = workflow?.jobs?.pre_activation?.steps?.find(
+    (step) => step.id === "check_membership",
+  );
+  const agent = workflow?.jobs?.agent;
+  const execution = agent?.steps?.find((step) => step.id === "agentic_execution");
+  const redaction = agent?.steps?.find(
+    (step) => step.name === "Redact secrets in logs",
+  );
+  const safeOutputs = workflow?.jobs?.safe_outputs;
+  const publisher = safeOutputs?.steps?.find(
+    (step) => step.id === "process_safe_outputs",
+  );
+  let handlers;
+  try {
+    handlers = JSON.parse(publisher?.env?.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG ?? "");
+  } catch {
+    handlers = null;
+  }
+  const pullRequest = handlers?.create_pull_request;
+  const generateInfo = workflow?.jobs?.activation?.steps?.find(
+    (step) => step.id === "generate_aw_info",
+  );
+  const secretReferences = [
+    ...JSON.stringify(workflow ?? {}).matchAll(
+      /\$\{\{\s*secrets(?:\.([A-Z0-9_]+)|\[['"]([A-Z0-9_]+)['"]\])/g,
+    ),
+  ].map((match) => match[1] ?? match[2]);
+  const expectedSecrets = [
+    "CODEX_API_KEY",
+    "CODEX_GITHUB_TOKEN",
+    "CODEX_MODEL",
+    "CODEX_RESPONSES_API_ENDPOINT",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_AW_GITHUB_MCP_SERVER_TOKEN",
+    "GH_AW_GITHUB_TOKEN",
+    "GITHUB_TOKEN",
+  ];
+  const secretCount = (value, secret) =>
+    [
+      ...JSON.stringify(value ?? {}).matchAll(
+        new RegExp(
+          `\\$\\{\\{\\s*secrets(?:\\.${secret}|\\[['\"]${secret}['\"]\\])\\s*\\}\\}`,
+          "g",
+        ),
+      ),
+    ].length;
+  const allActionsPinned = workflowSteps(workflow).every(
+    (step) =>
+      !step.uses || step.uses.startsWith("./") || FULL_SHA_ACTION.test(step.uses),
+  );
+  if (
+    workflow?.name !== "gh-aw Copilot BYOK Issue-to-PR POC" ||
+    workflow?.on?.issues !== undefined ||
+    workflow?.on?.workflow_dispatch?.inputs?.item_number?.required !== true ||
+    workflow?.on?.workflow_dispatch?.inputs?.item_number?.type !== "string" ||
+    workflow?.jobs?.pre_activation?.if !== "github.actor == 'LichKing-2234'" ||
+    !String(workflow?.jobs?.activation?.if ?? "").includes(
+      "github.actor == 'LichKing-2234'",
+    ) ||
+    workflow?.["run-name"] !==
+      "Issue #${{ inputs.item_number }} | gh-aw-poc | dispatch" ||
+    !sameObject(workflow?.permissions, {}) ||
+    workflow?.concurrency?.group !==
+      "gh-aw-poc-${{ inputs.item_number }}" ||
+    workflow?.concurrency?.["cancel-in-progress"] !== false ||
+    membership?.env?.GH_AW_REQUIRED_ROLES !== "admin" ||
+    [...new Set(secretReferences)].sort().join("\0") !==
+      expectedSecrets.sort().join("\0") ||
+    !sameObject(agent?.permissions, {
+      contents: "read",
+      issues: "read",
+      "pull-requests": "read",
+    }) ||
+    execution?.env?.COPILOT_PROVIDER_BASE_URL !==
+      "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}" ||
+    execution?.env?.COPILOT_PROVIDER_API_KEY !==
+      "${{ secrets.CODEX_API_KEY }}" ||
+    execution?.env?.COPILOT_PROVIDER_TYPE !== "openai" ||
+    execution?.env?.COPILOT_PROVIDER_WIRE_API !== "responses" ||
+    secretCount(workflow, "CODEX_API_KEY") !== 2 ||
+    secretCount(execution, "CODEX_API_KEY") !== 1 ||
+    secretCount(redaction, "CODEX_API_KEY") !== 1 ||
+    secretCount(workflow, "CODEX_RESPONSES_API_ENDPOINT") !== 2 ||
+    secretCount(execution, "CODEX_RESPONSES_API_ENDPOINT") !== 1 ||
+    secretCount(redaction, "CODEX_RESPONSES_API_ENDPOINT") !== 1 ||
+    secretCount(workflow, "CODEX_MODEL") !== 2 ||
+    secretCount(generateInfo, "CODEX_MODEL") !== 1 ||
+    secretCount(safeOutputs?.env, "CODEX_MODEL") !== 1 ||
+    secretCount(workflow, "CODEX_GITHUB_TOKEN") !== 1 ||
+    secretCount(publisher, "CODEX_GITHUB_TOKEN") !== 1 ||
+    !String(execution?.run ?? "").includes(
+      "--exclude-env COPILOT_PROVIDER_API_KEY --exclude-env COPILOT_PROVIDER_BASE_URL",
+    ) ||
+    redaction?.uses !==
+      "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" ||
+    !String(redaction?.with?.script ?? "").includes("redact_secrets.cjs") ||
+    !sameObject(safeOutputs?.permissions, {
+      contents: "write",
+      issues: "write",
+      "pull-requests": "write",
+    }) ||
+    publisher?.env?.GH_AW_CI_TRIGGER_TOKEN !==
+      "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
+    pullRequest?.draft !== true ||
+    pullRequest?.max !== 1 ||
+    pullRequest?.base_branch !== "main" ||
+    JSON.stringify(pullRequest?.allowed_branches) !==
+      JSON.stringify(["gh-aw/poc-*"]) ||
+    JSON.stringify(pullRequest?.allowed_files) !==
+      JSON.stringify(["apps/**", "packages/**", "tests/**"]) ||
+    pullRequest?.fallback_as_issue !== false ||
+    pullRequest?.auto_close_issue !== false ||
+    pullRequest?.if_no_changes !== "error" ||
+    pullRequest?.protected_files_policy !== "blocked" ||
+    handlers?.merge_pull_request !== undefined ||
+    workflow?.jobs?.threat_detection !== undefined ||
+    !allActionsPinned ||
+    semanticHash !== GH_AW_POC_SEMANTIC_SHA256
+  ) {
+    errors.push(
+      "gh-aw POC contract must preserve write-role activation, isolated Copilot BYOK, and one draft PR safe output",
+    );
+  }
+  return errors;
+}
+
+export function validateGhAwPocSource(source) {
+  const hash = createHash("sha256").update(source).digest("hex");
+  return hash === GH_AW_POC_SOURCE_SHA256
+    ? []
+    : ["gh-aw POC source must match the reviewed generated workflow source"];
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
@@ -717,6 +861,19 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   for (const [name, workflow] of Object.entries(workflows)) {
+    if (
+      name !== "gh-aw-copilot-byok-poc.lock.yml" &&
+      (workflow?.concurrency?.queue !== undefined ||
+        Object.values(workflow?.jobs ?? {}).some(
+          (job) => job?.concurrency?.queue !== undefined,
+        ))
+    ) {
+      errors.push(`${name}: concurrency.queue is reserved for the generated gh-aw POC`);
+    }
+    if (name === "gh-aw-copilot-byok-poc.lock.yml") {
+      errors.push(...validateGhAwPocWorkflow(workflow));
+      continue;
+    }
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       for (const secret of referencedSecrets(job.env)) {
@@ -1982,6 +2139,10 @@ async function main() {
     ),
   );
   const scriptDirectory = path.resolve(".github/scripts");
+  const ghAwPocSource = await fs.readFile(
+    path.join(directory, "gh-aw-copilot-byok-poc.md"),
+    "utf8",
+  );
   const scriptSources = Object.fromEntries(
     await Promise.all(
       [
@@ -2003,6 +2164,7 @@ async function main() {
   );
   const errors = [
     ...validateWorkflowDocuments(workflows),
+    ...validateGhAwPocSource(ghAwPocSource),
     ...validateTrustedScriptSources(scriptSources),
   ];
   if (errors.length) throw new Error(errors.join("\n"));

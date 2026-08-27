@@ -5,6 +5,7 @@ import test from "node:test";
 import YAML from "yaml";
 
 import {
+  validateGhAwPocSource,
   validateTrustedScriptSources,
   validateWorkflowDocuments,
 } from "./verify-workflow-policy.mjs";
@@ -48,8 +49,137 @@ async function actualTrustedScriptSources() {
   );
 }
 
+async function actualGhAwPocSource() {
+  return fs.readFile(
+    path.join(workflowDirectory, "gh-aw-copilot-byok-poc.md"),
+    "utf8",
+  );
+}
+
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
+});
+
+test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () => {
+  const writableAgent = await actualWorkflows();
+  writableAgent["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.permissions.contents =
+    "write";
+  assert.ok(
+    validateWorkflowDocuments(writableAgent).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const autoMerge = await actualWorkflows();
+  const safeOutputStep = autoMerge[
+    "gh-aw-copilot-byok-poc.lock.yml"
+  ].jobs.safe_outputs.steps.find((step) => step.id === "process_safe_outputs");
+  safeOutputStep.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG =
+    safeOutputStep.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG.replace(
+      '"draft":true',
+      '"draft":false',
+    );
+  assert.ok(
+    validateWorkflowDocuments(autoMerge).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const issueTrigger = await actualWorkflows();
+  issueTrigger["gh-aw-copilot-byok-poc.lock.yml"].on.issues = {
+    types: ["labeled"],
+  };
+  assert.ok(
+    validateWorkflowDocuments(issueTrigger).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const leakedKey = await actualWorkflows();
+  leakedKey["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.steps.push({
+    name: "Leak",
+    run: 'echo "$LEAK"',
+    env: { LEAK: "${{ secrets.CODEX_API_KEY }}" },
+  });
+  assert.ok(
+    validateWorkflowDocuments(leakedKey).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const replacedMembership = await actualWorkflows();
+  const membershipJob = replacedMembership[
+    "gh-aw-copilot-byok-poc.lock.yml"
+  ].jobs.pre_activation;
+  membershipJob.steps = [
+    { id: "check_membership", run: 'echo "activated=true" >> "$GITHUB_OUTPUT"' },
+  ];
+  assert.ok(
+    validateWorkflowDocuments(replacedMembership).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const unknownSecrets = await actualWorkflows();
+  unknownSecrets["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.env = {
+    LEAK: "${{ secrets.UNRELATED_SECRET }}",
+  };
+  unknownSecrets["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.steps.push({
+    name: "Bracket leak",
+    run: 'echo "$LEAK"',
+    env: { LEAK: "${{ secrets['CODEX_API_KEY'] }}" },
+  });
+  assert.ok(
+    validateWorkflowDocuments(unknownSecrets).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const literalModel = await actualWorkflows();
+  const literalWorkflow = literalModel["gh-aw-copilot-byok-poc.lock.yml"];
+  literalWorkflow.jobs.activation.steps.find(
+    (step) => step.id === "generate_aw_info",
+  ).env.GH_AW_INFO_MODEL = "literal-model";
+  literalWorkflow.jobs.safe_outputs.env.GH_AW_ENGINE_MODEL = "literal-model";
+  assert.ok(
+    validateWorkflowDocuments(literalModel).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+
+  const broadFiles = await actualWorkflows();
+  const broadPublisher = broadFiles[
+    "gh-aw-copilot-byok-poc.lock.yml"
+  ].jobs.safe_outputs.steps.find((step) => step.id === "process_safe_outputs");
+  broadPublisher.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG =
+    broadPublisher.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG.replace(
+      '["apps/**","packages/**","tests/**"]',
+      '["**"]',
+    );
+  assert.ok(
+    validateWorkflowDocuments(broadFiles).some((error) =>
+      error.includes("gh-aw POC contract"),
+    ),
+  );
+});
+
+test("binds the gh-aw POC source to its reviewed lock workflow", async () => {
+  const source = await actualGhAwPocSource();
+  assert.deepEqual(validateGhAwPocSource(source), []);
+  assert.ok(validateGhAwPocSource(`${source}\n# drift`).length > 0);
+});
+
+test("reserves concurrency queue for the generated gh-aw workflow", async () => {
+  const workflows = await actualWorkflows();
+  workflows["ci.yml"].jobs.ci.concurrency = {
+    group: "ci",
+    queue: "max",
+  };
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("concurrency.queue is reserved"),
+    ),
+  );
 });
 
 test("publishes repository validation through the CI workflow and check", async () => {
@@ -86,7 +216,7 @@ test("starts review, recovery, and outcome handling from the CI workflow", async
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 9);
+  assert.equal(Object.keys(workflows).length, 10);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -106,7 +236,11 @@ test("requires safe machine-parseable run names for every workflow", async () =>
 test("requires a safe terminal Job Summary in every source workflow", async () => {
   const workflows = await actualWorkflows();
   for (const [name, workflow] of Object.entries(workflows)) {
-    if (name === "workflow-outcome.yml") continue;
+    if (
+      ["gh-aw-copilot-byok-poc.lock.yml", "workflow-outcome.yml"].includes(name)
+    ) {
+      continue;
+    }
     assert.ok(workflow.jobs.outcome, name);
   }
 
