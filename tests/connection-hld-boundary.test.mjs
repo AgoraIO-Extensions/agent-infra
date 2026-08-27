@@ -113,7 +113,10 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.equal(manifest.scripts["connection:local"], undefined);
 	assert.equal(manifest.scripts["openconnector:runtime:build"], undefined);
 	assert.equal(apiManifest.scripts.local, undefined);
-	assert.equal(adapterManifest.exports, "./src/index.ts");
+	assert.deepEqual(adapterManifest.exports, {
+		".": "./src/index.ts",
+		"./jira-server": "./src/jira-server.ts",
+	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);
 	assert.doesNotMatch(dockerfile, /local-runtime/);
 	assert.doesNotMatch(readme, /LOCAL_SINGLE_USER|REMOTE_SHARED/);

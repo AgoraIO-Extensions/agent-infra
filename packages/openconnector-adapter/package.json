@@ -2,10 +2,14 @@
 	"name": "@agent-infra/openconnector-adapter",
 	"private": true,
 	"type": "module",
-	"exports": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./jira-server": "./src/jira-server.ts"
+	},
 	"scripts": {
 		"check-types": "tsc --noEmit",
-		"test": "node scripts/verify-bitbucket-provenance.mjs && node --test",
+		"test": "node scripts/verify-bitbucket-provenance.mjs && node scripts/verify-jira-provenance.mjs && node --test",
+		"verify:jira:upstream": "node scripts/verify-jira-upstream.mjs",
 		"verify:bitbucket:upstream": "node scripts/verify-bitbucket-upstream.mjs"
 	},
 	"dependencies": {

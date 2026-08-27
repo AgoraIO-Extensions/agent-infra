@@ -780,7 +780,12 @@ export function createConnectionOAuthApp(
 						management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,
-							body.accessToken,
+							body.providerId === "jira"
+								? JSON.stringify({
+										password: body.password,
+										username: body.username,
+									})
+								: body.accessToken,
 						),
 				),
 			);

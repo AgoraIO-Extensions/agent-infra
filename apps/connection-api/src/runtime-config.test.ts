@@ -30,6 +30,11 @@ const accountBase = {
 	LDAP_USERS_BASE_DN: "ou=users,dc=agora,dc=org",
 	GITHUB_OAUTH_CLIENT_ID: "github-client",
 	GITHUB_OAUTH_CLIENT_SECRET: "github-secret",
+	JIRA_TOKEN_CLIENT_ID: "jira-client",
+	JIRA_TOKEN_CLIENT_SECRET: "jira-secret",
+	JIRA_TOKEN_PASSWORD: "jira-token-password",
+	JIRA_TOKEN_SERVER_URL: "https://oauth.agoralab.co/oauth/token",
+	JIRA_TOKEN_USERNAME: "jira-token-user",
 };
 
 describe("Connection runtime configuration", () => {
@@ -76,6 +81,18 @@ describe("Connection runtime configuration", () => {
 		expect(config.github.redirectUri).toBe(
 			"https://connection.example/oauth/callback",
 		);
+		expect(config.jiraToken.tokenUrl).toBe(
+			"https://oauth.agoralab.co/oauth/token",
+		);
+	});
+
+	it("rejects a Jira token endpoint outside the fixed company service", () => {
+		expect(() =>
+			fullConnectionRuntimeConfig({
+				...accountBase,
+				JIRA_TOKEN_SERVER_URL: "https://oauth.example/token",
+			}),
+		).toThrow(/JIRA_TOKEN_SERVER_URL/);
 	});
 
 	it("requires optional LDAP active-state settings to be configured together", () => {

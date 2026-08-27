@@ -87,9 +87,8 @@ const errorMessages: Record<string, string> = {
 	"connection.error.invalid_request": "请求参数无效",
 	"connection.error.invalid_token_name": "Token 名称需为 1 到 100 个字符",
 	"connection.error.provider_authentication_failed":
-		"Bitbucket PAT 无效，或公司 Bitbucket 暂时无法访问",
-	"connection.error.provider_unavailable":
-		"公司 Bitbucket 暂时无法访问，请稍后重试",
+		"外部平台凭证无效，或平台暂时无法访问",
+	"connection.error.provider_unavailable": "外部平台暂时无法访问，请稍后重试",
 	"connection.error.request_failed": "请求无法完成",
 	"connection.error.resource_not_found": "无法访问该资源",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
@@ -183,7 +182,7 @@ export const connectionApi = {
 				body: parseClientInput(
 					providerCredentialRequestSchema,
 					body,
-					"请填写有效的 Bitbucket PAT",
+					"请填写有效的外部平台凭证",
 				),
 				headers: commandHeaders(),
 			}),

@@ -14,13 +14,27 @@ describe("Connection Browser OpenAPI", () => {
 		expect(
 			connectionBrowserOpenApi.components.schemas.ProviderCredentialRequest,
 		).toEqual({
-			additionalProperties: false,
-			properties: {
-				accessToken: { maxLength: 8192, minLength: 1, type: "string" },
-				providerId: { enum: ["bitbucket"], type: "string" },
-			},
-			required: ["providerId", "accessToken"],
-			type: "object",
+			oneOf: [
+				{
+					additionalProperties: false,
+					properties: {
+						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
+						providerId: { const: "bitbucket", type: "string" },
+					},
+					required: ["providerId", "accessToken"],
+					type: "object",
+				},
+				{
+					additionalProperties: false,
+					properties: {
+						password: { maxLength: 1024, minLength: 1, type: "string" },
+						providerId: { const: "jira", type: "string" },
+						username: { maxLength: 256, minLength: 1, type: "string" },
+					},
+					required: ["providerId", "username", "password"],
+					type: "object",
+				},
+			],
 		});
 	});
 });

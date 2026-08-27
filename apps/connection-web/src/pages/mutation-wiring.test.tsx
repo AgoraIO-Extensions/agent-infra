@@ -262,6 +262,28 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("连接页调用 Jira Server credential API", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "连接 Jira" }));
+		fireEvent.change(screen.getByLabelText("Jira 用户名"), {
+			target: { value: "guoxianzhe@agora.io" },
+		});
+		fireEvent.change(screen.getByLabelText("Jira 密码"), {
+			target: { value: "jira-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			password: "jira-password",
+			providerId: "jira",
+			username: "guoxianzhe@agora.io",
+		});
+	});
+
 	it("历史授权不允许再次撤销", async () => {
 		const overview = await api.getConnections();
 		const grant = overview.overview.grants[0];

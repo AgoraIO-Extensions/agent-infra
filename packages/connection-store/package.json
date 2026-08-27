@@ -10,7 +10,8 @@
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run src --no-file-parallelism",
-		"test:bitbucket:e2e": "tsx scripts/bitbucket-connection-e2e.ts"
+		"test:bitbucket:e2e": "tsx scripts/bitbucket-connection-e2e.ts",
+		"test:jira:e2e": "tsx scripts/jira-connection-e2e.ts"
 	},
 	"dependencies": {
 		"@agent-infra/connection-core": "workspace:*",

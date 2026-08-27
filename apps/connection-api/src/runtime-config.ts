@@ -32,6 +32,13 @@ export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 		redirectUri: string;
 		tokenUrl?: string;
 	};
+	jiraToken: {
+		clientId: string;
+		clientSecret: string;
+		password: string;
+		tokenUrl: string;
+		username: string;
+	};
 };
 
 export type ConnectionWorkerRuntimeConfig = {
@@ -135,6 +142,26 @@ function optionalHttps(environment: RuntimeEnvironment, name: string) {
 	return value ? requireHttps(value, name) : undefined;
 }
 
+function requireJiraTokenUrl(environment: RuntimeEnvironment) {
+	const tokenUrl = new URL(
+		requireHttps(
+			requireValue(environment, "JIRA_TOKEN_SERVER_URL"),
+			"JIRA_TOKEN_SERVER_URL",
+		),
+	);
+	if (
+		tokenUrl.origin !== "https://oauth.agoralab.co" ||
+		tokenUrl.pathname !== "/oauth/token" ||
+		tokenUrl.search ||
+		tokenUrl.hash
+	) {
+		throw new Error(
+			"JIRA_TOKEN_SERVER_URL must be https://oauth.agoralab.co/oauth/token",
+		);
+	}
+	return tokenUrl.toString();
+}
+
 export function connectionApiRuntimeConfig(
 	environment: RuntimeEnvironment = process.env,
 ): ConnectionApiRuntimeConfig {
@@ -222,6 +249,13 @@ export function fullConnectionRuntimeConfig(
 						tokenUrl: optionalHttps(environment, "GITHUB_OAUTH_TOKEN_URL"),
 					}
 				: {}),
+		},
+		jiraToken: {
+			clientId: requireValue(environment, "JIRA_TOKEN_CLIENT_ID"),
+			clientSecret: requireValue(environment, "JIRA_TOKEN_CLIENT_SECRET"),
+			password: requireValue(environment, "JIRA_TOKEN_PASSWORD"),
+			tokenUrl: requireJiraTokenUrl(environment),
+			username: requireValue(environment, "JIRA_TOKEN_USERNAME"),
 		},
 	};
 }

@@ -772,13 +772,39 @@
 				"properties": { "sharedScopeId": { "type": "string" } }
 			},
 			"ProviderCredentialRequest": {
-				"type": "object",
-				"additionalProperties": false,
-				"required": ["providerId", "accessToken"],
-				"properties": {
-					"providerId": { "type": "string", "enum": ["bitbucket"] },
-					"accessToken": { "type": "string", "minLength": 1, "maxLength": 8192 }
-				}
+				"oneOf": [
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["providerId", "accessToken"],
+						"properties": {
+							"providerId": { "type": "string", "const": "bitbucket" },
+							"accessToken": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 8192
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["providerId", "username", "password"],
+						"properties": {
+							"providerId": { "type": "string", "const": "jira" },
+							"username": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 256
+							},
+							"password": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 1024
+							}
+						}
+					}
+				]
 			},
 			"ConnectionCreated": {
 				"type": "object",

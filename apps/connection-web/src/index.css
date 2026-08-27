@@ -382,6 +382,12 @@ input::placeholder {
 	display: grid;
 	gap: 10px;
 }
+.form-hint {
+	margin: -2px 0 2px;
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1.5;
+}
 .form-stack label:not(:first-child) {
 	margin-top: 3px;
 }

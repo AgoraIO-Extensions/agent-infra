@@ -17,6 +17,11 @@ import {
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
+import {
+	JiraServerAdapter,
+	JiraServerOAuthTokenProvider,
+	jiraServerConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/jira-server";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 
 import { createConnectionApp } from "./app";
@@ -40,6 +45,7 @@ export async function createConnectionRuntimeApp(
 	for (const catalog of [
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
+		jiraServerConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog);
 	}
@@ -50,6 +56,7 @@ export async function createConnectionRuntimeApp(
 		for (const catalog of [
 			githubConnectionCatalog,
 			bitbucketServerConnectionCatalog,
+			jiraServerConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
@@ -71,14 +78,23 @@ export async function createConnectionRuntimeApp(
 	const bitbucket = new BitbucketServerAdapter(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 	);
+	const jiraFetch = createGuardedFetch({
+		allowPrivateNetwork: false,
+		maxRedirects: 0,
+	});
+	const jira = new JiraServerAdapter(
+		jiraFetch,
+		new JiraServerOAuthTokenProvider(jiraFetch, config.jiraToken),
+	);
 	const service = new ConnectionApplicationService(
 		repository,
 		new ProviderExecutorRouter({
 			[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 			[githubConnectionCatalog.providerReleaseId]: github,
+			[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		}),
 		new OpenConnectorGitHubOAuthAdapter(config.github),
-		{ bitbucket },
+		{ bitbucket, jira },
 	);
 	return createConnectionApp({
 		accessTokens: oauth,

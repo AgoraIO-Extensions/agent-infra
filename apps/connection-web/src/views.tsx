@@ -207,7 +207,7 @@ export function ConnectionsView(props: {
 	if (!props.connections.length) {
 		return (
 			<EmptyState title="还没有 Connection">
-				连接 GitHub 或公司 Bitbucket 账号后即可授权给你的客户端。
+				连接 GitHub、公司 Bitbucket 或公司 Jira 账号后即可授权给你的客户端。
 			</EmptyState>
 		);
 	}
@@ -294,7 +294,9 @@ function statusLabel(value: string) {
 }
 
 export function providerLabel(value: string) {
-	return { bitbucket: "Bitbucket", github: "GitHub" }[value] ?? value;
+	return (
+		{ bitbucket: "Bitbucket", github: "GitHub", jira: "Jira" }[value] ?? value
+	);
 }
 
 function formatTime(value: string) {

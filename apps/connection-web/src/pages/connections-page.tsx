@@ -1,6 +1,6 @@
 import type { AuthorizationPreviewResponse } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, GitBranch, Plus, ShieldOff, X } from "lucide-react";
+import { Check, GitBranch, KeyRound, Plus, ShieldOff, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { connectionApi } from "../api";
@@ -33,6 +33,9 @@ export function ConnectionsPage() {
 	const [bitbucketOpen, setBitbucketOpen] = useState(false);
 	const [bitbucketPending, setBitbucketPending] = useState(false);
 	const [bitbucketError, setBitbucketError] = useState<Error | null>(null);
+	const [jiraOpen, setJiraOpen] = useState(false);
+	const [jiraPending, setJiraPending] = useState(false);
+	const [jiraError, setJiraError] = useState<Error | null>(null);
 	const overview = useQuery({
 		queryKey: ["connections"],
 		queryFn: connectionApi.getConnections,
@@ -59,6 +62,25 @@ export function ConnectionsPage() {
 			);
 		} finally {
 			setBitbucketPending(false);
+		}
+	};
+	const connectJira = async (credential: {
+		password: string;
+		username: string;
+	}) => {
+		setJiraPending(true);
+		setJiraError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				providerId: "jira",
+				...credential,
+			});
+			setJiraOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setJiraError(error instanceof Error ? error : new Error("Jira 连接失败"));
+		} finally {
+			setJiraPending(false);
 		}
 	};
 	const preview = useMutation({
@@ -98,6 +120,14 @@ export function ConnectionsPage() {
 						<Button
 							variant="secondary"
 							type="button"
+							onClick={() => setJiraOpen(true)}
+						>
+							<KeyRound aria-hidden="true" size={17} />
+							连接 Jira
+						</Button>
+						<Button
+							variant="secondary"
+							type="button"
 							onClick={() => setBitbucketOpen(true)}
 						>
 							<GitBranch aria-hidden="true" size={17} />
@@ -116,6 +146,7 @@ export function ConnectionsPage() {
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
+			{jiraError ? <PageError error={jiraError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{data ? (
@@ -131,7 +162,14 @@ export function ConnectionsPage() {
 								})
 							}
 							onDisconnect={(connectionId) => {
-								if (window.confirm("确认断开这个 GitHub Connection？")) {
+								const connection = data.connections.find(
+									(entry) => entry.id === connectionId,
+								);
+								if (
+									window.confirm(
+										`确认断开这个 ${providerLabel(connection?.providerId ?? "")} Connection？`,
+									)
+								) {
 									disconnect.mutate(connectionId);
 								}
 							}}
@@ -141,6 +179,8 @@ export function ConnectionsPage() {
 								);
 								if (connection?.providerId === "bitbucket") {
 									setBitbucketOpen(true);
+								} else if (connection?.providerId === "jira") {
+									setJiraOpen(true);
 								} else {
 									beginOAuth();
 								}
@@ -362,6 +402,76 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={bitbucketPending}>
 								<GitBranch aria-hidden="true" size={17} />
 								{bitbucketPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
+				open={jiraOpen}
+				onOpenChange={(open) => {
+					setJiraOpen(open);
+					if (!open) setJiraError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接公司 Jira</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const form = new FormData(event.currentTarget);
+							const username = form.get("username");
+							const password = form.get("password");
+							if (
+								typeof username === "string" &&
+								typeof password === "string"
+							) {
+								event.currentTarget.reset();
+								void connectJira({ password, username });
+							}
+						}}
+					>
+						<label htmlFor="jira-username">Jira 用户名</label>
+						<input
+							autoComplete="username"
+							id="jira-username"
+							maxLength={256}
+							name="username"
+							required
+							defaultValue={overview.data?.account.email ?? ""}
+							type="text"
+						/>
+						<label htmlFor="jira-password">Jira 密码</label>
+						<input
+							autoComplete="current-password"
+							id="jira-password"
+							maxLength={1024}
+							name="password"
+							required
+							type="password"
+						/>
+						<p className="form-hint">
+							用户名默认使用当前 Connection 账号；Jira 密码会加密保存。
+							Connection 服务端会自动管理公司 OAuth accessToken。
+						</p>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={jiraPending}>
+								<KeyRound aria-hidden="true" size={17} />
+								{jiraPending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>

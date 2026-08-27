@@ -115,7 +115,10 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
   会话，不重复收集 LDAP 密码。
 - 公司账号禁用后，该 Principal 的个人 Connection、会话和 Consumer 授权立即停止使用。
 - 组织成员关系用于公司共享 Connection 的当前资格判断，不复制成永久权限。
-- LDAP 密码只用于当次 bind，不保存、不记录、不进入 token、错误、审计或模型上下文。
+- Connection 登录用的 LDAP 密码只用于当次 bind，不保存、不记录、不进入 token、错误、审计或模型上下文。
+- Jira Server 的 Basic 密码属于独立 Provider Credential：用户在 Jira Connection 页面单独输入，
+  由 Connection 以加密 credential envelope 保存，只注入 Jira Adapter，不回填或复用于 LDAP 登录。
+  若公司账号恰好复用同一密码，仍按 Jira Provider secret 的更严格生命周期和轮换要求处理。
 
 ### 6.2 Consumer
 
@@ -303,7 +306,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
-| 私有 Bitbucket | 员工可用公司 Bitbucket Server PAT 建立个人 Connection；同一 Consumer 的 GitHub 与 Bitbucket 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
+| 私有 Provider | 员工可用公司 Bitbucket Server PAT 和 Jira Server 凭证建立个人 Connection；同一 Consumer 的 GitHub、Bitbucket 与 Jira 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
 | 多 Credential | 同一 Connection 可完成 refresh/rotation 并保留版本历史，新调用只使用 current 版本 |
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |
 | 授权与撤销 | 用户可以授权或撤销 Consumer/Actor；其他 Consumer 的独立授权不受影响 |

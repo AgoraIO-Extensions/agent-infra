@@ -1,0 +1,89 @@
+{
+	"source": {
+		"repository": "https://github.com/oomol-lab/open-connector.git",
+		"commit": "5cd85feb1a19cb43a711fe305ea1b40f388792aa",
+		"referenceFile": "src/providers/jira/actions.ts",
+		"referenceFileSha256": "3e73e51ec071dcd901427e324f2ddc5dd210d7b1cf593f5ebd5b250e08fafae1",
+		"licenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+		"noticeSha256": "d0890661bf25e7327808610f773b055cb87bf949ff6bba5943c7d62d94d1bf0f"
+	},
+	"target": {
+		"product": "Jira Server",
+		"version": "7.11.0",
+		"build": "711000",
+		"apiOrigin": "https://jira.agoralab.co",
+		"authentication": "per-user Basic username/password plus server-issued short-lived accessToken request header",
+		"executorDigest": "sha256:99a69b4ef640d9b2f072087584f2564f86929436e65940c4685499889124eb79"
+	},
+	"atlassianCliReference": {
+		"version": "0.1.18",
+		"deployment": "server",
+		"authentication": "basic plus [jira.headers].accessToken command substitution",
+		"accessTokenCommand": "agora-jira-access-token",
+		"actions": [
+			"get_issue",
+			"search_issues",
+			"create_issue",
+			"update_issue",
+			"transition_issue",
+			"list_issue_transitions",
+			"delete_issue",
+			"bulk_create_issues",
+			"get_issue_changelog",
+			"list_issue_attachments",
+			"upload_issue_attachment",
+			"download_issue_attachment",
+			"search_fields",
+			"get_field_options",
+			"add_comment",
+			"edit_comment",
+			"list_projects",
+			"get_project",
+			"get_user",
+			"search_users"
+		]
+	},
+	"openConnectorActions": [
+		"list_projects",
+		"get_project",
+		"search_issues",
+		"get_issue",
+		"create_issue",
+		"list_issue_comments",
+		"add_comment"
+	],
+	"overlap": {
+		"openConnectorAndServer": [
+			"list_projects",
+			"get_project",
+			"search_issues",
+			"get_issue",
+			"create_issue",
+			"list_issue_comments",
+			"add_comment"
+		],
+		"serverOnlyForThisRelease": [
+			"get_current_user",
+			"update_issue",
+			"delete_issue",
+			"list_issue_transitions",
+			"transition_issue",
+			"get_issue_changelog",
+			"list_issue_attachments",
+			"search_fields",
+			"get_field_options",
+			"get_user",
+			"search_users",
+			"edit_comment",
+			"bulk_create_issues"
+		],
+		"cliOnlyExcluded": ["upload_issue_attachment", "download_issue_attachment"]
+	},
+	"policy": "The fixed Jira Server adapter uses REST API v2 and the company CLI authentication contract. Per-user Basic credentials are encrypted in Connection; the short-lived accessToken is issued and cached by a server-side Token Provider from injected JIRA_TOKEN_* secrets. It does not execute local CLI commands or read CLI config at runtime. Atlassian Cloud OAuth and arbitrary Jira deployment URLs are excluded.",
+	"modifications": [
+		"Replace OpenConnector Jira Cloud site discovery and Cloud OAuth transport with fixed company Jira Server REST API v2.",
+		"Move the CLI header command's application token exchange to a server-side, on-demand Token Provider while keeping per-user Basic identity.",
+		"Preserve OpenConnector Jira action names and schemas where the Server API supports them.",
+		"Add reviewed Server-only issue, workflow, field, user, comment and bulk-create actions; file upload/download are excluded from JSON MCP input until a bounded file contract is approved."
+	]
+}

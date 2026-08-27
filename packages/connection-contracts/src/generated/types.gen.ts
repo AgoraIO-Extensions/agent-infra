@@ -137,6 +137,10 @@ export type OAuthTransactionRequest = {
 export type ProviderCredentialRequest = {
     providerId: 'bitbucket';
     accessToken: string;
+} | {
+    providerId: 'jira';
+    username: string;
+    password: string;
 };
 
 export type ConnectionCreated = {

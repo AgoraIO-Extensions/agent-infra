@@ -89,6 +89,17 @@ Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 acti
 Server REST 1.0 Adapter 独立实现传输；workspace membership、issues、snippets、Pipelines 和 runner
 等 Cloud-only 能力不进入该 ProviderRelease。调用方不能提交 endpoint、auth mode 或 Credential。
 
+Jira 的首个 **[设计决策]** profile 固定为公司 Jira Server `7.11.0`（build `711000`）、受控 HTTPS
+API origin `https://jira.agoralab.co` 和 REST API v2。认证复用公司 Atlassian CLI 的 Server 组合，
+但把职责拆开：每个用户的 Jira 用户名/密码作为 provider-specific encrypted credential envelope
+保存；CLI 使用的 Token Server URL、client、token service account 和 secret 由 Connection 服务端
+环境/Secret Manager 注入。服务端按需获取并缓存短期 `accessToken`，它不是用户凭证，也不进入浏览器
+表单、用户 credential envelope 或 MCP 参数。Connection 不能读取或执行本机 CLI 配置/命令。
+Jira Server 的 identity proof 使用 `GET /rest/api/2/myself` 并要求 active 用户，且返回身份必须与
+该 Connection 的用户名匹配；不能使用 Cloud OAuth/site discovery 或调用方提交的任意 URL/header。
+OpenConnector Jira 的 7 个 Action 保留名称与 schema 语义，并补充经审核的 Server Issue、workflow、
+comment、field、user 和 bulk-create Action；文件附件上传/下载不进入 JSON MCP 输入契约。
+
 ### 3.3 非目标
 
 | 非目标 | 原因 |

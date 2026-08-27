@@ -827,6 +827,19 @@ describe("Connection API", () => {
 				providerId: string,
 				accessToken: string,
 			) => {
+				if (providerId === "jira") {
+					expect(accessToken).toBe(
+						JSON.stringify({
+							password: "jira-password",
+							username: "jira-user",
+						}),
+					);
+					calls.push({
+						name: "connect-jira",
+						value: { principalId, providerId },
+					});
+					return { connectionId: "connection-jira" };
+				}
 				expect(accessToken).toBe("test-bitbucket-pat");
 				calls.push({
 					name: "connect-bitbucket",
@@ -899,6 +912,20 @@ describe("Connection API", () => {
 				},
 				method: "POST",
 			}),
+			await app.request("/api/v1/connection/provider-credentials", {
+				body: JSON.stringify({
+					password: "jira-password",
+					providerId: "jira",
+					username: "jira-user",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-jira-connect",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
 			await app.request("/api/v1/connection/authorization-previews", {
 				body: JSON.stringify({
 					connectionId: "connection-github",
@@ -943,7 +970,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 204, 204,
+			200, 201, 201, 201, 201, 204, 204,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -951,7 +978,10 @@ describe("Connection API", () => {
 		expect(await apiResponses[1]?.json()).toEqual({
 			connectionId: "connection-bitbucket",
 		});
-		expect(await apiResponses[2]?.json()).toMatchObject({
+		expect(await apiResponses[2]?.json()).toEqual({
+			connectionId: "connection-jira",
+		});
+		expect(await apiResponses[3]?.json()).toMatchObject({
 			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
 			preview: { previewId: "preview-1" },
 		});
@@ -968,6 +998,13 @@ describe("Connection API", () => {
 				value: {
 					principalId: "principal-user",
 					providerId: "bitbucket",
+				},
+			},
+			{
+				name: "connect-jira",
+				value: {
+					principalId: "principal-user",
+					providerId: "jira",
 				},
 			},
 			{
