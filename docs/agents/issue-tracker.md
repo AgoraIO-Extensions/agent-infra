@@ -24,21 +24,24 @@ GitHub 的 Issue 和 PR 共用编号。遇到裸 `#<number>` 时，先读取 PR�
 
 - Skill 要求发布 ticket 时，创建 GitHub Issue。
 - Skill 要求读取 ticket 时，读取完整正文、标签和评论。
-- Implementation Issue 必须使用项目模板规定的 `Problem`、`Scope`、
-  `Acceptance criteria`、`Validation` 和 `Blocked by`。
+- Skill 路由和可选阶段以
+  [AI 主导开发工作流 Spec](../architecture/SPEC-ai-native-development-workflow.md#21-matt-skill-交付路径)
+  为准。
+- Implementation Issue 必须使用项目模板规定的 `Problem`、`Scope`、`Acceptance criteria`、
+  `Validation` 和 `Blocked by`；其 Execution Contract 语义以工作流 Spec 为准。
 - 每条验收标准使用稳定且唯一的 `AC-N`。
-- 发布 ticket 不等于授权 Worker。只有用户明确确认执行授权时才添加
-  `ready-for-agent`；需要人工或本地受监督 Codex 实现时使用 `ready-for-human`。
+- 发布或领取时按 [Triage Labels](triage-labels.md) 映射 canonical role；本文件不从标签推断授权。
 
 ## Relationships
 
-- `## Blocked by` 是仓库自动化的权威依赖来源，只能写 `None`，或每行一个
-  `- #<issue-number>`。
-- GitHub 支持原生 issue dependencies 时，将同一依赖边镜像到原生 `blocked by`
-  关系，用于 UI 展示；原生关系不能替代正文契约。
+- GitHub native issue dependencies 是权威依赖来源。添加依赖时使用
+  `repos/<owner>/<repo>/issues/<issue>/dependencies/blocked_by` API，并传 blocker 的 numeric
+  database ID。
+- `## Blocked by` 只保留为迁移期投影，写 `None` 或每行一个 `- #<issue-number>`；不得仅修改
+  正文来创建、删除或改变依赖边。
 - 只有明确的 umbrella Issue 才使用 GitHub sub-issues；普通相关 Issue 不自动建立父子关系。
-- 正文 DAG 与 GitHub 原生关系不一致时，不自行选择其一；先进入 `needs-triage`
-  并修复权威正文，再同步展示关系。
+- 正文投影与 GitHub native dependencies 不一致时，以 native dependencies 为准，并进入
+  `needs-triage` 修复投影。
 - `bug`、`enhancement`、`documentation` 等类型标签只在语义明确时添加，不代表执行授权。
 
 Issue 状态、授权周期、DAG 和门禁的正式规则以

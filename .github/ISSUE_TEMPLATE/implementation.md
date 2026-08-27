@@ -1,6 +1,6 @@
 ---
 name: Implementation
-about: Define an implementation task for a human or Agent
+about: Provide an Agent Brief and Execution Contract for implementation
 title: ""
 labels: ""
 assignees: ""

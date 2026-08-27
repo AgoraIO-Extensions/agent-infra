@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import YAML from "yaml";
 
 import {
   validateGhAwPocSource,
+  validateMattSkillSnapshot,
   validateTrustedScriptSources,
   validateWorkflowDocuments,
 } from "./verify-workflow-policy.mjs";
@@ -55,6 +57,31 @@ async function actualGhAwPocSource() {
     "utf8",
   );
 }
+
+test("locks repository Matt Skills to pinned upstream trees", async () => {
+  const repositoryRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "agent-infra-matt-skills-"),
+  );
+
+  try {
+    await fs.cp(".agents", path.join(repositoryRoot, ".agents"), {
+      recursive: true,
+    });
+    assert.deepEqual(await validateMattSkillSnapshot(repositoryRoot), []);
+
+    await fs.appendFile(
+      path.join(repositoryRoot, ".agents/skills/tdd/SKILL.md"),
+      "\n# drift\n",
+    );
+    assert.ok(
+      (await validateMattSkillSnapshot(repositoryRoot)).some((error) =>
+        error.includes("tdd"),
+      ),
+    );
+  } finally {
+    await fs.rm(repositoryRoot, { force: true, recursive: true });
+  }
+});
 
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);

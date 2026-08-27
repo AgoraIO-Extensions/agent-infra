@@ -19,6 +19,9 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 
 ## Agent skills
 
+使用 Matt 开发 Skills 时，按以下权威流程选择路由、可选阶段和实现内检查：
+[AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md#21-matt-skill-交付路径)。
+
 ### Issue tracker
 
 实现工作使用 `AgoraIO-Extensions/agent-infra` GitHub Issues 跟踪；正式 PRD 和工程 Spec
@@ -28,7 +31,7 @@ PRD 是产品结论的权威来源，工程 Spec 是实现边界的权威来源�
 ### Triage labels
 
 Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human` 和
-`wontfix`；执行授权和人工验证的正式语义仍以开发工作流 Spec 为准。参见
+`wontfix`。参见
 [Triage Labels](docs/agents/triage-labels.md)。
 
 ### Domain docs
