@@ -1,6 +1,7 @@
 import {
 	ConnectionApplicationService,
 	ConnectionOAuthService,
+	ProviderExecutorRouter,
 	portablePatConsumerId,
 } from "@agent-infra/connection-core";
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
@@ -10,10 +11,13 @@ import {
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
 import {
+	BitbucketServerAdapter,
+	bitbucketServerConnectionCatalog,
 	githubConnectionCatalog,
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
+import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 
 import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
@@ -33,18 +37,26 @@ export async function createConnectionRuntimeApp(
 		config.databaseUrl,
 		config.credentialKey,
 	);
-	await repository.publishGithubCatalog(githubConnectionCatalog);
+	for (const catalog of [
+		githubConnectionCatalog,
+		bitbucketServerConnectionCatalog,
+	]) {
+		await repository.publishProviderCatalog(catalog);
+	}
 	for (const consumer of [
 		config.directConsumer,
 		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
 	]) {
-		await repository.publishConsumerDeclaration({
-			actionVersionIds: githubConnectionCatalog.actions.map(
-				(action) => action.id,
-			),
-			consumer,
-			providerReleaseId: githubConnectionCatalog.providerReleaseId,
-		});
+		for (const catalog of [
+			githubConnectionCatalog,
+			bitbucketServerConnectionCatalog,
+		]) {
+			await repository.publishConsumerDeclaration({
+				actionVersionIds: catalog.actions.map((action) => action.id),
+				consumer,
+				providerReleaseId: catalog.providerReleaseId,
+			});
+		}
 	}
 	const directory = new LdapDirectoryAuthenticator(config.ldap);
 	const oauth = new ConnectionOAuthService({
@@ -55,10 +67,18 @@ export async function createConnectionRuntimeApp(
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
+	const github = new OpenConnectorGitHubAdapter();
+	const bitbucket = new BitbucketServerAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+	);
 	const service = new ConnectionApplicationService(
 		repository,
-		new OpenConnectorGitHubAdapter(),
+		new ProviderExecutorRouter({
+			[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
+			[githubConnectionCatalog.providerReleaseId]: github,
+		}),
 		new OpenConnectorGitHubOAuthAdapter(config.github),
+		{ bitbucket },
 	);
 	return createConnectionApp({
 		accessTokens: oauth,

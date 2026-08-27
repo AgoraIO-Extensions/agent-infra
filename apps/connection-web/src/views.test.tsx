@@ -88,15 +88,17 @@ describe("Connection Web 中文界面", () => {
 						externalAccount: "guoxianzhe",
 						id: "personal",
 						ownerType: "PERSONAL",
+						providerId: "github",
 						requiresReconnect: false,
 						status: "ACTIVE",
 					},
 					{
 						actionVersionIds: [],
-						displayName: "Agora GitHub",
+						displayName: "Agora Bitbucket",
 						externalAccount: "agora-release-bot",
 						id: "shared",
 						ownerType: "SHARED",
+						providerId: "bitbucket",
 						requiresReconnect: false,
 						status: "ACTIVE",
 					},
@@ -109,6 +111,8 @@ describe("Connection Web 中文界面", () => {
 
 		expect(screen.getByText("个人")).toBeTruthy();
 		expect(screen.getByText("共享")).toBeTruthy();
+		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
+		expect(screen.getByText("Bitbucket")).toBeTruthy();
 	});
 
 	it("把所有 Grant 状态显示为中文", () => {

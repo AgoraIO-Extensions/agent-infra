@@ -1,8 +1,8 @@
 import {
+	type ActionName,
 	type ConnectionApplicationService,
 	ConnectionError,
 	type DelegatedAssertionBinding,
-	type GitHubActionName,
 	OAuthProtocolError,
 } from "@agent-infra/connection-core";
 import { Hono } from "hono";
@@ -30,7 +30,7 @@ export type DelegatedIdentityVerifier = {
 	verifyDelegatedAssertion(
 		assertion: string | undefined,
 		binding: {
-			action: GitHubActionName;
+			action: ActionName;
 			actionVersionId: string;
 			args: Record<string, unknown>;
 			deadlineAt: string;
@@ -50,14 +50,14 @@ export type ConnectionAppOptions = {
 	service?: ConnectionApplicationService;
 };
 
-function actionFromRoute(value: string): GitHubActionName {
+function actionFromRoute(value: string): ActionName {
 	if (!/^[a-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) {
 		throw new ConnectionError("INVALID_REQUEST", "Unknown action");
 	}
 	return value;
 }
 
-function actionFromVersionId(value: string): GitHubActionName {
+function actionFromVersionId(value: string): ActionName {
 	const separator = value.lastIndexOf("@");
 	if (separator <= 0) {
 		throw new ConnectionError("INVALID_REQUEST", "Unknown action version");
@@ -84,6 +84,7 @@ function errorStatus(error: ConnectionError) {
 	if (error.code === "RESOURCE_NOT_FOUND") return 404;
 	if (error.code === "PROVIDER_UNCERTAIN") return 202;
 	if (error.code === "PROVIDER_FAILED") return 502;
+	if (error.code === "PROVIDER_UNAVAILABLE") return 503;
 	return 403;
 }
 

@@ -138,6 +138,8 @@ export class PostgresBrowserCommandIdempotency {
 				"FORBIDDEN",
 				"IDEMPOTENCY_CONFLICT",
 				"INVALID_REQUEST",
+				"PROVIDER_FAILED",
+				"PROVIDER_UNAVAILABLE",
 				"RESOURCE_NOT_FOUND",
 			].includes(error.code)
 		);

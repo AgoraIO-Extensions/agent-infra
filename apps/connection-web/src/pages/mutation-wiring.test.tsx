@@ -13,6 +13,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
 	confirmAuthorization: vi.fn(async () => ({ grantId: "grant-created" })),
+	connectProviderCredential: vi.fn(async () => ({
+		connectionId: "connection-bitbucket",
+	})),
 	createAuthorizationPreview: vi.fn(async () => ({
 		idempotencyKey: "confirmation-idempotency-key",
 		preview: {
@@ -53,6 +56,7 @@ const api = vi.hoisted(() => ({
 					externalAccount: "guoxianzhe",
 					id: "connection-personal",
 					ownerType: "PERSONAL" as const,
+					providerId: "github",
 					requiresReconnect: false,
 					status: "ACTIVE",
 				},
@@ -62,6 +66,7 @@ const api = vi.hoisted(() => ({
 					externalAccount: "guoxianzhe-old",
 					id: "connection-old",
 					ownerType: "PERSONAL" as const,
+					providerId: "github",
 					requiresReconnect: true,
 					status: "DISCONNECTED",
 				},
@@ -70,9 +75,20 @@ const api = vi.hoisted(() => ({
 			grants: [
 				{
 					actionVersionIds: ["github.get_repository@v2"],
+					actions: [
+						{
+							effect: "READ" as const,
+							id: "github.get_repository@v2",
+							name: "github.get_repository",
+						},
+					],
 					consumerId: "consumer-codex",
 					consumerName: "Codex",
+					connectionDisplayName: "GitHub",
+					connectionId: "connection-personal",
+					externalAccount: "guoxianzhe",
 					id: "grant-codex",
+					providerId: "github",
 					status: "ACTIVE",
 				},
 			],
@@ -188,7 +204,7 @@ function calls(mock: unknown) {
 }
 
 describe("Connection 管理 mutation wiring", () => {
-	it("连接页调用 GitHub、授权、断开和 Grant API", async () => {
+	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const popup = {
 			close: vi.fn(),
@@ -197,7 +213,23 @@ describe("Connection 管理 mutation wiring", () => {
 		};
 		vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
 		renderPage(<ConnectionsPage />);
-		await screen.findByText("guoxianzhe");
+		await screen.findByRole("heading", { name: "客户端授权" });
+		expect(screen.getByRole("columnheader", { name: "平台" })).toBeTruthy();
+		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
+		expect(screen.queryByText("github.get_repository")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "连接 Bitbucket" }));
+		fireEvent.change(screen.getByLabelText("Personal Access Token"), {
+			target: { value: "test-bitbucket-pat" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessToken: "test-bitbucket-pat",
+			providerId: "bitbucket",
+		});
 
 		fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
 		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
@@ -228,6 +260,42 @@ describe("Connection 管理 mutation wiring", () => {
 			idempotencyKey: "confirmation-idempotency-key",
 			previewId: "preview-id",
 		});
+	});
+
+	it("历史授权不允许再次撤销", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("测试需要至少一条 Grant");
+		grant.status = "REVOKED";
+		api.getConnections.mockResolvedValueOnce(overview);
+
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+		fireEvent.click(screen.getByRole("checkbox", { name: "显示历史授权" }));
+		const revokeButton = screen.getByRole("button", { name: "撤销 Codex" });
+		expect((revokeButton as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(revokeButton);
+		expect(api.revokeGrant).not.toHaveBeenCalled();
+	});
+
+	it("默认隐藏历史授权并支持切换查看", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("测试需要至少一条 Grant");
+		overview.overview.grants.push({
+			...grant,
+			consumerId: "consumer-history",
+			consumerName: "历史 Codex",
+			id: "grant-history",
+			status: "REVOKED",
+		});
+		api.getConnections.mockResolvedValueOnce(overview);
+
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+		expect(screen.queryByText("历史 Codex")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox", { name: "显示历史授权" }));
+		expect(screen.getByText("历史 Codex")).toBeTruthy();
 	});
 
 	it("Token 页面调用签发和撤销 API", async () => {

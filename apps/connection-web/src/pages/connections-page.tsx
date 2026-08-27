@@ -1,7 +1,7 @@
 import type { AuthorizationPreviewResponse } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, ShieldOff, X } from "lucide-react";
-import { useState } from "react";
+import { Check, GitBranch, Plus, ShieldOff, X } from "lucide-react";
+import { type FormEvent, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -14,7 +14,13 @@ import {
 } from "../components/ui/dialog";
 import { useGithubOAuth } from "../github-oauth";
 import { ConsoleShell, PageError } from "../shell";
-import { ConnectionsView, EmptyState, PageHeader, Status } from "../views";
+import {
+	ConnectionsView,
+	EmptyState,
+	PageHeader,
+	providerLabel,
+	Status,
+} from "../views";
 
 export function ConnectionsPage() {
 	const queryClient = useQueryClient();
@@ -23,6 +29,10 @@ export function ConnectionsPage() {
 		consumerId: string;
 		preview: AuthorizationPreviewResponse | null;
 	} | null>(null);
+	const [showHistory, setShowHistory] = useState(false);
+	const [bitbucketOpen, setBitbucketOpen] = useState(false);
+	const [bitbucketPending, setBitbucketPending] = useState(false);
+	const [bitbucketError, setBitbucketError] = useState<Error | null>(null);
 	const overview = useQuery({
 		queryKey: ["connections"],
 		queryFn: connectionApi.getConnections,
@@ -33,6 +43,24 @@ export function ConnectionsPage() {
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
+	const connectBitbucket = async (accessToken: string) => {
+		setBitbucketPending(true);
+		setBitbucketError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				accessToken,
+				providerId: "bitbucket",
+			});
+			setBitbucketOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setBitbucketError(
+				error instanceof Error ? error : new Error("Bitbucket 连接失败"),
+			);
+		} finally {
+			setBitbucketPending(false);
+		}
+	};
 	const preview = useMutation({
 		mutationFn: connectionApi.createAuthorizationPreview,
 		onSuccess: (value) =>
@@ -56,15 +84,30 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin();
 
 	const data = overview.data?.overview;
+	const visibleGrants = data
+		? showHistory
+			? data.grants
+			: data.grants.filter((grant) => grant.status === "ACTIVE")
+		: [];
 	return (
 		<ConsoleShell>
 			<PageHeader
 				title="我的 Connection"
 				action={
-					<Button type="button" onClick={beginOAuth}>
-						<Plus aria-hidden="true" size={17} />
-						连接 GitHub
-					</Button>
+					<div className="row-actions">
+						<Button
+							variant="secondary"
+							type="button"
+							onClick={() => setBitbucketOpen(true)}
+						>
+							<GitBranch aria-hidden="true" size={17} />
+							连接 Bitbucket
+						</Button>
+						<Button type="button" onClick={beginOAuth}>
+							<Plus aria-hidden="true" size={17} />
+							连接 GitHub
+						</Button>
+					</div>
 				}
 			/>
 			{overview.isPending ? (
@@ -72,6 +115,7 @@ export function ConnectionsPage() {
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
+			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{data ? (
@@ -91,7 +135,16 @@ export function ConnectionsPage() {
 									disconnect.mutate(connectionId);
 								}
 							}}
-							onReconnect={beginOAuth}
+							onReconnect={(connectionId) => {
+								const connection = data.connections.find(
+									(entry) => entry.id === connectionId,
+								);
+								if (connection?.providerId === "bitbucket") {
+									setBitbucketOpen(true);
+								} else {
+									beginOAuth();
+								}
+							}}
 						/>
 					</section>
 
@@ -99,36 +152,73 @@ export function ConnectionsPage() {
 						<div className="section-heading">
 							<div>
 								<h2 id="grants-title">客户端授权</h2>
-								<p>每个 Consumer 独立授权，可随时撤销。</p>
+								<p>每个客户端独立授权，可随时撤销。</p>
 							</div>
+							{data.grants.length ? (
+								<label className="history-toggle">
+									<input
+										checked={showHistory}
+										onChange={(event) => setShowHistory(event.target.checked)}
+										type="checkbox"
+									/>
+									<span>显示历史授权</span>
+								</label>
+							) : null}
 						</div>
-						{data.grants.length ? (
+						{visibleGrants.length ? (
 							<div className="table-scroll">
-								<table>
+								<table className="grant-table">
 									<thead>
 										<tr>
-											<th>Consumer</th>
+											<th>客户端</th>
+											<th>平台</th>
+											<th>账号</th>
 											<th>状态</th>
-											<th>Action 数</th>
+											<th>授权能力</th>
 											<th className="table-action">操作</th>
 										</tr>
 									</thead>
 									<tbody>
-										{data.grants.map((grant) => (
+										{visibleGrants.map((grant) => (
 											<tr key={grant.id}>
-												<td className="primary-cell">{grant.consumerName}</td>
+												<td className="primary-cell">
+													<div>{grant.consumerName}</div>
+													<small className="table-secondary">
+														{grant.consumerId}
+													</small>
+												</td>
+												<td>
+													<span className="provider-badge">
+														{providerLabel(grant.providerId)}
+													</span>
+												</td>
+												<td>
+													<strong>{grant.connectionDisplayName}</strong>
+													<small className="table-secondary">
+														{grant.externalAccount}
+													</small>
+												</td>
 												<td>
 													<Status value={grant.status} />
 												</td>
-												<td>{grant.actionVersionIds.length}</td>
+												<td>
+													<GrantPermissions grant={grant} />
+												</td>
 												<td className="table-action">
 													<Button
 														variant="danger"
 														size="icon"
 														type="button"
+														disabled={
+															grant.status !== "ACTIVE" || revokeGrant.isPending
+														}
 														onClick={() => revokeGrant.mutate(grant.id)}
 														aria-label={`撤销 ${grant.consumerName}`}
-														title="撤销授权"
+														title={
+															grant.status === "ACTIVE"
+																? "撤销授权"
+																: "历史授权不可操作"
+														}
 													>
 														<ShieldOff aria-hidden="true" size={17} />
 													</Button>
@@ -138,9 +228,13 @@ export function ConnectionsPage() {
 									</tbody>
 								</table>
 							</div>
+						) : data.grants.length ? (
+							<EmptyState title="没有当前授权">
+								当前只显示正常授权，打开“显示历史授权”可查看已撤销、已替换和已暂停记录。
+							</EmptyState>
 						) : (
 							<EmptyState title="还没有客户端授权">
-								从上方 Connection 选择 Consumer 并确认授权。
+								从上方 Connection 选择客户端并确认授权。
 							</EmptyState>
 						)}
 					</section>
@@ -183,7 +277,7 @@ export function ConnectionsPage() {
 							/>
 						) : (
 							<div className="form-stack">
-								<label htmlFor="consumer">Consumer</label>
+								<label htmlFor="consumer">客户端</label>
 								<select
 									id="consumer"
 									value={authorization.consumerId}
@@ -218,6 +312,60 @@ export function ConnectionsPage() {
 						{confirm.isError ? <PageError error={confirm.error} /> : null}
 					</DialogContent>
 				) : null}
+			</Dialog>
+
+			<Dialog
+				open={bitbucketOpen}
+				onOpenChange={(open) => {
+					setBitbucketOpen(open);
+					if (!open) setBitbucketError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接公司 Bitbucket</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const form = new FormData(event.currentTarget);
+							const accessToken = form.get("accessToken");
+							if (typeof accessToken === "string") {
+								event.currentTarget.reset();
+								void connectBitbucket(accessToken);
+							}
+						}}
+					>
+						<label htmlFor="bitbucket-access-token">
+							Personal Access Token
+						</label>
+						<input
+							autoComplete="off"
+							id="bitbucket-access-token"
+							maxLength={8192}
+							name="accessToken"
+							required
+							type="password"
+						/>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={bitbucketPending}>
+								<GitBranch aria-hidden="true" size={17} />
+								{bitbucketPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
 			</Dialog>
 		</ConsoleShell>
 	);
@@ -259,6 +407,25 @@ export function PreviewContent(props: {
 					{props.busy ? "正在确认" : "确认授权"}
 				</Button>
 			</div>
+		</div>
+	);
+}
+
+function GrantPermissions(props: {
+	grant: {
+		actions: Array<{ effect: "READ" | "WRITE"; id: string; name: string }>;
+		actionVersionIds: string[];
+	};
+}) {
+	const actions = props.grant.actions ?? [];
+	const read = actions.filter((action) => action.effect === "READ");
+	const write = actions.filter((action) => action.effect === "WRITE");
+	const total = actions.length || props.grant.actionVersionIds?.length || 0;
+	return (
+		<div className="permission-summary">
+			<strong>{total} 项</strong>
+			<span>{read.length} 读</span>
+			<span>{write.length} 写</span>
 		</div>
 	);
 }

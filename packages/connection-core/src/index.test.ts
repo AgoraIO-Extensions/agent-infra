@@ -21,6 +21,7 @@ import {
 	type GitHubReconciler,
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
+	ProviderExecutorRouter,
 	type ReconciliationJob,
 	type StoredCall,
 } from "./index";
@@ -99,6 +100,8 @@ const direct: InvocationContext = {
 	grantId: "grant-alice",
 	instanceId: "codex-desktop",
 	principalId: "alice",
+	providerId: "github",
+	providerReleaseId: "github-release-v1",
 };
 const delegated: InvocationContext = {
 	...direct,
@@ -139,6 +142,7 @@ class MemoryRepository implements ConnectionRepository {
 		}
 	>();
 	private callInputs = new Map<string, Record<string, unknown>>();
+	private callActionVersionIds = new Map<string, string>();
 	private leaseSequence = 0;
 	directInvocation = direct;
 	failSuccessfulFinalization = false;
@@ -179,7 +183,8 @@ class MemoryRepository implements ConnectionRepository {
 		return { connectionId: "connection-shared-test" };
 	}
 	async createCall(input: {
-		action: "github.getRepository" | "github.createPullRequest";
+		action: string;
+		actionVersionId?: string;
 		argsHash: string;
 		idempotencyKey?: string;
 		input: Record<string, unknown>;
@@ -207,6 +212,12 @@ class MemoryRepository implements ConnectionRepository {
 		};
 		this.calls.push(call);
 		this.callInputs.set(call.callId, input.input);
+		this.callActionVersionIds.set(
+			call.callId,
+			input.actionVersionId ??
+				actions.find((action) => action.name === input.action)?.id ??
+				input.action,
+		);
 		return { call, created: true };
 	}
 	async claimReconciliationJob() {
@@ -271,8 +282,17 @@ class MemoryRepository implements ConnectionRepository {
 		this.storedOAuthCredential = input;
 		return { connectionId: "connection-oauth" };
 	}
+	async storeProviderCredential(input: {
+		accessToken: string;
+		displayName: string;
+		externalAccount: string;
+		principalId: string;
+	}) {
+		this.storedOAuthCredential = input;
+		return { connectionId: "connection-provider" };
+	}
 	async findIdempotentCall(input: {
-		action: "github.getRepository" | "github.createPullRequest";
+		action: string;
 		idempotencyKey: string;
 		invocation: InvocationContext;
 	}) {
@@ -310,19 +330,26 @@ class MemoryRepository implements ConnectionRepository {
 				externalAccount: "alice-github",
 				id: direct.connectionId,
 				ownerType: "PERSONAL" as const,
+				providerId: "github",
 				requiresReconnect: false,
 				status: "ACTIVE" as const,
 			},
 		];
 	}
-	async resolveDelegatedWorkload() {
+	async resolveDelegatedWorkload(_workload?: string, _actorKey?: string) {
 		return delegated;
+	}
+	async resolveDelegatedWorkloads(_workload?: string, _actorKey?: string) {
+		return [delegated];
 	}
 	async resolveDirectSession() {
 		return this.directInvocation;
 	}
 	async resolveDirectIdentity() {
 		return direct;
+	}
+	async resolveDirectIdentities() {
+		return [direct];
 	}
 	async setCallResult(input: {
 		callId: string;
@@ -340,6 +367,8 @@ class MemoryRepository implements ConnectionRepository {
 			if (input.status === "UNCERTAIN") {
 				this.reconciliationJobs.push({
 					action: call.action,
+					actionVersionId:
+						this.callActionVersionIds.get(call.callId) ?? call.action,
 					callId: call.callId,
 					input: this.callInputs.get(call.callId) ?? {},
 					invocation: call.invocation,
@@ -994,5 +1023,217 @@ describe("Connection application service", () => {
 			result: { pullRequestUrl: "https://github.test/current" },
 		});
 		expect(repository.calls[0]?.status).toBe("SUCCEEDED");
+	});
+
+	it("aggregates Direct actions across Provider Grants and routes execution by Action", async () => {
+		const repository = new MemoryRepository();
+		const bitbucketInvocation = {
+			...direct,
+			connectionId: "connection-bitbucket",
+			credentialVersionId: "credential-bitbucket",
+			grantId: "grant-bitbucket",
+		};
+		const bitbucketAction: ActionDefinition = {
+			description: "List Bitbucket projects",
+			effect: "READ",
+			id: "bitbucket.list_projects@v1",
+			inputSchema: {
+				additionalProperties: false,
+				properties: {},
+				required: [],
+				type: "object",
+			},
+			name: "bitbucket.list_projects",
+			requiredScopes: ["bitbucket.server.pat"],
+		};
+		repository.resolveDirectIdentities = async () => [
+			direct,
+			bitbucketInvocation,
+		];
+		repository.listAuthorizedActions = async (
+			invocation?: InvocationContext,
+		) =>
+			invocation?.grantId === bitbucketInvocation.grantId
+				? [bitbucketAction]
+				: actions;
+		const executed: string[] = [];
+		const service = new ConnectionApplicationService(repository, {
+			execute: async ({ action }) => {
+				executed.push(action);
+				return { ok: true };
+			},
+		});
+
+		expect(await service.listDirectAppsForIdentity(direct)).toEqual([
+			{ actionCount: 1, service: "bitbucket" },
+			{ actionCount: 2, service: "github" },
+		]);
+		await service.executeDirectActionForIdentity(
+			direct,
+			"bitbucket.list_projects",
+			{},
+		);
+		expect(executed).toEqual(["bitbucket.list_projects"]);
+	});
+
+	it("treats rejected Provider credentials as a definite validation failure", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				bitbucket: {
+					providerId: "bitbucket",
+					providerReleaseId: "bitbucket-server-v1",
+					validateCredential: async () => {
+						throw Object.assign(new Error("denied"), {
+							providerCredentialInvalid: true,
+						});
+					},
+				},
+			},
+		);
+		await expect(
+			service.connectProviderCredential("alice", "bitbucket", "test-pat"),
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			message: "Provider credential validation failed",
+		});
+		expect(repository.storedOAuthCredential).toBeUndefined();
+	});
+
+	it("classifies Provider credential transport failures as unavailable", async () => {
+		const service = new ConnectionApplicationService(
+			new MemoryRepository(),
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				bitbucket: {
+					providerId: "bitbucket",
+					providerReleaseId: "bitbucket-server-v1",
+					validateCredential: async () => {
+						throw new Error("timeout");
+					},
+				},
+			},
+		);
+		await expect(
+			service.connectProviderCredential("alice", "bitbucket", "test-pat"),
+		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+	});
+
+	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {
+		const repository = new MemoryRepository();
+		const bitbucketInvocation = {
+			...direct,
+			connectionId: "connection-bitbucket-write",
+			credentialVersionId: "credential-bitbucket-write",
+			grantId: "grant-bitbucket-write",
+		};
+		const action: ActionDefinition = {
+			description: "Create Bitbucket pull request",
+			effect: "WRITE",
+			id: "bitbucket.create_pull_request@v1",
+			inputSchema: {
+				additionalProperties: false,
+				properties: {
+					destinationBranch: { type: "string" },
+					project: { type: "string" },
+					repository: { type: "string" },
+					sourceBranch: { type: "string" },
+					title: { type: "string" },
+				},
+				required: [
+					"project",
+					"repository",
+					"title",
+					"sourceBranch",
+					"destinationBranch",
+				],
+				type: "object",
+			},
+			name: "bitbucket.create_pull_request",
+			requiredScopes: ["bitbucket.server.pat"],
+		};
+		repository.resolveDirectIdentities = async () => [bitbucketInvocation];
+		repository.listAuthorizedActions = async () => [action];
+		let submissions = 0;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				submissions += 1;
+				throw new Error("response lost");
+			},
+		});
+		const input = {
+			destinationBranch: "main",
+			idempotencyKey: "bitbucket-pr-1",
+			project: "PROJ",
+			repository: "repo",
+			sourceBranch: "feature",
+			title: "Feature",
+		};
+
+		await expect(
+			service.executeDirectActionForIdentity(
+				direct,
+				"bitbucket.create_pull_request",
+				input,
+			),
+		).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
+		expect(submissions).toBe(1);
+		expect(
+			await service.executeDirectActionForIdentity(
+				direct,
+				"bitbucket.create_pull_request",
+				input,
+			),
+		).toMatchObject({ status: "UNCERTAIN" });
+		expect(submissions).toBe(1);
+	});
+
+	it("routes execution by the authorized ProviderRelease instead of the Action string", async () => {
+		const executions: string[] = [];
+		const router = new ProviderExecutorRouter({
+			"bitbucket-release-v1": {
+				execute: async ({ providerId }) => {
+					executions.push(providerId);
+					return {};
+				},
+			},
+		});
+		await expect(async () =>
+			router.execute({
+				action: "github.get_repository",
+				actionVersionId: "github.get_repository@v1",
+				credential: { accessToken: "test-secret" },
+				input: {},
+				providerId: "bitbucket",
+				providerReleaseId: "bitbucket-release-v1",
+			}),
+		).rejects.toMatchObject({ code: "PROVIDER_FAILED" });
+		expect(executions).toEqual([]);
+	});
+
+	it("binds delegated Provider resolution to the asserted Actor", async () => {
+		const repository = new MemoryRepository();
+		let resolvedActor: string | undefined;
+		repository.resolveDelegatedWorkloads = async (_workload, actorKey) => {
+			resolvedActor = actorKey;
+			return [delegated];
+		};
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => ({ ok: true }),
+		});
+		await service.invokeDelegated(
+			{
+				actionVersionId: "github.getRepository@v1",
+				actorId: delegated.actorKey,
+				workload: "workload",
+			},
+			"github.getRepository",
+			{ repository: "acme/widgets" },
+		);
+		expect(resolvedActor).toBe(delegated.actorKey);
 	});
 });

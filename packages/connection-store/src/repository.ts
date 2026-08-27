@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import {
 	type ActionDefinition,
+	type ActionName,
 	authorizationSnapshotMatches,
 	type CallStatus,
 	ConnectionError,
@@ -16,7 +17,6 @@ import {
 	canonicalHash,
 	createAuthorizationSnapshot,
 	decideReconnectAuthorization,
-	type GitHubActionName,
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
@@ -29,6 +29,9 @@ const githubProvider = "github";
 
 export type PublishedProviderCatalog = {
 	actions: readonly ActionDefinition[];
+	authProfile: Readonly<Record<string, unknown>>;
+	deploymentProfile: Readonly<Record<string, unknown>>;
+	executorDigest: string;
 	provider: string;
 	providerReleaseId: string;
 	sourceCommit: string;
@@ -41,11 +44,13 @@ type InvocationRow = {
 	grant_id: string;
 	instance_id: string;
 	principal_id: string;
+	provider_id: string;
+	provider_release_id: string;
 	actor_key: string | null;
 };
 
 type StoredCallRow = InvocationRow & {
-	action_name: GitHubActionName;
+	action_name: ActionName;
 	created_at: Date;
 	id: string;
 	idempotency_key: string | null;
@@ -120,7 +125,7 @@ function actionDefinition(row: {
 	effect: "READ" | "WRITE";
 	id: string;
 	input_schema: unknown;
-	name: GitHubActionName;
+	name: ActionName;
 	required_scopes: unknown;
 }): ActionDefinition {
 	const schema = asRecord(row.input_schema);
@@ -158,6 +163,8 @@ function invocation(row: InvocationRow): InvocationContext {
 		grantId: row.grant_id,
 		instanceId: row.instance_id,
 		principalId: row.principal_id,
+		providerId: row.provider_id,
+		providerReleaseId: row.provider_release_id,
 	};
 }
 
@@ -236,7 +243,7 @@ class CredentialProtector {
 export class PostgresConnectionRepository implements ConnectionRepository {
 	private readonly authorizationPreviewTtlMs: number;
 	private readonly protector: CredentialProtector;
-	private publishedGithubProviderReleaseId: string | undefined;
+	private readonly publishedProviderReleaseIds = new Map<string, string>();
 	private readonly sql;
 
 	constructor(
@@ -262,22 +269,49 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		await this.sql.end();
 	}
 
-	async publishGithubCatalog(catalog: PublishedProviderCatalog) {
+	async publishProviderCatalog(catalog: PublishedProviderCatalog) {
+		const catalogChecksum = canonicalHash(catalog.actions);
+		if (!/^sha256:[a-f0-9]{64}$/.test(catalog.executorDigest)) {
+			throw new Error("Provider executor digest is invalid");
+		}
 		await this.sql.begin(async (sql) => {
 			await sql`
-				INSERT INTO connection_provider_releases (id, provider, source_commit, status)
-				VALUES (${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit}, 'PUBLISHED')
+				INSERT INTO connection_provider_releases (
+					id, provider, source_commit, deployment_profile, auth_profile,
+					executor_digest, catalog_checksum, status
+				)
+				VALUES (
+					${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit},
+					${sql.json(catalog.deploymentProfile as postgres.JSONValue)},
+					${sql.json(catalog.authProfile as postgres.JSONValue)},
+					${catalog.executorDigest}, ${catalogChecksum}, 'PUBLISHED'
+				)
 				ON CONFLICT (id) DO NOTHING
 			`;
 			const [release] = await sql<
-				{ provider: string; source_commit: string; status: string }[]
+				{
+					auth_profile: unknown;
+					catalog_checksum: string;
+					deployment_profile: unknown;
+					executor_digest: string;
+					provider: string;
+					source_commit: string;
+					status: string;
+				}[]
 			>`
-				SELECT provider, source_commit, status
+				SELECT provider, source_commit, deployment_profile, auth_profile,
+					executor_digest, catalog_checksum, status
 				FROM connection_provider_releases WHERE id = ${catalog.providerReleaseId}
 			`;
 			if (
 				release?.provider !== catalog.provider ||
 				release.source_commit !== catalog.sourceCommit ||
+				canonicalHash(release.deployment_profile) !==
+					canonicalHash(catalog.deploymentProfile) ||
+				canonicalHash(release.auth_profile) !==
+					canonicalHash(catalog.authProfile) ||
+				release.executor_digest !== catalog.executorDigest ||
+				release.catalog_checksum !== catalogChecksum ||
 				release.status !== "PUBLISHED"
 			) {
 				throw new Error("Pinned ProviderRelease does not match the catalog");
@@ -329,7 +363,15 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				}
 			}
 		});
-		this.publishedGithubProviderReleaseId = catalog.providerReleaseId;
+		this.publishedProviderReleaseIds.set(
+			catalog.provider,
+			catalog.providerReleaseId,
+		);
+	}
+
+	/** @deprecated Use publishProviderCatalog. */
+	publishGithubCatalog(catalog: PublishedProviderCatalog) {
+		return this.publishProviderCatalog(catalog);
 	}
 
 	async publishConsumerDeclaration(input: {
@@ -349,17 +391,26 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			);
 		}
 		return this.sql.begin(async (sql) => {
-			const declaredActions = await sql<{ id: string }[]>`
-				SELECT action.id
+			const declaredActions = await sql<{ id: string; provider: string }[]>`
+				SELECT action.id, release.provider
 				FROM connection_action_versions action
 				JOIN connection_provider_releases release
 					ON release.id = action.provider_release_id
 					AND release.status = 'PUBLISHED'
+					AND release.executor_digest <> 'legacy:unrecorded'
+					AND release.catalog_checksum <> 'legacy:unrecorded'
 				WHERE action.provider_release_id = ${input.providerReleaseId}
 					AND action.status = 'PUBLISHED'
 				ORDER BY action.id
 				FOR SHARE OF action, release
 			`;
+			const providerId = declaredActions[0]?.provider;
+			if (!providerId) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Consumer declaration references an unavailable ProviderRelease",
+				);
+			}
 			const publishedIds = new Set(declaredActions.map((action) => action.id));
 			if (actionVersionIds.some((actionId) => !publishedIds.has(actionId))) {
 				throw new ConnectionError(
@@ -374,12 +425,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			`;
 			const [consumer] = await sql<
 				{
-					current_declaration_id: string | null;
 					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT current_declaration_id, revision::text, status
+				SELECT revision::text, status
 				FROM connection_consumers
 				WHERE id = ${input.consumer.id}
 				FOR UPDATE
@@ -387,37 +437,38 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			if (consumer?.status !== "ACTIVE") forbidden();
 			const declarationDigest = canonicalHash({
 				actionVersionIds,
+				providerId,
 				providerReleaseId: input.providerReleaseId,
 			});
-			if (consumer.current_declaration_id) {
-				const [current] = await sql<{ digest: string; id: string }[]>`
-					SELECT id, digest FROM connection_consumer_action_declarations
-					WHERE id = ${consumer.current_declaration_id}
-						AND consumer_id = ${input.consumer.id}
-						AND status = 'PUBLISHED'
-					FOR UPDATE
-				`;
-				if (current?.digest === declarationDigest) {
-					return { declarationId: current.id };
-				}
+			const [current] = await sql<{ digest: string; id: string }[]>`
+				SELECT id, digest FROM connection_consumer_action_declarations
+				WHERE consumer_id = ${input.consumer.id}
+					AND provider_id = ${providerId}
+					AND status = 'PUBLISHED'
+				FOR UPDATE
+			`;
+			if (current?.digest === declarationDigest) {
+				return { declarationId: current.id };
 			}
 			const declarationId = `declaration-${randomUUID()}`;
 			const nextRevision = (BigInt(consumer.revision) + 1n).toString();
-			if (consumer.current_declaration_id) {
+			if (current) {
 				await sql`
 					UPDATE connection_consumer_action_declarations
 					SET status = 'SUPERSEDED'
-					WHERE id = ${consumer.current_declaration_id}
+					WHERE id = ${current.id}
 						AND consumer_id = ${input.consumer.id}
+						AND provider_id = ${providerId}
 						AND status = 'PUBLISHED'
 				`;
 			}
 			await sql`
 				INSERT INTO connection_consumer_action_declarations (
-					id, consumer_id, provider_release_id, revision, digest, status
+					id, consumer_id, provider_id, provider_release_id, revision, digest, status
 				)
 				VALUES (
-					${declarationId}, ${input.consumer.id}, ${input.providerReleaseId},
+					${declarationId}, ${input.consumer.id}, ${providerId},
+					${input.providerReleaseId},
 					${nextRevision}, ${declarationDigest}, 'PUBLISHED'
 				)
 			`;
@@ -431,7 +482,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			}
 			await sql`
 				UPDATE connection_consumers
-				SET current_declaration_id = ${declarationId}, revision = ${nextRevision}
+				SET revision = ${nextRevision},
+					current_declaration_id = CASE
+						WHEN ${providerId} = 'github' THEN ${declarationId}
+						ELSE current_declaration_id
+					END
 				WHERE id = ${input.consumer.id} AND revision = ${consumer.revision}
 			`;
 			return { declarationId };
@@ -968,7 +1023,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE
 			`;
 			if (!scope) forbidden();
-			const providerReleaseId = this.publishedGithubProviderReleaseId;
+			const providerReleaseId =
+				this.publishedProviderReleaseIds.get(githubProvider);
 			if (!providerReleaseId) {
 				throw new ConnectionError(
 					"PROVIDER_FAILED",
@@ -1127,6 +1183,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			JOIN connection_grants active_grant
 				ON active_grant.id = root.current_grant_id
 				AND active_grant.root_id = root.id
+				AND active_grant.actor_key = root.actor_key
 				AND active_grant.status = 'ACTIVE'
 			WHERE active_grant.connection_id = ${connectionId}
 			ORDER BY active_grant.principal_id, root.id
@@ -1446,8 +1503,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND release.provider = account.provider_id
 				JOIN connection_consumers consumer ON consumer.id = ${input.consumerId}
 				JOIN connection_consumer_action_declarations declaration
-					ON declaration.id = consumer.current_declaration_id
-					AND declaration.consumer_id = consumer.id
+					ON declaration.consumer_id = consumer.id
+					AND declaration.provider_id = account.provider_id
 					AND declaration.provider_release_id = account.provider_release_id
 					AND declaration.status = 'PUBLISHED'
 				JOIN connection_credential_versions credential
@@ -1471,7 +1528,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				effect: "READ" | "WRITE";
 				id: string;
 				input_schema: unknown;
-				name: GitHubActionName;
+				name: ActionName;
 				required_scopes: unknown;
 				revision: string;
 			}[]
@@ -1942,7 +1999,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		instanceId: string;
 		principalId: string;
 	}) {
-		const [row] = await this.sql<InvocationRow[]>`
+		const invocations = await this.resolveDirectIdentities(input);
+		if (invocations.length !== 1) forbidden();
+		return invocations[0] as InvocationContext;
+	}
+
+	async resolveDirectIdentities(input: {
+		consumerId: string;
+		instanceId: string;
+		principalId: string;
+	}) {
+		const rows = await this.sql<InvocationRow[]>`
 			SELECT
 				active_grant.connection_id,
 				active_grant.consumer_id,
@@ -1950,6 +2017,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				active_grant.id AS grant_id,
 				instance.id AS instance_id,
 				active_grant.principal_id,
+				account.provider_id,
+				account.provider_release_id,
 				NULL::text AS actor_key
 			FROM connection_consumer_instances instance
 			JOIN connection_consumers consumer ON consumer.id = instance.consumer_id
@@ -1992,10 +2061,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND instance.principal_id = ${input.principalId}
 				AND instance.status = 'ACTIVE'
 				AND consumer.status = 'ACTIVE'
-				AND root.provider_id = ${githubProvider}
+			ORDER BY root.provider_id, root.id
 		`;
-		if (!row) forbidden();
-		return invocation(row);
+		if (rows.length === 0) forbidden();
+		return rows.map(invocation);
 	}
 
 	async resolveDirectSession(session: string | undefined) {
@@ -2015,7 +2084,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		});
 	}
 
-	async resolveDelegatedWorkload(workload: string | undefined) {
+	async resolveDelegatedWorkload(
+		workload: string | undefined,
+		actorKey?: string,
+	) {
+		const invocations = await this.resolveDelegatedWorkloads(
+			workload,
+			actorKey,
+		);
+		if (invocations.length !== 1) forbidden();
+		return invocations[0] as InvocationContext;
+	}
+
+	async resolveDelegatedWorkloads(
+		workload: string | undefined,
+		actorKey?: string,
+	) {
 		if (!workload) forbidden();
 		const rows = await this.sql<InvocationRow[]>`
 			SELECT
@@ -2025,6 +2109,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				active_grant.id AS grant_id,
 				instance.id AS instance_id,
 				active_grant.principal_id,
+				account.provider_id,
+				account.provider_release_id,
 				active_grant.actor_key
 			FROM connection_consumer_instances instance
 			JOIN connection_authorization_roots root
@@ -2032,17 +2118,24 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND root.consumer_id = instance.consumer_id
 				AND root.status = 'ACTIVE'
 			JOIN connection_grants active_grant
-				ON active_grant.id = root.current_grant_id AND active_grant.status = 'ACTIVE'
+				ON active_grant.id = root.current_grant_id
+				AND active_grant.root_id = root.id
+				AND active_grant.actor_key = root.actor_key
+				AND active_grant.status = 'ACTIVE'
 			JOIN connection_accounts account
-				ON account.id = active_grant.connection_id AND account.status = 'ACTIVE'
+				ON account.id = active_grant.connection_id
+				AND account.provider_id = active_grant.provider_id
+				AND account.provider_release_id = active_grant.provider_release_id
+				AND account.status = 'ACTIVE'
 			JOIN connection_credential_versions credential
 				ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
 			WHERE instance.auth_subject = ${workload}
 				AND instance.kind = 'WORKLOAD'
 				AND instance.status = 'ACTIVE'
+				AND root.actor_key = ${actorKey ?? ""}
 		`;
-		if (rows.length !== 1 || !rows[0]) forbidden();
-		return invocation(rows[0]);
+		if (rows.length === 0) forbidden();
+		return rows.map(invocation);
 	}
 
 	async listAuthorizedActions(input: InvocationContext) {
@@ -2053,7 +2146,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				effect: "READ" | "WRITE";
 				id: string;
 				input_schema: unknown;
-				name: GitHubActionName;
+				name: ActionName;
 				required_scopes: unknown;
 			}[]
 		>`
@@ -2082,12 +2175,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				external_account: string;
 				id: string;
 				owner_type: "PERSONAL" | "SHARED";
+				provider_id: string;
+				provider_release_id: string;
 				release_status: "DISABLED" | "PUBLISHED";
 				status: "ACTIVE" | "DISCONNECTED";
 			}[]
 		>`
 			SELECT account.id, account.external_account, account.display_name,
-				account.owner_type,
+				account.owner_type, account.provider_id, account.provider_release_id,
 				account.status, release.status AS release_status,
 				COALESCE(
 					jsonb_agg(action.id ORDER BY action.id)
@@ -2108,6 +2203,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND stored_grant.connection_id = ${input.connectionId}
 				AND stored_grant.principal_id = ${input.principalId}
 			GROUP BY account.id, account.external_account, account.display_name,
+				account.owner_type, account.provider_id, account.provider_release_id,
 				account.status, release.status
 		`;
 		return rows.map((connection) => ({
@@ -2120,20 +2216,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			externalAccount: connection.external_account,
 			id: connection.id,
 			ownerType: connection.owner_type,
-			requiresReconnect: connection.release_status !== "PUBLISHED",
+			providerId: connection.provider_id,
+			requiresReconnect:
+				connection.release_status !== "PUBLISHED" ||
+				this.publishedProviderReleaseIds.get(connection.provider_id) !==
+					connection.provider_release_id,
 			status: connection.status,
 		}));
 	}
 
-	async verifyInvocation(
-		input: InvocationContext & { action: GitHubActionName },
-	) {
+	async verifyInvocation(input: InvocationContext & { action: ActionName }) {
 		await this.verifyInvocationBase(input, input.action);
 	}
 
 	private async verifyInvocationBase(
 		input: InvocationContext,
-		action?: GitHubActionName,
+		action?: ActionName,
 	) {
 		const [row] = await this.sql<{ valid: boolean }[]>`
 			SELECT TRUE AS valid
@@ -2191,6 +2289,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND active_grant.consumer_id = ${input.consumerId}
 				AND active_grant.connection_id = ${input.connectionId}
 				AND active_grant.actor_key = ${input.actorKey ?? ""}
+				AND active_grant.provider_id = ${input.providerId}
+				AND active_grant.provider_release_id = ${input.providerReleaseId}
 				AND (
 					${action ?? null}::text IS NULL OR EXISTS (
 						SELECT 1 FROM connection_grant_actions grant_action
@@ -2321,8 +2421,39 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		grantedScopes: readonly string[];
 		principalId: string;
 	}) {
+		const providerReleaseId =
+			this.publishedProviderReleaseIds.get(githubProvider);
+		if (!providerReleaseId) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"GitHub catalog is unavailable",
+			);
+		}
+		return this.storeProviderCredential({
+			...input,
+			providerId: githubProvider,
+			providerReleaseId,
+		});
+	}
+
+	async storeProviderCredential(input: {
+		accessToken: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		principalId: string;
+		providerId: string;
+		providerReleaseId: string;
+	}) {
 		const grantedScopes = [...new Set(input.grantedScopes)].sort();
-		if (grantedScopes.length === 0) forbidden();
+		if (
+			grantedScopes.length === 0 ||
+			!input.providerId ||
+			this.publishedProviderReleaseIds.get(input.providerId) !==
+				input.providerReleaseId
+		) {
+			forbidden();
+		}
 		return this.sql.begin(async (sql) => {
 			const [principal] = await sql<{ id: string }[]>`
 					SELECT id FROM connection_principals
@@ -2330,29 +2461,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FOR UPDATE
 				`;
 			if (!principal) forbidden();
-			const providerReleaseId = this.publishedGithubProviderReleaseId;
-			if (!providerReleaseId) {
-				throw new ConnectionError(
-					"PROVIDER_FAILED",
-					"GitHub catalog is unavailable",
-				);
-			}
 			const [release] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_provider_releases
-				WHERE id = ${providerReleaseId}
-					AND provider = ${githubProvider}
+				WHERE id = ${input.providerReleaseId}
+					AND provider = ${input.providerId}
 					AND status = 'PUBLISHED'
 			`;
 			if (!release) {
 				throw new ConnectionError(
 					"PROVIDER_FAILED",
-					"GitHub catalog is unavailable",
+					"Provider catalog is unavailable",
 				);
 			}
 			await sql`
 					SELECT id FROM connection_authorization_roots
 					WHERE principal_id = ${input.principalId}
-						AND provider_id = ${githubProvider}
+						AND provider_id = ${input.providerId}
 					ORDER BY id
 					FOR UPDATE
 				`;
@@ -2364,7 +2488,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND active_grant.root_id = root.id
 					AND active_grant.status = 'ACTIVE'
 				WHERE root.principal_id = ${input.principalId}
-					AND root.provider_id = ${githubProvider}
+					AND root.provider_id = ${input.providerId}
 				ORDER BY root.id
 				FOR UPDATE OF active_grant
 			`;
@@ -2372,7 +2496,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				SELECT id FROM connection_accounts
 				WHERE owner_type = 'PERSONAL'
 					AND owner_principal_id = ${input.principalId}
-					AND provider_id = ${githubProvider}
+					AND provider_id = ${input.providerId}
 					AND external_account = ${input.externalAccount}
 				FOR UPDATE
 			`;
@@ -2394,7 +2518,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					)
 					VALUES (
 						${connectionId}, 'PERSONAL', ${input.principalId}, NULL,
-						${release.id}, ${githubProvider},
+						${release.id}, ${input.providerId},
 						${input.externalAccount}, ${input.displayName}, 'ACTIVE'
 					)
 				`;
@@ -2424,7 +2548,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				INSERT INTO connection_audit_records (principal_id, event, detail)
 				VALUES (
 					${input.principalId}, 'CONNECTION_CONNECTED',
-					${sql.json({ connectionId, provider: githubProvider })}
+					${sql.json({ connectionId, provider: input.providerId })}
 				)
 			`;
 			return { connectionId };
@@ -2432,7 +2556,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async getOverview(principalId: string): Promise<ConnectionOverview> {
-		const currentReleaseId = this.publishedGithubProviderReleaseId ?? "";
+		const currentReleaseIds = new Set(
+			this.publishedProviderReleaseIds.values(),
+		);
 		const [principal, connections, actions, grants, consumers, calls] =
 			await Promise.all([
 				this.sql<{ display_name: string; id: string }[]>`
@@ -2447,12 +2573,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						external_account: string;
 						id: string;
 						owner_type: "PERSONAL" | "SHARED";
+						provider_id: string;
+						provider_release_id: string;
 						release_status: "DISABLED" | "PUBLISHED";
 						status: "ACTIVE" | "DISCONNECTED";
 					}[]
 				>`
 					SELECT account.id, account.external_account, account.display_name,
-						account.owner_type,
+						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status AS release_status,
 						credential.scope_json IS NOT NULL AS credential_scope_known,
 						COALESCE(
@@ -2484,7 +2612,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND membership.principal_id IS NOT NULL
 					)
 					GROUP BY account.id, account.external_account, account.display_name,
-						account.owner_type, account.status, release.status,
+						account.owner_type, account.provider_id, account.provider_release_id,
+						account.status, release.status,
 						credential.scope_json
 					ORDER BY account.display_name, account.id
 				`,
@@ -2494,26 +2623,31 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						effect: "READ" | "WRITE";
 						id: string;
 						input_schema: unknown;
-						name: GitHubActionName;
+						name: ActionName;
+						provider_release_id: string;
 						required_scopes: unknown;
 					}[]
 				>`
 					SELECT action.id, action.name, action.description, action.effect,
-							action.input_schema, action.required_scopes
+							action.input_schema, action.required_scopes,
+							action.provider_release_id
 					FROM connection_action_versions action
 					JOIN connection_provider_releases release
 						ON release.id = action.provider_release_id
 					WHERE action.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
-						AND release.id = ${currentReleaseId}
 					ORDER BY action.id
 				`,
 				this.sql<
 					{
 						action_version_ids: unknown;
+						actions: unknown;
 						connection_id: string;
+						connection_display_name: string;
 						consumer_id: string;
 						consumer_name: string;
+						external_account: string;
 						id: string;
+						provider_id: string;
 						status:
 							| "ACTIVE"
 							| "PAUSED_CONNECTION"
@@ -2525,18 +2659,35 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				>`
 					SELECT stored_grant.id, stored_grant.connection_id,
 						stored_grant.consumer_id, stored_grant.status,
+						account.provider_id,
+						account.display_name AS connection_display_name,
+						account.external_account,
 						consumer.display_name AS consumer_name,
 						COALESCE(
 							jsonb_agg(grant_action.action_version_id ORDER BY grant_action.action_version_id)
 								FILTER (WHERE grant_action.action_version_id IS NOT NULL),
 							'[]'::jsonb
 						) AS action_version_ids
+						, COALESCE(
+							jsonb_agg(
+								jsonb_build_object(
+									'id', action.id,
+									'name', action.name,
+									'effect', action.effect
+								) ORDER BY action.id
+							) FILTER (WHERE action.id IS NOT NULL),
+							'[]'::jsonb
+						) AS actions
 					FROM connection_grants stored_grant
 					JOIN connection_consumers consumer ON consumer.id = stored_grant.consumer_id
+					JOIN connection_accounts account ON account.id = stored_grant.connection_id
 					LEFT JOIN connection_grant_actions grant_action
 						ON grant_action.grant_id = stored_grant.id
+					LEFT JOIN connection_action_versions action
+						ON action.id = grant_action.action_version_id
 					WHERE stored_grant.principal_id = ${principalId}
-					GROUP BY stored_grant.id, consumer.display_name
+					GROUP BY stored_grant.id, consumer.display_name,
+						account.provider_id, account.display_name, account.external_account
 					ORDER BY stored_grant.id
 				`,
 				this.sql<{ id: string; name: string }[]>`
@@ -2551,7 +2702,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				`,
 				this.sql<
 					{
-						action_name: GitHubActionName;
+						action_name: ActionName;
 						connection_id: string;
 						created_at: Date;
 						grant_id: string;
@@ -2570,7 +2721,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			]);
 		if (!principal[0]) forbidden();
 		return {
-			actions: actions.map(actionDefinition),
+			actions: actions
+				.filter((action) => currentReleaseIds.has(action.provider_release_id))
+				.map(actionDefinition),
 			calls: calls.map((call) => ({
 				action: call.action_name,
 				callId: call.id,
@@ -2593,22 +2746,45 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				externalAccount: connection.external_account,
 				id: connection.id,
 				ownerType: connection.owner_type,
+				providerId: connection.provider_id,
 				requiresReconnect:
 					connection.release_status !== "PUBLISHED" ||
-					!connection.credential_scope_known,
+					!connection.credential_scope_known ||
+					this.publishedProviderReleaseIds.get(connection.provider_id) !==
+						connection.provider_release_id,
 				status: connection.status,
 			})),
 			consumers,
 			grants: grants.map((grant) => ({
+				actions: Array.isArray(grant.actions)
+					? grant.actions.filter(
+							(
+								value,
+							): value is {
+								effect: "READ" | "WRITE";
+								id: string;
+								name: ActionName;
+							} =>
+								typeof value === "object" &&
+								value !== null &&
+								typeof (value as { id?: unknown }).id === "string" &&
+								typeof (value as { name?: unknown }).name === "string" &&
+								((value as { effect?: unknown }).effect === "READ" ||
+									(value as { effect?: unknown }).effect === "WRITE"),
+						)
+					: [],
 				actionVersionIds: Array.isArray(grant.action_version_ids)
 					? grant.action_version_ids.filter(
 							(value): value is string => typeof value === "string",
 						)
 					: [],
 				connectionId: grant.connection_id,
+				connectionDisplayName: grant.connection_display_name,
 				consumerId: grant.consumer_id,
 				consumerName: grant.consumer_name,
+				externalAccount: grant.external_account,
 				id: grant.id,
+				providerId: grant.provider_id,
 				status: grant.status,
 			})),
 			principal: {
@@ -2801,7 +2977,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async createCall(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		actionVersionId?: string;
 		argsHash: string;
 		idempotencyKey?: string;
@@ -2877,7 +3053,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async findIdempotentCall(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		idempotencyKey: string;
 		invocation: InvocationContext;
 	}) {
@@ -2900,7 +3076,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async startDispatch(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		callId: string;
 		invocation: InvocationContext;
 	}) {
@@ -3074,7 +3250,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			const leaseId = `lease-${randomUUID()}`;
 			const [row] = await sql<
 				(InvocationRow & {
-					action_name: GitHubActionName;
+					action_version_id: string;
+					action_name: ActionName;
 					call_id: string;
 					request_input: unknown;
 				})[]
@@ -3095,14 +3272,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				SELECT call.id AS call_id, call.principal_id, call.consumer_id,
 					call.instance_id, call.grant_id, call.connection_id,
 					call.credential_version_id, call.actor_key, call.request_input,
-					action.name AS action_name
+					account.provider_id, account.provider_release_id,
+					action.id AS action_version_id, action.name AS action_name
 				FROM leased
 				JOIN connection_calls call ON call.id = leased.call_id
+				JOIN connection_accounts account ON account.id = call.connection_id
 				JOIN connection_action_versions action ON action.id = call.action_version_id
 			`;
 			if (!row) return undefined;
 			return {
 				action: row.action_name,
+				actionVersionId: row.action_version_id,
 				callId: row.call_id,
 				input: asRecord(row.request_input) ?? {},
 				invocation: invocation(row),

@@ -207,7 +207,7 @@ export function ConnectionsView(props: {
 	if (!props.connections.length) {
 		return (
 			<EmptyState title="还没有 Connection">
-				连接 GitHub 账号后即可授权给你的客户端。
+				连接 GitHub 或公司 Bitbucket 账号后即可授权给你的客户端。
 			</EmptyState>
 		);
 	}
@@ -221,6 +221,9 @@ export function ConnectionsView(props: {
 					<div className="connection-main">
 						<div className="connection-title-line">
 							<h2>{connection.displayName}</h2>
+							<span className="ownership-badge">
+								{providerLabel(connection.providerId)}
+							</span>
 							<span className="ownership-badge">
 								{connection.ownerType === "PERSONAL" ? "个人" : "共享"}
 							</span>
@@ -288,6 +291,10 @@ function statusLabel(value: string) {
 			TERMINATED: "已终止",
 		}[value] ?? value
 	);
+}
+
+export function providerLabel(value: string) {
+	return { bitbucket: "Bitbucket", github: "GitHub" }[value] ?? value;
 }
 
 function formatTime(value: string) {

@@ -7,6 +7,7 @@ import {
 	issueTokenRequestSchema,
 	loginRequestSchema,
 	oauthTransactionRequestSchema,
+	providerCredentialRequestSchema,
 	sharedScopeNameSchema,
 } from "@agent-infra/connection-contracts";
 import {
@@ -199,7 +200,7 @@ function browserApiError(
 		code: string;
 		messageKey: string;
 		retryable?: boolean;
-		status: 400 | 401 | 403 | 404 | 409 | 500;
+		status: 400 | 401 | 403 | 404 | 409 | 500 | 503;
 	},
 ) {
 	context.header("cache-control", "no-store");
@@ -220,19 +221,27 @@ function browserConnectionError(context: Context, error: ConnectionError) {
 	return browserApiError(context, {
 		code: error.code,
 		messageKey:
-			error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
-				? "connection.error.resource_not_found"
-				: error.code === "IDEMPOTENCY_CONFLICT"
-					? "connection.error.idempotency_conflict"
-					: error.code === "RESULT_UNCERTAIN"
-						? "connection.error.result_uncertain"
-						: "connection.error.request_failed",
+			error.code === "INVALID_REQUEST" &&
+			error.message === "Provider credential validation failed"
+				? "connection.error.provider_authentication_failed"
+				: error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
+					? "connection.error.resource_not_found"
+					: error.code === "IDEMPOTENCY_CONFLICT"
+						? "connection.error.idempotency_conflict"
+						: error.code === "RESULT_UNCERTAIN"
+							? "connection.error.result_uncertain"
+							: error.code === "PROVIDER_UNAVAILABLE"
+								? "connection.error.provider_unavailable"
+								: "connection.error.request_failed",
+		retryable: error.code === "PROVIDER_UNAVAILABLE",
 		status:
 			error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
 				? 404
-				: error.code === "INVALID_REQUEST"
-					? 400
-					: 409,
+				: error.code === "PROVIDER_UNAVAILABLE"
+					? 503
+					: error.code === "INVALID_REQUEST"
+						? 400
+						: 409,
 	});
 }
 
@@ -747,6 +756,37 @@ export function createConnectionOAuthApp(
 			if (authorization instanceof Response) return authorization;
 			context.header("cache-control", "no-store");
 			return context.json({ authorizationUrl: authorization.authorizationUrl });
+		});
+
+		app.post("/api/v1/connection/provider-credentials", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const body = parseJsonBody(
+				providerCredentialRequestSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const connected = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.provider-credential.connect",
+						replayable: false,
+						request: body,
+						subject: session.account.principalId,
+					},
+					() =>
+						management.service.connectProviderCredential(
+							session.account.principalId,
+							body.providerId,
+							body.accessToken,
+						),
+				),
+			);
+			if (connected instanceof Response) return connected;
+			context.header("cache-control", "no-store");
+			return context.json(connected, 201);
 		});
 
 		app.post("/api/v1/connection/authorization-previews", async (context) => {

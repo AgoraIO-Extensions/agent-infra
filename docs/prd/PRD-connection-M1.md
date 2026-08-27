@@ -303,6 +303,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
+| 私有 Bitbucket | 员工可用公司 Bitbucket Server PAT 建立个人 Connection；同一 Consumer 的 GitHub 与 Bitbucket 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
 | 多 Credential | 同一 Connection 可完成 refresh/rotation 并保留版本历史，新调用只使用 current 版本 |
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |
 | 授权与撤销 | 用户可以授权或撤销 Consumer/Actor；其他 Consumer 的独立授权不受影响 |

@@ -1,0 +1,91 @@
+{
+	"source": {
+		"repository": "https://github.com/oomol-lab/open-connector.git",
+		"commit": "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7",
+		"referenceFile": "src/providers/bitbucket/actions.ts",
+		"referenceFileSha256": "b3ec36d0014054127c6527c003fe1a82c220251e0fb7d5128fcdacbb989194ab",
+		"licenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+		"noticeSha256": "d0890661bf25e7327808610f773b055cb87bf949ff6bba5943c7d62d94d1bf0f"
+	},
+	"target": {
+		"product": "Bitbucket Server",
+		"version": "6.7.2",
+		"build": "6007002",
+		"apiOrigin": "https://bitbucket-api.agoralab.co",
+		"authentication": "Personal Access Token sent as an Authorization Bearer value",
+		"executorDigest": "sha256:d722799caa8b7ccd0254720c14944e3fdf80f38e9a1eb4fdd9febe09b2da258d"
+	},
+	"atlassianCliReference": {
+		"version": "0.1.18",
+		"deployment": "server",
+		"authentication": "pat",
+		"actions": [
+			"list_projects",
+			"get_project",
+			"list_repositories",
+			"get_repository",
+			"create_repository",
+			"list_branches",
+			"get_commit_build_status",
+			"list_pull_requests",
+			"get_pull_request",
+			"get_pull_request_diff",
+			"get_pull_request_build_status",
+			"approve_pull_request",
+			"unapprove_pull_request",
+			"create_pull_request",
+			"merge_pull_request",
+			"list_pull_request_comments",
+			"get_pull_request_comment",
+			"create_pull_request_comment",
+			"reply_pull_request_comment",
+			"update_pull_request_comment",
+			"delete_pull_request_comment"
+		]
+	},
+	"policy": "OpenConnector Bitbucket Cloud action names and schemas are semantic references only. The Cloud OAuth2 transport, workspace model, api.bitbucket.org origin, and Cloud-only actions are not copied into the Server adapter.",
+	"licenseEvidence": "No Bitbucket provider source file is copied. The referenced OpenConnector Apache-2.0 LICENSE.txt and NOTICE.md remain in the controlled openconnector-kernel package and are verified with this record.",
+	"modifications": [
+		"Replace Bitbucket Cloud OAuth2 and REST 2.0 transport with fixed-origin Bitbucket Server REST 1.0 and PAT Bearer authentication.",
+		"Replace workspace semantics with project key and repository slug inputs.",
+		"Exclude Cloud-only action families and add reviewed Server project, build-status, diff, approval, and comment actions."
+	],
+	"overlap": {
+		"openConnectorAndServer": [
+			"get_current_user",
+			"list_repositories",
+			"get_repository",
+			"list_branches",
+			"list_commits",
+			"get_commit",
+			"list_pull_requests",
+			"get_pull_request",
+			"create_pull_request",
+			"merge_pull_request",
+			"decline_pull_request",
+			"approve_pull_request",
+			"list_pull_request_comments",
+			"create_pull_request_comment"
+		],
+		"serverOnlyForThisRelease": [
+			"list_projects",
+			"get_project",
+			"create_repository",
+			"get_commit_build_status",
+			"get_pull_request_diff",
+			"get_pull_request_build_status",
+			"unapprove_pull_request",
+			"get_pull_request_comment",
+			"reply_pull_request_comment",
+			"update_pull_request_comment",
+			"delete_pull_request_comment"
+		],
+		"excludedCloudOnlyFamilies": [
+			"workspace membership",
+			"issues",
+			"snippets",
+			"pipelines",
+			"runners"
+		]
+	}
+}

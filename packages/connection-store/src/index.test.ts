@@ -58,6 +58,10 @@ describe("Connection store migrations", () => {
 			"0019_shared_github_connections",
 			"0020_connection_owner_immutability",
 			"0021_browser_command_idempotency",
+			"0022_provider_scoped_consumer_declarations",
+			"0023_consumer_declaration_provider_release_fk",
+			"0024_provider_release_integrity",
+			"0025_consumer_declaration_rolling_compatibility",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

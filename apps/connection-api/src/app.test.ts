@@ -45,6 +45,8 @@ const direct: InvocationContext = {
 	grantId: "grant-alice-codex",
 	instanceId: "instance-codex",
 	principalId: "alice",
+	providerId: "github",
+	providerReleaseId: "github-release-v1",
 };
 
 const delegated: InvocationContext = {
@@ -177,6 +179,16 @@ class TestRepository implements ConnectionRepository {
 		};
 		return { connectionId: "connection-oauth" };
 	}
+	async storeProviderCredential(input: {
+		accessToken: string;
+		principalId: string;
+	}) {
+		this.storedOAuthCredential = {
+			accessToken: input.accessToken,
+			principalId: input.principalId,
+		};
+		return { connectionId: "connection-provider" };
+	}
 
 	async findIdempotentCall(input: {
 		action: StoredCall["action"];
@@ -210,6 +222,7 @@ class TestRepository implements ConnectionRepository {
 					externalAccount: "alice-demo",
 					id: "connection-alice",
 					ownerType: "PERSONAL" as const,
+					providerId: "github",
 					requiresReconnect: false,
 					status: "ACTIVE" as const,
 				},
@@ -227,8 +240,11 @@ class TestRepository implements ConnectionRepository {
 		return (await this.getOverview()).connections;
 	}
 
-	async resolveDelegatedWorkload() {
+	async resolveDelegatedWorkload(_workload?: string, _actorKey?: string) {
 		return delegated;
+	}
+	async resolveDelegatedWorkloads(_workload?: string, _actorKey?: string) {
+		return [delegated];
 	}
 
 	async resolveDirectSession() {
@@ -236,6 +252,9 @@ class TestRepository implements ConnectionRepository {
 	}
 	async resolveDirectIdentity() {
 		return direct;
+	}
+	async resolveDirectIdentities() {
+		return [direct];
 	}
 
 	async setCallResult(input: {
@@ -803,6 +822,18 @@ describe("Connection API", () => {
 					authorizationUrl: "https://github.test/login/oauth/authorize",
 				};
 			},
+			connectProviderCredential: async (
+				principalId: string,
+				providerId: string,
+				accessToken: string,
+			) => {
+				expect(accessToken).toBe("test-bitbucket-pat");
+				calls.push({
+					name: "connect-bitbucket",
+					value: { principalId, providerId },
+				});
+				return { connectionId: "connection-bitbucket" };
+			},
 		} as unknown as ConnectionApplicationService;
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
@@ -855,6 +886,19 @@ describe("Connection API", () => {
 				},
 				method: "POST",
 			}),
+			await app.request("/api/v1/connection/provider-credentials", {
+				body: JSON.stringify({
+					accessToken: "test-bitbucket-pat",
+					providerId: "bitbucket",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-bitbucket-connect",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
 			await app.request("/api/v1/connection/authorization-previews", {
 				body: JSON.stringify({
 					connectionId: "connection-github",
@@ -899,12 +943,15 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 204, 204,
+			200, 201, 201, 201, 204, 204,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
 		});
-		expect(await apiResponses[1]?.json()).toMatchObject({
+		expect(await apiResponses[1]?.json()).toEqual({
+			connectionId: "connection-bitbucket",
+		});
+		expect(await apiResponses[2]?.json()).toMatchObject({
 			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
 			preview: { previewId: "preview-1" },
 		});
@@ -914,6 +961,13 @@ describe("Connection API", () => {
 				value: {
 					principalId: "principal-user",
 					redirectUri: "https://connection.example/oauth/callback",
+				},
+			},
+			{
+				name: "connect-bitbucket",
+				value: {
+					principalId: "principal-user",
+					providerId: "bitbucket",
 				},
 			},
 			{

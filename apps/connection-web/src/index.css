@@ -256,9 +256,26 @@ p {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	flex-wrap: wrap;
 	gap: 16px;
 	padding: 15px 18px;
 	border-bottom: 1px solid var(--border);
+}
+.history-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 640;
+	white-space: nowrap;
+}
+.history-toggle input {
+	width: 16px;
+	min-height: 16px;
+	margin: 0;
+	accent-color: var(--accent-button);
 }
 .compact-heading {
 	min-height: 0;
@@ -494,6 +511,41 @@ tbody tr:hover {
 }
 .table-action .button {
 	min-width: 104px;
+}
+.grant-table {
+	min-width: 840px;
+}
+.provider-badge {
+	color: var(--accent);
+	font-size: 12px;
+	font-weight: 700;
+	white-space: nowrap;
+}
+.table-secondary {
+	display: block;
+	margin-top: 3px;
+	color: var(--text-muted);
+	font-size: 10px;
+	font-weight: 500;
+}
+.permission-summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 100px;
+	color: var(--text-muted);
+	font-size: 10px;
+	white-space: nowrap;
+}
+.permission-summary strong {
+	color: var(--text);
+	font-weight: 700;
+}
+.permission-summary span:nth-child(2) {
+	color: var(--accent);
+}
+.permission-summary span:nth-child(3) {
+	color: #9a651f;
 }
 
 .status,
@@ -847,6 +899,9 @@ tbody tr:hover {
 	}
 	.table-scroll .management-table {
 		min-width: 560px;
+	}
+	.table-scroll .grant-table {
+		min-width: 840px;
 	}
 	.table-action {
 		position: sticky;

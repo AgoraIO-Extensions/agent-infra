@@ -1,5 +1,10 @@
 export { executeAction } from "./core/execution.ts";
 export {
+	createGuardedFetch,
+	setDefaultGuardedFetchDnsLookup,
+} from "./core/guarded-fetch.ts";
+export type { GuardedFetchDnsLookup } from "./core/guarded-fetch.ts";
+export {
 	requestAuthorizationCodeToken,
 	requestRefreshToken,
 } from "./oauth/oauth-token.ts";

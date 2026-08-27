@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses } from './types.gen';
+import type { ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, ConnectProviderCredentialData, ConnectProviderCredentialErrors, ConnectProviderCredentialResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -101,6 +101,20 @@ export const disconnectConnection = <ThrowOnError extends boolean = false>(optio
         }],
     url: '/api/v1/connection/connections/{connectionId}',
     ...options
+});
+
+export const connectProviderCredential = <ThrowOnError extends boolean = false>(options: Options<ConnectProviderCredentialData, ThrowOnError>): RequestResult<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError> => (options.client ?? client).post<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/provider-credentials',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 export const startGithubOAuth = <ThrowOnError extends boolean = false>(options: Options<StartGithubOAuthData, ThrowOnError>): RequestResult<StartGithubOAuthResponses, StartGithubOAuthErrors, ThrowOnError> => (options.client ?? client).post<StartGithubOAuthResponses, StartGithubOAuthErrors, ThrowOnError>({

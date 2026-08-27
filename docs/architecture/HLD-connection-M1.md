@@ -81,6 +81,14 @@
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
+Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
+`6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
+Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID
+形成 external account fingerprint。Action catalog 参考 OpenConnector
+`0618e8cdaeaaaa77e2eb23938ac639867d4f03d7` 的 Bitbucket Cloud Action 名称与 schema 语义，但
+Server REST 1.0 Adapter 独立实现传输；workspace membership、issues、snippets、Pipelines 和 runner
+等 Cloud-only 能力不进入该 ProviderRelease。调用方不能提交 endpoint、auth mode 或 Credential。
+
 ### 3.3 非目标
 
 | 非目标 | 原因 |
@@ -134,7 +142,7 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | 初期 Provider 的 exact deployment、认证方式、测试账号、Action/scope，以及 Outlook 是否纳入 | 对应 ProviderRelease 不得进入 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-02 | Confluence/Jira 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | Credential 和 Provider 执行业务路由不启动，缺少正式 Adapter 时启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
@@ -588,6 +596,8 @@ Consumer 声明其需要展示和调用的 ActionVersion：
 type ConsumerActionDeclaration = {
   declarationId: string;
   consumerId: string;
+  providerId: string;
+  providerReleaseId: string;
   version: bigint;
   actionVersionIds: readonly string[];
   declarationDigest: string;
@@ -595,8 +605,10 @@ type ConsumerActionDeclaration = {
 };
 ```
 
-发布时验证所有 ActionVersion 当前存在、Schema 可生成 MCP/OpenAPI、Consumer 类型允许对应 effect class。声明只限制 Consumer 可以请求的最大集合，不授予任何 Principal 的账号。
-`PUBLISHED` 只用于 current declaration；它被新 declaration 替换后变为 `SUPERSEDED`。`SUPERSEDED` 仅当被
+发布时验证所有 ActionVersion 当前存在、属于同一 ProviderRelease、Schema 可生成 MCP/OpenAPI、Consumer 类型允许对应 effect class。声明只限制 Consumer 可以请求的最大集合，不授予任何 Principal 的账号。
+每个 `(consumerId, providerId)` 独立维护一个 current declaration；发布 GitHub declaration 不得替换
+Bitbucket declaration，反之亦然。`PUBLISHED` 只用于该 Provider 的 current declaration；它被同 Provider
+新 declaration 替换后变为 `SUPERSEDED`。`SUPERSEDED` 仅当被
 未终结 Grant 精确引用时可继续执行，不能用于发现或新授权；`REVOKED` 立即使其引用 Grant 不可执行。
 
 ## 13. Provider 与 Action Catalog
@@ -1449,11 +1461,11 @@ Effect Ledger 属于单独的 mutation durability class。生产开放 MUTATING 
 | --- | --- | --- |
 | `principal` | id、type、issuer、subject_hash、status、identity_revision | unique issuer+subject_hash |
 | `principal_profile` | principal_id、ciphertext、profile_revision | PK principal_id |
-| `consumer` | id、type、actor_mode、name、status、current_declaration_id、revision | name非授权键；DIRECT 必须 NONE |
+| `consumer` | id、type、actor_mode、name、status、revision | name非授权键；DIRECT 必须 NONE |
 | `consumer_owner` | consumer_id、principal_id | composite PK |
 | `consumer_instance` | id、consumer_id、owner_principal_id?、type、auth_binding_hash、status、revision | unique consumer+auth binding；unique id+consumer |
 | `consumer_actor_binding` | consumer_id、actor_key、instance_id、status、revision | composite PK；composite FK instance+consumer；current binding required |
-| `consumer_action_declaration` | id、consumer_id、version、digest、state | unique consumer+version；one current `PUBLISHED`；`SUPERSEDED` only executes through exact existing Grant |
+| `consumer_action_declaration` | id、consumer_id、provider_id、provider_release_id、version、digest、state | unique consumer+version；每 consumer+provider 最多一个 current `PUBLISHED`；`SUPERSEDED` only executes through exact existing Grant |
 | `consumer_declared_action` | declaration_id、action_version_id、action_id、tool_name | composite PK；unique declaration+tool_name；composite FK 到 ActionVersion |
 | `user_session` | id、principal_id、instance_id、recovery_generation、key_thumbprint、expires_at、revoked_at | MCP session secret只存hash |
 | `browser_session` | id、session_hash、principal_id、identity_issuer、recovery_generation、expires_at、last_seen_at、revoked_at | Cookie明文不落库；仅控制台使用 |

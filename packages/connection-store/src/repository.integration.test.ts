@@ -262,6 +262,7 @@ describe("PostgreSQL Connection business authority", () => {
 			const consumerId = `shared-consumer-${suffix}`;
 			const actionId = `github.shared_read_${suffix}@v1`;
 			const catalog = {
+				authProfile: { type: "test" },
 				actions: [
 					{
 						description: "Read through a Shared GitHub Connection",
@@ -272,6 +273,8 @@ describe("PostgreSQL Connection business authority", () => {
 						requiredScopes: ["repo"],
 					},
 				],
+				deploymentProfile: { deployment: "test" },
+				executorDigest: `sha256:${"3".repeat(64)}`,
 				provider: "github",
 				providerReleaseId: `github-shared-${suffix}`,
 				sourceCommit: "3".repeat(40),
@@ -595,6 +598,7 @@ describe("PostgreSQL Connection business authority", () => {
 			const v2ActionId = `github.catalog_v2_${suffix}@v1`;
 			const externalAccount = `github-${suffix}`;
 			const v1 = {
+				authProfile: { type: "test" },
 				actions: [
 					{
 						description: "Catalog V1 action",
@@ -613,6 +617,8 @@ describe("PostgreSQL Connection business authority", () => {
 						requiredScopes: ["repo"],
 					},
 				],
+				deploymentProfile: { deployment: "test" },
+				executorDigest: `sha256:${"1".repeat(64)}`,
 				provider: "github",
 				providerReleaseId: `github-release-v1-${suffix}`,
 				sourceCommit: "1".repeat(40),
@@ -661,9 +667,7 @@ describe("PostgreSQL Connection business authority", () => {
 							requiredScopes: ["repo", "workflow"],
 						})),
 					}),
-				).rejects.toThrow(
-					`Published ActionVersion does not match ${v1ActionId}`,
-				);
+				).rejects.toThrow("Pinned ProviderRelease does not match the catalog");
 				await repository.publishConsumerDeclaration({
 					actionVersionIds: [v1ActionId],
 					consumer: { id: consumerId, name: "Catalog test consumer" },
@@ -687,7 +691,7 @@ describe("PostgreSQL Connection business authority", () => {
 				]);
 				expect(pinnedConnection).toMatchObject({
 					actionVersionIds: [v1ActionId, undeclaredActionId].sort(),
-					requiresReconnect: false,
+					requiresReconnect: true,
 				});
 				await authorizeCurrentConsumer(repository, {
 					connectionId: connection.connectionId,
@@ -1156,8 +1160,12 @@ describe("PostgreSQL Connection business authority", () => {
 					),
 				).toEqual(
 					expect.arrayContaining([
-						"github.get_repository@v2",
-						"github.create_pull_request@v2",
+						githubConnectionCatalog.actions.find(
+							(action) => action.name === "github.get_repository",
+						)?.id,
+						githubConnectionCatalog.actions.find(
+							(action) => action.name === "github.create_pull_request",
+						)?.id,
 					]),
 				);
 				const result = await service.invokeDirectForIdentity(
@@ -1602,6 +1610,94 @@ describe("PostgreSQL Connection business authority", () => {
 				await sql.end();
 				await repository.close();
 				await oauthRepository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
+		"keeps one current Consumer declaration per Provider",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const consumer = {
+				id: `consumer-multi-provider-${suffix}`,
+				name: "Multi-provider consumer",
+			};
+			const catalog = (provider: "bitbucket" | "github") => ({
+				actions: [
+					{
+						description: `Read ${provider}`,
+						effect: "READ" as const,
+						id: `${provider}.read_${suffix}@v1`,
+						inputSchema: { required: [] },
+						name: `${provider}.read_${suffix}`,
+						requiredScopes: [`${provider}.read`],
+					},
+				],
+				authProfile: { type: "test" },
+				deploymentProfile: { deployment: "test" },
+				executorDigest: `sha256:${"4".repeat(64)}`,
+				provider,
+				providerReleaseId: `${provider}-multi-provider-${suffix}`,
+				sourceCommit: "4".repeat(40),
+			});
+			try {
+				for (const provider of ["github", "bitbucket"] as const) {
+					const published = catalog(provider);
+					await repository.publishProviderCatalog(published);
+					await repository.publishConsumerDeclaration({
+						actionVersionIds: published.actions.map((action) => action.id),
+						consumer,
+						providerReleaseId: published.providerReleaseId,
+					});
+				}
+				const declarations = await sql<
+					{ provider_id: string; status: string }[]
+				>`
+					SELECT provider_id, status
+					FROM connection_consumer_action_declarations
+					WHERE consumer_id = ${consumer.id}
+					ORDER BY provider_id
+				`;
+				expect(declarations).toEqual([
+					{ provider_id: "bitbucket", status: "PUBLISHED" },
+					{ provider_id: "github", status: "PUBLISHED" },
+				]);
+				const legacyConsumerId = `consumer-legacy-${suffix}`;
+				const legacyDeclarationId = `declaration-legacy-${suffix}`;
+				await sql`
+					INSERT INTO connection_consumers (id, display_name, status)
+					VALUES (${legacyConsumerId}, 'Legacy rolling consumer', 'ACTIVE')
+				`;
+				await sql`
+					INSERT INTO connection_consumer_action_declarations (
+						id, consumer_id, provider_release_id, revision, digest, status
+					)
+					VALUES (
+						${legacyDeclarationId}, ${legacyConsumerId},
+						${`github-multi-provider-${suffix}`}, 1,
+						${`legacy-${suffix}`}, 'PUBLISHED'
+					)
+				`;
+				const [legacyDeclaration] = await sql<{ provider_id: string }[]>`
+					SELECT provider_id
+					FROM connection_consumer_action_declarations
+					WHERE id = ${legacyDeclarationId}
+				`;
+				expect(legacyDeclaration?.provider_id).toBe("github");
+			} finally {
+				await sql.end();
+				await repository.close();
 			}
 		},
 		30_000,

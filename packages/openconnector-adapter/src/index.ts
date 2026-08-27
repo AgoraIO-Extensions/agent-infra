@@ -19,6 +19,10 @@ import {
 	requestAuthorizationCodeToken,
 } from "@agent-infra/openconnector-kernel";
 
+export * from "./bitbucket-server.ts";
+
+import { githubExecutorDigest } from "./github-integrity.ts";
+
 const githubSourceCommit = "0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674";
 
 /**
@@ -33,13 +37,23 @@ function connectionEffect(name: string): ActionDefinition["effect"] {
 }
 
 export const githubConnectionCatalog = {
+	authProfile: {
+		type: "oauth2",
+		tokenTransport: "bearer",
+	},
+	deploymentProfile: {
+		apiOrigin: "https://api.github.com",
+		deployment: "cloud",
+		product: "GitHub",
+	},
+	executorDigest: githubExecutorDigest,
 	provider: "github",
-	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v3`,
+	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v6`,
 	sourceCommit: githubSourceCommit,
 	actions: githubActions.map((action) => ({
 		description: action.description,
 		effect: connectionEffect(action.name),
-		id: `${action.id}@v2`,
+		id: `${action.id}@v5`,
 		inputSchema: connectionInputSchema(action.inputSchema),
 		name: action.id,
 		requiredScopes: [...action.requiredScopes],

@@ -16,8 +16,8 @@
 
 ## 当前状态
 
-仓库包含 M1 工程底座，以及基于 PostgreSQL、公司 LDAP、Connection OAuth/PAT 和 pinned
-OpenConnector GitHub kernel 的统一 Connection account 架构。所有 Consumer 都通过 Connection
+仓库包含 M1 工程底座，以及基于 PostgreSQL、公司 LDAP、Connection OAuth/PAT、pinned
+OpenConnector GitHub kernel 和公司 Bitbucket Server Adapter 的统一 Connection account 架构。所有 Consumer 都通过 Connection
 识别 Principal；同一 Principal 在多台设备共享个人 Connection 和 Direct Consumer Grant。OAuth
 设备会话和命名 PAT 可以单独撤销；同一 PAT 跨端复用时共享一个撤销与审计边界。OpenConnector
 只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。Connection
@@ -32,7 +32,7 @@ Platform Web；`connection-api` 不再拼接管理页面 HTML。
 | Connection Web | `apps/connection-web` | 独立简体中文 React 控制台、生成 Browser Client 与同源 Nginx 入口 |
 | Platform API | `apps/platform-api` | Hono 进程与健康检查 |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
-| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub Adapter、Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
+| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub/Bitbucket Adapter、多 Provider Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
 | OpenConnector Kernel | `packages/openconnector-kernel` | 仅由 `openconnector-adapter` 使用的受控 Provider execution closure |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按

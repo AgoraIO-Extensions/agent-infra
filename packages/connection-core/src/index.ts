@@ -70,6 +70,8 @@ export type InvocationContext = {
 	grantId: string;
 	instanceId: string;
 	principalId: string;
+	providerId: string;
+	providerReleaseId: string;
 };
 
 export type DelegatedAssertionBinding = {
@@ -97,16 +99,25 @@ export type ConnectionOverview = {
 		externalAccount: string;
 		id: string;
 		ownerType: "PERSONAL" | "SHARED";
+		providerId: string;
 		requiresReconnect: boolean;
 		status: "ACTIVE" | "DISCONNECTED";
 	}>;
 	consumers: Array<{ id: string; name: string }>;
 	grants: Array<{
+		actions: Array<{
+			effect: "READ" | "WRITE";
+			id: string;
+			name: ActionName;
+		}>;
 		actionVersionIds: string[];
 		connectionId: string;
+		connectionDisplayName: string;
 		consumerId: string;
 		consumerName: string;
+		externalAccount: string;
 		id: string;
+		providerId: string;
 		status:
 			| "ACTIVE"
 			| "PAUSED_CONNECTION"
@@ -172,7 +183,7 @@ export type CurrentConsumerAuthorizationPreview = {
 };
 
 export type CallProjection = {
-	action: GitHubActionName;
+	action: ActionName;
 	callId: string;
 	connectionId: string;
 	createdAt: string;
@@ -387,6 +398,11 @@ export type GitHubOAuthIdentity = {
 	grantedScopes: string[];
 };
 
+export type ProviderCredentialIdentity = GitHubOAuthIdentity & {
+	providerId: string;
+	providerReleaseId: string;
+};
+
 export type AuthorizationSourceRevisions = {
 	actionSetDigest: string;
 	catalogRevisionDigest: string;
@@ -511,7 +527,8 @@ export type OAuthTransaction = {
 };
 
 export type ReconciliationJob = {
-	action: GitHubActionName;
+	action: ActionName;
+	actionVersionId: string;
 	callId: string;
 	input: Record<string, unknown>;
 	invocation: InvocationContext;
@@ -572,7 +589,7 @@ export interface ConnectionRepository {
 		providerReleaseId: string;
 	}): Promise<{ declarationId: string }>;
 	createCall(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		actionVersionId?: string;
 		argsHash: string;
 		delegatedAssertion?: DelegatedAssertionBinding;
@@ -605,6 +622,15 @@ export interface ConnectionRepository {
 		grantedScopes: readonly string[];
 		principalId: string;
 	}): Promise<{ connectionId: string }>;
+	storeProviderCredential(input: {
+		accessToken: string;
+		displayName: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		principalId: string;
+		providerId: string;
+		providerReleaseId: string;
+	}): Promise<{ connectionId: string }>;
 	storeSharedGithubOAuthCredential(input: {
 		accessToken: string;
 		actorPrincipalId: string;
@@ -614,7 +640,7 @@ export interface ConnectionRepository {
 		sharedScopeId: string;
 	}): Promise<{ connectionId: string }>;
 	findIdempotentCall(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		idempotencyKey: string;
 		invocation: InvocationContext;
 	}): Promise<StoredCall | undefined>;
@@ -631,20 +657,30 @@ export interface ConnectionRepository {
 	): Promise<SharedGithubAdministration>;
 	resolveDelegatedWorkload(
 		workload: string | undefined,
+		actorKey?: string,
 	): Promise<InvocationContext>;
+	resolveDelegatedWorkloads(
+		workload: string | undefined,
+		actorKey?: string,
+	): Promise<InvocationContext[]>;
 	resolveDirectSession(session: string | undefined): Promise<InvocationContext>;
 	resolveDirectIdentity(input: {
 		consumerId: string;
 		instanceId: string;
 		principalId: string;
 	}): Promise<InvocationContext>;
+	resolveDirectIdentities(input: {
+		consumerId: string;
+		instanceId: string;
+		principalId: string;
+	}): Promise<InvocationContext[]>;
 	setCallResult(input: {
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
 	}): Promise<void>;
 	startDispatch(input: {
-		action: GitHubActionName;
+		action: ActionName;
 		callId: string;
 		invocation: InvocationContext;
 	}): Promise<void>;
@@ -655,25 +691,87 @@ export interface ConnectionRepository {
 		reason: string;
 	}): Promise<void>;
 	verifyInvocation(
-		input: InvocationContext & { action: GitHubActionName },
+		input: InvocationContext & { action: ActionName },
 	): Promise<void>;
 }
 
-export interface GitHubExecutor {
+export interface ProviderExecutor {
 	execute(input: {
-		action: GitHubActionName;
+		action: ActionName;
+		actionVersionId: string;
 		credential: CredentialForExecution;
 		input: Record<string, unknown>;
+		providerId: string;
+		providerReleaseId: string;
 	}): Promise<Record<string, unknown>>;
 }
 
-export interface GitHubReconciler {
+export interface ProviderReconciler {
 	reconcile(input: {
-		action: GitHubActionName;
+		action: ActionName;
+		actionVersionId?: string;
 		credential: CredentialForExecution;
 		input: Record<string, unknown>;
+		providerId: string;
+		providerReleaseId: string;
 	}): Promise<Record<string, unknown> | undefined>;
 }
+
+export interface ProviderCredentialConnector {
+	providerId: string;
+	providerReleaseId: string;
+	validateCredential(accessToken: string): Promise<ProviderCredentialIdentity>;
+}
+
+export class ProviderExecutorRouter
+	implements ProviderExecutor, ProviderReconciler
+{
+	constructor(
+		private readonly executors: Readonly<
+			Record<string, ProviderExecutor & Partial<ProviderReconciler>>
+		>,
+	) {}
+
+	execute(input: Parameters<ProviderExecutor["execute"]>[0]) {
+		return this.requireExecutor(input).execute(input);
+	}
+
+	async reconcile(input: Parameters<ProviderReconciler["reconcile"]>[0]) {
+		return this.requireExecutor(input).reconcile?.(input);
+	}
+
+	private requireExecutor(input: {
+		action: ActionName;
+		actionVersionId?: string;
+		providerId: string;
+		providerReleaseId: string;
+	}) {
+		const executor = this.executors[input.providerReleaseId];
+		if (!executor) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				`Provider executor is unavailable: ${input.providerReleaseId || "unknown"}`,
+			);
+		}
+		if (
+			!input.action.startsWith(`${input.providerId}.`) ||
+			(input.actionVersionId !== undefined &&
+				!input.actionVersionId.startsWith(`${input.action}@`))
+		) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Authorized Action does not match its Provider",
+			);
+		}
+		return executor;
+	}
+}
+
+/** @deprecated Use ProviderExecutor. */
+export type GitHubExecutor = ProviderExecutor;
+
+/** @deprecated Use ProviderReconciler. */
+export type GitHubReconciler = ProviderReconciler;
 
 export interface GitHubOAuthProvider {
 	getAuthorizationUrl(
@@ -695,6 +793,7 @@ export class ConnectionError extends Error {
 			| "INVALID_REQUEST"
 			| "PROVIDER_FAILED"
 			| "PROVIDER_UNCERTAIN"
+			| "PROVIDER_UNAVAILABLE"
 			| "RESOURCE_NOT_FOUND"
 			| "RESULT_UNCERTAIN",
 		message: string,
@@ -757,7 +856,7 @@ function validateInput(action: ActionDefinition, value: unknown) {
 	return { ...value };
 }
 
-function requestHash(action: GitHubActionName, input: Record<string, unknown>) {
+function requestHash(action: ActionName, input: Record<string, unknown>) {
 	return canonicalHash({ action, input });
 }
 
@@ -777,12 +876,58 @@ function publicActionId(action: ActionDefinition) {
 export class ConnectionApplicationService {
 	constructor(
 		private readonly repository: ConnectionRepository,
-		private readonly executor: GitHubExecutor,
+		private readonly executor: ProviderExecutor,
 		private readonly oauth?: GitHubOAuthProvider,
+		private readonly credentialConnectors: Readonly<
+			Record<string, ProviderCredentialConnector>
+		> = {},
 	) {}
 
 	async overview(principalId: string) {
 		return this.repository.getOverview(principalId);
+	}
+
+	async connectProviderCredential(
+		principalId: string,
+		providerId: string,
+		accessToken: string,
+	) {
+		if (!accessToken || accessToken.length > 8_192) {
+			throw new ConnectionError("INVALID_REQUEST", "Provider token is invalid");
+		}
+		const connector = this.credentialConnectors[providerId];
+		if (!connector) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				`Provider credential connector is unavailable: ${providerId}`,
+			);
+		}
+		await this.repository.ensurePrincipal({ principalId });
+		let identity: ProviderCredentialIdentity;
+		try {
+			identity = await connector.validateCredential(accessToken);
+		} catch (error) {
+			const invalidCredential = isProviderCredentialInvalid(error);
+			throw new ConnectionError(
+				invalidCredential ? "INVALID_REQUEST" : "PROVIDER_UNAVAILABLE",
+				invalidCredential
+					? "Provider credential validation failed"
+					: "Provider credential service is unavailable",
+			);
+		}
+		if (
+			identity.providerId !== connector.providerId ||
+			identity.providerReleaseId !== connector.providerReleaseId
+		) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Provider identity does not match the published release",
+			);
+		}
+		return this.repository.storeProviderCredential({
+			...identity,
+			principalId,
+		});
 	}
 
 	isConnectionAdministrator(principalId: string) {
@@ -875,9 +1020,14 @@ export class ConnectionApplicationService {
 		instanceId: string;
 		principalId: string;
 	}) {
-		return this.repository.listAuthorizedActions(
-			await this.repository.resolveDirectIdentity(input),
+		const actionSets = await Promise.all(
+			(await this.repository.resolveDirectIdentities(input)).map((invocation) =>
+				this.repository.listAuthorizedActions(invocation),
+			),
 		);
+		return actionSets
+			.flat()
+			.sort((left, right) => left.id.localeCompare(right.id));
 	}
 
 	async listDirectAppsForIdentity(
@@ -925,8 +1075,8 @@ export class ConnectionApplicationService {
 		identity: { consumerId: string; instanceId: string; principalId: string },
 		actionId: string,
 	) {
-		const action = await this.authorizedDirectAction(
-			await this.repository.resolveDirectIdentity(identity),
+		const { action } = await this.authorizedDirectActionAcross(
+			identity,
 			actionId,
 		);
 		const inputSchema = actionInputSchema(action);
@@ -962,9 +1112,15 @@ export class ConnectionApplicationService {
 		},
 		service?: string,
 	) {
-		const connections = await this.repository.listAuthorizedConnections(
-			await this.repository.resolveDirectIdentity(input),
-		);
+		const connections = (
+			await Promise.all(
+				(
+					await this.repository.resolveDirectIdentities(input)
+				).map((invocation) =>
+					this.repository.listAuthorizedConnections(invocation),
+				),
+			)
+		).flat();
 		const normalizedService = service?.toLowerCase();
 		return normalizedService
 			? connections.filter((connection) =>
@@ -983,7 +1139,7 @@ export class ConnectionApplicationService {
 
 	async invokeDirect(
 		session: string | undefined,
-		action: GitHubActionName,
+		action: ActionName,
 		input: unknown,
 	) {
 		return this.invoke(
@@ -999,14 +1155,14 @@ export class ConnectionApplicationService {
 			instanceId: string;
 			principalId: string;
 		},
-		action: GitHubActionName,
+		action: ActionName,
 		input: unknown,
 	) {
-		return this.invoke(
-			await this.repository.resolveDirectIdentity(identity),
+		const { invocation } = await this.authorizedDirectActionAcross(
+			identity,
 			action,
-			input,
 		);
+		return this.invoke(invocation, action, input);
 	}
 
 	async executeDirectActionForIdentity(
@@ -1014,8 +1170,10 @@ export class ConnectionApplicationService {
 		actionId: string,
 		input: unknown,
 	) {
-		const invocation = await this.repository.resolveDirectIdentity(identity);
-		const action = await this.authorizedDirectAction(invocation, actionId);
+		const { action, invocation } = await this.authorizedDirectActionAcross(
+			identity,
+			actionId,
+		);
 		return this.invoke(invocation, action.name, input);
 	}
 
@@ -1041,7 +1199,7 @@ export class ConnectionApplicationService {
 			| (DelegatedAssertionBinding & { workload: string })
 			| string
 			| undefined,
-		action: GitHubActionName,
+		action: ActionName,
 		input: unknown,
 		idempotencyKey?: string,
 	) {
@@ -1058,8 +1216,14 @@ export class ConnectionApplicationService {
 				"Delegated calls use Idempotency-Key header",
 			);
 		}
+		const invocation = await this.authorizedDelegatedAction(
+			workload,
+			action,
+			delegatedAssertion?.actionVersionId,
+			delegatedAssertion?.actorId,
+		);
 		return this.invoke(
-			await this.repository.resolveDelegatedWorkload(workload),
+			invocation,
 			action,
 			idempotencyKey ? { ...input, idempotencyKey } : input,
 			delegatedAssertion,
@@ -1158,7 +1322,7 @@ export class ConnectionApplicationService {
 
 	private async invoke(
 		invocation: InvocationContext,
-		action: GitHubActionName,
+		action: ActionName,
 		value: unknown,
 		delegatedAssertion?: DelegatedAssertionBinding,
 	): Promise<CallProjection> {
@@ -1245,8 +1409,11 @@ export class ConnectionApplicationService {
 			}
 			const result = await this.executor.execute({
 				action,
+				actionVersionId: actionDefinition.id,
 				credential,
 				input: delegatedRequestInput(input),
+				providerId: invocation.providerId,
+				providerReleaseId: invocation.providerReleaseId,
 			});
 			providerResponded = true;
 			await this.repository.setCallResult({
@@ -1281,16 +1448,13 @@ export class ConnectionApplicationService {
 			if (status === "UNCERTAIN") {
 				throw new ConnectionError(
 					"PROVIDER_UNCERTAIN",
-					"GitHub write submission outcome is unknown; reconciliation is pending",
+					"Provider write submission outcome is unknown; reconciliation is pending",
 				);
 			}
 			if (error instanceof ConnectionError) {
 				throw error;
 			}
-			throw new ConnectionError(
-				"PROVIDER_FAILED",
-				"GitHub provider request failed",
-			);
+			throw new ConnectionError("PROVIDER_FAILED", "Provider request failed");
 		}
 	}
 
@@ -1310,32 +1474,59 @@ export class ConnectionApplicationService {
 		return definition;
 	}
 
-	private async authorizedDirectAction(
-		invocation: InvocationContext,
+	private async authorizedDirectActionAcross(
+		identity: { consumerId: string; instanceId: string; principalId: string },
 		actionId: string,
 	) {
-		const action = (
-			await this.repository.listAuthorizedActions(invocation)
-		).find(
-			(candidate) =>
-				candidate.id === actionId ||
-				candidate.name === actionId ||
-				publicActionId(candidate) === actionId,
-		);
-		if (!action) {
-			throw new ConnectionError(
-				"INVALID_REQUEST",
-				"Unknown or unauthorized action",
+		for (const invocation of await this.repository.resolveDirectIdentities(
+			identity,
+		)) {
+			const action = (
+				await this.repository.listAuthorizedActions(invocation)
+			).find(
+				(candidate) =>
+					candidate.id === actionId ||
+					candidate.name === actionId ||
+					publicActionId(candidate) === actionId,
 			);
+			if (action) return { action, invocation };
 		}
-		return action;
+		throw new ConnectionError(
+			"INVALID_REQUEST",
+			"Unknown or unauthorized action",
+		);
+	}
+
+	private async authorizedDelegatedAction(
+		workload: string | undefined,
+		actionName: ActionName,
+		actionVersionId?: string,
+		actorKey?: string,
+	) {
+		for (const invocation of await this.repository.resolveDelegatedWorkloads(
+			workload,
+			actorKey,
+		)) {
+			const action = (
+				await this.repository.listAuthorizedActions(invocation)
+			).find(
+				(candidate) =>
+					candidate.name === actionName &&
+					(actionVersionId === undefined || candidate.id === actionVersionId),
+			);
+			if (action) return invocation;
+		}
+		throw new ConnectionError(
+			"FORBIDDEN",
+			"Connection authorization is not active",
+		);
 	}
 }
 
 export class ConnectionRecoveryService {
 	constructor(
 		private readonly repository: ConnectionRepository,
-		private readonly reconciler: GitHubReconciler,
+		private readonly reconciler: ProviderReconciler,
 	) {}
 
 	async runOnce(): Promise<boolean> {
@@ -1344,8 +1535,11 @@ export class ConnectionRecoveryService {
 		try {
 			const result = await this.reconciler.reconcile({
 				action: job.action,
+				actionVersionId: job.actionVersionId,
 				credential: await this.repository.getCredential(job.invocation),
 				input: job.input,
+				providerId: job.invocation.providerId,
+				providerReleaseId: job.invocation.providerReleaseId,
 			});
 			if (result) {
 				await this.repository.completeReconciliationJob({
@@ -1377,6 +1571,15 @@ function isSubmissionUncertain(error: unknown) {
 		typeof error === "object" &&
 		error !== null &&
 		(error as { submissionUncertain?: unknown }).submissionUncertain === true
+	);
+}
+
+function isProviderCredentialInvalid(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { providerCredentialInvalid?: unknown })
+			.providerCredentialInvalid === true
 	);
 }
 

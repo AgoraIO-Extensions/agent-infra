@@ -555,6 +555,10 @@ dispatch。
 被新 declaration 替换的 declaration 为 `SUPERSEDED`，仅可由其已绑定 Grant 执行，不能用于发现或新授权；
 `REVOKED` declaration 立即使其引用 Grant 不可执行。
 
+Consumer current declaration 按 `(consumerId, providerId)` 分区；同一 Direct Consumer 可以同时发布
+GitHub 与 Bitbucket declaration。MCP discovery 聚合当前 Principal/Consumer 在各 Provider 的 current Grant，
+执行时由服务端根据 exact ActionVersion 选择唯一 Provider Grant；调用方不能提交 Connection 或账号 selector。
+
 ### 13.3 调用链路
 
 ```mermaid
@@ -734,6 +738,8 @@ Hermes 的群聊和线程规则保留在 Hermes Adapter 内。Codex 不绑定企
   `get_action_guide` 返回的 Action input Schema 必须与同一 ActionVersion/OpenAPI domain contract 一致。
 - Hermes、Codex、组合模板和自定义样例镜像运行同一 Agent Runtime Conformance Suite。
 - OpenConnector Adapter 运行 Provider/Action、OAuth、凭证隐藏和跨 scope 拒绝测试。
+- 私有 Bitbucket Server Adapter 固定 deployment/auth/API origin；以 PAT 身份证明、Server 分页、路径编码、
+  response bound 和 Cloud-only Action 排除测试证明它没有继承 Bitbucket Cloud transport 假设。
 - SSE 验证事件顺序、重复投递、断线重连和游标补发。
 
 ### 19.3 集成测试

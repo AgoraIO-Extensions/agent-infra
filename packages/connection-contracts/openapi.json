@@ -117,6 +117,29 @@
 				}
 			}
 		},
+		"/api/v1/connection/provider-credentials": {
+			"post": {
+				"operationId": "connectProviderCredential",
+				"parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ProviderCredentialRequest"
+							}
+						}
+					}
+				},
+				"responses": {
+					"201": { "$ref": "#/components/responses/ConnectionCreated" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/oauth-transactions": {
 			"post": {
 				"operationId": "startGithubOAuth",
@@ -438,6 +461,14 @@
 					}
 				}
 			},
+			"ConnectionCreated": {
+				"description": "Connected provider account",
+				"content": {
+					"application/json": {
+						"schema": { "$ref": "#/components/schemas/ConnectionCreated" }
+					}
+				}
+			},
 			"AuthorizationPreview": {
 				"description": "Authorization preview",
 				"content": {
@@ -599,6 +630,7 @@
 					"displayName",
 					"externalAccount",
 					"ownerType",
+					"providerId",
 					"status",
 					"requiresReconnect",
 					"actionVersionIds"
@@ -608,6 +640,7 @@
 					"displayName": { "type": "string" },
 					"externalAccount": { "type": "string" },
 					"ownerType": { "type": "string", "enum": ["PERSONAL", "SHARED"] },
+					"providerId": { "type": "string", "minLength": 1 },
 					"status": { "type": "string", "enum": ["ACTIVE", "DISCONNECTED"] },
 					"requiresReconnect": { "type": "boolean" },
 					"actionVersionIds": { "type": "array", "items": { "type": "string" } }
@@ -632,6 +665,16 @@
 					"name": { "type": "string" }
 				}
 			},
+			"GrantAction": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["id", "name", "effect"],
+				"properties": {
+					"id": { "type": "string" },
+					"name": { "type": "string" },
+					"effect": { "type": "string", "enum": ["READ", "WRITE"] }
+				}
+			},
 			"Grant": {
 				"type": "object",
 				"additionalProperties": false,
@@ -640,16 +683,30 @@
 					"connectionId",
 					"consumerId",
 					"consumerName",
+					"providerId",
+					"connectionDisplayName",
+					"externalAccount",
 					"status",
-					"actionVersionIds"
+					"actionVersionIds",
+					"actions"
 				],
 				"properties": {
 					"id": { "type": "string" },
 					"connectionId": { "type": "string" },
 					"consumerId": { "type": "string" },
 					"consumerName": { "type": "string" },
+					"providerId": { "type": "string" },
+					"connectionDisplayName": { "type": "string" },
+					"externalAccount": { "type": "string" },
 					"status": { "type": "string" },
-					"actionVersionIds": { "type": "array", "items": { "type": "string" } }
+					"actionVersionIds": {
+						"type": "array",
+						"items": { "type": "string" }
+					},
+					"actions": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/GrantAction" }
+					}
 				}
 			},
 			"Call": {
@@ -713,6 +770,21 @@
 				"type": "object",
 				"additionalProperties": false,
 				"properties": { "sharedScopeId": { "type": "string" } }
+			},
+			"ProviderCredentialRequest": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["providerId", "accessToken"],
+				"properties": {
+					"providerId": { "type": "string", "enum": ["bitbucket"] },
+					"accessToken": { "type": "string", "minLength": 1, "maxLength": 8192 }
+				}
+			},
+			"ConnectionCreated": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["connectionId"],
+				"properties": { "connectionId": { "type": "string" } }
 			},
 			"OAuthTransaction": {
 				"type": "object",

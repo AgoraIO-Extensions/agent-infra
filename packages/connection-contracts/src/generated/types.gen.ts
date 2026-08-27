@@ -70,6 +70,7 @@ export type Connection = {
     displayName: string;
     externalAccount: string;
     ownerType: 'PERSONAL' | 'SHARED';
+    providerId: string;
     status: 'ACTIVE' | 'DISCONNECTED';
     requiresReconnect: boolean;
     actionVersionIds: Array<string>;
@@ -86,13 +87,23 @@ export type Consumer = {
     name: string;
 };
 
+export type GrantAction = {
+    id: string;
+    name: string;
+    effect: 'READ' | 'WRITE';
+};
+
 export type Grant = {
     id: string;
     connectionId: string;
     consumerId: string;
     consumerName: string;
+    providerId: string;
+    connectionDisplayName: string;
+    externalAccount: string;
     status: string;
     actionVersionIds: Array<string>;
+    actions: Array<GrantAction>;
 };
 
 export type Call = {
@@ -121,6 +132,15 @@ export type ConnectionsResponse = {
 
 export type OAuthTransactionRequest = {
     sharedScopeId?: string;
+};
+
+export type ProviderCredentialRequest = {
+    providerId: 'bitbucket';
+    accessToken: string;
+};
+
+export type ConnectionCreated = {
+    connectionId: string;
 };
 
 export type OAuthTransaction = {
@@ -481,6 +501,46 @@ export type DisconnectConnectionResponses = {
 };
 
 export type DisconnectConnectionResponse = DisconnectConnectionResponses[keyof DisconnectConnectionResponses];
+
+export type ConnectProviderCredentialData = {
+    body: ProviderCredentialRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/provider-credentials';
+};
+
+export type ConnectProviderCredentialErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type ConnectProviderCredentialError = ConnectProviderCredentialErrors[keyof ConnectProviderCredentialErrors];
+
+export type ConnectProviderCredentialResponses = {
+    /**
+     * Connected provider account
+     */
+    201: ConnectionCreated;
+};
+
+export type ConnectProviderCredentialResponse = ConnectProviderCredentialResponses[keyof ConnectProviderCredentialResponses];
 
 export type StartGithubOAuthData = {
     body?: OAuthTransactionRequest;

@@ -21,6 +21,11 @@ export const oauthTransactionRequestSchema = z.strictObject({
 	sharedScopeId: opaqueId.optional(),
 });
 
+export const providerCredentialRequestSchema = z.strictObject({
+	accessToken: z.string().min(1).max(8_192),
+	providerId: z.literal("bitbucket"),
+});
+
 export const authorizationPreviewRequestSchema = z.strictObject({
 	connectionId: opaqueId,
 	consumerId: opaqueId,

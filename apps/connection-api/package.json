@@ -27,6 +27,7 @@
 		"@agent-infra/connection-identity": "workspace:*",
 		"@agent-infra/connection-store": "workspace:*",
 		"@agent-infra/openconnector-adapter": "workspace:*",
+		"@agent-infra/openconnector-kernel": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "^0.22.14",
 		"tsx": "^4.23.1",

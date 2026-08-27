@@ -5,7 +5,8 @@
 	"exports": "./src/index.ts",
 	"scripts": {
 		"check-types": "tsc --noEmit",
-		"test": "node --test"
+		"test": "node scripts/verify-bitbucket-provenance.mjs && node --test",
+		"verify:bitbucket:upstream": "node scripts/verify-bitbucket-upstream.mjs"
 	},
 	"dependencies": {
 		"@agent-infra/connection-core": "workspace:*",
