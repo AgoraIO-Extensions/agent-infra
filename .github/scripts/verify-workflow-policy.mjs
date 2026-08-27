@@ -182,6 +182,8 @@ const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const GH_AW_POC_SEMANTIC_SHA256 =
   "5782bc284cca0eac0a40859ec47a2c1381f98592ab8aea67020d2556d11ca557";
+const GH_AW_POC_SOURCE_SHA256 =
+  "531cc11b6c14d1f3815f00ec218b7d9d6409dd341827011f830f3cf0feb2d1b4";
 
 function workflowSteps(workflow) {
   return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
@@ -357,6 +359,13 @@ function validateGhAwPocWorkflow(workflow) {
     );
   }
   return errors;
+}
+
+export function validateGhAwPocSource(source) {
+  const hash = createHash("sha256").update(source).digest("hex");
+  return hash === GH_AW_POC_SOURCE_SHA256
+    ? []
+    : ["gh-aw POC source must match the reviewed generated workflow source"];
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
@@ -2130,6 +2139,10 @@ async function main() {
     ),
   );
   const scriptDirectory = path.resolve(".github/scripts");
+  const ghAwPocSource = await fs.readFile(
+    path.join(directory, "gh-aw-copilot-byok-poc.md"),
+    "utf8",
+  );
   const scriptSources = Object.fromEntries(
     await Promise.all(
       [
@@ -2151,6 +2164,7 @@ async function main() {
   );
   const errors = [
     ...validateWorkflowDocuments(workflows),
+    ...validateGhAwPocSource(ghAwPocSource),
     ...validateTrustedScriptSources(scriptSources),
   ];
   if (errors.length) throw new Error(errors.join("\n"));

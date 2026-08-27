@@ -5,6 +5,7 @@ import test from "node:test";
 import YAML from "yaml";
 
 import {
+  validateGhAwPocSource,
   validateTrustedScriptSources,
   validateWorkflowDocuments,
 } from "./verify-workflow-policy.mjs";
@@ -45,6 +46,13 @@ async function actualTrustedScriptSources() {
         ],
       ),
     ),
+  );
+}
+
+async function actualGhAwPocSource() {
+  return fs.readFile(
+    path.join(workflowDirectory, "gh-aw-copilot-byok-poc.md"),
+    "utf8",
   );
 }
 
@@ -153,6 +161,12 @@ test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () =>
       error.includes("gh-aw POC contract"),
     ),
   );
+});
+
+test("binds the gh-aw POC source to its reviewed lock workflow", async () => {
+  const source = await actualGhAwPocSource();
+  assert.deepEqual(validateGhAwPocSource(source), []);
+  assert.ok(validateGhAwPocSource(`${source}\n# drift`).length > 0);
 });
 
 test("reserves concurrency queue for the generated gh-aw workflow", async () => {
