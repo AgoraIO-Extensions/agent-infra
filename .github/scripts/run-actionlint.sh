@@ -50,4 +50,5 @@ if [[ "$actual_sha256" != "$expected_sha256" ]]; then
 fi
 
 tar -xzf "${temporary_directory}/${archive}" -C "$temporary_directory" actionlint
-"${temporary_directory}/actionlint" -color
+"${temporary_directory}/actionlint" -color \
+  -ignore 'unexpected key "queue" for "concurrency" section'
