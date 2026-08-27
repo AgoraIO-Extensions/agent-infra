@@ -221,6 +221,21 @@ agent-infra/
 
 `packages/contracts` 只保存跨进程 wire DTO/Schema，不依赖 React、Hono、Drizzle、Kubernetes 或应用入口，也不复用数据库实体作为协议类型。Web、API、Worker、RuntimeHost 和 Connection Client 在边界显式映射协议 DTO 与领域对象。
 
+### 6.4 Contract Schema authority
+
+`packages/contracts` 中由 Agent Platform 主系统维护的 wire Schema 只手写 Zod 4，并从该 authoring source 单向生成两类提交到仓库的标准产物：浏览器和内部 HTTP Contract 使用 OpenAPI 3.1，SSE payload、Runtime Manifest 等非 HTTP Contract 使用 JSON Schema 2020-12。生成后的 OpenAPI 是 HTTP 消费者评审和兼容检查的规范来源，其中浏览器 OpenAPI 也是 TypeScript Client 的生成输入；JSON Schema 是非 HTTP Contract 的机器校验入口。调用方不得直接编辑生成产物，也不能从 OpenAPI 或 JSON Schema 反向生成 Zod，项目不维护第三套通用 Schema IR。取舍见 [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](../adr/0003-zod-authored-wire-contracts.md)。
+
+M1 的 Schema family 按以下顺序和主责 artifact 交付：
+
+| Schema family | 主责 artifact | Implementation Issue |
+| --- | --- | --- |
+| 公共 primitives、错误模型、生成与兼容工具 | Platform Core/API | [#179](https://github.com/AgoraIO-Extensions/agent-infra/issues/179) |
+| 浏览器 OpenAPI/SSE、delegated contract 和生产 Web Client | Platform Core/API，Web/Connection 消费方评审 | [#180](https://github.com/AgoraIO-Extensions/agent-infra/issues/180) |
+| RuntimeHost/Driver wire Schema | Codex Runtime，Worker 消费方评审 | [#181](https://github.com/AgoraIO-Extensions/agent-infra/issues/181) |
+| Registry、Secret、Kubernetes Workload 与 Runtime Manifest Contract | Agent Workload，Core/Delivery 消费方评审 | [#182](https://github.com/AgoraIO-Extensions/agent-infra/issues/182)；OCI admission 由 [#188](https://github.com/AgoraIO-Extensions/agent-infra/issues/188) 实现 |
+
+生成工具固定版本；产物使用稳定 key/property 顺序、LF 和一个末尾换行，不能包含时间戳、绝对路径或工具版本等易漂移字段。`packages/contracts` 必须在现有 `pnpm test` 路径中执行生成漂移、基于 pull-request merge-base 的 breaking-change 和 consumer contract 检查。test-only Client smoke 只验证 OpenAPI 到浏览器 TypeScript Client 的单向链路，不进入 package exports、`files` 或 `dist`；`packages/test-support` 只提供由正式 Schema 校验的静态 builder/fixture，生产代码不得依赖它。Connection 内部 Provider、OAuth、凭证和 Action Schema 仍由 Connection 子地图决定；本节只覆盖 Platform-owned namespaces 以及由 Platform 主责、Connection 作为消费方评审的 delegated contract。
+
 ## 7. Web 架构
 
 ### 7.1 页面模块
@@ -261,7 +276,7 @@ Connection 在产品上是独立系统，但 M1 复用同一 Web Shell 和公司
 
 - 管理和查询使用 `/api/v1/*` HTTP/JSON。
 - 创建、更新和命令类请求支持 `Idempotency-Key`。
-- OpenAPI 3.1 是浏览器接口的规范来源。
+- 浏览器接口遵循 [Contract Schema authority](#64-contract-schema-authority)；生成并提交的 OpenAPI 3.1 是消费者使用的规范来源。
 - TypeScript 客户端由 OpenAPI 生成，禁止手写重复的请求/响应类型。
 - 文件使用预签名上传/下载；业务接口只传文件引用和元数据。
 
@@ -279,7 +294,7 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 ### 8.3 内部接口
 
-平台到 Connection、`platform-worker` 到 Agent Pod 均使用版本化 HTTP 契约；Runtime 增量事件使用内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，不因位于集群内而跳过鉴权。
+平台到 Connection、`platform-worker` 到 Agent Pod 均使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，不因位于集群内而跳过鉴权。
 
 M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其他语言客户端和测试工具共同使用同一份契约。
 
@@ -687,8 +702,7 @@ sequenceDiagram
 
 ### 19.2 契约测试
 
-- OpenAPI Schema 变更必须通过兼容性检查。
-- `packages/contracts` 的浏览器 OpenAPI、SSE、内部 HTTP 和 RuntimeHost Schema 必须通过生成漂移、consumer contract 和 breaking-change 检查；数据库/领域类型不能绕过映射直接成为 wire contract。
+- Contract 测试执行 [Contract Schema authority](#64-contract-schema-authority) 定义的单向生成、漂移、merge-base breaking-change、consumer contract 和发布边界；数据库/领域类型不能绕过映射直接成为 wire contract。
 - IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署加密公钥/Worker-only 解密 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
 - IdentityAdapter 负向测试覆盖签发方、audience、签发/过期时间、context ID、keyVersion、部署身份绑定和重放；调用方提交的身份字段、过期/重复信封或身份依赖不可用都不能形成授权。
 - Platform Secret 负向测试覆盖 API 进程无解密私钥、非 CSPRNG/错误长度、重用 DEK/nonce、DEK fingerprint 冲突、失败重试复用加密材料、非 canonical AAD、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingAlgorithmVersion`/`wrappingKeyVersion`、AEAD 认证失败、原地更新被引用的 Kubernetes Secret、候选 Workload 引用错误版本化名称、Worker 在创建 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 Agent/Secret/config revision/Workload UID/generation/fence 任一 stale 值试图激活候选版本；任何路径都不能泄露明文、改变旧 Workload 的 active Secret、错误提升 active 或提前回收旧版本。

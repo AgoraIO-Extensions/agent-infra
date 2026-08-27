@@ -12,6 +12,7 @@
 - [Agent Runtime M1 HLD](docs/architecture/HLD-agent-runtime-M1.md)
 - [ADR: Platform 服务与 Kubernetes Workload Plane 分离](docs/adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)
 - [ADR: Platform Secret 使用项目内置密文存储](docs/adr/0002-store-platform-secrets-as-application-ciphertext.md)
+- [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](docs/adr/0003-zod-authored-wire-contracts.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
 
 ## 当前状态
