@@ -24,6 +24,18 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 - 仓库只建设本仓库所需的有界 Issue 依赖图、状态决策函数和幂等 Reconciler，不建设通用
   Loop Engine、Graph Engine 或开发调度平台。
 
+### 2.1 Matt Skill 交付路径
+
+默认交付路径是 `triage -> implement`。只有需求需要形成并确认独立 Spec 时才在中间加入
+`to-spec`；只有工作无法在一个 fresh context 内完成，或需要多个可独立交付的 vertical slice 时
+才继续使用 `to-tickets`。这些阶段是可选的工作量升级，不是每个 Issue 的固定仪式。
+
+`triage` 交给实现阶段的完整结构化 Issue 正文就是 Agent Brief 和 Execution Contract，不再创建
+第二份同义文档。`implement` 是实现入口，在预先确认的测试 seam 上按需使用仓库级 `tdd`，完成
+验证后使用仓库级 `code-review` 做 Standards 与 Spec 双轴评审，再提交代码。仓库不记录或校验
+Skill 调用轨迹；受保护路径、CI、Review thread、CODEOWNER Approve、人工验证和分支保护继续从
+外层校验交付结果与安全边界。
+
 ## 3. 权威依据
 
 开发工作按以下顺序确定依据：
@@ -81,6 +93,8 @@ Team 查询、Check Run 发布或配置读取失败时一律 fail closed。网�
 
 - Implementation Issue 必须包含唯一的 `Problem`、`Scope`、`Acceptance criteria`、`Validation`
   和 `Blocked by` 二级标题。
+- 上述结构化正文就是 Agent Brief 和 Execution Contract。`Problem`、`Scope`、稳定 `AC-N` 与
+  `Validation` 定义实现义务；`Blocked by` 只投影依赖，不扩大实现范围。
 - 每条验收标准使用稳定且唯一的 `AC-N`；编辑顺序时不能复用旧 ID 表达不同要求。
 - 上述契约必须在创建任务分支、修改文件或提交代码前明确。人工与 Agent 都不能用后补 Issue
   或占位 PR 追认已经开始的实现。
@@ -95,16 +109,21 @@ Team 查询、Check Run 发布或配置读取失败时一律 fail closed。网�
 
 | 标签 | 用于 Issue 时的含义 |
 | --- | --- |
-| `ready-for-agent` | CODEOWNERS Team 成员确认当前 execution content，可以进入 Worker cycle |
+| `ready-for-agent` | Issue 已完整并适合 AFK Agent；不选择执行器，也不单独授予执行权限 |
 | `ready-for-human` | 该 Issue 由人或本地受监督 Codex 实现，不进入 Worker 自动领取流程 |
 | `needs-triage` | 契约、授权、依赖或执行状态需要人处理 |
 | `wontfix` | 不再实施，并终止对应自动执行 |
 | `claude` | 成员授权 Claude 分析外部用户创建的 Issue |
 
-`ready-for-agent` 标签只是授权入口，不是可复用的永久权限。只有 CODEOWNERS Team 中的非 Bot
-人员可以创建有效授权；Codex implement job、trusted Publisher、Claude、Reconciler 和其他 Bot
-不能创建、续期或代理该授权。由人监督的本地 Codex 可以使用当前操作者身份执行标签操作，
-授权责任仍归属于该人。
+`ready-for-agent` 是 executor-neutral readiness。AFK 执行还需要 CODEOWNERS Team 中非 Bot 人员
+通过受信入口发起一次明确 opt-in；该事件固定 Issue、execution content、操作者和执行方式。
+Codex implement job、trusted Publisher、Claude、Reconciler 和其他 Bot 不能创建、续期或代理
+该授权。仓库只有一个 AFK 执行方式时直接使用该固定入口，不增加 Dispatcher 或 Adapter 层。
+
+在 `#224` 合并并关闭旧 Worker 的新 Issue intake 前，现有 `codex-worker.yml` 仍会把人工添加
+`ready-for-agent` 的事件解释为旧 Worker 授权。因此迁移期内只能由 Team 成员在明确选择旧
+Worker 时添加该标签；`#221` 不改变这条触发行为。由人监督的本地 Codex 使用
+`ready-for-human`，不借用 AFK readiness。
 
 ### 5.3 Canonical execution-content hash
 
@@ -130,7 +149,10 @@ DAG 规则保护的执行元数据，不能扩大 Problem、Scope、AC 或 Valid
 不能改变已授权要求。缺失或重复受保护标题、重复 AC ID 或非法 AC 格式时不能计算有效 hash，
 Issue 进入 `needs-triage`。
 
-### 5.4 授权记录与 cycle
+### 5.4 现有 Worker 授权记录与 cycle（迁移期）
+
+本节记录 `#224` 关闭新 Issue intake 前的旧 Worker 兼容契约，不定义新的通用调度层。目标流程
+使用 [§5.2](#52-实现标签) 的独立 opt-in；`#221` 与 `#222` 均保留以下运行时行为。
 
 - 有效 `ready-for-agent` labeled timeline event 是人工授权事实。可信 recorder 校验 actor 的实时
   Team membership，并发布由 GitHub Actions App 创建的审计记录；记录至少包含 Issue、actor、
@@ -147,9 +169,15 @@ Issue 进入 `needs-triage`。
 
 ### 5.5 Blocker DAG
 
-`## Blocked by` 只接受 `None`，或一行一个唯一的 `- #<issue-number>`。依赖必须属于同一仓库，
-不能指向 PR、自身或形成直接/间接环。格式非法、查询失败、图超限或更新未原子收敛时 fail closed
-并进入 `needs-triage`。
+GitHub native issue dependencies 是依赖图的权威来源。依赖必须属于同一仓库，不能指向 PR、
+自身或形成直接/间接环；查询失败、图超限或更新未原子收敛时 fail closed 并进入
+`needs-triage`。`## Blocked by` 只保留为迁移期投影，接受 `None` 或一行一个唯一的
+`- #<issue-number>`，不能独立创建、删除或改变依赖边。
+
+在 `#222` 合并前，现有 Worker 和 Reconciler 仍读取正文投影并镜像到 native dependencies；
+`#221` 不改变该运行时。迁移期间现有自动化仍先更新正文，再据此镜像 native dependency；这是
+兼容行为，不改变 native dependency 的目标权威地位。Stage 4B 才切换为先写 native dependency、
+再同步正文投影，并在不一致时以 native dependency 为准进入 `needs-triage`。
 
 - Worker 的未完成结果必须显式且互斥地选择一种有界模式：`blocker_proposals` 表达可独立交付
   和验证的 implementation blocker，`human_handoffs` 表达权限、受保护路径、需求冲突、凭证或
@@ -170,14 +198,14 @@ Issue 进入 `needs-triage`。
   的 App identity、marker 与一次性 acknowledgement，再把只读模型输出交给隔离 Publisher。
 - Publisher 登记可信依赖边时同步追加当前 cycle 的 `frontier-updated` 授权审计；Reconciler 只能在
   旧 `blockedByHash` 与移除可信 proposal 后的前缀完全匹配时补写漏失记录，不能借修复扩大授权。
-- 可信 proposal 以 `not_planned` 关闭或带有 `wontfix`、已从权威 `Blocked by` 删除，且更高 cycle
+- 可信 proposal 以 `not_planned` 关闭或带有 `wontfix`、已删除对应 native dependency，且更高 cycle
   的有效 Team 授权精确绑定当前 execution content 与 `blockedByHash` 时，视为已由人工退役；
   Reconciler 不恢复该边，也不再因此给来源 Issue 添加 `needs-triage`。同 cycle 的漏边、未关闭
   proposal 或授权不匹配仍按 fail closed 处理。退役判定只使用 identity-audited proposal、GitHub
   API 当前状态与 append-only 授权记录，不读取 blocker prose 或普通评论。
-- 正文 `Blocked by` 是权威边，GitHub native dependency 只是 UI 镜像。正文存在但原生边缺失时，
-  Publisher 或 Reconciler 使用 blocker 的 GitHub `issue_id` 补齐；原生边多于正文、查询失败或更新
-  失败时进入 `needs-triage`，不能自动删除原生边或选择任一版本覆盖另一版本。
+- Publisher 或 Reconciler 使用 blocker 的 GitHub `issue_id` 写 native dependency，再更新正文
+  投影。正文与 native dependency 不一致、查询失败或更新失败时进入 `needs-triage`；不得根据正文
+  自动删除 native dependency。
 - blocker 打开或重新打开时，所有 reverse dependents 立即不再是 frontier；正在执行的 dependent
   停止发布，已存在 branch/Draft PR 保留。
 - blocker 以 `state_reason=completed` 关闭时，事件处理器重新计算所有 reverse dependents；仍
@@ -205,7 +233,11 @@ Issue 进入 `needs-triage`。
 首次执行返回 `no-change` 时不创建空 commit/PR，也不关闭 Issue；系统记录稳定原因并进入
 `needs-triage`。已有 Draft PR 的 `no-change` 可以幂等复用该 PR，不生成额外 branch 或 PR。
 
-## 6. Codex Worker 执行
+## 6. 现有 Codex Worker 执行（迁移期）
+
+本节只约束 `#224` 前保留的旧 Worker，实现 #221 时不修改其 trigger、Publisher 或 repair 行为。
+`#224` 完成真实 hosted smoke 后，固定 operator、人工 opt-in 的 gh-aw workflow 成为唯一 AFK
+Issue-to-PR 路径，旧 Worker 停止领取新 Issue；仓库不为两者建设 Dispatcher 或 legacy Adapter。
 
 ### 6.1 执行方式与所有权
 
@@ -452,6 +484,9 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 | Stage 3D（`#53`） | blocker proposal、同仓库 DAG、completed/not planned 语义、15 分钟 Reconciler | Stage 3C cycle |
 | Stage 3E（`#54`） | 三次 attempt、Patch checkpoint、全局并发 2、CI retry、两轮 repair、base update | Stage 3C cycle |
 | Stage 3F（`#55`） | terminal outcome、Actions 可追溯性、企微、post-merge triage | 轮换后的企微 Secret |
+| Stage 4A（`#221`） | 对齐 Matt Skill 快照、provenance 与仓库文档契约，不改变运行时 | 无外部配置 |
+| Stage 4B（`#222`） | native issue dependencies 成为运行时权威，正文降为迁移投影 | Stage 4A |
+| Stage 4C（`#224`） | gh-aw 固定 operator 人工 opt-in 成为唯一 AFK 路径，旧 Worker 停止领取新 Issue | Stage 4B、现有 BYOK 配置 |
 
 每个 Stage 独立通过 PR 评审和真实 GitHub 冒烟。前置 Stage 未合并并稳定运行时，不启用依赖它
 的无人值守行为。Stage 3D 和 3E 在依赖图上都只依赖 3C，但因修改同一 Worker 控制面，实施时
@@ -460,7 +495,9 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 ## 13. 验收标准
 
 - 新成员 Issue 自动收到最终 Claude 建议；外部用户 Issue 只有成员授权后调用模型。
-- 未经 Team 人员确认且没有匹配 content hash/cycle 的 Issue 不能被 Worker 执行。
+- `ready-for-agent` 不能单独触发目标 AFK 路径；只有 Team 人员对匹配 execution content 的明确
+  opt-in 才能执行。Stage 4C 前的旧 Worker 继续受迁移期 cycle 契约约束。
+- GitHub native issue dependencies 是依赖权威；正文 `Blocked by` 只作为迁移投影。
 - implementation blocker 是同仓库 DAG；human handoff 只 triage 来源 Issue，不创建伪 blocker；
   blocker completed 唤醒有效 dependent，not planned/wontfix 转人工 triage。
 - 同一 Issue/cycle 不产生并发执行或多个活动 PR，全仓模型调用并发不超过 `2`。

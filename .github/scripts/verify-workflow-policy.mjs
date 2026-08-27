@@ -184,6 +184,114 @@ const GH_AW_POC_SEMANTIC_SHA256 =
   "1c4405c96f475598e2f73f9953b9c5883bda1850352ca5135f3afb0c91d88076";
 const GH_AW_POC_SOURCE_SHA256 =
   "f821a82ba746b8e372ba2fb52f3b5eab159be4326260322a712500831ac5a26a";
+const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
+const MATT_SKILL_SOURCE = "https://github.com/mattpocock/skills.git";
+const MATT_SKILLS = ["code-review", "implement", "tdd"];
+const MATT_SKILL_REVISION = "6654f6b60cd9d5be8b54c6fafe44346dabeb3b76";
+const MATT_SKILL_TREES = {
+  "code-review": "d8e341cee7980127dddda05159bedf25dc853615",
+  implement: "f07d230f645fc9ac390cf13a450bbff12ad791a3",
+  tdd: "79288be15c67b849f22b6572056601090fd20913",
+};
+
+function gitObjectSha(type, content) {
+  return createHash("sha1")
+    .update(`${type} ${content.length}\0`)
+    .update(content)
+    .digest();
+}
+
+async function gitTreeSha(directory) {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  entries.sort((left, right) =>
+    Buffer.compare(
+      Buffer.from(`${left.name}${left.isDirectory() ? "/" : ""}`),
+      Buffer.from(`${right.name}${right.isDirectory() ? "/" : ""}`),
+    ),
+  );
+  const treeEntries = [];
+
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    let mode;
+    let sha;
+    if (entry.isDirectory()) {
+      mode = "40000";
+      sha = await gitTreeSha(entryPath);
+    } else if (entry.isFile()) {
+      const [content, metadata] = await Promise.all([
+        fs.readFile(entryPath),
+        fs.stat(entryPath),
+      ]);
+      mode = metadata.mode & 0o111 ? "100755" : "100644";
+      sha = gitObjectSha("blob", content);
+    } else if (entry.isSymbolicLink()) {
+      mode = "120000";
+      sha = gitObjectSha("blob", Buffer.from(await fs.readlink(entryPath)));
+    } else {
+      throw new Error(`unsupported file type: ${entryPath}`);
+    }
+    treeEntries.push(
+      Buffer.concat([
+        Buffer.from(`${mode} ${entry.name}\0`),
+        sha,
+      ]),
+    );
+  }
+
+  return gitObjectSha("tree", Buffer.concat(treeEntries));
+}
+
+export async function validateMattSkillSnapshot(repositoryRoot = process.cwd()) {
+  const errors = [];
+  let lock;
+  try {
+    lock = JSON.parse(
+      await fs.readFile(path.join(repositoryRoot, MATT_SKILL_LOCK_PATH), "utf8"),
+    );
+  } catch (error) {
+    return [
+      `Matt Skill snapshot lock is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+    ];
+  }
+
+  if (
+    lock?.version !== 1 ||
+    lock?.source !== MATT_SKILL_SOURCE ||
+    lock?.revision !== MATT_SKILL_REVISION ||
+    JSON.stringify(Object.keys(lock?.skills ?? {}).sort()) !==
+      JSON.stringify(MATT_SKILLS)
+  ) {
+    return ["Matt Skill snapshot lock has an invalid source contract"];
+  }
+
+  for (const skill of MATT_SKILLS) {
+    const record = lock.skills[skill];
+    if (
+      record?.sourcePath !== `skills/engineering/${skill}` ||
+      record?.treeSha !== MATT_SKILL_TREES[skill]
+    ) {
+      errors.push(`${skill}: invalid Matt Skill provenance`);
+      continue;
+    }
+    try {
+      const actual = (
+        await gitTreeSha(path.join(repositoryRoot, ".agents/skills", skill))
+      ).toString("hex");
+      if (actual !== MATT_SKILL_TREES[skill]) {
+        errors.push(
+          `${skill}: snapshot tree ${actual} does not match ${MATT_SKILL_TREES[skill]}`,
+        );
+      }
+    } catch (error) {
+      errors.push(
+        `${skill}: snapshot is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return errors;
+}
 
 function workflowSteps(workflow) {
   return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
@@ -2163,6 +2271,7 @@ async function main() {
     ),
   );
   const errors = [
+    ...(await validateMattSkillSnapshot()),
     ...validateWorkflowDocuments(workflows),
     ...validateGhAwPocSource(ghAwPocSource),
     ...validateTrustedScriptSources(scriptSources),
