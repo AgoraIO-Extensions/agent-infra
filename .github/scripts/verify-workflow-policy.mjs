@@ -183,7 +183,7 @@ const TEAM_MEMBERSHIP_TOKEN_ACTION =
 const GH_AW_POC_SEMANTIC_SHA256 =
   "1c4405c96f475598e2f73f9953b9c5883bda1850352ca5135f3afb0c91d88076";
 const GH_AW_POC_SOURCE_SHA256 =
-  "72e0969f14d6afc7e252502dd30752d5e68e163be164e257774fd55f13000eac";
+  "f821a82ba746b8e372ba2fb52f3b5eab159be4326260322a712500831ac5a26a";
 
 function workflowSteps(workflow) {
   return Object.values(workflow?.jobs ?? {}).flatMap((job) => job.steps ?? []);
