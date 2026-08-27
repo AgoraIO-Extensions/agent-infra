@@ -776,17 +776,20 @@ export function createConnectionOAuthApp(
 						request: body,
 						subject: session.account.principalId,
 					},
-					() =>
-						management.service.connectProviderCredential(
-							session.account.principalId,
-							body.providerId,
-							body.providerId === "jira"
-								? JSON.stringify({
+					() => {
+						const credential =
+							body.providerId === "bitbucket"
+								? body.accessToken
+								: JSON.stringify({
 										password: body.password,
 										username: body.username,
-									})
-								: body.accessToken,
-						),
+									});
+						return management.service.connectProviderCredential(
+							session.account.principalId,
+							body.providerId,
+							credential,
+						);
+					},
 				),
 			);
 			if (connected instanceof Response) return connected;

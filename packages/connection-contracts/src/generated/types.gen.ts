@@ -138,7 +138,7 @@ export type ProviderCredentialRequest = {
     providerId: 'bitbucket';
     accessToken: string;
 } | {
-    providerId: 'jira';
+    providerId: 'confluence' | 'jira';
     username: string;
     password: string;
 };

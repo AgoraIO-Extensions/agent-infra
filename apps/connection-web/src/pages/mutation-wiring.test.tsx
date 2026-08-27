@@ -284,6 +284,25 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("连接页调用 Confluence Server credential API", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "连接 Confluence" }));
+		fireEvent.change(screen.getByLabelText("Confluence 密码"), {
+			target: { value: "confluence-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			password: "confluence-password",
+			providerId: "confluence",
+			username: "guoxianzhe@agora.io",
+		});
+	});
+
 	it("历史授权不允许再次撤销", async () => {
 		const overview = await api.getConnections();
 		const grant = overview.overview.grants[0];

@@ -295,7 +295,12 @@ function statusLabel(value: string) {
 
 export function providerLabel(value: string) {
 	return (
-		{ bitbucket: "Bitbucket", github: "GitHub", jira: "Jira" }[value] ?? value
+		{
+			bitbucket: "Bitbucket",
+			confluence: "Confluence",
+			github: "GitHub",
+			jira: "Jira",
+		}[value] ?? value
 	);
 }
 

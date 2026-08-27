@@ -17,7 +17,7 @@
 ## 当前状态
 
 仓库包含 M1 工程底座，以及基于 PostgreSQL、公司 LDAP、Connection OAuth/PAT、pinned
-OpenConnector GitHub kernel、公司 Bitbucket Server Adapter 和公司 Jira Server Adapter 的统一 Connection account 架构。所有 Consumer 都通过 Connection
+OpenConnector GitHub kernel、公司 Bitbucket Server Adapter、公司 Jira Server Adapter 和公司 Confluence Server Adapter 的统一 Connection account 架构。所有 Consumer 都通过 Connection
 识别 Principal；同一 Principal 在多台设备共享个人 Connection 和 Direct Consumer Grant。OAuth
 设备会话和命名 PAT 可以单独撤销；同一 PAT 跨端复用时共享一个撤销与审计边界。OpenConnector
 只作为进程内 Provider/Action/OAuth/executor Kernel，不保存产品账号、Credential 或授权权威。Connection
@@ -32,7 +32,7 @@ Platform Web；`connection-api` 不再拼接管理页面 HTML。
 | Connection Web | `apps/connection-web` | 独立简体中文 React 控制台、生成 Browser Client 与同源 Nginx 入口 |
 | Platform API | `apps/platform-api` | Hono 进程与健康检查 |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
-| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub/Bitbucket/Jira Server Adapter、多 Provider Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
+| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub/Bitbucket/Jira/Confluence Server Adapter、多 Provider Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
 | OpenConnector Kernel | `packages/openconnector-kernel` | 仅由 `openconnector-adapter` 使用的受控 Provider execution closure |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
@@ -110,6 +110,10 @@ Jira Server 连接使用公司 CLI 兼容的每用户用户名/密码和短期 `
 Secret Manager 配置按需获取并缓存。Connection 不读取或执行本机 CLI 配置脚本，也不把服务端
 Token Server secret、accessToken 或用户 credential 返回给浏览器/MCP。多个客户端复用同一 PAT 时无法分别撤销或审计；需要独立
 边界时分别签发命名 PAT。
+
+Confluence Server 使用同一套每用户 Basic 凭证和服务端 Token Provider，固定 API origin 为
+`https://confluence.agoralab.co`，支持页面、空间、层级、历史、评论和附件元数据 Action；文件
+上传/下载暂不进入 JSON MCP 输入契约。
 
 ## 开发工作流
 

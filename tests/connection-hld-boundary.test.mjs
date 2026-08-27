@@ -115,6 +115,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.equal(apiManifest.scripts.local, undefined);
 	assert.deepEqual(adapterManifest.exports, {
 		".": "./src/index.ts",
+		"./confluence-server": "./src/confluence-server.ts",
 		"./jira-server": "./src/jira-server.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);

@@ -47,7 +47,7 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
 - 当前 `connection-api` 生产镜像只启动 `/` 与 `/healthz`，且 Compose 不向主机发布 API 端口。LDAP、OAuth metadata、DCR、
   PAT 签发、token、MCP、Provider、Consent、管理与 Action 路由全部不注册，不能通过环境变量启用。
 - `apps/connection-api/src/runtime-app.ts` 是正式 Connection runtime 的唯一完整装配点，包含 LDAP、
-  OAuth/PAT、PostgreSQL 账号与业务仓储、GitHub/Bitbucket/Jira Server Adapter、Grant 和 Direct MCP。
+  OAuth/PAT、PostgreSQL 账号与业务仓储、GitHub/Bitbucket/Jira/Confluence Server Adapter、Grant 和 Direct MCP。
   `apps/connection-api/src/conformance.ts` 只负责迁移数据库、启动该 runtime 并执行真实账号验收；
   conformance 是测试和证据过程，不是独立部署 profile 或另一套业务实现。两者在门禁关闭前均不进入
   生产镜像，只在受控 HTTPS 入口或精确 loopback 本机验收中运行。当前
@@ -62,7 +62,7 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
 - Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。正式 runtime 的本机
   通过只能形成实现证据，不能代替尚未关闭的生产身份、KMS、egress、Consent 和恢复门禁。
 
-Jira Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务端，用于按需签发短期应用级
+Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务端，用于按需签发短期应用级
 `accessToken`；它不进入用户 credential envelope。用户的 Jira 用户名/密码仍按 Connection
 credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发送。Connection 不读取或执行
 本机 Atlassian CLI 配置或脚本。
@@ -70,7 +70,7 @@ credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发�
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。生产验收
-仍需要真实公司 LDAP、已登记的 Codex client、真实 Bitbucket/Jira credential 在至少两个客户端的
+仍需要真实公司 LDAP、已登记的 Codex client、真实 Bitbucket/Jira/Confluence credential 在至少两个客户端的
 Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、PostgreSQL 备份/恢复、受控 egress，
 以及最小只读与写入 Provider canary。参数清单见
 `.env.conformance.example`；本机验收可使用被 Git 忽略的 `.env.conformance.local`，部署环境必须由

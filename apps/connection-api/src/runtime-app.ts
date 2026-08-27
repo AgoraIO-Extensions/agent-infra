@@ -18,6 +18,10 @@ import {
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
 import {
+	ConfluenceServerAdapter,
+	confluenceServerConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/confluence-server";
+import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
@@ -46,6 +50,7 @@ export async function createConnectionRuntimeApp(
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
+		confluenceServerConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog);
 	}
@@ -57,6 +62,7 @@ export async function createConnectionRuntimeApp(
 			githubConnectionCatalog,
 			bitbucketServerConnectionCatalog,
 			jiraServerConnectionCatalog,
+			confluenceServerConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
@@ -82,9 +88,14 @@ export async function createConnectionRuntimeApp(
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
-	const jira = new JiraServerAdapter(
+	const atlassianTokenProvider = new JiraServerOAuthTokenProvider(
 		jiraFetch,
-		new JiraServerOAuthTokenProvider(jiraFetch, config.jiraToken),
+		config.jiraToken,
+	);
+	const jira = new JiraServerAdapter(jiraFetch, atlassianTokenProvider);
+	const confluence = new ConfluenceServerAdapter(
+		jiraFetch,
+		atlassianTokenProvider,
 	);
 	const service = new ConnectionApplicationService(
 		repository,
@@ -92,9 +103,10 @@ export async function createConnectionRuntimeApp(
 			[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 			[githubConnectionCatalog.providerReleaseId]: github,
 			[jiraServerConnectionCatalog.providerReleaseId]: jira,
+			[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		}),
 		new OpenConnectorGitHubOAuthAdapter(config.github),
-		{ bitbucket, jira },
+		{ bitbucket, confluence, jira },
 	);
 	return createConnectionApp({
 		accessTokens: oauth,

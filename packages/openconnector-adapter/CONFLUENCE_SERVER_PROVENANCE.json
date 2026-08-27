@@ -1,0 +1,82 @@
+{
+	"source": {
+		"repository": "https://github.com/oomol-lab/open-connector.git",
+		"commit": "0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674",
+		"referenceFile": "src/providers/confluence/actions.ts",
+		"referenceFileSha256": "1181fe6682dc96488d86888db4111d2c1e4d16da44a9040ee0d48bfd9307a54b",
+		"licenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+		"noticeSha256": "d0890661bf25e7327808610f773b055cb87bf949ff6bba5943c7d62d94d1bf0f"
+	},
+	"target": {
+		"product": "Confluence Server",
+		"version": "7.11.0",
+		"build": "711000",
+		"apiOrigin": "https://confluence.agoralab.co",
+		"authentication": "per-user Basic username/password plus server-issued short-lived accessToken request header",
+		"executorDigest": "sha256:ed7cb9f7aca45612fa75aef9105c3000be647a5685022c8a789ec43f0ae20ebb"
+	},
+	"atlassianCliReference": {
+		"version": "0.1.18",
+		"deployment": "server",
+		"authentication": "basic plus server-issued [jira.headers].accessToken command substitution",
+		"actions": [
+			"get_page",
+			"search_pages",
+			"get_page_children",
+			"get_page_tree",
+			"get_page_history",
+			"get_page_diff",
+			"move_page",
+			"create_page",
+			"update_page",
+			"delete_page",
+			"list_comments",
+			"add_comment",
+			"reply_to_comment",
+			"list_spaces",
+			"get_space",
+			"list_attachments",
+			"upload_attachment",
+			"download_attachment"
+		]
+	},
+	"openConnectorActions": [
+		"search_content",
+		"list_spaces",
+		"get_page",
+		"create_page",
+		"update_page"
+	],
+	"overlap": {
+		"openConnectorAndServer": [
+			"search_content",
+			"list_spaces",
+			"get_page",
+			"create_page",
+			"update_page"
+		],
+		"serverOnlyForThisRelease": [
+			"get_current_user",
+			"get_space",
+			"get_page_by_title",
+			"list_page_children",
+			"list_page_tree",
+			"get_page_history",
+			"get_page_diff",
+			"move_page",
+			"delete_page",
+			"list_comments",
+			"add_comment",
+			"reply_comment",
+			"list_attachments"
+		],
+		"cliOnlyExcluded": ["upload_attachment", "download_attachment"]
+	},
+	"policy": "The fixed Confluence Server adapter uses REST API v1 and the company CLI authentication contract. Per-user Basic credentials are encrypted in Connection; the short-lived accessToken is issued and cached by a server-side Token Provider from injected JIRA_TOKEN_* secrets. It does not execute local CLI commands or read CLI config at runtime. Confluence Cloud site URLs, Cloud API v2 and file transfer are excluded.",
+	"modifications": [
+		"Replace OpenConnector Confluence Cloud site URL and API v2 transport with fixed company Confluence Server REST API v1.",
+		"Move the CLI header command's application token exchange to the shared server-side Token Provider while keeping per-user Basic identity.",
+		"Preserve OpenConnector Confluence action names and input semantics where the Server API supports them.",
+		"Add reviewed Server page, hierarchy, history, move, delete, comment, space and attachment metadata actions; file upload/download are excluded from JSON MCP input until a bounded file contract is approved."
+	]
+}

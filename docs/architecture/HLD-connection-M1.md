@@ -100,6 +100,17 @@ Jira Server 的 identity proof 使用 `GET /rest/api/2/myself` 并要求 active 
 OpenConnector Jira 的 7 个 Action 保留名称与 schema 语义，并补充经审核的 Server Issue、workflow、
 comment、field、user 和 bulk-create Action；文件附件上传/下载不进入 JSON MCP 输入契约。
 
+Confluence 的首个 **[设计决策]** profile 固定为公司 Confluence Server `7.11.0`（build `711000`）、
+受控 HTTPS API origin `https://confluence.agoralab.co` 和 REST API v1。认证与 Jira 使用相同的
+公司 Atlassian CLI Server 组合：每个用户的 Confluence 用户名/密码作为 provider-specific encrypted
+credential envelope 保存；Token Server URL、client、token service account 和 secret 由 Connection
+服务端环境/Secret Manager 注入，服务端按需获取并缓存短期 `accessToken`，不进入浏览器表单、用户
+credential envelope 或 MCP 参数。Connection 不能读取或执行本机 CLI 配置/命令。Confluence Server
+的 identity proof 使用 `GET /rest/api/user/current` 并要求 active 用户，且返回身份必须与该
+Connection 的用户名匹配；不能使用 Cloud site URL、Cloud API v2 或调用方提交的任意 URL/header。
+OpenConnector Confluence 的 5 个 Cloud Action 保留名称与 schema 语义，并补充经审核的 Server
+页面、评论、空间和附件元数据 Action；附件文件上传/下载不进入 JSON MCP 输入契约。
+
 ### 3.3 非目标
 
 | 非目标 | 原因 |

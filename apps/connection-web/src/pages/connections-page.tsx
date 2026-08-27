@@ -1,6 +1,14 @@
 import type { AuthorizationPreviewResponse } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, GitBranch, KeyRound, Plus, ShieldOff, X } from "lucide-react";
+import {
+	BookOpen,
+	Check,
+	GitBranch,
+	KeyRound,
+	Plus,
+	ShieldOff,
+	X,
+} from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { connectionApi } from "../api";
@@ -36,6 +44,9 @@ export function ConnectionsPage() {
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
+	const [confluenceOpen, setConfluenceOpen] = useState(false);
+	const [confluencePending, setConfluencePending] = useState(false);
+	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
 	const overview = useQuery({
 		queryKey: ["connections"],
 		queryFn: connectionApi.getConnections,
@@ -83,6 +94,27 @@ export function ConnectionsPage() {
 			setJiraPending(false);
 		}
 	};
+	const connectConfluence = async (credential: {
+		password: string;
+		username: string;
+	}) => {
+		setConfluencePending(true);
+		setConfluenceError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				providerId: "confluence",
+				...credential,
+			});
+			setConfluenceOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setConfluenceError(
+				error instanceof Error ? error : new Error("Confluence 连接失败"),
+			);
+		} finally {
+			setConfluencePending(false);
+		}
+	};
 	const preview = useMutation({
 		mutationFn: connectionApi.createAuthorizationPreview,
 		onSuccess: (value) =>
@@ -120,6 +152,14 @@ export function ConnectionsPage() {
 						<Button
 							variant="secondary"
 							type="button"
+							onClick={() => setConfluenceOpen(true)}
+						>
+							<BookOpen aria-hidden="true" size={17} />
+							连接 Confluence
+						</Button>
+						<Button
+							variant="secondary"
+							type="button"
 							onClick={() => setJiraOpen(true)}
 						>
 							<KeyRound aria-hidden="true" size={17} />
@@ -147,6 +187,7 @@ export function ConnectionsPage() {
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
+			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{data ? (
@@ -181,6 +222,8 @@ export function ConnectionsPage() {
 									setBitbucketOpen(true);
 								} else if (connection?.providerId === "jira") {
 									setJiraOpen(true);
+								} else if (connection?.providerId === "confluence") {
+									setConfluenceOpen(true);
 								} else {
 									beginOAuth();
 								}
@@ -402,6 +445,76 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={bitbucketPending}>
 								<GitBranch aria-hidden="true" size={17} />
 								{bitbucketPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
+				open={confluenceOpen}
+				onOpenChange={(open) => {
+					setConfluenceOpen(open);
+					if (!open) setConfluenceError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接公司 Confluence</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const form = new FormData(event.currentTarget);
+							const username = form.get("username");
+							const password = form.get("password");
+							if (
+								typeof username === "string" &&
+								typeof password === "string"
+							) {
+								event.currentTarget.reset();
+								void connectConfluence({ password, username });
+							}
+						}}
+					>
+						<label htmlFor="confluence-username">Confluence 用户名</label>
+						<input
+							autoComplete="username"
+							defaultValue={overview.data?.account.email ?? ""}
+							id="confluence-username"
+							maxLength={256}
+							name="username"
+							required
+							type="text"
+						/>
+						<label htmlFor="confluence-password">Confluence 密码</label>
+						<input
+							autoComplete="current-password"
+							id="confluence-password"
+							maxLength={1024}
+							name="password"
+							required
+							type="password"
+						/>
+						<p className="form-hint">
+							用户名默认使用当前 Connection 账号；Confluence 密码会加密保存。
+							Connection 服务端会自动管理公司 OAuth accessToken。
+						</p>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={confluencePending}>
+								<BookOpen aria-hidden="true" size={17} />
+								{confluencePending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>
