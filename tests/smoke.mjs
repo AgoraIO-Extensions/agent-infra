@@ -14,6 +14,10 @@ async function verifyApi(start, expectedService) {
 	try {
 		const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
 		assert.equal(response.status, 200);
+		assert.match(
+			response.headers.get("content-type") ?? "",
+			/^application\/json(?:;\s*charset=utf-8)?$/i,
+		);
 		assert.deepEqual(await response.json(), {
 			service: expectedService,
 			status: "ok",
