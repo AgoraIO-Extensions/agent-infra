@@ -255,10 +255,28 @@ function validateGhAwPocWorkflow(workflow) {
   const generateInfo = workflow?.jobs?.activation?.steps?.find(
     (step) => step.id === "generate_aw_info",
   );
+  const secretReferences = [
+    ...JSON.stringify(workflow ?? {}).matchAll(
+      /\$\{\{\s*secrets(?:\.([A-Z0-9_]+)|\[['"]([A-Z0-9_]+)['"]\])/g,
+    ),
+  ].map((match) => match[1] ?? match[2]);
+  const expectedSecrets = [
+    "CODEX_API_KEY",
+    "CODEX_GITHUB_TOKEN",
+    "CODEX_MODEL",
+    "CODEX_RESPONSES_API_ENDPOINT",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_AW_GITHUB_MCP_SERVER_TOKEN",
+    "GH_AW_GITHUB_TOKEN",
+    "GITHUB_TOKEN",
+  ];
   const secretCount = (value, secret) =>
     [
       ...JSON.stringify(value ?? {}).matchAll(
-        new RegExp(`\\$\\{\\{\\s*secrets\\.${secret}\\s*\\}\\}`, "g"),
+        new RegExp(
+          `\\$\\{\\{\\s*secrets(?:\\.${secret}|\\[['\"]${secret}['\"]\\])\\s*\\}\\}`,
+          "g",
+        ),
       ),
     ].length;
   const allActionsPinned = workflowSteps(workflow).every(
@@ -281,6 +299,8 @@ function validateGhAwPocWorkflow(workflow) {
       "gh-aw-poc-${{ inputs.item_number }}" ||
     workflow?.concurrency?.["cancel-in-progress"] !== false ||
     membership?.env?.GH_AW_REQUIRED_ROLES !== "admin" ||
+    [...new Set(secretReferences)].sort().join("\0") !==
+      expectedSecrets.sort().join("\0") ||
     !sameObject(agent?.permissions, {
       contents: "read",
       issues: "read",

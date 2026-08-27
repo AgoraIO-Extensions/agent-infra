@@ -55,7 +55,8 @@ workflow_files=()
 while IFS= read -r workflow; do
   workflow_files+=("$workflow")
 done < <(
-  find .github/workflows -maxdepth 1 -type f -name '*.yml' \
+  find .github/workflows -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) \
     ! -name "$(basename "$poc_workflow")" -print | sort
 )
 
