@@ -125,7 +125,8 @@
                   "properties": {
                     "credentialValue": {
                       "minLength": 1,
-                      "type": "string"
+                      "type": "string",
+                      "writeOnly": true
                     },
                     "endpointId": {
                       "minLength": 1,
@@ -185,7 +186,8 @@
                 },
                 "value": {
                   "minLength": 1,
-                  "type": "string"
+                  "type": "string",
+                  "writeOnly": true
                 }
               },
               "required": [
@@ -566,7 +568,8 @@
                   "properties": {
                     "credentialValue": {
                       "minLength": 1,
-                      "type": "string"
+                      "type": "string",
+                      "writeOnly": true
                     },
                     "endpointId": {
                       "minLength": 1,
@@ -626,7 +629,8 @@
                 },
                 "value": {
                   "minLength": 1,
-                  "type": "string"
+                  "type": "string",
+                  "writeOnly": true
                 }
               },
               "required": [
@@ -1046,7 +1050,8 @@
                   "properties": {
                     "credentialValue": {
                       "minLength": 1,
-                      "type": "string"
+                      "type": "string",
+                      "writeOnly": true
                     },
                     "endpointId": {
                       "minLength": 1,
@@ -1102,7 +1107,8 @@
                 },
                 "value": {
                   "minLength": 1,
-                  "type": "string"
+                  "type": "string",
+                  "writeOnly": true
                 }
               },
               "required": [
@@ -1215,7 +1221,7 @@
           "interactionUrl": {
             "anyOf": [
               {
-                "format": "uri",
+                "pattern": "^https:\\/\\/",
                 "type": "string"
               },
               {

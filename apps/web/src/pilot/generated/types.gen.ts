@@ -29,7 +29,6 @@ export type AgentApplicationCreateRequestV1 = {
         defaultOptionId: string;
         defaultReasoningLevel: string;
         options: Array<{
-            credentialValue?: string;
             endpointId: string;
             modelId: string;
             optionId: string;
@@ -40,7 +39,6 @@ export type AgentApplicationCreateRequestV1 = {
     schemaVersion: 1;
     secrets: Array<{
         name: string;
-        value: string;
     }>;
     source: {
         kind: 'standard';
@@ -105,7 +103,6 @@ export type AgentApplicationUpdateRequestV1 = {
         defaultOptionId: string;
         defaultReasoningLevel: string;
         options: Array<{
-            credentialValue?: string;
             endpointId: string;
             modelId: string;
             optionId: string;
@@ -116,7 +113,6 @@ export type AgentApplicationUpdateRequestV1 = {
     schemaVersion: 1;
     secrets?: Array<{
         name: string;
-        value: string;
     }>;
     source: {
         kind: 'standard';
@@ -186,7 +182,6 @@ export type AgentConfigurationUpdateRequestV1 = {
         defaultOptionId: string;
         defaultReasoningLevel: string;
         options: Array<{
-            credentialValue?: string;
             endpointId: string;
             modelId: string;
             optionId: string;
@@ -196,7 +191,6 @@ export type AgentConfigurationUpdateRequestV1 = {
     schemaVersion: 1;
     secrets?: Array<{
         name: string;
-        value: string;
     }>;
 };
 
@@ -530,6 +524,133 @@ export type TimelineReloadSignalV1 = {
     type: 'timeline.reload';
 };
 
+export type AgentApplicationCreateRequestV1Writable = {
+    actions: Array<ActionSelectionV1>;
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 1;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentApplicationUpdateRequestV1Writable = {
+    actions: Array<ActionSelectionV1>;
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 1;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentConfigurationUpdateRequestV1Writable = {
+    actions?: Array<ActionSelectionV1>;
+    availability?: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels?: Array<ChannelBindingInputV1>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 1;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+};
+
 export type ListPendingAgentApplicationsData = {
     body?: never;
     path?: never;
@@ -750,7 +871,7 @@ export type ListAgentApplicationsResponses = {
 export type ListAgentApplicationsResponse = ListAgentApplicationsResponses[keyof ListAgentApplicationsResponses];
 
 export type CreateAgentApplicationData = {
-    body: AgentApplicationCreateRequestV1;
+    body: AgentApplicationCreateRequestV1Writable;
     headers: {
         'Idempotency-Key': string;
     };
@@ -853,7 +974,7 @@ export type GetAgentApplicationResponses = {
 export type GetAgentApplicationResponse = GetAgentApplicationResponses[keyof GetAgentApplicationResponses];
 
 export type UpdateAgentApplicationData = {
-    body: AgentApplicationUpdateRequestV1;
+    body: AgentApplicationUpdateRequestV1Writable;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1067,7 +1188,7 @@ export type GetAgentResponses = {
 export type GetAgentResponse = GetAgentResponses[keyof GetAgentResponses];
 
 export type UpdateAgentConfigurationData = {
-    body: AgentConfigurationUpdateRequestV1;
+    body: AgentConfigurationUpdateRequestV1Writable;
     headers: {
         'Idempotency-Key': string;
     };

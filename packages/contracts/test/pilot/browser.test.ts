@@ -8,6 +8,7 @@ import {
 	AgentConfigurationProjectionV1Schema,
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
+	AgentProjectionV1Schema,
 	BrowserSessionProjectionV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	MessageCommandRequestV1Schema,
@@ -112,6 +113,16 @@ describe("Pilot browser contracts", () => {
 		]) {
 			expect(serialized).not.toContain(`"${forbiddenProperty}"`);
 		}
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"javascript:alert(1)",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test",
+			).success,
+		).toBe(true);
 	});
 
 	it("accepts product inputs while rejecting caller-supplied identity and authorization", () => {

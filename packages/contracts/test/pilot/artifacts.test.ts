@@ -38,6 +38,18 @@ describe("Pilot standard artifacts", () => {
 		expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual(
 			Object.keys(pilotBrowserSchemasV1).sort(),
 		);
+		expect(
+			document.components?.schemas?.AgentApplicationCreateRequestV1,
+		).toHaveProperty(
+			"properties.modelConfiguration.properties.options.items.properties.credentialValue.writeOnly",
+			true,
+		);
+		expect(
+			document.components?.schemas?.AgentApplicationCreateRequestV1,
+		).toHaveProperty(
+			"properties.secrets.items.properties.value.writeOnly",
+			true,
+		);
 	});
 
 	it("generates JSON Schema 2020-12 for SSE and delegated contracts", () => {

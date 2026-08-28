@@ -93,7 +93,7 @@ export const ModelOptionInputV1Schema = z.strictObject({
 	endpointId: OpaqueIdV1Schema,
 	modelId: nonEmptyString(),
 	reasoningLevels: z.array(nonEmptyString()).min(1),
-	credentialValue: nonEmptyString().optional(),
+	credentialValue: nonEmptyString().meta({ writeOnly: true }).optional(),
 });
 
 export const ModelConfigurationInputV1Schema = z.strictObject({
@@ -115,7 +115,7 @@ export const EnvironmentValueInputV1Schema = z.strictObject({
 
 export const SecretValueInputV1Schema = z.strictObject({
 	name: nonEmptyString(),
-	value: nonEmptyString(),
+	value: nonEmptyString().meta({ writeOnly: true }),
 });
 
 export const ChannelBindingInputV1Schema = z.discriminatedUnion("enabled", [
@@ -243,7 +243,11 @@ export const AgentProjectionV1Schema = z.strictObject({
 		connection: z.boolean(),
 		supplementaryInstruction: z.boolean(),
 	}),
-	interactionUrl: z.string().url().nullable(),
+	interactionUrl: z
+		.string()
+		.url()
+		.regex(/^https:\/\//)
+		.nullable(),
 });
 
 export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
