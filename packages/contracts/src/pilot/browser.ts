@@ -151,9 +151,10 @@ const applicationInputShape = {
 export const AgentApplicationCreateRequestV1Schema = z.strictObject(
 	applicationInputShape,
 );
-export const AgentApplicationUpdateRequestV1Schema = z.strictObject(
-	applicationInputShape,
-);
+export const AgentApplicationUpdateRequestV1Schema = z.strictObject({
+	...applicationInputShape,
+	secrets: applicationInputShape.secrets.optional(),
+});
 
 export const AgentManagementStatusV1Schema = z.enum([
 	"pending_approval",
@@ -388,23 +389,36 @@ export const ExecutionProcessSummaryV1Schema = z.discriminatedUnion("kind", [
 	}),
 ]);
 
-export const ExecutionDetailProjectionV1Schema = z.strictObject({
+const executionDetailProjectionShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	executionId: OpaqueIdV1Schema,
 	conversationId: OpaqueIdV1Schema,
-	status: z.enum([
-		"submitted",
-		"processing",
-		"completed",
-		"failed",
-		"cancelled",
-		"unknown",
-	]),
 	processSummary: z.array(ExecutionProcessSummaryV1Schema),
 	startedAt: Rfc3339TimestampV1Schema.nullable(),
 	finishedAt: Rfc3339TimestampV1Schema.nullable(),
-	error: PilotProtocolErrorV1Schema.nullable(),
-});
+};
+
+export const ExecutionDetailProjectionV1Schema = z.discriminatedUnion(
+	"status",
+	[
+		z.strictObject({
+			...executionDetailProjectionShape,
+			status: z.enum([
+				"submitted",
+				"processing",
+				"completed",
+				"cancelled",
+				"unknown",
+			]),
+			error: z.null(),
+		}),
+		z.strictObject({
+			...executionDetailProjectionShape,
+			status: z.literal("failed"),
+			error: PilotProtocolErrorV1Schema,
+		}),
+	],
+);
 
 export const PlatformAuditProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,

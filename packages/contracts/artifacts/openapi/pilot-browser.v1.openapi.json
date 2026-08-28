@@ -722,8 +722,7 @@
           "coOwnerIds",
           "availability",
           "actions",
-          "environment",
-          "secrets"
+          "environment"
         ],
         "type": "object"
       },
@@ -1795,81 +1794,143 @@
         ]
       },
       "ExecutionDetailProjectionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "conversationId": {
-            "minLength": 1,
-            "type": "string"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "error": {
+                "type": "null"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "finishedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "processSummary": {
+                "items": {
+                  "$ref": "#/components/schemas/ExecutionProcessSummaryV1"
+                },
+                "type": "array"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "startedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": [
+                  "submitted",
+                  "processing",
+                  "completed",
+                  "cancelled",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "executionId",
+              "conversationId",
+              "processSummary",
+              "startedAt",
+              "finishedAt",
+              "status",
+              "error"
+            ],
+            "type": "object"
           },
-          "error": {
-            "anyOf": [
-              {
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "error": {
                 "$ref": "#/components/schemas/PilotProtocolErrorV1"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "executionId": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "finishedAt": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "executionId": {
+                "minLength": 1,
                 "type": "string"
               },
-              {
-                "type": "null"
+              "finishedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "processSummary": {
+                "items": {
+                  "$ref": "#/components/schemas/ExecutionProcessSummaryV1"
+                },
+                "type": "array"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "startedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "const": "failed",
+                "type": "string"
               }
-            ]
-          },
-          "processSummary": {
-            "items": {
-              "$ref": "#/components/schemas/ExecutionProcessSummaryV1"
             },
-            "type": "array"
-          },
-          "schemaVersion": {
-            "const": 1,
-            "type": "number"
-          },
-          "startedAt": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "status": {
-            "enum": [
-              "submitted",
-              "processing",
-              "completed",
-              "failed",
-              "cancelled",
-              "unknown"
+            "required": [
+              "schemaVersion",
+              "executionId",
+              "conversationId",
+              "processSummary",
+              "startedAt",
+              "finishedAt",
+              "status",
+              "error"
             ],
-            "type": "string"
+            "type": "object"
           }
-        },
-        "required": [
-          "schemaVersion",
-          "executionId",
-          "conversationId",
-          "status",
-          "processSummary",
-          "startedAt",
-          "finishedAt",
-          "error"
         ],
         "type": "object"
       },

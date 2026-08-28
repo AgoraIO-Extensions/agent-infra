@@ -4,6 +4,7 @@ import { createDocument } from "zod-openapi";
 import {
 	AgentApplicationCreateRequestV1Schema,
 	AgentApplicationProjectionV1Schema,
+	AgentApplicationUpdateRequestV1Schema,
 	AgentConfigurationProjectionV1Schema,
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
@@ -186,6 +187,18 @@ describe("Pilot browser contracts", () => {
 				secrets: [
 					{ name: "MODEL_API_KEY", isSet: true, version: 1, value: "leak" },
 				],
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationUpdateRequestV1Schema.safeParse({
+				...validApplication,
+				secrets: undefined,
+			}).success,
+		).toBe(true);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				secrets: undefined,
 			}).success,
 		).toBe(false);
 	});
@@ -397,6 +410,36 @@ describe("Pilot browser contracts", () => {
 				error: null,
 			}),
 		).toMatchObject({ status: "completed" });
+		expect(
+			ExecutionDetailProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				executionId: "execution-failed",
+				conversationId: "conversation-1",
+				status: "failed",
+				processSummary: [],
+				startedAt: "2026-08-28T10:00:00Z",
+				finishedAt: "2026-08-28T10:02:00Z",
+				error: null,
+			}).success,
+		).toBe(false);
+		expect(
+			ExecutionDetailProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				executionId: "execution-completed",
+				conversationId: "conversation-1",
+				status: "completed",
+				processSummary: [],
+				startedAt: "2026-08-28T10:00:00Z",
+				finishedAt: "2026-08-28T10:02:00Z",
+				error: {
+					schemaVersion: 1,
+					code: "EXECUTION_FAILED",
+					message: "Contradictory error",
+					retryable: false,
+					traceId: "trace-execution",
+				},
+			}).success,
+		).toBe(false);
 		expect(
 			PlatformAuditProjectionV1Schema.parse({
 				schemaVersion: 1,

@@ -114,7 +114,7 @@ export type AgentApplicationUpdateRequestV1 = {
     };
     name: string;
     schemaVersion: 1;
-    secrets: Array<{
+    secrets?: Array<{
         name: string;
         value: string;
     }>;
@@ -324,13 +324,22 @@ export type ConversationSseMessageV1 = PersistedConversationEventV1 | TimelineRe
 
 export type ExecutionDetailProjectionV1 = {
     conversationId: string;
-    error: PilotProtocolErrorV1 | null;
+    error: null;
     executionId: string;
     finishedAt: string | null;
     processSummary: Array<ExecutionProcessSummaryV1>;
     schemaVersion: 1;
     startedAt: string | null;
-    status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    status: 'submitted' | 'processing' | 'completed' | 'cancelled' | 'unknown';
+} | {
+    conversationId: string;
+    error: PilotProtocolErrorV1;
+    executionId: string;
+    finishedAt: string | null;
+    processSummary: Array<ExecutionProcessSummaryV1>;
+    schemaVersion: 1;
+    startedAt: string | null;
+    status: 'failed';
 };
 
 export type ExecutionProcessSummaryV1 = {
