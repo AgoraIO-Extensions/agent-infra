@@ -1,0 +1,49 @@
+name: Publish container images
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: connection-api
+            dockerfile: apps/connection-api/Dockerfile
+          - name: connection-web
+            dockerfile: apps/connection-web/Dockerfile
+          - name: platform-api
+            dockerfile: apps/platform-api/Dockerfile
+          - name: platform-worker
+            dockerfile: apps/platform-worker/Dockerfile
+          - name: web
+            dockerfile: apps/web/Dockerfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.name }}:${{ github.ref_name }}
