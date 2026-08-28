@@ -67,6 +67,7 @@ export type AgentApplicationProjectionV1 = {
     } | null;
     description: string;
     name: string;
+    resourceProfile: AgentResourceProfileProjectionV1;
     schemaVersion: 1;
     source: {
         kind: 'standard';
@@ -239,6 +240,16 @@ export type AgentProjectionV1 = {
     };
 };
 
+export type AgentResourceProfileProjectionV1 = {
+    displayName: string;
+    estimatedResources: {
+        cpuMillicores: number;
+        memoryMiB: number;
+        storageGiB: number;
+    };
+    profileId: string;
+};
+
 export type ApprovalDecisionRequestV1 = {
     decision: 'approve';
     schemaVersion: 1;
@@ -351,12 +362,24 @@ export type MessageCommandRequestV1 = {
 export type MessageProjectionV1 = {
     answerVersion: number | null;
     createdAt: string;
+    error: null;
     executionId: string | null;
     isCurrentAnswer: boolean | null;
     messageId: string;
     replyToMessageId: string | null;
     role: 'user' | 'assistant';
-    status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled';
+    status: 'submitted' | 'processing' | 'completed' | 'cancelled';
+    text: string;
+} | {
+    answerVersion: number | null;
+    createdAt: string;
+    error: PilotProtocolErrorV1;
+    executionId: string | null;
+    isCurrentAnswer: boolean | null;
+    messageId: string;
+    replyToMessageId: string | null;
+    role: 'user' | 'assistant';
+    status: 'failed';
     text: string;
 };
 
@@ -438,14 +461,22 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 };
 
+export type PilotInternalErrorV1 = {
+    code: 'INTERNAL_ERROR';
+    message: string;
+    retryable: true;
+    schemaVersion: 1;
+    traceId: string;
+};
+
 export type PilotProtocolErrorV1 = {
-    code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE';
+    code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR';
     message: string;
     retryable: true;
     schemaVersion: 1;
     traceId: string;
 } | {
-    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED';
+    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED';
     message: string;
     retryable: false;
     schemaVersion: 1;
@@ -519,6 +550,10 @@ export type ListPendingAgentApplicationsErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -572,6 +607,10 @@ export type DecideAgentApplicationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -619,6 +658,10 @@ export type ListPlatformAuditErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -671,6 +714,10 @@ export type ListAgentApplicationsErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -722,6 +769,10 @@ export type CreateAgentApplicationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -768,6 +819,10 @@ export type GetAgentApplicationErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -819,6 +874,10 @@ export type UpdateAgentApplicationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -869,6 +928,10 @@ export type WithdrawAgentApplicationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -916,6 +979,10 @@ export type ListAgentsErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -967,6 +1034,10 @@ export type GetAgentErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1017,6 +1088,10 @@ export type UpdateAgentConfigurationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1066,6 +1141,10 @@ export type ListConversationsErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -1122,6 +1201,10 @@ export type CreateConversationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1172,6 +1255,10 @@ export type CommandAgentLifecycleErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1219,6 +1306,10 @@ export type GetConversationErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1262,6 +1353,10 @@ export type StreamConversationEventsErrors = {
      * Conversation access is unavailable
      */
     403: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
 };
 
 export type StreamConversationEventsError = StreamConversationEventsErrors[keyof StreamConversationEventsErrors];
@@ -1306,6 +1401,10 @@ export type GetExecutionDetailErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -1357,6 +1456,10 @@ export type SubmitMessageErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1406,6 +1509,10 @@ export type UpdateConversationModelSelectionErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */
@@ -1457,6 +1564,10 @@ export type RegenerateAnswerErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1507,6 +1618,10 @@ export type StopExecutionErrors = {
      */
     409: PilotProtocolErrorV1;
     /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
      * Dependency is temporarily unavailable
      */
     503: PilotProtocolErrorV1;
@@ -1551,6 +1666,10 @@ export type GetCurrentSessionErrors = {
      * Request conflicts with current state
      */
     409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
     /**
      * Dependency is temporarily unavailable
      */

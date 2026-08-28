@@ -416,7 +416,8 @@
                                 "RUNTIME_UNAVAILABLE",
                                 "CONNECTION_UNAVAILABLE",
                                 "PROVIDER_RATE_LIMITED",
-                                "DEPENDENCY_UNAVAILABLE"
+                                "DEPENDENCY_UNAVAILABLE",
+                                "INTERNAL_ERROR"
                               ],
                               "type": "string"
                             },
@@ -461,7 +462,9 @@
                                 "CONNECTION_AUTHORIZATION_REQUIRED",
                                 "ACTION_UNAVAILABLE",
                                 "PROVIDER_REJECTED",
-                                "DELEGATED_RESULT_REJECTED"
+                                "DELEGATED_RESULT_REJECTED",
+                                "ORIGINAL_RESPONSE_NOT_STARTED",
+                                "ORIGINAL_RESPONSE_ALREADY_FINISHED"
                               ],
                               "type": "string"
                             },
@@ -982,7 +985,8 @@
                             "RUNTIME_UNAVAILABLE",
                             "CONNECTION_UNAVAILABLE",
                             "PROVIDER_RATE_LIMITED",
-                            "DEPENDENCY_UNAVAILABLE"
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
                           ],
                           "type": "string"
                         },
@@ -1027,7 +1031,9 @@
                             "CONNECTION_AUTHORIZATION_REQUIRED",
                             "ACTION_UNAVAILABLE",
                             "PROVIDER_REJECTED",
-                            "DELEGATED_RESULT_REJECTED"
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
                           ],
                           "type": "string"
                         },

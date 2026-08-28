@@ -144,7 +144,7 @@
               },
               "propertyNames": {
                 "minLength": 1,
-                "pattern": "^(?!(?:accessToken|access_token|refreshToken|refresh_token|apiKey|api_key|authorization|clientSecret|client_secret|credential|password|secret|secretPlaintext|secret_plaintext)$).+$",
+                "pattern": "^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$",
                 "type": "string"
               },
               "type": "object"
@@ -246,7 +246,8 @@
                         "RUNTIME_UNAVAILABLE",
                         "CONNECTION_UNAVAILABLE",
                         "PROVIDER_RATE_LIMITED",
-                        "DEPENDENCY_UNAVAILABLE"
+                        "DEPENDENCY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
                       ],
                       "type": "string"
                     },
@@ -291,7 +292,9 @@
                         "CONNECTION_AUTHORIZATION_REQUIRED",
                         "ACTION_UNAVAILABLE",
                         "PROVIDER_REJECTED",
-                        "DELEGATED_RESULT_REJECTED"
+                        "DELEGATED_RESULT_REJECTED",
+                        "ORIGINAL_RESPONSE_NOT_STARTED",
+                        "ORIGINAL_RESPONSE_ALREADY_FINISHED"
                       ],
                       "type": "string"
                     },

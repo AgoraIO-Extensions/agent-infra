@@ -19,6 +19,7 @@
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
+		"@agent-infra/test-support": "workspace:*",
 		"@tanstack/router-plugin": "^1.168.23",
 		"@types/node": "catalog:",
 		"@types/react": "catalog:",
