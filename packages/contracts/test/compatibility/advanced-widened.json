@@ -1,0 +1,16 @@
+{
+	"$defs": {
+		"AliasV1": {},
+		"ChoiceV1": {},
+		"ModeV1": {},
+		"OpaqueIdV1": {
+			"type": "string"
+		},
+		"RequestIdV1": {
+			"type": "string"
+		},
+		"ToggleV1": {},
+		"UntypedV1": {}
+	},
+	"$schema": "https://json-schema.org/draft/2020-12/schema"
+}

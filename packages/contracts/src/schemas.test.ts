@@ -79,4 +79,23 @@ describe("common wire schemas", () => {
 			message: "运行时暂时不可用",
 		});
 	});
+
+	it("does not impose undocumented lengths on protocol-neutral strings", () => {
+		expect(OpaqueIdV1Schema.safeParse("租".repeat(129)).success).toBe(true);
+		expect(TraceIdV1Schema.safeParse("踪".repeat(129)).success).toBe(true);
+		expect(RequestIdV1Schema.safeParse("请".repeat(129)).success).toBe(true);
+		expect(OpaqueCursorV1Schema.safeParse("游".repeat(513)).success).toBe(true);
+		expect(
+			ProtocolErrorV1Schema.safeParse({
+				...validProtocolError,
+				code: "错".repeat(65),
+			}).success,
+		).toBe(true);
+		expect(
+			ProtocolErrorV1Schema.safeParse({
+				...validProtocolError,
+				message: "消".repeat(513),
+			}).success,
+		).toBe(true);
+	});
 });

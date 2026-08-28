@@ -23,6 +23,9 @@
 		"ToggleV1": {
 			"const": true,
 			"type": "boolean"
+		},
+		"UntypedV1": {
+			"type": "string"
 		}
 	},
 	"$schema": "https://json-schema.org/draft/2020-12/schema"

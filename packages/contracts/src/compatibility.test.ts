@@ -47,8 +47,14 @@ describe("contract compatibility command", () => {
 	it("rejects introduced const, enum, union, and reference narrowings", () => {
 		const result = compare("advanced-narrowed", "advanced-base");
 		expect(result.status).toBe(1);
-		for (const keyword of ["const", "enum", "oneOf", "$ref"]) {
+		for (const keyword of ["const", "enum", "oneOf", "$ref", "type"]) {
 			expect(result.stderr).toContain(keyword);
 		}
+	});
+
+	it("accepts removal of type, const, enum, union, and reference constraints", () => {
+		const result = compare("advanced-widened", "advanced-base");
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
 	});
 });

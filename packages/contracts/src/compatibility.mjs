@@ -37,7 +37,12 @@ function sameValue(left, right) {
 function compareSchema(previous, current, path, changes) {
 	const previousTypes = valueSet(previous.type);
 	const currentTypes = valueSet(current.type);
-	if (previousTypes.some((type) => !currentTypes.includes(type))) {
+	if (previousTypes.length === 0 && currentTypes.length > 0) {
+		changes.push(`narrowed ${path} type`);
+	} else if (
+		currentTypes.length > 0 &&
+		previousTypes.some((type) => !currentTypes.includes(type))
+	) {
 		changes.push(
 			`retyped ${path} from ${previousTypes.join("|")} to ${currentTypes.join("|")}`,
 		);
