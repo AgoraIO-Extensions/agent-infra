@@ -39,6 +39,7 @@ interface RuntimeHostOptions {
 	grantVerifier: ExecutionGrantVerifierOptions;
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
+	afterOperationResolved?: (operationId: string) => void | Promise<void>;
 }
 
 function invalidRequest(): never {
@@ -413,6 +414,7 @@ export class RuntimeHost {
 			result,
 			driverRecord.nativeSessionRef,
 		);
+		await this.options.afterOperationResolved?.(operation.operationId);
 		return {
 			schemaVersion: 1,
 			hostSessionRef,
@@ -422,61 +424,68 @@ export class RuntimeHost {
 	}
 
 	private async recoverOperations() {
+		const quarantinedSessions = new Set<string>();
 		for (const {
 			session,
 			operation,
 		} of this.options.store.listRecoverableOperations()) {
-			await this.serialize(session.hostSessionRef, async () => {
-				let recoveredResult: RuntimeOperationResponseV1["result"];
-				if (operation.kind === "generation-cancel") {
-					await this.options.store.activateGenerationBarrier(
-						session.hostSessionRef,
-						session,
-						operation.operationId,
-					);
-				}
-				if (operation.state === "prepared") {
-					recoveredResult = (
-						await this.dispatch(session.hostSessionRef, operation)
-					).result;
-				} else {
-					const lookup = await this.options.driver.lookupOperation(
-						operation.operationId,
-					);
-					if (lookup.state === "found") {
-						recoveredResult = await this.currentDriverResult(
-							lookup.record,
-							operation.executionId,
-						);
-						await this.options.store.resolveOperation(
+			if (quarantinedSessions.has(session.hostSessionRef)) continue;
+			try {
+				await this.serialize(session.hostSessionRef, async () => {
+					let recoveredResult: RuntimeOperationResponseV1["result"];
+					if (operation.kind === "generation-cancel") {
+						await this.options.store.activateGenerationBarrier(
 							session.hostSessionRef,
+							session,
 							operation.operationId,
-							recoveredResult,
-							lookup.record.nativeSessionRef,
-						);
-					} else {
-						recoveredResult = {
-							outcome: "unknown",
-							code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-							message: "Runtime command acceptance could not be confirmed",
-						};
-						await this.options.store.resolveOperation(
-							session.hostSessionRef,
-							operation.operationId,
-							recoveredResult,
 						);
 					}
-				}
-				if (
-					operation.kind === "generation-cancel" &&
-					recoveredResult.outcome === "accepted"
-				) {
-					await this.options.store.confirmGenerationBarrier(
-						session.hostSessionRef,
-						operation.operationId,
-					);
-				}
-			});
+					if (operation.state === "prepared") {
+						recoveredResult = (
+							await this.dispatch(session.hostSessionRef, operation)
+						).result;
+					} else {
+						const lookup = await this.options.driver.lookupOperation(
+							operation.operationId,
+						);
+						if (lookup.state === "found") {
+							recoveredResult = await this.currentDriverResult(
+								lookup.record,
+								operation.executionId,
+							);
+							await this.options.store.resolveOperation(
+								session.hostSessionRef,
+								operation.operationId,
+								recoveredResult,
+								lookup.record.nativeSessionRef,
+							);
+						} else {
+							recoveredResult = {
+								outcome: "unknown",
+								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+								message: "Runtime command acceptance could not be confirmed",
+							};
+							await this.options.store.resolveOperation(
+								session.hostSessionRef,
+								operation.operationId,
+								recoveredResult,
+							);
+						}
+					}
+					if (
+						operation.kind === "generation-cancel" &&
+						recoveredResult.outcome === "accepted"
+					) {
+						await this.options.store.confirmGenerationBarrier(
+							session.hostSessionRef,
+							operation.operationId,
+						);
+					}
+				});
+			} catch {
+				await this.options.store.quarantineSession(session.hostSessionRef);
+				quarantinedSessions.add(session.hostSessionRef);
+			}
 		}
 	}
 

@@ -44,6 +44,7 @@ export interface StoredSession extends SessionBinding {
 interface RuntimeStoreState {
 	schemaVersion: 1;
 	sessions: Record<string, StoredSession>;
+	quarantinedSessions: Record<string, unknown>;
 }
 
 interface PrepareOperation {
@@ -66,117 +67,142 @@ function storeCorrupted(): never {
 	);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.getPrototypeOf(value) === Object.prototype
+	);
+}
+
 function hasOnlyKeys(value: object, allowed: readonly string[]) {
 	return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-function assertStoreState(value: RuntimeStoreState) {
+function assertRootState(value: RuntimeStoreState) {
 	if (
-		!hasOnlyKeys(value, ["schemaVersion", "sessions"]) ||
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["schemaVersion", "sessions", "quarantinedSessions"]) ||
 		value.schemaVersion !== 1 ||
-		!value.sessions ||
-		typeof value.sessions !== "object"
+		!isPlainRecord(value.sessions) ||
+		(value.quarantinedSessions !== undefined &&
+			!isPlainRecord(value.quarantinedSessions))
 	) {
 		storeCorrupted();
 	}
-	const conversationKeys = new Set<string>();
-	for (const [hostSessionRef, session] of Object.entries(value.sessions)) {
-		const conversationKey = `${session.agentId}\u0000${session.conversationId}`;
+	value.quarantinedSessions ??= {};
+	if (
+		Object.keys(value.sessions).some((hostSessionRef) =>
+			Object.hasOwn(value.quarantinedSessions, hostSessionRef),
+		)
+	) {
+		storeCorrupted();
+	}
+}
+
+function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
+	if (
+		!isPlainRecord(session) ||
+		!hasOnlyKeys(session, [
+			"hostSessionRef",
+			"agentId",
+			"conversationId",
+			"sessionGeneration",
+			"nativeSessionRef",
+			"highestFences",
+			"operations",
+			"generationBarrier",
+		]) ||
+		session.hostSessionRef !== hostSessionRef ||
+		!session.agentId ||
+		!session.conversationId ||
+		!Number.isSafeInteger(session.sessionGeneration) ||
+		session.sessionGeneration < 1 ||
+		!isPlainRecord(session.highestFences) ||
+		!isPlainRecord(session.operations) ||
+		(session.nativeSessionRef !== undefined && !session.nativeSessionRef) ||
+		Object.entries(session.highestFences).some(
+			([scope, fence]) => !scope || !Number.isSafeInteger(fence) || fence < 1,
+		) ||
+		(session.generationBarrier !== undefined &&
+			(!isPlainRecord(session.generationBarrier) ||
+				!hasOnlyKeys(session.generationBarrier, [
+					"generation",
+					"tombstoneId",
+					"state",
+				]) ||
+				session.generationBarrier.generation !== session.sessionGeneration ||
+				!session.generationBarrier.tombstoneId ||
+				!(["active", "confirmed"] as const).includes(
+					session.generationBarrier.state,
+				)))
+	) {
+		storeCorrupted();
+	}
+	for (const [operationId, operation] of Object.entries(session.operations)) {
+		if (!isPlainRecord(operation)) storeCorrupted();
+		const expectedScope =
+			operation.kind === "submit-turn"
+				? `execution:${operation.executionId}`
+				: operation.kind === "supplement"
+					? `message:${operation.operationId}`
+					: operation.kind === "stop"
+						? `stop:${operation.operationId}`
+						: operation.kind === "generation-cancel"
+							? `generation:${session.sessionGeneration}`
+							: undefined;
 		if (
-			!hasOnlyKeys(session, [
-				"hostSessionRef",
-				"agentId",
-				"conversationId",
-				"sessionGeneration",
-				"nativeSessionRef",
-				"highestFences",
-				"operations",
-				"generationBarrier",
+			!hasOnlyKeys(operation, [
+				"operationId",
+				"kind",
+				"executionId",
+				"turnId",
+				"scope",
+				"deliveryFence",
+				"requestDigest",
+				"command",
+				"state",
+				"result",
 			]) ||
-			session.hostSessionRef !== hostSessionRef ||
-			!session.agentId ||
-			!session.conversationId ||
-			!Number.isSafeInteger(session.sessionGeneration) ||
-			session.sessionGeneration < 1 ||
-			!session.highestFences ||
-			typeof session.highestFences !== "object" ||
-			!session.operations ||
-			typeof session.operations !== "object" ||
-			(session.nativeSessionRef !== undefined && !session.nativeSessionRef) ||
-			conversationKeys.has(conversationKey) ||
-			Object.entries(session.highestFences).some(
-				([scope, fence]) => !scope || !Number.isSafeInteger(fence) || fence < 1,
-			) ||
-			(session.generationBarrier !== undefined &&
-				(typeof session.generationBarrier !== "object" ||
-					session.generationBarrier === null ||
-					!hasOnlyKeys(session.generationBarrier, [
-						"generation",
-						"tombstoneId",
-						"state",
-					]) ||
-					session.generationBarrier.generation !== session.sessionGeneration ||
-					!session.generationBarrier.tombstoneId ||
-					!(["active", "confirmed"] as const).includes(
-						session.generationBarrier.state,
-					)))
+			operation.operationId !== operationId ||
+			!operation.executionId ||
+			!operation.turnId ||
+			!operation.scope ||
+			!operation.requestDigest ||
+			!RuntimeDriverCommandV1Schema.safeParse(operation.command).success ||
+			operation.command.operationId !== operation.operationId ||
+			operation.command.kind !== operation.kind ||
+			operation.command.agentId !== session.agentId ||
+			operation.command.conversationId !== session.conversationId ||
+			operation.command.sessionGeneration !== session.sessionGeneration ||
+			operation.command.executionId !== operation.executionId ||
+			operation.command.turnId !== operation.turnId ||
+			("nativeSessionRef" in operation.command &&
+				session.nativeSessionRef !== undefined &&
+				operation.command.nativeSessionRef !== session.nativeSessionRef) ||
+			!expectedScope ||
+			operation.scope !== expectedScope ||
+			!Number.isSafeInteger(operation.deliveryFence) ||
+			operation.deliveryFence < 1 ||
+			(session.highestFences[operation.scope] ?? 0) < operation.deliveryFence ||
+			(operation.state === "resolved"
+				? !RuntimeOperationResultV1Schema.safeParse(operation.result).success
+				: operation.state !== "prepared" || operation.result !== undefined)
 		) {
 			storeCorrupted();
 		}
+	}
+}
+
+function assertStoreState(value: RuntimeStoreState) {
+	assertRootState(value);
+	const conversationKeys = new Set<string>();
+	for (const [hostSessionRef, session] of Object.entries(value.sessions)) {
+		assertSessionRecord(hostSessionRef, session);
+		const conversationKey = `${session.agentId}\u0000${session.conversationId}`;
+		if (conversationKeys.has(conversationKey)) storeCorrupted();
 		conversationKeys.add(conversationKey);
-		for (const [operationId, operation] of Object.entries(session.operations)) {
-			const expectedScope =
-				operation.kind === "submit-turn"
-					? `execution:${operation.executionId}`
-					: operation.kind === "supplement"
-						? `message:${operation.operationId}`
-						: operation.kind === "stop"
-							? `stop:${operation.operationId}`
-							: operation.kind === "generation-cancel"
-								? `generation:${session.sessionGeneration}`
-								: undefined;
-			if (
-				!hasOnlyKeys(operation, [
-					"operationId",
-					"kind",
-					"executionId",
-					"turnId",
-					"scope",
-					"deliveryFence",
-					"requestDigest",
-					"command",
-					"state",
-					"result",
-				]) ||
-				operation.operationId !== operationId ||
-				!operation.executionId ||
-				!operation.turnId ||
-				!operation.scope ||
-				!operation.requestDigest ||
-				!RuntimeDriverCommandV1Schema.safeParse(operation.command).success ||
-				operation.command.operationId !== operation.operationId ||
-				operation.command.kind !== operation.kind ||
-				operation.command.agentId !== session.agentId ||
-				operation.command.conversationId !== session.conversationId ||
-				operation.command.sessionGeneration !== session.sessionGeneration ||
-				operation.command.executionId !== operation.executionId ||
-				operation.command.turnId !== operation.turnId ||
-				("nativeSessionRef" in operation.command &&
-					session.nativeSessionRef !== undefined &&
-					operation.command.nativeSessionRef !== session.nativeSessionRef) ||
-				!expectedScope ||
-				operation.scope !== expectedScope ||
-				!Number.isSafeInteger(operation.deliveryFence) ||
-				operation.deliveryFence < 1 ||
-				(session.highestFences[operation.scope] ?? 0) <
-					operation.deliveryFence ||
-				(operation.state === "resolved"
-					? !RuntimeOperationResultV1Schema.safeParse(operation.result).success
-					: operation.state !== "prepared" || operation.result !== undefined)
-			) {
-				storeCorrupted();
-			}
-		}
 	}
 }
 
@@ -186,6 +212,13 @@ function sessionFor(
 	binding: SessionBinding,
 	allowGenerationBarrier = false,
 ) {
+	if (Object.hasOwn(state.quarantinedSessions, hostSessionRef)) {
+		throw new RuntimeHostError(
+			"RUNTIME_SESSION_QUARANTINED",
+			"Runtime session state is quarantined",
+			503,
+		);
+	}
 	const session = state.sessions[hostSessionRef];
 	if (!session) {
 		throw new RuntimeHostError(
@@ -247,8 +280,40 @@ export class FileRuntimeStore {
 			file = await DurableJsonFile.open(path, {
 				schemaVersion: 1,
 				sessions: {},
+				quarantinedSessions: {},
 			});
-			assertStoreState(file.read());
+			await file.update((state) => {
+				assertRootState(state);
+				const invalidSessionRefs = new Set<string>();
+				const sessionsByConversation = new Map<string, string[]>();
+				for (const [hostSessionRef, session] of Object.entries(
+					state.sessions,
+				)) {
+					try {
+						assertSessionRecord(hostSessionRef, session);
+						const key = `${session.agentId}\u0000${session.conversationId}`;
+						const refs = sessionsByConversation.get(key) ?? [];
+						refs.push(hostSessionRef);
+						sessionsByConversation.set(key, refs);
+					} catch {
+						invalidSessionRefs.add(hostSessionRef);
+					}
+				}
+				for (const refs of sessionsByConversation.values()) {
+					if (refs.length > 1) {
+						for (const hostSessionRef of refs) {
+							invalidSessionRefs.add(hostSessionRef);
+						}
+					}
+				}
+				for (const hostSessionRef of invalidSessionRefs) {
+					const session = state.sessions[hostSessionRef];
+					if (session === undefined) storeCorrupted();
+					state.quarantinedSessions[hostSessionRef] = session;
+					delete state.sessions[hostSessionRef];
+				}
+				assertStoreState(state);
+			});
 		} catch (error) {
 			if (error instanceof RuntimeHostError) throw error;
 			storeCorrupted();
@@ -267,6 +332,24 @@ export class FileRuntimeStore {
 					session.agentId === input.binding.agentId &&
 					session.conversationId === input.binding.conversationId,
 			);
+			const quarantinedSession = Object.entries(state.quarantinedSessions).find(
+				([, value]) =>
+					isPlainRecord(value)
+						? value.agentId === input.binding.agentId &&
+							value.conversationId === input.binding.conversationId
+						: false,
+			);
+			if (
+				!input.requestedHostSessionRef &&
+				!currentSession &&
+				quarantinedSession
+			) {
+				throw new RuntimeHostError(
+					"RUNTIME_SESSION_QUARANTINED",
+					"Runtime session state is quarantined",
+					503,
+				);
+			}
 			const hostSessionRef =
 				input.requestedHostSessionRef ??
 				existingSession?.hostSessionRef ??
@@ -372,6 +455,9 @@ export class FileRuntimeStore {
 				.filter(
 					(operation) =>
 						operation.state === "prepared" ||
+						(session.generationBarrier?.state === "active" &&
+							session.generationBarrier.tombstoneId ===
+								operation.operationId) ||
 						(operation.result?.outcome === "accepted" &&
 							["running", "unknown"].includes(operation.result.status)),
 				)
@@ -380,6 +466,16 @@ export class FileRuntimeStore {
 					operation: structuredClone(operation),
 				})),
 		);
+	}
+
+	quarantineSession(hostSessionRef: string) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const session = state.sessions[hostSessionRef];
+			if (!session) return;
+			state.quarantinedSessions[hostSessionRef] = session;
+			delete state.sessions[hostSessionRef];
+		});
 	}
 
 	resolveOperation(

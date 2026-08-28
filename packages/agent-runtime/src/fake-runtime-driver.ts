@@ -27,6 +27,8 @@ interface FakeDriverState {
 	sessions: Record<string, FakeSession>;
 	operations: Record<string, RuntimeDriverOperationRecordV1>;
 	unknownOperations: string[];
+	lookupFailures: string[];
+	statusFailures: string[];
 	sideEffects: number;
 }
 
@@ -56,6 +58,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				sessions: {},
 				operations: {},
 				unknownOperations: [],
+				lookupFailures: [],
+				statusFailures: [],
 				sideEffects: 0,
 			}),
 		);
@@ -183,10 +187,29 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 
 	async lookupOperation(operationId: string): Promise<RuntimeDriverLookup> {
 		const state = this.file.read();
+		if (state.lookupFailures.includes(operationId)) {
+			throw new RuntimeHostError(
+				"RUNTIME_DRIVER_RECOVERY_FAILED",
+				"Runtime operation recovery failed",
+				503,
+			);
+		}
 		if (state.unknownOperations.includes(operationId))
 			return { state: "unknown" };
 		const record = state.operations[operationId];
 		return record ? { state: "found", record } : { state: "missing" };
+	}
+
+	failLookupFor(operationId: string) {
+		return this.file.update((state) => {
+			state.lookupFailures.push(operationId);
+		});
+	}
+
+	failStatusFor(executionId: string) {
+		return this.file.update((state) => {
+			state.statusFailures.push(executionId);
+		});
 	}
 
 	makeOperationUnknown(operationId: string) {
@@ -224,6 +247,13 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
+		if (this.file.read().statusFailures.includes(executionId)) {
+			throw new RuntimeHostError(
+				"RUNTIME_DRIVER_RECOVERY_FAILED",
+				"Runtime status recovery failed",
+				503,
+			);
+		}
 		const session = this.session(nativeSessionRef);
 		if (session.activeExecutionId && session.activeExecutionId !== executionId)
 			return "idle";

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -429,5 +429,86 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_GENERATION_CANCELLED" });
 		expect(await driver.sideEffectCount()).toBe(2);
+	});
+
+	it("confirms an active generation barrier after a crash persisted cancellation", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-barrier-crash-"),
+		);
+		directories.push(directory);
+		const hostPath = join(directory, "host.json");
+		const driverPath = join(directory, "driver.json");
+		const driver = await FakeRuntimeDriver.open(driverPath);
+		const original = submitRequest();
+		const firstHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(hostPath),
+			driver,
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		const submitted = await firstHost.submitTurn(original);
+		const tombstoneId = "generation-tombstone-crash";
+		const crashingHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(hostPath),
+			driver: await FakeRuntimeDriver.open(driverPath),
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+			afterOperationResolved: (operationId) => {
+				if (operationId === tombstoneId) {
+					throw new Error("simulated crash before barrier confirmation");
+				}
+			},
+		});
+
+		await expect(
+			crashingHost.cancelGeneration({
+				schemaVersion: 1,
+				requestId: "request-generation-crash",
+				agentId: original.agentId,
+				conversationId: original.conversationId,
+				executionId: original.executionId,
+				turnId: original.turnId,
+				sessionGeneration: original.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				tombstoneId,
+				grant: signedGrant(original, ["generation.cancel"]),
+			}),
+		).rejects.toThrow("simulated crash before barrier confirmation");
+		const activeState = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<string, { generationBarrier?: { state: string } }>;
+		};
+		expect(
+			activeState.sessions[submitted.hostSessionRef]?.generationBarrier?.state,
+		).toBe("active");
+
+		await RuntimeHost.open({
+			store: await FileRuntimeStore.open(hostPath),
+			driver: await FakeRuntimeDriver.open(driverPath),
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		const recoveredState = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<string, { generationBarrier?: { state: string } }>;
+		};
+		expect(
+			recoveredState.sessions[submitted.hostSessionRef]?.generationBarrier
+				?.state,
+		).toBe("confirmed");
+		await expect(
+			(await FakeRuntimeDriver.open(driverPath)).sideEffectCount(),
+		).resolves.toBe(2);
 	});
 });

@@ -5,7 +5,9 @@ import { join } from "node:path";
 
 import type {
 	ExecutionGrantClaimsV1,
+	RuntimeGrantOperationV1,
 	RuntimeSubmitTurnRequestV1,
+	SignedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -38,42 +40,60 @@ async function directory() {
 	return value;
 }
 
-function request(): RuntimeSubmitTurnRequestV1 {
+type RuntimeBinding = Pick<
+	RuntimeSubmitTurnRequestV1,
+	"agentId" | "conversationId" | "executionId" | "turnId" | "sessionGeneration"
+>;
+
+function signedGrant(
+	binding: RuntimeBinding,
+	operations: RuntimeGrantOperationV1[],
+): SignedExecutionGrantV1 {
 	const claims: ExecutionGrantClaimsV1 = {
 		schemaVersion: 1,
 		issuer: "agent-platform",
 		audience: ["agent-runtime-host"],
 		issuedAt: "2026-08-28T09:59:00Z",
 		expiresAt: "2026-08-28T10:01:00Z",
-		grantId: "grant-crash",
+		grantId: `grant-${binding.executionId}-${operations.join("-")}`,
 		actorId: "actor-crash",
 		channelId: "web",
-		agentId: "agent-crash",
-		conversationId: "conversation-crash",
-		executionId: "execution-crash",
-		turnId: "turn-crash",
-		sessionGeneration: 1,
-		operations: ["turn.submit"],
+		agentId: binding.agentId,
+		conversationId: binding.conversationId,
+		executionId: binding.executionId,
+		turnId: binding.turnId,
+		sessionGeneration: binding.sessionGeneration,
+		operations,
 		attachments: [],
 		actionSetVersion: "actions-crash",
 	};
 	const payload = Buffer.from(JSON.stringify(claims));
 	return {
 		schemaVersion: 1,
-		requestId: "request-crash",
-		agentId: claims.agentId,
-		conversationId: claims.conversationId,
-		executionId: claims.executionId,
-		turnId: claims.turnId,
-		sessionGeneration: claims.sessionGeneration,
+		algorithm: "Ed25519",
+		keyId: "key-crash",
+		payload: payload.toString("base64url"),
+		signature: sign(null, payload, privateKey).toString("base64url"),
+	};
+}
+
+function request(
+	overrides: Partial<RuntimeBinding> = {},
+): RuntimeSubmitTurnRequestV1 {
+	const binding: RuntimeBinding = {
+		agentId: "agent-crash",
+		conversationId: "conversation-crash",
+		executionId: "execution-crash",
+		turnId: "turn-crash",
+		sessionGeneration: 1,
+		...overrides,
+	};
+	return {
+		schemaVersion: 1,
+		requestId: `request-${binding.executionId}`,
+		...binding,
 		deliveryFence: 1,
-		grant: {
-			schemaVersion: 1,
-			algorithm: "Ed25519",
-			keyId: "key-crash",
-			payload: payload.toString("base64url"),
-			signature: sign(null, payload, privateKey).toString("base64url"),
-		},
+		grant: signedGrant(binding, ["turn.submit"]),
 		input: { text: "synthetic-crash-input", attachments: [] },
 	};
 }
@@ -292,7 +312,38 @@ describe("RuntimeHost crash-window recovery", () => {
 		});
 	});
 
+	it("fails globally when the root sessions container is an array", async () => {
+		const root = await directory();
+		const hostPath = join(root, "host.json");
+		await writeFile(
+			hostPath,
+			JSON.stringify({ schemaVersion: 1, sessions: [] }),
+			"utf8",
+		);
+
+		await expect(FileRuntimeStore.open(hostPath)).rejects.toMatchObject({
+			code: "RUNTIME_STORE_CORRUPTED",
+		});
+	});
+
 	it.each([
+		[
+			"highest-fence array container",
+			(session: MutableStoredSession) => {
+				session.highestFences = [] as unknown as Record<string, unknown>;
+				session.operations = {};
+			},
+		],
+		[
+			"operations array container",
+			(session: MutableStoredSession) => {
+				session.highestFences = {};
+				session.operations = [] as unknown as Record<
+					string,
+					MutableStoredOperation
+				>;
+			},
+		],
 		[
 			"highest fence",
 			(session: MutableStoredSession) => {
@@ -350,8 +401,13 @@ describe("RuntimeHost crash-window recovery", () => {
 			corrupt(session);
 			await writeFile(hostPath, JSON.stringify(state), "utf8");
 
-			await expect(FileRuntimeStore.open(hostPath)).rejects.toMatchObject({
-				code: "RUNTIME_STORE_CORRUPTED",
+			const reopened = await FileRuntimeStore.open(hostPath);
+			await expect(
+				Promise.resolve().then(() =>
+					reopened.getSessionForQuery(session.hostSessionRef, request(), 1),
+				),
+			).rejects.toMatchObject({
+				code: "RUNTIME_SESSION_QUARANTINED",
 			});
 		},
 	);
@@ -375,8 +431,157 @@ describe("RuntimeHost crash-window recovery", () => {
 		};
 		await writeFile(hostPath, JSON.stringify(state), "utf8");
 
-		await expect(FileRuntimeStore.open(hostPath)).rejects.toMatchObject({
-			code: "RUNTIME_STORE_CORRUPTED",
+		const reopened = await FileRuntimeStore.open(hostPath);
+		await expect(
+			Promise.resolve().then(() =>
+				reopened.getSessionForQuery(session.hostSessionRef, request(), 1),
+			),
+		).rejects.toMatchObject({
+			code: "RUNTIME_SESSION_QUARANTINED",
 		});
 	});
+
+	it("quarantines one corrupt Session while a healthy Conversation remains usable", async () => {
+		const root = await directory();
+		const hostPath = join(root, "host.json");
+		const driverPath = join(root, "driver.json");
+		const driver = await FakeRuntimeDriver.open(driverPath);
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(hostPath),
+			driver,
+		);
+		const affectedRequest = request();
+		const healthyRequest = request({
+			conversationId: "conversation-healthy",
+			executionId: "execution-healthy",
+			turnId: "turn-healthy",
+		});
+		const affected = await runtimeHost.submitTurn(affectedRequest);
+		const healthy = await runtimeHost.submitTurn(healthyRequest);
+		const state = JSON.parse(
+			await readFile(hostPath, "utf8"),
+		) as MutableStoreState;
+		const affectedSession = state.sessions[affected.hostSessionRef];
+		const affectedOperation = affectedSession
+			? Object.values(affectedSession.operations)[0]
+			: undefined;
+		if (!affectedOperation) throw new Error("expected affected operation");
+		affectedOperation.kind = "corrupted-operation";
+		await writeFile(hostPath, JSON.stringify(state), "utf8");
+
+		const restartedDriver = await FakeRuntimeDriver.open(driverPath);
+		const recoveredHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(hostPath),
+			driver: restartedDriver,
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-crash", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		expect(
+			await recoveredHost.status({
+				schemaVersion: 1,
+				requestId: "request-status-healthy",
+				agentId: healthyRequest.agentId,
+				conversationId: healthyRequest.conversationId,
+				executionId: healthyRequest.executionId,
+				turnId: healthyRequest.turnId,
+				sessionGeneration: healthyRequest.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: healthy.hostSessionRef,
+				grant: signedGrant(healthyRequest, ["session.status"]),
+			}),
+		).toMatchObject({ status: "running" });
+		await expect(
+			recoveredHost.status({
+				schemaVersion: 1,
+				requestId: "request-status-affected",
+				agentId: affectedRequest.agentId,
+				conversationId: affectedRequest.conversationId,
+				executionId: affectedRequest.executionId,
+				turnId: affectedRequest.turnId,
+				sessionGeneration: affectedRequest.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: affected.hostSessionRef,
+				grant: signedGrant(affectedRequest, ["session.status"]),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_SESSION_QUARANTINED" });
+		await expect(
+			recoveredHost.submitTurn(
+				request({
+					executionId: "execution-after-quarantine",
+					turnId: "turn-after-quarantine",
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_SESSION_QUARANTINED" });
+		expect(await restartedDriver.sideEffectCount()).toBe(2);
+	});
+
+	it.each(["lookup", "status"] as const)(
+		"quarantines only the Session whose Driver %s recovery fails",
+		async (failure) => {
+			const root = await directory();
+			const hostPath = join(root, "host.json");
+			const driverPath = join(root, "driver.json");
+			const driver = await FakeRuntimeDriver.open(driverPath);
+			const runtimeHost = await host(
+				await FileRuntimeStore.open(hostPath),
+				driver,
+			);
+			const affectedRequest = request();
+			const healthyRequest = request({
+				conversationId: "conversation-driver-healthy",
+				executionId: "execution-driver-healthy",
+				turnId: "turn-driver-healthy",
+			});
+			const affected = await runtimeHost.submitTurn(affectedRequest);
+			const healthy = await runtimeHost.submitTurn(healthyRequest);
+			if (failure === "lookup") {
+				await driver.failLookupFor(affectedRequest.executionId);
+			} else {
+				await driver.failStatusFor(affectedRequest.executionId);
+			}
+
+			const recoveredHost = await RuntimeHost.open({
+				store: await FileRuntimeStore.open(hostPath),
+				driver: await FakeRuntimeDriver.open(driverPath),
+				grantVerifier: {
+					expectedIssuer: "agent-platform",
+					expectedAudience: "agent-runtime-host",
+					publicKeys: new Map([["key-crash", publicKey]]),
+					now: () => new Date("2026-08-28T10:00:00Z"),
+				},
+			});
+			expect(
+				await recoveredHost.status({
+					schemaVersion: 1,
+					requestId: `request-driver-${failure}-healthy`,
+					agentId: healthyRequest.agentId,
+					conversationId: healthyRequest.conversationId,
+					executionId: healthyRequest.executionId,
+					turnId: healthyRequest.turnId,
+					sessionGeneration: healthyRequest.sessionGeneration,
+					deliveryFence: 1,
+					hostSessionRef: healthy.hostSessionRef,
+					grant: signedGrant(healthyRequest, ["session.status"]),
+				}),
+			).toMatchObject({ status: "running" });
+			await expect(
+				recoveredHost.status({
+					schemaVersion: 1,
+					requestId: `request-driver-${failure}-affected`,
+					agentId: affectedRequest.agentId,
+					conversationId: affectedRequest.conversationId,
+					executionId: affectedRequest.executionId,
+					turnId: affectedRequest.turnId,
+					sessionGeneration: affectedRequest.sessionGeneration,
+					deliveryFence: 1,
+					hostSessionRef: affected.hostSessionRef,
+					grant: signedGrant(affectedRequest, ["session.status"]),
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_SESSION_QUARANTINED" });
+		},
+	);
 });
