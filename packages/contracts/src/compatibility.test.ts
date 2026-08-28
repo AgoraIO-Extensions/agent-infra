@@ -153,6 +153,24 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain(
 			"removed $defs.RemovedNestedDefV1.$defs.Value",
 		);
+		expect(result.stderr).toContain(
+			"retyped $defs.PatternToPropertyV1.x property ^x",
+		);
+	});
+
+	it("fails closed for unsupported evaluation constraints", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		for (const keyword of [
+			"dependentSchemas",
+			"if",
+			"then",
+			"else",
+			"unevaluatedProperties",
+			"unevaluatedItems",
+		]) {
+			expect(result.stderr).toContain(keyword);
+		}
 	});
 
 	it("accepts removed constraints and integer-to-number widening", () => {

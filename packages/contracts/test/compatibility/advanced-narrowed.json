@@ -103,6 +103,20 @@
 			},
 			"type": "object"
 		},
+		"PatternToPropertyV1": {
+			"additionalProperties": false,
+			"patternProperties": {
+				"^x": {
+					"type": "string"
+				}
+			},
+			"properties": {
+				"x": {
+					"type": "number"
+				}
+			},
+			"type": "object"
+		},
 		"PatternExplicitV1": {
 			"additionalProperties": false,
 			"patternProperties": {
@@ -148,6 +162,24 @@
 			"items": false,
 			"prefixItems": [],
 			"type": "array"
+		},
+		"UnsupportedConstraintsV1": {
+			"dependentSchemas": {
+				"foo": {
+					"required": ["bar"]
+				}
+			},
+			"else": {
+				"maxProperties": 1
+			},
+			"if": {
+				"required": ["flag"]
+			},
+			"then": {
+				"required": ["value"]
+			},
+			"unevaluatedItems": false,
+			"unevaluatedProperties": false
 		},
 		"UntypedV1": {
 			"type": "string"

@@ -66,6 +66,15 @@
 		"PatternObjectV1": {
 			"type": "object"
 		},
+		"PatternToPropertyV1": {
+			"additionalProperties": false,
+			"patternProperties": {
+				"^x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
 		"PatternExplicitV1": {
 			"additionalProperties": false,
 			"properties": {
@@ -109,6 +118,7 @@
 			],
 			"type": "array"
 		},
+		"UnsupportedConstraintsV1": {},
 		"UntypedV1": {}
 	},
 	"$schema": "https://json-schema.org/draft/2020-12/schema"

@@ -9,6 +9,14 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 ];
+const unsupportedConstraintKeywords = [
+	"dependentSchemas",
+	"if",
+	"then",
+	"else",
+	"unevaluatedProperties",
+	"unevaluatedItems",
+];
 const usage = "Usage: compatibility.mjs [--previous path --current path]";
 
 function parseArguments(arguments_) {
@@ -210,6 +218,14 @@ function compareSchema(previous, current, path, changes) {
 	) {
 		changes.push(`narrowed ${path} not`);
 	}
+	for (const keyword of unsupportedConstraintKeywords) {
+		if (
+			current[keyword] !== undefined &&
+			!sameValue(previous[keyword], current[keyword])
+		) {
+			changes.push(`narrowed ${path} unsupported ${keyword}`);
+		}
+	}
 
 	const increasingMinimums = ["minLength", "minItems", "minProperties"];
 	for (const keyword of increasingMinimums) {
@@ -359,13 +375,28 @@ function compareSchema(previous, current, path, changes) {
 	}
 	for (const [name, schema] of Object.entries(current.properties ?? {})) {
 		if (previous.properties?.[name] !== undefined) continue;
-		compareSubschemaConstraint(
-			previous.additionalProperties,
-			schema,
-			`${path}.${name}`,
-			"property",
-			changes,
-		);
+		const matchingPatterns = Object.entries(
+			previous.patternProperties ?? {},
+		).filter(([pattern]) => new RegExp(pattern).test(name));
+		if (matchingPatterns.length > 0) {
+			for (const [pattern, patternSchema] of matchingPatterns) {
+				compareSubschemaConstraint(
+					patternSchema,
+					schema,
+					`${path}.${name}`,
+					`property ${pattern}`,
+					changes,
+				);
+			}
+		} else {
+			compareSubschemaConstraint(
+				previous.additionalProperties,
+				schema,
+				`${path}.${name}`,
+				"property",
+				changes,
+			);
+		}
 	}
 	for (const [pattern, schema] of Object.entries(
 		current.patternProperties ?? {},
