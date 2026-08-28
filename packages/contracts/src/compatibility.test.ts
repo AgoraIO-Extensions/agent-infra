@@ -154,6 +154,9 @@ describe("contract compatibility command", () => {
 			"removed $defs.RemovedNestedDefV1.$defs.Value",
 		);
 		expect(result.stderr).toContain(
+			"removed $defs.UnusedNestedDefV1.$defs.Value",
+		);
+		expect(result.stderr).toContain(
 			"retyped $defs.PatternToPropertyV1.x property ^x",
 		);
 	});

@@ -181,6 +181,7 @@
 			"unevaluatedItems": false,
 			"unevaluatedProperties": false
 		},
+		"UnusedNestedDefV1": {},
 		"UntypedV1": {
 			"type": "string"
 		}

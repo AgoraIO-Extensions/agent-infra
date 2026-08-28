@@ -70,21 +70,6 @@ function literalSchemasAreDisjoint(left, right) {
 	);
 }
 
-function containsReference(value, reference) {
-	if (Array.isArray(value)) {
-		return value.some((entry) => containsReference(entry, reference));
-	}
-	if (!value || typeof value !== "object") return false;
-	if (value.$ref === reference) return true;
-	return Object.values(value).some((entry) =>
-		containsReference(entry, reference),
-	);
-}
-
-function jsonPointerSegment(value) {
-	return value.replaceAll("~", "~0").replaceAll("/", "~1");
-}
-
 function hasSchemaConstraints(value) {
 	return (
 		value === false ||
@@ -501,9 +486,7 @@ function compareSchema(previous, current, path, changes) {
 		const currentSchema = current.$defs?.[name];
 		if (currentSchema !== undefined) {
 			compareSchema(schema, currentSchema, `${path}.$defs.${name}`, changes);
-		} else if (
-			containsReference(current, `#/$defs/${jsonPointerSegment(name)}`)
-		) {
+		} else {
 			changes.push(`removed ${path}.$defs.${name}`);
 		}
 	}
