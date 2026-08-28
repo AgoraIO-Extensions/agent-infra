@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { resolvePilotReplayV1 } from "../../../test-support/src/pilot/index.js";
 import {
 	ConversationSseMessageV1Schema,
 	DelegatedActionRequestV1Schema,
@@ -42,28 +41,5 @@ describe("Pilot consumer contract boundaries", () => {
 				traceId: "trace-1",
 			}).success,
 		).toBe(false);
-	});
-
-	it("turns cross-conversation and unknown cursors into reload signals", () => {
-		const crossConversation = resolvePilotReplayV1({
-			conversationId: "conversation-pilot-1",
-			cursor: "cursor-other-1",
-		});
-		const unknown = resolvePilotReplayV1({
-			conversationId: "conversation-pilot-1",
-			cursor: "cursor-unknown",
-		});
-
-		expect(
-			ConversationSseMessageV1Schema.parse(crossConversation[0]),
-		).toMatchObject({
-			type: "timeline.reload",
-			reason: "cross_conversation_cursor",
-		});
-		expect(ConversationSseMessageV1Schema.parse(unknown[0])).toMatchObject({
-			type: "timeline.reload",
-			reason: "unknown_event_id",
-		});
-		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
 	});
 });

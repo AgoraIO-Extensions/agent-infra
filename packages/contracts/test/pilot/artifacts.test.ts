@@ -1,3 +1,4 @@
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
@@ -50,8 +51,37 @@ describe("Pilot standard artifacts", () => {
 		expect(delegated.ExecutionGrantClaimsV1).toHaveProperty(
 			"properties.actionSetVersion",
 		);
-		expect(JSON.stringify(delegated.DelegatedActionResultV1)).toContain(
-			"accessToken",
-		);
+
+		const ajv = new Ajv2020({ strict: true });
+		ajv.addFormat("date-time", true);
+		const delegatedResultSchema = delegated.DelegatedActionResultV1;
+		if (!delegatedResultSchema)
+			throw new Error("Delegated result schema missing");
+		const validateDelegatedResult = ajv.compile(delegatedResultSchema);
+		for (const key of [
+			"token",
+			"Authorization",
+			"cookie",
+			"access_token_value",
+			"privateKey",
+			"apiKey",
+			"secret",
+			"credential",
+			"password",
+		]) {
+			expect(
+				validateDelegatedResult({
+					schemaVersion: 1,
+					requestId: "request-1",
+					traceId: "trace-1",
+					callId: "call-1",
+					status: "succeeded",
+					actionId: "github.issues.read",
+					actionVersion: "v3",
+					completedAt: "2026-08-28T10:00:01Z",
+					output: { levelOne: { levelTwo: { [key]: "blocked" } } },
+				}),
+			).toBe(false);
+		}
 	});
 });

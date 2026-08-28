@@ -7,7 +7,10 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
-import { PilotProtocolErrorV1Schema } from "./errors.ts";
+import {
+	PilotInternalErrorV1Schema,
+	PilotProtocolErrorV1Schema,
+} from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const eventShape = {
@@ -144,6 +147,12 @@ export const pilotBrowserSseOpenApiPathsV1 = {
 				"400": protocolErrorResponse("Invalid replay cursor"),
 				"401": protocolErrorResponse("Authentication required"),
 				"403": protocolErrorResponse("Conversation access is unavailable"),
+				"500": {
+					description: "Internal error",
+					content: {
+						"application/json": { schema: PilotInternalErrorV1Schema },
+					},
+				},
 			},
 		},
 	},

@@ -1,16 +1,17 @@
-import { describe, expect, it } from "vitest";
-
-import { pilotFakeScenariosV1 } from "../../../test-support/src/pilot/index.js";
 import {
 	AgentProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
+	ConversationSseMessageV1Schema,
 	ExecutionDetailProjectionV1Schema,
-} from "../../src/pilot/browser.js";
-import { PilotProtocolErrorV1Schema } from "../../src/pilot/errors.js";
-import { ConversationSseMessageV1Schema } from "../../src/pilot/sse.js";
+	MessageProjectionV1Schema,
+	PilotProtocolErrorV1Schema,
+} from "@agent-infra/contracts/pilot";
+import { describe, expect, it } from "vitest";
+
+import { pilotFakeScenariosV1, resolvePilotReplayV1 } from "./index.js";
 
 describe("Pilot schema-driven Fake scenarios", () => {
-	it("covers every required product state", () => {
+	it("covers every required product state with schema-valid responses", () => {
 		expect(Object.keys(pilotFakeScenariosV1).sort()).toEqual(
 			[
 				"busy",
@@ -23,9 +24,6 @@ describe("Pilot schema-driven Fake scenarios", () => {
 				"unavailable",
 			].sort(),
 		);
-	});
-
-	it("keeps every HTTP Fake response valid against its public response schema", () => {
 		expect(
 			CommandAcceptedProjectionV1Schema.parse(
 				pilotFakeScenariosV1.success.response.body,
@@ -41,6 +39,16 @@ describe("Pilot schema-driven Fake scenarios", () => {
 				pilotFakeScenariosV1.failed.response.body,
 			),
 		).toEqual(pilotFakeScenariosV1.failed.response.body);
+		expect(
+			pilotFakeScenariosV1.failed.messages.map(
+				(message) => MessageProjectionV1Schema.parse(message).error?.code,
+			),
+		).toEqual([
+			"ORIGINAL_RESPONSE_NOT_STARTED",
+			"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			"AUTHORIZATION_REVOKED",
+			"EXECUTION_FAILED",
+		]);
 		for (const scenario of [
 			pilotFakeScenariosV1.unauthorized,
 			pilotFakeScenariosV1.busy,
@@ -50,9 +58,6 @@ describe("Pilot schema-driven Fake scenarios", () => {
 				scenario.response.body,
 			);
 		}
-	});
-
-	it("keeps replay duplicates stable and stale authorization explicit", () => {
 		for (const message of pilotFakeScenariosV1.replay.messages) {
 			expect(ConversationSseMessageV1Schema.safeParse(message).success).toBe(
 				true,
@@ -69,5 +74,28 @@ describe("Pilot schema-driven Fake scenarios", () => {
 			type: "authorization.revoked",
 			error: { retryable: false },
 		});
+	});
+
+	it("returns reload controls without leaking events for foreign or unknown cursors", () => {
+		const crossConversation = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			cursor: "cursor-other-1",
+		});
+		const unknown = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			cursor: "cursor-unknown",
+		});
+
+		expect(
+			ConversationSseMessageV1Schema.parse(crossConversation[0]),
+		).toMatchObject({
+			type: "timeline.reload",
+			reason: "cross_conversation_cursor",
+		});
+		expect(ConversationSseMessageV1Schema.parse(unknown[0])).toMatchObject({
+			type: "timeline.reload",
+			reason: "unknown_event_id",
+		});
+		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
 	});
 });

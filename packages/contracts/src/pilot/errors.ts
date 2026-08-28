@@ -10,6 +10,7 @@ export const PilotRetryableErrorCodeV1Schema = z.enum([
 	"CONNECTION_UNAVAILABLE",
 	"PROVIDER_RATE_LIMITED",
 	"DEPENDENCY_UNAVAILABLE",
+	"INTERNAL_ERROR",
 ]);
 
 export const PilotTerminalErrorCodeV1Schema = z.enum([
@@ -24,6 +25,8 @@ export const PilotTerminalErrorCodeV1Schema = z.enum([
 	"ACTION_UNAVAILABLE",
 	"PROVIDER_REJECTED",
 	"DELEGATED_RESULT_REJECTED",
+	"ORIGINAL_RESPONSE_NOT_STARTED",
+	"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 ]);
 
 const errorShape = {
@@ -44,5 +47,11 @@ export const PilotProtocolErrorV1Schema = z.union([
 		retryable: z.literal(false),
 	}),
 ]);
+
+export const PilotInternalErrorV1Schema = z.strictObject({
+	...errorShape,
+	code: z.literal("INTERNAL_ERROR"),
+	retryable: z.literal(true),
+});
 
 export type PilotProtocolErrorV1 = z.infer<typeof PilotProtocolErrorV1Schema>;

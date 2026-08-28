@@ -43,6 +43,18 @@ const validRequest = {
 	traceId: "trace-1",
 } as const;
 
+const forbiddenCredentialKeys = [
+	"token",
+	"Authorization",
+	"cookie",
+	"access_token_value",
+	"privateKey",
+	"apiKey",
+	"secret",
+	"credential",
+	"password",
+] as const;
+
 describe("Pilot delegated contracts", () => {
 	it("binds every approved Execution Grant authorization dimension", () => {
 		expect(ExecutionGrantClaimsV1Schema.parse(validClaims)).toEqual(
@@ -105,17 +117,15 @@ describe("Pilot delegated contracts", () => {
 			output: { issue: { number: 180, title: "Pilot contracts" } },
 		};
 		expect(DelegatedActionResultV1Schema.parse(safeResult)).toEqual(safeResult);
-		expect(
-			DelegatedActionResultV1Schema.safeParse({
-				...safeResult,
-				output: { issue: { accessToken: "must-not-leave-connection" } },
-			}).success,
-		).toBe(false);
-		expect(
-			DelegatedActionResultV1Schema.safeParse({
-				...safeResult,
-				output: { nested: { secretPlaintext: "must-not-leave-connection" } },
-			}).success,
-		).toBe(false);
+		for (const key of forbiddenCredentialKeys) {
+			expect(
+				DelegatedActionResultV1Schema.safeParse({
+					...safeResult,
+					output: {
+						levelOne: { levelTwo: { [key]: "must-not-leave-connection" } },
+					},
+				}).success,
+			).toBe(false);
+		}
 	});
 });

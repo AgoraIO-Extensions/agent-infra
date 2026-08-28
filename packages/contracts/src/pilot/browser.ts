@@ -8,7 +8,10 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
-import { PilotProtocolErrorV1Schema } from "./errors.ts";
+import {
+	PilotInternalErrorV1Schema,
+	PilotProtocolErrorV1Schema,
+} from "./errors.ts";
 import { pilotBrowserSseOpenApiPathsV1 } from "./sse.ts";
 
 const nonEmptyString = () => z.string().min(1);
@@ -41,6 +44,7 @@ const errorResponses = {
 		"Dependency is temporarily unavailable",
 		PilotProtocolErrorV1Schema,
 	),
+	"500": jsonResponse("Internal error", PilotInternalErrorV1Schema),
 };
 
 export const BrowserUserProjectionV1Schema = z.strictObject({
@@ -183,6 +187,16 @@ export const AgentConfigurationProjectionV1Schema = z.strictObject({
 	),
 });
 
+export const AgentResourceProfileProjectionV1Schema = z.strictObject({
+	profileId: OpaqueIdV1Schema,
+	displayName: nonEmptyString(),
+	estimatedResources: z.strictObject({
+		cpuMillicores: z.number().int().positive(),
+		memoryMiB: z.number().int().positive(),
+		storageGiB: z.number().int().positive(),
+	}),
+});
+
 export const AgentApplicationProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	applicationId: OpaqueIdV1Schema,
@@ -191,6 +205,7 @@ export const AgentApplicationProjectionV1Schema = z.strictObject({
 	description: nonEmptyString(),
 	source: AgentSourceInputV1Schema,
 	status: AgentManagementStatusV1Schema,
+	resourceProfile: AgentResourceProfileProjectionV1Schema,
 	configuration: AgentConfigurationProjectionV1Schema,
 	submittedAt: Rfc3339TimestampV1Schema,
 	decision: z
@@ -274,23 +289,29 @@ export const ConversationProjectionV1Schema = z.strictObject({
 	updatedAt: Rfc3339TimestampV1Schema,
 });
 
-export const MessageProjectionV1Schema = z.strictObject({
+const messageProjectionShape = {
 	messageId: OpaqueIdV1Schema,
 	role: z.enum(["user", "assistant"]),
 	text: z.string(),
-	status: z.enum([
-		"submitted",
-		"processing",
-		"completed",
-		"failed",
-		"cancelled",
-	]),
 	executionId: OpaqueIdV1Schema.nullable(),
 	replyToMessageId: OpaqueIdV1Schema.nullable(),
 	answerVersion: z.number().int().positive().nullable(),
 	isCurrentAnswer: z.boolean().nullable(),
 	createdAt: Rfc3339TimestampV1Schema,
-});
+};
+
+export const MessageProjectionV1Schema = z.discriminatedUnion("status", [
+	z.strictObject({
+		...messageProjectionShape,
+		status: z.enum(["submitted", "processing", "completed", "cancelled"]),
+		error: z.null(),
+	}),
+	z.strictObject({
+		...messageProjectionShape,
+		status: z.literal("failed"),
+		error: PilotProtocolErrorV1Schema,
+	}),
+]);
 
 export const ConversationDetailProjectionV1Schema = z.strictObject({
 	conversation: ConversationProjectionV1Schema,
@@ -684,6 +705,7 @@ export const pilotBrowserSchemasV1 = {
 	AgentConfigurationUpdateRequestV1: AgentConfigurationUpdateRequestV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1: AgentProjectionV1Schema,
+	AgentResourceProfileProjectionV1: AgentResourceProfileProjectionV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	BrowserSessionProjectionV1: BrowserSessionProjectionV1Schema,
 	CommandAcceptedProjectionV1: CommandAcceptedProjectionV1Schema,
@@ -696,6 +718,7 @@ export const pilotBrowserSchemasV1 = {
 	MessageCommandRequestV1: MessageCommandRequestV1Schema,
 	MessageProjectionV1: MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1: ModelSelectionUpdateRequestV1Schema,
+	PilotInternalErrorV1: PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1: PilotProtocolErrorV1Schema,
 	PlatformAuditProjectionV1: PlatformAuditProjectionV1Schema,
 	RegenerateCommandRequestV1: RegenerateCommandRequestV1Schema,

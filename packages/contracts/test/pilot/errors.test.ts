@@ -22,6 +22,29 @@ describe("Pilot stable errors", () => {
 				traceId: "trace-authorization",
 			}),
 		).toMatchObject({ code: "AUTHORIZATION_REVOKED", retryable: false });
+		for (const code of [
+			"ORIGINAL_RESPONSE_NOT_STARTED",
+			"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+		] as const) {
+			expect(
+				PilotProtocolErrorV1Schema.parse({
+					schemaVersion: 1,
+					code,
+					message: "The supplementary message could not be delivered",
+					retryable: false,
+					traceId: "trace-message",
+				}),
+			).toMatchObject({ code, retryable: false });
+		}
+		expect(
+			PilotProtocolErrorV1Schema.parse({
+				schemaVersion: 1,
+				code: "INTERNAL_ERROR",
+				message: "The request could not be completed",
+				retryable: true,
+				traceId: "trace-internal",
+			}),
+		).toMatchObject({ code: "INTERNAL_ERROR", retryable: true });
 	});
 
 	it("rejects unknown codes and contradictory retryability", () => {
@@ -41,6 +64,15 @@ describe("Pilot stable errors", () => {
 				message: "The conversation is busy",
 				retryable: false,
 				traceId: "trace-busy",
+			}).success,
+		).toBe(false);
+		expect(
+			PilotProtocolErrorV1Schema.safeParse({
+				schemaVersion: 1,
+				code: "INTERNAL_ERROR",
+				message: "The request could not be completed",
+				retryable: false,
+				traceId: "trace-internal",
 			}).success,
 		).toBe(false);
 	});

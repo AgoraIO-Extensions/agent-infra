@@ -83,6 +83,20 @@ describe("Pilot browser contracts", () => {
 			);
 
 		expect(operations.sort()).toEqual(requiredOperations.sort());
+		for (const path of Object.values(document.paths ?? {})) {
+			for (const operation of Object.values(path ?? {})) {
+				if (
+					!operation ||
+					typeof operation !== "object" ||
+					!("responses" in operation)
+				)
+					continue;
+				expect(operation.responses).toHaveProperty("500");
+				expect(JSON.stringify(operation.responses["500"])).toContain(
+					"INTERNAL_ERROR",
+				);
+			}
+		}
 		const serialized = JSON.stringify(document);
 		for (const forbiddenProperty of [
 			"issuer",
@@ -210,6 +224,15 @@ describe("Pilot browser contracts", () => {
 			description: "Helps the release team",
 			source: { kind: "standard", templateId: "codex" },
 			status: "creating",
+			resourceProfile: {
+				profileId: "standard-medium",
+				displayName: "Standard medium",
+				estimatedResources: {
+					cpuMillicores: 2000,
+					memoryMiB: 4096,
+					storageGiB: 20,
+				},
+			},
 			configuration: {
 				owners: [{ userId: "user-1", displayName: "Ada", roles: ["employee"] }],
 				availability: [],
@@ -231,6 +254,24 @@ describe("Pilot browser contracts", () => {
 		expect(AgentApplicationProjectionV1Schema.parse(application)).toEqual(
 			application,
 		);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				resourceProfile: application.resourceProfile,
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationProjectionV1Schema.safeParse({
+				...application,
+				resourceProfile: {
+					...application.resourceProfile,
+					estimatedResources: {
+						...application.resourceProfile.estimatedResources,
+						cpuMillicores: 0,
+					},
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	it("projects answer versions and actual model or Connection execution records", () => {
@@ -244,9 +285,71 @@ describe("Pilot browser contracts", () => {
 				replyToMessageId: "message-user-1",
 				answerVersion: 2,
 				isCurrentAnswer: true,
+				error: null,
 				createdAt: "2026-08-28T10:02:00Z",
 			}),
 		).toMatchObject({ answerVersion: 2, isCurrentAnswer: true });
+		for (const code of [
+			"ORIGINAL_RESPONSE_NOT_STARTED",
+			"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			"AUTHORIZATION_REVOKED",
+			"EXECUTION_FAILED",
+		] as const) {
+			expect(
+				MessageProjectionV1Schema.parse({
+					messageId: `message-${code}`,
+					role: "user",
+					text: "Supplementary instruction",
+					status: "failed",
+					executionId: "execution-2",
+					replyToMessageId: null,
+					answerVersion: null,
+					isCurrentAnswer: null,
+					error: {
+						schemaVersion: 1,
+						code,
+						message: "The message could not be delivered",
+						retryable: false,
+						traceId: "trace-message",
+					},
+					createdAt: "2026-08-28T10:02:00Z",
+				}),
+			).toMatchObject({ status: "failed", error: { code } });
+		}
+		expect(
+			MessageProjectionV1Schema.safeParse({
+				messageId: "message-invalid-error",
+				role: "assistant",
+				text: "Completed answer",
+				status: "completed",
+				executionId: "execution-2",
+				replyToMessageId: "message-user-1",
+				answerVersion: 1,
+				isCurrentAnswer: true,
+				error: {
+					schemaVersion: 1,
+					code: "EXECUTION_FAILED",
+					message: "Contradictory error",
+					retryable: false,
+					traceId: "trace-message",
+				},
+				createdAt: "2026-08-28T10:02:00Z",
+			}).success,
+		).toBe(false);
+		expect(
+			MessageProjectionV1Schema.safeParse({
+				messageId: "message-missing-error",
+				role: "user",
+				text: "Supplementary instruction",
+				status: "failed",
+				executionId: "execution-2",
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				error: null,
+				createdAt: "2026-08-28T10:02:00Z",
+			}).success,
+		).toBe(false);
 		expect(
 			ExecutionDetailProjectionV1Schema.parse({
 				schemaVersion: 1,
