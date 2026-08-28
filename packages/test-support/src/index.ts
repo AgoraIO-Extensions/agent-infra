@@ -1,6 +1,6 @@
 import {
-	ProtocolErrorV1Schema,
 	type ProtocolErrorV1,
+	ProtocolErrorV1Schema,
 } from "@agent-infra/contracts";
 
 export const validCommonFixturesV1 = {
