@@ -41,7 +41,7 @@ describe("standard contract artifacts", () => {
 		);
 		expect(
 			artifacts.openapi.components.schemas.ProtocolErrorV1.properties.message,
-		).toMatchObject({ maxLength: 512, minLength: 1, type: "string" });
+		).toMatchObject({ minLength: 1, type: "string" });
 		expect(
 			artifacts.openapi.components.schemas.ProtocolErrorV1.properties.message,
 		).not.toHaveProperty("$ref");

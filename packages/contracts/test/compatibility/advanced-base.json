@@ -1,0 +1,30 @@
+{
+	"$defs": {
+		"AliasV1": {
+			"$ref": "#/$defs/OpaqueIdV1"
+		},
+		"ChoiceV1": {
+			"oneOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
+		"ModeV1": {
+			"type": "string"
+		},
+		"OpaqueIdV1": {
+			"type": "string"
+		},
+		"RequestIdV1": {
+			"type": "string"
+		},
+		"ToggleV1": {
+			"type": "boolean"
+		}
+	},
+	"$schema": "https://json-schema.org/draft/2020-12/schema"
+}

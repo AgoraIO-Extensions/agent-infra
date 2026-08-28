@@ -23,7 +23,7 @@ export const validCommonFixturesV1 = {
 
 export const invalidCommonFixturesV1 = {
 	idempotencyKey: "contains space",
-	opaqueCursor: "cursor\nvalue",
+	opaqueCursor: "",
 	opaqueId: "",
 	protocolError: {
 		...validCommonFixturesV1.protocolError,
@@ -33,7 +33,7 @@ export const invalidCommonFixturesV1 = {
 	retryable: "yes",
 	rfc3339Timestamp: "2026-08-28 03:00:00",
 	schemaVersion: 2,
-	traceId: "contains space",
+	traceId: "",
 } as const satisfies Record<string, unknown>;
 
 export function buildProtocolErrorV1(

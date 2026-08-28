@@ -7,30 +7,22 @@
       "type": "string"
     },
     "OpaqueCursorV1": {
-      "maxLength": 512,
       "minLength": 1,
-      "pattern": "^[\\u0020-\\u007e]+$",
       "type": "string"
     },
     "OpaqueIdV1": {
-      "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9._~-]+$",
       "type": "string"
     },
     "ProtocolErrorV1": {
       "additionalProperties": false,
       "properties": {
         "code": {
-          "maxLength": 64,
           "minLength": 1,
-          "pattern": "^[A-Z][A-Z0-9_]*$",
           "type": "string"
         },
         "message": {
-          "maxLength": 512,
           "minLength": 1,
-          "pattern": "^[\\u0020-\\u007e]+$",
           "type": "string"
         },
         "retryable": {
@@ -41,9 +33,7 @@
           "type": "number"
         },
         "traceId": {
-          "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._~-]+$",
           "type": "string"
         }
       },
@@ -57,9 +47,7 @@
       "type": "object"
     },
     "RequestIdV1": {
-      "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9._~-]+$",
       "type": "string"
     },
     "RetryableV1": {
@@ -75,9 +63,7 @@
       "type": "number"
     },
     "TraceIdV1": {
-      "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9._~-]+$",
       "type": "string"
     }
   },

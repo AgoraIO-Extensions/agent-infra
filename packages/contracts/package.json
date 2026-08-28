@@ -4,10 +4,10 @@
 	"private": true,
 	"type": "module",
 	"main": "dist/index.mjs",
-	"types": "src/index.ts",
+	"types": "dist/index.d.mts",
 	"exports": {
 		".": {
-			"types": "./src/index.ts",
+			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
 		},
 		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",

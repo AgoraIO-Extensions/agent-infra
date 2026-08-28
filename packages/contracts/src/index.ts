@@ -6,30 +6,21 @@ const boundedToken = () =>
 		.min(1)
 		.max(128)
 		.regex(/^[A-Za-z0-9._~-]+$/);
-const boundedVisibleText = () =>
-	z
-		.string()
-		.min(1)
-		.max(512)
-		.regex(/^[\u0020-\u007e]+$/);
+const nonEmptyString = () => z.string().min(1);
 
 export const SchemaVersionV1Schema = z.literal(1);
-export const OpaqueIdV1Schema = boundedToken();
+export const OpaqueIdV1Schema = nonEmptyString();
 export const Rfc3339TimestampV1Schema = z.iso.datetime({ offset: true });
-export const TraceIdV1Schema = boundedToken();
-export const RequestIdV1Schema = boundedToken();
+export const TraceIdV1Schema = nonEmptyString();
+export const RequestIdV1Schema = nonEmptyString();
 export const IdempotencyKeyV1Schema = boundedToken();
-export const OpaqueCursorV1Schema = boundedVisibleText();
+export const OpaqueCursorV1Schema = nonEmptyString();
 export const RetryableV1Schema = z.boolean();
 
 export const ProtocolErrorV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
-	code: z
-		.string()
-		.min(1)
-		.max(64)
-		.regex(/^[A-Z][A-Z0-9_]*$/),
-	message: boundedVisibleText(),
+	code: nonEmptyString(),
+	message: nonEmptyString(),
 	retryable: RetryableV1Schema,
 	traceId: TraceIdV1Schema,
 });

@@ -59,6 +59,6 @@ describe("common contract test support", () => {
 	});
 
 	it("rejects overrides that violate the canonical ProtocolErrorV1 schema", () => {
-		expect(() => buildProtocolErrorV1({ code: "invalid-code" })).toThrow();
+		expect(() => buildProtocolErrorV1({ code: "" })).toThrow();
 	});
 });

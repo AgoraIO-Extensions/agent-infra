@@ -54,18 +54,29 @@ describe("common wire schemas", () => {
 		expect(IdempotencyKeyV1Schema.safeParse("contains space").success).toBe(
 			false,
 		);
-		expect(OpaqueCursorV1Schema.safeParse("cursor\nvalue").success).toBe(false);
+		expect(OpaqueCursorV1Schema.safeParse("").success).toBe(false);
 		expect(
 			ProtocolErrorV1Schema.safeParse({
 				...validProtocolError,
 				unexpectedField: true,
 			}).success,
 		).toBe(false);
+	});
+
+	it("keeps opaque values and safe messages protocol-neutral", () => {
+		expect(OpaqueIdV1Schema.parse("agent:租户/01")).toBe("agent:租户/01");
+		expect(TraceIdV1Schema.parse("trace:供应商/01")).toBe("trace:供应商/01");
+		expect(RequestIdV1Schema.parse("request:调用/01")).toBe("request:调用/01");
+		expect(OpaqueCursorV1Schema.parse("cursor:游标/01")).toBe("cursor:游标/01");
 		expect(
-			ProtocolErrorV1Schema.safeParse({
+			ProtocolErrorV1Schema.parse({
 				...validProtocolError,
-				code: "runtime-unavailable",
-			}).success,
-		).toBe(false);
+				code: "runtime.unavailable",
+				message: "运行时暂时不可用",
+			}),
+		).toMatchObject({
+			code: "runtime.unavailable",
+			message: "运行时暂时不可用",
+		});
 	});
 });

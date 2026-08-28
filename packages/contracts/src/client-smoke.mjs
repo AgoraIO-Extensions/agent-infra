@@ -23,34 +23,9 @@ const temporaryRoot = await mkdtemp(
 );
 try {
 	const generatedDirectory = resolve(temporaryRoot, "generated");
-	const openapi = JSON.parse(
-		await readFile(
-			resolve(packageRoot, "artifacts/openapi/common.v1.openapi.json"),
-			"utf8",
-		),
-	);
-	openapi.paths = {
-		"/__contract-smoke": {
-			get: {
-				operationId: "getContractSmoke",
-				responses: {
-					200: {
-						description: "Contract smoke response",
-						content: {
-							"application/json": {
-								schema: {
-									$ref: "#/components/schemas/ProtocolErrorV1",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	};
 
 	await createClient({
-		input: openapi,
+		input: resolve(packageRoot, "test/client/openapi-smoke.json"),
 		output: generatedDirectory,
 		plugins: ["@hey-api/client-fetch", "@hey-api/typescript"],
 	});

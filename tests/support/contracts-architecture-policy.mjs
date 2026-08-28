@@ -77,7 +77,7 @@ export function checkSourceImports(source, { path }) {
 export function checkManifestDependencies(manifest) {
 	const violations = [];
 	for (const dependency of Object.keys(manifest.dependencies ?? {})) {
-		if (dependency.startsWith("@agent-infra/")) {
+		if (forbiddenContractImports.some((pattern) => pattern.test(dependency))) {
 			violations.push(`contracts package must not depend on ${dependency}`);
 		}
 	}

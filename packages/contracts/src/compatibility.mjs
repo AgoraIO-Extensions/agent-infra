@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,14 +44,19 @@ function compareSchema(previous, current, path, changes) {
 		return;
 	}
 
-	if (
+	if (previous.const === undefined && current.const !== undefined) {
+		changes.push(`narrowed ${path} const`);
+	} else if (
 		previous.const !== undefined &&
+		current.const !== undefined &&
 		!sameValue(previous.const, current.const)
 	) {
 		changes.push(`narrowed ${path} const`);
 	}
-	if (Array.isArray(previous.enum)) {
-		const currentEnum = Array.isArray(current.enum) ? current.enum : [];
+	if (!Array.isArray(previous.enum) && Array.isArray(current.enum)) {
+		changes.push(`narrowed ${path} enum`);
+	} else if (Array.isArray(previous.enum) && Array.isArray(current.enum)) {
+		const currentEnum = current.enum;
 		if (
 			previous.enum.some(
 				(value) => !currentEnum.some((entry) => sameValue(entry, value)),
@@ -59,6 +64,30 @@ function compareSchema(previous, current, path, changes) {
 		) {
 			changes.push(`narrowed ${path} enum`);
 		}
+	}
+	for (const keyword of ["oneOf", "anyOf"]) {
+		const previousOptions = previous[keyword];
+		const currentOptions = current[keyword];
+		if (!Array.isArray(previousOptions) && Array.isArray(currentOptions)) {
+			changes.push(`narrowed ${path} ${keyword}`);
+		} else if (
+			Array.isArray(previousOptions) &&
+			Array.isArray(currentOptions) &&
+			previousOptions.some(
+				(option) => !currentOptions.some((entry) => sameValue(entry, option)),
+			)
+		) {
+			changes.push(`narrowed ${path} ${keyword}`);
+		}
+	}
+	if (previous.$ref === undefined && current.$ref !== undefined) {
+		changes.push(`narrowed ${path} $ref`);
+	} else if (
+		previous.$ref !== undefined &&
+		current.$ref !== undefined &&
+		previous.$ref !== current.$ref
+	) {
+		changes.push(`retyped ${path} $ref`);
 	}
 
 	const increasingMinimums = [
@@ -154,13 +183,18 @@ function readMergeBaseArtifact(artifactRelativePath) {
 		cwd: repositoryRoot,
 		encoding: "utf8",
 	}).trim();
-	const result = spawnSync(
+	const matchingPath = execFileSync(
 		"git",
-		["show", `${mergeBase}:${artifactRelativePath}`],
+		["ls-tree", "-r", "--name-only", mergeBase, "--", artifactRelativePath],
 		{ cwd: repositoryRoot, encoding: "utf8" },
+	).trim();
+	if (!matchingPath) return undefined;
+	return JSON.parse(
+		execFileSync("git", ["show", `${mergeBase}:${artifactRelativePath}`], {
+			cwd: repositoryRoot,
+			encoding: "utf8",
+		}),
 	);
-	if (result.status !== 0) return undefined;
-	return JSON.parse(result.stdout);
 }
 
 const arguments_ = parseArguments(process.argv.slice(2));

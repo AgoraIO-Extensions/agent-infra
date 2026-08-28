@@ -61,4 +61,15 @@ test("contracts manifest cannot depend on repository runtime modules", () => {
 		})[0],
 		/contracts package must not depend on @agent-infra\/platform-core/,
 	);
+	for (const dependency of [
+		"react",
+		"@hono/node-server",
+		"drizzle-orm",
+		"@kubernetes/client-node",
+	]) {
+		assert.match(
+			checkManifestDependencies({ dependencies: { [dependency]: "1.0.0" } })[0],
+			new RegExp(`contracts package must not depend on ${dependency}`),
+		);
+	}
 });

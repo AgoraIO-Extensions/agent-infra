@@ -7,20 +7,11 @@ import { describe, expect, it } from "vitest";
 const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
-describe("contracts package surface", () => {
-	it("publishes standard artifacts without publishing test-only clients", async () => {
+describe("test-support package surface", () => {
+	it("packs declarations without tests or source fixtures", async () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-
 		expect(manifest.types).toBe("dist/index.d.mts");
 		expect(manifest.exports["."].types).toBe("./dist/index.d.mts");
-		expect(manifest.exports["./openapi/common.v1"]).toBe(
-			"./artifacts/openapi/common.v1.openapi.json",
-		);
-		expect(manifest.exports["./json-schema/common.v1"]).toBe(
-			"./artifacts/json-schema/common.v1.schema.json",
-		);
-		expect(manifest.files).toEqual(["dist", "artifacts"]);
-		expect(JSON.stringify(manifest.exports)).not.toContain("test");
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
@@ -30,7 +21,6 @@ describe("contracts package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
-		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);
