@@ -1,0 +1,28 @@
+{
+	"$defs": {
+		"OpaqueIdV1": {
+			"minLength": 1,
+			"type": "string"
+		},
+		"ProtocolErrorV1": {
+			"additionalProperties": false,
+			"properties": {
+				"code": {
+					"type": "string"
+				},
+				"detail": {
+					"type": "string"
+				},
+				"message": {
+					"type": "string"
+				}
+			},
+			"required": ["code", "message"],
+			"type": "object"
+		},
+		"RequestIdV1": {
+			"type": "string"
+		}
+	},
+	"$schema": "https://json-schema.org/draft/2020-12/schema"
+}

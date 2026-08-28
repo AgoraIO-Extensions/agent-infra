@@ -16,6 +16,7 @@
 			"!**/dist",
 			"!**/.turbo",
 			"!**/routeTree.gen.ts",
+			"!packages/contracts/artifacts",
 			"!bts.jsonc",
 			"!pnpm-lock.yaml",
 			"!.markdown-link-check.json",

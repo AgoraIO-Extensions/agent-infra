@@ -1,0 +1,88 @@
+{
+  "components": {
+    "schemas": {
+      "IdempotencyKeyV1": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._~-]+$",
+        "type": "string"
+      },
+      "OpaqueCursorV1": {
+        "maxLength": 512,
+        "minLength": 1,
+        "pattern": "^[\\u0020-\\u007e]+$",
+        "type": "string"
+      },
+      "OpaqueIdV1": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._~-]+$",
+        "type": "string"
+      },
+      "ProtocolErrorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[\\u0020-\\u007e]+$",
+            "type": "string"
+          },
+          "retryable": {
+            "$ref": "#/components/schemas/RetryableV1"
+          },
+          "schemaVersion": {
+            "$ref": "#/components/schemas/SchemaVersionV1"
+          },
+          "traceId": {
+            "$ref": "#/components/schemas/TraceIdV1"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "code",
+          "message",
+          "retryable",
+          "traceId"
+        ],
+        "type": "object"
+      },
+      "RequestIdV1": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._~-]+$",
+        "type": "string"
+      },
+      "RetryableV1": {
+        "type": "boolean"
+      },
+      "Rfc3339TimestampV1": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "SchemaVersionV1": {
+        "const": 1,
+        "type": "number"
+      },
+      "TraceIdV1": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._~-]+$",
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "title": "Agent Infra Common Contracts",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}
