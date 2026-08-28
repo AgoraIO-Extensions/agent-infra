@@ -141,6 +141,18 @@ function assertBounded(values, name) {
   return values;
 }
 
+export function activePilotPullRequests(
+  pullRequests,
+  { repository, branch, issueNumber },
+) {
+  return assertBounded(pullRequests, "Open pull request").filter(
+    (pullRequest) =>
+      pullRequest.head?.repo?.full_name === repository &&
+      (pullRequest.head.ref === branch ||
+        extractPrimaryIssueNumbers(pullRequest.body).includes(issueNumber)),
+  );
+}
+
 async function loadPilotSnapshot({
   repository,
   issueNumber,
@@ -176,11 +188,11 @@ async function loadPilotSnapshot({
         { token: membershipToken },
       ),
     ]);
-  const activePullRequests = assertBounded(pullRequests, "Open pull request").filter(
-    (pullRequest) =>
-      pullRequest.head?.ref === branch ||
-      extractPrimaryIssueNumbers(pullRequest.body).includes(issueNumber),
-  );
+  const activePullRequests = activePilotPullRequests(pullRequests, {
+    repository,
+    branch,
+    issueNumber,
+  });
   return {
     issue,
     blockers: assertBounded(blockers, "Native blocker"),

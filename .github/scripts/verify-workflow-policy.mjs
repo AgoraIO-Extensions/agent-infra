@@ -187,7 +187,7 @@ const GH_AW_PILOT_SEMANTIC_SHA256 =
 const GH_AW_PILOT_SOURCE_SHA256 =
   "ce5804481dbcf9239123a0e5ccc313002bd4cc58155bd8c68af3d16b046471a7";
 const GH_AW_PILOT_SCRIPT_SHA256 =
-  "954aabd0738b6dcff5c9128f7e5784d482b81c81fb33188a5f8f36aba4f6e4e3";
+  "077817dad358bcc3c7e4877c3edcf37ce6e5ec8dade12e2f9cb6cebc60a943ac";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
 const MATT_SKILL_SOURCE = "https://github.com/mattpocock/skills.git";
 const MATT_SKILLS = ["code-review", "implement", "tdd"];
@@ -888,6 +888,7 @@ export function validateTrustedScriptSources(sources) {
     "executionContent(issue,",
     "WORKER_OWNERS_TEAM_SLUG",
     "extractPrimaryIssueNumbers(pullRequest.body)",
+    "pullRequest.head?.repo?.full_name === repository",
     'actorAccount?.type !== "User"',
     'membership?.state !== "active"',
     'blocker.state_reason !== "completed"',

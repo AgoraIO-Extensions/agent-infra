@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activePilotPullRequests,
   normalizeGitHubApiUrl,
   parsePilotIssueNumber,
   validatePilotSnapshot,
@@ -101,6 +102,31 @@ test("accepts only credential-free HTTPS GitHub API URLs", () => {
   ]) {
     assert.throws(() => normalizeGitHubApiUrl(value), /API URL/);
   }
+});
+
+test("ignores fork pull requests that mimic pilot ownership", () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+  const branch = "gh-aw/pilot-42";
+  const pullRequests = [
+    { number: 1, head: { ref: branch, repo: { full_name: "external/fork" } }, body: "" },
+    {
+      number: 2,
+      head: { ref: "feature", repo: { full_name: "external/fork" } },
+      body: "Closes #42",
+    },
+    { number: 3, head: { ref: branch, repo: { full_name: repository } }, body: "" },
+    {
+      number: 4,
+      head: { ref: "feature", repo: { full_name: repository } },
+      body: "Closes #42",
+    },
+  ];
+  assert.deepEqual(
+    activePilotPullRequests(pullRequests, { repository, branch, issueNumber: 42 }).map(
+      (pullRequest) => pullRequest.number,
+    ),
+    [3, 4],
+  );
 });
 
 test("fails closed across actor, Team, Issue, blocker, and ownership boundaries", () => {
