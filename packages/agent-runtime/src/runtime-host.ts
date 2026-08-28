@@ -128,6 +128,14 @@ export class RuntimeHost {
 			request,
 			request.deliveryFence,
 		);
+		if (session.recovery?.status === "blocked") {
+			return {
+				schemaVersion: 1,
+				hostSessionRef: request.hostSessionRef,
+				executionId: request.executionId,
+				status: "unavailable",
+			};
+		}
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
 		return {
@@ -360,6 +368,7 @@ export class RuntimeHost {
 					request.hostSessionRef,
 					request.tombstoneId,
 				);
+				await this.options.store.clearRecoveryBlocked(request.hostSessionRef);
 			}
 			return response;
 		});
@@ -407,6 +416,7 @@ export class RuntimeHost {
 		const result = await this.currentDriverResult(
 			driverRecord,
 			operation.executionId,
+			operation.kind,
 		);
 		await this.options.store.resolveOperation(
 			hostSessionRef,
@@ -424,12 +434,14 @@ export class RuntimeHost {
 	}
 
 	private async recoverOperations() {
-		const quarantinedSessions = new Set<string>();
+		const attemptedSessions = new Set<string>();
+		const blockedSessions = new Set<string>();
 		for (const {
 			session,
 			operation,
 		} of this.options.store.listRecoverableOperations()) {
-			if (quarantinedSessions.has(session.hostSessionRef)) continue;
+			if (blockedSessions.has(session.hostSessionRef)) continue;
+			attemptedSessions.add(session.hostSessionRef);
 			try {
 				await this.serialize(session.hostSessionRef, async () => {
 					let recoveredResult: RuntimeOperationResponseV1["result"];
@@ -452,6 +464,7 @@ export class RuntimeHost {
 							recoveredResult = await this.currentDriverResult(
 								lookup.record,
 								operation.executionId,
+								operation.kind,
 							);
 							await this.options.store.resolveOperation(
 								session.hostSessionRef,
@@ -483,8 +496,16 @@ export class RuntimeHost {
 					}
 				});
 			} catch {
-				await this.options.store.quarantineSession(session.hostSessionRef);
-				quarantinedSessions.add(session.hostSessionRef);
+				await this.options.store.markRecoveryBlocked(
+					session.hostSessionRef,
+					operation.operationId,
+				);
+				blockedSessions.add(session.hostSessionRef);
+			}
+		}
+		for (const hostSessionRef of attemptedSessions) {
+			if (!blockedSessions.has(hostSessionRef)) {
+				await this.options.store.clearRecoveryBlocked(hostSessionRef);
 			}
 		}
 	}
@@ -492,8 +513,14 @@ export class RuntimeHost {
 	private async currentDriverResult(
 		record: Awaited<ReturnType<RuntimeDriver["execute"]>>,
 		executionId: string,
+		operationKind: StoredOperation["kind"],
 	) {
-		if (record.result.outcome !== "accepted") return record.result;
+		if (
+			record.result.outcome !== "accepted" ||
+			["stop", "generation-cancel"].includes(operationKind)
+		) {
+			return record.result;
+		}
 		return {
 			outcome: "accepted" as const,
 			status: await this.options.driver.getStatus(

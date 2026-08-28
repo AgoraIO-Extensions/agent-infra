@@ -212,6 +212,13 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
+	clearRecoveryFailures() {
+		return this.file.update((state) => {
+			state.lookupFailures = [];
+			state.statusFailures = [];
+		});
+	}
+
 	makeOperationUnknown(operationId: string) {
 		return this.file.update((state) => {
 			if (!state.operations[operationId]) {

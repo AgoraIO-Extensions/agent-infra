@@ -39,10 +39,16 @@ export interface StoredSession extends SessionBinding {
 		tombstoneId: string;
 		state: "active" | "confirmed";
 	};
+	recovery?: {
+		status: "blocked";
+		operationId: string;
+		reason: "driver-unavailable";
+	};
 }
 
 interface RuntimeStoreState {
 	schemaVersion: 1;
+	sessionBindings: Record<string, string>;
 	sessions: Record<string, StoredSession>;
 	quarantinedSessions: Record<string, unknown>;
 }
@@ -80,17 +86,45 @@ function hasOnlyKeys(value: object, allowed: readonly string[]) {
 	return Object.keys(value).every((key) => allowed.includes(key));
 }
 
+function sessionBindingKey(
+	binding: Pick<SessionBinding, "agentId" | "conversationId">,
+) {
+	return JSON.stringify([binding.agentId, binding.conversationId]);
+}
+
+function isSessionBindingKey(value: string) {
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return (
+			Array.isArray(parsed) &&
+			parsed.length === 2 &&
+			parsed.every((entry) => typeof entry === "string" && entry.length > 0) &&
+			JSON.stringify(parsed) === value
+		);
+	} catch {
+		return false;
+	}
+}
+
 function assertRootState(value: RuntimeStoreState) {
 	if (
 		!isPlainRecord(value) ||
-		!hasOnlyKeys(value, ["schemaVersion", "sessions", "quarantinedSessions"]) ||
+		!hasOnlyKeys(value, [
+			"schemaVersion",
+			"sessionBindings",
+			"sessions",
+			"quarantinedSessions",
+		]) ||
 		value.schemaVersion !== 1 ||
+		(value.sessionBindings !== undefined &&
+			!isPlainRecord(value.sessionBindings)) ||
 		!isPlainRecord(value.sessions) ||
 		(value.quarantinedSessions !== undefined &&
 			!isPlainRecord(value.quarantinedSessions))
 	) {
 		storeCorrupted();
 	}
+	value.sessionBindings ??= {};
 	value.quarantinedSessions ??= {};
 	if (
 		Object.keys(value.sessions).some((hostSessionRef) =>
@@ -98,6 +132,22 @@ function assertRootState(value: RuntimeStoreState) {
 		)
 	) {
 		storeCorrupted();
+	}
+}
+
+function assertBindingIndex(value: RuntimeStoreState) {
+	const boundSessionRefs = new Set<string>();
+	for (const [key, hostSessionRef] of Object.entries(value.sessionBindings)) {
+		if (
+			!isSessionBindingKey(key) ||
+			!hostSessionRef ||
+			boundSessionRefs.has(hostSessionRef) ||
+			(!Object.hasOwn(value.sessions, hostSessionRef) &&
+				!Object.hasOwn(value.quarantinedSessions, hostSessionRef))
+		) {
+			storeCorrupted();
+		}
+		boundSessionRefs.add(hostSessionRef);
 	}
 }
 
@@ -113,6 +163,7 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			"highestFences",
 			"operations",
 			"generationBarrier",
+			"recovery",
 		]) ||
 		session.hostSessionRef !== hostSessionRef ||
 		!session.agentId ||
@@ -136,7 +187,13 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 				!session.generationBarrier.tombstoneId ||
 				!(["active", "confirmed"] as const).includes(
 					session.generationBarrier.state,
-				)))
+				))) ||
+		(session.recovery !== undefined &&
+			(!isPlainRecord(session.recovery) ||
+				!hasOnlyKeys(session.recovery, ["status", "operationId", "reason"]) ||
+				session.recovery.status !== "blocked" ||
+				!session.recovery.operationId ||
+				session.recovery.reason !== "driver-unavailable"))
 	) {
 		storeCorrupted();
 	}
@@ -193,15 +250,29 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			storeCorrupted();
 		}
 	}
+	if (
+		(session.generationBarrier !== undefined &&
+			!session.operations[session.generationBarrier.tombstoneId]) ||
+		(session.recovery !== undefined &&
+			!session.operations[session.recovery.operationId])
+	) {
+		storeCorrupted();
+	}
 }
 
 function assertStoreState(value: RuntimeStoreState) {
 	assertRootState(value);
+	assertBindingIndex(value);
 	const conversationKeys = new Set<string>();
 	for (const [hostSessionRef, session] of Object.entries(value.sessions)) {
 		assertSessionRecord(hostSessionRef, session);
 		const conversationKey = `${session.agentId}\u0000${session.conversationId}`;
-		if (conversationKeys.has(conversationKey)) storeCorrupted();
+		if (
+			conversationKeys.has(conversationKey) ||
+			value.sessionBindings[sessionBindingKey(session)] !== hostSessionRef
+		) {
+			storeCorrupted();
+		}
 		conversationKeys.add(conversationKey);
 	}
 }
@@ -212,6 +283,13 @@ function sessionFor(
 	binding: SessionBinding,
 	allowGenerationBarrier = false,
 ) {
+	if (state.sessionBindings[sessionBindingKey(binding)] !== hostSessionRef) {
+		throw new RuntimeHostError(
+			"RUNTIME_SESSION_BINDING_MISMATCH",
+			"Runtime session does not match this request",
+			403,
+		);
+	}
 	if (Object.hasOwn(state.quarantinedSessions, hostSessionRef)) {
 		throw new RuntimeHostError(
 			"RUNTIME_SESSION_QUARANTINED",
@@ -279,11 +357,38 @@ export class FileRuntimeStore {
 		try {
 			file = await DurableJsonFile.open(path, {
 				schemaVersion: 1,
+				sessionBindings: {},
 				sessions: {},
 				quarantinedSessions: {},
 			});
 			await file.update((state) => {
+				const hadBindingIndex = Object.hasOwn(state, "sessionBindings");
 				assertRootState(state);
+				if (!hadBindingIndex) {
+					if (Object.keys(state.quarantinedSessions).length > 0) {
+						storeCorrupted();
+					}
+					for (const [hostSessionRef, session] of Object.entries(
+						state.sessions,
+					)) {
+						if (
+							!isPlainRecord(session) ||
+							typeof session.agentId !== "string" ||
+							!session.agentId ||
+							typeof session.conversationId !== "string" ||
+							!session.conversationId
+						) {
+							storeCorrupted();
+						}
+						const key = sessionBindingKey({
+							agentId: session.agentId,
+							conversationId: session.conversationId,
+						});
+						if (state.sessionBindings[key]) storeCorrupted();
+						state.sessionBindings[key] = hostSessionRef;
+					}
+				}
+				assertBindingIndex(state);
 				const invalidSessionRefs = new Set<string>();
 				const sessionsByConversation = new Map<string, string[]>();
 				for (const [hostSessionRef, session] of Object.entries(
@@ -292,6 +397,13 @@ export class FileRuntimeStore {
 					try {
 						assertSessionRecord(hostSessionRef, session);
 						const key = `${session.agentId}\u0000${session.conversationId}`;
+						if (
+							state.sessionBindings[sessionBindingKey(session)] !==
+							hostSessionRef
+						) {
+							invalidSessionRefs.add(hostSessionRef);
+							continue;
+						}
 						const refs = sessionsByConversation.get(key) ?? [];
 						refs.push(hostSessionRef);
 						sessionsByConversation.set(key, refs);
@@ -324,36 +436,10 @@ export class FileRuntimeStore {
 	prepareOperation(input: PrepareOperation) {
 		return this.file.update((state) => {
 			assertStoreState(state);
-			const existingSession = Object.values(state.sessions).find(
-				(session) => session.operations[input.operationId],
-			);
-			const currentSession = Object.values(state.sessions).find(
-				(session) =>
-					session.agentId === input.binding.agentId &&
-					session.conversationId === input.binding.conversationId,
-			);
-			const quarantinedSession = Object.entries(state.quarantinedSessions).find(
-				([, value]) =>
-					isPlainRecord(value)
-						? value.agentId === input.binding.agentId &&
-							value.conversationId === input.binding.conversationId
-						: false,
-			);
-			if (
-				!input.requestedHostSessionRef &&
-				!currentSession &&
-				quarantinedSession
-			) {
-				throw new RuntimeHostError(
-					"RUNTIME_SESSION_QUARANTINED",
-					"Runtime session state is quarantined",
-					503,
-				);
-			}
+			const indexedHostSessionRef =
+				state.sessionBindings[sessionBindingKey(input.binding)];
 			const hostSessionRef =
-				input.requestedHostSessionRef ??
-				existingSession?.hostSessionRef ??
-				currentSession?.hostSessionRef;
+				input.requestedHostSessionRef ?? indexedHostSessionRef;
 			let session: StoredSession;
 			if (hostSessionRef) {
 				session = sessionFor(
@@ -380,9 +466,21 @@ export class FileRuntimeStore {
 					operations: {},
 				};
 				state.sessions[newHostSessionRef] = session;
+				state.sessionBindings[sessionBindingKey(input.binding)] =
+					newHostSessionRef;
 			}
 			if (input.kind !== "submit-turn") {
 				assertExecutionBinding(session, input.binding);
+			}
+			if (
+				session.recovery?.status === "blocked" &&
+				["submit-turn", "supplement"].includes(input.kind)
+			) {
+				throw new RuntimeHostError(
+					"RUNTIME_SESSION_RECOVERY_BLOCKED",
+					"Runtime session recovery has not converged",
+					503,
+				);
 			}
 
 			if (input.executionDeliveryFence !== undefined) {
@@ -458,6 +556,8 @@ export class FileRuntimeStore {
 						(session.generationBarrier?.state === "active" &&
 							session.generationBarrier.tombstoneId ===
 								operation.operationId) ||
+						(session.recovery?.status === "blocked" &&
+							session.recovery.operationId === operation.operationId) ||
 						(operation.result?.outcome === "accepted" &&
 							["running", "unknown"].includes(operation.result.status)),
 				)
@@ -475,6 +575,27 @@ export class FileRuntimeStore {
 			if (!session) return;
 			state.quarantinedSessions[hostSessionRef] = session;
 			delete state.sessions[hostSessionRef];
+		});
+	}
+
+	markRecoveryBlocked(hostSessionRef: string, operationId: string) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const session = state.sessions[hostSessionRef];
+			if (!session) return;
+			session.recovery = {
+				status: "blocked",
+				operationId,
+				reason: "driver-unavailable",
+			};
+		});
+	}
+
+	clearRecoveryBlocked(hostSessionRef: string) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const session = state.sessions[hostSessionRef];
+			if (session) delete session.recovery;
 		});
 	}
 
