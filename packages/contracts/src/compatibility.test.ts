@@ -52,6 +52,25 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("rejects adding an array item constraint", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("narrowed $defs.ArrayV1[] items");
+	});
+
+	it("rejects adding numeric and collection constraints", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		for (const keyword of [
+			"exclusiveMinimum",
+			"exclusiveMaximum",
+			"multipleOf",
+			"uniqueItems",
+		]) {
+			expect(result.stderr).toContain(keyword);
+		}
+	});
+
 	it("accepts removal of type, const, enum, union, and reference constraints", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);

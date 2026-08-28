@@ -3,6 +3,13 @@
 		"AliasV1": {
 			"$ref": "#/$defs/RequestIdV1"
 		},
+		"ArrayV1": {
+			"items": {
+				"type": "string"
+			},
+			"type": "array",
+			"uniqueItems": true
+		},
 		"ChoiceV1": {
 			"oneOf": [
 				{
@@ -13,6 +20,12 @@
 		"ModeV1": {
 			"enum": ["safe"],
 			"type": "string"
+		},
+		"NumberV1": {
+			"exclusiveMaximum": 10,
+			"exclusiveMinimum": 0,
+			"multipleOf": 2,
+			"type": "number"
 		},
 		"OpaqueIdV1": {
 			"type": "string"

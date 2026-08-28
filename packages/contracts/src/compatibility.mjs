@@ -95,12 +95,7 @@ function compareSchema(previous, current, path, changes) {
 		changes.push(`retyped ${path} $ref`);
 	}
 
-	const increasingMinimums = [
-		"minLength",
-		"minItems",
-		"minProperties",
-		"minimum",
-	];
+	const increasingMinimums = ["minLength", "minItems", "minProperties"];
 	for (const keyword of increasingMinimums) {
 		if (
 			typeof current[keyword] === "number" &&
@@ -109,12 +104,7 @@ function compareSchema(previous, current, path, changes) {
 			changes.push(`narrowed ${path} ${keyword}`);
 		}
 	}
-	const decreasingMaximums = [
-		"maxLength",
-		"maxItems",
-		"maxProperties",
-		"maximum",
-	];
+	const decreasingMaximums = ["maxLength", "maxItems", "maxProperties"];
 	for (const keyword of decreasingMaximums) {
 		if (
 			typeof current[keyword] === "number" &&
@@ -122,6 +112,62 @@ function compareSchema(previous, current, path, changes) {
 		) {
 			changes.push(`narrowed ${path} ${keyword}`);
 		}
+	}
+	const previousMinimum = Math.max(
+		previous.minimum ?? Number.NEGATIVE_INFINITY,
+		previous.exclusiveMinimum ?? Number.NEGATIVE_INFINITY,
+	);
+	const currentMinimum = Math.max(
+		current.minimum ?? Number.NEGATIVE_INFINITY,
+		current.exclusiveMinimum ?? Number.NEGATIVE_INFINITY,
+	);
+	const previousMinimumExclusive =
+		previous.exclusiveMinimum === previousMinimum;
+	const currentMinimumExclusive = current.exclusiveMinimum === currentMinimum;
+	if (
+		currentMinimum > previousMinimum ||
+		(currentMinimum === previousMinimum &&
+			currentMinimumExclusive &&
+			!previousMinimumExclusive)
+	) {
+		changes.push(
+			`narrowed ${path} ${currentMinimumExclusive ? "exclusiveMinimum" : "minimum"}`,
+		);
+	}
+	const previousMaximum = Math.min(
+		previous.maximum ?? Number.POSITIVE_INFINITY,
+		previous.exclusiveMaximum ?? Number.POSITIVE_INFINITY,
+	);
+	const currentMaximum = Math.min(
+		current.maximum ?? Number.POSITIVE_INFINITY,
+		current.exclusiveMaximum ?? Number.POSITIVE_INFINITY,
+	);
+	const previousMaximumExclusive =
+		previous.exclusiveMaximum === previousMaximum;
+	const currentMaximumExclusive = current.exclusiveMaximum === currentMaximum;
+	if (
+		currentMaximum < previousMaximum ||
+		(currentMaximum === previousMaximum &&
+			currentMaximumExclusive &&
+			!previousMaximumExclusive)
+	) {
+		changes.push(
+			`narrowed ${path} ${currentMaximumExclusive ? "exclusiveMaximum" : "maximum"}`,
+		);
+	}
+	if (typeof current.multipleOf === "number") {
+		const previousMultiple = previous.multipleOf;
+		const ratio = previousMultiple / current.multipleOf;
+		const ratioError = Math.abs(ratio - Math.round(ratio));
+		if (
+			typeof previousMultiple !== "number" ||
+			ratioError > Number.EPSILON * Math.max(1, Math.abs(ratio)) * 4
+		) {
+			changes.push(`narrowed ${path} multipleOf`);
+		}
+	}
+	if (current.uniqueItems === true && previous.uniqueItems !== true) {
+		changes.push(`narrowed ${path} uniqueItems`);
 	}
 	for (const keyword of ["pattern", "format"]) {
 		if (
@@ -152,10 +198,25 @@ function compareSchema(previous, current, path, changes) {
 		}
 		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
 	}
-	if (previous.items && current.items) {
-		compareSchema(previous.items, current.items, `${path}[]`, changes);
-	} else if (previous.items && !current.items) {
-		changes.push(`removed ${path}[]`);
+	const previousItems = previous.items;
+	const currentItems = current.items;
+	if (
+		(previousItems === undefined || previousItems === true) &&
+		currentItems !== undefined &&
+		currentItems !== true
+	) {
+		changes.push(`narrowed ${path}[] items`);
+	} else if (
+		previousItems !== undefined &&
+		previousItems !== true &&
+		currentItems !== undefined &&
+		currentItems !== true
+	) {
+		if (currentItems === false) {
+			if (previousItems !== false) changes.push(`narrowed ${path}[] items`);
+		} else if (previousItems !== false) {
+			compareSchema(previousItems, currentItems, `${path}[]`, changes);
+		}
 	}
 }
 

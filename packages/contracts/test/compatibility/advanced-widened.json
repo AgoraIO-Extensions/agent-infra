@@ -1,8 +1,10 @@
 {
 	"$defs": {
 		"AliasV1": {},
+		"ArrayV1": {},
 		"ChoiceV1": {},
 		"ModeV1": {},
+		"NumberV1": {},
 		"OpaqueIdV1": {
 			"type": "string"
 		},

@@ -3,6 +3,9 @@
 		"AliasV1": {
 			"$ref": "#/$defs/OpaqueIdV1"
 		},
+		"ArrayV1": {
+			"type": "array"
+		},
 		"ChoiceV1": {
 			"oneOf": [
 				{
@@ -15,6 +18,9 @@
 		},
 		"ModeV1": {
 			"type": "string"
+		},
+		"NumberV1": {
+			"type": "number"
 		},
 		"OpaqueIdV1": {
 			"type": "string"
