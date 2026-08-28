@@ -1,0 +1,523 @@
+{
+  "$defs": {
+    "DelegatedActionRequestV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "additionalProperties": false,
+          "properties": {
+            "actionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "actionVersion": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "actionId",
+            "actionVersion",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "idempotencyKey",
+        "grant",
+        "action",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "DelegatedActionResultV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "propertyNames": {
+                "minLength": 1,
+                "pattern": "^(?!(?:accessToken|access_token|refreshToken|refresh_token|apiKey|api_key|authorization|clientSecret|client_secret|credential|password|secret|secretPlaintext|secret_plaintext)$).+$",
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "actionVersion": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "completedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "output": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "actionId",
+            "actionVersion",
+            "completedAt",
+            "callId",
+            "status",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "actionVersion": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "completedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "AGENT_BUSY",
+                        "AGENT_STARTING",
+                        "AGENT_UPDATING",
+                        "RUNTIME_UNAVAILABLE",
+                        "CONNECTION_UNAVAILABLE",
+                        "PROVIDER_RATE_LIMITED",
+                        "DEPENDENCY_UNAVAILABLE"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "message",
+                    "traceId",
+                    "code",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "AUTHENTICATION_REQUIRED",
+                        "RESOURCE_UNAVAILABLE",
+                        "AUTHORIZATION_REVOKED",
+                        "CONVERSATION_UNAVAILABLE",
+                        "EXECUTION_FAILED",
+                        "MODEL_SELECTION_INVALID",
+                        "CONNECTION_AUTHORIZATION_REQUIRED",
+                        "ACTION_UNAVAILABLE",
+                        "PROVIDER_REJECTED",
+                        "DELEGATED_RESULT_REJECTED"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "message",
+                    "traceId",
+                    "code",
+                    "retryable"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "failed",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "actionId",
+            "actionVersion",
+            "completedAt",
+            "callId",
+            "status",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExecutionGrantClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actionIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "actionSetVersion": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "tool.invoke"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attachmentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "read"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "attachmentId",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "items": {
+            "enum": [
+              "runtime_host",
+              "platform_tool_gateway",
+              "connection_api"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "audience",
+        "issuedAt",
+        "expiresAt",
+        "grantId",
+        "agentId",
+        "actorId",
+        "channelId",
+        "conversationId",
+        "turnId",
+        "executionId",
+        "allowedCommands",
+        "attachments",
+        "actionSetVersion",
+        "actionIds",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "ExecutionGrantV1": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "compact-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-delegated.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Pilot Delegated Contracts V1"
+}

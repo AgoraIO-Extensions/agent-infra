@@ -16,6 +16,12 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "./index.ts";
+import {
+	pilotBrowserOpenApiPathsV1,
+	pilotBrowserSchemasV1,
+	pilotDelegatedSchemasV1,
+	pilotSseSchemasV1,
+} from "./pilot/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -30,6 +36,18 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 const artifactPaths = {
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
+	pilotDelegatedJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-delegated.v1.schema.json",
+	),
+	pilotSseJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-sse.v1.schema.json",
+	),
+	pilotBrowserOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-browser.v1.openapi.json",
+	),
 };
 const schemas = {
 	IdempotencyKeyV1: IdempotencyKeyV1Schema,
@@ -62,22 +80,13 @@ function serialize(value) {
 	return `${JSON.stringify(sortKeys(value), null, 2)}\n`;
 }
 
-function buildArtifacts() {
-	const openapi = createDocument({
-		openapi: "3.1.0",
-		info: {
-			title: "Agent Infra Common Contracts",
-			version: "1.0.0",
-		},
-		paths: {},
-		components: { schemas },
-	});
-	const jsonSchema = {
+function jsonSchemaDocument({ id, title, definitions }) {
+	return {
 		$schema: "https://json-schema.org/draft/2020-12/schema",
-		$id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/common.v1.schema.json",
-		title: "Agent Infra Common Contracts V1",
+		$id: id,
+		title,
 		$defs: Object.fromEntries(
-			Object.entries(schemas).map(([name, schema]) => [
+			Object.entries(definitions).map(([name, schema]) => [
 				name,
 				withoutSchemaDialect(
 					z.toJSONSchema(schema, {
@@ -88,7 +97,51 @@ function buildArtifacts() {
 			]),
 		),
 	};
-	return { jsonSchema, openapi };
+}
+
+function buildArtifacts() {
+	const openapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Common Contracts",
+			version: "1.0.0",
+		},
+		paths: {},
+		components: { schemas },
+	});
+	const jsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/common.v1.schema.json",
+		title: "Agent Infra Common Contracts V1",
+		definitions: schemas,
+	});
+	const pilotBrowserOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Browser API",
+			version: "1.0.0",
+		},
+		paths: pilotBrowserOpenApiPathsV1,
+		components: {
+			schemas: { ...pilotBrowserSchemasV1, ...pilotSseSchemasV1 },
+		},
+	});
+	const pilotSseJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v1.schema.json",
+		title: "Agent Infra Pilot SSE Contracts V1",
+		definitions: pilotSseSchemasV1,
+	});
+	const pilotDelegatedJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-delegated.v1.schema.json",
+		title: "Agent Infra Pilot Delegated Contracts V1",
+		definitions: pilotDelegatedSchemasV1,
+	});
+	return {
+		jsonSchema,
+		openapi,
+		pilotBrowserOpenapi,
+		pilotSseJsonSchema,
+		pilotDelegatedJsonSchema,
+	};
 }
 
 async function writeArtifacts(artifacts) {

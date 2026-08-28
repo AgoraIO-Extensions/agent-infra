@@ -1,0 +1,1139 @@
+{
+  "$defs": {
+    "AuthorizationRevokedSignalV1": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "AUTHORIZATION_REVOKED",
+              "type": "string"
+            },
+            "message": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        "kind": {
+          "const": "control",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "type": {
+          "const": "authorization.revoked",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "type",
+        "error"
+      ],
+      "type": "object"
+    },
+    "ConversationSseMessageV1": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "conversationCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "event",
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "text.delta",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "kind",
+                "eventId",
+                "conversationId",
+                "executionId",
+                "sequence",
+                "conversationCursor",
+                "occurredAt",
+                "type",
+                "payload"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "conversationCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "event",
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "submitted",
+                        "processing",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "execution.status",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "kind",
+                "eventId",
+                "conversationId",
+                "executionId",
+                "sequence",
+                "conversationCursor",
+                "occurredAt",
+                "type",
+                "payload"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "conversationCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "event",
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "callId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "category": {
+                      "enum": [
+                        "status",
+                        "model_call",
+                        "connection_call"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "summary"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "execution.detail",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "kind",
+                "eventId",
+                "conversationId",
+                "executionId",
+                "sequence",
+                "conversationCursor",
+                "occurredAt",
+                "type",
+                "payload"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "conversationCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "event",
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fileId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "mediaType": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "sizeBytes": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "fileId",
+                    "name",
+                    "mediaType",
+                    "sizeBytes"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "result.file",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "kind",
+                "eventId",
+                "conversationId",
+                "executionId",
+                "sequence",
+                "conversationCursor",
+                "occurredAt",
+                "type",
+                "payload"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "conversationCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "event",
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "AGENT_BUSY",
+                                "AGENT_STARTING",
+                                "AGENT_UPDATING",
+                                "RUNTIME_UNAVAILABLE",
+                                "CONNECTION_UNAVAILABLE",
+                                "PROVIDER_RATE_LIMITED",
+                                "DEPENDENCY_UNAVAILABLE"
+                              ],
+                              "type": "string"
+                            },
+                            "message": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": true,
+                              "type": "boolean"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "traceId": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "message",
+                            "traceId",
+                            "code",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "INVALID_REQUEST",
+                                "AUTHENTICATION_REQUIRED",
+                                "RESOURCE_UNAVAILABLE",
+                                "AUTHORIZATION_REVOKED",
+                                "CONVERSATION_UNAVAILABLE",
+                                "EXECUTION_FAILED",
+                                "MODEL_SELECTION_INVALID",
+                                "CONNECTION_AUTHORIZATION_REQUIRED",
+                                "ACTION_UNAVAILABLE",
+                                "PROVIDER_REJECTED",
+                                "DELEGATED_RESULT_REJECTED"
+                              ],
+                              "type": "string"
+                            },
+                            "message": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "traceId": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "message",
+                            "traceId",
+                            "code",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "conversation.error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "kind",
+                "eventId",
+                "conversationId",
+                "executionId",
+                "sequence",
+                "conversationCursor",
+                "occurredAt",
+                "type",
+                "payload"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "control",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "unknown_event_id",
+                "cross_conversation_cursor",
+                "cursor_expired"
+              ],
+              "type": "string"
+            },
+            "resumeCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "timeline.reload",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "type",
+            "reason",
+            "resumeCursor"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "AUTHORIZATION_REVOKED",
+                  "type": "string"
+                },
+                "message": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "code",
+                "message",
+                "retryable",
+                "traceId"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "control",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "authorization.revoked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "type",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PersistedConversationEventV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conversationCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text.delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "eventId",
+            "conversationId",
+            "executionId",
+            "sequence",
+            "conversationCursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conversationCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "enum": [
+                    "submitted",
+                    "processing",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "unknown"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "execution.status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "eventId",
+            "conversationId",
+            "executionId",
+            "sequence",
+            "conversationCursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conversationCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "callId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "category": {
+                  "enum": [
+                    "status",
+                    "model_call",
+                    "connection_call"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "category",
+                "summary"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "execution.detail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "eventId",
+            "conversationId",
+            "executionId",
+            "sequence",
+            "conversationCursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conversationCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "fileId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "mediaType": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "fileId",
+                "name",
+                "mediaType",
+                "sizeBytes"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "result.file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "eventId",
+            "conversationId",
+            "executionId",
+            "sequence",
+            "conversationCursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conversationCursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "conversation.error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "kind",
+            "eventId",
+            "conversationId",
+            "executionId",
+            "sequence",
+            "conversationCursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimelineReloadSignalV1": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "control",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "unknown_event_id",
+            "cross_conversation_cursor",
+            "cursor_expired"
+          ],
+          "type": "string"
+        },
+        "resumeCursor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "type": {
+          "const": "timeline.reload",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "type",
+        "reason",
+        "resumeCursor"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Pilot SSE Contracts V1"
+}
