@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parsePilotIssueNumber, validatePilotSnapshot } from "./gh-aw-pilot.mjs";
+import {
+  normalizeGitHubApiUrl,
+  parsePilotIssueNumber,
+  validatePilotSnapshot,
+} from "./gh-aw-pilot.mjs";
 import { executionContent } from "./worker-contract.mjs";
 
 const issue = {
@@ -83,6 +87,20 @@ test("rejects alternate Issue spellings and unauthorized execution content", () 
       }),
     /changed after authorization/,
   );
+});
+
+test("accepts only credential-free HTTPS GitHub API URLs", () => {
+  assert.equal(
+    normalizeGitHubApiUrl("https://github.example.com/api/v3/"),
+    "https://github.example.com/api/v3",
+  );
+  for (const value of [
+    "http://github.example.com/api/v3",
+    "https://token@github.example.com/api/v3",
+    "https://github.example.com/api/v3?token=x",
+  ]) {
+    assert.throws(() => normalizeGitHubApiUrl(value), /API URL/);
+  }
 });
 
 test("fails closed across actor, Team, Issue, blocker, and ownership boundaries", () => {

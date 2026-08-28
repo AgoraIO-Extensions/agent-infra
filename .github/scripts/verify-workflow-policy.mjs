@@ -184,6 +184,8 @@ const GH_AW_PILOT_SEMANTIC_SHA256 =
   "41ae67574d02166deb734c651998a7e5f8056aae32d24e73bfe7f061aaa029ec";
 const GH_AW_PILOT_SOURCE_SHA256 =
   "78fe52e63cf79e08e789b37bbe3d647365c8b4ba8ac8354a44d90846a15d8ade";
+const GH_AW_PILOT_SCRIPT_SHA256 =
+  "954aabd0738b6dcff5c9128f7e5784d482b81c81fb33188a5f8f36aba4f6e4e3";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
 const MATT_SKILL_SOURCE = "https://github.com/mattpocock/skills.git";
 const MATT_SKILLS = ["code-review", "implement", "tdd"];
@@ -858,6 +860,8 @@ export function validateTrustedScriptSources(sources) {
     'TARGET_VERSION = "gh-aw-pilot-target-v1"',
     "parsePilotIssueNumber",
     "validatePilotSnapshot",
+    "normalizeGitHubApiUrl",
+    'requiredEnvironment("GITHUB_API_URL")',
     "executionContent(issue,",
     "WORKER_OWNERS_TEAM_SLUG",
     "extractPrimaryIssueNumbers(pullRequest.body)",
@@ -868,8 +872,17 @@ export function validateTrustedScriptSources(sources) {
     "contract.hash !== expectedExecutionContentHash",
     "targetHash !== expectedTargetHash",
   ];
-  if (pilotRequirements.some((requirement) => !pilotSource.includes(requirement))) {
+  if (
+    pilotRequirements.some((requirement) => !pilotSource.includes(requirement)) ||
+    pilotSource.includes("https://api.github.com")
+  ) {
     errors.push("gh-aw Pilot must authorize and recheck one trusted target snapshot");
+  }
+  const pilotSourceHash = createHash("sha256")
+    .update(pilotSource)
+    .digest("hex");
+  if (pilotSourceHash !== GH_AW_PILOT_SCRIPT_SHA256) {
+    errors.push("gh-aw Pilot authorization script must match the reviewed trusted source");
   }
   const claudeRecoveryRequirements = [
     "reviewRecoveryArtifactAvailable({",

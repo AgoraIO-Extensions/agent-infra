@@ -236,6 +236,14 @@ test("requires trusted gh-aw Pilot authorization and publish recheck", async () 
       error.includes("trusted target snapshot"),
     ),
   );
+
+  const drifted = await actualTrustedScriptSources();
+  drifted["gh-aw-pilot.mjs"] += "\n// drift\n";
+  assert.ok(
+    validateTrustedScriptSources(drifted).some((error) =>
+      error.includes("reviewed trusted source"),
+    ),
+  );
 });
 
 test("reserves concurrency queue for the generated gh-aw workflow", async () => {

@@ -23,6 +23,20 @@ export function parsePilotIssueNumber(value) {
   return number;
 }
 
+export function normalizeGitHubApiUrl(value) {
+  const url = new URL(String(value ?? ""));
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("GitHub API URL is invalid");
+  }
+  return url.href.replace(/\/$/, "");
+}
+
 function labelsOf(value) {
   return (value?.labels ?? []).map((label) =>
     typeof label === "string" ? label : label.name,
@@ -107,8 +121,8 @@ export function validatePilotSnapshot({
   return { category, targetHash };
 }
 
-async function githubRequest(apiPath, { token, allowNotFound = false } = {}) {
-  const response = await fetch(`https://api.github.com${apiPath}`, {
+async function githubRequest(apiUrl, apiPath, { token, allowNotFound = false } = {}) {
+  const response = await fetch(`${apiUrl}${apiPath}`, {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
@@ -130,6 +144,7 @@ function assertBounded(values, name) {
 async function loadPilotSnapshot({
   repository,
   issueNumber,
+  apiUrl,
   token,
   membershipToken,
   triggeringActor,
@@ -138,20 +153,25 @@ async function loadPilotSnapshot({
   const branch = `gh-aw/pilot-${issueNumber}`;
   const [issue, blockers, pullRequests, branchRef, actorAccount, membership] =
     await Promise.all([
-      githubRequest(`/repos/${repository}/issues/${issueNumber}`, { token }),
+      githubRequest(apiUrl, `/repos/${repository}/issues/${issueNumber}`, { token }),
       githubRequest(
+        apiUrl,
         `/repos/${repository}/issues/${issueNumber}/dependencies/blocked_by?per_page=100`,
         { token },
       ),
-      githubRequest(`/repos/${repository}/pulls?state=open&per_page=100`, { token }),
-      githubRequest(
-        `/repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`,
-        { token, allowNotFound: true },
-      ),
-      githubRequest(`/users/${encodeURIComponent(triggeringActor)}`, {
+      githubRequest(apiUrl, `/repos/${repository}/pulls?state=open&per_page=100`, {
         token,
       }),
       githubRequest(
+        apiUrl,
+        `/repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`,
+        { token, allowNotFound: true },
+      ),
+      githubRequest(apiUrl, `/users/${encodeURIComponent(triggeringActor)}`, {
+        token,
+      }),
+      githubRequest(
+        apiUrl,
         `/orgs/${owner}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(triggeringActor)}`,
         { token: membershipToken },
       ),
@@ -180,6 +200,7 @@ async function main() {
   const snapshot = await loadPilotSnapshot({
     repository,
     issueNumber,
+    apiUrl: normalizeGitHubApiUrl(requiredEnvironment("GITHUB_API_URL")),
     token: requiredEnvironment("GITHUB_TOKEN"),
     membershipToken: requiredEnvironment("TEAM_MEMBERSHIP_TOKEN"),
     triggeringActor,
