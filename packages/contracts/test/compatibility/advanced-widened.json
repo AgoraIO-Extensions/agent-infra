@@ -27,12 +27,29 @@
 		},
 		"OpenObjectV1": {},
 		"PatternObjectV1": {},
+		"PatternExplicitV1": {
+			"additionalProperties": false,
+			"properties": {
+				"x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
 		"RequestIdV1": {
 			"type": "string"
 		},
 		"RecordV1": {},
 		"RemovedOpenPropertyV1": {
 			"type": "object"
+		},
+		"RemovedNestedDefV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
 		},
 		"ToggleV1": {},
 		"TupleV1": {},

@@ -62,6 +62,21 @@ function literalSchemasAreDisjoint(left, right) {
 	);
 }
 
+function containsReference(value, reference) {
+	if (Array.isArray(value)) {
+		return value.some((entry) => containsReference(entry, reference));
+	}
+	if (!value || typeof value !== "object") return false;
+	if (value.$ref === reference) return true;
+	return Object.values(value).some((entry) =>
+		containsReference(entry, reference),
+	);
+}
+
+function jsonPointerSegment(value) {
+	return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
 function hasSchemaConstraints(value) {
 	return (
 		value === false ||
@@ -355,13 +370,29 @@ function compareSchema(previous, current, path, changes) {
 	for (const [pattern, schema] of Object.entries(
 		current.patternProperties ?? {},
 	)) {
+		const previousPatternSchema = previous.patternProperties?.[pattern];
 		compareSubschemaConstraint(
-			previous.patternProperties?.[pattern] ?? previous.additionalProperties,
+			previousPatternSchema ?? previous.additionalProperties,
 			schema,
 			`${path}.${pattern}`,
 			"patternProperties",
 			changes,
 		);
+		if (previousPatternSchema === undefined) {
+			const expression = new RegExp(pattern);
+			for (const [name, propertySchema] of Object.entries(
+				previous.properties ?? {},
+			)) {
+				if (!expression.test(name)) continue;
+				compareSubschemaConstraint(
+					propertySchema,
+					schema,
+					`${path}.${name}`,
+					`patternProperties ${pattern}`,
+					changes,
+				);
+			}
+		}
 	}
 	for (const [pattern, schema] of Object.entries(
 		previous.patternProperties ?? {},
@@ -439,6 +470,10 @@ function compareSchema(previous, current, path, changes) {
 		const currentSchema = current.$defs?.[name];
 		if (currentSchema !== undefined) {
 			compareSchema(schema, currentSchema, `${path}.$defs.${name}`, changes);
+		} else if (
+			containsReference(current, `#/$defs/${jsonPointerSegment(name)}`)
+		) {
+			changes.push(`removed ${path}.$defs.${name}`);
 		}
 	}
 }

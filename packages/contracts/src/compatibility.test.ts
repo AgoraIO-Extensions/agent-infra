@@ -147,6 +147,12 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain(
 			"narrowed $defs.PatternObjectV1.^x patternProperties",
 		);
+		expect(result.stderr).toContain(
+			"retyped $defs.PatternExplicitV1.x patternProperties ^x",
+		);
+		expect(result.stderr).toContain(
+			"removed $defs.RemovedNestedDefV1.$defs.Value",
+		);
 	});
 
 	it("accepts removed constraints and integer-to-number widening", () => {

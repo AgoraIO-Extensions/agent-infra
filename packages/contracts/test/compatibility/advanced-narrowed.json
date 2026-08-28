@@ -103,6 +103,20 @@
 			},
 			"type": "object"
 		},
+		"PatternExplicitV1": {
+			"additionalProperties": false,
+			"patternProperties": {
+				"^x": {
+					"type": "number"
+				}
+			},
+			"properties": {
+				"x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
 		"RequestIdV1": {
 			"type": "string"
 		},
@@ -122,6 +136,9 @@
 				}
 			},
 			"type": "object"
+		},
+		"RemovedNestedDefV1": {
+			"$ref": "#/$defs/Value"
 		},
 		"ToggleV1": {
 			"const": true,
