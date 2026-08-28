@@ -13,11 +13,21 @@ describe("contracts package surface", () => {
 
 		expect(manifest.types).toBe("dist/index.d.mts");
 		expect(manifest.exports["."].types).toBe("./dist/index.d.mts");
+		expect(manifest.exports["./runtime"]).toEqual({
+			types: "./dist/runtime/index.d.mts",
+			import: "./dist/runtime/index.mjs",
+		});
 		expect(manifest.exports["./openapi/common.v1"]).toBe(
 			"./artifacts/openapi/common.v1.openapi.json",
 		);
 		expect(manifest.exports["./json-schema/common.v1"]).toBe(
 			"./artifacts/json-schema/common.v1.schema.json",
+		);
+		expect(manifest.exports["./json-schema/runtime.v1"]).toBe(
+			"./artifacts/json-schema/runtime.v1.schema.json",
+		);
+		expect(manifest.exports["./openapi/runtime-host.v1"]).toBe(
+			"./artifacts/openapi/runtime-host.v1.openapi.json",
 		);
 		expect(manifest.files).toEqual(["dist", "artifacts"]);
 		expect(JSON.stringify(manifest.exports)).not.toContain("test");
@@ -30,7 +40,14 @@ describe("contracts package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
+		expect(packedFiles).toContain("dist/runtime/index.d.mts");
 		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");
+		expect(packedFiles).toContain(
+			"artifacts/openapi/runtime-host.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/runtime.v1.schema.json",
+		);
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);

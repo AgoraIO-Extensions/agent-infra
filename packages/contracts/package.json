@@ -10,8 +10,14 @@
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
 		},
+		"./runtime": {
+			"types": "./dist/runtime/index.d.mts",
+			"import": "./dist/runtime/index.mjs"
+		},
 		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",
-		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json"
+		"./json-schema/runtime.v1": "./artifacts/json-schema/runtime.v1.schema.json",
+		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json",
+		"./openapi/runtime-host.v1": "./artifacts/openapi/runtime-host.v1.openapi.json"
 	},
 	"files": [
 		"dist",
@@ -24,7 +30,7 @@
 		"client-smoke": "node src/client-smoke.mjs",
 		"generate": "node src/generate.mjs --write",
 		"check-generated": "node src/generate.mjs --check",
-		"test": "pnpm build && vitest run src && pnpm check-generated && pnpm check-compatibility"
+		"test": "pnpm build && vitest run src test && pnpm check-generated && pnpm check-compatibility"
 	},
 	"dependencies": {
 		"zod": "catalog:"

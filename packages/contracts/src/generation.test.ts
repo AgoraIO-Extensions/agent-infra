@@ -50,6 +50,40 @@ describe("standard contract artifacts", () => {
 		);
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
+		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
+		expect(Object.keys(artifacts.runtimeOpenapi.paths).sort()).toEqual([
+			"/internal/runtime/v1/capabilities",
+			"/internal/runtime/v1/events/replay",
+			"/internal/runtime/v1/generations/cancel",
+			"/internal/runtime/v1/instructions",
+			"/internal/runtime/v1/status",
+			"/internal/runtime/v1/stops",
+			"/internal/runtime/v1/turns",
+		]);
+		expect(JSON.stringify(artifacts.runtimeOpenapi)).not.toMatch(
+			/nativeSessionRef|RuntimeDriver/,
+		);
+		for (const path of Object.values(artifacts.runtimeOpenapi.paths) as Array<{
+			post: { responses: Record<string, unknown> };
+		}>) {
+			expect(Object.keys(path.post.responses).sort()).toEqual([
+				"200",
+				"400",
+				"401",
+				"403",
+				"404",
+				"409",
+				"500",
+				"503",
+			]);
+		}
+		expect(Object.keys(artifacts.runtimeJsonSchema.$defs)).toEqual(
+			expect.arrayContaining([
+				"RuntimeDriverCommandV1",
+				"RuntimeEventV1",
+				"RuntimeSubmitTurnRequestV1",
+			]),
+		);
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
@@ -71,6 +105,21 @@ describe("standard contract artifacts", () => {
 		});
 		expect(validateTimestamp("2026-12-31T23:59:60Z")).toBe(true);
 		expect(validateTimestamp("2026-08-28t03:00:00z")).toBe(true);
+		ajv.addSchema(artifacts.runtimeJsonSchema);
+		const validateRuntimeEvent = ajv.compile({
+			$ref: `${artifacts.runtimeJsonSchema.$id}#/$defs/RuntimeEventV1`,
+		});
+		expect(
+			validateRuntimeEvent({
+				schemaVersion: 1,
+				adapterEventKey: "event-1",
+				executionId: "execution-1",
+				cursor: "cursor-1",
+				occurredAt: "2026-08-28T10:00:00Z",
+				type: "status",
+				payload: { status: "running" },
+			}),
+		).toBe(true);
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {

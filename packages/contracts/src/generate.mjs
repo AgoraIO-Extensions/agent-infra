@@ -16,6 +16,22 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "./index.ts";
+import {
+	RuntimeCapabilitiesRequestV1Schema,
+	RuntimeCapabilitiesResponseV1Schema,
+	RuntimeDriverV1SchemaDefinitions,
+	RuntimeEventV1Schema,
+	RuntimeEventV1SchemaDefinitions,
+	RuntimeGenerationCancelRequestV1Schema,
+	RuntimeHostV1SchemaDefinitions,
+	RuntimeOperationResponseV1Schema,
+	RuntimeReplayRequestV1Schema,
+	RuntimeStatusRequestV1Schema,
+	RuntimeStatusResponseV1Schema,
+	RuntimeStopRequestV1Schema,
+	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSupplementRequestV1Schema,
+} from "./runtime/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -30,6 +46,11 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 const artifactPaths = {
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
+	runtimeJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime.v1.schema.json",
+	),
+	runtimeOpenapi: resolve(artifactRoot, "openapi/runtime-host.v1.openapi.json"),
 };
 const schemas = {
 	IdempotencyKeyV1: IdempotencyKeyV1Schema,
@@ -62,22 +83,13 @@ function serialize(value) {
 	return `${JSON.stringify(sortKeys(value), null, 2)}\n`;
 }
 
-function buildArtifacts() {
-	const openapi = createDocument({
-		openapi: "3.1.0",
-		info: {
-			title: "Agent Infra Common Contracts",
-			version: "1.0.0",
-		},
-		paths: {},
-		components: { schemas },
-	});
-	const jsonSchema = {
+function jsonSchemaDocument({ id, title, definitions }) {
+	return {
 		$schema: "https://json-schema.org/draft/2020-12/schema",
-		$id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/common.v1.schema.json",
-		title: "Agent Infra Common Contracts V1",
+		$id: id,
+		title,
 		$defs: Object.fromEntries(
-			Object.entries(schemas).map(([name, schema]) => [
+			Object.entries(definitions).map(([name, schema]) => [
 				name,
 				withoutSchemaDialect(
 					z.toJSONSchema(schema, {
@@ -88,7 +100,139 @@ function buildArtifacts() {
 			]),
 		),
 	};
-	return { jsonSchema, openapi };
+}
+
+function protocolErrorResponse(description) {
+	return {
+		description,
+		content: { "application/json": { schema: ProtocolErrorV1Schema } },
+	};
+}
+
+const runtimeErrorResponses = {
+	400: protocolErrorResponse("Invalid RuntimeHost request"),
+	401: protocolErrorResponse("RuntimeHost authentication required"),
+	403: protocolErrorResponse("Execution Grant is not authorized"),
+	404: protocolErrorResponse("Runtime session or operation is unavailable"),
+	409: protocolErrorResponse("Generation, fence, or operation conflict"),
+	500: protocolErrorResponse("RuntimeHost operation failed"),
+	503: protocolErrorResponse("Runtime or Driver is unavailable"),
+};
+
+function postOperation(operationId, requestSchema, responseSchema, mediaType) {
+	return {
+		operationId,
+		requestBody: {
+			required: true,
+			content: { "application/json": { schema: requestSchema } },
+		},
+		responses: {
+			200: {
+				description: "RuntimeHost response",
+				content: { [mediaType]: { schema: responseSchema } },
+			},
+			...runtimeErrorResponses,
+		},
+	};
+}
+
+function buildArtifacts() {
+	const openapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Common Contracts",
+			version: "1.0.0",
+		},
+		paths: {},
+		components: { schemas },
+	});
+	const jsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/common.v1.schema.json",
+		title: "Agent Infra Common Contracts V1",
+		definitions: schemas,
+	});
+	const runtimeDefinitions = {
+		...RuntimeHostV1SchemaDefinitions,
+		...RuntimeEventV1SchemaDefinitions,
+		...RuntimeDriverV1SchemaDefinitions,
+	};
+	const runtimeOpenApiDefinitions = {
+		ProtocolErrorV1: ProtocolErrorV1Schema,
+		...RuntimeHostV1SchemaDefinitions,
+		...RuntimeEventV1SchemaDefinitions,
+	};
+	const runtimeJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v1.schema.json",
+		title: "Agent Infra Runtime Contracts V1",
+		definitions: runtimeDefinitions,
+	});
+	const runtimeOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra RuntimeHost Contract",
+			version: "1.0.0",
+		},
+		paths: {
+			"/internal/runtime/v1/turns": {
+				post: postOperation(
+					"submitRuntimeTurnV1",
+					RuntimeSubmitTurnRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/instructions": {
+				post: postOperation(
+					"supplementRuntimeTurnV1",
+					RuntimeSupplementRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/stops": {
+				post: postOperation(
+					"stopRuntimeTurnV1",
+					RuntimeStopRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/status": {
+				post: postOperation(
+					"readRuntimeStatusV1",
+					RuntimeStatusRequestV1Schema,
+					RuntimeStatusResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/capabilities": {
+				post: postOperation(
+					"readRuntimeCapabilitiesV1",
+					RuntimeCapabilitiesRequestV1Schema,
+					RuntimeCapabilitiesResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/events/replay": {
+				post: postOperation(
+					"replayRuntimeEventsV1",
+					RuntimeReplayRequestV1Schema,
+					RuntimeEventV1Schema,
+					"text/event-stream",
+				),
+			},
+			"/internal/runtime/v1/generations/cancel": {
+				post: postOperation(
+					"cancelRuntimeGenerationV1",
+					RuntimeGenerationCancelRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+		},
+		components: { schemas: runtimeOpenApiDefinitions },
+	});
+	return { jsonSchema, openapi, runtimeJsonSchema, runtimeOpenapi };
 }
 
 async function writeArtifacts(artifacts) {
