@@ -33,6 +33,7 @@ function issue(number, blockers = [], overrides = {}) {
     state: "open",
     state_reason: null,
     labels: [{ name: "ready-for-agent" }],
+    native_blockers: blockers,
     body: [
       "## Problem",
       "",
@@ -267,12 +268,7 @@ function mockGitHub(
   const events = new Map();
   const nativeDependencies = new Map();
   for (const source of issues) {
-    let blockerNumbers = [];
-    try {
-      blockerNumbers = parseBlockedBy(source.body, { issueNumber: source.number });
-    } catch {
-      // Invalid body fixtures intentionally start with no native mirror.
-    }
+    const blockerNumbers = source.native_blockers ?? [];
     nativeDependencies.set(
       source.number,
       blockerNumbers
@@ -649,7 +645,7 @@ test("reconciles close, reopen, duplicate, and state-reason changes", async () =
 });
 
 test("persists state intent before dispatch and retries only the failed dispatch", async () => {
-  const issues = [issue(1, [2]), issue(2)];
+  const issues = [issue(1, [2]), issue(2, [], { labels: [] })];
   const github = mockGitHub(issues);
   let rejectDispatch = true;
   const request = async (apiPath, options) => {
@@ -695,51 +691,86 @@ test("persists state intent before dispatch and retries only the failed dispatch
   );
 });
 
-test("adds missing native dependencies and triages native-only edges", async () => {
+test("projects native dependencies to the compatibility body section", async () => {
   const issues = [issue(1, [2]), issue(2), issue(3)];
-  const repair = mockGitHub(issues);
-  repair.nativeDependencies.set(1, []);
-  const first = await reconcileRepository({
-    repository: "example/agent-infra",
-    token: "test-token",
-    request: repair.request,
-    paginate: repair.paginate,
-  });
-  assert.equal(first.repairedNativeDependencies, 1);
-  assert.deepEqual(
-    repair.nativeDependencies.get(1).map((entry) => entry.number),
-    [2],
-  );
-
-  const mismatchIssues = [issue(1, [2]), issue(2), issue(3)];
-  const mismatch = mockGitHub(mismatchIssues);
-  mismatch.nativeDependencies.set(1, [mismatchIssues[2]]);
+  const github = mockGitHub(issues);
+  github.nativeDependencies.set(1, [issues[2]]);
   const outcome = await reconcileRepository({
     repository: "example/agent-infra",
     token: "test-token",
-    request: mismatch.request,
-    paginate: mismatch.paginate,
+    request: github.request,
+    paginate: github.paginate,
   });
-  assert.deepEqual(outcome.nativeDependencyTriage, [1]);
+  assert.equal(outcome.repairedBodyProjections, 1);
+  assert.match(issues[0].body, /## Blocked by\n\n- #3/);
+  assert.doesNotMatch(issues[0].body, /- #2/);
   assert.equal(
-    mismatchIssues[0].labels.some((label) => label.name === "needs-triage"),
-    true,
-  );
-  assert.match(
-    mismatch.comments
-      .get(1)
-      .find((comment) => comment.body.includes("agent-infra-blocker-state")).body,
-    /native-dependency-mismatch/,
-  );
-  assert.equal(
-    mismatch.calls.some((call) => call.method === "DELETE"),
+    github.calls.some(
+      (call) =>
+        call.apiPath.includes("/dependencies/blocked_by") &&
+        ["POST", "DELETE"].includes(call.method),
+    ),
     false,
   );
+});
+
+test("triages projection write failures idempotently", async () => {
+  const issues = [issue(1, [2]), issue(2), issue(3)];
+  const github = mockGitHub(issues);
+  github.nativeDependencies.set(1, [issues[2]]);
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/issues/1") && options.method === "PATCH") {
+      throw new Error("projection unavailable");
+    }
+    return github.request(apiPath, options);
+  };
+
+  const first = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request,
+    paginate: github.paginate,
+  });
+  assert.equal(first.outcomes[0].state.reason, "body-projection-update-failed");
+  assert.equal(issues[0].labels.some((label) => label.name === "needs-triage"), true);
+
+  await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request,
+    paginate: github.paginate,
+  });
+  assert.equal(
+    github.comments
+      .get(1)
+      .filter((comment) => comment.body.includes("agent-infra-blocker-state"))
+      .length,
+    1,
+  );
+});
+
+test("reconciles a dependent when its final native blocker is removed", async () => {
+  const issues = [issue(1), issue(2)];
+  const github = mockGitHub(issues);
+  github.nativeDependencies.set(1, []);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(result.repairedBodyProjections, 0);
+  assert.match(issues[0].body, /## Blocked by\n\nNone/);
+  assert.equal(result.outcomes[0].issueNumber, 1);
+  assert.equal(result.outcomes[0].state.state, "frontier");
 });
 
 test("invalid graphs add one triage label and one stable audit", async () => {
   const issues = [issue(1, [99])];
   const github = mockGitHub(issues);
+  github.nativeDependencies.set(1, [{ number: 99 }]);
   await reconcileRepository({
     repository: "example/agent-infra",
     token: "test-token",
@@ -764,6 +795,31 @@ test("invalid graphs add one triage label and one stable audit", async () => {
     paginate: github.paginate,
   });
   assert.deepEqual(github.calls.slice(before), []);
+});
+
+test("ignores Wayfinder planning objects during execution reconciliation", async () => {
+  const question = issue(199, [], {
+    labels: [{ name: "wayfinder:grilling" }],
+    body: "## Question\n\nShould the parser require `## Blocked by`?",
+  });
+  const map = issue(195, [], {
+    labels: [{ name: "wayfinder:map" }],
+    body: "## Notes\n\nDecision map.",
+  });
+  const github = mockGitHub([question, map]);
+  github.nativeDependencies.set(199, [map]);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.deepEqual(result.outcomes, []);
+  assert.deepEqual(result.triage, []);
+  assert.deepEqual(question.labels, [{ name: "wayfinder:grilling" }]);
+  assert.deepEqual(github.comments.get(199) ?? [], []);
 });
 
 test("graph overflow fails closed by triaging affected open Issues", async () => {
@@ -884,6 +940,82 @@ test("repairs one orphan trusted proposal edge and review marker idempotently", 
   });
   assert.equal(second.repairedEdges, false);
   assert.deepEqual(github.calls.slice(before), []);
+});
+
+test("recovers the trusted prefix after partial multi-edge publication", async () => {
+  const source = issue(1, [], { title: "Source Issue" });
+  const contract = executionContent(source);
+  const timelineEvent = {
+    id: 101,
+    event: "labeled",
+    label: { name: "ready-for-agent" },
+    actor: { login: "owner", type: "User" },
+    created_at: "2026-08-06T00:00:00Z",
+    url: "https://api.github.test/issues/events/101",
+    authorizationCycle: 1,
+  };
+  const authorization = authorizeCycle({
+    issueNumber: 1,
+    executionContentHash: contract.hash,
+    blockedByHash: contract.blockedByHash,
+    timelineEvent,
+    membership: { state: "active", role: "member" },
+    recordedAt: "2026-08-06T00:00:01Z",
+  });
+  const rendered = ["schema", "index"].map((name) =>
+    buildBlockerIssue({
+      sourceIssue: 1,
+      sourceCycle: 1,
+      executionContentHash: contract.hash,
+      proposal: {
+        proposal_id: `database-${name}`,
+        title: `add the database ${name}`,
+        problem: `The database ${name} is missing.`,
+        deliverable: `A versioned database ${name}.`,
+        scope: [`Add only the ${name}.`],
+        acceptance_criteria: [{ id: "AC-1", text: `${name} is present.` }],
+        validation: ["Run migration tests."],
+      },
+    }),
+  );
+  const blockers = rendered.map((entry, index) => ({
+    ...issue(index + 2, [], { labels: [] }),
+    title: entry.title,
+    body: entry.body,
+    user: { login: "github-actions[bot]", type: "Bot" },
+    performed_via_github_app: { id: 15368 },
+  }));
+  const github = mockGitHub([source, ...blockers]);
+  github.nativeDependencies.set(1, [blockers[0]]);
+  github.comments.set(1, [
+    {
+      ...appComment(40, buildAuthorizationRecordComment(authorization)),
+      html_url: "https://github.test/comments/40",
+    },
+  ]);
+  for (const [index, blocker] of blockers.entries()) {
+    const record = parseBlockerProposalRecord(blocker, { trusted: false });
+    github.comments.set(blocker.number, [
+      appComment(41 + index * 2, rendered[index].identityComment),
+      appComment(42 + index * 2, buildBlockerReviewAck(blocker.number, record)),
+    ]);
+  }
+  github.events.set(1, [timelineEvent]);
+
+  const result = await reconcileRepository({
+    repository: "example/agent-infra",
+    token: "test-token",
+    request: github.request,
+    paginate: github.paginate,
+  });
+
+  assert.equal(result.repairedAuthorizations, 2);
+  assert.deepEqual(
+    github.nativeDependencies.get(1).map(({ number }) => number),
+    [2, 3],
+  );
+  assert.deepEqual(parseBlockedBy(source.body, { issueNumber: 1 }), [2, 3]);
+  assert.equal(source.labels.some((label) => label.name === "needs-triage"), false);
 });
 
 test("retires a not-planned older-cycle proposal after new authorization", async () => {

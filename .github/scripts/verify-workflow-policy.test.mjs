@@ -469,6 +469,16 @@ test("requires bounded blocker and reconciliation sources", async () => {
       error.includes("bounded proposals and signed reconciliation"),
     ),
   );
+
+  const bodyAuthority = await actualTrustedScriptSources();
+  bodyAuthority["blocker-reconciler.mjs"] = bodyAuthority[
+    "blocker-reconciler.mjs"
+  ].replaceAll("readNativeDependencies({", "readBodyDependencies({");
+  assert.ok(
+    validateTrustedScriptSources(bodyAuthority).some((error) =>
+      error.includes("bounded proposals and signed reconciliation"),
+    ),
+  );
 });
 
 test("requires the Codex Worker workflow", async () => {

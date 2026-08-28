@@ -684,9 +684,14 @@ export function replaceBlockedBy(body, blockerNumbers, { issueNumber } = {}) {
   ) {
     throw new Error("Blocked by replacement contains invalid Issue numbers");
   }
-  parseBlockedBy(body, { issueNumber });
   const lines = String(body).replace(/\r\n?/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => line.trim() === "## Blocked by");
+  const headings = lines.flatMap((line, index) =>
+    line.trim() === "## Blocked by" ? [index] : [],
+  );
+  if (headings.length !== 1) {
+    throw new Error("Issue must contain exactly one ## Blocked by section");
+  }
+  const heading = headings[0];
   const next = lines.findIndex(
     (line, index) => index > heading && /^##\s+\S/.test(line.trim()),
   );
@@ -708,6 +713,73 @@ function issueLabels(issue) {
   return (issue?.labels ?? []).map((label) =>
     typeof label === "string" ? label : label.name,
   );
+}
+
+const IMPLEMENTATION_HEADINGS = [
+  "## Problem",
+  "## Scope",
+  "## Acceptance criteria",
+  "## Validation",
+  "## Blocked by",
+];
+
+export function workItemKind(issue) {
+  if (issue?.pull_request) return "pull-request";
+  const labels = issueLabels(issue);
+  if (labels.includes("wayfinder:map")) return "map";
+  if (labels.some((label) => label.startsWith("wayfinder:"))) return "decision";
+  const lines = String(issue?.body ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim());
+  return IMPLEMENTATION_HEADINGS.every(
+    (heading) => lines.filter((line) => line === heading).length === 1,
+  )
+    ? "implementation"
+    : "other";
+}
+
+export async function hydrateNativeDependencies(
+  issues,
+  load,
+  { concurrency = 8 } = {},
+) {
+  if (
+    !Array.isArray(issues) ||
+    typeof load !== "function" ||
+    !Number.isSafeInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > 32
+  ) {
+    throw new Error("Native dependency hydration inputs are invalid");
+  }
+  const candidates = issues.filter(
+    (issue) => workItemKind(issue) === "implementation",
+  );
+  const snapshot = new Map();
+  let cursor = 0;
+  async function worker() {
+    while (cursor < candidates.length) {
+      const issue = candidates[cursor];
+      cursor += 1;
+      if (issue.issue_dependencies_summary?.total_blocked_by === 0) {
+        snapshot.set(issue.number, []);
+        continue;
+      }
+      try {
+        snapshot.set(issue.number, await load(issue));
+      } catch {
+        snapshot.set(issue.number, null);
+      }
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, candidates.length) },
+      () => worker(),
+    ),
+  );
+  return snapshot;
 }
 
 export function blockerStatus(issue) {
@@ -744,9 +816,14 @@ function cycleNodes(adjacency) {
 
 export function inspectBlockerGraph(
   issues,
-  { maxIssues = 1_000, maxEdges = 5_000 } = {},
+  {
+    maxIssues = 1_000,
+    maxEdges = 5_000,
+    nativeDependencies,
+  } = {},
 ) {
   if (!Array.isArray(issues)) throw new Error("Blocker graph Issues are invalid");
+  const repositoryIssues = new Map();
   const issuesByNumber = new Map();
   const adjacency = new Map();
   const reverse = new Map();
@@ -755,18 +832,40 @@ export function inspectBlockerGraph(
     if (!Number.isSafeInteger(issue?.number) || issue.number < 1 || issue.pull_request) {
       continue;
     }
-    issuesByNumber.set(issue.number, issue);
+    repositoryIssues.set(issue.number, issue);
+    if (workItemKind(issue) === "implementation") {
+      issuesByNumber.set(issue.number, issue);
+    }
   }
   let edgeCount = 0;
   for (const issue of issuesByNumber.values()) {
-    if (!String(issue.body ?? "").includes("## Blocked by")) continue;
-    try {
-      const blockers = parseBlockedBy(issue.body, { issueNumber: issue.number });
-      edgeCount += blockers.length;
-      adjacency.set(issue.number, blockers);
-    } catch (error) {
-      errors.set(issue.number, error instanceof Error ? error.message : String(error));
+    const nativeBlockers = nativeDependencies instanceof Map
+      ? nativeDependencies.get(issue.number)
+      : issue.native_blockers;
+    if (!Array.isArray(nativeBlockers)) {
+      errors.set(issue.number, "native-dependency-response-invalid");
+      continue;
     }
+    const blockers = [];
+    for (const blocker of nativeBlockers) {
+      const number = typeof blocker === "number" ? blocker : blocker?.number;
+      if (!Number.isSafeInteger(number) || number < 1 || blockers.includes(number)) {
+        errors.set(issue.number, "native-dependency-response-invalid");
+        continue;
+      }
+      const target = repositoryIssues.get(number);
+      if (!target || target.pull_request) {
+        errors.set(issue.number, `Blocked by Issue #${number} is missing or is a PR`);
+        continue;
+      }
+      if (workItemKind(target) !== "implementation") {
+        errors.set(issue.number, `Blocked by Issue #${number} is a cross-domain edge`);
+        continue;
+      }
+      blockers.push(number);
+    }
+    edgeCount += blockers.length;
+    adjacency.set(issue.number, blockers);
   }
   const participantNumbers = new Set(errors.keys());
   for (const [source, blockers] of adjacency) {
@@ -806,50 +905,25 @@ export function inspectBlockerGraph(
   };
 }
 
-export function nativeDependencyDecision(
-  blockerNumbers,
-  nativeBlockers,
-  issuesByNumber,
+export function validatedExecutionIssue(
+  issues,
+  issueNumber,
+  { nativeDependencies } = {},
 ) {
-  if (
-    !Array.isArray(blockerNumbers) ||
-    blockerNumbers.some((number) => !Number.isSafeInteger(number) || number < 1) ||
-    new Set(blockerNumbers).size !== blockerNumbers.length ||
-    !Array.isArray(nativeBlockers) ||
-    !(issuesByNumber instanceof Map)
-  ) {
-    throw new Error("Native dependency inputs are invalid");
+  positiveInteger(issueNumber, "Execution Graph Issue");
+  const graph = inspectBlockerGraph(issues, { nativeDependencies });
+  const issue = graph.issuesByNumber.get(issueNumber);
+  if (!issue) throw new Error("Execution Graph target is not an Implementation Issue");
+  if (graph.errors.has(issueNumber)) {
+    throw new Error(String(graph.errors.get(issueNumber)));
   }
-  const nativeNumbers = nativeBlockers.map((issue) => issue?.number);
-  if (
-    nativeNumbers.some((number) => !Number.isSafeInteger(number) || number < 1) ||
-    new Set(nativeNumbers).size !== nativeNumbers.length
-  ) {
-    return { status: "triage", reason: "native-dependency-response-invalid" };
-  }
-  const body = new Set(blockerNumbers);
-  const native = new Set(nativeNumbers);
-  const extras = nativeNumbers.filter((number) => !body.has(number));
-  if (extras.length > 0) {
-    return {
-      status: "triage",
-      reason: "native-dependency-mismatch",
-      extraNumbers: extras.sort((left, right) => left - right),
-    };
-  }
-  const add = [];
-  for (const number of blockerNumbers) {
-    if (native.has(number)) continue;
-    const issueId = issuesByNumber.get(number)?.id;
-    if (!Number.isSafeInteger(issueId) || issueId < 1) {
-      return {
-        status: "triage",
-        reason: "native-dependency-target-invalid",
-      };
-    }
-    add.push({ number, issueId });
-  }
-  return { status: "sync", add };
+  const blockerNumbers = graph.adjacency.get(issueNumber) ?? [];
+  return {
+    blockerNumbers,
+    blockers: blockerNumbers.map((number) => graph.issuesByNumber.get(number)),
+    graph,
+    issue,
+  };
 }
 
 export function assertCanAddBlockers(graph, sourceIssue, blockerNumbers) {
@@ -912,7 +986,9 @@ export function classifyDependentBlockers(graph, issueNumber) {
   positiveInteger(issueNumber, "Dependent Issue");
   if (graph.errors.has(issueNumber)) {
     const error = String(graph.errors.get(issueNumber));
-    const reason = error.startsWith("native-dependency-")
+    const reason =
+      error.startsWith("native-dependency-") ||
+      error === "body-projection-update-failed"
       ? error
       : "invalid-graph";
     return blockerStateResult(issueNumber, [], "triage", reason);

@@ -39,6 +39,18 @@ import {
   inspectBlockerGraph,
 } from "./blocker-contract.mjs";
 
+function executionGraphIssue(number, blockers = [], overrides = {}) {
+  return {
+    number,
+    state: "open",
+    state_reason: null,
+    labels: [],
+    native_blockers: blockers,
+    body: `## Problem\n\nIssue ${number}\n\n## Scope\n\nScope\n\n## Acceptance criteria\n\n- [ ] **AC-1:** Outcome\n\n## Validation\n\nValidation\n\n## Blocked by\n\nNone\n`,
+    ...overrides,
+  };
+}
+
 test("parses deterministic Blocked by declarations", () => {
   assert.deepEqual(parseBlockedBy("## Blocked by\n\nNone\n"), []);
   assert.deepEqual(
@@ -211,12 +223,13 @@ test("classifies only explicit Worker control and execution events", () => {
   );
 });
 
-test("invalidates protected or untrusted blocker edits but permits checkbox and trusted metadata edits", () => {
+test("invalidates protected content but ignores dependency projection edits", () => {
   const body = "## Blocked by\n\nNone\n";
   const blocked = "## Blocked by\n\n- #7\n";
   assert.equal(
     authorizationEditInvalidation({
       executionContentMatches: true,
+      blockerStateMatches: true,
       contractValid: true,
       bodyWasEdited: true,
       currentBody: blocked,
@@ -224,11 +237,12 @@ test("invalidates protected or untrusted blocker edits but permits checkbox and 
       issueNumber: 42,
       actor: { login: "issue-author", type: "User" },
     }),
-    "untrusted-blocker-edit",
+    null,
   );
   assert.equal(
     authorizationEditInvalidation({
       executionContentMatches: true,
+      blockerStateMatches: true,
       contractValid: true,
       bodyWasEdited: true,
       currentBody: blocked,
@@ -236,11 +250,12 @@ test("invalidates protected or untrusted blocker edits but permits checkbox and 
       issueNumber: 42,
       actor: { login: "github-actions[bot]", type: "Bot" },
     }),
-    "trusted-blocker-edit",
+    null,
   );
   assert.equal(
     authorizationEditInvalidation({
       executionContentMatches: true,
+      blockerStateMatches: true,
       contractValid: true,
       bodyWasEdited: true,
       currentBody: body,
@@ -253,6 +268,7 @@ test("invalidates protected or untrusted blocker edits but permits checkbox and 
   assert.equal(
     authorizationEditInvalidation({
       executionContentMatches: false,
+      blockerStateMatches: true,
       contractValid: true,
       bodyWasEdited: true,
       currentBody: body,
@@ -261,6 +277,14 @@ test("invalidates protected or untrusted blocker edits but permits checkbox and 
       actor: { login: "github-actions[bot]", type: "Bot" },
     }),
     "content-changed",
+  );
+  assert.equal(
+    authorizationEditInvalidation({
+      executionContentMatches: true,
+      blockerStateMatches: false,
+      contractValid: true,
+    }),
+    "native-dependencies-changed",
   );
 });
 
@@ -406,20 +430,15 @@ test("requires completed state_reason and no wontfix label for every blocker", (
 });
 
 test("accepts each reconciler dispatch signature only once", async () => {
-  const source = {
-    number: 42,
-    state: "open",
+  const source = executionGraphIssue(42, [43], {
     labels: [{ name: "ready-for-agent" }],
-  };
-  const blocker = { number: 43, state: "closed", state_reason: "completed" };
+  });
+  const blocker = executionGraphIssue(43, [], {
+    state: "closed",
+    state_reason: "completed",
+  });
   const state = classifyDependentBlockers(
-    inspectBlockerGraph([
-      {
-        ...source,
-        body: "## Blocked by\n\n- #43\n",
-      },
-      { ...blocker, body: "## Blocked by\n\nNone\n" },
-    ]),
+    inspectBlockerGraph([source, blocker]),
     42,
   );
   let nextCommentId = 2;
@@ -483,38 +502,61 @@ test("accepts each reconciler dispatch signature only once", async () => {
   assert.equal(comments.length, 2);
 });
 
+test("publishes native blocker edges before audit and body projection", async () => {
+  const source = executionGraphIssue(42, [], { id: 42_000 });
+  const blocker = executionGraphIssue(43, [], { id: 43_000 });
+  const operations = [];
+  let projectedBody = null;
+
+  const result = await worker.publishBlockerEdges({
+    plan: {
+      repository: "example/agent-infra",
+      issueNumber: 42,
+    },
+    source,
+    currentBlockerNumbers: [],
+    blockerIssues: [blocker],
+    graph: inspectBlockerGraph([source, blocker]),
+    token: "test-token",
+    authorize: async () => operations.push("authorize"),
+    recordTransition: async () => operations.push("audit"),
+    request: async (apiPath, options) => {
+      const body = JSON.parse(options.body);
+      if (apiPath.endsWith("/dependencies/blocked_by")) {
+        operations.push("native");
+        assert.deepEqual(body, { issue_id: 43_000 });
+        return null;
+      }
+      operations.push("body");
+      projectedBody = body.body;
+      return source;
+    },
+  });
+
+  assert.deepEqual(operations, ["authorize", "native", "audit", "body"]);
+  assert.deepEqual(result, { nextBlockerNumbers: [43], replay: false });
+  assert.match(projectedBody, /## Blocked by\n\n- #43/);
+});
+
 test("rejects an out-of-order dispatch after a newer blocker state audit", async () => {
   const completed = classifyDependentBlockers(
     inspectBlockerGraph([
-      {
-        number: 42,
-        state: "open",
+      executionGraphIssue(42, [43], {
         labels: [{ name: "ready-for-agent" }],
-        body: "## Blocked by\n\n- #43\n",
-      },
-      {
-        number: 43,
+      }),
+      executionGraphIssue(43, [], {
         state: "closed",
         state_reason: "completed",
-        body: "## Blocked by\n\nNone\n",
-      },
+      }),
     ]),
     42,
   );
   const blocked = classifyDependentBlockers(
     inspectBlockerGraph([
-      {
-        number: 42,
-        state: "open",
+      executionGraphIssue(42, [43], {
         labels: [{ name: "ready-for-agent" }],
-        body: "## Blocked by\n\n- #43\n",
-      },
-      {
-        number: 43,
-        state: "open",
-        state_reason: null,
-        body: "## Blocked by\n\nNone\n",
-      },
+      }),
+      executionGraphIssue(43),
     ]),
     42,
   );

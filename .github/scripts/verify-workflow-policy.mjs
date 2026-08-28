@@ -792,10 +792,15 @@ export function validateTrustedScriptSources(sources) {
     "assertCanAddBlockers",
     "latestBlockerStateRecord",
     "isTrustedBlockerReviewComment",
+    "workItemKind",
+    "hydrateNativeDependencies",
+    "native_blockers",
   ];
   const blockerReconcilerRequirements = [
     "reconciliationIssueNumbers(graph)",
     "classifyDependentBlockers(graph, issueNumber)",
+    "readNativeDependencies({",
+    "reconcileBodyProjections({",
     'event_type: "codex-worker"',
     "blocker_state_signature: state.signature",
   ];
@@ -804,6 +809,9 @@ export function validateTrustedScriptSources(sources) {
     'if (command === "blockers") return blockersCommand();',
     'if (command === "handoffs") return handoffsCommand();',
     "publishHumanHandoffs({ plan, result, token })",
+    "publishBlockerEdges({",
+    "/dependencies/blocked_by",
+    "validatedExecutionIssue(",
   ];
   if (
     blockerContractRequirements.some(
@@ -815,6 +823,7 @@ export function validateTrustedScriptSources(sources) {
     blockerWorkerRequirements.some(
       (requirement) => !workerSource.includes(requirement),
     ) ||
+    !gateSource.includes("validatedExecutionIssue(") ||
     !claudeAuthorizationSource.includes("authorizeBlockerReviewDispatch") ||
     !claudeAuthorizationSource.includes("hasTrustedBlockerReviewAck")
   ) {

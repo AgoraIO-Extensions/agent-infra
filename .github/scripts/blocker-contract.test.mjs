@@ -11,13 +11,14 @@ import {
   canRegisterBlockerIdentity,
   classifyDependentBlockers,
   hasTrustedWorkerDispatchAck,
+  hydrateNativeDependencies,
   inspectBlockerGraph,
   isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
-  nativeDependencyDecision,
   parseBlockerProposalRecord,
   reconciliationIssueNumbers,
   replaceBlockedBy,
+  validatedExecutionIssue,
   validateBlockerProposals,
   validateHumanHandoffs,
 } from "./blocker-contract.mjs";
@@ -38,6 +39,7 @@ function issue(number, blockers = [], overrides = {}) {
     state: "open",
     state_reason: null,
     labels: [],
+    native_blockers: blockers,
     body: [
       "## Problem",
       "",
@@ -371,6 +373,12 @@ test("replaces only the deterministic Blocked by section", () => {
   const replaced = replaceBlockedBy(original, [7, 9], { issueNumber: 42 });
   assert.match(replaced, /## Blocked by\n\n- #7\n- #9/);
   assert.equal(replaced.split("## Problem")[1], original.split("## Problem")[1].replace("## Blocked by\n\nNone\n", "## Blocked by\n\n- #7\n- #9\n"));
+  assert.match(
+    replaceBlockedBy(original.replace("None", "Waiting for planning"), [7], {
+      issueNumber: 42,
+    }),
+    /## Blocked by\n\n- #7/,
+  );
   assert.throws(() => replaceBlockedBy(original, [42], { issueNumber: 42 }));
 });
 
@@ -388,6 +396,11 @@ test("builds a bounded DAG and rejects missing targets, duplicate edges, and cyc
 
   const missing = inspectBlockerGraph([issue(1, [99])]);
   assert.match(missing.errors.get(1), /missing or is a PR/);
+  const prTarget = inspectBlockerGraph([
+    issue(1, [2]),
+    issue(2, [], { pull_request: { url: "https://api.github.test/pulls/2" } }),
+  ]);
+  assert.match(prTarget.errors.get(1), /missing or is a PR/);
   const cyclic = inspectBlockerGraph([issue(1, [2]), issue(2, [1])]);
   assert.match(cyclic.errors.get(1), /cycle/);
   assert.match(cyclic.errors.get(2), /cycle/);
@@ -424,23 +437,70 @@ test("limits participating DAG nodes instead of unrelated historical Issues", ()
   assert.match(overflow.errors.get(2), /participating Issue limit/);
 });
 
-test("mirrors missing native dependencies and triages native-only edges", () => {
-  const issuesByNumber = new Map([
-    [2, { number: 2, id: 2002 }],
-    [3, { number: 3, id: 2003 }],
-  ]);
-  assert.deepEqual(
-    nativeDependencyDecision([2, 3], [{ number: 2, id: 2002 }], issuesByNumber),
-    { status: "sync", add: [{ number: 3, issueId: 2003 }] },
+test("hydrates native dependencies with bounded concurrency", async () => {
+  let active = 0;
+  let peak = 0;
+  const snapshot = await hydrateNativeDependencies(
+    Array.from({ length: 12 }, (_, index) => issue(index + 1)),
+    async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setImmediate(resolve));
+      active -= 1;
+      return [];
+    },
+    { concurrency: 3 },
   );
-  assert.deepEqual(
-    nativeDependencyDecision([2], [{ number: 3, id: 2003 }], issuesByNumber),
+  assert.equal(snapshot.size, 12);
+  assert.equal(peak, 3);
+});
+
+test("keeps Wayfinder planning objects outside the Execution Graph", () => {
+  const implementation = issue(1);
+  const map = issue(2, [], {
+    labels: [{ name: "wayfinder:map" }],
+    body: "Question: should planning tickets use `## Blocked by`?",
+  });
+  const decision = issue(3, [], {
+    labels: [{ name: "wayfinder:grilling" }],
+    body: "## Question\n\nChoose the dependency model.",
+  });
+  const planningGraph = inspectBlockerGraph(
+    [implementation, map, decision],
     {
-      status: "triage",
-      reason: "native-dependency-mismatch",
-      extraNumbers: [3],
+      nativeDependencies: new Map([
+        [1, []],
+        [2, [decision]],
+        [3, [map]],
+      ]),
     },
   );
+  assert.equal(planningGraph.errors.size, 0);
+  assert.deepEqual(reconciliationIssueNumbers(planningGraph), []);
+
+  const crossDomain = inspectBlockerGraph(
+    [implementation, map, decision],
+    { nativeDependencies: new Map([[1, [decision]]]) },
+  );
+  assert.match(crossDomain.errors.get(1), /cross-domain/);
+  assert.throws(
+    () =>
+      validatedExecutionIssue([implementation, map, decision], 1, {
+        nativeDependencies: new Map([[1, [decision]]]),
+      }),
+    /cross-domain/,
+  );
+  assert.equal(crossDomain.errors.has(2), false);
+  assert.equal(crossDomain.errors.has(3), false);
+
+  const unavailable = inspectBlockerGraph([implementation], {
+    nativeDependencies: new Map([[1, null]]),
+  });
+  assert.equal(
+    unavailable.errors.get(1),
+    "native-dependency-response-invalid",
+  );
+  assert.equal(classifyDependentBlockers(unavailable, 1).state, "triage");
 });
 
 test("classifies open, completed, and not-planned blocker frontiers", () => {
