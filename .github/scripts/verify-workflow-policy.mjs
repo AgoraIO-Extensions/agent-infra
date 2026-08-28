@@ -180,10 +180,12 @@ const PR_AGENT_SECRETS = [
 ];
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const CHECKOUT_ACTION =
+  "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const GH_AW_PILOT_SEMANTIC_SHA256 =
-  "41ae67574d02166deb734c651998a7e5f8056aae32d24e73bfe7f061aaa029ec";
+  "d82091a6f3bb91201f8e625647757d69682f2398d3c611e4c970e3e9822656ad";
 const GH_AW_PILOT_SOURCE_SHA256 =
-  "78fe52e63cf79e08e789b37bbe3d647365c8b4ba8ac8354a44d90846a15d8ade";
+  "4567927ac8b78c5eccc7e47592e69bd1d4fed88e58fa06d77d930ce9c4cae07b";
 const GH_AW_PILOT_SCRIPT_SHA256 =
   "954aabd0738b6dcff5c9128f7e5784d482b81c81fb33188a5f8f36aba4f6e4e3";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
@@ -362,6 +364,9 @@ function validateGhAwPilotWorkflow(workflow) {
     (step) => step.name === "Redact secrets in logs",
   );
   const safeOutputs = workflow?.jobs?.safe_outputs;
+  const pilotTrustedCheckout = safeOutputs?.steps?.find(
+    (step) => step.name === "Checkout trusted pilot verifier",
+  );
   const pilotRecheckToken = safeOutputs?.steps?.find(
     (step) => step.id === "pilot-recheck-team-token",
   );
@@ -506,6 +511,14 @@ function validateGhAwPilotWorkflow(workflow) {
     }) ||
     JSON.stringify(safeOutputs?.needs) !==
       JSON.stringify(["activation", "agent", "pilot_preflight"]) ||
+    pilotTrustedCheckout?.uses !== CHECKOUT_ACTION ||
+    !sameObject(pilotTrustedCheckout?.with, {
+      clean: true,
+      "fetch-depth": 1,
+      path: ".pilot-trusted",
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+    }) ||
     pilotRecheckToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     !sameObject(pilotRecheckToken?.with, {
       "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
@@ -513,7 +526,8 @@ function validateGhAwPilotWorkflow(workflow) {
       "permission-members": "read",
       "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
     }) ||
-    pilotRecheck?.run !== "node .github/scripts/gh-aw-pilot.mjs" ||
+    pilotRecheck?.run !==
+      "node .pilot-trusted/.github/scripts/gh-aw-pilot.mjs" ||
     !sameObject(pilotRecheck?.env, {
       GITHUB_TOKEN: "${{ github.token }}",
       PILOT_EXPECTED_ACTOR: "LichKing-2234",
