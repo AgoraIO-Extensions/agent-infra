@@ -27,6 +27,9 @@
 		"ContainsV1": {
 			"type": "array"
 		},
+		"DependentObjectV1": {
+			"type": "object"
+		},
 		"ExcludedV1": {
 			"type": "string"
 		},

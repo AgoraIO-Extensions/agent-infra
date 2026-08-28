@@ -9,6 +9,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 ];
+const usage = "Usage: compatibility.mjs [--previous path --current path]";
 
 function parseArguments(arguments_) {
 	const values = {};
@@ -16,9 +17,7 @@ function parseArguments(arguments_) {
 		const option = arguments_[index];
 		const value = arguments_[index + 1];
 		if (!value || (option !== "--previous" && option !== "--current")) {
-			throw new Error(
-				"Usage: compatibility.mjs [--previous path --current path]",
-			);
+			throw new Error(usage);
 		}
 		values[option.slice(2)] = value;
 	}
@@ -285,6 +284,20 @@ function compareSchema(previous, current, path, changes) {
 		if (!previousRequired.has(name))
 			changes.push(`narrowed ${path}.${name} required`);
 	}
+	for (const [property, currentDependencies] of Object.entries(
+		current.dependentRequired ?? {},
+	)) {
+		const previousDependencies = new Set(
+			previous.dependentRequired?.[property] ?? [],
+		);
+		for (const dependency of currentDependencies) {
+			if (!previousDependencies.has(dependency)) {
+				changes.push(
+					`narrowed ${path}.${property} dependentRequired ${dependency}`,
+				);
+			}
+		}
+	}
 	compareSubschemaConstraint(
 		previous.additionalProperties,
 		current.additionalProperties,
@@ -424,6 +437,12 @@ function readMergeBaseArtifact(artifactRelativePath) {
 }
 
 const arguments_ = parseArguments(process.argv.slice(2));
+if (
+	(arguments_.previous === undefined) !==
+	(arguments_.current === undefined)
+) {
+	throw new Error(usage);
+}
 const comparisons = arguments_.previous
 	? [
 			{

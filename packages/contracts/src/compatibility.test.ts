@@ -119,6 +119,27 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain("narrowed $defs.OpenObjectV1.foo property");
 	});
 
+	it.each(["--previous", "--current"])(
+		"rejects an unpaired %s fixture argument",
+		(option) => {
+			const result = spawnSync(
+				process.execPath,
+				[cliPath, option, fixturePath("base")],
+				{ encoding: "utf8" },
+			);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain("Usage: compatibility.mjs");
+		},
+	);
+
+	it("rejects adding a dependent required property", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"narrowed $defs.DependentObjectV1.creditCard dependentRequired billingAddress",
+		);
+	});
+
 	it("accepts removed constraints and integer-to-number widening", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);

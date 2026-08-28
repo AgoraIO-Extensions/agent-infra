@@ -41,6 +41,12 @@
 			"minContains": 2,
 			"type": "array"
 		},
+		"DependentObjectV1": {
+			"dependentRequired": {
+				"creditCard": ["billingAddress"]
+			},
+			"type": "object"
+		},
 		"ExcludedV1": {
 			"not": {
 				"const": "forbidden"

@@ -6,6 +6,7 @@
 		"ChoiceV1": {},
 		"ConjunctionV1": {},
 		"ContainsV1": {},
+		"DependentObjectV1": {},
 		"ExcludedV1": {},
 		"ExclusiveChoiceV1": {},
 		"IntegerV1": {
