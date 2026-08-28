@@ -51,6 +51,26 @@
 		"IntegerV1": {
 			"type": "integer"
 		},
+		"MergedAnyOptionsV1": {
+			"anyOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
+		"MergedOneOptionsV1": {
+			"oneOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
 		"ModeV1": {
 			"type": "string"
 		},

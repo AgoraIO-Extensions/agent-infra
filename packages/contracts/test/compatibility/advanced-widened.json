@@ -19,6 +19,20 @@
 		"IntegerV1": {
 			"type": "number"
 		},
+		"MergedAnyOptionsV1": {
+			"anyOf": [
+				{
+					"enum": ["a", "b"]
+				}
+			]
+		},
+		"MergedOneOptionsV1": {
+			"oneOf": [
+				{
+					"enum": ["a", "b"]
+				}
+			]
+		},
 		"ModeV1": {},
 		"NestedDefsV1": {
 			"$defs": {

@@ -143,7 +143,12 @@ function compareSchema(previous, current, path, changes) {
 		changes.push(`narrowed ${path} const`);
 	}
 	if (!Array.isArray(previous.enum) && Array.isArray(current.enum)) {
-		changes.push(`narrowed ${path} enum`);
+		if (
+			previous.const === undefined ||
+			!current.enum.some((entry) => sameValue(entry, previous.const))
+		) {
+			changes.push(`narrowed ${path} enum`);
+		}
 	} else if (Array.isArray(previous.enum) && Array.isArray(current.enum)) {
 		const currentEnum = current.enum;
 		if (
@@ -165,6 +170,7 @@ function compareSchema(previous, current, path, changes) {
 		) {
 			const removedOptions = unmatchedOptions(previousOptions, currentOptions);
 			const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+			const matchedAdditions = new Set();
 			for (let index = removedOptions.length - 1; index >= 0; index -= 1) {
 				const previousOption = removedOptions[index];
 				const match = addedOptions.findIndex((currentOption) => {
@@ -179,8 +185,13 @@ function compareSchema(previous, current, path, changes) {
 				});
 				if (match !== -1) {
 					removedOptions.splice(index, 1);
-					addedOptions.splice(match, 1);
+					matchedAdditions.add(match);
 				}
+			}
+			for (const index of [...matchedAdditions].sort(
+				(left, right) => right - left,
+			)) {
+				addedOptions.splice(index, 1);
 			}
 			const disjointAdditions = addedOptions.every(
 				(option, index) =>

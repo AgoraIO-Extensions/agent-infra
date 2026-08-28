@@ -176,7 +176,7 @@ describe("contract compatibility command", () => {
 		}
 	});
 
-	it("accepts removed constraints and proven schema widening", () => {
+	it("accepts removed constraints and proven one-to-many schema widening", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
