@@ -246,7 +246,7 @@ export const AgentProjectionV1Schema = z.strictObject({
 	interactionUrl: z
 		.string()
 		.url()
-		.regex(/^https:\/\//)
+		.regex(/^https:\/\/(?![^/?#]*@)/)
 		.nullable(),
 });
 

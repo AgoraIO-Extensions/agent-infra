@@ -1221,7 +1221,7 @@
           "interactionUrl": {
             "anyOf": [
               {
-                "pattern": "^https:\\/\\/",
+                "pattern": "^https:\\/\\/(?![^/?#]*@)",
                 "type": "string"
               },
               {

@@ -85,6 +85,10 @@ describe("Pilot schema-driven Fake scenarios", () => {
 			conversationId: "conversation-pilot-1",
 			cursor: "cursor-unknown",
 		});
+		const sameForeignConversation = resolvePilotReplayV1({
+			conversationId: "conversation-other-1",
+			cursor: "cursor-other-1",
+		});
 
 		expect(
 			ConversationSseMessageV1Schema.parse(crossConversation[0]),
@@ -97,5 +101,6 @@ describe("Pilot schema-driven Fake scenarios", () => {
 			reason: "unknown_event_id",
 		});
 		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
+		expect(sameForeignConversation).toEqual([]);
 	});
 });

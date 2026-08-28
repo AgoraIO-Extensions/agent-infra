@@ -290,5 +290,7 @@ export function resolvePilotReplayV1(input: {
 			},
 		] as const;
 	}
-	return pilotFakeScenariosV1.replay.messages;
+	return pilotFakeScenariosV1.replay.messages.filter(
+		(message) => message.conversationId === input.conversationId,
+	);
 }

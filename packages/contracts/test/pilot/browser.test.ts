@@ -120,6 +120,11 @@ describe("Pilot browser contracts", () => {
 		).toBe(false);
 		expect(
 			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://user:password@agent.example.test",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
 				"https://agent.example.test",
 			).success,
 		).toBe(true);
