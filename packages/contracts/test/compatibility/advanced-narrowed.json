@@ -15,6 +15,14 @@
 			"type": "array",
 			"uniqueItems": true
 		},
+		"AnyOptionWideningV1": {
+			"anyOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
+		},
 		"BooleanSchemaV1": false,
 		"ChoiceV1": {
 			"oneOf": [
@@ -94,6 +102,14 @@
 				}
 			},
 			"type": "object"
+		},
+		"OneOptionWideningV1": {
+			"oneOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
 		},
 		"PatternObjectV1": {
 			"patternProperties": {

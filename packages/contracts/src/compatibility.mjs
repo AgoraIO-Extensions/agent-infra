@@ -96,6 +96,12 @@ function compareSubschemaConstraint(previous, current, path, keyword, changes) {
 	}
 }
 
+function schemaIsWidening(previous, current) {
+	const changes = [];
+	compareSchema(previous, current, "$option", changes);
+	return changes.length === 0;
+}
+
 function compareSchema(previous, current, path, changes) {
 	if (previous === false || current === true) return;
 	if (current === false) {
@@ -159,6 +165,23 @@ function compareSchema(previous, current, path, changes) {
 		) {
 			const removedOptions = unmatchedOptions(previousOptions, currentOptions);
 			const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+			for (let index = removedOptions.length - 1; index >= 0; index -= 1) {
+				const previousOption = removedOptions[index];
+				const match = addedOptions.findIndex((currentOption) => {
+					if (!schemaIsWidening(previousOption, currentOption)) return false;
+					if (keyword !== "oneOf" || currentOptions.length === 1) return true;
+					const currentIndex = currentOptions.indexOf(currentOption);
+					return currentOptions.every(
+						(other, otherIndex) =>
+							otherIndex === currentIndex ||
+							literalSchemasAreDisjoint(currentOption, other),
+					);
+				});
+				if (match !== -1) {
+					removedOptions.splice(index, 1);
+					addedOptions.splice(match, 1);
+				}
+			}
 			const disjointAdditions = addedOptions.every(
 				(option, index) =>
 					previousOptions.every((previousOption) =>

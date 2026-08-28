@@ -6,6 +6,14 @@
 		"ArrayV1": {
 			"type": "array"
 		},
+		"AnyOptionWideningV1": {
+			"anyOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
+		},
 		"BooleanSchemaV1": true,
 		"ChoiceV1": {
 			"oneOf": [
@@ -62,6 +70,14 @@
 		},
 		"OpenObjectV1": {
 			"type": "object"
+		},
+		"OneOptionWideningV1": {
+			"oneOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
 		},
 		"PatternObjectV1": {
 			"type": "object"

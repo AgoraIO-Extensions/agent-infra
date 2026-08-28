@@ -2,6 +2,13 @@
 	"$defs": {
 		"AliasV1": {},
 		"ArrayV1": {},
+		"AnyOptionWideningV1": {
+			"anyOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
 		"BooleanSchemaV1": true,
 		"ChoiceV1": {},
 		"ConjunctionV1": {},
@@ -26,6 +33,13 @@
 			"type": "string"
 		},
 		"OpenObjectV1": {},
+		"OneOptionWideningV1": {
+			"oneOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
 		"PatternObjectV1": {},
 		"PatternToPropertyV1": {
 			"additionalProperties": false,
