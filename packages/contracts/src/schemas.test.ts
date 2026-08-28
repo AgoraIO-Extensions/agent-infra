@@ -30,6 +30,12 @@ describe("common wire schemas", () => {
 		expect(
 			Rfc3339TimestampV1Schema.parse("2026-08-28T03:00:00.123+08:00"),
 		).toBe("2026-08-28T03:00:00.123+08:00");
+		expect(Rfc3339TimestampV1Schema.parse("2026-12-31T23:59:60Z")).toBe(
+			"2026-12-31T23:59:60Z",
+		);
+		expect(Rfc3339TimestampV1Schema.parse("2026-08-28t03:00:00z")).toBe(
+			"2026-08-28t03:00:00z",
+		);
 		expect(TraceIdV1Schema.parse(validProtocolError.traceId)).toBe(
 			validProtocolError.traceId,
 		);
@@ -56,6 +62,15 @@ describe("common wire schemas", () => {
 		).toBe(false);
 		expect(
 			Rfc3339TimestampV1Schema.safeParse("2026-08-28T03:00Z").success,
+		).toBe(false);
+		expect(
+			Rfc3339TimestampV1Schema.safeParse("2026-02-29T03:00:00Z").success,
+		).toBe(false);
+		expect(
+			Rfc3339TimestampV1Schema.safeParse("2026-08-28T03:00:61Z").success,
+		).toBe(false);
+		expect(
+			Rfc3339TimestampV1Schema.safeParse("2026-08-28TabcT03:00:00Z").success,
 		).toBe(false);
 		expect(IdempotencyKeyV1Schema.safeParse("contains space").success).toBe(
 			false,

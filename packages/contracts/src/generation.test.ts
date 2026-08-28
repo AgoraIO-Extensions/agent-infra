@@ -52,6 +52,7 @@ describe("standard contract artifacts", () => {
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
 
 		const ajv = new Ajv2020({ strict: true });
+		ajv.addFormat("date-time", true);
 		ajv.addSchema(artifacts.jsonSchema);
 		const validate = ajv.compile({
 			$ref: `${artifacts.jsonSchema.$id}#/$defs/ProtocolErrorV1`,
@@ -65,6 +66,11 @@ describe("standard contract artifacts", () => {
 				traceId: "01JQY7K9M4N6P8R2T3V5W7X9ZA",
 			}),
 		).toBe(true);
+		const validateTimestamp = ajv.compile({
+			$ref: `${artifacts.jsonSchema.$id}#/$defs/Rfc3339TimestampV1`,
+		});
+		expect(validateTimestamp("2026-12-31T23:59:60Z")).toBe(true);
+		expect(validateTimestamp("2026-08-28t03:00:00z")).toBe(true);
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {
