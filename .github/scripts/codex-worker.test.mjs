@@ -179,7 +179,7 @@ test("classifies only explicit Worker control and execution events", () => {
       action: "labeled",
       label: "ready-for-agent",
     }),
-    "evaluate",
+    "noop",
   );
   assert.equal(
     classifyWorkerEvent({
@@ -897,8 +897,7 @@ test("routes malformed current Worker attempt audit to prepare triage", async (t
   writeFileSync(
     eventPath,
     JSON.stringify({
-      action: "labeled",
-      label: { name: "ready-for-agent" },
+      action: "edited",
       issue: { number: 42 },
       repository: { default_branch: "main" },
     }),

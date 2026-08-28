@@ -125,25 +125,10 @@ jobs:
         with:
           node-version: 24
 
-      - name: Mint Team membership token
-        id: team-membership-token
-        if: >-
-          github.event_name == 'issues' &&
-          github.event.action == 'labeled' &&
-          github.event.label.name == 'ready-for-agent'
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.TEAM_MEMBERSHIP_APP_ID }}
-          permission-members: read
-          private-key: ${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Record trusted authorization transition
         id: authorize
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TEAM_MEMBERSHIP_TOKEN: ${{ steps.team-membership-token.outputs.token }}
         run: node trusted/.github/scripts/codex-worker.mjs authorize
 
   prepare:

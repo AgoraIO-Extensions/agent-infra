@@ -50,20 +50,20 @@ if [[ "$actual_sha256" != "$expected_sha256" ]]; then
 fi
 
 tar -xzf "${temporary_directory}/${archive}" -C "$temporary_directory" actionlint
-poc_workflow=".github/workflows/gh-aw-copilot-byok-poc.lock.yml"
+pilot_workflow=".github/workflows/gh-aw-issue-to-pr-pilot.lock.yml"
 workflow_files=()
 while IFS= read -r workflow; do
   workflow_files+=("$workflow")
 done < <(
   find .github/workflows -maxdepth 1 -type f \
     \( -name '*.yml' -o -name '*.yaml' \) \
-    ! -name "$(basename "$poc_workflow")" -print | sort
+    ! -name "$(basename "$pilot_workflow")" -print | sort
 )
 
 if (( ${#workflow_files[@]} )); then
   "${temporary_directory}/actionlint" -color "${workflow_files[@]}"
 fi
-if [[ -f "$poc_workflow" ]]; then
+if [[ -f "$pilot_workflow" ]]; then
   "${temporary_directory}/actionlint" -color \
-    -ignore 'unexpected key "queue" for "concurrency" section' "$poc_workflow"
+    -ignore 'unexpected key "queue" for "concurrency" section' "$pilot_workflow"
 fi
