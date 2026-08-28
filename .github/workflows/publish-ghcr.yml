@@ -46,4 +46,4 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ghcr.io/${{ github.repository }}/${{ matrix.name }}:${{ github.ref_name }}
+          tags: ghcr.io/agoraio-extensions/agent-infra/${{ matrix.name }}:${{ github.ref_name }}
