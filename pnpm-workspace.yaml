@@ -5,6 +5,10 @@ allowBuilds:
   esbuild: true
   sharp: true
 catalog:
+  "@hey-api/openapi-ts": 0.99.0
+  ajv: 8.20.0
+  zod: 4.4.3
+  zod-openapi: 6.0.1
   typescript: ^6.0.3
   "@types/node": ^24.13.3
   vitest: ^4.1.10

@@ -1,0 +1,168 @@
+{
+	"$defs": {
+		"AliasV1": {
+			"$ref": "#/$defs/OpaqueIdV1"
+		},
+		"ArrayV1": {
+			"type": "array"
+		},
+		"AnyOptionWideningV1": {
+			"anyOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
+		},
+		"BooleanSchemaV1": true,
+		"ChoiceV1": {
+			"oneOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
+		"ConjunctionV1": {
+			"allOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
+		"ContainsV1": {
+			"type": "array"
+		},
+		"DependentObjectV1": {
+			"type": "object"
+		},
+		"ExcludedV1": {
+			"type": "string"
+		},
+		"ExclusiveChoiceV1": {
+			"oneOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
+		"IntegerV1": {
+			"type": "integer"
+		},
+		"MergedAnyOptionsV1": {
+			"anyOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
+		"MergedOneOptionsV1": {
+			"oneOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				}
+			]
+		},
+		"ModeV1": {
+			"type": "string"
+		},
+		"NestedDefsV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
+		"NumberV1": {
+			"type": "number"
+		},
+		"OpaqueIdV1": {
+			"type": "string"
+		},
+		"OpenObjectV1": {
+			"type": "object"
+		},
+		"OneOptionWideningV1": {
+			"oneOf": [
+				{
+					"minLength": 1,
+					"type": "string"
+				}
+			]
+		},
+		"PatternObjectV1": {
+			"type": "object"
+		},
+		"PatternToPropertyV1": {
+			"additionalProperties": false,
+			"patternProperties": {
+				"^x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
+		"PatternExplicitV1": {
+			"additionalProperties": false,
+			"properties": {
+				"x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
+		"RequestIdV1": {
+			"type": "string"
+		},
+		"RecordV1": {
+			"type": "object"
+		},
+		"RemovedOpenPropertyV1": {
+			"properties": {
+				"foo": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
+		"RemovedNestedDefV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
+		"ToggleV1": {
+			"type": "boolean"
+		},
+		"TupleV1": {
+			"items": false,
+			"prefixItems": [
+				{
+					"type": "string"
+				}
+			],
+			"type": "array"
+		},
+		"UnsupportedConstraintsV1": {},
+		"UnusedNestedDefV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			}
+		},
+		"UntypedV1": {}
+	},
+	"$schema": "https://json-schema.org/draft/2020-12/schema"
+}

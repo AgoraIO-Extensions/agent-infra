@@ -1,0 +1,26 @@
+{
+	"info": {
+		"title": "Agent Infra contract client smoke",
+		"version": "1.0.0"
+	},
+	"openapi": "3.1.0",
+	"paths": {
+		"/__contract-smoke": {
+			"get": {
+				"operationId": "getContractSmoke",
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "../../artifacts/openapi/common.v1.openapi.json#/components/schemas/ProtocolErrorV1"
+								}
+							}
+						},
+						"description": "Contract smoke response"
+					}
+				}
+			}
+		}
+	}
+}

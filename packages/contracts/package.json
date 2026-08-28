@@ -1,0 +1,42 @@
+{
+	"name": "@agent-infra/contracts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"main": "dist/index.mjs",
+	"types": "dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		},
+		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",
+		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json"
+	},
+	"files": [
+		"dist",
+		"artifacts"
+	],
+	"scripts": {
+		"build": "tsdown",
+		"check-compatibility": "node src/compatibility.mjs",
+		"check-types": "tsc --noEmit",
+		"client-smoke": "node src/client-smoke.mjs",
+		"generate": "node src/generate.mjs --write",
+		"check-generated": "node src/generate.mjs --check",
+		"test": "pnpm build && vitest run src && pnpm check-generated && pnpm check-compatibility"
+	},
+	"dependencies": {
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@hey-api/openapi-ts": "catalog:",
+		"@types/node": "catalog:",
+		"ajv": "catalog:",
+		"tsdown": "0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:",
+		"zod-openapi": "catalog:"
+	}
+}

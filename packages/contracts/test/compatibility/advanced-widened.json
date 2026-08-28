@@ -1,0 +1,104 @@
+{
+	"$defs": {
+		"AliasV1": {},
+		"ArrayV1": {},
+		"AnyOptionWideningV1": {
+			"anyOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
+		"BooleanSchemaV1": true,
+		"ChoiceV1": {},
+		"ConjunctionV1": {},
+		"ContainsV1": {},
+		"DependentObjectV1": {},
+		"ExcludedV1": {},
+		"ExclusiveChoiceV1": {},
+		"IntegerV1": {
+			"type": "number"
+		},
+		"MergedAnyOptionsV1": {
+			"anyOf": [
+				{
+					"enum": ["a", "b"]
+				}
+			]
+		},
+		"MergedOneOptionsV1": {
+			"oneOf": [
+				{
+					"enum": ["a", "b"]
+				}
+			]
+		},
+		"ModeV1": {},
+		"NestedDefsV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
+		"NumberV1": {},
+		"OpaqueIdV1": {
+			"type": "string"
+		},
+		"OpenObjectV1": {},
+		"OneOptionWideningV1": {
+			"oneOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
+		"PatternObjectV1": {},
+		"PatternToPropertyV1": {
+			"additionalProperties": false,
+			"patternProperties": {
+				"^x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
+		"PatternExplicitV1": {
+			"additionalProperties": false,
+			"properties": {
+				"x": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
+		"RequestIdV1": {
+			"type": "string"
+		},
+		"RecordV1": {},
+		"RemovedOpenPropertyV1": {
+			"type": "object"
+		},
+		"RemovedNestedDefV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
+		"ToggleV1": {},
+		"TupleV1": {},
+		"UnsupportedConstraintsV1": {},
+		"UnusedNestedDefV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			}
+		},
+		"UntypedV1": {}
+	},
+	"$schema": "https://json-schema.org/draft/2020-12/schema"
+}
