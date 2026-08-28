@@ -26,6 +26,7 @@ describe("test-support package surface", () => {
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
 		expect(packedFiles).toContain("dist/pilot/index.d.mts");
+		expect(packedFiles).toContain("dist/pilot/index.mjs");
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);
