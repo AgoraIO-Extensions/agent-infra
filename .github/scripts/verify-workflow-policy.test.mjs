@@ -211,6 +211,7 @@ test("binds the gh-aw Pilot source to its reviewed lock workflow", async () => {
 
 test("requires trusted gh-aw Pilot authorization and publish recheck", async () => {
   const source = await actualGhAwPilotSource();
+  const prompt = source.replace(/^---[\s\S]*?\n---\n/, "");
   for (const requirement of [
     "github.triggering_actor == 'LichKing-2234'",
     "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
@@ -232,6 +233,17 @@ test("requires trusted gh-aw Pilot authorization and publish recheck", async () 
     assert.ok(source.includes(requirement), requirement);
   }
   assert.equal(source.match(/ref: \$\{\{ github\.sha \}\}/g)?.length, 2);
+  assert.doesNotMatch(prompt, /\$implement|needs\.pilot_preflight\.outputs/);
+  for (const requirement of [
+    "Apply the pinned upstream `implement` sequence directly",
+    "Call the Skill tool with `tdd` where possible at pre-agreed seams",
+    "Run typechecking regularly and run single test files regularly",
+    "Run the full test suite once at the end",
+    "Call the Skill tool with `code-review` after implementation and validation",
+    "Commit the reviewed work to the current branch",
+  ]) {
+    assert.ok(prompt.includes(requirement), requirement);
+  }
 
   const sources = await actualTrustedScriptSources();
   sources["gh-aw-pilot.mjs"] = sources["gh-aw-pilot.mjs"].replace(
