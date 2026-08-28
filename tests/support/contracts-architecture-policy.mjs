@@ -76,9 +76,19 @@ export function checkSourceImports(source, { path }) {
 
 export function checkManifestDependencies(manifest) {
 	const violations = [];
-	for (const dependency of Object.keys(manifest.dependencies ?? {})) {
-		if (forbiddenContractImports.some((pattern) => pattern.test(dependency))) {
-			violations.push(`contracts package must not depend on ${dependency}`);
+	for (const section of [
+		"dependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		for (const dependency of Object.keys(manifest[section] ?? {})) {
+			if (
+				forbiddenContractImports.some((pattern) => pattern.test(dependency))
+			) {
+				violations.push(
+					`contracts package must not depend on ${dependency} via ${section}`,
+				);
+			}
 		}
 	}
 	return violations;

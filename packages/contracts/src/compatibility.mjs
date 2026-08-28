@@ -183,11 +183,32 @@ function compareSchema(previous, current, path, changes) {
 		if (!previousRequired.has(name))
 			changes.push(`narrowed ${path}.${name} required`);
 	}
-	if (
-		previous.additionalProperties !== false &&
-		current.additionalProperties === false
-	) {
-		changes.push(`narrowed ${path} additionalProperties`);
+	const previousAdditional = previous.additionalProperties ?? true;
+	const currentAdditional = current.additionalProperties ?? true;
+	if (previousAdditional === true) {
+		if (
+			currentAdditional === false ||
+			(typeof currentAdditional === "object" &&
+				currentAdditional !== null &&
+				Object.keys(currentAdditional).length > 0)
+		) {
+			changes.push(`narrowed ${path} additionalProperties`);
+		}
+	} else if (previousAdditional !== false) {
+		if (currentAdditional === false) {
+			changes.push(`narrowed ${path} additionalProperties`);
+		} else if (
+			currentAdditional !== true &&
+			typeof currentAdditional === "object" &&
+			currentAdditional !== null
+		) {
+			compareSchema(
+				previousAdditional,
+				currentAdditional,
+				`${path}.*`,
+				changes,
+			);
+		}
 	}
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {

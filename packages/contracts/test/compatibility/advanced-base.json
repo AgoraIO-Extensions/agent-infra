@@ -28,6 +28,9 @@
 		"RequestIdV1": {
 			"type": "string"
 		},
+		"RecordV1": {
+			"type": "object"
+		},
 		"ToggleV1": {
 			"type": "boolean"
 		},

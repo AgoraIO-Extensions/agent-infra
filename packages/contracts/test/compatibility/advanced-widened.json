@@ -11,6 +11,7 @@
 		"RequestIdV1": {
 			"type": "string"
 		},
+		"RecordV1": {},
 		"ToggleV1": {},
 		"UntypedV1": {}
 	},

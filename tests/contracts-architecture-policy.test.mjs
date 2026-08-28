@@ -55,12 +55,18 @@ test("contracts manifest cannot depend on repository runtime modules", () => {
 		checkManifestDependencies({ dependencies: { zod: "catalog:" } }),
 		[],
 	);
-	assert.match(
-		checkManifestDependencies({
-			dependencies: { "@agent-infra/platform-core": "workspace:*" },
-		})[0],
-		/contracts package must not depend on @agent-infra\/platform-core/,
-	);
+	for (const section of [
+		"dependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		assert.match(
+			checkManifestDependencies({
+				[section]: { "@agent-infra/platform-core": "workspace:*" },
+			})[0],
+			/contracts package must not depend on @agent-infra\/platform-core/,
+		);
+	}
 	for (const dependency of [
 		"react",
 		"@hono/node-server",

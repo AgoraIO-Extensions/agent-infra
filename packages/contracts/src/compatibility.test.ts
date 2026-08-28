@@ -71,6 +71,14 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("rejects adding an additional-property schema", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"narrowed $defs.RecordV1 additionalProperties",
+		);
+	});
+
 	it("accepts removal of type, const, enum, union, and reference constraints", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);

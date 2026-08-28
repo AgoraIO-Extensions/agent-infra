@@ -33,6 +33,12 @@
 		"RequestIdV1": {
 			"type": "string"
 		},
+		"RecordV1": {
+			"additionalProperties": {
+				"type": "string"
+			},
+			"type": "object"
+		},
 		"ToggleV1": {
 			"const": true,
 			"type": "boolean"
