@@ -140,6 +140,15 @@ describe("contract compatibility command", () => {
 		);
 	});
 
+	it("rejects nested definition and pattern-property narrowings", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("retyped $defs.NestedDefsV1.$defs.Value");
+		expect(result.stderr).toContain(
+			"narrowed $defs.PatternObjectV1.^x patternProperties",
+		);
+	});
+
 	it("accepts removed constraints and integer-to-number widening", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);

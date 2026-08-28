@@ -46,6 +46,14 @@
 		"ModeV1": {
 			"type": "string"
 		},
+		"NestedDefsV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
 		"NumberV1": {
 			"type": "number"
 		},
@@ -55,10 +63,21 @@
 		"OpenObjectV1": {
 			"type": "object"
 		},
+		"PatternObjectV1": {
+			"type": "object"
+		},
 		"RequestIdV1": {
 			"type": "string"
 		},
 		"RecordV1": {
+			"type": "object"
+		},
+		"RemovedOpenPropertyV1": {
+			"properties": {
+				"foo": {
+					"type": "string"
+				}
+			},
 			"type": "object"
 		},
 		"ToggleV1": {

@@ -13,15 +13,27 @@
 			"type": "number"
 		},
 		"ModeV1": {},
+		"NestedDefsV1": {
+			"$defs": {
+				"Value": {
+					"type": "string"
+				}
+			},
+			"$ref": "#/$defs/Value"
+		},
 		"NumberV1": {},
 		"OpaqueIdV1": {
 			"type": "string"
 		},
 		"OpenObjectV1": {},
+		"PatternObjectV1": {},
 		"RequestIdV1": {
 			"type": "string"
 		},
 		"RecordV1": {},
+		"RemovedOpenPropertyV1": {
+			"type": "object"
+		},
 		"ToggleV1": {},
 		"TupleV1": {},
 		"UntypedV1": {}

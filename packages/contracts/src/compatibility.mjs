@@ -316,7 +316,28 @@ function compareSchema(previous, current, path, changes) {
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
 		const currentSchema = current.properties?.[name];
 		if (currentSchema === undefined) {
-			changes.push(`removed ${path}.${name}`);
+			const matchingPatterns = Object.entries(
+				current.patternProperties ?? {},
+			).filter(([pattern]) => new RegExp(pattern).test(name));
+			if (matchingPatterns.length > 0) {
+				for (const [pattern, patternSchema] of matchingPatterns) {
+					compareSubschemaConstraint(
+						schema,
+						patternSchema,
+						`${path}.${name}`,
+						`patternProperties ${pattern}`,
+						changes,
+					);
+				}
+			} else {
+				compareSubschemaConstraint(
+					schema,
+					current.additionalProperties,
+					`${path}.${name}`,
+					"property",
+					changes,
+				);
+			}
 			continue;
 		}
 		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
@@ -328,6 +349,29 @@ function compareSchema(previous, current, path, changes) {
 			schema,
 			`${path}.${name}`,
 			"property",
+			changes,
+		);
+	}
+	for (const [pattern, schema] of Object.entries(
+		current.patternProperties ?? {},
+	)) {
+		compareSubschemaConstraint(
+			previous.patternProperties?.[pattern] ?? previous.additionalProperties,
+			schema,
+			`${path}.${pattern}`,
+			"patternProperties",
+			changes,
+		);
+	}
+	for (const [pattern, schema] of Object.entries(
+		previous.patternProperties ?? {},
+	)) {
+		if (current.patternProperties?.[pattern] !== undefined) continue;
+		compareSubschemaConstraint(
+			schema,
+			current.additionalProperties,
+			`${path}.${pattern}`,
+			"patternProperties",
 			changes,
 		);
 	}
@@ -389,6 +433,12 @@ function compareSchema(previous, current, path, changes) {
 		const currentMaxContains = current.maxContains ?? Number.POSITIVE_INFINITY;
 		if (currentMaxContains < previousMaxContains) {
 			changes.push(`narrowed ${path} maxContains`);
+		}
+	}
+	for (const [name, schema] of Object.entries(previous.$defs ?? {})) {
+		const currentSchema = current.$defs?.[name];
+		if (currentSchema !== undefined) {
+			compareSchema(schema, currentSchema, `${path}.$defs.${name}`, changes);
 		}
 	}
 }
