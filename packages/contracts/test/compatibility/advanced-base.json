@@ -49,6 +49,9 @@
 		"OpaqueIdV1": {
 			"type": "string"
 		},
+		"OpenObjectV1": {
+			"type": "object"
+		},
 		"RequestIdV1": {
 			"type": "string"
 		},

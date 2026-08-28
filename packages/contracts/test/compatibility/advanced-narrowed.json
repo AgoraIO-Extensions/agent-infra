@@ -73,6 +73,14 @@
 		"OpaqueIdV1": {
 			"type": "string"
 		},
+		"OpenObjectV1": {
+			"properties": {
+				"foo": {
+					"type": "string"
+				}
+			},
+			"type": "object"
+		},
 		"RequestIdV1": {
 			"type": "string"
 		},

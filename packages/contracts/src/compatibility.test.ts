@@ -113,6 +113,12 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain("narrowed $defs.BooleanSchemaV1 schema");
 	});
 
+	it("rejects constraining a property previously governed by an open object", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("narrowed $defs.OpenObjectV1.foo property");
+	});
+
 	it("accepts removed constraints and integer-to-number widening", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);

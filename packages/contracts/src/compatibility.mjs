@@ -302,11 +302,21 @@ function compareSchema(previous, current, path, changes) {
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
 		const currentSchema = current.properties?.[name];
-		if (!currentSchema) {
+		if (currentSchema === undefined) {
 			changes.push(`removed ${path}.${name}`);
 			continue;
 		}
 		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
+	}
+	for (const [name, schema] of Object.entries(current.properties ?? {})) {
+		if (previous.properties?.[name] !== undefined) continue;
+		compareSubschemaConstraint(
+			previous.additionalProperties,
+			schema,
+			`${path}.${name}`,
+			"property",
+			changes,
+		);
 	}
 	compareSubschemaConstraint(
 		previous.items,
