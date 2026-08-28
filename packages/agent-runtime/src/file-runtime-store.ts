@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+	type RuntimeDriverCommandV1,
+	RuntimeDriverCommandV1Schema,
 	type RuntimeOperationResultV1,
 	RuntimeOperationResultV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -22,6 +24,7 @@ export interface StoredOperation {
 	scope: string;
 	deliveryFence: number;
 	requestDigest: string;
+	command: RuntimeDriverCommandV1;
 	state: "prepared" | "resolved";
 	result?: RuntimeOperationResultV1;
 }
@@ -52,6 +55,7 @@ interface PrepareOperation {
 	deliveryFence: number;
 	requestDigest: string;
 	executionDeliveryFence?: number;
+	command: (nativeSessionRef?: string) => RuntimeDriverCommandV1;
 }
 
 function storeCorrupted(): never {
@@ -62,16 +66,33 @@ function storeCorrupted(): never {
 	);
 }
 
+function hasOnlyKeys(value: object, allowed: readonly string[]) {
+	return Object.keys(value).every((key) => allowed.includes(key));
+}
+
 function assertStoreState(value: RuntimeStoreState) {
 	if (
+		!hasOnlyKeys(value, ["schemaVersion", "sessions"]) ||
 		value.schemaVersion !== 1 ||
 		!value.sessions ||
 		typeof value.sessions !== "object"
 	) {
 		storeCorrupted();
 	}
+	const conversationKeys = new Set<string>();
 	for (const [hostSessionRef, session] of Object.entries(value.sessions)) {
+		const conversationKey = `${session.agentId}\u0000${session.conversationId}`;
 		if (
+			!hasOnlyKeys(session, [
+				"hostSessionRef",
+				"agentId",
+				"conversationId",
+				"sessionGeneration",
+				"nativeSessionRef",
+				"highestFences",
+				"operations",
+				"generationBarrier",
+			]) ||
 			session.hostSessionRef !== hostSessionRef ||
 			!session.agentId ||
 			!session.conversationId ||
@@ -81,22 +102,77 @@ function assertStoreState(value: RuntimeStoreState) {
 			typeof session.highestFences !== "object" ||
 			!session.operations ||
 			typeof session.operations !== "object" ||
-			(session.nativeSessionRef !== undefined && !session.nativeSessionRef)
+			(session.nativeSessionRef !== undefined && !session.nativeSessionRef) ||
+			conversationKeys.has(conversationKey) ||
+			Object.entries(session.highestFences).some(
+				([scope, fence]) => !scope || !Number.isSafeInteger(fence) || fence < 1,
+			) ||
+			(session.generationBarrier !== undefined &&
+				(typeof session.generationBarrier !== "object" ||
+					session.generationBarrier === null ||
+					!hasOnlyKeys(session.generationBarrier, [
+						"generation",
+						"tombstoneId",
+						"state",
+					]) ||
+					session.generationBarrier.generation !== session.sessionGeneration ||
+					!session.generationBarrier.tombstoneId ||
+					!(["active", "confirmed"] as const).includes(
+						session.generationBarrier.state,
+					)))
 		) {
 			storeCorrupted();
 		}
+		conversationKeys.add(conversationKey);
 		for (const [operationId, operation] of Object.entries(session.operations)) {
+			const expectedScope =
+				operation.kind === "submit-turn"
+					? `execution:${operation.executionId}`
+					: operation.kind === "supplement"
+						? `message:${operation.operationId}`
+						: operation.kind === "stop"
+							? `stop:${operation.operationId}`
+							: operation.kind === "generation-cancel"
+								? `generation:${session.sessionGeneration}`
+								: undefined;
 			if (
+				!hasOnlyKeys(operation, [
+					"operationId",
+					"kind",
+					"executionId",
+					"turnId",
+					"scope",
+					"deliveryFence",
+					"requestDigest",
+					"command",
+					"state",
+					"result",
+				]) ||
 				operation.operationId !== operationId ||
 				!operation.executionId ||
 				!operation.turnId ||
 				!operation.scope ||
 				!operation.requestDigest ||
+				!RuntimeDriverCommandV1Schema.safeParse(operation.command).success ||
+				operation.command.operationId !== operation.operationId ||
+				operation.command.kind !== operation.kind ||
+				operation.command.agentId !== session.agentId ||
+				operation.command.conversationId !== session.conversationId ||
+				operation.command.sessionGeneration !== session.sessionGeneration ||
+				operation.command.executionId !== operation.executionId ||
+				operation.command.turnId !== operation.turnId ||
+				("nativeSessionRef" in operation.command &&
+					session.nativeSessionRef !== undefined &&
+					operation.command.nativeSessionRef !== session.nativeSessionRef) ||
+				!expectedScope ||
+				operation.scope !== expectedScope ||
 				!Number.isSafeInteger(operation.deliveryFence) ||
 				operation.deliveryFence < 1 ||
+				(session.highestFences[operation.scope] ?? 0) <
+					operation.deliveryFence ||
 				(operation.state === "resolved"
 					? !RuntimeOperationResultV1Schema.safeParse(operation.result).success
-					: operation.state !== "prepared")
+					: operation.state !== "prepared" || operation.result !== undefined)
 			) {
 				storeCorrupted();
 			}
@@ -142,6 +218,24 @@ function sessionFor(
 	return session;
 }
 
+function assertExecutionBinding(
+	session: StoredSession,
+	binding: { executionId: string; turnId: string },
+) {
+	const execution = session.operations[binding.executionId];
+	if (
+		execution?.kind !== "submit-turn" ||
+		execution.executionId !== binding.executionId ||
+		execution.turnId !== binding.turnId
+	) {
+		throw new RuntimeHostError(
+			"RUNTIME_EXECUTION_BINDING_MISMATCH",
+			"Runtime execution does not match this request",
+			403,
+		);
+	}
+}
+
 export class FileRuntimeStore {
 	private constructor(
 		private readonly file: DurableJsonFile<RuntimeStoreState>,
@@ -168,8 +262,15 @@ export class FileRuntimeStore {
 			const existingSession = Object.values(state.sessions).find(
 				(session) => session.operations[input.operationId],
 			);
+			const currentSession = Object.values(state.sessions).find(
+				(session) =>
+					session.agentId === input.binding.agentId &&
+					session.conversationId === input.binding.conversationId,
+			);
 			const hostSessionRef =
-				input.requestedHostSessionRef ?? existingSession?.hostSessionRef;
+				input.requestedHostSessionRef ??
+				existingSession?.hostSessionRef ??
+				currentSession?.hostSessionRef;
 			let session: StoredSession;
 			if (hostSessionRef) {
 				session = sessionFor(
@@ -196,6 +297,9 @@ export class FileRuntimeStore {
 					operations: {},
 				};
 				state.sessions[newHostSessionRef] = session;
+			}
+			if (input.kind !== "submit-turn") {
+				assertExecutionBinding(session, input.binding);
 			}
 
 			if (input.executionDeliveryFence !== undefined) {
@@ -248,6 +352,7 @@ export class FileRuntimeStore {
 				scope: input.scope,
 				deliveryFence: input.deliveryFence,
 				requestDigest: input.requestDigest,
+				command: input.command(session.nativeSessionRef),
 				state: "prepared",
 			};
 			session.highestFences[input.scope] = input.deliveryFence;
@@ -257,6 +362,24 @@ export class FileRuntimeStore {
 				operation: structuredClone(prepared),
 			};
 		});
+	}
+
+	listRecoverableOperations() {
+		const state = this.file.read();
+		assertStoreState(state);
+		return Object.values(state.sessions).flatMap((session) =>
+			Object.values(session.operations)
+				.filter(
+					(operation) =>
+						operation.state === "prepared" ||
+						(operation.result?.outcome === "accepted" &&
+							["running", "unknown"].includes(operation.result.status)),
+				)
+				.map((operation) => ({
+					session: structuredClone(session),
+					operation: structuredClone(operation),
+				})),
+		);
 	}
 
 	resolveOperation(
@@ -280,12 +403,13 @@ export class FileRuntimeStore {
 
 	getSessionForQuery(
 		hostSessionRef: string,
-		binding: SessionBinding & { executionId: string },
+		binding: SessionBinding & { executionId: string; turnId: string },
 		deliveryFence: number,
 	) {
 		const state = this.file.read();
 		assertStoreState(state);
 		const session = sessionFor(state, hostSessionRef, binding);
+		assertExecutionBinding(session, binding);
 		if (
 			session.highestFences[`execution:${binding.executionId}`] !==
 			deliveryFence

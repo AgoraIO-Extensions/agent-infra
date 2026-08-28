@@ -44,6 +44,7 @@ export const RuntimeSupplementRequestV1Schema = z.strictObject({
 	...requestContext,
 	hostSessionRef: OpaqueIdV1Schema,
 	messageId: OpaqueIdV1Schema,
+	executionDeliveryFence: positiveFence,
 	input: RuntimeInputV1Schema,
 });
 

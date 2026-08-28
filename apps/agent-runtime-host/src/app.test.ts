@@ -20,7 +20,7 @@ async function setup() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-http-"));
 	directories.push(directory);
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-	const host = new RuntimeHost({
+	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(join(directory, "host.json")),
 		driver,
 		grantVerifier: {
@@ -149,5 +149,92 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		expect(stream).toContain("id: fake-cursor-1");
 		expect(stream).toContain('"type":"status"');
 		expect(stream).not.toMatch(/native|vendor|stdio|protocol/i);
+	});
+
+	it("keeps a live SSE subscription open after the confirmed cursor", async () => {
+		const { app } = await setup();
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const abort = new AbortController();
+		const liveResponse = await app.request(
+			"/internal/runtime/v1/events/stream",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				signal: abort.signal,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					requestId: "request-http-live",
+					agentId: body.agentId,
+					conversationId: body.conversationId,
+					executionId: body.executionId,
+					turnId: body.turnId,
+					sessionGeneration: body.sessionGeneration,
+					deliveryFence: body.deliveryFence,
+					hostSessionRef: submitted.hostSessionRef,
+					afterCursor: "fake-cursor-1",
+					grant: body.grant,
+				}),
+			},
+		);
+		expect(liveResponse.status).toBe(200);
+		expect(liveResponse.headers.get("content-type")).toContain(
+			"text/event-stream",
+		);
+		const reader = liveResponse.body?.getReader();
+		if (!reader) throw new Error("expected live SSE body");
+		const claims = JSON.parse(
+			Buffer.from(body.grant.payload, "base64url").toString("utf8"),
+		) as ExecutionGrantClaimsV1;
+		claims.operations = ["turn.supplement"];
+		const payload = Buffer.from(JSON.stringify(claims));
+
+		const supplemented = await app.request(
+			"/internal/runtime/v1/instructions",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					requestId: "request-http-live-supplement",
+					agentId: body.agentId,
+					conversationId: body.conversationId,
+					executionId: body.executionId,
+					turnId: body.turnId,
+					sessionGeneration: body.sessionGeneration,
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+					hostSessionRef: submitted.hostSessionRef,
+					messageId: "message-http-live",
+					grant: {
+						...body.grant,
+						payload: payload.toString("base64url"),
+						signature: sign(null, payload, privateKey).toString("base64url"),
+					},
+					input: { text: "synthetic-live-supplement", attachments: [] },
+				}),
+			},
+		);
+		expect(supplemented.status).toBe(200);
+		const next = await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) =>
+				setTimeout(() => reject(new Error("live SSE event timed out")), 2_000),
+			),
+		]);
+		expect(next.done).toBe(false);
+		const chunk = new TextDecoder().decode(next.value);
+		expect(chunk).toContain("id: fake-cursor-2");
+		expect(chunk).not.toContain("fake-cursor-1");
+
+		abort.abort();
+		await reader.cancel();
 	});
 });

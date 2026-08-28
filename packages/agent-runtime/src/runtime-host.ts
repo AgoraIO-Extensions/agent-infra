@@ -60,7 +60,13 @@ function nativeSessionRequired(): never {
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
 
-	constructor(private readonly options: RuntimeHostOptions) {}
+	private constructor(private readonly options: RuntimeHostOptions) {}
+
+	static async open(options: RuntimeHostOptions) {
+		const host = new RuntimeHost(options);
+		await host.recoverOperations();
+		return host;
+	}
 
 	async submitTurn(
 		value: RuntimeSubmitTurnRequestV1,
@@ -88,11 +94,7 @@ export class RuntimeHost {
 						sessionGeneration: request.sessionGeneration,
 						input: request.input,
 					}),
-				});
-				return this.dispatch(
-					prepared.session.hostSessionRef,
-					prepared.operation,
-					{
+					command: (nativeSessionRef) => ({
 						schemaVersion: 1,
 						kind: "submit-turn",
 						operationId: request.executionId,
@@ -101,9 +103,13 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: prepared.session.nativeSessionRef,
+						...(nativeSessionRef ? { nativeSessionRef } : {}),
 						input: request.input,
-					},
+					}),
+				});
+				return this.dispatch(
+					prepared.session.hostSessionRef,
+					prepared.operation,
 				);
 			},
 		);
@@ -182,6 +188,37 @@ export class RuntimeHost {
 		};
 	}
 
+	async streamEvents(value: RuntimeReplayRequestV1, signal?: AbortSignal) {
+		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		verifyExecutionGrant(request, "events.replay", this.options.grantVerifier);
+		const session = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.deliveryFence,
+		);
+		const nativeSessionRef =
+			session.nativeSessionRef ?? nativeSessionRequired();
+		const events = await this.options.driver.subscribeEvents(
+			nativeSessionRef,
+			request.executionId,
+			request.afterCursor,
+			signal,
+		);
+		const store = this.options.store;
+		return (async function* () {
+			for await (const event of events) {
+				store.getSessionForQuery(
+					request.hostSessionRef,
+					request,
+					request.deliveryFence,
+				);
+				yield event;
+			}
+		})();
+	}
+
 	async supplement(
 		value: RuntimeSupplementRequestV1,
 	): Promise<RuntimeOperationResponseV1> {
@@ -201,6 +238,7 @@ export class RuntimeHost {
 				kind: "supplement",
 				scope: `message:${request.messageId}`,
 				deliveryFence: request.deliveryFence,
+				executionDeliveryFence: request.executionDeliveryFence,
 				requestDigest: requestDigest({
 					kind: "supplement",
 					agentId: request.agentId,
@@ -211,21 +249,20 @@ export class RuntimeHost {
 					messageId: request.messageId,
 					input: request.input,
 				}),
+				command: (nativeSessionRef) => ({
+					schemaVersion: 1,
+					kind: "supplement",
+					operationId: request.messageId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+					input: request.input,
+				}),
 			});
-			const nativeSessionRef =
-				prepared.session.nativeSessionRef ?? nativeSessionRequired();
-			return this.dispatch(request.hostSessionRef, prepared.operation, {
-				schemaVersion: 1,
-				kind: "supplement",
-				operationId: request.messageId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				nativeSessionRef,
-				input: request.input,
-			});
+			return this.dispatch(request.hostSessionRef, prepared.operation);
 		});
 	}
 
@@ -252,20 +289,19 @@ export class RuntimeHost {
 					sessionGeneration: request.sessionGeneration,
 					stopRequestId: request.stopRequestId,
 				}),
+				command: (nativeSessionRef) => ({
+					schemaVersion: 1,
+					kind: "stop",
+					operationId: request.stopRequestId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+				}),
 			});
-			const nativeSessionRef =
-				prepared.session.nativeSessionRef ?? nativeSessionRequired();
-			return this.dispatch(request.hostSessionRef, prepared.operation, {
-				schemaVersion: 1,
-				kind: "stop",
-				operationId: request.stopRequestId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				nativeSessionRef,
-			});
+			return this.dispatch(request.hostSessionRef, prepared.operation);
 		});
 	}
 
@@ -297,18 +333,7 @@ export class RuntimeHost {
 					sessionGeneration: request.sessionGeneration,
 					tombstoneId: request.tombstoneId,
 				}),
-			});
-			const nativeSessionRef =
-				prepared.session.nativeSessionRef ?? nativeSessionRequired();
-			await this.options.store.activateGenerationBarrier(
-				request.hostSessionRef,
-				request,
-				request.tombstoneId,
-			);
-			const response = await this.dispatch(
-				request.hostSessionRef,
-				prepared.operation,
-				{
+				command: (nativeSessionRef) => ({
 					schemaVersion: 1,
 					kind: "generation-cancel",
 					operationId: request.tombstoneId,
@@ -317,13 +342,24 @@ export class RuntimeHost {
 					executionId: request.executionId,
 					turnId: request.turnId,
 					sessionGeneration: request.sessionGeneration,
-					nativeSessionRef,
-				},
-			);
-			await this.options.store.confirmGenerationBarrier(
+					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+				}),
+			});
+			await this.options.store.activateGenerationBarrier(
 				request.hostSessionRef,
+				request,
 				request.tombstoneId,
 			);
+			const response = await this.dispatch(
+				request.hostSessionRef,
+				prepared.operation,
+			);
+			if (response.result.outcome === "accepted") {
+				await this.options.store.confirmGenerationBarrier(
+					request.hostSessionRef,
+					request.tombstoneId,
+				);
+			}
 			return response;
 		});
 	}
@@ -331,7 +367,6 @@ export class RuntimeHost {
 	private async dispatch(
 		hostSessionRef: string,
 		operation: StoredOperation,
-		command: Parameters<RuntimeDriver["execute"]>[0],
 	): Promise<RuntimeOperationResponseV1> {
 		if (operation.state === "resolved" && operation.result) {
 			return {
@@ -366,19 +401,96 @@ export class RuntimeHost {
 		const driverRecord =
 			lookup.state === "found"
 				? lookup.record
-				: await this.options.driver.execute(command);
+				: await this.options.driver.execute(operation.command);
 		await this.options.afterDriverResult?.(operation.operationId);
+		const result = await this.currentDriverResult(
+			driverRecord,
+			operation.executionId,
+		);
 		await this.options.store.resolveOperation(
 			hostSessionRef,
 			operation.operationId,
-			driverRecord.result,
+			result,
 			driverRecord.nativeSessionRef,
 		);
 		return {
 			schemaVersion: 1,
 			hostSessionRef,
 			operationId: operation.operationId,
-			result: driverRecord.result,
+			result,
+		};
+	}
+
+	private async recoverOperations() {
+		for (const {
+			session,
+			operation,
+		} of this.options.store.listRecoverableOperations()) {
+			await this.serialize(session.hostSessionRef, async () => {
+				let recoveredResult: RuntimeOperationResponseV1["result"];
+				if (operation.kind === "generation-cancel") {
+					await this.options.store.activateGenerationBarrier(
+						session.hostSessionRef,
+						session,
+						operation.operationId,
+					);
+				}
+				if (operation.state === "prepared") {
+					recoveredResult = (
+						await this.dispatch(session.hostSessionRef, operation)
+					).result;
+				} else {
+					const lookup = await this.options.driver.lookupOperation(
+						operation.operationId,
+					);
+					if (lookup.state === "found") {
+						recoveredResult = await this.currentDriverResult(
+							lookup.record,
+							operation.executionId,
+						);
+						await this.options.store.resolveOperation(
+							session.hostSessionRef,
+							operation.operationId,
+							recoveredResult,
+							lookup.record.nativeSessionRef,
+						);
+					} else {
+						recoveredResult = {
+							outcome: "unknown",
+							code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+							message: "Runtime command acceptance could not be confirmed",
+						};
+						await this.options.store.resolveOperation(
+							session.hostSessionRef,
+							operation.operationId,
+							recoveredResult,
+						);
+					}
+				}
+				if (
+					operation.kind === "generation-cancel" &&
+					recoveredResult.outcome === "accepted"
+				) {
+					await this.options.store.confirmGenerationBarrier(
+						session.hostSessionRef,
+						operation.operationId,
+					);
+				}
+			});
+		}
+	}
+
+	private async currentDriverResult(
+		record: Awaited<ReturnType<RuntimeDriver["execute"]>>,
+		executionId: string,
+	) {
+		if (record.result.outcome !== "accepted") return record.result;
+		return {
+			outcome: "accepted" as const,
+			status: await this.options.driver.getStatus(
+				record.nativeSessionRef,
+				executionId,
+			),
 		};
 	}
 

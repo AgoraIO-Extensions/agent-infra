@@ -59,7 +59,7 @@ async function startFromEnvironment() {
 	const publicKey = createPublicKey(
 		requiredEnvironment("AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY"),
 	);
-	const host = new RuntimeHost({
+	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(`${dataDirectory}/host.json`),
 		driver: await FakeRuntimeDriver.open(`${dataDirectory}/fake-driver.json`),
 		grantVerifier: {

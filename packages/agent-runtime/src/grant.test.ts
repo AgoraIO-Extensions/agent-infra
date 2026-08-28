@@ -116,4 +116,68 @@ describe("Execution Grant verification", () => {
 			).toThrow(RuntimeHostError);
 		},
 	);
+
+	it("accepts canonical leap seconds, lowercase separators, and offsets", () => {
+		const leapSecondClaims = {
+			...claims,
+			issuedAt: "2027-01-01t07:59:60+08:00",
+			expiresAt: "2027-01-01t08:00:01+08:00",
+		};
+
+		expect(
+			verifyExecutionGrant(
+				request(signedGrant(leapSecondClaims)),
+				"turn.submit",
+				{
+					...verifier,
+					now: () => new Date("2027-01-01T00:00:00.500Z"),
+				},
+			),
+		).toEqual(leapSecondClaims);
+	});
+
+	it("orders leap-second issued and expiry instants instead of failing open", () => {
+		const leapExpiry = {
+			...claims,
+			issuedAt: "2027-01-01T07:59:59+08:00",
+			expiresAt: "2027-01-01T07:59:60+08:00",
+		};
+		const futureLeapIssue = {
+			...claims,
+			issuedAt: "2027-01-01T07:59:60+08:00",
+			expiresAt: "2027-01-01T08:00:01+08:00",
+		};
+
+		expect(() =>
+			verifyExecutionGrant(request(signedGrant(leapExpiry)), "turn.submit", {
+				...verifier,
+				now: () => new Date("2027-01-01T00:00:00.500Z"),
+			}),
+		).toThrow(RuntimeHostError);
+		expect(() =>
+			verifyExecutionGrant(
+				request(signedGrant(futureLeapIssue)),
+				"turn.submit",
+				{
+					...verifier,
+					now: () => new Date("2026-12-31T23:59:59.500Z"),
+				},
+			),
+		).toThrow(RuntimeHostError);
+	});
+
+	it("fails closed when a signed timestamp cannot produce a finite instant", () => {
+		const malformedClaims = {
+			...claims,
+			expiresAt: "not-a-timestamp",
+		} as ExecutionGrantClaimsV1;
+
+		expect(() =>
+			verifyExecutionGrant(
+				request(signedGrant(malformedClaims)),
+				"turn.submit",
+				verifier,
+			),
+		).toThrow(RuntimeHostError);
+	});
 });

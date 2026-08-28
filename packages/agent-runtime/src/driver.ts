@@ -26,4 +26,10 @@ export interface RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 	): Promise<RuntimeEventV1[]>;
+	subscribeEvents(
+		nativeSessionRef: string,
+		executionId: string,
+		afterCursor?: string,
+		signal?: AbortSignal,
+	): Promise<AsyncIterable<RuntimeEventV1>>;
 }

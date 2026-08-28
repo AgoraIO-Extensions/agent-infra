@@ -121,6 +121,21 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			}
 		});
 	});
+	app.post("/internal/runtime/v1/events/stream", async (context) => {
+		const events = await options.host.streamEvents(
+			await parseBody(context.req.raw, RuntimeReplayRequestV1Schema),
+			context.req.raw.signal,
+		);
+		return streamSSE(context, async (stream) => {
+			for await (const event of events) {
+				await stream.writeSSE({
+					id: event.cursor,
+					event: event.type,
+					data: JSON.stringify(event),
+				});
+			}
+		});
+	});
 	app.post("/internal/runtime/v1/generations/cancel", async (context) =>
 		context.json(
 			await options.host.cancelGeneration(

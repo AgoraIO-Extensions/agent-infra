@@ -43,6 +43,8 @@ function timestamp() {
 }
 
 export class FakeRuntimeDriver implements RuntimeDriver {
+	private readonly eventWaiters = new Map<string, Set<() => void>>();
+
 	private constructor(
 		private readonly file: DurableJsonFile<FakeDriverState>,
 	) {}
@@ -59,8 +61,9 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		);
 	}
 
-	execute(command: RuntimeDriverCommandV1) {
-		return this.file.update((state) => {
+	async execute(command: RuntimeDriverCommandV1) {
+		let eventStreamKey: string | undefined;
+		const record = await this.file.update((state) => {
 			const previous = state.operations[command.operationId];
 			if (previous) return structuredClone(previous);
 			const nativeSessionRef =
@@ -111,6 +114,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 					this.appendEvent(session, command.executionId, "status", {
 						status: "running",
 					});
+					eventStreamKey = this.eventStreamKey(
+						nativeSessionRef,
+						command.executionId,
+					);
 					result = { outcome: "accepted", status: "running" };
 					state.sideEffects += 1;
 				}
@@ -129,6 +136,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 					this.appendEvent(session, command.executionId, "text", {
 						delta: "synthetic-supplement-accepted",
 					});
+					eventStreamKey = this.eventStreamKey(
+						nativeSessionRef,
+						command.executionId,
+					);
 					result = { outcome: "accepted", status: "running" };
 					state.sideEffects += 1;
 				}
@@ -142,6 +153,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 					this.appendEvent(session, command.executionId, "completed", {
 						status: "cancelled",
 					});
+					eventStreamKey = this.eventStreamKey(
+						nativeSessionRef,
+						command.executionId,
+					);
 					state.sideEffects += 1;
 				}
 				result = { outcome: "accepted", status: session.status };
@@ -162,6 +177,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 			state.operations[command.operationId] = record;
 			return structuredClone(record);
 		});
+		if (eventStreamKey) this.notifyEventStream(eventStreamKey);
+		return record;
 	}
 
 	async lookupOperation(operationId: string): Promise<RuntimeDriverLookup> {
@@ -183,6 +200,26 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 			}
 			delete state.operations[operationId];
 			state.unknownOperations.push(operationId);
+		});
+	}
+
+	setOperationStatus(operationId: string, status: RuntimeStatusV1) {
+		return this.file.update((state) => {
+			const operation = state.operations[operationId];
+			const session = operation
+				? state.sessions[operation.nativeSessionRef]
+				: undefined;
+			if (!session) {
+				throw new RuntimeHostError(
+					"RUNTIME_FAKE_OPERATION_NOT_FOUND",
+					"Fake Runtime operation was not found",
+					404,
+				);
+			}
+			session.status = status;
+			if (["completed", "failed", "cancelled"].includes(status)) {
+				session.activeExecutionId = undefined;
+			}
 		});
 	}
 
@@ -217,6 +254,49 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		return events.slice(index + 1);
 	}
 
+	async subscribeEvents(
+		nativeSessionRef: string,
+		executionId: string,
+		afterCursor?: string,
+		signal?: AbortSignal,
+	) {
+		const initialEvents = await this.replayEvents(
+			nativeSessionRef,
+			executionId,
+			afterCursor,
+		);
+		const driver = this;
+		return (async function* () {
+			let cursor = afterCursor;
+			let pending = initialEvents;
+			while (!signal?.aborted) {
+				for (const event of pending) {
+					cursor = event.cursor;
+					yield event;
+				}
+				const waiter = driver.waitForEvent(
+					driver.eventStreamKey(nativeSessionRef, executionId),
+					signal,
+				);
+				pending = await driver.replayEvents(
+					nativeSessionRef,
+					executionId,
+					cursor,
+				);
+				if (pending.length > 0) {
+					waiter.cancel();
+					continue;
+				}
+				await waiter.promise;
+				pending = await driver.replayEvents(
+					nativeSessionRef,
+					executionId,
+					cursor,
+				);
+			}
+		})();
+	}
+
 	async sideEffectCount() {
 		return this.file.read().sideEffects;
 	}
@@ -231,6 +311,35 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 			);
 		}
 		return session;
+	}
+
+	private eventStreamKey(nativeSessionRef: string, executionId: string) {
+		return `${nativeSessionRef}\u0000${executionId}`;
+	}
+
+	private notifyEventStream(key: string) {
+		for (const wake of this.eventWaiters.get(key) ?? []) wake();
+	}
+
+	private waitForEvent(key: string, signal?: AbortSignal) {
+		let wake: () => void = () => undefined;
+		const promise = new Promise<void>((resolve) => {
+			wake = () => {
+				cleanup();
+				resolve();
+			};
+		});
+		const waiters = this.eventWaiters.get(key) ?? new Set<() => void>();
+		this.eventWaiters.set(key, waiters);
+		waiters.add(wake);
+		const cleanup = () => {
+			waiters.delete(wake);
+			if (waiters.size === 0) this.eventWaiters.delete(key);
+			signal?.removeEventListener("abort", wake);
+		};
+		signal?.addEventListener("abort", wake, { once: true });
+		if (signal?.aborted) wake();
+		return { promise, cancel: cleanup };
 	}
 
 	private appendEvent(

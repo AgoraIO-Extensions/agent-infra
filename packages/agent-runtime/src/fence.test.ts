@@ -84,7 +84,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-fence-"));
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = new RuntimeHost({
+		const runtimeHost = await RuntimeHost.open({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
 			grantVerifier: {
@@ -113,6 +113,24 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		});
 		expect(takeover).toEqual(first);
 		expect(await driver.sideEffectCount()).toBe(1);
+
+		await expect(
+			runtimeHost.supplement({
+				schemaVersion: 1,
+				requestId: "request-stale-supplement",
+				agentId: original.agentId,
+				conversationId: original.conversationId,
+				executionId: original.executionId,
+				turnId: original.turnId,
+				sessionGeneration: 1,
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+				hostSessionRef: first.hostSessionRef,
+				messageId: "message-stale",
+				grant: signedGrant(original, ["turn.supplement"]),
+				input: { text: "synthetic-stale-supplement", attachments: [] },
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
 
 		await expect(
 			runtimeHost.stop({
@@ -178,13 +196,191 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		expect(await driver.sideEffectCount()).toBe(1);
 	});
 
+	it("binds status, replay, supplement, and stop to the persisted Execution and Turn", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-binding-"));
+		directories.push(directory);
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		const original = submitRequest();
+		const submitted = await runtimeHost.submitTurn(original);
+		const wrongExecution = {
+			...original,
+			executionId: "execution-other",
+			turnId: "turn-other",
+		};
+		const wrongTurn = { ...original, turnId: "turn-other" };
+
+		await expect(
+			runtimeHost.status({
+				schemaVersion: 1,
+				requestId: "request-status-wrong-execution",
+				agentId: wrongExecution.agentId,
+				conversationId: wrongExecution.conversationId,
+				executionId: wrongExecution.executionId,
+				turnId: wrongExecution.turnId,
+				sessionGeneration: wrongExecution.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				grant: signedGrant(wrongExecution, ["session.status"]),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_EXECUTION_BINDING_MISMATCH" });
+		await expect(
+			runtimeHost.replay({
+				schemaVersion: 1,
+				requestId: "request-replay-wrong-turn",
+				agentId: wrongTurn.agentId,
+				conversationId: wrongTurn.conversationId,
+				executionId: wrongTurn.executionId,
+				turnId: wrongTurn.turnId,
+				sessionGeneration: wrongTurn.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				grant: signedGrant(wrongTurn, ["events.replay"]),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_EXECUTION_BINDING_MISMATCH" });
+		await expect(
+			runtimeHost.supplement({
+				schemaVersion: 1,
+				requestId: "request-supplement-wrong-turn",
+				agentId: wrongTurn.agentId,
+				conversationId: wrongTurn.conversationId,
+				executionId: wrongTurn.executionId,
+				turnId: wrongTurn.turnId,
+				sessionGeneration: wrongTurn.sessionGeneration,
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				messageId: "message-wrong-turn",
+				grant: signedGrant(wrongTurn, ["turn.supplement"]),
+				input: { text: "synthetic-wrong-turn", attachments: [] },
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_EXECUTION_BINDING_MISMATCH" });
+		await expect(
+			runtimeHost.stop({
+				schemaVersion: 1,
+				requestId: "request-stop-wrong-turn",
+				agentId: wrongTurn.agentId,
+				conversationId: wrongTurn.conversationId,
+				executionId: wrongTurn.executionId,
+				turnId: wrongTurn.turnId,
+				sessionGeneration: wrongTurn.sessionGeneration,
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				stopRequestId: "stop-wrong-turn",
+				grant: signedGrant(wrongTurn, ["turn.stop"]),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_EXECUTION_BINDING_MISMATCH" });
+		expect(await driver.sideEffectCount()).toBe(1);
+	});
+
+	it("reuses the one current Host Session when a new Execution omits its ref", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-session-"));
+		directories.push(directory);
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		const original = submitRequest();
+		const first = await runtimeHost.submitTurn(original);
+		const nextExecution = {
+			...original,
+			requestId: "request-next-execution",
+			executionId: "execution-next",
+			turnId: "turn-next",
+		};
+		const second = await runtimeHost.submitTurn({
+			...nextExecution,
+			grant: signedGrant(nextExecution, ["turn.submit"]),
+		});
+
+		expect(second.hostSessionRef).toBe(first.hostSessionRef);
+		expect(second.result).toEqual({ outcome: "busy" });
+		expect(await driver.sideEffectCount()).toBe(1);
+	});
+
+	it("stops a live event stream when a higher Execution fence takes over", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-stream-fence-"),
+		);
+		directories.push(directory);
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantVerifier: {
+				expectedIssuer: "agent-platform",
+				expectedAudience: "agent-runtime-host",
+				publicKeys: new Map([["key-fence", publicKey]]),
+				now: () => new Date("2026-08-28T10:00:00Z"),
+			},
+		});
+		const original = submitRequest();
+		const submitted = await runtimeHost.submitTurn(original);
+		const events = await runtimeHost.streamEvents({
+			schemaVersion: 1,
+			requestId: "request-stream-fence-1",
+			agentId: original.agentId,
+			conversationId: original.conversationId,
+			executionId: original.executionId,
+			turnId: original.turnId,
+			sessionGeneration: original.sessionGeneration,
+			deliveryFence: 1,
+			hostSessionRef: submitted.hostSessionRef,
+			afterCursor: "fake-cursor-1",
+			grant: signedGrant(original, ["events.replay"]),
+		});
+		const iterator = events[Symbol.asyncIterator]();
+		await runtimeHost.submitTurn({
+			...original,
+			requestId: "request-stream-fence-2",
+			deliveryFence: 2,
+			hostSessionRef: submitted.hostSessionRef,
+		});
+		await runtimeHost.supplement({
+			schemaVersion: 1,
+			requestId: "request-stream-event",
+			agentId: original.agentId,
+			conversationId: original.conversationId,
+			executionId: original.executionId,
+			turnId: original.turnId,
+			sessionGeneration: original.sessionGeneration,
+			deliveryFence: 1,
+			executionDeliveryFence: 2,
+			hostSessionRef: submitted.hostSessionRef,
+			messageId: "message-stream-event",
+			grant: signedGrant(original, ["turn.supplement"]),
+			input: { text: "synthetic-stream-event", attachments: [] },
+		});
+
+		await expect(iterator.next()).rejects.toMatchObject({
+			code: "RUNTIME_FENCE_STALE",
+		});
+	});
+
 	it("activates a durable generation barrier before confirming cancellation", async () => {
 		const directory = await mkdtemp(
 			join(tmpdir(), "agent-runtime-generation-"),
 		);
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = new RuntimeHost({
+		const runtimeHost = await RuntimeHost.open({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
 			grantVerifier: {

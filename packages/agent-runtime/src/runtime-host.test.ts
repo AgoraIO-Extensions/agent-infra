@@ -86,7 +86,7 @@ function submitRequest(): RuntimeSubmitTurnRequestV1 {
 }
 
 function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
-	return new RuntimeHost({
+	return RuntimeHost.open({
 		store,
 		driver,
 		grantVerifier: {
@@ -109,7 +109,7 @@ afterEach(async () => {
 describe("RuntimeHost durable Session", () => {
 	it("recovers the same opaque Host Session after Host and Driver restart", async () => {
 		const directory = await runtimeDirectory();
-		const firstHost = host(
+		const firstHost = await host(
 			await FileRuntimeStore.open(join(directory, "host.json")),
 			await FakeRuntimeDriver.open(join(directory, "driver.json")),
 		);
@@ -125,7 +125,7 @@ describe("RuntimeHost durable Session", () => {
 			/native|vendor|stdio|protocol/i,
 		);
 
-		const restartedHost = host(
+		const restartedHost = await host(
 			await FileRuntimeStore.open(join(directory, "host.json")),
 			await FakeRuntimeDriver.open(join(directory, "driver.json")),
 		);
@@ -154,7 +154,7 @@ describe("RuntimeHost durable Session", () => {
 	it("passes the Session, Turn, event, stop, status, and capability conformance table", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = host(
+		const runtimeHost = await host(
 			await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
 		);
@@ -200,6 +200,7 @@ describe("RuntimeHost durable Session", () => {
 			...base,
 			requestId: "request-supplement-1",
 			deliveryFence: 1,
+			executionDeliveryFence: 1,
 			hostSessionRef: submitted.hostSessionRef,
 			messageId: "message-supplement-1",
 			grant: grant(base, ["turn.supplement"]),
@@ -279,6 +280,7 @@ describe("RuntimeHost durable Session", () => {
 			...base,
 			requestId: "request-supplement-rejected",
 			deliveryFence: 1,
+			executionDeliveryFence: 1,
 			hostSessionRef: submitted.hostSessionRef,
 			messageId: "message-supplement-2",
 			grant: grant(base, ["turn.supplement"]),

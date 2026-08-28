@@ -6,6 +6,7 @@ import {
 	RuntimeReplayRequestV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSupplementRequestV1Schema,
 	SignedExecutionGrantV1Schema,
 } from "../../src/runtime/index.js";
 
@@ -47,6 +48,20 @@ describe("RuntimeHost V1 wire schemas", () => {
 			}),
 		).toMatchObject({ input: { attachments: ["attachment-1"] } });
 		expect(
+			RuntimeSupplementRequestV1Schema.parse({
+				...requestContext,
+				hostSessionRef: "host-session-1",
+				messageId: "message-1",
+				executionDeliveryFence: 4,
+				deliveryFence: 2,
+				input: { text: "synthetic-supplement", attachments: [] },
+			}),
+		).toMatchObject({
+			messageId: "message-1",
+			executionDeliveryFence: 4,
+			deliveryFence: 2,
+		});
+		expect(
 			RuntimeStopRequestV1Schema.parse({
 				...requestContext,
 				hostSessionRef: "host-session-1",
@@ -85,6 +100,14 @@ describe("RuntimeHost V1 wire schemas", () => {
 	});
 
 	it("rejects native protocol leakage, malformed fences, and expanded objects", () => {
+		expect(
+			RuntimeSupplementRequestV1Schema.safeParse({
+				...requestContext,
+				hostSessionRef: "host-session-1",
+				messageId: "message-1",
+				input: { text: "synthetic-supplement", attachments: [] },
+			}).success,
+		).toBe(false);
 		expect(
 			RuntimeSubmitTurnRequestV1Schema.safeParse({
 				...requestContext,
