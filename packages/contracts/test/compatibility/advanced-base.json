@@ -54,6 +54,15 @@
 		"ToggleV1": {
 			"type": "boolean"
 		},
+		"TupleV1": {
+			"items": false,
+			"prefixItems": [
+				{
+					"type": "string"
+				}
+			],
+			"type": "array"
+		},
 		"UntypedV1": {}
 	},
 	"$schema": "https://json-schema.org/draft/2020-12/schema"

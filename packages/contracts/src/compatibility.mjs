@@ -34,6 +34,32 @@ function sameValue(left, right) {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function hasSchemaConstraints(value) {
+	return (
+		value === false ||
+		(typeof value === "object" &&
+			value !== null &&
+			Object.keys(value).length > 0)
+	);
+}
+
+function compareSubschemaConstraint(previous, current, path, keyword, changes) {
+	const previousSchema = previous ?? true;
+	const currentSchema = current ?? true;
+	if (previousSchema === true) {
+		if (hasSchemaConstraints(currentSchema)) {
+			changes.push(`narrowed ${path} ${keyword}`);
+		}
+		return;
+	}
+	if (previousSchema === false || currentSchema === true) return;
+	if (currentSchema === false) {
+		changes.push(`narrowed ${path} ${keyword}`);
+	} else if (typeof currentSchema === "object" && currentSchema !== null) {
+		compareSchema(previousSchema, currentSchema, `${path} ${keyword}`, changes);
+	}
+}
+
 function compareSchema(previous, current, path, changes) {
 	const previousTypes = valueSet(previous.type);
 	const currentTypes = valueSet(current.type);
@@ -205,60 +231,20 @@ function compareSchema(previous, current, path, changes) {
 		if (!previousRequired.has(name))
 			changes.push(`narrowed ${path}.${name} required`);
 	}
-	const previousAdditional = previous.additionalProperties ?? true;
-	const currentAdditional = current.additionalProperties ?? true;
-	if (previousAdditional === true) {
-		if (
-			currentAdditional === false ||
-			(typeof currentAdditional === "object" &&
-				currentAdditional !== null &&
-				Object.keys(currentAdditional).length > 0)
-		) {
-			changes.push(`narrowed ${path} additionalProperties`);
-		}
-	} else if (previousAdditional !== false) {
-		if (currentAdditional === false) {
-			changes.push(`narrowed ${path} additionalProperties`);
-		} else if (
-			currentAdditional !== true &&
-			typeof currentAdditional === "object" &&
-			currentAdditional !== null
-		) {
-			compareSchema(
-				previousAdditional,
-				currentAdditional,
-				`${path}.*`,
-				changes,
-			);
-		}
-	}
-	const previousPropertyNames = previous.propertyNames ?? true;
-	const currentPropertyNames = current.propertyNames ?? true;
-	if (previousPropertyNames === true) {
-		if (
-			currentPropertyNames === false ||
-			(typeof currentPropertyNames === "object" &&
-				currentPropertyNames !== null &&
-				Object.keys(currentPropertyNames).length > 0)
-		) {
-			changes.push(`narrowed ${path} propertyNames`);
-		}
-	} else if (previousPropertyNames !== false) {
-		if (currentPropertyNames === false) {
-			changes.push(`narrowed ${path} propertyNames`);
-		} else if (
-			currentPropertyNames !== true &&
-			typeof currentPropertyNames === "object" &&
-			currentPropertyNames !== null
-		) {
-			compareSchema(
-				previousPropertyNames,
-				currentPropertyNames,
-				`${path} propertyNames`,
-				changes,
-			);
-		}
-	}
+	compareSubschemaConstraint(
+		previous.additionalProperties,
+		current.additionalProperties,
+		path,
+		"additionalProperties",
+		changes,
+	);
+	compareSubschemaConstraint(
+		previous.propertyNames,
+		current.propertyNames,
+		path,
+		"propertyNames",
+		changes,
+	);
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
 		const currentSchema = current.properties?.[name];
@@ -268,87 +254,51 @@ function compareSchema(previous, current, path, changes) {
 		}
 		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
 	}
-	const previousItems = previous.items;
-	const currentItems = current.items;
-	if (
-		(previousItems === undefined || previousItems === true) &&
-		currentItems !== undefined &&
-		currentItems !== true
-	) {
-		changes.push(`narrowed ${path}[] items`);
-	} else if (
-		previousItems !== undefined &&
-		previousItems !== true &&
-		currentItems !== undefined &&
-		currentItems !== true
-	) {
-		if (currentItems === false) {
-			if (previousItems !== false) changes.push(`narrowed ${path}[] items`);
-		} else if (previousItems !== false) {
-			compareSchema(previousItems, currentItems, `${path}[]`, changes);
-		}
+	compareSubschemaConstraint(
+		previous.items,
+		current.items,
+		`${path}[]`,
+		"items",
+		changes,
+	);
+	const previousPrefixItems = Array.isArray(previous.prefixItems)
+		? previous.prefixItems
+		: [];
+	const currentPrefixItems = Array.isArray(current.prefixItems)
+		? current.prefixItems
+		: [];
+	for (const [index, currentPrefixItem] of currentPrefixItems.entries()) {
+		compareSubschemaConstraint(
+			previousPrefixItems[index] ?? previous.items,
+			currentPrefixItem,
+			`${path}[${index}]`,
+			"prefixItems",
+			changes,
+		);
 	}
-	const previousPrefixItems = previous.prefixItems;
-	const currentPrefixItems = current.prefixItems;
-	if (Array.isArray(currentPrefixItems)) {
-		for (const [index, currentPrefixItem] of currentPrefixItems.entries()) {
-			const previousPrefixItem = Array.isArray(previousPrefixItems)
-				? previousPrefixItems[index]
-				: undefined;
-			if (previousPrefixItem === undefined || previousPrefixItem === true) {
-				if (
-					currentPrefixItem === false ||
-					(typeof currentPrefixItem === "object" &&
-						currentPrefixItem !== null &&
-						Object.keys(currentPrefixItem).length > 0)
-				) {
-					changes.push(`narrowed ${path}[${index}] prefixItems`);
-				}
-			} else if (previousPrefixItem !== false) {
-				if (currentPrefixItem === false) {
-					changes.push(`narrowed ${path}[${index}] prefixItems`);
-				} else if (
-					typeof currentPrefixItem === "object" &&
-					currentPrefixItem !== null
-				) {
-					compareSchema(
-						previousPrefixItem,
-						currentPrefixItem,
-						`${path}[${index}] prefixItems`,
-						changes,
-					);
-				}
-			}
-		}
+	for (
+		let index = currentPrefixItems.length;
+		index < previousPrefixItems.length;
+		index += 1
+	) {
+		compareSubschemaConstraint(
+			previousPrefixItems[index],
+			current.items,
+			`${path}[${index}]`,
+			"prefixItems",
+			changes,
+		);
 	}
 	const previousContains = previous.contains;
 	const currentContains = current.contains;
 	if (currentContains !== undefined) {
-		if (previousContains === undefined || previousContains === true) {
-			if (
-				currentContains === false ||
-				(typeof currentContains === "object" &&
-					currentContains !== null &&
-					Object.keys(currentContains).length > 0)
-			) {
-				changes.push(`narrowed ${path} contains`);
-			}
-		} else if (previousContains !== false) {
-			if (currentContains === false) {
-				changes.push(`narrowed ${path} contains`);
-			} else if (
-				currentContains !== true &&
-				typeof currentContains === "object" &&
-				currentContains !== null
-			) {
-				compareSchema(
-					previousContains,
-					currentContains,
-					`${path} contains`,
-					changes,
-				);
-			}
-		}
+		compareSubschemaConstraint(
+			previousContains,
+			currentContains,
+			path,
+			"contains",
+			changes,
+		);
 		const previousMinContains =
 			previousContains === undefined ? 0 : (previous.minContains ?? 1);
 		const currentMinContains = current.minContains ?? 1;

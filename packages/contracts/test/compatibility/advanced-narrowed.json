@@ -85,6 +85,11 @@
 			"const": true,
 			"type": "boolean"
 		},
+		"TupleV1": {
+			"items": false,
+			"prefixItems": [],
+			"type": "array"
+		},
 		"UntypedV1": {
 			"type": "string"
 		}
