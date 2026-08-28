@@ -16,6 +16,26 @@
 				}
 			]
 		},
+		"ConjunctionV1": {
+			"allOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
+		"ContainsV1": {
+			"type": "array"
+		},
+		"ExcludedV1": {
+			"type": "string"
+		},
+		"ExclusiveChoiceV1": {
+			"oneOf": [
+				{
+					"type": "string"
+				}
+			]
+		},
 		"ModeV1": {
 			"type": "string"
 		},

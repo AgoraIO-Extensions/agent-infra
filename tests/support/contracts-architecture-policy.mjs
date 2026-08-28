@@ -12,6 +12,11 @@ const forbiddenContractImports = [
 	/^@kubernetes(?:\/|$)/,
 	/^@agent-infra\//,
 ];
+const runtimeDependencySections = [
+	"dependencies",
+	"optionalDependencies",
+	"peerDependencies",
+];
 
 function importSpecifiers(source) {
 	const sourceFile = ts.createSourceFile(
@@ -76,11 +81,7 @@ export function checkSourceImports(source, { path }) {
 
 export function checkManifestDependencies(manifest) {
 	const violations = [];
-	for (const section of [
-		"dependencies",
-		"optionalDependencies",
-		"peerDependencies",
-	]) {
+	for (const section of runtimeDependencySections) {
 		for (const dependency of Object.keys(manifest[section] ?? {})) {
 			if (
 				forbiddenContractImports.some((pattern) => pattern.test(dependency))
@@ -89,6 +90,18 @@ export function checkManifestDependencies(manifest) {
 					`contracts package must not depend on ${dependency} via ${section}`,
 				);
 			}
+		}
+	}
+	return violations;
+}
+
+export function checkProductionManifestDependencies(manifest, { path }) {
+	const violations = [];
+	for (const section of runtimeDependencySections) {
+		if (Object.hasOwn(manifest[section] ?? {}, "@agent-infra/test-support")) {
+			violations.push(
+				`production package must not depend on @agent-infra/test-support via ${section}: ${path}`,
+			);
 		}
 	}
 	return violations;
@@ -142,11 +155,11 @@ export async function checkRepositoryArchitecture(repositoryRoot) {
 			const manifest = JSON.parse(
 				await readFile(resolve(root, "package.json"), "utf8"),
 			);
-			if (manifest.dependencies?.["@agent-infra/test-support"]) {
-				violations.push(
-					`production package must not depend on @agent-infra/test-support: ${relative(repositoryRoot, root)}`,
-				);
-			}
+			violations.push(
+				...checkProductionManifestDependencies(manifest, {
+					path: relative(repositoryRoot, root),
+				}),
+			);
 		}
 	}
 	return violations.sort();

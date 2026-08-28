@@ -7,6 +7,11 @@
 			"items": {
 				"type": "string"
 			},
+			"prefixItems": [
+				{
+					"type": "string"
+				}
+			],
 			"type": "array",
 			"uniqueItems": true
 		},
@@ -14,6 +19,40 @@
 			"oneOf": [
 				{
 					"const": "a"
+				}
+			]
+		},
+		"ConjunctionV1": {
+			"allOf": [
+				{
+					"type": "string"
+				},
+				{
+					"minLength": 1
+				}
+			]
+		},
+		"ContainsV1": {
+			"contains": {
+				"type": "string"
+			},
+			"maxContains": 3,
+			"minContains": 2,
+			"type": "array"
+		},
+		"ExcludedV1": {
+			"not": {
+				"const": "forbidden"
+			},
+			"type": "string"
+		},
+		"ExclusiveChoiceV1": {
+			"oneOf": [
+				{
+					"type": "string"
+				},
+				{
+					"minLength": 1
 				}
 			]
 		},
@@ -36,6 +75,9 @@
 		"RecordV1": {
 			"additionalProperties": {
 				"type": "string"
+			},
+			"propertyNames": {
+				"pattern": "^[a-z]+$"
 			},
 			"type": "object"
 		},

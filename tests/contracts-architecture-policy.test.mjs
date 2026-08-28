@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
 	checkManifestDependencies,
+	checkProductionManifestDependencies,
 	checkRepositoryArchitecture,
 	checkSourceImports,
 } from "./support/contracts-architecture-policy.mjs";
@@ -45,6 +46,29 @@ test("production source rejects test-support while test-support consumes contrac
 		checkSourceImports(
 			'import { ProtocolErrorV1Schema } from "@agent-infra/contracts";',
 			{ path: "packages/test-support/src/index.ts" },
+		),
+		[],
+	);
+});
+
+test("production manifests reject test-support runtime dependencies", () => {
+	for (const section of [
+		"dependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		assert.match(
+			checkProductionManifestDependencies(
+				{ [section]: { "@agent-infra/test-support": "workspace:*" } },
+				{ path: "apps/platform-api" },
+			)[0],
+			new RegExp(`via ${section}`),
+		);
+	}
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ devDependencies: { "@agent-infra/test-support": "workspace:*" } },
+			{ path: "apps/platform-api" },
 		),
 		[],
 	);

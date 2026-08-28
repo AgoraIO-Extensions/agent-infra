@@ -3,6 +3,10 @@
 		"AliasV1": {},
 		"ArrayV1": {},
 		"ChoiceV1": {},
+		"ConjunctionV1": {},
+		"ContainsV1": {},
+		"ExcludedV1": {},
+		"ExclusiveChoiceV1": {},
 		"ModeV1": {},
 		"NumberV1": {},
 		"OpaqueIdV1": {

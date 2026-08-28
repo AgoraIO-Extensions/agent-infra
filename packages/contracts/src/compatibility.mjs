@@ -78,12 +78,28 @@ function compareSchema(previous, current, path, changes) {
 		} else if (
 			Array.isArray(previousOptions) &&
 			Array.isArray(currentOptions) &&
-			previousOptions.some(
+			(previousOptions.some(
 				(option) => !currentOptions.some((entry) => sameValue(entry, option)),
-			)
+			) ||
+				(keyword === "oneOf" &&
+					currentOptions.some(
+						(option) =>
+							!previousOptions.some((entry) => sameValue(entry, option)),
+					)))
 		) {
 			changes.push(`narrowed ${path} ${keyword}`);
 		}
+	}
+	const previousAllOf = previous.allOf;
+	const currentAllOf = current.allOf;
+	if (
+		Array.isArray(currentAllOf) &&
+		(!Array.isArray(previousAllOf) ||
+			currentAllOf.some(
+				(option) => !previousAllOf.some((entry) => sameValue(entry, option)),
+			))
+	) {
+		changes.push(`narrowed ${path} allOf`);
 	}
 	if (previous.$ref === undefined && current.$ref !== undefined) {
 		changes.push(`narrowed ${path} $ref`);
@@ -93,6 +109,12 @@ function compareSchema(previous, current, path, changes) {
 		previous.$ref !== current.$ref
 	) {
 		changes.push(`retyped ${path} $ref`);
+	}
+	if (
+		current.not !== undefined &&
+		(previous.not === undefined || !sameValue(previous.not, current.not))
+	) {
+		changes.push(`narrowed ${path} not`);
 	}
 
 	const increasingMinimums = ["minLength", "minItems", "minProperties"];
@@ -210,6 +232,33 @@ function compareSchema(previous, current, path, changes) {
 			);
 		}
 	}
+	const previousPropertyNames = previous.propertyNames ?? true;
+	const currentPropertyNames = current.propertyNames ?? true;
+	if (previousPropertyNames === true) {
+		if (
+			currentPropertyNames === false ||
+			(typeof currentPropertyNames === "object" &&
+				currentPropertyNames !== null &&
+				Object.keys(currentPropertyNames).length > 0)
+		) {
+			changes.push(`narrowed ${path} propertyNames`);
+		}
+	} else if (previousPropertyNames !== false) {
+		if (currentPropertyNames === false) {
+			changes.push(`narrowed ${path} propertyNames`);
+		} else if (
+			currentPropertyNames !== true &&
+			typeof currentPropertyNames === "object" &&
+			currentPropertyNames !== null
+		) {
+			compareSchema(
+				previousPropertyNames,
+				currentPropertyNames,
+				`${path} propertyNames`,
+				changes,
+			);
+		}
+	}
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
 		const currentSchema = current.properties?.[name];
@@ -237,6 +286,82 @@ function compareSchema(previous, current, path, changes) {
 			if (previousItems !== false) changes.push(`narrowed ${path}[] items`);
 		} else if (previousItems !== false) {
 			compareSchema(previousItems, currentItems, `${path}[]`, changes);
+		}
+	}
+	const previousPrefixItems = previous.prefixItems;
+	const currentPrefixItems = current.prefixItems;
+	if (Array.isArray(currentPrefixItems)) {
+		for (const [index, currentPrefixItem] of currentPrefixItems.entries()) {
+			const previousPrefixItem = Array.isArray(previousPrefixItems)
+				? previousPrefixItems[index]
+				: undefined;
+			if (previousPrefixItem === undefined || previousPrefixItem === true) {
+				if (
+					currentPrefixItem === false ||
+					(typeof currentPrefixItem === "object" &&
+						currentPrefixItem !== null &&
+						Object.keys(currentPrefixItem).length > 0)
+				) {
+					changes.push(`narrowed ${path}[${index}] prefixItems`);
+				}
+			} else if (previousPrefixItem !== false) {
+				if (currentPrefixItem === false) {
+					changes.push(`narrowed ${path}[${index}] prefixItems`);
+				} else if (
+					typeof currentPrefixItem === "object" &&
+					currentPrefixItem !== null
+				) {
+					compareSchema(
+						previousPrefixItem,
+						currentPrefixItem,
+						`${path}[${index}] prefixItems`,
+						changes,
+					);
+				}
+			}
+		}
+	}
+	const previousContains = previous.contains;
+	const currentContains = current.contains;
+	if (currentContains !== undefined) {
+		if (previousContains === undefined || previousContains === true) {
+			if (
+				currentContains === false ||
+				(typeof currentContains === "object" &&
+					currentContains !== null &&
+					Object.keys(currentContains).length > 0)
+			) {
+				changes.push(`narrowed ${path} contains`);
+			}
+		} else if (previousContains !== false) {
+			if (currentContains === false) {
+				changes.push(`narrowed ${path} contains`);
+			} else if (
+				currentContains !== true &&
+				typeof currentContains === "object" &&
+				currentContains !== null
+			) {
+				compareSchema(
+					previousContains,
+					currentContains,
+					`${path} contains`,
+					changes,
+				);
+			}
+		}
+		const previousMinContains =
+			previousContains === undefined ? 0 : (previous.minContains ?? 1);
+		const currentMinContains = current.minContains ?? 1;
+		if (currentMinContains > previousMinContains) {
+			changes.push(`narrowed ${path} minContains`);
+		}
+		const previousMaxContains =
+			previousContains === undefined
+				? Number.POSITIVE_INFINITY
+				: (previous.maxContains ?? Number.POSITIVE_INFINITY);
+		const currentMaxContains = current.maxContains ?? Number.POSITIVE_INFINITY;
+		if (currentMaxContains < previousMaxContains) {
+			changes.push(`narrowed ${path} maxContains`);
 		}
 	}
 }

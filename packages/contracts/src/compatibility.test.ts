@@ -79,6 +79,28 @@ describe("contract compatibility command", () => {
 		);
 	});
 
+	it("rejects composition, tuple, contains, and property-name narrowings", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		for (const keyword of [
+			"allOf",
+			"not",
+			"prefixItems",
+			"contains",
+			"minContains",
+			"maxContains",
+			"propertyNames",
+		]) {
+			expect(result.stderr).toContain(keyword);
+		}
+	});
+
+	it("rejects adding an overlapping oneOf option", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("narrowed $defs.ExclusiveChoiceV1 oneOf");
+	});
+
 	it("accepts removal of type, const, enum, union, and reference constraints", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);
