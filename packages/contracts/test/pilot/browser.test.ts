@@ -95,6 +95,9 @@ describe("Pilot browser contracts", () => {
 				expect(JSON.stringify(operation.responses["500"])).toContain(
 					"INTERNAL_ERROR",
 				);
+				if ("requestBody" in operation) {
+					expect(operation.requestBody).toMatchObject({ required: true });
+				}
 			}
 		}
 		const serialized = JSON.stringify(document);
@@ -198,6 +201,18 @@ describe("Pilot browser contracts", () => {
 						bindingReference: "binding-1",
 					},
 				],
+			}),
+		).toMatchObject({ schemaVersion: 1 });
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				channels: [{ kind: "wecom_bot", enabled: true }],
+			}).success,
+		).toBe(false);
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.parse({
+				schemaVersion: 1,
+				channels: [{ kind: "wecom_bot", enabled: false }],
 			}),
 		).toMatchObject({ schemaVersion: 1 });
 		expect(

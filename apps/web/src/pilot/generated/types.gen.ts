@@ -282,8 +282,11 @@ export type BrowserSessionProjectionV1 = {
 };
 
 export type ChannelBindingInputV1 = {
-    bindingReference?: string;
-    enabled: boolean;
+    bindingReference: string;
+    enabled: true;
+    kind: 'wecom_bot' | 'wecom_app';
+} | {
+    enabled: false;
     kind: 'wecom_bot' | 'wecom_app';
 };
 
@@ -574,7 +577,7 @@ export type ListPendingAgentApplicationsResponses = {
 export type ListPendingAgentApplicationsResponse = ListPendingAgentApplicationsResponses[keyof ListPendingAgentApplicationsResponses];
 
 export type DecideAgentApplicationData = {
-    body?: ApprovalDecisionRequestV1;
+    body: ApprovalDecisionRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -738,7 +741,7 @@ export type ListAgentApplicationsResponses = {
 export type ListAgentApplicationsResponse = ListAgentApplicationsResponses[keyof ListAgentApplicationsResponses];
 
 export type CreateAgentApplicationData = {
-    body?: AgentApplicationCreateRequestV1;
+    body: AgentApplicationCreateRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -841,7 +844,7 @@ export type GetAgentApplicationResponses = {
 export type GetAgentApplicationResponse = GetAgentApplicationResponses[keyof GetAgentApplicationResponses];
 
 export type UpdateAgentApplicationData = {
-    body?: AgentApplicationUpdateRequestV1;
+    body: AgentApplicationUpdateRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1055,7 +1058,7 @@ export type GetAgentResponses = {
 export type GetAgentResponse = GetAgentResponses[keyof GetAgentResponses];
 
 export type UpdateAgentConfigurationData = {
-    body?: AgentConfigurationUpdateRequestV1;
+    body: AgentConfigurationUpdateRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1166,7 +1169,7 @@ export type ListConversationsResponses = {
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
 
 export type CreateConversationData = {
-    body?: {
+    body: {
         schemaVersion: 1;
     };
     headers: {
@@ -1222,7 +1225,7 @@ export type CreateConversationResponses = {
 export type CreateConversationResponse = CreateConversationResponses[keyof CreateConversationResponses];
 
 export type CommandAgentLifecycleData = {
-    body?: AgentLifecycleCommandRequestV1;
+    body: AgentLifecycleCommandRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1423,7 +1426,7 @@ export type GetExecutionDetailResponses = {
 export type GetExecutionDetailResponse = GetExecutionDetailResponses[keyof GetExecutionDetailResponses];
 
 export type SubmitMessageData = {
-    body?: MessageCommandRequestV1;
+    body: MessageCommandRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1477,7 +1480,7 @@ export type SubmitMessageResponses = {
 export type SubmitMessageResponse = SubmitMessageResponses[keyof SubmitMessageResponses];
 
 export type UpdateConversationModelSelectionData = {
-    body?: ModelSelectionUpdateRequestV1;
+    body: ModelSelectionUpdateRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1531,7 +1534,7 @@ export type UpdateConversationModelSelectionResponses = {
 export type UpdateConversationModelSelectionResponse = UpdateConversationModelSelectionResponses[keyof UpdateConversationModelSelectionResponses];
 
 export type RegenerateAnswerData = {
-    body?: RegenerateCommandRequestV1;
+    body: RegenerateCommandRequestV1;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1585,7 +1588,7 @@ export type RegenerateAnswerResponses = {
 export type RegenerateAnswerResponse = RegenerateAnswerResponses[keyof RegenerateAnswerResponses];
 
 export type StopExecutionData = {
-    body?: StopCommandRequestV1;
+    body: StopCommandRequestV1;
     headers: {
         'Idempotency-Key': string;
     };

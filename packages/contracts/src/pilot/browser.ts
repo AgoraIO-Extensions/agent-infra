@@ -27,6 +27,10 @@ const pageQuery = z.strictObject({
 const jsonContent = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
+const requiredJsonRequestBody = (schema: z.ZodType) => ({
+	required: true,
+	...jsonContent(schema),
+});
 const jsonResponse = (description: string, schema: z.ZodType) => ({
 	description,
 	...jsonContent(schema),
@@ -114,11 +118,17 @@ export const SecretValueInputV1Schema = z.strictObject({
 	value: nonEmptyString(),
 });
 
-export const ChannelBindingInputV1Schema = z.strictObject({
-	kind: z.enum(["wecom_bot", "wecom_app"]),
-	enabled: z.boolean(),
-	bindingReference: OpaqueIdV1Schema.optional(),
-});
+export const ChannelBindingInputV1Schema = z.discriminatedUnion("enabled", [
+	z.strictObject({
+		kind: z.enum(["wecom_bot", "wecom_app"]),
+		enabled: z.literal(true),
+		bindingReference: OpaqueIdV1Schema,
+	}),
+	z.strictObject({
+		kind: z.enum(["wecom_bot", "wecom_app"]),
+		enabled: z.literal(false),
+	}),
+]);
 
 export const ChannelBindingProjectionV1Schema = z.strictObject({
 	kind: z.enum(["web", "wecom_bot", "wecom_app"]),
@@ -461,7 +471,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "createAgentApplication",
 			requestParams: { header: idempotencyHeader },
-			requestBody: jsonContent(AgentApplicationCreateRequestV1Schema),
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV1Schema,
+			),
 			responses: {
 				"201": jsonResponse(
 					"Application submitted",
@@ -486,7 +498,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		put: {
 			operationId: "updateAgentApplication",
 			requestParams: { path: applicationPath, header: idempotencyHeader },
-			requestBody: jsonContent(AgentApplicationUpdateRequestV1Schema),
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationUpdateRequestV1Schema,
+			),
 			responses: {
 				"200": jsonResponse(
 					"Application updated",
@@ -523,7 +537,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "decideAgentApplication",
 			requestParams: { path: applicationPath, header: idempotencyHeader },
-			requestBody: jsonContent(ApprovalDecisionRequestV1Schema),
+			requestBody: requiredJsonRequestBody(ApprovalDecisionRequestV1Schema),
 			responses: {
 				"200": jsonResponse(
 					"Application decision",
@@ -557,7 +571,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		put: {
 			operationId: "updateAgentConfiguration",
 			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: jsonContent(AgentConfigurationUpdateRequestV1Schema),
+			requestBody: requiredJsonRequestBody(
+				AgentConfigurationUpdateRequestV1Schema,
+			),
 			responses: {
 				"200": jsonResponse("Agent configuration", AgentProjectionV1Schema),
 				...errorResponses,
@@ -568,7 +584,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "commandAgentLifecycle",
 			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: jsonContent(AgentLifecycleCommandRequestV1Schema),
+			requestBody: requiredJsonRequestBody(
+				AgentLifecycleCommandRequestV1Schema,
+			),
 			responses: {
 				"202": jsonResponse(
 					"Lifecycle command accepted",
@@ -590,7 +608,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "createConversation",
 			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: jsonContent(createConversationRequest),
+			requestBody: requiredJsonRequestBody(createConversationRequest),
 			responses: {
 				"201": jsonResponse(
 					"Conversation created",
@@ -617,7 +635,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "submitMessage",
 			requestParams: { path: conversationPath, header: idempotencyHeader },
-			requestBody: jsonContent(MessageCommandRequestV1Schema),
+			requestBody: requiredJsonRequestBody(MessageCommandRequestV1Schema),
 			responses: {
 				"202": jsonResponse(
 					"Message accepted",
@@ -631,7 +649,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "regenerateAnswer",
 			requestParams: { path: conversationPath, header: idempotencyHeader },
-			requestBody: jsonContent(RegenerateCommandRequestV1Schema),
+			requestBody: requiredJsonRequestBody(RegenerateCommandRequestV1Schema),
 			responses: {
 				"202": jsonResponse(
 					"Regeneration accepted",
@@ -645,7 +663,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "stopExecution",
 			requestParams: { path: conversationPath, header: idempotencyHeader },
-			requestBody: jsonContent(StopCommandRequestV1Schema),
+			requestBody: requiredJsonRequestBody(StopCommandRequestV1Schema),
 			responses: {
 				"202": jsonResponse("Stop accepted", CommandAcceptedProjectionV1Schema),
 				...errorResponses,
@@ -656,7 +674,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		put: {
 			operationId: "updateConversationModelSelection",
 			requestParams: { path: conversationPath, header: idempotencyHeader },
-			requestBody: jsonContent(ModelSelectionUpdateRequestV1Schema),
+			requestBody: requiredJsonRequestBody(ModelSelectionUpdateRequestV1Schema),
 			responses: {
 				"200": jsonResponse(
 					"Model selection updated",
