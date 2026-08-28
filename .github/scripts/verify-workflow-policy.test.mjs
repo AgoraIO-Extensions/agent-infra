@@ -6,7 +6,7 @@ import test from "node:test";
 import YAML from "yaml";
 
 import {
-  validateGhAwPocSource,
+  validateGhAwPilotSource,
   validateMattSkillSnapshot,
   validateTrustedScriptSources,
   validateWorkflowDocuments,
@@ -37,6 +37,7 @@ async function actualTrustedScriptSources() {
         "claude-blocker-review.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
+        "gh-aw-pilot.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
@@ -51,9 +52,9 @@ async function actualTrustedScriptSources() {
   );
 }
 
-async function actualGhAwPocSource() {
+async function actualGhAwPilotSource() {
   return fs.readFile(
-    path.join(workflowDirectory, "gh-aw-copilot-byok-poc.md"),
+    path.join(workflowDirectory, "gh-aw-issue-to-pr-pilot.md"),
     "utf8",
   );
 }
@@ -99,19 +100,19 @@ test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
 });
 
-test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () => {
+test("locks the gh-aw Pilot to Copilot BYOK and bounded draft PR safe output", async () => {
   const writableAgent = await actualWorkflows();
-  writableAgent["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.permissions.contents =
+  writableAgent["gh-aw-issue-to-pr-pilot.lock.yml"].jobs.agent.permissions.contents =
     "write";
   assert.ok(
     validateWorkflowDocuments(writableAgent).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const autoMerge = await actualWorkflows();
   const safeOutputStep = autoMerge[
-    "gh-aw-copilot-byok-poc.lock.yml"
+    "gh-aw-issue-to-pr-pilot.lock.yml"
   ].jobs.safe_outputs.steps.find((step) => step.id === "process_safe_outputs");
   safeOutputStep.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG =
     safeOutputStep.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG.replace(
@@ -120,75 +121,75 @@ test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () =>
     );
   assert.ok(
     validateWorkflowDocuments(autoMerge).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const issueTrigger = await actualWorkflows();
-  issueTrigger["gh-aw-copilot-byok-poc.lock.yml"].on.issues = {
+  issueTrigger["gh-aw-issue-to-pr-pilot.lock.yml"].on.issues = {
     types: ["labeled"],
   };
   assert.ok(
     validateWorkflowDocuments(issueTrigger).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const leakedKey = await actualWorkflows();
-  leakedKey["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.steps.push({
+  leakedKey["gh-aw-issue-to-pr-pilot.lock.yml"].jobs.agent.steps.push({
     name: "Leak",
     run: 'echo "$LEAK"',
     env: { LEAK: "${{ secrets.CODEX_API_KEY }}" },
   });
   assert.ok(
     validateWorkflowDocuments(leakedKey).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const replacedMembership = await actualWorkflows();
   const membershipJob = replacedMembership[
-    "gh-aw-copilot-byok-poc.lock.yml"
+    "gh-aw-issue-to-pr-pilot.lock.yml"
   ].jobs.pre_activation;
   membershipJob.steps = [
     { id: "check_membership", run: 'echo "activated=true" >> "$GITHUB_OUTPUT"' },
   ];
   assert.ok(
     validateWorkflowDocuments(replacedMembership).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const unknownSecrets = await actualWorkflows();
-  unknownSecrets["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.env = {
+  unknownSecrets["gh-aw-issue-to-pr-pilot.lock.yml"].jobs.agent.env = {
     LEAK: "${{ secrets.UNRELATED_SECRET }}",
   };
-  unknownSecrets["gh-aw-copilot-byok-poc.lock.yml"].jobs.agent.steps.push({
+  unknownSecrets["gh-aw-issue-to-pr-pilot.lock.yml"].jobs.agent.steps.push({
     name: "Bracket leak",
     run: 'echo "$LEAK"',
     env: { LEAK: "${{ secrets['CODEX_API_KEY'] }}" },
   });
   assert.ok(
     validateWorkflowDocuments(unknownSecrets).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const literalModel = await actualWorkflows();
-  const literalWorkflow = literalModel["gh-aw-copilot-byok-poc.lock.yml"];
+  const literalWorkflow = literalModel["gh-aw-issue-to-pr-pilot.lock.yml"];
   literalWorkflow.jobs.activation.steps.find(
     (step) => step.id === "generate_aw_info",
   ).env.GH_AW_INFO_MODEL = "literal-model";
   literalWorkflow.jobs.safe_outputs.env.GH_AW_ENGINE_MODEL = "literal-model";
   assert.ok(
     validateWorkflowDocuments(literalModel).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 
   const broadFiles = await actualWorkflows();
   const broadPublisher = broadFiles[
-    "gh-aw-copilot-byok-poc.lock.yml"
+    "gh-aw-issue-to-pr-pilot.lock.yml"
   ].jobs.safe_outputs.steps.find((step) => step.id === "process_safe_outputs");
   broadPublisher.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG =
     broadPublisher.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG.replace(
@@ -197,15 +198,44 @@ test("locks the gh-aw POC to Copilot BYOK and draft PR safe output", async () =>
     );
   assert.ok(
     validateWorkflowDocuments(broadFiles).some((error) =>
-      error.includes("gh-aw POC contract"),
+      error.includes("gh-aw Pilot contract"),
     ),
   );
 });
 
-test("binds the gh-aw POC source to its reviewed lock workflow", async () => {
-  const source = await actualGhAwPocSource();
-  assert.deepEqual(validateGhAwPocSource(source), []);
-  assert.ok(validateGhAwPocSource(`${source}\n# drift`).length > 0);
+test("binds the gh-aw Pilot source to its reviewed lock workflow", async () => {
+  const source = await actualGhAwPilotSource();
+  assert.deepEqual(validateGhAwPilotSource(source), []);
+  assert.ok(validateGhAwPilotSource(`${source}\n# drift`).length > 0);
+});
+
+test("requires trusted gh-aw Pilot authorization and publish recheck", async () => {
+  const source = await actualGhAwPilotSource();
+  for (const requirement of [
+    "github.triggering_actor == 'LichKing-2234'",
+    'group: "gh-aw-pilot-${{ github.repository }}"',
+    "pilot_preflight:",
+    "node .github/scripts/gh-aw-pilot.mjs",
+    "PILOT_PHASE: authorize",
+    "PILOT_PHASE: recheck",
+    "PILOT_EXPECTED_EXECUTION_CONTENT_HASH: ${{ inputs.execution_content_sha256 }}",
+    'allowed-branches: ["gh-aw/pilot-${{ inputs.item_number }}"]',
+    "needs.pilot_preflight.outputs.target_hash",
+    "needs.pilot_preflight.outputs.category",
+  ]) {
+    assert.ok(source.includes(requirement), requirement);
+  }
+
+  const sources = await actualTrustedScriptSources();
+  sources["gh-aw-pilot.mjs"] = sources["gh-aw-pilot.mjs"].replace(
+    "targetHash !== expectedTargetHash",
+    "false",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("trusted target snapshot"),
+    ),
+  );
 });
 
 test("reserves concurrency queue for the generated gh-aw workflow", async () => {
@@ -276,7 +306,7 @@ test("requires a safe terminal Job Summary in every source workflow", async () =
   const workflows = await actualWorkflows();
   for (const [name, workflow] of Object.entries(workflows)) {
     if (
-      ["gh-aw-copilot-byok-poc.lock.yml", "workflow-outcome.yml"].includes(name)
+      ["gh-aw-issue-to-pr-pilot.lock.yml", "workflow-outcome.yml"].includes(name)
     ) {
       continue;
     }
@@ -509,20 +539,47 @@ test("requires the isolated Worker authorization recorder before the model", asy
   );
 });
 
-test("locks the Worker authorization Team token to the recorder", async () => {
+test("keeps legacy Worker new Issue intake disabled", async () => {
   const workflows = await actualWorkflows();
   const worker = workflows["codex-worker.yml"];
+  const tokenMint = worker.jobs.authorization.steps.find(
+    (step) => step.id === "team-membership-token",
+  );
   const recorder = worker.jobs.authorization.steps.find(
     (step) => step.name === "Record trusted authorization transition",
   );
-  assert.equal(
-    recorder.env.TEAM_MEMBERSHIP_TOKEN,
-    "${{ steps.team-membership-token.outputs.token }}",
-  );
-  recorder.run = "node untrusted.mjs";
+  assert.equal(tokenMint, undefined);
+  assert.deepEqual(recorder.env, { GITHUB_TOKEN: "${{ github.token }}" });
+
+  recorder.env.TEAM_MEMBERSHIP_TOKEN =
+    "${{ steps.team-membership-token.outputs.token }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("authorization Team token"),
+      error.includes("new Issue intake must stay disabled"),
+    ),
+  );
+
+  const sources = await actualTrustedScriptSources();
+  assert.doesNotMatch(sources["codex-worker.mjs"], /\bauthorizeCycle\(/);
+  assert.doesNotMatch(
+    sources["codex-worker.mjs"],
+    /TEAM_MEMBERSHIP_TOKEN|fetchTeamMembership/,
+  );
+  assert.match(
+    sources["codex-worker.mjs"],
+    /if \(!context\.current\) return false;/,
+  );
+  assert.match(
+    sources["codex-worker.mjs"],
+    /const allowed = await recordIssueAuthorizationEvent\([\s\S]{0,200}await writeOutput\("allowed", allowed\);/,
+  );
+  sources["codex-worker.mjs"] = sources["codex-worker.mjs"].replace(
+    'event.action === "labeled" && event.label?.name === "ready-for-agent"',
+    "false",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("new Issue intake must stay disabled"),
     ),
   );
 });

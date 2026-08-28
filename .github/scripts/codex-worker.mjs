@@ -31,17 +31,14 @@ import {
 } from "./blocker-contract.mjs";
 import {
   activeAuthorization,
-  authorizeCycle,
   buildAcceptanceCriteriaEvidenceMarker,
   buildAuthorizationRecordComment,
   executionContent,
   latestAuthorizationRecord,
-  latestAuthorizationTimelineEvent,
   parseAuthorizationRecords,
   parseBlockedBy,
   transitionAuthorization,
   validateAcceptanceCriteriaEvidence,
-  WORKER_OWNERS_TEAM_SLUG,
 } from "./worker-contract.mjs";
 import {
   buildPullRequestRecoveryComment,
@@ -102,7 +99,6 @@ export function classifyWorkerEvent({
   if (
     action === "reopened" ||
     action === "edited" ||
-    (action === "labeled" && label === "ready-for-agent") ||
     (action === "unlabeled" &&
       ["ready-for-human", "needs-triage", "wontfix"].includes(label))
   ) {
@@ -1559,22 +1555,20 @@ async function fetchAuthorizationContext(repository, issueNumber, token) {
   let issue = issues.find((candidate) => candidate.number === issueNumber);
   if (!issue || issue.pull_request) throw new Error("Worker target is not an Issue");
   let contract;
-  let contractError;
   try {
     const graphState = validatedExecutionIssue(issues, issueNumber);
     issue = graphState.issue;
     contract = executionContent(issue, {
       blockerNumbers: graphState.blockerNumbers,
     });
-  } catch (error) {
-    contractError = error;
+  } catch {
+    contract = undefined;
   }
   return {
     issue,
     records,
     current: latestAuthorizationRecord(records),
     contract,
-    contractError,
     timelineEvents,
   };
 }
@@ -1594,14 +1588,6 @@ function findIssueTimelineEvent({
     )
     .sort((left, right) => left.id - right.id)
     .at(-1);
-}
-
-async function fetchTeamMembership(repository, login, token) {
-  const owner = repository.split("/")[0];
-  return githubRequest(
-    `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
-    { token, allowNotFound: true },
-  );
 }
 
 async function addIssueLabel(repository, issueNumber, label, token) {
@@ -1648,7 +1634,6 @@ async function recordIssueAuthorizationEvent({
   repository,
   event,
   token,
-  teamToken,
 }) {
   const issueNumber = event.issue?.number;
   assertPositiveInteger(issueNumber, "Worker authorization Issue");
@@ -1657,50 +1642,12 @@ async function recordIssueAuthorizationEvent({
   const recordedAt = new Date().toISOString();
   const action = event.action;
   const label = event.label?.name;
-
-  if (action === "labeled" && label === "ready-for-agent") {
-    if (context.issue.state !== "open" || !labels.includes("ready-for-agent")) {
-      return;
-    }
-    try {
-      if (context.contractError) throw context.contractError;
-      const timelineEvent = latestAuthorizationTimelineEvent(
-        context.timelineEvents,
-      );
-      if (!timelineEvent) throw new Error("Worker authorization timeline event is missing");
-      if (!teamToken) throw new Error("TEAM_MEMBERSHIP_TOKEN is required");
-      const membership = await fetchTeamMembership(
-        repository,
-        timelineEvent.actor.login,
-        teamToken,
-      );
-      const record = authorizeCycle({
-        issueNumber,
-        executionContentHash: context.contract.hash,
-        blockedByHash: context.contract.blockedByHash,
-        records: context.records,
-        timelineEvent,
-        membership,
-        recordedAt,
-        forceNewCycle: context.timelineEvents.some(
-          (timelineEntry) =>
-            ["closed", "reopened"].includes(timelineEntry.event) &&
-            timelineEntry.id > (context.current?.authorizationEventId ?? 0) &&
-            timelineEntry.id < timelineEvent.id,
-        ),
-      });
-      if (record) await publishAuthorizationRecord(repository, issueNumber, record, token);
-      return;
-    } catch (error) {
-      await rejectAuthorization(repository, issueNumber, token);
-      throw error;
-    }
-  }
+  if (!context.current) return false;
 
   if (action === "unlabeled" && label === "ready-for-agent") {
-    if (labels.includes("ready-for-agent")) return;
-    if (!context.current || !["active", "paused"].includes(context.current.state)) {
-      return;
+    if (labels.includes("ready-for-agent")) return true;
+    if (!["active", "paused"].includes(context.current.state)) {
+      return true;
     }
     const timelineEvent = findIssueTimelineEvent({
       events: context.timelineEvents,
@@ -1712,7 +1659,7 @@ async function recordIssueAuthorizationEvent({
       timelineEvent.id <= context.current.authorizationEventId ||
       String(timelineEvent.id) === context.current.transitionEventId
     ) {
-      return;
+      return true;
     }
     const unchanged =
       context.contract &&
@@ -1730,21 +1677,15 @@ async function recordIssueAuthorizationEvent({
     });
     await publishAuthorizationRecord(repository, issueNumber, record, token);
     if (!unchanged) await addIssueLabel(repository, issueNumber, "needs-triage", token);
-    return;
+    return true;
   }
   if (action === "edited") {
-    if (!context.current) {
-      if (labels.includes("ready-for-agent")) {
-        await rejectAuthorization(repository, issueNumber, token);
-      }
-      return;
-    }
-    if (!["active", "paused"].includes(context.current.state)) return;
+    if (!["active", "paused"].includes(context.current.state)) return true;
     if (
       Date.parse(event.issue.updated_at) <
       Date.parse(context.current.authorizationEventCreatedAt)
     ) {
-      return;
+      return true;
     }
     const unchanged =
       context.contract &&
@@ -1753,7 +1694,7 @@ async function recordIssueAuthorizationEvent({
       unchanged &&
       context.current.blockedByHash === context.contract.blockedByHash
     ) {
-      return;
+      return true;
     }
     const invalidationReason = authorizationEditInvalidation({
       executionContentMatches: Boolean(unchanged),
@@ -1761,7 +1702,7 @@ async function recordIssueAuthorizationEvent({
         context.current.blockedByHash === context.contract?.blockedByHash,
       contractValid: Boolean(context.contract),
     });
-    if (!invalidationReason) return;
+    if (!invalidationReason) return true;
     const record = transitionAuthorization({
       current: context.current,
       state: "invalidated",
@@ -1775,18 +1716,18 @@ async function recordIssueAuthorizationEvent({
     });
     await publishAuthorizationRecord(repository, issueNumber, record, token);
     await rejectAuthorization(repository, issueNumber, token);
-    return;
+    return true;
   }
 
   if (action === "closed") {
-    if (context.issue.state !== "closed") return;
-    if (!shouldConsumeAuthorization(context.current)) return;
+    if (context.issue.state !== "closed") return true;
+    if (!shouldConsumeAuthorization(context.current)) return true;
     const timelineEvent = findIssueTimelineEvent({
       events: context.timelineEvents,
       eventName: "closed",
     });
     if (!timelineEvent) throw new Error("Issue close timeline event is missing");
-    if (timelineEvent.id <= context.current.authorizationEventId) return;
+    if (timelineEvent.id <= context.current.authorizationEventId) return true;
     const record = transitionAuthorization({
       current: context.current,
       state: "consumed",
@@ -1799,11 +1740,11 @@ async function recordIssueAuthorizationEvent({
       recordedAt,
     });
     await publishAuthorizationRecord(repository, issueNumber, record, token);
-    return;
+    return true;
   }
 
   if (action === "reopened") {
-    if (context.issue.state !== "open") return;
+    if (context.issue.state !== "open") return true;
     const timelineEvent = findIssueTimelineEvent({
       events: context.timelineEvents,
       eventName: "reopened",
@@ -1826,13 +1767,8 @@ async function recordIssueAuthorizationEvent({
       });
       await publishAuthorizationRecord(repository, issueNumber, record, token);
     }
-    if (
-      labels.includes("ready-for-agent") &&
-      (!context.current || context.current.authorizationEventId < timelineEvent.id)
-    ) {
-      await rejectAuthorization(repository, issueNumber, token);
-    }
   }
+  return true;
 }
 
 async function recordPullRequestAuthorizationEvent({ repository, event, token }) {
@@ -1998,13 +1934,16 @@ async function authorizeCommand() {
     return;
   }
   if (eventName === "issues") {
-    await recordIssueAuthorizationEvent({
+    if (event.action === "labeled" && event.label?.name === "ready-for-agent") {
+      await writeOutput("allowed", false);
+      return;
+    }
+    const allowed = await recordIssueAuthorizationEvent({
       repository,
       event,
       token,
-      teamToken: process.env.TEAM_MEMBERSHIP_TOKEN,
     });
-    await writeOutput("allowed", true);
+    await writeOutput("allowed", allowed);
     return;
   }
   if (eventName === "pull_request_target") {

@@ -11,7 +11,7 @@ const REQUIRED_WORKFLOWS = [
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
-  "gh-aw-copilot-byok-poc.lock.yml",
+  "gh-aw-issue-to-pr-pilot.lock.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
   "workflow-outcome.yml",
@@ -180,10 +180,10 @@ const PR_AGENT_SECRETS = [
 ];
 const TEAM_MEMBERSHIP_TOKEN_ACTION =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
-const GH_AW_POC_SEMANTIC_SHA256 =
-  "1c4405c96f475598e2f73f9953b9c5883bda1850352ca5135f3afb0c91d88076";
-const GH_AW_POC_SOURCE_SHA256 =
-  "f821a82ba746b8e372ba2fb52f3b5eab159be4326260322a712500831ac5a26a";
+const GH_AW_PILOT_SEMANTIC_SHA256 =
+  "41ae67574d02166deb734c651998a7e5f8056aae32d24e73bfe7f061aaa029ec";
+const GH_AW_PILOT_SOURCE_SHA256 =
+  "78fe52e63cf79e08e789b37bbe3d647365c8b4ba8ac8354a44d90846a15d8ade";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
 const MATT_SKILL_SOURCE = "https://github.com/mattpocock/skills.git";
 const MATT_SKILLS = ["code-review", "implement", "tdd"];
@@ -338,7 +338,7 @@ function hasSingleFixedClaudeArgument(args, option, value) {
   return optionOccurrences.length === 1 && fixedOccurrences.length === 1;
 }
 
-function validateGhAwPocWorkflow(workflow) {
+function validateGhAwPilotWorkflow(workflow) {
   const errors = [];
   const semanticHash = createHash("sha256")
     .update(JSON.stringify(workflow))
@@ -347,11 +347,25 @@ function validateGhAwPocWorkflow(workflow) {
     (step) => step.id === "check_membership",
   );
   const agent = workflow?.jobs?.agent;
+  const pilotPreflight = workflow?.jobs?.pilot_preflight;
+  const pilotPreflightSteps = pilotPreflight?.steps ?? [];
+  const pilotToken = pilotPreflightSteps.find(
+    (step) => step.id === "team-membership-token",
+  );
+  const pilotAuthorize = pilotPreflightSteps.find(
+    (step) => step.name === "Authorize trusted pilot target",
+  );
   const execution = agent?.steps?.find((step) => step.id === "agentic_execution");
   const redaction = agent?.steps?.find(
     (step) => step.name === "Redact secrets in logs",
   );
   const safeOutputs = workflow?.jobs?.safe_outputs;
+  const pilotRecheckToken = safeOutputs?.steps?.find(
+    (step) => step.id === "pilot-recheck-team-token",
+  );
+  const pilotRecheck = safeOutputs?.steps?.find(
+    (step) => step.name === "Recheck trusted pilot target",
+  );
   const publisher = safeOutputs?.steps?.find(
     (step) => step.id === "process_safe_outputs",
   );
@@ -373,12 +387,13 @@ function validateGhAwPocWorkflow(workflow) {
   const expectedSecrets = [
     "CODEX_API_KEY",
     "CODEX_GITHUB_TOKEN",
-    "CODEX_MODEL",
     "CODEX_RESPONSES_API_ENDPOINT",
     "COPILOT_GITHUB_TOKEN",
     "GH_AW_GITHUB_MCP_SERVER_TOKEN",
     "GH_AW_GITHUB_TOKEN",
     "GITHUB_TOKEN",
+    "TEAM_MEMBERSHIP_APP_ID",
+    "TEAM_MEMBERSHIP_APP_PRIVATE_KEY",
   ];
   const secretCount = (value, secret) =>
     [
@@ -393,20 +408,27 @@ function validateGhAwPocWorkflow(workflow) {
     (step) =>
       !step.uses || step.uses.startsWith("./") || FULL_SHA_ACTION.test(step.uses),
   );
+  const pilotActivationCondition =
+    "github.actor == 'LichKing-2234' && github.triggering_actor == 'LichKing-2234' && github.ref_name == github.event.repository.default_branch";
   if (
-    workflow?.name !== "gh-aw Copilot BYOK Issue-to-PR POC" ||
+    workflow?.name !== "gh-aw Copilot BYOK Issue-to-PR Pilot" ||
     workflow?.on?.issues !== undefined ||
     workflow?.on?.workflow_dispatch?.inputs?.item_number?.required !== true ||
     workflow?.on?.workflow_dispatch?.inputs?.item_number?.type !== "string" ||
-    workflow?.jobs?.pre_activation?.if !== "github.actor == 'LichKing-2234'" ||
+    workflow?.on?.workflow_dispatch?.inputs?.execution_content_sha256?.required !==
+      true ||
+    workflow?.on?.workflow_dispatch?.inputs?.execution_content_sha256?.type !==
+      "string" ||
+    String(workflow?.jobs?.pre_activation?.if ?? "").trim() !==
+      pilotActivationCondition ||
     !String(workflow?.jobs?.activation?.if ?? "").includes(
-      "github.actor == 'LichKing-2234'",
+      pilotActivationCondition,
     ) ||
     workflow?.["run-name"] !==
-      "Issue #${{ inputs.item_number }} | gh-aw-poc | dispatch" ||
+      "Issue #${{ inputs.item_number }} | gh-aw-pilot | dispatch" ||
     !sameObject(workflow?.permissions, {}) ||
     workflow?.concurrency?.group !==
-      "gh-aw-poc-${{ inputs.item_number }}" ||
+      "gh-aw-pilot-${{ github.repository }}" ||
     workflow?.concurrency?.["cancel-in-progress"] !== false ||
     membership?.env?.GH_AW_REQUIRED_ROLES !== "admin" ||
     [...new Set(secretReferences)].sort().join("\0") !==
@@ -415,6 +437,36 @@ function validateGhAwPocWorkflow(workflow) {
       contents: "read",
       issues: "read",
       "pull-requests": "read",
+    }) ||
+    JSON.stringify(agent?.needs) !==
+      JSON.stringify(["activation", "pilot_preflight"]) ||
+    pilotPreflight?.needs !== "activation" ||
+    pilotPreflight?.if !== undefined ||
+    !sameObject(pilotPreflight?.permissions, {
+      contents: "read",
+      issues: "read",
+      "pull-requests": "read",
+    }) ||
+    !sameObject(pilotPreflight?.outputs, {
+      category: "${{ steps.authorize.outputs.category }}",
+      target_hash: "${{ steps.authorize.outputs.target_hash }}",
+    }) ||
+    pilotToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    !sameObject(pilotToken?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      owner: "${{ github.repository_owner }}",
+      "permission-members": "read",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+    }) ||
+    pilotAuthorize?.run !== "node .github/scripts/gh-aw-pilot.mjs" ||
+    !sameObject(pilotAuthorize?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      PILOT_EXPECTED_ACTOR: "LichKing-2234",
+      PILOT_EXPECTED_EXECUTION_CONTENT_HASH:
+        "${{ inputs.execution_content_sha256 }}",
+      PILOT_ISSUE_NUMBER: "${{ inputs.item_number }}",
+      PILOT_PHASE: "authorize",
+      TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
     }) ||
     execution?.env?.COPILOT_PROVIDER_BASE_URL !==
       "${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}" ||
@@ -428,9 +480,15 @@ function validateGhAwPocWorkflow(workflow) {
     secretCount(workflow, "CODEX_RESPONSES_API_ENDPOINT") !== 2 ||
     secretCount(execution, "CODEX_RESPONSES_API_ENDPOINT") !== 1 ||
     secretCount(redaction, "CODEX_RESPONSES_API_ENDPOINT") !== 1 ||
-    secretCount(workflow, "CODEX_MODEL") !== 2 ||
-    secretCount(generateInfo, "CODEX_MODEL") !== 1 ||
-    secretCount(safeOutputs?.env, "CODEX_MODEL") !== 1 ||
+    secretCount(workflow, "TEAM_MEMBERSHIP_APP_ID") !== 2 ||
+    secretCount(workflow, "TEAM_MEMBERSHIP_APP_PRIVATE_KEY") !== 2 ||
+    secretCount(workflow, "CODEX_MODEL") !== 0 ||
+    generateInfo?.env?.GH_AW_INFO_MODEL !==
+      "${{ vars.GH_AW_MODEL_AGENT_COPILOT }}" ||
+    execution?.env?.COPILOT_MODEL !==
+      "${{ vars.GH_AW_MODEL_AGENT_COPILOT }}" ||
+    safeOutputs?.env?.GH_AW_ENGINE_MODEL !==
+      "${{ vars.GH_AW_MODEL_AGENT_COPILOT }}" ||
     secretCount(workflow, "CODEX_GITHUB_TOKEN") !== 1 ||
     secretCount(publisher, "CODEX_GITHUB_TOKEN") !== 1 ||
     !String(execution?.run ?? "").includes(
@@ -444,15 +502,43 @@ function validateGhAwPocWorkflow(workflow) {
       issues: "write",
       "pull-requests": "write",
     }) ||
+    JSON.stringify(safeOutputs?.needs) !==
+      JSON.stringify(["activation", "agent", "pilot_preflight"]) ||
+    pilotRecheckToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    !sameObject(pilotRecheckToken?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      owner: "${{ github.repository_owner }}",
+      "permission-members": "read",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+    }) ||
+    pilotRecheck?.run !== "node .github/scripts/gh-aw-pilot.mjs" ||
+    !sameObject(pilotRecheck?.env, {
+      GITHUB_TOKEN: "${{ github.token }}",
+      PILOT_EXPECTED_ACTOR: "LichKing-2234",
+      PILOT_EXPECTED_TARGET_HASH:
+        "${{ needs.pilot_preflight.outputs.target_hash }}",
+      PILOT_ISSUE_NUMBER: "${{ inputs.item_number }}",
+      PILOT_PHASE: "recheck",
+      TEAM_MEMBERSHIP_TOKEN:
+        "${{ steps.pilot-recheck-team-token.outputs.token }}",
+    }) ||
     publisher?.env?.GH_AW_CI_TRIGGER_TOKEN !==
       "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
     pullRequest?.draft !== true ||
     pullRequest?.max !== 1 ||
     pullRequest?.base_branch !== "main" ||
     JSON.stringify(pullRequest?.allowed_branches) !==
-      JSON.stringify(["gh-aw/poc-*"]) ||
+      JSON.stringify(["gh-aw/pilot-${{ inputs.item_number }}"]) ||
     JSON.stringify(pullRequest?.allowed_files) !==
       JSON.stringify(["apps/**", "packages/**", "tests/**"]) ||
+    JSON.stringify(pullRequest?.labels) !==
+      JSON.stringify([
+        "gh-aw-pilot",
+        "ready-for-human",
+        "${{ needs.pilot_preflight.outputs.category }}",
+      ]) ||
+    pullRequest?.preserve_branch_name !== true ||
+    pullRequest?.title_prefix !== "[gh-aw Pilot] " ||
     pullRequest?.fallback_as_issue !== false ||
     pullRequest?.auto_close_issue !== false ||
     pullRequest?.if_no_changes !== "error" ||
@@ -460,20 +546,20 @@ function validateGhAwPocWorkflow(workflow) {
     handlers?.merge_pull_request !== undefined ||
     workflow?.jobs?.threat_detection !== undefined ||
     !allActionsPinned ||
-    semanticHash !== GH_AW_POC_SEMANTIC_SHA256
+    semanticHash !== GH_AW_PILOT_SEMANTIC_SHA256
   ) {
     errors.push(
-      "gh-aw POC contract must preserve write-role activation, isolated Copilot BYOK, and one draft PR safe output",
+      "gh-aw Pilot contract must preserve manual activation, isolated Copilot BYOK, and one bounded draft PR safe output",
     );
   }
   return errors;
 }
 
-export function validateGhAwPocSource(source) {
+export function validateGhAwPilotSource(source) {
   const hash = createHash("sha256").update(source).digest("hex");
-  return hash === GH_AW_POC_SOURCE_SHA256
+  return hash === GH_AW_PILOT_SOURCE_SHA256
     ? []
-    : ["gh-aw POC source must match the reviewed generated workflow source"];
+    : ["gh-aw Pilot source must match the reviewed generated workflow source"];
 }
 
 function isApprovedClaudeConfigStep(workflowName, jobName, step) {
@@ -646,8 +732,8 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       const allowedMembershipLocation =
         step.id === "team-membership-token" &&
-        ((workflowName === "pr-gates.yml" && jobName === "gates") ||
-          (workflowName === "codex-worker.yml" && jobName === "authorization"));
+        workflowName === "pr-gates.yml" &&
+        jobName === "gates";
       const allowedGatePublisherLocation =
         step.id === "gate-publisher-token" &&
         ((workflowName === "pr-gates.yml" && jobName === "gates") ||
@@ -679,6 +765,7 @@ export function validateTrustedScriptSources(sources) {
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
+  const pilotSource = sources?.["gh-aw-pilot.mjs"] ?? "";
   const resilienceSource = sources?.["worker-resilience.mjs"] ?? "";
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
@@ -721,8 +808,8 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Gate publishers must bind Check Runs to current heads");
   }
   const workerAuthorizationRequirements = [
-    "authorizeCycle({",
     "parseAuthorizationRecords(",
+    "transitionAuthorization({",
     'if (command === "authorize") return authorizeCommand();',
     "codex/issue-${issueNumber}-cycle-${issueState.authorizationRecord.cycle}",
   ];
@@ -749,6 +836,40 @@ export function validateTrustedScriptSources(sources) {
     !workerSource.includes("run.head_repository.full_name.toLowerCase() === repository.toLowerCase()")
   ) {
     errors.push("Codex Worker workflow recovery must pass authorization");
+  }
+  if (
+    !/if \(eventName === "issues"\) \{\s+if \(event\.action === "labeled" && event\.label\?\.name === "ready-for-agent"\) \{\s+await writeOutput\("allowed", false\);\s+return;/.test(
+      workerSource,
+    ) ||
+    workerSource.includes(
+      '(action === "labeled" && label === "ready-for-agent")',
+    ) ||
+    /\bauthorizeCycle\(|TEAM_MEMBERSHIP_TOKEN|fetchTeamMembership/.test(
+      workerSource,
+    ) ||
+    !workerSource.includes("if (!context.current) return false;") ||
+    !/const allowed = await recordIssueAuthorizationEvent\([\s\S]{0,200}await writeOutput\("allowed", allowed\);/.test(
+      workerSource,
+    )
+  ) {
+    errors.push("Codex Worker new Issue intake must stay disabled");
+  }
+  const pilotRequirements = [
+    'TARGET_VERSION = "gh-aw-pilot-target-v1"',
+    "parsePilotIssueNumber",
+    "validatePilotSnapshot",
+    "executionContent(issue,",
+    "WORKER_OWNERS_TEAM_SLUG",
+    "extractPrimaryIssueNumbers(pullRequest.body)",
+    'actorAccount?.type !== "User"',
+    'membership?.state !== "active"',
+    'blocker.state_reason !== "completed"',
+    "activePullRequests.length > 0 || branchExists",
+    "contract.hash !== expectedExecutionContentHash",
+    "targetHash !== expectedTargetHash",
+  ];
+  if (pilotRequirements.some((requirement) => !pilotSource.includes(requirement))) {
+    errors.push("gh-aw Pilot must authorize and recheck one trusted target snapshot");
   }
   const claudeRecoveryRequirements = [
     "reviewRecoveryArtifactAvailable({",
@@ -979,16 +1100,16 @@ export function validateWorkflowDocuments(workflows) {
 
   for (const [name, workflow] of Object.entries(workflows)) {
     if (
-      name !== "gh-aw-copilot-byok-poc.lock.yml" &&
+      name !== "gh-aw-issue-to-pr-pilot.lock.yml" &&
       (workflow?.concurrency?.queue !== undefined ||
         Object.values(workflow?.jobs ?? {}).some(
           (job) => job?.concurrency?.queue !== undefined,
         ))
     ) {
-      errors.push(`${name}: concurrency.queue is reserved for the generated gh-aw POC`);
+      errors.push(`${name}: concurrency.queue is reserved for the generated gh-aw Pilot`);
     }
-    if (name === "gh-aw-copilot-byok-poc.lock.yml") {
-      errors.push(...validateGhAwPocWorkflow(workflow));
+    if (name === "gh-aw-issue-to-pr-pilot.lock.yml") {
+      errors.push(...validateGhAwPilotWorkflow(workflow));
       continue;
     }
     if (!workflow.permissions) errors.push(`${name} must declare top-level permissions`);
@@ -1016,14 +1137,10 @@ export function validateWorkflowDocuments(workflows) {
           tokenReferences.length === 1 &&
           step.env?.TEAM_MEMBERSHIP_TOKEN ===
             "${{ steps.team-membership-token.outputs.token }}" &&
-          ((name === "pr-gates.yml" &&
-            jobName === "gates" &&
-            step.name === "Evaluate Issue, readiness, and human validation gates" &&
-            step.run === "node .github/scripts/pr-gates.mjs") ||
-            (name === "codex-worker.yml" &&
-              jobName === "authorization" &&
-              step.name === "Record trusted authorization transition" &&
-              step.run === "node trusted/.github/scripts/codex-worker.mjs authorize"));
+          name === "pr-gates.yml" &&
+          jobName === "gates" &&
+          step.name === "Evaluate Issue, readiness, and human validation gates" &&
+          step.run === "node .github/scripts/pr-gates.mjs";
         if (tokenReferences.length > 0 && !allowedTeamMembershipToken) {
           errors.push(
             `${name}/${jobName}: Team membership token is allowed only in fixed Gate steps`,
@@ -1282,28 +1399,16 @@ export function validateWorkflowDocuments(workflows) {
   const authorizationRecorder = authorizationSteps.find(
     (step) => step.name === "Record trusted authorization transition",
   );
-  const authorizationTokenCondition = String(authorizationToken?.if ?? "");
   if (
-    authorizationToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-    authorizationToken?.["continue-on-error"] !== true ||
-    !authorizationTokenCondition.includes("github.event_name == 'issues'") ||
-    !authorizationTokenCondition.includes("github.event.action == 'labeled'") ||
-    !authorizationTokenCondition.includes("github.event.label.name == 'ready-for-agent'") ||
-    !sameObject(authorizationToken?.with, {
-      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
-      "permission-members": "read",
-      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
-      owner: "${{ github.repository_owner }}",
-    }) ||
+    authorizationToken !== undefined ||
     authorizationRecorder?.run !==
       "node trusted/.github/scripts/codex-worker.mjs authorize" ||
     !sameObject(authorizationRecorder?.env, {
       GITHUB_TOKEN: "${{ github.token }}",
-      TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
     }) ||
-    teamMembershipTokenReferences(worker).length !== 1
+    teamMembershipTokenReferences(worker).length !== 0
   ) {
-    errors.push("Codex Worker must mint and isolate the authorization Team token");
+    errors.push("Codex Worker new Issue intake must stay disabled");
   }
   if (
     !workerGroup.includes("github.event.pull_request.head.repo.full_name != github.repository") ||
@@ -2256,8 +2361,8 @@ async function main() {
     ),
   );
   const scriptDirectory = path.resolve(".github/scripts");
-  const ghAwPocSource = await fs.readFile(
-    path.join(directory, "gh-aw-copilot-byok-poc.md"),
+  const ghAwPilotSource = await fs.readFile(
+    path.join(directory, "gh-aw-issue-to-pr-pilot.md"),
     "utf8",
   );
   const scriptSources = Object.fromEntries(
@@ -2269,6 +2374,7 @@ async function main() {
         "claude-event-authorization.mjs",
         "claude-review.mjs",
         "codex-worker.mjs",
+        "gh-aw-pilot.mjs",
         "pr-gates.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
@@ -2282,7 +2388,7 @@ async function main() {
   const errors = [
     ...(await validateMattSkillSnapshot()),
     ...validateWorkflowDocuments(workflows),
-    ...validateGhAwPocSource(ghAwPocSource),
+    ...validateGhAwPilotSource(ghAwPilotSource),
     ...validateTrustedScriptSources(scriptSources),
   ];
   if (errors.length) throw new Error(errors.join("\n"));
