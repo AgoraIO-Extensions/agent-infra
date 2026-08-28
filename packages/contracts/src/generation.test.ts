@@ -54,6 +54,7 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.runtimeOpenapi.paths).sort()).toEqual([
 			"/internal/runtime/v1/capabilities",
 			"/internal/runtime/v1/events/replay",
+			"/internal/runtime/v1/events/stream",
 			"/internal/runtime/v1/generations/cancel",
 			"/internal/runtime/v1/instructions",
 			"/internal/runtime/v1/status",

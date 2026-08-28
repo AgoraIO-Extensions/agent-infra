@@ -2342,6 +2342,11 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "executionDeliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
         "executionId": {
           "minLength": 1,
           "type": "string"
@@ -2461,6 +2466,7 @@
         "grant",
         "hostSessionRef",
         "messageId",
+        "executionDeliveryFence",
         "input"
       ],
       "type": "object"

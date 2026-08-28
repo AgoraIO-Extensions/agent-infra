@@ -221,6 +221,14 @@ function buildArtifacts() {
 					"text/event-stream",
 				),
 			},
+			"/internal/runtime/v1/events/stream": {
+				post: postOperation(
+					"streamRuntimeEventsV1",
+					RuntimeReplayRequestV1Schema,
+					RuntimeEventV1Schema,
+					"text/event-stream",
+				),
+			},
 			"/internal/runtime/v1/generations/cancel": {
 				post: postOperation(
 					"cancelRuntimeGenerationV1",
