@@ -225,6 +225,7 @@ test("requires trusted gh-aw Pilot authorization and publish recheck", async () 
     "Do not read or act on Issue comments",
     "PILOT_EXPECTED_EXECUTION_CONTENT_HASH: ${{ inputs.execution_content_sha256 }}",
     'allowed-branches: ["gh-aw/pilot-${{ inputs.item_number }}"]',
+    "base-branch: ${{ github.event.repository.default_branch }}",
     "needs.pilot_preflight.outputs.target_hash",
     "needs.pilot_preflight.outputs.category",
   ]) {

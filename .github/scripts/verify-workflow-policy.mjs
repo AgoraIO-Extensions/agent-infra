@@ -183,9 +183,9 @@ const TEAM_MEMBERSHIP_TOKEN_ACTION =
 const CHECKOUT_ACTION =
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const GH_AW_PILOT_SEMANTIC_SHA256 =
-  "8719251e58213d7c1e2b5e1fcca96e2051ffea40567bdbfdfdcd9b20acbcaf1d";
+  "bfc18176cfe8ecb754df9d22a9fa45c83711b1c4e3179311e0c28a93df552cd1";
 const GH_AW_PILOT_SOURCE_SHA256 =
-  "ce5804481dbcf9239123a0e5ccc313002bd4cc58155bd8c68af3d16b046471a7";
+  "0a10578b846b2908d876ade22ff7281272a8835f63b231be62f76abd2104c826";
 const GH_AW_PILOT_SCRIPT_SHA256 =
   "077817dad358bcc3c7e4877c3edcf37ce6e5ec8dade12e2f9cb6cebc60a943ac";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
@@ -551,7 +551,8 @@ function validateGhAwPilotWorkflow(workflow) {
       "${{ secrets.CODEX_GITHUB_TOKEN }}" ||
     pullRequest?.draft !== true ||
     pullRequest?.max !== 1 ||
-    pullRequest?.base_branch !== "main" ||
+    pullRequest?.base_branch !==
+      "${{ github.event.repository.default_branch }}" ||
     JSON.stringify(pullRequest?.allowed_branches) !==
       JSON.stringify(["gh-aw/pilot-${{ inputs.item_number }}"]) ||
     JSON.stringify(pullRequest?.allowed_files) !==

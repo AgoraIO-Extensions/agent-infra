@@ -125,7 +125,7 @@ safe-outputs:
     allowed-labels: [gh-aw-pilot, ready-for-human, bug, enhancement, documentation]
     draft: true
     max: 1
-    base-branch: main
+    base-branch: ${{ github.event.repository.default_branch }}
     allowed-branches: ["gh-aw/pilot-${{ inputs.item_number }}"]
     preserve-branch-name: true
     fallback-as-issue: false
