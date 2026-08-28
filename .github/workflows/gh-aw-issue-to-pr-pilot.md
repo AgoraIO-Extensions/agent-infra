@@ -17,7 +17,7 @@ on:
 if: >-
   github.actor == 'LichKing-2234' &&
   github.triggering_actor == 'LichKing-2234' &&
-  github.ref_name == github.event.repository.default_branch
+  github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
 run-name: "Issue #${{ inputs.item_number }} | gh-aw-pilot | dispatch"
 concurrency:
   group: "gh-aw-pilot-${{ github.repository }}"
@@ -39,10 +39,10 @@ jobs:
       category: ${{ steps.authorize.outputs.category }}
       target_hash: ${{ steps.authorize.outputs.target_hash }}
     steps:
-      - name: Checkout trusted default branch
+      - name: Checkout authorized pilot verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - name: Set up Node.js

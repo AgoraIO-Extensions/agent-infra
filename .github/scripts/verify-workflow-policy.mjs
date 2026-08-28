@@ -183,9 +183,9 @@ const TEAM_MEMBERSHIP_TOKEN_ACTION =
 const CHECKOUT_ACTION =
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const GH_AW_PILOT_SEMANTIC_SHA256 =
-  "d82091a6f3bb91201f8e625647757d69682f2398d3c611e4c970e3e9822656ad";
+  "8719251e58213d7c1e2b5e1fcca96e2051ffea40567bdbfdfdcd9b20acbcaf1d";
 const GH_AW_PILOT_SOURCE_SHA256 =
-  "4567927ac8b78c5eccc7e47592e69bd1d4fed88e58fa06d77d930ce9c4cae07b";
+  "ce5804481dbcf9239123a0e5ccc313002bd4cc58155bd8c68af3d16b046471a7";
 const GH_AW_PILOT_SCRIPT_SHA256 =
   "954aabd0738b6dcff5c9128f7e5784d482b81c81fb33188a5f8f36aba4f6e4e3";
 const MATT_SKILL_LOCK_PATH = ".agents/skills/mattpocock.lock.json";
@@ -353,6 +353,9 @@ function validateGhAwPilotWorkflow(workflow) {
   const agent = workflow?.jobs?.agent;
   const pilotPreflight = workflow?.jobs?.pilot_preflight;
   const pilotPreflightSteps = pilotPreflight?.steps ?? [];
+  const pilotAuthorizationCheckout = pilotPreflightSteps.find(
+    (step) => step.name === "Checkout authorized pilot verifier",
+  );
   const pilotToken = pilotPreflightSteps.find(
     (step) => step.id === "team-membership-token",
   );
@@ -416,7 +419,7 @@ function validateGhAwPilotWorkflow(workflow) {
       !step.uses || step.uses.startsWith("./") || FULL_SHA_ACTION.test(step.uses),
   );
   const pilotActivationCondition =
-    "github.actor == 'LichKing-2234' && github.triggering_actor == 'LichKing-2234' && github.ref_name == github.event.repository.default_branch";
+    "github.actor == 'LichKing-2234' && github.triggering_actor == 'LichKing-2234' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
   if (
     workflow?.name !== "gh-aw Copilot BYOK Issue-to-PR Pilot" ||
     workflow?.on?.issues !== undefined ||
@@ -457,6 +460,12 @@ function validateGhAwPilotWorkflow(workflow) {
     !sameObject(pilotPreflight?.outputs, {
       category: "${{ steps.authorize.outputs.category }}",
       target_hash: "${{ steps.authorize.outputs.target_hash }}",
+    }) ||
+    pilotAuthorizationCheckout?.uses !== CHECKOUT_ACTION ||
+    !sameObject(pilotAuthorizationCheckout?.with, {
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
     }) ||
     pilotToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     !sameObject(pilotToken?.with, {

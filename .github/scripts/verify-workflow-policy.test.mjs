@@ -213,6 +213,7 @@ test("requires trusted gh-aw Pilot authorization and publish recheck", async () 
   const source = await actualGhAwPilotSource();
   for (const requirement of [
     "github.triggering_actor == 'LichKing-2234'",
+    "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
     'group: "gh-aw-pilot-${{ github.repository }}"',
     "pilot_preflight:",
     "node .github/scripts/gh-aw-pilot.mjs",
@@ -229,6 +230,7 @@ test("requires trusted gh-aw Pilot authorization and publish recheck", async () 
   ]) {
     assert.ok(source.includes(requirement), requirement);
   }
+  assert.equal(source.match(/ref: \$\{\{ github\.sha \}\}/g)?.length, 2);
 
   const sources = await actualTrustedScriptSources();
   sources["gh-aw-pilot.mjs"] = sources["gh-aw-pilot.mjs"].replace(
