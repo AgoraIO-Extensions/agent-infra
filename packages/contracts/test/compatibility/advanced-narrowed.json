@@ -15,6 +15,7 @@
 			"type": "array",
 			"uniqueItems": true
 		},
+		"BooleanSchemaV1": false,
 		"ChoiceV1": {
 			"oneOf": [
 				{
@@ -55,6 +56,9 @@
 					"minLength": 1
 				}
 			]
+		},
+		"IntegerV1": {
+			"type": "integer"
 		},
 		"ModeV1": {
 			"enum": ["safe"],

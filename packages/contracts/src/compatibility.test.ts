@@ -22,7 +22,7 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
-	it("accepts additive schemas", () => {
+	it("accepts additive schemas and disjoint oneOf literals", () => {
 		const result = compare("additive");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
@@ -107,7 +107,13 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain("narrowed $defs.TupleV1[0] prefixItems");
 	});
 
-	it("accepts removal of type, const, enum, union, and reference constraints", () => {
+	it("rejects replacing a true schema with false", () => {
+		const result = compare("advanced-narrowed", "advanced-base");
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("narrowed $defs.BooleanSchemaV1 schema");
+	});
+
+	it("accepts removed constraints and integer-to-number widening", () => {
 		const result = compare("advanced-widened", "advanced-base");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");

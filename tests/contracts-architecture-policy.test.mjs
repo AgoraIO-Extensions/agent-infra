@@ -6,6 +6,7 @@ import {
 	checkProductionManifestDependencies,
 	checkRepositoryArchitecture,
 	checkSourceImports,
+	isProductionPackagePath,
 } from "./support/contracts-architecture-policy.mjs";
 
 test("current repository obeys contract package dependency directions", async () => {
@@ -72,6 +73,18 @@ test("production manifests reject test-support runtime dependencies", () => {
 		),
 		[],
 	);
+});
+
+test("production package classification is path-separator independent", () => {
+	for (const path of [
+		"packages/contracts",
+		"packages/test-support",
+		"packages\\contracts",
+		"packages\\test-support",
+	]) {
+		assert.equal(isProductionPackagePath(path), false);
+	}
+	assert.equal(isProductionPackagePath("apps\\platform-api"), true);
 });
 
 test("contracts manifest cannot depend on repository runtime modules", () => {

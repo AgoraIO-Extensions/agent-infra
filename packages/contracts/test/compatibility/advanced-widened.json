@@ -2,11 +2,15 @@
 	"$defs": {
 		"AliasV1": {},
 		"ArrayV1": {},
+		"BooleanSchemaV1": true,
 		"ChoiceV1": {},
 		"ConjunctionV1": {},
 		"ContainsV1": {},
 		"ExcludedV1": {},
 		"ExclusiveChoiceV1": {},
+		"IntegerV1": {
+			"type": "number"
+		},
 		"ModeV1": {},
 		"NumberV1": {},
 		"OpaqueIdV1": {

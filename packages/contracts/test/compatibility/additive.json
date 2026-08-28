@@ -1,5 +1,18 @@
 {
 	"$defs": {
+		"ChoiceV1": {
+			"oneOf": [
+				{
+					"const": "a"
+				},
+				{
+					"const": "b"
+				},
+				{
+					"const": "c"
+				}
+			]
+		},
 		"OpaqueIdV1": {
 			"minLength": 1,
 			"type": "string"

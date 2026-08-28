@@ -34,6 +34,35 @@ function sameValue(left, right) {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function unmatchedOptions(options, baseline) {
+	const remaining = [...baseline];
+	return options.filter((option) => {
+		const match = remaining.findIndex((entry) => sameValue(entry, option));
+		if (match === -1) return true;
+		remaining.splice(match, 1);
+		return false;
+	});
+}
+
+function literalValues(schema) {
+	if (!schema || typeof schema !== "object") return undefined;
+	if (schema.const !== undefined) return [schema.const];
+	return Array.isArray(schema.enum) ? schema.enum : undefined;
+}
+
+function literalSchemasAreDisjoint(left, right) {
+	const leftValues = literalValues(left);
+	const rightValues = literalValues(right);
+	return (
+		leftValues !== undefined &&
+		rightValues !== undefined &&
+		leftValues.every(
+			(leftValue) =>
+				!rightValues.some((rightValue) => sameValue(leftValue, rightValue)),
+		)
+	);
+}
+
 function hasSchemaConstraints(value) {
 	return (
 		value === false ||
@@ -61,13 +90,29 @@ function compareSubschemaConstraint(previous, current, path, keyword, changes) {
 }
 
 function compareSchema(previous, current, path, changes) {
+	if (previous === false || current === true) return;
+	if (current === false) {
+		changes.push(`narrowed ${path} schema`);
+		return;
+	}
+	if (previous === true) {
+		if (hasSchemaConstraints(current)) {
+			changes.push(`narrowed ${path} schema`);
+		}
+		return;
+	}
+
 	const previousTypes = valueSet(previous.type);
 	const currentTypes = valueSet(current.type);
 	if (previousTypes.length === 0 && currentTypes.length > 0) {
 		changes.push(`narrowed ${path} type`);
 	} else if (
 		currentTypes.length > 0 &&
-		previousTypes.some((type) => !currentTypes.includes(type))
+		previousTypes.some(
+			(type) =>
+				!currentTypes.includes(type) &&
+				!(type === "integer" && currentTypes.includes("number")),
+		)
 	) {
 		changes.push(
 			`retyped ${path} from ${previousTypes.join("|")} to ${currentTypes.join("|")}`,
@@ -103,17 +148,26 @@ function compareSchema(previous, current, path, changes) {
 			changes.push(`narrowed ${path} ${keyword}`);
 		} else if (
 			Array.isArray(previousOptions) &&
-			Array.isArray(currentOptions) &&
-			(previousOptions.some(
-				(option) => !currentOptions.some((entry) => sameValue(entry, option)),
-			) ||
-				(keyword === "oneOf" &&
-					currentOptions.some(
-						(option) =>
-							!previousOptions.some((entry) => sameValue(entry, option)),
-					)))
+			Array.isArray(currentOptions)
 		) {
-			changes.push(`narrowed ${path} ${keyword}`);
+			const removedOptions = unmatchedOptions(previousOptions, currentOptions);
+			const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+			const disjointAdditions = addedOptions.every(
+				(option, index) =>
+					previousOptions.every((previousOption) =>
+						literalSchemasAreDisjoint(option, previousOption),
+					) &&
+					addedOptions.every(
+						(other, otherIndex) =>
+							index === otherIndex || literalSchemasAreDisjoint(option, other),
+					),
+			);
+			if (
+				removedOptions.length > 0 ||
+				(keyword === "oneOf" && !disjointAdditions)
+			) {
+				changes.push(`narrowed ${path} ${keyword}`);
+			}
 		}
 	}
 	const previousAllOf = previous.allOf;
@@ -324,7 +378,7 @@ function findBreakingChanges(previous, current) {
 	const currentSchemas = current.$defs ?? current.components?.schemas ?? {};
 	for (const [name, schema] of Object.entries(previousSchemas)) {
 		const currentSchema = currentSchemas[name];
-		if (!currentSchema) {
+		if (currentSchema === undefined) {
 			changes.push(`removed schema $defs.${name}`);
 			continue;
 		}

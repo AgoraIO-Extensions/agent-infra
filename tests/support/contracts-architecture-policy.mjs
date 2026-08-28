@@ -107,6 +107,14 @@ export function checkProductionManifestDependencies(manifest, { path }) {
 	return violations;
 }
 
+export function isProductionPackagePath(path) {
+	const normalizedPath = path.replaceAll("\\", "/");
+	return (
+		normalizedPath !== "packages/contracts" &&
+		normalizedPath !== "packages/test-support"
+	);
+}
+
 async function sourceFiles(directory) {
 	const entries = await readdir(directory, { withFileTypes: true }).catch(
 		() => [],
@@ -151,13 +159,14 @@ export async function checkRepositoryArchitecture(repositoryRoot) {
 				...checkSourceImports(await readFile(file, "utf8"), { path }),
 			);
 		}
-		if (!root.endsWith("/contracts") && !root.endsWith("/test-support")) {
+		const packagePath = relative(repositoryRoot, root).replaceAll("\\", "/");
+		if (isProductionPackagePath(packagePath)) {
 			const manifest = JSON.parse(
 				await readFile(resolve(root, "package.json"), "utf8"),
 			);
 			violations.push(
 				...checkProductionManifestDependencies(manifest, {
-					path: relative(repositoryRoot, root),
+					path: packagePath,
 				}),
 			);
 		}

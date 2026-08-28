@@ -6,6 +6,7 @@
 		"ArrayV1": {
 			"type": "array"
 		},
+		"BooleanSchemaV1": true,
 		"ChoiceV1": {
 			"oneOf": [
 				{
@@ -35,6 +36,9 @@
 					"type": "string"
 				}
 			]
+		},
+		"IntegerV1": {
+			"type": "integer"
 		},
 		"ModeV1": {
 			"type": "string"
