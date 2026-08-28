@@ -7,6 +7,7 @@ describe("platform API health", () => {
 		const response = await createPlatformApp().request("/healthz");
 
 		expect(response.status).toBe(200);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
 		expect(await response.json()).toEqual({
 			service: "platform-api",
 			status: "ok",

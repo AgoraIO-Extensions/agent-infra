@@ -5,12 +5,14 @@ export const connectionApiService = "connection-api";
 export function createConnectionApp() {
 	const app = new Hono();
 
-	app.get("/healthz", (context) =>
-		context.json({
+	app.get("/healthz", (context) => {
+		context.header("Cache-Control", "no-store");
+
+		return context.json({
 			service: connectionApiService,
 			status: "ok",
-		}),
-	);
+		});
+	});
 
 	return app;
 }
