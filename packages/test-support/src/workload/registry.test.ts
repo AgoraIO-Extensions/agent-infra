@@ -54,6 +54,7 @@ const admittedOutcome = {
 		schemaVersion: 1,
 		policyRef: request.admissionPolicyRef,
 		decisionRef: "decision_01",
+		imageDigest: `sha256:${"a".repeat(64)}`,
 		evaluatedAt: "2026-08-28T10:00:00Z",
 	},
 } as const;
@@ -86,6 +87,44 @@ describe("Fake ImageRegistryAdapter V1", () => {
 				traceId: request.traceId,
 			});
 		}
+	});
+
+	it("returns a configured redacted policy rejection", async () => {
+		const adapter = createFakeImageRegistryAdapterV1({
+			[request.imageReference]: {
+				status: "rejected",
+				error: {
+					schemaVersion: 1,
+					code: "IMAGE_NOT_ADMITTED",
+					message: "The image is not admitted by deployment policy",
+					retryable: false,
+					traceId: request.traceId,
+				},
+			},
+		});
+
+		const result = await adapter.admit(request);
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_NOT_ADMITTED", retryable: false },
+		});
+		expect(JSON.stringify(result)).not.toContain("providerResponse");
+	});
+
+	it("rejects stale admission policy evidence", async () => {
+		const adapter = createFakeImageRegistryAdapterV1({
+			[request.imageReference]: {
+				...admittedOutcome,
+				policyEvidence: {
+					...admittedOutcome.policyEvidence,
+					imageDigest: `sha256:${"c".repeat(64)}`,
+				},
+			},
+		});
+
+		await expect(adapter.admit(request)).rejects.toThrow(
+			"Image registry result correlation mismatch",
+		);
 	});
 
 	it("rejects malformed configured outcomes instead of bypassing the schema", async () => {

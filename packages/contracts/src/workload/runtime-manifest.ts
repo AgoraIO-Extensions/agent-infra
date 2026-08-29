@@ -6,11 +6,11 @@ const healthPathPattern =
 	/^\/(?!\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))(?!.*\/\/)[A-Za-z0-9._~/-]*$/;
 
 export const RuntimeCapabilitySetV1Schema = z.strictObject({
-	modelSelection: z.boolean().optional(),
-	attachments: z.boolean().optional(),
-	resultFiles: z.boolean().optional(),
-	connection: z.boolean().optional(),
-	supplementaryInstruction: z.boolean().optional(),
+	modelSelection: z.boolean().default(false),
+	attachments: z.boolean().default(false),
+	resultFiles: z.boolean().default(false),
+	connection: z.boolean().default(false),
+	supplementaryInstruction: z.boolean().default(false),
 });
 
 export const RuntimeServiceV1Schema = z.strictObject({

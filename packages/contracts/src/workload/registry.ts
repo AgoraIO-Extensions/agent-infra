@@ -31,6 +31,7 @@ export const ImageAdmissionPolicyEvidenceV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	policyRef: WorkloadOpaqueIdV1Schema,
 	decisionRef: WorkloadOpaqueIdV1Schema,
+	imageDigest: ImmutableOciDigestV1Schema,
 	evaluatedAt: WorkloadTimestampV1Schema,
 });
 
@@ -42,6 +43,32 @@ export const RuntimeManifestParsingEvidenceV1Schema = z.strictObject({
 	duplicateKeysDetected: z.literal(false),
 	unknownFieldsDetected: z.literal(false),
 });
+
+const imageRegistryTerminalErrorCodeV1Schema = z.enum([
+	"IMAGE_REFERENCE_INVALID",
+	"IMAGE_NOT_FOUND",
+	"IMAGE_NOT_ADMITTED",
+	"OCI_CONFIG_INVALID",
+	"RUNTIME_MANIFEST_MISSING",
+	"RUNTIME_MANIFEST_INVALID",
+]);
+const imageRegistryRetryableErrorCodeV1Schema = z.enum([
+	"IMAGE_REGISTRY_UNAVAILABLE",
+	"IMAGE_ADMISSION_POLICY_UNAVAILABLE",
+]);
+export const ImageRegistryAdmissionErrorV1Schema = z.discriminatedUnion(
+	"retryable",
+	[
+		WorkloadBoundaryErrorV1Schema.extend({
+			code: imageRegistryTerminalErrorCodeV1Schema,
+			retryable: z.literal(false),
+		}),
+		WorkloadBoundaryErrorV1Schema.extend({
+			code: imageRegistryRetryableErrorCodeV1Schema,
+			retryable: z.literal(true),
+		}),
+	],
+);
 
 export const ImageRegistryAdmissionRequestV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
@@ -75,7 +102,7 @@ const imageRegistryAdmittedV1Schema = z.strictObject({
 const imageRegistryRejectedV1Schema = z.strictObject({
 	...registryResultCorrelationV1Schema,
 	status: z.literal("rejected"),
-	error: WorkloadBoundaryErrorV1Schema,
+	error: ImageRegistryAdmissionErrorV1Schema,
 });
 
 export const ImageRegistryAdmissionResultV1Schema = z.discriminatedUnion(
@@ -103,8 +130,10 @@ export function validateImageRegistryAdmissionResultV1(
 		result.imageReference !== request.imageReference ||
 		(result.status === "admitted" &&
 			(result.policyEvidence.policyRef !== request.admissionPolicyRef ||
+				result.policyEvidence.imageDigest !== result.immutableDigest ||
 				result.runtimeManifestParsingEvidence.utf8ByteLength !==
-					Buffer.byteLength(result.runtimeManifestLabel, "utf8")))
+					Buffer.byteLength(result.runtimeManifestLabel, "utf8"))) ||
+		(result.status === "rejected" && result.error.traceId !== request.traceId)
 	) {
 		throw new Error("Image registry result correlation mismatch");
 	}

@@ -50,7 +50,10 @@ const admitted = {
 		health: { path: "/healthz" },
 		capabilities: {
 			modelSelection: true,
+			attachments: false,
+			resultFiles: false,
 			connection: true,
+			supplementaryInstruction: false,
 		},
 	},
 	runtimeManifestLabel,
@@ -66,6 +69,7 @@ const admitted = {
 		schemaVersion: 1,
 		policyRef: request.admissionPolicyRef,
 		decisionRef: "decision_01",
+		imageDigest: `sha256:${"a".repeat(64)}`,
 		evaluatedAt: "2026-08-28T10:00:00Z",
 	},
 } as const;
@@ -145,6 +149,15 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}),
 		).toThrow("Image registry result correlation mismatch");
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				policyEvidence: {
+					...admitted.policyEvidence,
+					imageDigest: `sha256:${"c".repeat(64)}`,
+				},
+			}),
+		).toThrow("Image registry result correlation mismatch");
 	});
 
 	it("rejects invalid or semantically mismatched Runtime Manifest labels", () => {
@@ -195,11 +208,33 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		expect(validateImageRegistryAdmissionResultV1(request, rejected)).toEqual(
 			rejected,
 		);
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...rejected,
+				error: { ...rejected.error, traceId: "trace_registry_02" },
+			}),
+		).toThrow("Image registry result correlation mismatch");
 		expect(
 			ImageRegistryAdmissionResultV1Schema.safeParse({
 				...rejected,
 				error: { ...rejected.error, providerResponse: "sensitive" },
 			}).success,
 		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...rejected,
+				error: { ...rejected.error, code: "PROVIDER_SPECIFIC_FAILURE" },
+			}).success,
+		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...rejected,
+				error: {
+					...rejected.error,
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			}).success,
+		).toBe(true);
 	});
 });

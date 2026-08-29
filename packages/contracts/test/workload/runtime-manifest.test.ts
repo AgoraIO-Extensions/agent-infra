@@ -25,6 +25,27 @@ describe("Runtime Manifest V1 contract", () => {
 		).toBe(false);
 	});
 
+	it("normalizes missing declared capability keys to false", () => {
+		expect(
+			RuntimeManifestV1Schema.parse({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { modelSelection: true },
+			}),
+		).toMatchObject({
+			capabilities: {
+				modelSelection: true,
+				attachments: false,
+				resultFiles: false,
+				connection: false,
+				supplementaryInstruction: false,
+			},
+		});
+	});
+
 	it("forbids protocol declarations and unknown fields for self-managed images", () => {
 		const manifest = {
 			schemaVersion: 1,
