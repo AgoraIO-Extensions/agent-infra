@@ -92,6 +92,13 @@ export const TimelineReloadSignalV1Schema = z.strictObject({
 	resumeCursor: OpaqueCursorV1Schema,
 });
 
+export const HeartbeatSignalV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	kind: z.literal("control"),
+	type: z.literal("heartbeat"),
+	occurredAt: Rfc3339TimestampV1Schema,
+});
+
 const authorizationRevokedError = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	code: z.literal("AUTHORIZATION_REVOKED"),
@@ -109,6 +116,7 @@ export const AuthorizationRevokedSignalV1Schema = z.strictObject({
 
 export const ConversationSseMessageV1Schema = z.union([
 	PersistedConversationEventV1Schema,
+	HeartbeatSignalV1Schema,
 	TimelineReloadSignalV1Schema,
 	AuthorizationRevokedSignalV1Schema,
 ]);
@@ -122,6 +130,25 @@ const replayQuery = z.strictObject({
 const replayHeader = z.strictObject({
 	"Last-Event-ID": OpaqueIdV1Schema.optional(),
 });
+const replaySelector = z.strictObject({
+	cursor: OpaqueCursorV1Schema.optional(),
+	lastEventId: OpaqueIdV1Schema.optional(),
+});
+
+export function resolvePilotReplaySelectorV1(input: unknown) {
+	const selector = replaySelector.parse(input);
+	if (selector.cursor !== undefined && selector.lastEventId !== undefined) {
+		throw new Error("Replay selector is ambiguous");
+	}
+	if (selector.cursor !== undefined) {
+		return { kind: "cursor", value: selector.cursor } as const;
+	}
+	if (selector.lastEventId !== undefined) {
+		return { kind: "last-event-id", value: selector.lastEventId } as const;
+	}
+	return undefined;
+}
+
 const protocolErrorResponse = (description: string) => ({
 	description,
 	content: { "application/json": { schema: PilotProtocolErrorV1Schema } },
@@ -147,6 +174,7 @@ export const pilotBrowserSseOpenApiPathsV1 = {
 				"400": protocolErrorResponse("Invalid replay cursor"),
 				"401": protocolErrorResponse("Authentication required"),
 				"403": protocolErrorResponse("Conversation access is unavailable"),
+				"503": protocolErrorResponse("Event stream is temporarily unavailable"),
 				"500": {
 					description: "Internal error",
 					content: {
@@ -161,6 +189,7 @@ export const pilotBrowserSseOpenApiPathsV1 = {
 export const pilotSseSchemasV1 = {
 	AuthorizationRevokedSignalV1: AuthorizationRevokedSignalV1Schema,
 	ConversationSseMessageV1: ConversationSseMessageV1Schema,
+	HeartbeatSignalV1: HeartbeatSignalV1Schema,
 	PersistedConversationEventV1: PersistedConversationEventV1Schema,
 	TimelineReloadSignalV1: TimelineReloadSignalV1Schema,
 };

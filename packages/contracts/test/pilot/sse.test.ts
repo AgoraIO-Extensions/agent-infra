@@ -3,8 +3,10 @@ import { createDocument } from "zod-openapi";
 
 import {
 	ConversationSseMessageV1Schema,
+	HeartbeatSignalV1Schema,
 	PersistedConversationEventV1Schema,
 	pilotBrowserSseOpenApiPathsV1,
+	resolvePilotReplaySelectorV1,
 } from "../../src/pilot/sse.js";
 
 const baseEvent = {
@@ -46,7 +48,13 @@ describe("Pilot SSE contracts", () => {
 		).toBe(false);
 	});
 
-	it("defines reload and current-authorization signals separately from persisted events", () => {
+	it("defines heartbeat, reload, and authorization controls outside persisted events", () => {
+		const heartbeat = {
+			schemaVersion: 1,
+			kind: "control",
+			type: "heartbeat",
+			occurredAt: "2026-08-28T10:00:00Z",
+		};
 		const reload = {
 			schemaVersion: 1,
 			kind: "control",
@@ -66,6 +74,11 @@ describe("Pilot SSE contracts", () => {
 				traceId: "trace-1",
 			},
 		};
+		expect(HeartbeatSignalV1Schema.parse(heartbeat)).toEqual(heartbeat);
+		expect(ConversationSseMessageV1Schema.parse(heartbeat)).toEqual(heartbeat);
+		expect(
+			PersistedConversationEventV1Schema.safeParse(heartbeat).success,
+		).toBe(false);
 		expect(ConversationSseMessageV1Schema.parse(reload)).toEqual(reload);
 		expect(ConversationSseMessageV1Schema.parse(revoked)).toEqual(revoked);
 		expect(
@@ -94,5 +107,22 @@ describe("Pilot SSE contracts", () => {
 		expect(operation?.responses?.["200"]).toHaveProperty(
 			"content.text/event-stream",
 		);
+		expect(operation?.responses?.["503"]).toHaveProperty(
+			"content.application/json",
+		);
+		expect(resolvePilotReplaySelectorV1({ cursor: "cursor-1" })).toEqual({
+			kind: "cursor",
+			value: "cursor-1",
+		});
+		expect(resolvePilotReplaySelectorV1({ lastEventId: "event-1" })).toEqual({
+			kind: "last-event-id",
+			value: "event-1",
+		});
+		expect(() =>
+			resolvePilotReplaySelectorV1({
+				cursor: "cursor-1",
+				lastEventId: "event-1",
+			}),
+		).toThrow("Replay selector is ambiguous");
 	});
 });

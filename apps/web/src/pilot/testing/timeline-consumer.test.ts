@@ -1,27 +1,28 @@
 import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
-import type {
-	ConversationSseMessageV1,
-	MessageProjectionV1,
-} from "../generated/types.gen.js";
-import { consumePilotSseMessages } from "./timeline-consumer.js";
+import type { ConversationSseMessageV1 } from "../generated/types.gen.js";
+import { createPilotSseMessageConsumer } from "./timeline-consumer.js";
 
 describe("Pilot Web SSE consumer", () => {
 	it("deduplicates replay by stable eventId without reordering new events", () => {
-		const result = consumePilotSseMessages(
-			pilotFakeScenariosV1.replay
-				.messages as unknown as readonly ConversationSseMessageV1[],
-		);
+		const consume = createPilotSseMessageConsumer();
+		const messages = pilotFakeScenariosV1.replay
+			.messages as unknown as readonly ConversationSseMessageV1[];
+		const first = consume([messages[0]]);
+		const result = consume(messages.slice(1));
 
-		expect(result.events.map((event) => event.eventId)).toEqual([
+		expect(first.events.map((event) => event.eventId)).toEqual([
 			"event-replay-1",
+		]);
+		expect(result.events.map((event) => event.eventId)).toEqual([
 			"event-replay-2",
 		]);
-		expect(result.events.map((event) => event.sequence)).toEqual([1, 2]);
+		expect(result.events.map((event) => event.sequence)).toEqual([2]);
 	});
 
 	it("keeps stale-authorization control outside the persisted timeline", () => {
-		const result = consumePilotSseMessages(
+		const consume = createPilotSseMessageConsumer();
+		const result = consume(
 			pilotFakeScenariosV1.staleAuthorization
 				.messages as unknown as readonly ConversationSseMessageV1[],
 		);
@@ -32,19 +33,19 @@ describe("Pilot Web SSE consumer", () => {
 		]);
 	});
 
-	it("consumes stable persisted message failure reasons", () => {
-		const messages = pilotFakeScenariosV1.failed
-			.messages as unknown as readonly MessageProjectionV1[];
+	it("keeps heartbeat controls outside the persisted timeline", () => {
+		const consume = createPilotSseMessageConsumer();
+		const heartbeat = {
+			schemaVersion: 1,
+			kind: "control",
+			type: "heartbeat",
+			occurredAt: "2026-08-28T10:00:00Z",
+		} as unknown as ConversationSseMessageV1;
+		const result = consume([heartbeat]);
 
-		expect(
-			messages.map((message) =>
-				message.status === "failed" ? message.error.code : null,
-			),
-		).toEqual([
-			"ORIGINAL_RESPONSE_NOT_STARTED",
-			"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-			"AUTHORIZATION_REVOKED",
-			"EXECUTION_FAILED",
+		expect(result.events).toEqual([]);
+		expect(result.controls).toEqual([
+			expect.objectContaining({ type: "heartbeat" }),
 		]);
 	});
 });
