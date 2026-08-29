@@ -874,11 +874,11 @@
             "additionalProperties": false,
             "properties": {
               "code": {
-                "minLength": 1,
+                "const": "RUNTIME_TURN_NOT_ACTIVE",
                 "type": "string"
               },
               "message": {
-                "minLength": 1,
+                "const": "Runtime turn is no longer active",
                 "type": "string"
               },
               "outcome": {
@@ -886,6 +886,7 @@
                 "type": "string"
               },
               "retryable": {
+                "const": false,
                 "type": "boolean"
               }
             },
@@ -901,11 +902,11 @@
             "additionalProperties": false,
             "properties": {
               "code": {
-                "minLength": 1,
+                "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                 "type": "string"
               },
               "message": {
-                "minLength": 1,
+                "const": "Runtime command acceptance could not be confirmed",
                 "type": "string"
               },
               "outcome": {
