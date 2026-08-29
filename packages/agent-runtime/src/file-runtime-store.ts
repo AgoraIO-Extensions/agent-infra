@@ -437,6 +437,13 @@ export class FileRuntimeStore {
 		return sessionBindingKey(binding);
 	}
 
+	nativeSessionRef(hostSessionRef: string) {
+		const state = this.file.read();
+		assertStoreState(state);
+		return (state.sessions[hostSessionRef] ?? storeCorrupted())
+			.nativeSessionRef;
+	}
+
 	prepareOperation(input: PrepareOperation) {
 		return this.file.update((state) => {
 			assertStoreState(state);
@@ -612,6 +619,18 @@ export class FileRuntimeStore {
 		return this.file.update((state) => {
 			const session = state.sessions[hostSessionRef] ?? storeCorrupted();
 			const operation = session.operations[operationId] ?? storeCorrupted();
+			if (
+				nativeSessionRef &&
+				session.nativeSessionRef &&
+				nativeSessionRef !== session.nativeSessionRef
+			) {
+				throw new RuntimeHostError(
+					"RUNTIME_DRIVER_INVALID",
+					"Runtime Driver response is invalid",
+					503,
+					true,
+				);
+			}
 			operation.state = "resolved";
 			operation.result = result;
 			if (nativeSessionRef) session.nativeSessionRef = nativeSessionRef;

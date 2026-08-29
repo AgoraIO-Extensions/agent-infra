@@ -72,12 +72,17 @@ function driverInvalid(): never {
 	);
 }
 
-function parseDriverRecord(value: unknown, operation: StoredOperation) {
+function parseDriverRecord(
+	value: unknown,
+	operation: StoredOperation,
+	persistedNativeSessionRef?: string,
+) {
 	const parsed = RuntimeDriverOperationRecordV1Schema.safeParse(value);
 	const expectedNativeSessionRef =
-		"nativeSessionRef" in operation.command
+		persistedNativeSessionRef ??
+		("nativeSessionRef" in operation.command
 			? operation.command.nativeSessionRef
-			: undefined;
+			: undefined);
 	if (
 		!parsed.success ||
 		parsed.data.operationId !== operation.operationId ||
@@ -88,13 +93,21 @@ function parseDriverRecord(value: unknown, operation: StoredOperation) {
 	return parsed.data;
 }
 
-function parseDriverLookup(value: unknown, operation: StoredOperation) {
+function parseDriverLookup(
+	value: unknown,
+	operation: StoredOperation,
+	persistedNativeSessionRef?: string,
+) {
 	const parsed = RuntimeDriverLookupV1Schema.safeParse(value);
 	if (!parsed.success) driverInvalid();
 	if (parsed.data.state === "found") {
 		return {
 			state: "found" as const,
-			record: parseDriverRecord(parsed.data.record, operation),
+			record: parseDriverRecord(
+				parsed.data.record,
+				operation,
+				persistedNativeSessionRef,
+			),
 		};
 	}
 	return parsed.data;
@@ -496,6 +509,7 @@ export class RuntimeHost {
 		const lookup = parseDriverLookup(
 			await this.options.driver.lookupOperation(operation.operationId),
 			operation,
+			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		if (lookup.state === "unknown") {
 			const result = {
@@ -520,6 +534,7 @@ export class RuntimeHost {
 				? lookup.record
 				: await this.options.driver.execute(operation.command),
 			operation,
+			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(
@@ -569,6 +584,7 @@ export class RuntimeHost {
 						const lookup = parseDriverLookup(
 							await this.options.driver.lookupOperation(operation.operationId),
 							operation,
+							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
 							recoveredResult = await this.currentDriverResult(

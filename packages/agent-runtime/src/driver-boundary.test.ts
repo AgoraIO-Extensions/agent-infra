@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,7 +58,7 @@ async function setup() {
 			},
 		}),
 	);
-	return { driver, host };
+	return { directory, driver, host };
 }
 
 function malformedRecord(
@@ -97,6 +97,46 @@ afterEach(async () => {
 });
 
 describe("Runtime Driver boundary", () => {
+	it("preserves the native Session mapping during initial-submit recovery", async () => {
+		const { directory, driver, host } = await setup();
+		const original = request();
+		const submitted = await host.submitTurn(original);
+		const hostPath = join(directory, "host.json");
+		const before = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<string, { nativeSessionRef?: string }>;
+		};
+		const nativeSessionRef =
+			before.sessions[submitted.hostSessionRef]?.nativeSessionRef;
+		if (!nativeSessionRef) throw new Error("expected native Session mapping");
+		Object.assign(driver, {
+			lookupOperation: async () => ({
+				state: "found",
+				record: {
+					schemaVersion: 1,
+					operationId: original.executionId,
+					nativeSessionRef: "native-session-other",
+					result: { outcome: "accepted", status: "running" },
+				},
+			}),
+			getStatus: async () => "running",
+		} as Partial<RuntimeDriver>);
+		await RuntimeHost.open({
+			store: await FileRuntimeStore.open(hostPath),
+			driver,
+			grantValidation: { expectedIssuer: "agent-platform" },
+		});
+		const after = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<
+				string,
+				{ nativeSessionRef?: string; recovery?: { status: string } }
+			>;
+		};
+		expect(after.sessions[submitted.hostSessionRef]).toMatchObject({
+			nativeSessionRef,
+			recovery: { status: "blocked" },
+		});
+	});
+
 	it.each(["execute", "lookup"] as const)(
 		"rejects a %s record that replaces the native Session mapping",
 		async (source) => {
