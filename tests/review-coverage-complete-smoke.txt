@@ -1,0 +1,2 @@
+Automated Review Coverage required Gate complete smoke.
+This reviewable text exists only long enough to verify the default-branch rollout.
