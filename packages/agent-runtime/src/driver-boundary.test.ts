@@ -97,6 +97,39 @@ afterEach(async () => {
 });
 
 describe("Runtime Driver boundary", () => {
+	it.each(["execute", "lookup"] as const)(
+		"rejects a %s record that replaces the native Session mapping",
+		async (source) => {
+			const { driver, host } = await setup();
+			const original = request();
+			const submitted = await host.submitTurn(original);
+			const messageId = `message-native-mismatch-${source}`;
+			const record = {
+				schemaVersion: 1 as const,
+				operationId: messageId,
+				nativeSessionRef: "native-session-other",
+				result: { outcome: "busy" as const },
+			};
+			Object.assign(driver, {
+				...(source === "execute" ? { execute: async () => record } : {}),
+				...(source === "lookup"
+					? { lookupOperation: async () => ({ state: "found", record }) }
+					: {}),
+			} as Partial<RuntimeDriver>);
+			await expect(
+				host.supplement({
+					...original,
+					requestId: `request-native-mismatch-${source}`,
+					hostSessionRef: submitted.hostSessionRef,
+					messageId,
+					executionDeliveryFence: 1,
+					grant: runtimeGrantFixture(original, ["turn.supplement"]),
+					input: { text: "synthetic-native-mismatch", attachments: [] },
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_DRIVER_INVALID" });
+		},
+	);
+
 	it.each([
 		[
 			"wrong operation identity",

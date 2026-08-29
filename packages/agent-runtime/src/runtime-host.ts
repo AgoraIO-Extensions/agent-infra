@@ -72,21 +72,30 @@ function driverInvalid(): never {
 	);
 }
 
-function parseDriverRecord(value: unknown, operationId: string) {
+function parseDriverRecord(value: unknown, operation: StoredOperation) {
 	const parsed = RuntimeDriverOperationRecordV1Schema.safeParse(value);
-	if (!parsed.success || parsed.data.operationId !== operationId)
+	const expectedNativeSessionRef =
+		"nativeSessionRef" in operation.command
+			? operation.command.nativeSessionRef
+			: undefined;
+	if (
+		!parsed.success ||
+		parsed.data.operationId !== operation.operationId ||
+		(expectedNativeSessionRef !== undefined &&
+			parsed.data.nativeSessionRef !== expectedNativeSessionRef)
+	)
 		driverInvalid();
 	return parsed.data;
 }
 
-function parseDriverLookup(value: unknown, operationId: string) {
+function parseDriverLookup(value: unknown, operation: StoredOperation) {
 	const parsed = RuntimeDriverLookupV1Schema.safeParse(value);
 	if (!parsed.success) driverInvalid();
-	if (
-		parsed.data.state === "found" &&
-		parsed.data.record.operationId !== operationId
-	) {
-		driverInvalid();
+	if (parsed.data.state === "found") {
+		return {
+			state: "found" as const,
+			record: parseDriverRecord(parsed.data.record, operation),
+		};
 	}
 	return parsed.data;
 }
@@ -486,7 +495,7 @@ export class RuntimeHost {
 		await this.options.afterOperationPrepared?.(operation.operationId);
 		const lookup = parseDriverLookup(
 			await this.options.driver.lookupOperation(operation.operationId),
-			operation.operationId,
+			operation,
 		);
 		if (lookup.state === "unknown") {
 			const result = {
@@ -510,7 +519,7 @@ export class RuntimeHost {
 			lookup.state === "found"
 				? lookup.record
 				: await this.options.driver.execute(operation.command),
-			operation.operationId,
+			operation,
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(
@@ -559,7 +568,7 @@ export class RuntimeHost {
 					} else {
 						const lookup = parseDriverLookup(
 							await this.options.driver.lookupOperation(operation.operationId),
-							operation.operationId,
+							operation,
 						);
 						if (lookup.state === "found") {
 							recoveredResult = await this.currentDriverResult(
