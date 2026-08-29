@@ -4,6 +4,7 @@ import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1Schema,
+	ExecutionGrantCommandV1Schema,
 	ExecutionGrantV1Schema,
 	validateDelegatedActionRequestV1,
 	validateDelegatedActionResultV1,
@@ -154,6 +155,32 @@ describe("Pilot delegated contracts", () => {
 				validValidationContext,
 			),
 		).toThrow("Execution Grant binding mismatch");
+		for (const command of [
+			"session.status",
+			"events.replay",
+			"capabilities.read",
+			"generation.cancel",
+		] as const) {
+			expect(ExecutionGrantCommandV1Schema.parse(command)).toBe(command);
+			const runtimeClaims = {
+				...validClaims,
+				audience: ["runtime_host"],
+				allowedCommands: [command],
+				actionIds: [],
+			} as const;
+			expect(
+				validateExecutionGrantClaimsV1(runtimeClaims, {
+					...validValidationContext,
+					requiredAudience: "runtime_host",
+				}),
+			).toEqual(runtimeClaims);
+			expect(() =>
+				validateExecutionGrantClaimsV1(
+					{ ...runtimeClaims, audience: ["connection_api"] },
+					validValidationContext,
+				),
+			).toThrow("Execution Grant claims are inconsistent");
+		}
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, expiresAt: validClaims.issuedAt },
@@ -275,6 +302,22 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			DelegatedActionRequestV1Schema.parse({
+				...validRequest,
+				action: {
+					...validRequest.action,
+					arguments: {
+						issueNumber: 180,
+						pageToken: "opaque-pagination-cursor",
+					},
+				},
+			}),
+		).toMatchObject({
+			action: {
+				arguments: { pageToken: "opaque-pagination-cursor" },
+			},
+		});
 		expect(
 			DelegatedActionRequestV1Schema.safeParse({
 				...validRequest,

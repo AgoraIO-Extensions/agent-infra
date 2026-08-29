@@ -12,6 +12,17 @@ import { PilotProtocolErrorV1Schema } from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
 
+export const ExecutionGrantCommandV1Schema = z.enum([
+	"turn.submit",
+	"turn.supplement",
+	"turn.stop",
+	"session.status",
+	"events.replay",
+	"capabilities.read",
+	"generation.cancel",
+	"tool.invoke",
+]);
+
 export const ExecutionGrantClaimsV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	issuer: nonEmptyString(),
@@ -28,11 +39,7 @@ export const ExecutionGrantClaimsV1Schema = z.strictObject({
 	turnId: OpaqueIdV1Schema,
 	executionId: OpaqueIdV1Schema,
 	sessionGeneration: z.number().int().positive(),
-	allowedCommands: z
-		.array(
-			z.enum(["turn.submit", "turn.supplement", "turn.stop", "tool.invoke"]),
-		)
-		.min(1),
+	allowedCommands: z.array(ExecutionGrantCommandV1Schema).min(1),
 	attachments: z.array(
 		z.strictObject({
 			attachmentId: OpaqueIdV1Schema,
@@ -134,8 +141,8 @@ export function validateExecutionGrantClaimsV1(
 	const expiresAt = rfc3339Instant(claims.expiresAt);
 	const now = rfc3339Instant(Rfc3339TimestampV1Schema.parse(context.now));
 	const invokesTools = claims.allowedCommands.includes("tool.invoke");
-	const invokesRuntime = claims.allowedCommands.some((command) =>
-		command.startsWith("turn."),
+	const invokesRuntime = claims.allowedCommands.some(
+		(command) => command !== "tool.invoke",
 	);
 	if (
 		compareRfc3339Instants(issuedAt, expiresAt) >= 0 ||
@@ -273,11 +280,15 @@ export const pilotDelegatedSchemasV1 = {
 	DelegatedActionRequestV1: DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1: DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1: ExecutionGrantClaimsV1Schema,
+	ExecutionGrantCommandV1: ExecutionGrantCommandV1Schema,
 	ExecutionGrantV1: ExecutionGrantV1Schema,
 };
 
 export type ExecutionGrantClaimsV1 = z.infer<
 	typeof ExecutionGrantClaimsV1Schema
+>;
+export type ExecutionGrantCommandV1 = z.infer<
+	typeof ExecutionGrantCommandV1Schema
 >;
 export type ExecutionGrantV1 = z.infer<typeof ExecutionGrantV1Schema>;
 export type DelegatedActionRequestV1 = z.infer<
