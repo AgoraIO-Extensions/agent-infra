@@ -13,10 +13,10 @@ import {
 
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
 
-const REVIEW_HEADING = "## PR Reviewer Guide 🔍";
-const COVERAGE_FOOTER = "⚠️ **Review coverage:**";
-const REVIEW_HEAD_PATTERN =
-  /Review updated until commit https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/commit\/([0-9a-f]{40})/;
+const FULL_DIFF_PATTERN =
+  /Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\./g;
+const PRUNED_DIFF_PATTERN =
+  /Tokens: [0-9]+, total tokens over limit: [0-9]+, pruning diff\./g;
 
 function result(provider, headSha, conclusion, reasonCode, omittedFileCount = 0) {
   return { conclusion, headSha, omittedFileCount, provider, reasonCode };
@@ -35,70 +35,39 @@ function runFailure(provider, headSha, runResult) {
   return null;
 }
 
-function trustedPrAgentComment(comment) {
-  return (
-    comment?.user?.login === "github-actions[bot]" &&
-    comment?.user?.type === "Bot" &&
-    typeof comment.body === "string" &&
-    comment.body.includes(REVIEW_HEADING)
-  );
-}
-
-function timestamp(comment) {
-  return Date.parse(comment.updated_at ?? comment.created_at ?? "");
-}
-
-function parseOmittedFileCount(body) {
-  const footer = body.slice(body.indexOf(COVERAGE_FOOTER));
-  const listed = footer
-    .split("\n")
-    .filter((line) => /^- `[^`]+`$/.test(line.trim())).length;
-  const additional = Number(footer.match(/\.\.\. and ([0-9]+) more/)?.[1] ?? 0);
-  return Math.min(listed + additional, 10_000);
-}
-
 function evaluatePrAgent({
   expectedHead,
   runResult,
-  runStartedAt,
-  comments = [],
+  analysisJobConclusion,
+  analysisLog,
 }) {
   const failed = runFailure("pr-agent", expectedHead, runResult);
   if (failed) return failed;
-
-  const trusted = comments.filter(trustedPrAgentComment);
-  if (trusted.length === 0) {
+  if (!analysisLog) {
     return result("pr-agent", expectedHead, "failure", "review-output-missing");
   }
-
-  const started = Date.parse(runStartedAt ?? "");
-  if (!Number.isFinite(started)) {
+  if (analysisJobConclusion !== "success") {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
-  const recent = trusted
-    .filter((comment) => timestamp(comment) >= started)
-    .sort((left, right) => timestamp(right) - timestamp(left))[0];
-  if (!recent) {
-    return result("pr-agent", expectedHead, "failure", "review-output-stale");
-  }
-  if (Buffer.byteLength(recent.body, "utf8") > 256 * 1024) {
+  if (Buffer.byteLength(analysisLog, "utf8") > 10 * 1024 * 1024) {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
 
-  const markedHead = recent.body.match(REVIEW_HEAD_PATTERN)?.[1];
-  if (markedHead && markedHead !== expectedHead) {
-    return result("pr-agent", expectedHead, "failure", "review-output-stale");
+  const completeMatches = analysisLog.match(FULL_DIFF_PATTERN) ?? [];
+  const prunedMatches = analysisLog.match(PRUNED_DIFF_PATTERN) ?? [];
+  if (completeMatches.length === 1 && prunedMatches.length === 0) {
+    return result("pr-agent", expectedHead, "success", "complete");
   }
-  if (recent.body.includes(COVERAGE_FOOTER)) {
+  if (prunedMatches.length === 1 && completeMatches.length === 0) {
     return result(
       "pr-agent",
       expectedHead,
       "failure",
       "review-coverage-incomplete",
-      parseOmittedFileCount(recent.body),
+      null,
     );
   }
-  return result("pr-agent", expectedHead, "success", "complete");
+  return result("pr-agent", expectedHead, "failure", "review-output-invalid");
 }
 
 function reasonCode(summary) {
@@ -144,13 +113,16 @@ export function evaluateReviewCoverage(input) {
 
 export function buildCoverageCheckOutput(coverage) {
   const complete = coverage.conclusion === "success";
+  const omittedFileCount = Number.isSafeInteger(coverage.omittedFileCount)
+    ? coverage.omittedFileCount
+    : "unknown";
   return {
     title: `Automated Review Coverage: ${coverage.conclusion} (shadow)`,
     summary: [
       `provider: ${coverage.provider}`,
       `head_sha: ${coverage.headSha}`,
       `reason_code: ${coverage.reasonCode}`,
-      `omitted_file_count: ${coverage.omittedFileCount}`,
+      `omitted_file_count: ${omittedFileCount}`,
       "",
       complete
         ? "Shadow coverage evaluation found complete current-head Review evidence."
@@ -168,6 +140,9 @@ export function selectCoverageCheck(checkRuns, expectedHead, prNumber) {
 }
 
 export function buildCoverageJobSummary(coverage, prNumber) {
+  const omittedFileCount = Number.isSafeInteger(coverage.omittedFileCount)
+    ? coverage.omittedFileCount
+    : "unknown";
   return [
     "## Automated Review Coverage (shadow)",
     "",
@@ -176,7 +151,7 @@ export function buildCoverageJobSummary(coverage, prNumber) {
     `- Head SHA: \`${coverage.headSha}\``,
     `- Conclusion: \`${coverage.conclusion}\``,
     `- Reason: \`${coverage.reasonCode}\``,
-    `- Omitted files: \`${coverage.omittedFileCount}\``,
+    `- Omitted files: \`${omittedFileCount}\``,
     `- Next owner: \`${coverage.conclusion === "success" ? "none" : "repository-maintainer"}\``,
     "",
   ].join("\n");
@@ -264,26 +239,36 @@ async function githubRequest(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
-async function paginate(path) {
-  const values = [];
-  for (let page = 1; page <= 20; page += 1) {
-    const separator = path.includes("?") ? "&" : "?";
-    const batch = await githubRequest(`${path}${separator}per_page=100&page=${page}`);
-    values.push(...batch);
-    if (batch.length < 100) return values;
+async function githubTextRequest(path) {
+  const response = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub API GET ${path}: ${response.status}`);
   }
-  throw new Error(`GitHub API pagination limit exceeded for ${path}`);
+  return response.text();
 }
 
 async function collectEvidence({ repository, prNumber, expectedHead, provider }) {
   if (provider === "pr-agent") {
-    const [comments, run] = await Promise.all([
-      paginate(`/repos/${repository}/issues/${prNumber}/comments`),
-      githubRequest(
-        `/repos/${repository}/actions/runs/${requiredEnvironment("GITHUB_RUN_ID")}`,
+    const runId = requiredEnvironment("GITHUB_RUN_ID");
+    const response = await githubRequest(
+      `/repos/${repository}/actions/runs/${runId}/jobs?filter=latest&per_page=100`,
+    );
+    const jobs = (response.jobs ?? []).filter(
+      (job) => job.name === "PR-Agent Analysis",
+    );
+    if (jobs.length !== 1) return {};
+    return {
+      analysisJobConclusion: jobs[0].conclusion,
+      analysisLog: await githubTextRequest(
+        `/repos/${repository}/actions/jobs/${jobs[0].id}/logs`,
       ),
-    ]);
-    return { comments, runStartedAt: run.run_started_at };
+    };
   }
   if (provider === "claude") {
     const encodedName = encodeURIComponent("Claude Review Gate");

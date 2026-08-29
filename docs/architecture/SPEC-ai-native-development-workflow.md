@@ -373,8 +373,8 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
   闭环；Review 摘要不阻塞合并。
 - Review Coverage Shadow 以 shadow 模式发布 provider-aware 的 `Automated Review Coverage` Check。它只接受所选
-  Reviewer 的可信 current-head evidence：PR-Agent 使用 GitHub Actions App 发布的 persistent Review
-  及确定性 coverage footer，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Check 对
+  Reviewer 的可信 current-head evidence：PR-Agent 使用当前 workflow run 中 `PR-Agent Analysis` job
+  的确定性 token decision log，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Check 对
   完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回稳定 reason code。shadow Check 尚不属于 required checks，不改变 merge authority；
   Review Coverage Enforcement 经 hosted smoke 和 branch-protection readback 后才把同一 contract 提升为

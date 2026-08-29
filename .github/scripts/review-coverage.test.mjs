@@ -10,28 +10,10 @@ import {
 } from "./review-coverage.mjs";
 
 const head = "a".repeat(40);
-const runStartedAt = "2026-08-29T00:00:00Z";
-
-function prAgentComment(body, overrides = {}) {
-  return {
-    user: { login: "github-actions[bot]", type: "Bot" },
-    body,
-    created_at: "2026-08-29T00:00:01Z",
-    updated_at: "2026-08-29T00:00:01Z",
-    ...overrides,
-  };
-}
-
-function reviewBody(extra = "") {
-  return [
-    "## PR Reviewer Guide 🔍",
-    "",
-    `#### (Review updated until commit https://github.com/example/repo/commit/${head})`,
-    "",
-    "Review completed.",
-    extra,
-  ].join("\n");
-}
+const completeLog =
+  "Tokens: 18682, total tokens under limit: 32000, returning full diff.";
+const prunedLog =
+  "Tokens: 135314, total tokens over limit: 32000, pruning diff.";
 
 test("accepts a complete current-head PR-Agent review", () => {
   assert.deepEqual(
@@ -39,8 +21,8 @@ test("accepts a complete current-head PR-Agent review", () => {
       provider: "pr-agent",
       expectedHead: head,
       runResult: "success",
-      runStartedAt,
-      comments: [prAgentComment(reviewBody())],
+      analysisJobConclusion: "success",
+      analysisLog: completeLog,
     }),
     {
       conclusion: "success",
@@ -53,63 +35,54 @@ test("accepts a complete current-head PR-Agent review", () => {
 });
 
 test("fails closed when PR-Agent reports omitted files", () => {
-  const body = reviewBody(
-    [
-      "⚠️ **Review coverage:** The following files were not included in this review because of the token budget:",
-      "- `generated/client.ts`",
-      "- `contracts/openapi.json`",
-      "... and 3 more",
-    ].join("\n"),
-  );
-
   assert.deepEqual(
     evaluateReviewCoverage({
       provider: "pr-agent",
       expectedHead: head,
       runResult: "success",
-      runStartedAt,
-      comments: [prAgentComment(body)],
+      analysisJobConclusion: "success",
+      analysisLog: prunedLog,
     }),
     {
       conclusion: "failure",
       headSha: head,
-      omittedFileCount: 5,
+      omittedFileCount: null,
       provider: "pr-agent",
       reasonCode: "review-coverage-incomplete",
     },
   );
 });
 
-test("rejects missing, stale, or untrusted PR-Agent output", () => {
+test("rejects missing, malformed, or mismatched PR-Agent job evidence", () => {
   const cases = [
-    { comments: [], reasonCode: "review-output-missing" },
+    { analysisLog: "", reasonCode: "review-output-missing" },
     {
-      comments: [
-        prAgentComment(reviewBody(), {
-          created_at: "2026-08-28T23:00:00Z",
-          updated_at: "2026-08-28T23:00:00Z",
-        }),
-      ],
-      reasonCode: "review-output-stale",
+      analysisLog: "Review completed without token metadata.",
+      reasonCode: "review-output-invalid",
     },
     {
-      comments: [
-        prAgentComment(reviewBody(), {
-          user: { login: "someone", type: "User" },
-        }),
-      ],
-      reasonCode: "review-output-missing",
+      analysisLog: `${completeLog}\n${prunedLog}`,
+      reasonCode: "review-output-invalid",
+    },
+    {
+      analysisLog: completeLog,
+      analysisJobConclusion: "failure",
+      reasonCode: "review-output-invalid",
     },
   ];
 
-  for (const { comments, reasonCode } of cases) {
+  for (const {
+    analysisJobConclusion = "success",
+    analysisLog,
+    reasonCode,
+  } of cases) {
     assert.equal(
       evaluateReviewCoverage({
         provider: "pr-agent",
         expectedHead: head,
         runResult: "success",
-        runStartedAt,
-        comments,
+        analysisJobConclusion,
+        analysisLog,
       }).reasonCode,
       reasonCode,
     );
@@ -127,7 +100,7 @@ test("maps reviewer control outcomes to stable reasons", () => {
         provider: "pr-agent",
         expectedHead: head,
         runResult,
-        runStartedAt,
+        analysisJobConclusion: runResult,
       }).reasonCode,
       reasonCode,
     );
@@ -238,8 +211,8 @@ test("publishes the shadow Check through a current-head dedicated App path", asy
     provider: "pr-agent",
     expectedHead: head,
     runResult: "success",
-    runStartedAt,
-    comments: [prAgentComment(reviewBody())],
+    analysisJobConclusion: "success",
+    analysisLog: completeLog,
   });
 
   await publishCoverageCheck({

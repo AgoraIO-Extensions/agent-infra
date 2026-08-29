@@ -826,6 +826,8 @@ export function validateTrustedScriptSources(sources) {
     'COVERAGE_CHECK_NAME = "Automated Review Coverage"',
     "gateCheckRequest,",
     "requireCurrentReviewTarget({",
+    'job.name === "PR-Agent Analysis"',
+    "/actions/jobs/${jobs[0].id}/logs",
     "selectReviewGateCheck(",
     "review-coverage-incomplete",
     "await checkRequest(`/repos/${repository}/check-runs/${check.id}`",
@@ -1588,7 +1590,6 @@ export function validateWorkflowDocuments(workflows) {
       actions: "read",
       checks: "read",
       contents: "read",
-      issues: "read",
       "pull-requests": "read",
     }) ||
     prAgentCoverage?.needs !== "analyze" ||

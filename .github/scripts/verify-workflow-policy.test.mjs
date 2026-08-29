@@ -995,7 +995,6 @@ test("publishes provider-aware Automated Review Coverage in shadow mode", async 
     actions: "read",
     checks: "read",
     contents: "read",
-    issues: "read",
     "pull-requests": "read",
   });
   assert.equal(coverage.needs, "analyze");
