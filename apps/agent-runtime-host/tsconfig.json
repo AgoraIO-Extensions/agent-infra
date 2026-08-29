@@ -1,3 +1,12 @@
 {
-	"extends": "@agent-infra/config/tsconfig.base.json"
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
+			"@agent-infra/contracts/runtime": [
+				"../../packages/contracts/src/runtime/index.ts"
+			]
+		}
+	}
 }
