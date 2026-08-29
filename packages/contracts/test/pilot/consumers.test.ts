@@ -4,6 +4,7 @@ import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1Schema,
+	validateDelegatedActionResultV1,
 } from "../../src/pilot/index.js";
 
 describe("Pilot named consumers", () => {
@@ -57,6 +58,7 @@ describe("Pilot named consumers", () => {
 		const result = {
 			schemaVersion: 1,
 			requestId: request.requestId,
+			idempotencyKey: request.idempotencyKey,
 			traceId: request.traceId,
 			callId: "call-connection-1",
 			status: "succeeded",
@@ -68,5 +70,17 @@ describe("Pilot named consumers", () => {
 
 		expect(DelegatedActionRequestV1Schema.parse(request)).toEqual(request);
 		expect(DelegatedActionResultV1Schema.parse(result)).toEqual(result);
+		expect(validateDelegatedActionResultV1(request, result)).toEqual(result);
+		for (const mismatch of [
+			{ requestId: "request-other" },
+			{ idempotencyKey: "tool.call_other" },
+			{ traceId: "trace-other" },
+			{ actionId: "github.issues.write" },
+			{ actionVersion: "v4" },
+		]) {
+			expect(() =>
+				validateDelegatedActionResultV1(request, { ...result, ...mismatch }),
+			).toThrow("Delegated Action result correlation mismatch");
+		}
 	});
 });

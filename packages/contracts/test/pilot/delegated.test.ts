@@ -4,6 +4,8 @@ import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1Schema,
+	ExecutionGrantV1Schema,
+	validateExecutionGrantClaimsV1,
 } from "../../src/pilot/delegated.js";
 
 const validClaims = {
@@ -51,6 +53,11 @@ const forbiddenCredentialKeys = [
 	"oauthToken",
 	"session_token",
 	"AuthorizationHeader",
+	"bearerToken",
+	"authToken",
+	"id_token",
+	"jwt",
+	"clientKey",
 	"privateKey",
 	"apiKey",
 	"secret",
@@ -81,6 +88,36 @@ describe("Pilot delegated contracts", () => {
 				false,
 			);
 		}
+		expect(
+			validateExecutionGrantClaimsV1(validClaims, "connection_api"),
+		).toEqual(validClaims);
+		expect(() =>
+			validateExecutionGrantClaimsV1(
+				{ ...validClaims, expiresAt: validClaims.issuedAt },
+				"connection_api",
+			),
+		).toThrow("Execution Grant claims are inconsistent");
+		expect(() =>
+			validateExecutionGrantClaimsV1(validClaims, "runtime_host"),
+		).toThrow("Execution Grant audience mismatch");
+		expect(() =>
+			validateExecutionGrantClaimsV1(
+				{ ...validClaims, actionIds: [] },
+				"connection_api",
+			),
+		).toThrow("Execution Grant claims are inconsistent");
+	});
+
+	it("requires a three-segment compact JWS envelope", () => {
+		expect(ExecutionGrantV1Schema.parse(validRequest.grant)).toEqual(
+			validRequest.grant,
+		);
+		expect(
+			ExecutionGrantV1Schema.safeParse({
+				...validRequest.grant,
+				token: "not-a-compact-jws",
+			}).success,
+		).toBe(false);
 	});
 
 	it("accepts only versioned delegated requests without caller-selected identity or Connection", () => {
@@ -111,6 +148,7 @@ describe("Pilot delegated contracts", () => {
 		const safeResult = {
 			schemaVersion: 1,
 			requestId: "request-1",
+			idempotencyKey: validRequest.idempotencyKey,
 			callId: "call-1",
 			status: "succeeded",
 			actionId: "github.issues.read",

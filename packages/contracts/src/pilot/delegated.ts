@@ -43,10 +43,45 @@ export const ExecutionGrantClaimsV1Schema = z.strictObject({
 	traceId: TraceIdV1Schema,
 });
 
+type ExecutionGrantAudienceV1 =
+	| "runtime_host"
+	| "platform_tool_gateway"
+	| "connection_api";
+
+export function validateExecutionGrantClaimsV1(
+	input: unknown,
+	requiredAudience: ExecutionGrantAudienceV1,
+) {
+	const claims = ExecutionGrantClaimsV1Schema.parse(input);
+	if (!claims.audience.includes(requiredAudience)) {
+		throw new Error("Execution Grant audience mismatch");
+	}
+	const issuedAt = Date.parse(claims.issuedAt);
+	const expiresAt = Date.parse(claims.expiresAt);
+	const invokesTools = claims.allowedCommands.includes("tool.invoke");
+	const invokesRuntime = claims.allowedCommands.some((command) =>
+		command.startsWith("turn."),
+	);
+	if (
+		!Number.isFinite(issuedAt) ||
+		!Number.isFinite(expiresAt) ||
+		issuedAt >= expiresAt ||
+		(invokesTools &&
+			(claims.actionIds.length === 0 ||
+				!claims.audience.includes("platform_tool_gateway") ||
+				!claims.audience.includes("connection_api"))) ||
+		(!invokesTools && claims.actionIds.length > 0) ||
+		(invokesRuntime && !claims.audience.includes("runtime_host"))
+	) {
+		throw new Error("Execution Grant claims are inconsistent");
+	}
+	return claims;
+}
+
 export const ExecutionGrantV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	format: z.literal("compact-jws"),
-	token: nonEmptyString(),
+	token: z.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
 });
 
 type SafeDelegatedJson =
@@ -61,7 +96,7 @@ const safeDelegatedJsonKey = z
 	.string()
 	.min(1)
 	.regex(
-		/^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Oo][Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]))?|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$/,
+		/^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Oo][Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Bb][Ee][Aa][Rr][Ee][Rr][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ii][Dd][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Jj][Ww][Tt]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]))?|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$/,
 	);
 
 export const SafeDelegatedJsonV1Schema: z.ZodType<SafeDelegatedJson> = z.lazy(
@@ -92,6 +127,7 @@ export const DelegatedActionRequestV1Schema = z.strictObject({
 const delegatedResultShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
 	traceId: TraceIdV1Schema,
 	actionId: OpaqueIdV1Schema,
 	actionVersion: nonEmptyString(),
@@ -116,6 +152,24 @@ export const DelegatedActionResultV1Schema = z.discriminatedUnion("status", [
 	DelegatedActionSucceededV1Schema,
 	DelegatedActionFailedV1Schema,
 ]);
+
+export function validateDelegatedActionResultV1(
+	requestInput: unknown,
+	resultInput: unknown,
+) {
+	const request = DelegatedActionRequestV1Schema.parse(requestInput);
+	const result = DelegatedActionResultV1Schema.parse(resultInput);
+	if (
+		result.requestId !== request.requestId ||
+		result.idempotencyKey !== request.idempotencyKey ||
+		result.traceId !== request.traceId ||
+		result.actionId !== request.action.actionId ||
+		result.actionVersion !== request.action.actionVersion
+	) {
+		throw new Error("Delegated Action result correlation mismatch");
+	}
+	return result;
+}
 
 export const pilotDelegatedSchemasV1 = {
 	DelegatedActionRequestV1: DelegatedActionRequestV1Schema,
