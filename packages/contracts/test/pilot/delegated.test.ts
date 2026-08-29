@@ -6,6 +6,7 @@ import {
 	ExecutionGrantClaimsV1Schema,
 	ExecutionGrantV1Schema,
 	validateDelegatedActionRequestV1,
+	validateDelegatedActionResultV1,
 	validateExecutionGrantClaimsV1,
 } from "../../src/pilot/delegated.js";
 
@@ -45,6 +46,20 @@ const validRequest = {
 	},
 	traceId: "trace-1",
 } as const;
+
+const validValidationContext = {
+	expectedIssuer: "agent-platform",
+	requiredAudience: "connection_api" as const,
+	now: "2026-08-28T10:01:00Z",
+	expectedBindings: {
+		agentId: validClaims.agentId,
+		actorId: validClaims.actorId,
+		channelId: validClaims.channelId,
+		conversationId: validClaims.conversationId,
+		turnId: validClaims.turnId,
+		executionId: validClaims.executionId,
+	},
+};
 
 const forbiddenCredentialKeys = [
 	"token",
@@ -88,15 +103,22 @@ describe("Pilot delegated contracts", () => {
 			validClaims,
 		);
 		for (const requiredField of [
+			"schemaVersion",
 			"issuer",
 			"audience",
+			"issuedAt",
 			"expiresAt",
 			"grantId",
 			"agentId",
 			"actorId",
+			"channelId",
 			"conversationId",
+			"turnId",
 			"executionId",
+			"allowedCommands",
+			"attachments",
 			"actionSetVersion",
+			"actionIds",
 			"traceId",
 		] as const) {
 			const incomplete = { ...validClaims } as Record<string, unknown>;
@@ -106,58 +128,51 @@ describe("Pilot delegated contracts", () => {
 			);
 		}
 		expect(
-			validateExecutionGrantClaimsV1(validClaims, {
-				expectedIssuer: "agent-platform",
-				requiredAudience: "connection_api",
-				now: "2026-08-28T10:01:00Z",
-			}),
+			validateExecutionGrantClaimsV1(validClaims, validValidationContext),
 		).toEqual(validClaims);
+		for (const binding of [
+			"agentId",
+			"actorId",
+			"channelId",
+			"conversationId",
+			"turnId",
+			"executionId",
+		] as const) {
+			expect(() =>
+				validateExecutionGrantClaimsV1(
+					{ ...validClaims, [binding]: "another-binding" },
+					validValidationContext,
+				),
+			).toThrow("Execution Grant binding mismatch");
+		}
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, expiresAt: validClaims.issuedAt },
-				{
-					expectedIssuer: "agent-platform",
-					requiredAudience: "connection_api",
-					now: "2026-08-28T10:01:00Z",
-				},
+				validValidationContext,
 			),
 		).toThrow("Execution Grant claims are inconsistent");
 		expect(() =>
 			validateExecutionGrantClaimsV1(validClaims, {
-				expectedIssuer: "agent-platform",
+				...validValidationContext,
 				requiredAudience: "runtime_host",
-				now: "2026-08-28T10:01:00Z",
 			}),
 		).toThrow("Execution Grant audience mismatch");
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, actionIds: [] },
-				{
-					expectedIssuer: "agent-platform",
-					requiredAudience: "connection_api",
-					now: "2026-08-28T10:01:00Z",
-				},
+				validValidationContext,
 			),
 		).toThrow("Execution Grant claims are inconsistent");
-		for (const context of [
-			{
-				expectedIssuer: "other-issuer",
-				requiredAudience: "connection_api" as const,
-				now: "2026-08-28T10:01:00Z",
-			},
-			{
-				expectedIssuer: "agent-platform",
-				requiredAudience: "connection_api" as const,
-				now: "2026-08-28T10:06:00Z",
-			},
-			{
-				expectedIssuer: "agent-platform",
-				requiredAudience: "connection_api" as const,
-				now: "2026-08-28T09:59:00Z",
-			},
+		for (const override of [
+			{ expectedIssuer: "other-issuer" },
+			{ now: "2026-08-28T10:06:00Z" },
+			{ now: "2026-08-28T09:59:00Z" },
 		]) {
 			expect(() =>
-				validateExecutionGrantClaimsV1(validClaims, context),
+				validateExecutionGrantClaimsV1(validClaims, {
+					...validValidationContext,
+					...override,
+				}),
 			).toThrow();
 		}
 		expect(
@@ -167,11 +182,7 @@ describe("Pilot delegated contracts", () => {
 					issuedAt: "2026-12-31T23:59:60Z",
 					expiresAt: "2027-01-01T00:00:02Z",
 				},
-				{
-					expectedIssuer: "agent-platform",
-					requiredAudience: "connection_api",
-					now: "2027-01-01T00:00:01Z",
-				},
+				{ ...validValidationContext, now: "2027-01-01T00:00:01Z" },
 			).issuedAt,
 		).toBe("2026-12-31T23:59:60Z");
 		expect(() =>
@@ -181,21 +192,16 @@ describe("Pilot delegated contracts", () => {
 					issuedAt: "2026-08-28T10:00:00.0009Z",
 					expiresAt: "2026-08-28T10:00:00.0011Z",
 				},
-				{
-					expectedIssuer: "agent-platform",
-					requiredAudience: "connection_api",
-					now: "2026-08-28T10:00:00.0001Z",
-				},
+				{ ...validValidationContext, now: "2026-08-28T10:00:00.0001Z" },
 			),
 		).toThrow("Execution Grant claims are inconsistent");
 	});
 
 	it("binds delegated Action requests to verified Grant claims", () => {
 		const context = {
-			expectedIssuer: "agent-platform",
-			requiredAudience: "connection_api" as const,
-			now: "2026-08-28T10:01:00Z",
+			...validValidationContext,
 			expectedActionSetVersion: validClaims.actionSetVersion,
+			expectedActionVersion: validRequest.action.actionVersion,
 		};
 		expect(
 			validateDelegatedActionRequestV1(validClaims, validRequest, context),
@@ -212,6 +218,7 @@ describe("Pilot delegated contracts", () => {
 			],
 			[{ ...validClaims, allowedCommands: ["turn.submit"] }, validRequest, {}],
 			[validClaims, validRequest, { expectedActionSetVersion: "actions-v8" }],
+			[validClaims, validRequest, { expectedActionVersion: "v4" }],
 		] as const) {
 			expect(() =>
 				validateDelegatedActionRequestV1(claims, request, {
@@ -291,8 +298,11 @@ describe("Pilot delegated contracts", () => {
 			DelegatedActionResultV1Schema.parse({
 				...safeResult,
 				output: { nextPageToken: "opaque-pagination-cursor" },
-			}).output,
-		).toEqual({ nextPageToken: "opaque-pagination-cursor" });
+			}),
+		).toMatchObject({
+			status: "succeeded",
+			output: { nextPageToken: "opaque-pagination-cursor" },
+		});
 		for (const key of forbiddenCredentialKeys) {
 			expect(
 				DelegatedActionResultV1Schema.safeParse({
@@ -303,5 +313,25 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(() =>
+			validateDelegatedActionResultV1(validRequest, {
+				schemaVersion: 1,
+				requestId: safeResult.requestId,
+				idempotencyKey: safeResult.idempotencyKey,
+				status: "failed",
+				callId: null,
+				actionId: safeResult.actionId,
+				actionVersion: safeResult.actionVersion,
+				traceId: safeResult.traceId,
+				completedAt: safeResult.completedAt,
+				error: {
+					schemaVersion: 1,
+					code: "CONNECTION_UNAVAILABLE",
+					message: "Connection is unavailable",
+					retryable: true,
+					traceId: "trace-other",
+				},
+			}),
+		).toThrow("Delegated Action result correlation mismatch");
 	});
 });

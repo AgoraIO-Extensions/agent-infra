@@ -1,11 +1,10 @@
-import { describe, expect, it } from "vitest";
-
 import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1Schema,
 	validateDelegatedActionResultV1,
-} from "../../src/pilot/index.js";
+} from "@agent-infra/contracts/pilot";
+import { describe, expect, it } from "vitest";
 
 describe("Pilot named consumers", () => {
 	it("gives the RuntimeHost client only a bounded, current Execution Grant", () => {

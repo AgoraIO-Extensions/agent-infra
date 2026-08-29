@@ -52,6 +52,14 @@ type ExecutionGrantValidationContext = {
 	expectedIssuer: string;
 	requiredAudience: ExecutionGrantAudienceV1;
 	now: string;
+	expectedBindings: {
+		agentId: string;
+		actorId: string;
+		channelId: string;
+		conversationId: string;
+		turnId: string;
+		executionId: string;
+	};
 };
 
 function rfc3339Instant(value: string) {
@@ -106,6 +114,18 @@ export function validateExecutionGrantClaimsV1(
 	}
 	if (!claims.audience.includes(context.requiredAudience)) {
 		throw new Error("Execution Grant audience mismatch");
+	}
+	for (const binding of [
+		"agentId",
+		"actorId",
+		"channelId",
+		"conversationId",
+		"turnId",
+		"executionId",
+	] as const) {
+		if (claims[binding] !== context.expectedBindings[binding]) {
+			throw new Error("Execution Grant binding mismatch");
+		}
 	}
 	const issuedAt = rfc3339Instant(claims.issuedAt);
 	const expiresAt = rfc3339Instant(claims.expiresAt);
@@ -181,6 +201,7 @@ export function validateDelegatedActionRequestV1(
 	requestInput: unknown,
 	context: ExecutionGrantValidationContext & {
 		expectedActionSetVersion: string;
+		expectedActionVersion: string;
 	},
 ) {
 	const claims = validateExecutionGrantClaimsV1(verifiedClaimsInput, context);
@@ -189,6 +210,7 @@ export function validateDelegatedActionRequestV1(
 		!claims.allowedCommands.includes("tool.invoke") ||
 		!claims.actionIds.includes(request.action.actionId) ||
 		claims.actionSetVersion !== context.expectedActionSetVersion ||
+		request.action.actionVersion !== context.expectedActionVersion ||
 		claims.traceId !== request.traceId
 	) {
 		throw new Error("Delegated Action request exceeds Grant");
@@ -236,7 +258,8 @@ export function validateDelegatedActionResultV1(
 		result.idempotencyKey !== request.idempotencyKey ||
 		result.traceId !== request.traceId ||
 		result.actionId !== request.action.actionId ||
-		result.actionVersion !== request.action.actionVersion
+		result.actionVersion !== request.action.actionVersion ||
+		(result.status === "failed" && result.error.traceId !== result.traceId)
 	) {
 		throw new Error("Delegated Action result correlation mismatch");
 	}
