@@ -44,29 +44,64 @@ export const RuntimeManifestParsingEvidenceV1Schema = z.strictObject({
 	unknownFieldsDetected: z.literal(false),
 });
 
-const imageRegistryTerminalErrorCodeV1Schema = z.enum([
-	"IMAGE_REFERENCE_INVALID",
-	"IMAGE_NOT_FOUND",
-	"IMAGE_NOT_ADMITTED",
-	"OCI_CONFIG_INVALID",
-	"RUNTIME_MANIFEST_MISSING",
-	"RUNTIME_MANIFEST_INVALID",
-]);
-const imageRegistryRetryableErrorCodeV1Schema = z.enum([
-	"IMAGE_REGISTRY_UNAVAILABLE",
-	"IMAGE_ADMISSION_POLICY_UNAVAILABLE",
-]);
+const imageRegistryAdmissionErrorV1Schema = <
+	const Code extends string,
+	const Message extends string,
+	const Retryable extends boolean,
+>(
+	code: Code,
+	message: Message,
+	retryable: Retryable,
+) =>
+	WorkloadBoundaryErrorV1Schema.extend({
+		code: z.literal(code),
+		message: z.literal(message),
+		retryable: z.literal(retryable),
+	});
+
 export const ImageRegistryAdmissionErrorV1Schema = z.discriminatedUnion(
-	"retryable",
+	"code",
 	[
-		WorkloadBoundaryErrorV1Schema.extend({
-			code: imageRegistryTerminalErrorCodeV1Schema,
-			retryable: z.literal(false),
-		}),
-		WorkloadBoundaryErrorV1Schema.extend({
-			code: imageRegistryRetryableErrorCodeV1Schema,
-			retryable: z.literal(true),
-		}),
+		imageRegistryAdmissionErrorV1Schema(
+			"IMAGE_REFERENCE_INVALID",
+			"Image reference is invalid",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"IMAGE_NOT_FOUND",
+			"Image was not found",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"IMAGE_NOT_ADMITTED",
+			"The image is not admitted by deployment policy",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"OCI_CONFIG_INVALID",
+			"OCI image config is invalid",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"RUNTIME_MANIFEST_MISSING",
+			"Runtime Manifest is missing",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"RUNTIME_MANIFEST_INVALID",
+			"Runtime Manifest is invalid",
+			false,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"IMAGE_REGISTRY_UNAVAILABLE",
+			"Image registry is unavailable",
+			true,
+		),
+		imageRegistryAdmissionErrorV1Schema(
+			"IMAGE_ADMISSION_POLICY_UNAVAILABLE",
+			"Image admission policy is unavailable",
+			true,
+		),
 	],
 );
 

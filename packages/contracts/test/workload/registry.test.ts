@@ -221,6 +221,15 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		expect(
 			ImageRegistryAdmissionResultV1Schema.safeParse({
 				...rejected,
+				error: {
+					...rejected.error,
+					message: "Registry returned bearer super-secret-token",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...rejected,
 				error: { ...rejected.error, code: "PROVIDER_SPECIFIC_FAILURE" },
 			}).success,
 		).toBe(false);
@@ -230,6 +239,7 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				error: {
 					...rejected.error,
 					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					message: "Image registry is unavailable",
 					retryable: true,
 				},
 			}).success,

@@ -22,7 +22,7 @@ export function createFakeImageRegistryAdapterV1(
 							error: {
 								schemaVersion: 1,
 								code: "IMAGE_NOT_ADMITTED",
-								message: "The image is not admitted by the configured Fake",
+								message: "The image is not admitted by deployment policy",
 								retryable: false,
 								traceId: request.traceId,
 							},
