@@ -212,6 +212,7 @@ export async function publishCoverageCheck({
     body: JSON.stringify({
       status: "completed",
       conclusion: coverage.conclusion,
+      details_url: targetUrl,
       output: buildCoverageCheckOutput(coverage),
     }),
   });

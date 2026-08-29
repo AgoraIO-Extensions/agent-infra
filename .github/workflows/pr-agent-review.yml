@@ -113,6 +113,7 @@ jobs:
   coverage:
     name: Automated Review Coverage (shadow)
     needs: analyze
+    continue-on-error: true
     if: >-
       always() &&
       vars.PR_REVIEW_PROVIDER != 'claude' &&
@@ -161,7 +162,7 @@ jobs:
 
   outcome:
     name: Publish terminal outcome
-    needs: [analyze, coverage, suggestions]
+    needs: [analyze, suggestions]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

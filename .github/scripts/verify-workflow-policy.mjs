@@ -118,7 +118,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "pr-agent-review.yml": {
-    needs: ["analyze", "coverage", "suggestions"],
+    needs: ["analyze", "suggestions"],
     operation: "pr-agent-review",
   },
   "pr-gates.yml": {
@@ -1593,6 +1593,7 @@ export function validateWorkflowDocuments(workflows) {
       "pull-requests": "read",
     }) ||
     prAgentCoverage?.needs !== "analyze" ||
+    prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
       ["analyze", "coverage", "outcome", "suggestions"].join("\0") ||
     prAgentAnalyze?.steps?.length !== 2 ||
@@ -1632,7 +1633,7 @@ export function validateWorkflowDocuments(workflows) {
       REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
     }) ||
     JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
-      JSON.stringify(["analyze", "coverage", "suggestions"]) ||
+      JSON.stringify(["analyze", "suggestions"]) ||
     gatePublisherTokenReferences(prAgent).length !== 1 ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||

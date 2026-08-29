@@ -252,6 +252,10 @@ test("publishes the shadow Check through a current-head dedicated App path", asy
     },
   });
   assert.equal(checkRequests[1].path, "/repos/example/repo/check-runs/99");
+  assert.equal(
+    checkRequests[1].body.details_url,
+    "https://github.com/example/repo/actions/runs/1",
+  );
   assert.equal(checkRequests[1].body.conclusion, "success");
   assert.equal(checkRequests[1].body.status, "completed");
 });

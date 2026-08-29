@@ -998,6 +998,8 @@ test("publishes provider-aware Automated Review Coverage in shadow mode", async 
     "pull-requests": "read",
   });
   assert.equal(coverage.needs, "analyze");
+  assert.equal(coverage["continue-on-error"], true);
+  assert.deepEqual(prAgent.jobs.outcome.needs, ["analyze", "suggestions"]);
   assert.equal(coveragePublisher.if, "always()");
   assert.equal(
     coveragePublisher.run,
