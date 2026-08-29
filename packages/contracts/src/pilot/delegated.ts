@@ -27,6 +27,7 @@ export const ExecutionGrantClaimsV1Schema = z.strictObject({
 	conversationId: OpaqueIdV1Schema,
 	turnId: OpaqueIdV1Schema,
 	executionId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive(),
 	allowedCommands: z
 		.array(
 			z.enum(["turn.submit", "turn.supplement", "turn.stop", "tool.invoke"]),
@@ -59,6 +60,7 @@ type ExecutionGrantValidationContext = {
 		conversationId: string;
 		turnId: string;
 		executionId: string;
+		sessionGeneration: number;
 	};
 };
 
@@ -122,6 +124,7 @@ export function validateExecutionGrantClaimsV1(
 		"conversationId",
 		"turnId",
 		"executionId",
+		"sessionGeneration",
 	] as const) {
 		if (claims[binding] !== context.expectedBindings[binding]) {
 			throw new Error("Execution Grant binding mismatch");

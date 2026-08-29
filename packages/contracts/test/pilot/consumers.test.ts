@@ -21,6 +21,7 @@ describe("Pilot named consumers", () => {
 			conversationId: "conversation-1",
 			turnId: "turn-1",
 			executionId: "execution-1",
+			sessionGeneration: 1,
 			allowedCommands: ["turn.submit"],
 			attachments: [],
 			actionSetVersion: "actions-v7",

@@ -23,6 +23,7 @@ const validClaims = {
 	conversationId: "conversation-1",
 	turnId: "turn-1",
 	executionId: "execution-1",
+	sessionGeneration: 1,
 	allowedCommands: ["tool.invoke"],
 	attachments: [{ attachmentId: "attachment-1", operations: ["read"] }],
 	actionSetVersion: "actions-v7",
@@ -58,6 +59,7 @@ const validValidationContext = {
 		conversationId: validClaims.conversationId,
 		turnId: validClaims.turnId,
 		executionId: validClaims.executionId,
+		sessionGeneration: validClaims.sessionGeneration,
 	},
 };
 
@@ -115,6 +117,7 @@ describe("Pilot delegated contracts", () => {
 			"conversationId",
 			"turnId",
 			"executionId",
+			"sessionGeneration",
 			"allowedCommands",
 			"attachments",
 			"actionSetVersion",
@@ -145,6 +148,12 @@ describe("Pilot delegated contracts", () => {
 				),
 			).toThrow("Execution Grant binding mismatch");
 		}
+		expect(() =>
+			validateExecutionGrantClaimsV1(
+				{ ...validClaims, sessionGeneration: 2 },
+				validValidationContext,
+			),
+		).toThrow("Execution Grant binding mismatch");
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, expiresAt: validClaims.issuedAt },
