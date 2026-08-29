@@ -339,7 +339,9 @@ export function resolvePilotReplayV1(input: PilotReplayInputV1) {
 					? usesCursor
 						? "cross_conversation_cursor"
 						: "cross_conversation_event_id"
-					: "unknown_event_id",
+					: usesCursor
+						? "cursor_expired"
+						: "unknown_event_id",
 				resumeCursor: "cursor-pilot-2",
 			},
 		] as const;

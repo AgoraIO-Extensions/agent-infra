@@ -4893,6 +4893,15 @@
             },
             "description": "Event stream is temporarily unavailable"
           }
+        },
+        "x-agent-infra-replay-selector": {
+          "header": "Last-Event-ID",
+          "mode": "at-most-one",
+          "query": "cursor"
+        },
+        "x-agent-infra-sse-framing": {
+          "controlId": null,
+          "persistedEventId": "eventId"
         }
       }
     },

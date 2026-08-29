@@ -3,6 +3,7 @@ import { createDocument } from "zod-openapi";
 
 import {
 	ConversationSseMessageV1Schema,
+	framePilotSseMessageV1,
 	HeartbeatSignalV1Schema,
 	PersistedConversationEventV1Schema,
 	pilotBrowserSseOpenApiPathsV1,
@@ -28,6 +29,10 @@ describe("Pilot SSE contracts", () => {
 			payload: { text: "done" },
 		};
 		expect(PersistedConversationEventV1Schema.parse(event)).toEqual(event);
+		expect(framePilotSseMessageV1(event)).toEqual({
+			id: event.eventId,
+			data: event,
+		});
 		expect(
 			PersistedConversationEventV1Schema.safeParse({
 				...event,
@@ -85,6 +90,7 @@ describe("Pilot SSE contracts", () => {
 			},
 		};
 		expect(HeartbeatSignalV1Schema.parse(heartbeat)).toEqual(heartbeat);
+		expect(framePilotSseMessageV1(heartbeat)).toEqual({ data: heartbeat });
 		expect(ConversationSseMessageV1Schema.parse(heartbeat)).toEqual(heartbeat);
 		expect(
 			PersistedConversationEventV1Schema.safeParse(heartbeat).success,
@@ -123,6 +129,15 @@ describe("Pilot SSE contracts", () => {
 		expect(operation?.responses?.["503"]).toHaveProperty(
 			"content.application/json",
 		);
+		expect(operation).toHaveProperty("x-agent-infra-sse-framing", {
+			controlId: null,
+			persistedEventId: "eventId",
+		});
+		expect(operation).toHaveProperty("x-agent-infra-replay-selector", {
+			header: "Last-Event-ID",
+			mode: "at-most-one",
+			query: "cursor",
+		});
 		expect(resolvePilotReplaySelectorV1({ cursor: "cursor-1" })).toEqual({
 			kind: "cursor",
 			value: "cursor-1",

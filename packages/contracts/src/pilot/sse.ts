@@ -114,6 +114,11 @@ export const ConversationSseMessageV1Schema = z.union([
 	AuthorizationRevokedSignalV1Schema,
 ]);
 
+export function framePilotSseMessageV1(input: unknown) {
+	const data = ConversationSseMessageV1Schema.parse(input);
+	return data.kind === "event" ? { id: data.eventId, data } : { data };
+}
+
 const conversationPath = z.strictObject({
 	conversationId: OpaqueIdV1Schema,
 });
@@ -151,6 +156,15 @@ export const pilotBrowserSseOpenApiPathsV1 = {
 	"/api/v1/conversations/{conversationId}/events": {
 		get: {
 			operationId: "streamConversationEvents",
+			"x-agent-infra-replay-selector": {
+				header: "Last-Event-ID",
+				mode: "at-most-one",
+				query: "cursor",
+			},
+			"x-agent-infra-sse-framing": {
+				controlId: null,
+				persistedEventId: "eventId",
+			},
 			requestParams: {
 				path: conversationPath,
 				query: replayQuery,

@@ -93,7 +93,7 @@ describe("Pilot schema-driven Fake scenarios", () => {
 		});
 		expect(ConversationSseMessageV1Schema.parse(unknown[0])).toMatchObject({
 			type: "timeline.reload",
-			reason: "unknown_event_id",
+			reason: "cursor_expired",
 		});
 		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
 	});
