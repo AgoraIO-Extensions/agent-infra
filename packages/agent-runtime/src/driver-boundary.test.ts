@@ -74,6 +74,22 @@ function malformedRecord(
 	} as unknown as RuntimeDriverOperationRecordV1;
 }
 
+function unsafeErrorEvent() {
+	return {
+		schemaVersion: 1,
+		adapterEventKey: "event-driver-error",
+		executionId: binding.executionId,
+		cursor: "cursor-driver-error",
+		occurredAt: "2026-08-28T10:00:01Z",
+		type: "error",
+		payload: {
+			code: "UPSTREAM_ERROR",
+			message: "Provider returned bearer secret-value",
+			retryable: false,
+		},
+	};
+}
+
 afterEach(async () => {
 	await Promise.all(
 		directories.splice(0).map((value) => rm(value, { recursive: true })),
@@ -122,13 +138,13 @@ describe("Runtime Driver boundary", () => {
 					? { getCapabilities: async () => ({ rawProtocol: true }) }
 					: {}),
 				...(kind === "replay"
-					? { replayEvents: async () => [{ rawProtocol: "secret" }] }
+					? { replayEvents: async () => [unsafeErrorEvent()] }
 					: {}),
 				...(kind === "stream"
 					? {
 							subscribeEvents: async () =>
 								(async function* () {
-									yield { rawProtocol: "secret" };
+									yield unsafeErrorEvent();
 								})(),
 						}
 					: {}),

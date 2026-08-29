@@ -64,6 +64,61 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost generation and delivery fencing", () => {
+	it("keeps one queue key while the first Session is being created", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-first-session-ordering-"),
+		);
+		directories.push(directory);
+		let releaseFirst: () => void = () => undefined;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let firstPrepared: () => void = () => undefined;
+		const firstPreparedPromise = new Promise<void>((resolve) => {
+			firstPrepared = resolve;
+		});
+		let secondPrepared: () => void = () => undefined;
+		const secondPreparedPromise = new Promise<void>((resolve) => {
+			secondPrepared = resolve;
+		});
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver: await FakeRuntimeDriver.open(join(directory, "driver.json")),
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+			afterOperationPrepared: async (operationId) => {
+				if (operationId === "execution-fence") {
+					firstPrepared();
+					await firstReleased;
+				}
+				if (operationId === "execution-fence-next") secondPrepared();
+			},
+		});
+		const first = submitRequest();
+		const firstSubmit = runtimeHost.submitTurn(first);
+		await firstPreparedPromise;
+		const secondBinding = {
+			...first,
+			executionId: "execution-fence-next",
+			turnId: "turn-fence-next",
+		};
+		const secondSubmit = runtimeHost.submitTurn({
+			...secondBinding,
+			requestId: "request-fence-next",
+			grant: signedGrant(secondBinding, ["turn.submit"]),
+		});
+		const secondEnteredWhileFirstBlocked = await Promise.race([
+			secondPreparedPromise.then(() => true),
+			new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+		]);
+		releaseFirst();
+		await Promise.all([firstSubmit, secondSubmit]);
+		await secondPreparedPromise;
+		expect(secondEnteredWhileFirstBlocked).toBe(false);
+	});
+
 	it("serializes ref-less submit and ref-bound commands for one Session", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-ordering-"));
 		directories.push(directory);

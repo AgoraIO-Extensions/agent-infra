@@ -116,7 +116,7 @@ export class RuntimeHost {
 			this.options.grantValidation,
 		);
 		return this.serialize(
-			this.options.store.sessionQueueKey(request.hostSessionRef, request),
+			this.options.store.sessionQueueKey(request),
 			async () => {
 				const prepared = await this.options.store.prepareOperation({
 					requestedHostSessionRef: request.hostSessionRef,
@@ -317,40 +317,43 @@ export class RuntimeHost {
 			verification,
 			this.options.grantValidation,
 		);
-		return this.serialize(request.hostSessionRef, async () => {
-			const prepared = await this.options.store.prepareOperation({
-				requestedHostSessionRef: request.hostSessionRef,
-				binding: request,
-				operationId: request.messageId,
-				kind: "supplement",
-				scope: `message:${request.messageId}`,
-				deliveryFence: request.deliveryFence,
-				executionDeliveryFence: request.executionDeliveryFence,
-				requestDigest: requestDigest({
-					kind: "supplement",
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					messageId: request.messageId,
-					input: request.input,
-				}),
-				command: (nativeSessionRef) => ({
-					schemaVersion: 1,
-					kind: "supplement",
+		return this.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				const prepared = await this.options.store.prepareOperation({
+					requestedHostSessionRef: request.hostSessionRef,
+					binding: request,
 					operationId: request.messageId,
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
-					input: request.input,
-				}),
-			});
-			return this.dispatch(request.hostSessionRef, prepared.operation);
-		});
+					kind: "supplement",
+					scope: `message:${request.messageId}`,
+					deliveryFence: request.deliveryFence,
+					executionDeliveryFence: request.executionDeliveryFence,
+					requestDigest: requestDigest({
+						kind: "supplement",
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						messageId: request.messageId,
+						input: request.input,
+					}),
+					command: (nativeSessionRef) => ({
+						schemaVersion: 1,
+						kind: "supplement",
+						operationId: request.messageId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						input: request.input,
+					}),
+				});
+				return this.dispatch(request.hostSessionRef, prepared.operation);
+			},
+		);
 	}
 
 	async stop(
@@ -366,38 +369,41 @@ export class RuntimeHost {
 			verification,
 			this.options.grantValidation,
 		);
-		return this.serialize(request.hostSessionRef, async () => {
-			const prepared = await this.options.store.prepareOperation({
-				requestedHostSessionRef: request.hostSessionRef,
-				binding: request,
-				operationId: request.stopRequestId,
-				kind: "stop",
-				scope: `stop:${request.stopRequestId}`,
-				deliveryFence: request.deliveryFence,
-				executionDeliveryFence: request.executionDeliveryFence,
-				requestDigest: requestDigest({
-					kind: "stop",
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					stopRequestId: request.stopRequestId,
-				}),
-				command: (nativeSessionRef) => ({
-					schemaVersion: 1,
-					kind: "stop",
+		return this.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				const prepared = await this.options.store.prepareOperation({
+					requestedHostSessionRef: request.hostSessionRef,
+					binding: request,
 					operationId: request.stopRequestId,
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
-				}),
-			});
-			return this.dispatch(request.hostSessionRef, prepared.operation);
-		});
+					kind: "stop",
+					scope: `stop:${request.stopRequestId}`,
+					deliveryFence: request.deliveryFence,
+					executionDeliveryFence: request.executionDeliveryFence,
+					requestDigest: requestDigest({
+						kind: "stop",
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						stopRequestId: request.stopRequestId,
+					}),
+					command: (nativeSessionRef) => ({
+						schemaVersion: 1,
+						kind: "stop",
+						operationId: request.stopRequestId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+					}),
+				});
+				return this.dispatch(request.hostSessionRef, prepared.operation);
+			},
+		);
 	}
 
 	async cancelGeneration(
@@ -413,53 +419,56 @@ export class RuntimeHost {
 			verification,
 			this.options.grantValidation,
 		);
-		return this.serialize(request.hostSessionRef, async () => {
-			const prepared = await this.options.store.prepareOperation({
-				requestedHostSessionRef: request.hostSessionRef,
-				binding: request,
-				operationId: request.tombstoneId,
-				kind: "generation-cancel",
-				scope: `generation:${request.sessionGeneration}`,
-				deliveryFence: request.deliveryFence,
-				requestDigest: requestDigest({
-					kind: "generation-cancel",
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					tombstoneId: request.tombstoneId,
-				}),
-				command: (nativeSessionRef) => ({
-					schemaVersion: 1,
-					kind: "generation-cancel",
+		return this.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				const prepared = await this.options.store.prepareOperation({
+					requestedHostSessionRef: request.hostSessionRef,
+					binding: request,
 					operationId: request.tombstoneId,
-					agentId: request.agentId,
-					conversationId: request.conversationId,
-					executionId: request.executionId,
-					turnId: request.turnId,
-					sessionGeneration: request.sessionGeneration,
-					nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
-				}),
-			});
-			await this.options.store.activateGenerationBarrier(
-				request.hostSessionRef,
-				request,
-				request.tombstoneId,
-			);
-			const response = await this.dispatch(
-				request.hostSessionRef,
-				prepared.operation,
-			);
-			if (response.result.outcome === "accepted") {
-				await this.options.store.confirmGenerationBarrier(
+					kind: "generation-cancel",
+					scope: `generation:${request.sessionGeneration}`,
+					deliveryFence: request.deliveryFence,
+					requestDigest: requestDigest({
+						kind: "generation-cancel",
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						tombstoneId: request.tombstoneId,
+					}),
+					command: (nativeSessionRef) => ({
+						schemaVersion: 1,
+						kind: "generation-cancel",
+						operationId: request.tombstoneId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+					}),
+				});
+				await this.options.store.activateGenerationBarrier(
 					request.hostSessionRef,
+					request,
 					request.tombstoneId,
 				);
-				await this.options.store.clearRecoveryBlocked(request.hostSessionRef);
-			}
-			return response;
-		});
+				const response = await this.dispatch(
+					request.hostSessionRef,
+					prepared.operation,
+				);
+				if (response.result.outcome === "accepted") {
+					await this.options.store.confirmGenerationBarrier(
+						request.hostSessionRef,
+						request.tombstoneId,
+					);
+					await this.options.store.clearRecoveryBlocked(request.hostSessionRef);
+				}
+				return response;
+			},
+		);
 	}
 
 	private async dispatch(

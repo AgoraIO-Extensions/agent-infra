@@ -646,24 +646,53 @@
                 "type": "string"
               },
               "payload": {
-                "additionalProperties": false,
-                "properties": {
-                  "code": {
-                    "minLength": 1,
-                    "type": "string"
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "const": "RUNTIME_EXECUTION_FAILED",
+                        "type": "string"
+                      },
+                      "message": {
+                        "const": "Runtime execution failed",
+                        "type": "string"
+                      },
+                      "retryable": {
+                        "const": false,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message",
+                      "retryable"
+                    ],
+                    "type": "object"
                   },
-                  "message": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "retryable": {
-                    "type": "boolean"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "const": "RUNTIME_DEPENDENCY_UNAVAILABLE",
+                        "type": "string"
+                      },
+                      "message": {
+                        "const": "Runtime dependency is unavailable",
+                        "type": "string"
+                      },
+                      "retryable": {
+                        "const": true,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message",
+                      "retryable"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "code",
-                  "message",
-                  "retryable"
                 ],
                 "type": "object"
               },

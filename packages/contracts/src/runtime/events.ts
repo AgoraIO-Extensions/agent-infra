@@ -33,6 +33,19 @@ const runtimeEventBase = {
 	occurredAt: Rfc3339TimestampV1Schema,
 };
 
+const runtimeErrorEventPayloadV1Schema = z.discriminatedUnion("code", [
+	z.strictObject({
+		code: z.literal("RUNTIME_EXECUTION_FAILED"),
+		message: z.literal("Runtime execution failed"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		code: z.literal("RUNTIME_DEPENDENCY_UNAVAILABLE"),
+		message: z.literal("Runtime dependency is unavailable"),
+		retryable: z.literal(true),
+	}),
+]);
+
 export const RuntimeEventV1Schema = z.discriminatedUnion("type", [
 	z.strictObject({
 		...runtimeEventBase,
@@ -73,11 +86,7 @@ export const RuntimeEventV1Schema = z.discriminatedUnion("type", [
 	z.strictObject({
 		...runtimeEventBase,
 		type: z.literal("error"),
-		payload: z.strictObject({
-			code: z.string().min(1),
-			message: z.string().min(1),
-			retryable: z.boolean(),
-		}),
+		payload: runtimeErrorEventPayloadV1Schema,
 	}),
 ]);
 

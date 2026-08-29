@@ -102,6 +102,36 @@ describe("RuntimeHost V1 wire schemas", () => {
 
 	it("rejects native protocol leakage, malformed fences, and expanded objects", () => {
 		expect(
+			RuntimeEventV1Schema.safeParse({
+				schemaVersion: 1,
+				adapterEventKey: "event-error-1",
+				executionId: "execution-1",
+				cursor: "runtime-cursor-error-1",
+				occurredAt: "2026-08-28T12:00:00Z",
+				type: "error",
+				payload: {
+					code: "UPSTREAM_ERROR",
+					message: "Provider returned bearer secret-value",
+					retryable: false,
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeEventV1Schema.safeParse({
+				schemaVersion: 1,
+				adapterEventKey: "event-error-1",
+				executionId: "execution-1",
+				cursor: "runtime-cursor-error-1",
+				occurredAt: "2026-08-28T12:00:00Z",
+				type: "error",
+				payload: {
+					code: "RUNTIME_EXECUTION_FAILED",
+					message: "Runtime execution failed",
+					retryable: false,
+				},
+			}).success,
+		).toBe(true);
+		expect(
 			RuntimeDriverLookupV1Schema.safeParse({
 				state: "found",
 				record: {
