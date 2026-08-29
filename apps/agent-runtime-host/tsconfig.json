@@ -3,7 +3,9 @@
 	"compilerOptions": {
 		"allowImportingTsExtensions": true,
 		"paths": {
-			"@agent-infra/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
+			"@agent-infra/agent-runtime": [
+				"../../packages/agent-runtime/src/index.ts"
+			],
 			"@agent-infra/contracts/runtime": [
 				"../../packages/contracts/src/runtime/index.ts"
 			]
