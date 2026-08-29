@@ -87,6 +87,7 @@ export const TimelineReloadSignalV1Schema = z.strictObject({
 	reason: z.enum([
 		"unknown_event_id",
 		"cross_conversation_cursor",
+		"cross_conversation_event_id",
 		"cursor_expired",
 	]),
 	resumeCursor: OpaqueCursorV1Schema,

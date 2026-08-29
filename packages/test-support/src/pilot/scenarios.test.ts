@@ -97,4 +97,32 @@ describe("Pilot schema-driven Fake scenarios", () => {
 		});
 		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
 	});
+
+	it("replays valid event IDs and rejects foreign or unknown event IDs", () => {
+		const valid = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			lastEventId: "event-before-replay",
+		});
+		const crossConversation = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			lastEventId: "event-other-1",
+		});
+		const unknown = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			lastEventId: "event-unknown",
+		});
+
+		expect(valid.map((message) => message.type)).toContain("text.delta");
+		expect(
+			ConversationSseMessageV1Schema.parse(crossConversation[0]),
+		).toMatchObject({
+			type: "timeline.reload",
+			reason: "cross_conversation_event_id",
+		});
+		expect(ConversationSseMessageV1Schema.parse(unknown[0])).toMatchObject({
+			type: "timeline.reload",
+			reason: "unknown_event_id",
+		});
+		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
+	});
 });

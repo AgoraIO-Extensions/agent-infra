@@ -572,6 +572,7 @@
               "enum": [
                 "unknown_event_id",
                 "cross_conversation_cursor",
+                "cross_conversation_event_id",
                 "cursor_expired"
               ],
               "type": "string"
@@ -1170,6 +1171,7 @@
           "enum": [
             "unknown_event_id",
             "cross_conversation_cursor",
+            "cross_conversation_event_id",
             "cursor_expired"
           ],
           "type": "string"

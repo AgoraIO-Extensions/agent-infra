@@ -68,6 +68,10 @@ describe("Pilot SSE contracts", () => {
 			reason: "cross_conversation_cursor",
 			resumeCursor: "cursor-conversation-1-latest",
 		};
+		const crossConversationEvent = {
+			...reload,
+			reason: "cross_conversation_event_id",
+		};
 		const revoked = {
 			schemaVersion: 1,
 			kind: "control",
@@ -86,6 +90,9 @@ describe("Pilot SSE contracts", () => {
 			PersistedConversationEventV1Schema.safeParse(heartbeat).success,
 		).toBe(false);
 		expect(ConversationSseMessageV1Schema.parse(reload)).toEqual(reload);
+		expect(
+			ConversationSseMessageV1Schema.parse(crossConversationEvent),
+		).toEqual(crossConversationEvent);
 		expect(ConversationSseMessageV1Schema.parse(revoked)).toEqual(revoked);
 		expect(
 			ConversationSseMessageV1Schema.safeParse({

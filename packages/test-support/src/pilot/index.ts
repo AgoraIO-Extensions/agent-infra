@@ -285,19 +285,34 @@ const pilotCursorOwnersV1: Record<string, string> = {
 	"cursor-pilot-1": "conversation-pilot-1",
 	"cursor-other-1": "conversation-other-1",
 };
+const pilotEventOwnersV1: Record<string, string> = {
+	"event-before-replay": "conversation-pilot-1",
+	"event-replay-1": "conversation-pilot-1",
+	"event-replay-2": "conversation-pilot-1",
+	"event-other-1": "conversation-other-1",
+};
 
-export function resolvePilotReplayV1(input: {
-	conversationId: string;
-	cursor: string;
-}) {
-	const owner = pilotCursorOwnersV1[input.cursor];
+type PilotReplayInputV1 =
+	| { conversationId: string; cursor: string; lastEventId?: never }
+	| { conversationId: string; cursor?: never; lastEventId: string };
+
+export function resolvePilotReplayV1(input: PilotReplayInputV1) {
+	const usesCursor = input.cursor !== undefined;
+	const selector = usesCursor ? input.cursor : input.lastEventId;
+	const owner = usesCursor
+		? pilotCursorOwnersV1[selector]
+		: pilotEventOwnersV1[selector];
 	if (owner !== input.conversationId) {
 		return [
 			{
 				schemaVersion: 1,
 				kind: "control",
 				type: "timeline.reload",
-				reason: owner ? "cross_conversation_cursor" : "unknown_event_id",
+				reason: owner
+					? usesCursor
+						? "cross_conversation_cursor"
+						: "cross_conversation_event_id"
+					: "unknown_event_id",
 				resumeCursor: "cursor-pilot-2",
 			},
 		] as const;

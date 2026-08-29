@@ -525,7 +525,7 @@ export type StopCommandRequestV1 = {
 
 export type TimelineReloadSignalV1 = {
     kind: 'control';
-    reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cursor_expired';
+    reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cross_conversation_event_id' | 'cursor_expired';
     resumeCursor: string;
     schemaVersion: 1;
     type: 'timeline.reload';
