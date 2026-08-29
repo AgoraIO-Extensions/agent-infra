@@ -5,6 +5,19 @@ const protocolError = (
 	traceId: string,
 ) => ({ schemaVersion: 1, code, message, retryable, traceId }) as const;
 
+const replayTextEvent = {
+	schemaVersion: 1,
+	kind: "event",
+	eventId: "event-replay-1",
+	conversationId: "conversation-pilot-1",
+	executionId: "execution-pilot-1",
+	sequence: 1,
+	conversationCursor: "cursor-pilot-1",
+	occurredAt: "2026-08-28T10:00:00Z",
+	type: "text.delta",
+	payload: { text: "Hello" },
+} as const;
+
 export const pilotFakeScenariosV1 = {
 	success: {
 		kind: "http",
@@ -216,4 +229,80 @@ export const pilotFakeScenariosV1 = {
 			),
 		},
 	},
+	replay: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		lastEventId: "event-before-replay",
+		messages: [
+			replayTextEvent,
+			replayTextEvent,
+			{
+				schemaVersion: 1,
+				kind: "event",
+				eventId: "event-replay-2",
+				conversationId: "conversation-pilot-1",
+				executionId: "execution-pilot-1",
+				sequence: 2,
+				conversationCursor: "cursor-pilot-2",
+				occurredAt: "2026-08-28T10:00:01Z",
+				type: "execution.status",
+				payload: { status: "completed" },
+			},
+		],
+	},
+	staleAuthorization: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		messages: [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "authorization.revoked",
+				error: protocolError(
+					"AUTHORIZATION_REVOKED",
+					"Conversation access is no longer available",
+					false,
+					"trace-stale-authorization",
+				),
+			},
+		],
+	},
+	heartbeat: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		messages: [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "heartbeat",
+				occurredAt: "2026-08-28T10:00:02Z",
+			},
+		],
+	},
 } as const satisfies Record<string, unknown>;
+
+const pilotCursorOwnersV1: Record<string, string> = {
+	"cursor-pilot-1": "conversation-pilot-1",
+	"cursor-other-1": "conversation-other-1",
+};
+
+export function resolvePilotReplayV1(input: {
+	conversationId: string;
+	cursor: string;
+}) {
+	const owner = pilotCursorOwnersV1[input.cursor];
+	if (owner !== input.conversationId) {
+		return [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "timeline.reload",
+				reason: owner ? "cross_conversation_cursor" : "unknown_event_id",
+				resumeCursor: "cursor-pilot-2",
+			},
+		] as const;
+	}
+	return pilotFakeScenariosV1.replay.messages.filter(
+		(message) => message.conversationId === input.conversationId,
+	);
+}

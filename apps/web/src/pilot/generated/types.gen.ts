@@ -253,6 +253,19 @@ export type ApprovalDecisionRequestV1 = {
     schemaVersion: 1;
 };
 
+export type AuthorizationRevokedSignalV1 = {
+    error: {
+        code: 'AUTHORIZATION_REVOKED';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+    kind: 'control';
+    schemaVersion: 1;
+    type: 'authorization.revoked';
+};
+
 export type BrowserSessionProjectionV1 = {
     schemaVersion: 1;
     user: {
@@ -301,6 +314,8 @@ export type ConversationProjectionV1 = {
     updatedAt: string;
 };
 
+export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+
 export type ExecutionDetailProjectionV1 = {
     conversationId: string;
     error: null;
@@ -345,6 +360,13 @@ export type ExecutionProcessSummaryV1 = {
     summary: string;
 };
 
+export type HeartbeatSignalV1 = {
+    kind: 'control';
+    occurredAt: string;
+    schemaVersion: 1;
+    type: 'heartbeat';
+};
+
 export type MessageCommandRequestV1 = {
     schemaVersion: 1;
     text: string;
@@ -378,6 +400,78 @@ export type ModelSelectionUpdateRequestV1 = {
     modelOptionId: string;
     reasoningLevel: string;
     schemaVersion: 1;
+};
+
+export type PersistedConversationEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: string;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        text: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'text.delta';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: string;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'execution.status';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: string;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        callId?: string;
+        category: 'status' | 'model_call' | 'connection_call';
+        summary: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'execution.detail';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: string;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        fileId: string;
+        mediaType: string;
+        name: string;
+        sizeBytes: number;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'result.file';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: string;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        error: PilotProtocolErrorV1;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'conversation.error';
 };
 
 export type PilotInternalErrorV1 = {
@@ -427,6 +521,14 @@ export type RegenerateCommandRequestV1 = {
 export type StopCommandRequestV1 = {
     schemaVersion: 1;
     targetExecutionId: string;
+};
+
+export type TimelineReloadSignalV1 = {
+    kind: 'control';
+    reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cursor_expired';
+    resumeCursor: string;
+    schemaVersion: 1;
+    type: 'timeline.reload';
 };
 
 export type AgentApplicationCreateRequestV1Writable = {
@@ -1363,6 +1465,54 @@ export type GetConversationResponses = {
 };
 
 export type GetConversationResponse = GetConversationResponses[keyof GetConversationResponses];
+
+export type StreamConversationEventsData = {
+    body?: never;
+    headers?: {
+        'Last-Event-ID'?: string;
+    };
+    path: {
+        conversationId: string;
+    };
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v1/conversations/{conversationId}/events';
+};
+
+export type StreamConversationEventsErrors = {
+    /**
+     * Invalid replay cursor
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Conversation access is unavailable
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Event stream is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type StreamConversationEventsError = StreamConversationEventsErrors[keyof StreamConversationEventsErrors];
+
+export type StreamConversationEventsResponses = {
+    /**
+     * Persisted conversation events and bounded control signals
+     */
+    200: ConversationSseMessageV1;
+};
+
+export type StreamConversationEventsResponse = StreamConversationEventsResponses[keyof StreamConversationEventsResponses];
 
 export type GetExecutionDetailData = {
     body?: never;

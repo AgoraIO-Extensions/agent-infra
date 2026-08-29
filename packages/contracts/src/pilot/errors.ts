@@ -48,6 +48,12 @@ export const PilotProtocolErrorV1Schema = z.union([
 	}),
 ]);
 
+export const PilotAuthorizationRevokedErrorV1Schema = z.strictObject({
+	...errorShape,
+	code: z.literal("AUTHORIZATION_REVOKED"),
+	retryable: z.literal(false),
+});
+
 export const PilotInternalErrorV1Schema = z.strictObject({
 	...errorShape,
 	code: z.literal("INTERNAL_ERROR"),

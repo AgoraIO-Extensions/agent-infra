@@ -5,9 +5,9 @@ import {
 	OpaqueIdV1Schema,
 	Rfc3339TimestampV1Schema,
 	SchemaVersionV1Schema,
-	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	PilotAuthorizationRevokedErrorV1Schema,
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
@@ -99,19 +99,11 @@ export const HeartbeatSignalV1Schema = z.strictObject({
 	occurredAt: Rfc3339TimestampV1Schema,
 });
 
-const authorizationRevokedError = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	code: z.literal("AUTHORIZATION_REVOKED"),
-	message: nonEmptyString(),
-	retryable: z.literal(false),
-	traceId: TraceIdV1Schema,
-});
-
 export const AuthorizationRevokedSignalV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	kind: z.literal("control"),
 	type: z.literal("authorization.revoked"),
-	error: authorizationRevokedError,
+	error: PilotAuthorizationRevokedErrorV1Schema,
 });
 
 export const ConversationSseMessageV1Schema = z.union([

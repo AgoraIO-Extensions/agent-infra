@@ -10,7 +10,10 @@
 		"types": ["vite/client"],
 		"rootDirs": ["."],
 		"paths": {
-			"@/*": ["./src/*"]
+			"@/*": ["./src/*"],
+			"@agent-infra/test-support/pilot": [
+				"../../packages/test-support/src/pilot/index.ts"
+			]
 		}
 	}
 }
