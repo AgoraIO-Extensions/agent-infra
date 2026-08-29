@@ -1,6 +1,9 @@
 {
 	"extends": "@agent-infra/config/tsconfig.base.json",
 	"compilerOptions": {
-		"allowImportingTsExtensions": true
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/contracts/pilot": ["./src/pilot/index.ts"]
+		}
 	}
 }
