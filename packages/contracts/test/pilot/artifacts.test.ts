@@ -123,7 +123,12 @@ describe("Pilot standard artifacts", () => {
 			traceId: "trace-1",
 		};
 		expect(validateDelegatedRequest(request)).toBe(true);
-		for (const key of ["connectionId", "connectionIds", "attachmentIds"]) {
+		for (const key of [
+			"connectionId",
+			"connectionIds",
+			"platformUserId",
+			"attachmentIds",
+		]) {
 			expect(
 				validateDelegatedRequest({
 					...request,
