@@ -110,6 +110,20 @@ describe("Platform Secret V1 contract", () => {
 			}).success,
 		).toBe(false);
 		expect(
+			SecretEncryptionKeySetV1Schema.safeParse({
+				...encryptionKeys,
+				keys: [{ ...encryptionKeys.keys[0], status: "retired" }],
+			}).success,
+		).toBe(false);
+		expect(
+			SecretEncryptionKeySetV1Schema.safeParse({
+				...encryptionKeys,
+				keys: encryptionKeys.keys.map(
+					({ publicKeySpkiDerBase64: _publicKey, ...descriptor }) => descriptor,
+				),
+			}).success,
+		).toBe(false);
+		expect(
 			SecretWorkerKeyringDescriptorV1Schema.safeParse({
 				...keyring,
 				privateKeyMaterial: "must-not-enter-wire-contract",
