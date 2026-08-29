@@ -67,6 +67,14 @@ const forbiddenCredentialKeys = [
 	"clientSecretValue",
 	"personalAccessToken",
 	"apiToken",
+	"aws_secret_access_key",
+	"aws_access_key_id",
+	"x-api-key",
+	"x-auth-token",
+	"secretKey",
+	"awsSecretAccessKey",
+	"sshPrivateKey",
+	"xApiKey",
 	"privateKey",
 	"apiKey",
 	"secret",
@@ -166,6 +174,20 @@ describe("Pilot delegated contracts", () => {
 				},
 			).issuedAt,
 		).toBe("2026-12-31T23:59:60Z");
+		expect(() =>
+			validateExecutionGrantClaimsV1(
+				{
+					...validClaims,
+					issuedAt: "2026-08-28T10:00:00.0009Z",
+					expiresAt: "2026-08-28T10:00:00.0011Z",
+				},
+				{
+					expectedIssuer: "agent-platform",
+					requiredAudience: "connection_api",
+					now: "2026-08-28T10:00:00.0001Z",
+				},
+			),
+		).toThrow("Execution Grant claims are inconsistent");
 	});
 
 	it("binds delegated Action requests to verified Grant claims", () => {
@@ -210,6 +232,12 @@ describe("Pilot delegated contracts", () => {
 				token: "not-a-compact-jws",
 			}).success,
 		).toBe(false);
+		expect(
+			ExecutionGrantV1Schema.safeParse({
+				...validRequest.grant,
+				schemaVersion: 2,
+			}).success,
+		).toBe(false);
 	});
 
 	it("accepts only versioned delegated requests without caller-selected identity or Connection", () => {
@@ -218,6 +246,9 @@ describe("Pilot delegated contracts", () => {
 		);
 		for (const injected of [
 			{ actorId: "caller-controlled" },
+			{ userId: "caller-controlled" },
+			{ organizationId: "caller-controlled" },
+			{ authorization: "caller-controlled" },
 			{ connectionId: "another-users-connection" },
 			{ externalAccountId: "another-users-account" },
 		]) {
@@ -250,6 +281,18 @@ describe("Pilot delegated contracts", () => {
 			output: { issue: { number: 180, title: "Pilot contracts" } },
 		};
 		expect(DelegatedActionResultV1Schema.parse(safeResult)).toEqual(safeResult);
+		expect(
+			DelegatedActionResultV1Schema.safeParse({
+				...safeResult,
+				schemaVersion: 2,
+			}).success,
+		).toBe(false);
+		expect(
+			DelegatedActionResultV1Schema.parse({
+				...safeResult,
+				output: { nextPageToken: "opaque-pagination-cursor" },
+			}).output,
+		).toEqual({ nextPageToken: "opaque-pagination-cursor" });
 		for (const key of forbiddenCredentialKeys) {
 			expect(
 				DelegatedActionResultV1Schema.safeParse({

@@ -55,15 +55,45 @@ type ExecutionGrantValidationContext = {
 };
 
 function rfc3339Instant(value: string) {
-	const leapSecond = /:60(?=(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$)/i.test(value);
-	const normalized = leapSecond
-		? value.replace(/:60(?=(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$)/i, ":59")
-		: value;
-	const instant = Date.parse(normalized);
-	if (!Number.isFinite(instant)) {
+	const match = value.match(
+		/^(.*[Tt]\d{2}:\d{2}:)(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/,
+	);
+	if (!match) {
 		throw new Error("Execution Grant claims are inconsistent");
 	}
-	return instant + (leapSecond ? 1000 : 0);
+	const [, prefix, second, fraction = "", zone] = match;
+	const leapSecond = second === "60";
+	const wholeSecond = Date.parse(
+		`${prefix}${leapSecond ? "59" : second}${zone}`,
+	);
+	if (!Number.isFinite(wholeSecond)) {
+		throw new Error("Execution Grant claims are inconsistent");
+	}
+	return {
+		epochSecond: BigInt(wholeSecond / 1000 + (leapSecond ? 1 : 0)),
+		fraction,
+		leapSecond,
+	};
+}
+
+function compareRfc3339Instants(
+	left: ReturnType<typeof rfc3339Instant>,
+	right: ReturnType<typeof rfc3339Instant>,
+) {
+	if (left.epochSecond !== right.epochSecond) {
+		return left.epochSecond < right.epochSecond ? -1 : 1;
+	}
+	if (left.leapSecond !== right.leapSecond) {
+		return left.leapSecond ? -1 : 1;
+	}
+	const width = Math.max(left.fraction.length, right.fraction.length);
+	const leftFraction = left.fraction.padEnd(width, "0");
+	const rightFraction = right.fraction.padEnd(width, "0");
+	return leftFraction < rightFraction
+		? -1
+		: leftFraction > rightFraction
+			? 1
+			: 0;
 }
 
 export function validateExecutionGrantClaimsV1(
@@ -85,9 +115,9 @@ export function validateExecutionGrantClaimsV1(
 		command.startsWith("turn."),
 	);
 	if (
-		issuedAt >= expiresAt ||
-		now < issuedAt ||
-		now >= expiresAt ||
+		compareRfc3339Instants(issuedAt, expiresAt) >= 0 ||
+		compareRfc3339Instants(now, issuedAt) < 0 ||
+		compareRfc3339Instants(now, expiresAt) >= 0 ||
 		(invokesTools &&
 			(claims.actionIds.length === 0 ||
 				!claims.audience.includes("platform_tool_gateway") ||
@@ -118,7 +148,7 @@ const safeDelegatedJsonKey = z
 	.string()
 	.min(1)
 	.regex(
-		/^(?!(?:[Ss][Ee][Tt][_-]?[Cc][Oo][Oo][Kk][Ii][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy](?:[_-]?[Ii][Dd])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy](?:[_-]?[Pp][Ee][Mm])?|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?[Ss][Ee][Cc][Rr][Ee][Tt](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Ee][Rr][Ss][Oo][Nn][Aa][Ll][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Tt][Oo][Kk][Ee][Nn])$)(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Oo][Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Bb][Ee][Aa][Rr][Ee][Rr][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ii][Dd][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Jj][Ww][Tt]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]))?|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$/,
+		/^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?)$)(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy]|(?:[Aa][Pp][Ii]|[Aa][Uu][Tt][Hh]|[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh]|[Ii][Dd]|[Pp][Ee][Rr][Ss][Oo][Nn][Aa][Ll].*[Aa][Cc][Cc][Ee][Ss][Ss]).*[Tt][Oo][Kk][Ee][Nn])).+$/,
 	);
 
 export const SafeDelegatedJsonV1Schema: z.ZodType<SafeDelegatedJson> = z.lazy(
