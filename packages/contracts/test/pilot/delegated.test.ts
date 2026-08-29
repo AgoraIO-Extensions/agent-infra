@@ -365,6 +365,17 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		for (const key of ["connectionId", "actorId", "nativeSessionId", "token"]) {
+			expect(
+				DelegatedActionRequestV1Schema.safeParse({
+					...validRequest,
+					action: {
+						...validRequest.action,
+						arguments: { nested: { [key]: "caller-controlled" } },
+					},
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			DelegatedActionRequestV1Schema.parse({
 				...validRequest,
@@ -373,12 +384,16 @@ describe("Pilot delegated contracts", () => {
 					arguments: {
 						issueNumber: 180,
 						pageToken: "opaque-pagination-cursor",
+						userId: "provider-domain-user",
 					},
 				},
 			}),
 		).toMatchObject({
 			action: {
-				arguments: { pageToken: "opaque-pagination-cursor" },
+				arguments: {
+					pageToken: "opaque-pagination-cursor",
+					userId: "provider-domain-user",
+				},
 			},
 		});
 		expect(

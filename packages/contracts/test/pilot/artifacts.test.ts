@@ -102,6 +102,36 @@ describe("Pilot standard artifacts", () => {
 				}),
 			).toBe(false);
 		}
+		const delegatedRequestSchema = delegated.DelegatedActionRequestV1;
+		if (!delegatedRequestSchema)
+			throw new Error("Delegated request schema missing");
+		const validateDelegatedRequest = ajv.compile(delegatedRequestSchema);
+		const request = {
+			schemaVersion: 1,
+			requestId: "request-1",
+			idempotencyKey: "idempotency-1",
+			grant: {
+				schemaVersion: 1,
+				format: "compact-jws",
+				token: "header.payload.signature",
+			},
+			action: {
+				actionId: "github.issues.read",
+				actionVersion: "v3",
+				arguments: { userId: "provider-domain-user" },
+			},
+			traceId: "trace-1",
+		};
+		expect(validateDelegatedRequest(request)).toBe(true);
+		expect(
+			validateDelegatedRequest({
+				...request,
+				action: {
+					...request.action,
+					arguments: { nested: { connectionId: "caller-controlled" } },
+				},
+			}),
+		).toBe(false);
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {
