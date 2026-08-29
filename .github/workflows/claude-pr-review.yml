@@ -189,7 +189,7 @@ jobs:
           STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}
         run: node .github/scripts/claude-review.mjs
 
-      - name: Publish Automated Review Coverage shadow
+      - name: Publish Automated Review Coverage
         if: always()
         continue-on-error: true
         env:

@@ -1023,6 +1023,14 @@ export function validateTrustedScriptSources(sources) {
     "Workflow outcome Check Run pagination limit exceeded",
     "WECOM_BOT_WEBHOOK_URL",
   ];
+  const coverageOutcomeRequirements = [
+    "REVIEW_PROVIDER_BY_WORKFLOW",
+    "selectCoverageCheck(",
+    'outcome("review_coverage_failed", "repository-maintainer", true)',
+    "review-coverage-check-${reviewCoverage.checkId}",
+    "Review provider:",
+    "Coverage reason:",
+  ];
   const summaryStart = outcomeSource.indexOf("export function renderJobSummary");
   const summaryEnd = outcomeSource.indexOf("function wait(milliseconds)");
   const hasTrustedSummaryWindow =
@@ -1038,6 +1046,15 @@ export function validateTrustedScriptSources(sources) {
   ) {
     errors.push(
       "Workflow Outcome must preserve bounded dedupe and post-merge triage without auto-revert",
+    );
+  }
+  if (
+    coverageOutcomeRequirements.some(
+      (requirement) => !outcomeSource.includes(requirement),
+    )
+  ) {
+    errors.push(
+      "Workflow Outcome must preserve the required Review Coverage notification",
     );
   }
   if (
@@ -1212,11 +1229,11 @@ export function validateWorkflowDocuments(workflows) {
               jobName === "publish" &&
               ((step.name === "Publish validated Review result" &&
                 step.run === "node .github/scripts/claude-review.mjs") ||
-                (step.name === "Publish Automated Review Coverage shadow" &&
+                (step.name === "Publish Automated Review Coverage" &&
                   step.run === "node .github/scripts/review-coverage.mjs"))) ||
             (name === "pr-agent-review.yml" &&
               jobName === "coverage" &&
-              step.name === "Publish Automated Review Coverage shadow" &&
+              step.name === "Publish Automated Review Coverage" &&
               step.run === "node .github/scripts/review-coverage.mjs"));
         if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
           errors.push(
@@ -1526,7 +1543,7 @@ export function validateWorkflowDocuments(workflows) {
     (step) => step.id === "gate-publisher-token",
   );
   const prAgentCoveragePublish = prAgentCoverageSteps.find(
-    (step) => step.name === "Publish Automated Review Coverage shadow",
+    (step) => step.name === "Publish Automated Review Coverage",
   );
   const prAgentCondition = String(prAgentAnalyze?.if ?? "");
   const prAgentCoverageCondition = String(prAgentCoverage?.if ?? "");
@@ -1592,6 +1609,7 @@ export function validateWorkflowDocuments(workflows) {
       contents: "read",
       "pull-requests": "read",
     }) ||
+    prAgentCoverage?.name !== "Publish Automated Review Coverage" ||
     prAgentCoverage?.needs !== "analyze" ||
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
@@ -2096,7 +2114,7 @@ export function validateWorkflowDocuments(workflows) {
     (step) => step.name === "Publish validated Review result",
   );
   const reviewCoveragePublish = reviewPublishSteps.find(
-    (step) => step.name === "Publish Automated Review Coverage shadow",
+    (step) => step.name === "Publish Automated Review Coverage",
   );
   const reviewGatePublisherToken = reviewPublishSteps.find(
     (step) => step.id === "gate-publisher-token",

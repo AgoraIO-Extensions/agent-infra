@@ -111,7 +111,7 @@ jobs:
             ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]
 
   coverage:
-    name: Automated Review Coverage (shadow)
+    name: Publish Automated Review Coverage
     needs: analyze
     continue-on-error: true
     if: >-
@@ -150,7 +150,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Publish Automated Review Coverage shadow
+      - name: Publish Automated Review Coverage
         if: always()
         env:
           GATE_CHECK_TOKEN: ${{ steps.gate-publisher-token.outputs.token }}

@@ -395,6 +395,19 @@ test("requires bounded deduplicated outcome and post-merge behavior", async () =
   );
 });
 
+test("requires deduplicated failed Review Coverage notification", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "review-coverage-check-${reviewCoverage.checkId}",
+    "review-coverage-run-${sourceRun.id}",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Review Coverage notification"),
+    ),
+  );
+});
+
 test("isolates workflow outcome concurrency per source run", async () => {
   const workflows = await actualWorkflows();
   const workflow = workflows["workflow-outcome.yml"];
@@ -980,12 +993,12 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
 });
 
-test("publishes provider-aware Automated Review Coverage in shadow mode", async () => {
+test("publishes provider-aware Automated Review Coverage as a required Gate", async () => {
   const workflows = await actualWorkflows();
   const prAgent = workflows["pr-agent-review.yml"];
   const coverage = prAgent.jobs.coverage;
   const coveragePublisher = coverage.steps.find(
-    (step) => step.name === "Publish Automated Review Coverage shadow",
+    (step) => step.name === "Publish Automated Review Coverage",
   );
   const coverageToken = coverage.steps.find(
     (step) => step.id === "gate-publisher-token",
@@ -997,6 +1010,7 @@ test("publishes provider-aware Automated Review Coverage in shadow mode", async 
     contents: "read",
     "pull-requests": "read",
   });
+  assert.equal(coverage.name, "Publish Automated Review Coverage");
   assert.equal(coverage.needs, "analyze");
   assert.equal(coverage["continue-on-error"], true);
   assert.deepEqual(prAgent.jobs.outcome.needs, ["analyze", "suggestions"]);
@@ -1019,7 +1033,7 @@ test("publishes provider-aware Automated Review Coverage in shadow mode", async 
 
   const claudePublish = workflows["claude-pr-review.yml"].jobs.publish;
   const claudeCoverage = claudePublish.steps.find(
-    (step) => step.name === "Publish Automated Review Coverage shadow",
+    (step) => step.name === "Publish Automated Review Coverage",
   );
   assert.equal(claudeCoverage.if, "always()");
   assert.equal(claudeCoverage["continue-on-error"], true);
