@@ -8,6 +8,7 @@ const repositoryRoot = resolve(packageRoot, "../..");
 const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
