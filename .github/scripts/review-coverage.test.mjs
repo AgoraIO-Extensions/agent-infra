@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildCoverageCheckOutput,
   buildCoverageJobSummary,
+  collectReviewEvidence,
   evaluateReviewCoverage,
   publishCoverageCheck,
   selectCoverageCheck,
@@ -21,6 +22,25 @@ const logRecord = (message, extra = {}) =>
   })}`;
 const completeLog = logRecord(completeDecision);
 const prunedLog = logRecord(prunedDecision);
+
+test("skips failed runs and degrades evidence collection errors", async () => {
+  let calls = 0;
+  const failingCollector = async () => {
+    calls += 1;
+    throw new Error("logs unavailable");
+  };
+
+  assert.deepEqual(await collectReviewEvidence("failure", failingCollector), {});
+  assert.equal(calls, 0);
+  assert.deepEqual(await collectReviewEvidence("success", failingCollector), {});
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    await collectReviewEvidence("success", async () => ({
+      analysisJobConclusion: "success",
+    })),
+    { analysisJobConclusion: "success" },
+  );
+});
 
 test("accepts a complete current-head PR-Agent review", () => {
   assert.deepEqual(

@@ -314,6 +314,15 @@ async function collectEvidence({ repository, prNumber, expectedHead, provider })
   return {};
 }
 
+export async function collectReviewEvidence(runResult, collector) {
+  if (runResult !== "success") return {};
+  try {
+    return await collector();
+  } catch {
+    return {};
+  }
+}
+
 async function main() {
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const prNumber = Number(requiredEnvironment("PR_NUMBER"));
@@ -325,12 +334,9 @@ async function main() {
     process.env.EXPECTED_HEAD_SHA ?? event.pull_request?.head?.sha;
   if (!expectedHead) throw new Error("Current Review head is required");
   const runResult = requiredEnvironment("REVIEW_RUN_RESULT");
-  const evidence = await collectEvidence({
-    repository,
-    prNumber,
-    expectedHead,
-    provider,
-  });
+  const evidence = await collectReviewEvidence(runResult, () =>
+    collectEvidence({ repository, prNumber, expectedHead, provider }),
+  );
   const coverage = evaluateReviewCoverage({
     provider,
     expectedHead,
