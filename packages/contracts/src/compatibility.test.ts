@@ -44,6 +44,29 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain("retyped");
 	});
 
+	it.each([
+		["openapi-operation-removed", "removed OpenAPI path"],
+		[
+			"openapi-request-media-removed",
+			"removed OpenAPI POST /internal/v1/delegated-actions requestBody content application/json",
+		],
+		[
+			"openapi-response-removed",
+			"removed OpenAPI POST /internal/v1/delegated-actions response 503",
+		],
+		[
+			"openapi-parameter-removed",
+			"removed OpenAPI GET /resource parameter query:cursor",
+		],
+	])("rejects %s HTTP contract changes", (fixture, reason) => {
+		const previous = fixture.startsWith("openapi-parameter")
+			? "openapi-parameter-base"
+			: "openapi-base";
+		const result = compare(fixture, previous);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(reason);
+	});
+
 	it("rejects introduced const, enum, union, and reference narrowings", () => {
 		const result = compare("advanced-narrowed", "advanced-base");
 		expect(result.status).toBe(1);
