@@ -124,7 +124,17 @@ describe("Pilot browser contracts", () => {
 		).toBe(false);
 		expect(
 			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
-				"https://agent.example.test",
+				"https://agent.example.test?access_token=secret",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test/#token=secret",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test/chat",
 			).success,
 		).toBe(true);
 	});
