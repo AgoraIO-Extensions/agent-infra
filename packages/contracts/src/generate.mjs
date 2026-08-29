@@ -24,6 +24,7 @@ import {
 	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
+import { registryManifestSchemasV1 } from "./workload/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -53,6 +54,10 @@ const artifactPaths = {
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/pilot-sse.v1.schema.json",
+	),
+	registryManifestJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/registry-manifest.v1.schema.json",
 	),
 };
 const schemas = {
@@ -176,6 +181,11 @@ function buildArtifacts() {
 		paths: pilotDelegatedOpenApiPathsV1,
 		components: { schemas: pilotDelegatedSchemasV1 },
 	});
+	const registryManifestJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",
+		title: "Agent Infra Registry and Runtime Manifest Contracts V1",
+		definitions: registryManifestSchemasV1,
+	});
 	return {
 		jsonSchema,
 		openapi,
@@ -183,6 +193,7 @@ function buildArtifacts() {
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
+		registryManifestJsonSchema,
 	};
 }
 

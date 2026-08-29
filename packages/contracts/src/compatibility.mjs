@@ -9,6 +9,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-sse.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/registry-manifest.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",

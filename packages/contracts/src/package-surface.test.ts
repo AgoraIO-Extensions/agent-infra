@@ -17,6 +17,10 @@ describe("contracts package surface", () => {
 			types: "./dist/pilot/index.d.mts",
 			import: "./dist/pilot/index.mjs",
 		});
+		expect(manifest.exports["./workload"]).toEqual({
+			types: "./dist/workload/index.d.mts",
+			import: "./dist/workload/index.mjs",
+		});
 		expect(manifest.exports["./openapi/common.v1"]).toBe(
 			"./artifacts/openapi/common.v1.openapi.json",
 		);
@@ -28,6 +32,9 @@ describe("contracts package surface", () => {
 		);
 		expect(manifest.exports["./json-schema/pilot-sse.v1"]).toBe(
 			"./artifacts/json-schema/pilot-sse.v1.schema.json",
+		);
+		expect(manifest.exports["./json-schema/registry-manifest.v1"]).toBe(
+			"./artifacts/json-schema/registry-manifest.v1.schema.json",
 		);
 		expect(manifest.exports["./openapi/pilot-browser.v1"]).toBe(
 			"./artifacts/openapi/pilot-browser.v1.openapi.json",
@@ -47,12 +54,16 @@ describe("contracts package surface", () => {
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
 		expect(packedFiles).toContain("dist/pilot/index.d.mts");
+		expect(packedFiles).toContain("dist/workload/index.d.mts");
 		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/pilot-delegated.v1.schema.json",
 		);
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/pilot-sse.v1.schema.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/registry-manifest.v1.schema.json",
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-browser.v1.openapi.json",

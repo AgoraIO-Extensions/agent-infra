@@ -87,6 +87,15 @@ describe("standard contract artifacts", () => {
 			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
 				.post.responses,
 		).toHaveProperty("503");
+		expect(artifacts.registryManifestJsonSchema.$schema).toBe(
+			"https://json-schema.org/draft/2020-12/schema",
+		);
+		expect(artifacts.registryManifestJsonSchema.$defs).toHaveProperty(
+			"ImageRegistryAdmissionResultV1",
+		);
+		expect(artifacts.registryManifestJsonSchema.$defs).toHaveProperty(
+			"RuntimeManifestV1",
+		);
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
@@ -128,6 +137,11 @@ describe("standard contract artifacts", () => {
 				}),
 			).not.toThrow();
 		}
+		ajv.addSchema(artifacts.registryManifestJsonSchema);
+		const validateDigest = ajv.compile({
+			$ref: `${artifacts.registryManifestJsonSchema.$id}#/$defs/ImmutableOciDigestV1`,
+		});
+		expect(validateDigest(`sha256:${"a".repeat(64)}`)).toBe(true);
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {
@@ -152,6 +166,7 @@ describe("standard contract artifacts", () => {
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
 			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
 			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
+			expect(result.stderr).toContain("registry-manifest.v1.schema.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}
