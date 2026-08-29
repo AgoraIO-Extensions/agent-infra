@@ -189,6 +189,18 @@ jobs:
           STRUCTURED_OUTPUT: ${{ needs.analyze.outputs.structured_output }}
         run: node .github/scripts/claude-review.mjs
 
+      - name: Publish Automated Review Coverage shadow
+        if: always()
+        continue-on-error: true
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATE_CHECK_TOKEN: ${{ steps.gate-publisher-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          REVIEW_PROVIDER: claude
+          REVIEW_RUN_RESULT: ${{ steps.publish-review.outcome }}
+        run: node .github/scripts/review-coverage.mjs
+
       - name: Stage trusted Review recovery target
         if: steps.publish-review.outcome == 'success'
         env:
