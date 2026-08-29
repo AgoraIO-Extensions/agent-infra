@@ -6,6 +6,7 @@ import { createFakeSecretActivationAdapterV1 } from "./secret.js";
 const cryptoMetadata = {
 	schemaVersion: 1,
 	algorithmVersion: "aes-256-gcm:v1",
+	aadVersion: "platform-secret-aad:v1",
 	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 	wrappingKeyVersion: "key-2026-08",
 	dekFingerprint: "a".repeat(64),

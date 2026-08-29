@@ -1,3 +1,6 @@
+import { Buffer } from "node:buffer";
+import { createHash, createPublicKey } from "node:crypto";
+
 import { z } from "zod";
 
 import {
@@ -13,6 +16,7 @@ const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
 const canonicalBase64Pattern =
 	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$/;
 const base64 = z.string().min(4).regex(canonicalBase64Pattern);
+const spkiDerBase64 = z.string().min(512).regex(canonicalBase64Pattern);
 const wrappedDekBase64 = z.string().min(512).regex(canonicalBase64Pattern);
 const nonceBase64 = z
 	.string()
@@ -26,12 +30,15 @@ const authenticationTagBase64 = z
 const kubernetesResourceName = z
 	.string()
 	.max(253)
-	.regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/);
+	.regex(
+		/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/,
+	);
 
 export const SecretPublicKeyDescriptorV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	keyVersion: WorkloadOpaqueIdV1Schema,
 	wrappingAlgorithmVersion: z.literal("rsa-oaep-sha256:v1"),
+	publicKeySpkiDerBase64: spkiDerBase64,
 	publicKeyFingerprint: sha256Hex,
 	rsaModulusBits: z.number().int().min(3072),
 	status: z.enum(["active", "retiring"]),
@@ -56,6 +63,30 @@ export function validateSecretEncryptionKeySetV1(input: unknown) {
 	) {
 		throw new Error("Secret active wrapping key mismatch");
 	}
+	for (const descriptor of keySet.keys) {
+		const encoded = Buffer.from(descriptor.publicKeySpkiDerBase64, "base64");
+		let publicKey: ReturnType<typeof createPublicKey>;
+		try {
+			publicKey = createPublicKey({
+				key: encoded,
+				format: "der",
+				type: "spki",
+			});
+		} catch {
+			throw new Error("Secret public key descriptor mismatch");
+		}
+		const canonicalDer = publicKey.export({ format: "der", type: "spki" });
+		const fingerprint = createHash("sha256").update(encoded).digest("hex");
+		if (
+			publicKey.asymmetricKeyType !== "rsa" ||
+			publicKey.asymmetricKeyDetails?.modulusLength !==
+				descriptor.rsaModulusBits ||
+			!canonicalDer.equals(encoded) ||
+			fingerprint !== descriptor.publicKeyFingerprint
+		) {
+			throw new Error("Secret public key descriptor mismatch");
+		}
+	}
 	return keySet;
 }
 
@@ -68,6 +99,7 @@ export const SecretWorkerKeyringDescriptorV1Schema = z.strictObject({
 export const SecretCryptoMetadataV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	algorithmVersion: z.literal("aes-256-gcm:v1"),
+	aadVersion: z.literal("platform-secret-aad:v1"),
 	wrappingAlgorithmVersion: z.literal("rsa-oaep-sha256:v1"),
 	wrappingKeyVersion: WorkloadOpaqueIdV1Schema,
 	dekFingerprint: sha256Hex,

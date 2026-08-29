@@ -1,3 +1,5 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,6 +17,7 @@ import {
 const cryptoMetadata = {
 	schemaVersion: 1,
 	algorithmVersion: "aes-256-gcm:v1",
+	aadVersion: "platform-secret-aad:v1",
 	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 	wrappingKeyVersion: "key-2026-08",
 	dekFingerprint: "a".repeat(64),
@@ -22,6 +25,27 @@ const cryptoMetadata = {
 	ciphertext: "c2VhbGVkLXNlY3JldA==",
 	authenticationTag: "AAAAAAAAAAAAAAAAAAAAAA==",
 	wrappedDek: "A".repeat(512),
+} as const;
+
+const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
+const publicKeySpkiDerBase64 = publicKeySpkiDer.toString("base64");
+const publicKeyFingerprint = createHash("sha256")
+	.update(publicKeySpkiDer)
+	.digest("hex");
+const activePublicKey = {
+	schemaVersion: 1,
+	keyVersion: "key-2026-08",
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+	publicKeySpkiDerBase64,
+	publicKeyFingerprint,
+	rsaModulusBits: 3072,
+	status: "active",
+} as const;
+const encryptionKeys = {
+	schemaVersion: 1,
+	activeWrappingKeyVersion: activePublicKey.keyVersion,
+	keys: [activePublicKey],
 } as const;
 
 const recordBase = {
@@ -61,20 +85,6 @@ const activationFence = {
 
 describe("Platform Secret V1 contract", () => {
 	it("keeps encrypt-only API keys separate from the Worker-only keyring", () => {
-		const encryptionKeys = {
-			schemaVersion: 1,
-			activeWrappingKeyVersion: "key-2026-08",
-			keys: [
-				{
-					schemaVersion: 1,
-					keyVersion: "key-2026-08",
-					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-					publicKeyFingerprint: "b".repeat(64),
-					rsaModulusBits: 3072,
-					status: "active",
-				},
-			],
-		} as const;
 		const keyring = {
 			schemaVersion: 1,
 			availableKeyVersions: ["key-2026-08", "key-2026-07"],
@@ -111,16 +121,7 @@ describe("Platform Secret V1 contract", () => {
 		const keySet = {
 			schemaVersion: 1,
 			activeWrappingKeyVersion: "key-missing",
-			keys: [
-				{
-					schemaVersion: 1,
-					keyVersion: "key-2026-08",
-					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-					publicKeyFingerprint: "b".repeat(64),
-					rsaModulusBits: 3072,
-					status: "active",
-				},
-			],
+			keys: [activePublicKey],
 		} as const;
 		expect(SecretEncryptionKeySetV1Schema.safeParse(keySet).success).toBe(true);
 		expect(() => validateSecretEncryptionKeySetV1(keySet)).toThrow(
@@ -134,11 +135,8 @@ describe("Platform Secret V1 contract", () => {
 		["multiple active", ["active", "other-active"]],
 	] as const)("rejects a %s active wrapping key", (_name, variants) => {
 		const keys = variants.map((variant) => ({
-			schemaVersion: 1 as const,
+			...activePublicKey,
 			keyVersion: variant === "other-active" ? "key-2026-09" : "key-2026-08",
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-			publicKeyFingerprint: "b".repeat(64),
-			rsaModulusBits: 3072,
 			status:
 				variant === "retiring" ? ("retiring" as const) : ("active" as const),
 		}));
@@ -151,7 +149,29 @@ describe("Platform Secret V1 contract", () => {
 		).toThrow("Secret active wrapping key mismatch");
 	});
 
+	it("rejects malformed or mismatched public key descriptors", () => {
+		for (const descriptor of [
+			{ ...activePublicKey, publicKeySpkiDerBase64: "A".repeat(512) },
+			{ ...activePublicKey, publicKeyFingerprint: "c".repeat(64) },
+			{ ...activePublicKey, rsaModulusBits: 4096 },
+		]) {
+			expect(() =>
+				validateSecretEncryptionKeySetV1({
+					...encryptionKeys,
+					keys: [descriptor],
+				}),
+			).toThrow("Secret public key descriptor mismatch");
+		}
+	});
+
 	it("enforces the approved nonce and authentication-tag sizes", () => {
+		expect(
+			PlatformSecretRecordV1Schema.safeParse({
+				...recordBase,
+				lifecycleState: "pending",
+				crypto: { ...cryptoMetadata, aadVersion: "ad-hoc" },
+			}).success,
+		).toBe(false);
 		expect(
 			PlatformSecretRecordV1Schema.safeParse({
 				...recordBase,
@@ -227,6 +247,15 @@ describe("Platform Secret V1 contract", () => {
 				...recordBase,
 				lifecycleState: "active",
 				kubernetesSecretRef,
+			}).success,
+		).toBe(false);
+		expect(
+			PlatformSecretRecordV1Schema.safeParse({
+				...active,
+				kubernetesSecretRef: {
+					...kubernetesSecretRef,
+					name: "agent-01..secret-01",
+				},
 			}).success,
 		).toBe(false);
 		expect(
