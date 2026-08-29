@@ -5,11 +5,11 @@ import { createPilotSseMessageConsumer } from "./timeline-consumer.js";
 
 describe("Pilot Web SSE consumer", () => {
 	it("deduplicates replay by stable eventId without reordering new events", () => {
-		const consume = createPilotSseMessageConsumer();
+		const consumer = createPilotSseMessageConsumer();
 		const messages = pilotFakeScenariosV1.replay
 			.messages as unknown as readonly ConversationSseMessageV1[];
-		const first = consume([messages[0]]);
-		const result = consume(messages.slice(1));
+		const first = consumer.consume([messages[0]]);
+		const result = consumer.consume(messages.slice(1));
 
 		expect(first.events.map((event) => event.eventId)).toEqual([
 			"event-replay-1",
@@ -21,8 +21,8 @@ describe("Pilot Web SSE consumer", () => {
 	});
 
 	it("keeps stale-authorization control outside the persisted timeline", () => {
-		const consume = createPilotSseMessageConsumer();
-		const result = consume(
+		const consumer = createPilotSseMessageConsumer();
+		const result = consumer.consume(
 			pilotFakeScenariosV1.staleAuthorization
 				.messages as unknown as readonly ConversationSseMessageV1[],
 		);
@@ -34,18 +34,43 @@ describe("Pilot Web SSE consumer", () => {
 	});
 
 	it("keeps heartbeat controls outside the persisted timeline", () => {
-		const consume = createPilotSseMessageConsumer();
+		const consumer = createPilotSseMessageConsumer();
 		const heartbeat = {
 			schemaVersion: 1,
 			kind: "control",
 			type: "heartbeat",
 			occurredAt: "2026-08-28T10:00:00Z",
 		} as unknown as ConversationSseMessageV1;
-		const result = consume([heartbeat]);
+		const result = consumer.consume([heartbeat]);
 
 		expect(result.events).toEqual([]);
 		expect(result.controls).toEqual([
 			expect.objectContaining({ type: "heartbeat" }),
 		]);
+	});
+
+	it("rejects malformed wire messages before updating timeline state", () => {
+		const consumer = createPilotSseMessageConsumer();
+
+		expect(() =>
+			consumer.consume([
+				{
+					schemaVersion: 2,
+					kind: "control",
+					type: "heartbeat",
+					occurredAt: "2026-08-28T10:00:02Z",
+				},
+			]),
+		).toThrow();
+	});
+
+	it("resets deduplication state after timeline replacement", () => {
+		const consumer = createPilotSseMessageConsumer();
+		const message = pilotFakeScenariosV1.replay
+			.messages[0] as unknown as ConversationSseMessageV1;
+
+		expect(consumer.consume([message]).events).toHaveLength(1);
+		consumer.reset();
+		expect(consumer.consume([message]).events).toHaveLength(1);
 	});
 });

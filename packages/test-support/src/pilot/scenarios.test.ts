@@ -114,6 +114,26 @@ describe("Pilot schema-driven Fake scenarios", () => {
 
 		expect(valid.map((message) => message.type)).toContain("text.delta");
 		expect(
+			resolvePilotReplayV1({
+				conversationId: "conversation-pilot-1",
+				lastEventId: "event-replay-1",
+			})
+				.filter((message) => message.kind === "event")
+				.map((message) => message.sequence),
+		).toEqual([2]);
+		expect(
+			resolvePilotReplayV1({
+				conversationId: "conversation-pilot-1",
+				lastEventId: "event-replay-2",
+			}),
+		).toEqual([]);
+		expect(
+			resolvePilotReplayV1({
+				conversationId: "conversation-pilot-1",
+				cursor: "cursor-pilot-2",
+			}),
+		).toEqual([]);
+		expect(
 			ConversationSseMessageV1Schema.parse(crossConversation[0]),
 		).toMatchObject({
 			type: "timeline.reload",

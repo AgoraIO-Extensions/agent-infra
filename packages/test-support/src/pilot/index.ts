@@ -281,15 +281,42 @@ export const pilotFakeScenariosV1 = {
 	},
 } as const satisfies Record<string, unknown>;
 
-const pilotCursorOwnersV1: Record<string, string> = {
-	"cursor-pilot-1": "conversation-pilot-1",
-	"cursor-other-1": "conversation-other-1",
+type PilotReplayPositionV1 = {
+	conversationId: string;
+	afterSequence: number;
 };
-const pilotEventOwnersV1: Record<string, string> = {
-	"event-before-replay": "conversation-pilot-1",
-	"event-replay-1": "conversation-pilot-1",
-	"event-replay-2": "conversation-pilot-1",
-	"event-other-1": "conversation-other-1",
+
+const pilotCursorPositionsV1: Record<string, PilotReplayPositionV1> = {
+	"cursor-pilot-1": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 1,
+	},
+	"cursor-pilot-2": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 2,
+	},
+	"cursor-other-1": {
+		conversationId: "conversation-other-1",
+		afterSequence: 1,
+	},
+};
+const pilotEventPositionsV1: Record<string, PilotReplayPositionV1> = {
+	"event-before-replay": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 0,
+	},
+	"event-replay-1": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 1,
+	},
+	"event-replay-2": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 2,
+	},
+	"event-other-1": {
+		conversationId: "conversation-other-1",
+		afterSequence: 1,
+	},
 };
 
 type PilotReplayInputV1 =
@@ -299,16 +326,16 @@ type PilotReplayInputV1 =
 export function resolvePilotReplayV1(input: PilotReplayInputV1) {
 	const usesCursor = input.cursor !== undefined;
 	const selector = usesCursor ? input.cursor : input.lastEventId;
-	const owner = usesCursor
-		? pilotCursorOwnersV1[selector]
-		: pilotEventOwnersV1[selector];
-	if (owner !== input.conversationId) {
+	const position = usesCursor
+		? pilotCursorPositionsV1[selector]
+		: pilotEventPositionsV1[selector];
+	if (position?.conversationId !== input.conversationId) {
 		return [
 			{
 				schemaVersion: 1,
 				kind: "control",
 				type: "timeline.reload",
-				reason: owner
+				reason: position
 					? usesCursor
 						? "cross_conversation_cursor"
 						: "cross_conversation_event_id"
@@ -318,6 +345,8 @@ export function resolvePilotReplayV1(input: PilotReplayInputV1) {
 		] as const;
 	}
 	return pilotFakeScenariosV1.replay.messages.filter(
-		(message) => message.conversationId === input.conversationId,
+		(message) =>
+			message.conversationId === input.conversationId &&
+			message.sequence > position.afterSequence,
 	);
 }

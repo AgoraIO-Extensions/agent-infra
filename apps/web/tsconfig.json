@@ -1,5 +1,6 @@
 {
 	"compilerOptions": {
+		"allowImportingTsExtensions": true,
 		"strict": true,
 		"esModuleInterop": true,
 		"jsx": "react-jsx",
@@ -11,6 +12,9 @@
 		"rootDirs": ["."],
 		"paths": {
 			"@/*": ["./src/*"],
+			"@agent-infra/contracts/pilot": [
+				"../../packages/contracts/src/pilot/index.ts"
+			],
 			"@agent-infra/test-support/pilot": [
 				"../../packages/test-support/src/pilot/index.ts"
 			]
