@@ -94,7 +94,7 @@ describe("Pilot standard artifacts", () => {
 		expect(
 			validateDelegatedResult({ ...result, idempotencyKey: undefined }),
 		).toBe(false);
-		for (const key of ["token", "jwt", "secretAccessKey"]) {
+		for (const key of ["token", "tokenResponse", "jwt", "secretAccessKey"]) {
 			expect(
 				validateDelegatedResult({
 					...result,
@@ -123,15 +123,17 @@ describe("Pilot standard artifacts", () => {
 			traceId: "trace-1",
 		};
 		expect(validateDelegatedRequest(request)).toBe(true);
-		expect(
-			validateDelegatedRequest({
-				...request,
-				action: {
-					...request.action,
-					arguments: { nested: { connectionId: "caller-controlled" } },
-				},
-			}),
-		).toBe(false);
+		for (const key of ["connectionId", "connectionIds", "attachmentIds"]) {
+			expect(
+				validateDelegatedRequest({
+					...request,
+					action: {
+						...request.action,
+						arguments: { nested: { [key]: "caller-controlled" } },
+					},
+				}),
+			).toBe(false);
+		}
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {

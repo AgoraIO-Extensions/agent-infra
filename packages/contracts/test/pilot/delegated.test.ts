@@ -110,6 +110,9 @@ const forbiddenCredentialKeys = [
 	"secret",
 	"credential",
 	"password",
+	"tokens",
+	"tokenData",
+	"tokenResponse",
 ] as const;
 
 describe("Pilot delegated contracts", () => {
@@ -365,7 +368,18 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
-		for (const key of ["connectionId", "actorId", "nativeSessionId", "token"]) {
+		for (const key of [
+			"connectionId",
+			"connectionIds",
+			"connectionIdList",
+			"externalAccountIds",
+			"actorId",
+			"nativeSessionId",
+			"attachmentId",
+			"attachmentIds",
+			"token",
+			"tokenResponse",
+		]) {
 			expect(
 				DelegatedActionRequestV1Schema.safeParse({
 					...validRequest,
@@ -383,7 +397,7 @@ describe("Pilot delegated contracts", () => {
 					...validRequest.action,
 					arguments: {
 						issueNumber: 180,
-						pageToken: "opaque-pagination-cursor",
+						pageCursor: "opaque-pagination-cursor",
 						userId: "provider-domain-user",
 					},
 				},
@@ -391,7 +405,7 @@ describe("Pilot delegated contracts", () => {
 		).toMatchObject({
 			action: {
 				arguments: {
-					pageToken: "opaque-pagination-cursor",
+					pageCursor: "opaque-pagination-cursor",
 					userId: "provider-domain-user",
 				},
 			},

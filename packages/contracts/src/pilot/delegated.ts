@@ -196,17 +196,28 @@ type SafeDelegatedJson =
 	| { [key: string]: SafeDelegatedJson };
 
 const credentialSafeDelegatedJsonKeyPattern =
-	/^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?)$)(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy]|(?:[Aa][Pp][Ii]|[Aa][Uu][Tt][Hh]|[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh]|[Ii][Dd]|[Pp][Ee][Rr][Ss][Oo][Nn][Aa][Ll].*[Aa][Cc][Cc][Ee][Ss][Ss]).*[Tt][Oo][Kk][Ee][Nn])).+$/;
+	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
 const delegatedAuthoritySelectorKeyPattern =
-	/^(?!(?:[Aa][Cc][Tt][Oo][Rr][_-]?[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn][_-]?[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt][_-]?[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn][_-]?[Ii][Dd]|[Tt][Uu][Rr][Nn][_-]?[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn][_-]?[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt][_-]?[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn][_-]?[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll][_-]?[Aa][Cc][Cc][Oo][Uu][Nn][Tt][_-]?[Ii][Dd]|[Hh][Oo][Ss][Tt][_-]?[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Rr][Ee][Ff]|[Nn][Aa][Tt][Ii][Vv][Ee][_-]?[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Ii][Dd]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][_-]?[Cc][Oo][Nn][Tt][Ee][Xx][Tt])$).+$/;
+	/^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Rr][Ee][Ff]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Ii][Dd]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][Tt].*[Ii][Dd])).+$/;
 
-const safeDelegatedJsonKey = z
+const credentialSafeNonPaginationKey = z
 	.string()
 	.min(1)
 	.regex(credentialSafeDelegatedJsonKeyPattern);
-const safeDelegatedArgumentKey = safeDelegatedJsonKey.regex(
-	delegatedAuthoritySelectorKeyPattern,
-);
+const paginationTokenKey = z.enum([
+	"pageToken",
+	"nextPageToken",
+	"previousPageToken",
+	"continuationToken",
+]);
+const safeDelegatedJsonKey = z.union([
+	paginationTokenKey,
+	credentialSafeNonPaginationKey,
+]);
+const safeDelegatedArgumentKey = z.union([
+	paginationTokenKey,
+	credentialSafeNonPaginationKey.regex(delegatedAuthoritySelectorKeyPattern),
+]);
 
 export const SafeDelegatedJsonV1Schema: z.ZodType<SafeDelegatedJson> = z.lazy(
 	() =>
