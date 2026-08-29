@@ -36,10 +36,14 @@ export function fakeDelegatedActionSuccessV1(
 	});
 }
 
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+	? Omit<T, K & keyof T>
+	: never;
+
 type DelegatedFailureOptions = {
 	callId?: string | null;
 	completedAt?: string;
-	error?: Omit<DelegatedActionErrorV1, "schemaVersion" | "traceId">;
+	error?: DistributiveOmit<DelegatedActionErrorV1, "schemaVersion" | "traceId">;
 };
 
 export function fakeDelegatedActionFailureV1(

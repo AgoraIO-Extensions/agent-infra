@@ -9,6 +9,19 @@ import {
 	fakeDelegatedActionSuccessV1,
 } from "./delegated.js";
 
+type FailureError = NonNullable<
+	NonNullable<Parameters<typeof fakeDelegatedActionFailureV1>[1]>["error"]
+>;
+type RejectsMismatchedFailure = {
+	code: "PROVIDER_REJECTED";
+	message: "Connection is unavailable";
+	retryable: true;
+} extends FailureError
+	? false
+	: true;
+const rejectsMismatchedFailure: RejectsMismatchedFailure = true;
+void rejectsMismatchedFailure;
+
 const request = {
 	schemaVersion: 1,
 	requestId: "request-connection-1",
