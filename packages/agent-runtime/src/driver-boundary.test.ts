@@ -74,19 +74,15 @@ function malformedRecord(
 	} as unknown as RuntimeDriverOperationRecordV1;
 }
 
-function unsafeErrorEvent() {
+function mismatchedExecutionEvent() {
 	return {
 		schemaVersion: 1,
-		adapterEventKey: "event-driver-error",
-		executionId: binding.executionId,
-		cursor: "cursor-driver-error",
+		adapterEventKey: "event-driver-mismatch",
+		executionId: "execution-other",
+		cursor: "cursor-driver-mismatch",
 		occurredAt: "2026-08-28T10:00:01Z",
-		type: "error",
-		payload: {
-			code: "UPSTREAM_ERROR",
-			message: "Provider returned bearer secret-value",
-			retryable: false,
-		},
+		type: "status",
+		payload: { status: "running" },
 	};
 }
 
@@ -211,13 +207,13 @@ describe("Runtime Driver boundary", () => {
 					? { getCapabilities: async () => ({ rawProtocol: true }) }
 					: {}),
 				...(kind === "replay"
-					? { replayEvents: async () => [unsafeErrorEvent()] }
+					? { replayEvents: async () => [mismatchedExecutionEvent()] }
 					: {}),
 				...(kind === "stream"
 					? {
 							subscribeEvents: async () =>
 								(async function* () {
-									yield unsafeErrorEvent();
+									yield mismatchedExecutionEvent();
 								})(),
 						}
 					: {}),

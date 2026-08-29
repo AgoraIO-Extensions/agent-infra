@@ -8,6 +8,7 @@ import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
+	RuntimeHostError,
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantClaimsV1,
@@ -162,6 +163,27 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 			body: JSON.stringify(invalidGrant),
 		});
 		expect(rejected.status).toBe(403);
+		Object.assign(driver, {
+			execute: async () => {
+				throw new RuntimeHostError(
+					"UPSTREAM_SECRET_ERROR",
+					"Provider returned bearer secret-value",
+					418,
+				);
+			},
+		});
+		const driverFailure = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(submitBody()),
+		});
+		expect(driverFailure.status).toBe(503);
+		const driverFailureBody = await driverFailure.json();
+		expect(driverFailureBody).toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			message: "Runtime Driver response is invalid",
+		});
+		expect(JSON.stringify(driverFailureBody)).not.toContain("secret-value");
 		expect(await driver.sideEffectCount()).toBe(0);
 	});
 

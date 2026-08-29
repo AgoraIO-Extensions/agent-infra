@@ -72,6 +72,35 @@ function driverInvalid(): never {
 	);
 }
 
+async function callDriver<T>(work: () => Promise<T>) {
+	try {
+		return await work();
+	} catch {
+		driverInvalid();
+	}
+}
+
+async function* validatedDriverEventStream(
+	events: AsyncIterable<unknown>,
+	executionId: string,
+) {
+	const iterator = events[Symbol.asyncIterator]();
+	while (true) {
+		let next: IteratorResult<unknown>;
+		try {
+			next = await iterator.next();
+		} catch {
+			driverInvalid();
+		}
+		if (next.done) return;
+		const event = RuntimeEventV1Schema.safeParse(next.value);
+		if (!event.success || event.data.executionId !== executionId) {
+			driverInvalid();
+		}
+		yield event.data;
+	}
+}
+
 function parseDriverRecord(
 	value: unknown,
 	operation: StoredOperation,
@@ -206,9 +235,8 @@ export class RuntimeHost {
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
 		const status = RuntimeStatusV1Schema.safeParse(
-			await this.options.driver.getStatus(
-				nativeSessionRef,
-				request.executionId,
+			await callDriver(() =>
+				this.options.driver.getStatus(nativeSessionRef, request.executionId),
 			),
 		);
 		if (!status.success) driverInvalid();
@@ -241,7 +269,7 @@ export class RuntimeHost {
 			);
 		}
 		const capabilities = RuntimeCapabilitiesV1Schema.safeParse(
-			await this.options.driver.getCapabilities(),
+			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
 		return {
@@ -271,13 +299,20 @@ export class RuntimeHost {
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
 		const events = RuntimeEventV1Schema.array().safeParse(
-			await this.options.driver.replayEvents(
-				nativeSessionRef,
-				request.executionId,
-				request.afterCursor,
+			await callDriver(() =>
+				this.options.driver.replayEvents(
+					nativeSessionRef,
+					request.executionId,
+					request.afterCursor,
+				),
 			),
 		);
-		if (!events.success) driverInvalid();
+		if (
+			!events.success ||
+			events.data.some((event) => event.executionId !== request.executionId)
+		) {
+			driverInvalid();
+		}
 		return {
 			schemaVersion: 1,
 			events: events.data,
@@ -305,23 +340,26 @@ export class RuntimeHost {
 		);
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
-		const events = await this.options.driver.subscribeEvents(
-			nativeSessionRef,
-			request.executionId,
-			request.afterCursor,
-			signal,
+		const events = await callDriver(() =>
+			this.options.driver.subscribeEvents(
+				nativeSessionRef,
+				request.executionId,
+				request.afterCursor,
+				signal,
+			),
 		);
 		const store = this.options.store;
 		return (async function* () {
-			for await (const value of events) {
+			for await (const event of validatedDriverEventStream(
+				events,
+				request.executionId,
+			)) {
 				store.getSessionForQuery(
 					request.hostSessionRef,
 					request,
 					request.deliveryFence,
 				);
-				const event = RuntimeEventV1Schema.safeParse(value);
-				if (!event.success) driverInvalid();
-				yield event.data;
+				yield event;
 			}
 		})();
 	}
@@ -507,7 +545,9 @@ export class RuntimeHost {
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
 		const lookup = parseDriverLookup(
-			await this.options.driver.lookupOperation(operation.operationId),
+			await callDriver(() =>
+				this.options.driver.lookupOperation(operation.operationId),
+			),
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
@@ -532,7 +572,9 @@ export class RuntimeHost {
 		const driverRecord = parseDriverRecord(
 			lookup.state === "found"
 				? lookup.record
-				: await this.options.driver.execute(operation.command),
+				: await callDriver(() =>
+						this.options.driver.execute(operation.command),
+					),
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
@@ -582,7 +624,9 @@ export class RuntimeHost {
 						).result;
 					} else {
 						const lookup = parseDriverLookup(
-							await this.options.driver.lookupOperation(operation.operationId),
+							await callDriver(() =>
+								this.options.driver.lookupOperation(operation.operationId),
+							),
 							operation,
 							session.nativeSessionRef,
 						);
@@ -648,7 +692,9 @@ export class RuntimeHost {
 			return record.result;
 		}
 		const status = RuntimeStatusV1Schema.safeParse(
-			await this.options.driver.getStatus(record.nativeSessionRef, executionId),
+			await callDriver(() =>
+				this.options.driver.getStatus(record.nativeSessionRef, executionId),
+			),
 		);
 		if (!status.success) driverInvalid();
 		return {
