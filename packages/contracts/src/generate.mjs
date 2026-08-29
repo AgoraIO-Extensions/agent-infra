@@ -20,6 +20,8 @@ import {
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserSchemasV1,
 	pilotBrowserSseOpenApiPathsV1,
+	pilotDelegatedOpenApiPathsV1,
+	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
 
@@ -39,6 +41,14 @@ const artifactPaths = {
 	pilotBrowserOpenapi: resolve(
 		artifactRoot,
 		"openapi/pilot-browser.v1.openapi.json",
+	),
+	pilotDelegatedJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-delegated.v1.schema.json",
+	),
+	pilotDelegatedOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-delegated.v1.openapi.json",
 	),
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
@@ -60,6 +70,26 @@ const schemas = {
 function withoutSchemaDialect(schema) {
 	const { $schema: _schema, ...definition } = schema;
 	return definition;
+}
+
+function rebaseDefinitionRefs(value, definitionName) {
+	if (Array.isArray(value)) {
+		return value.map((entry) => rebaseDefinitionRefs(entry, definitionName));
+	}
+	if (value === null || typeof value !== "object") return value;
+	const definitionPointer = definitionName
+		.replaceAll("~", "~0")
+		.replaceAll("/", "~1");
+	return Object.fromEntries(
+		Object.entries(value).map(([key, entry]) => [
+			key,
+			key === "$ref" &&
+			typeof entry === "string" &&
+			entry.startsWith("#/$defs/")
+				? `#/$defs/${definitionPointer}/$defs/${entry.slice("#/$defs/".length)}`
+				: rebaseDefinitionRefs(entry, definitionName),
+		]),
+	);
 }
 
 function sortKeys(value) {
@@ -84,11 +114,14 @@ function jsonSchemaDocument({ id, title, definitions }) {
 		$defs: Object.fromEntries(
 			Object.entries(definitions).map(([name, schema]) => [
 				name,
-				withoutSchemaDialect(
-					z.toJSONSchema(schema, {
-						target: "draft-2020-12",
-						unrepresentable: "throw",
-					}),
+				rebaseDefinitionRefs(
+					withoutSchemaDialect(
+						z.toJSONSchema(schema, {
+							target: "draft-2020-12",
+							unrepresentable: "throw",
+						}),
+					),
+					name,
 				),
 			]),
 		),
@@ -129,7 +162,28 @@ function buildArtifacts() {
 		title: "Agent Infra Pilot SSE Contracts V1",
 		definitions: pilotSseSchemasV1,
 	});
-	return { jsonSchema, openapi, pilotBrowserOpenapi, pilotSseJsonSchema };
+	const pilotDelegatedJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-delegated.v1.schema.json",
+		title: "Agent Infra Pilot Delegated Contracts V1",
+		definitions: pilotDelegatedSchemasV1,
+	});
+	const pilotDelegatedOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Delegated Action API",
+			version: "1.0.0",
+		},
+		paths: pilotDelegatedOpenApiPathsV1,
+		components: { schemas: pilotDelegatedSchemasV1 },
+	});
+	return {
+		jsonSchema,
+		openapi,
+		pilotBrowserOpenapi,
+		pilotDelegatedJsonSchema,
+		pilotDelegatedOpenapi,
+		pilotSseJsonSchema,
+	};
 }
 
 async function writeArtifacts(artifacts) {

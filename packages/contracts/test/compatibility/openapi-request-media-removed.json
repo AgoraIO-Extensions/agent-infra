@@ -3,7 +3,7 @@
 		"schemas": {
 			"OpaqueIdV1": {
 				"minLength": 1,
-				"type": "number"
+				"type": "string"
 			}
 		}
 	},
@@ -17,13 +17,7 @@
 			"post": {
 				"operationId": "executeDelegatedAction",
 				"requestBody": {
-					"content": {
-						"application/json": {
-							"schema": {
-								"$ref": "#/components/schemas/OpaqueIdV1"
-							}
-						}
-					},
+					"content": {},
 					"required": true
 				},
 				"responses": {

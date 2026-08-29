@@ -63,6 +63,30 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
 			"HeartbeatSignalV1",
 		);
+		expect(
+			Object.keys(artifacts.pilotDelegatedJsonSchema.$defs).sort(),
+		).toEqual([
+			"DelegatedActionErrorV1",
+			"DelegatedActionRequestV1",
+			"DelegatedActionResultV1",
+			"ExecutionGrantClaimsV1",
+			"ExecutionGrantCommandV1",
+			"ExecutionGrantV1",
+		]);
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantClaimsV1.required,
+		).toEqual(expect.arrayContaining(["sessionGeneration", "allowedCommands"]));
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantCommandV1.enum,
+		).toEqual(expect.arrayContaining(["generation.cancel", "tool.invoke"]));
+		expect(artifacts.pilotDelegatedOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotDelegatedOpenapi.paths).toHaveProperty(
+			"/internal/v1/delegated-actions.post",
+		);
+		expect(
+			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
+				.post.responses,
+		).toHaveProperty("503");
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
@@ -96,6 +120,14 @@ describe("standard contract artifacts", () => {
 				occurredAt: "2026-08-28T10:00:00Z",
 			}),
 		).toBe(true);
+		ajv.addSchema(artifacts.pilotDelegatedJsonSchema);
+		for (const name of Object.keys(artifacts.pilotDelegatedJsonSchema.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.pilotDelegatedJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {
@@ -118,6 +150,8 @@ describe("standard contract artifacts", () => {
 			);
 			expect(result.status).toBe(1);
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
+			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
+			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}

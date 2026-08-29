@@ -1,3 +1,5 @@
+export * from "./delegated.ts";
+
 const protocolError = (
 	code: string,
 	message: string,

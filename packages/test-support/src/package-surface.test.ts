@@ -16,6 +16,11 @@ describe("test-support package surface", () => {
 			types: "./dist/pilot/index.d.mts",
 			import: "./dist/pilot/index.mjs",
 		});
+		const pilotSurface = await import(
+			new URL("../dist/pilot/index.mjs", import.meta.url).href
+		);
+		expect(pilotSurface.fakeDelegatedActionSuccessV1).toBeTypeOf("function");
+		expect(pilotSurface.fakeDelegatedActionFailureV1).toBeTypeOf("function");
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
