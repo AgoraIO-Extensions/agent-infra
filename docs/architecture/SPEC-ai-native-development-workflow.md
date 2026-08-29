@@ -371,7 +371,19 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - 每个适用的 PR 只运行选定 Reviewer；较新的 head 取消同一 PR 的 stale run。Claude 在确定性
   CI 成功后启动，PR-Agent 在适用的 PR head 事件上启动。
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
-  闭环；Review 摘要不阻塞合并，不新增统一 Review Gate。
+  闭环；Review 摘要不阻塞合并。
+- Review Coverage Shadow 以 shadow 模式发布 provider-aware 的 `Automated Review Coverage` Check。它只接受所选
+  Reviewer 的可信 current-head evidence：PR-Agent 使用 GitHub Actions App 发布的 persistent Review
+  及确定性 coverage footer，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Check 对
+  完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
+  取消分别返回稳定 reason code。shadow Check 尚不属于 required checks，不改变 merge authority；
+  Review Coverage Enforcement 经 hosted smoke 和 branch-protection readback 后才把同一 contract 提升为
+  required Gate。
+- PR-Agent 的 `config.custom_model_max_tokens` 与 `config.max_model_tokens` 使用同一受控配置，避免
+  默认 32k 全局 cap 覆盖部署已批准的模型 context 上限；提高上限不能替代 coverage 判定。不得为
+  适配 token budget blanket ignore 生成 Client、OpenAPI、JSON Schema、Fake、测试或其他可评审文本。
+- PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
+  Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
 - Claude 的结构化输出和可信 Publisher 校验只属于 Claude Adapter 的内部安全机制，不构成
   Automated Reviewer 的统一输出契约。
 - 只有选中 Claude 时，其 P0/P1 finding 才能进入现有无人值守 code-repair；PR-Agent finding
@@ -480,6 +492,8 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
 | Stage 2 | 初版 Codex Worker、Artifact/Publisher 隔离、固定 branch、代码 push 后短暂 Draft PR、受保护路径 | Codex 与 Publisher Secret |
 | Stage 3A（`#50`） | 本文目标契约、稳定 AC ID、模板与导航同步 | 无外部配置 |
 | Stage 3B（`#51`） | App-bound current-head gates、Automated PR Review provider selection、CODEOWNERS Team | Team、CODEOWNERS、branch protection |
+| Review Coverage Shadow（`#242`） | provider-aware Automated Review Coverage shadow Check、PR-Agent 有效 context cap | Stage 3B |
+| Review Coverage Enforcement（`#243`） | Automated Review Coverage required Gate 与 hosted merge-authority smoke | Review Coverage Shadow |
 | Stage 3C（`#52`） | authorization record、cycle branch、execution hash、Issue Readiness/AC evidence | Stage 3B Team identity |
 | Stage 3D（`#53`） | blocker proposal、同仓库 DAG、completed/not planned 语义、15 分钟 Reconciler | Stage 3C cycle |
 | Stage 3E（`#54`） | 三次 attempt、Patch checkpoint、全局并发 2、CI retry、两轮 repair、base update | Stage 3C cycle |
@@ -506,6 +520,8 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
   `status/evidence`；等时、晚建或时间缺失时 Issue Gate fail closed。
 - 每个 required Check Run 和人工验证都绑定当前 head；旧 SHA 不能满足新 head 门禁。
 - 每个适用的 PR 只触发由 `PR_REVIEW_PROVIDER` 选定的 Automated Reviewer；未设置时使用 PR-Agent。
+- 所选 Reviewer 的 current-head coverage evidence 产生可审计 shadow Check；裁剪、缺失、旧 head、
+  无效输出、provider mismatch、失败或取消不能显示为完整覆盖，且 shadow 阶段不改变 required checks。
 - 需要人工验证的 PR 在 Team 人员完成当前-head 确认前不能合并；Approve 与验证互不替代。
 - 所有门禁通过后只由 GitHub 原生 Squash Auto-merge 合并；AI 不能 Approve、直接 Merge 或绕过。
 - 失败、取消、跳过和异常中断都有可回读 terminal outcome；企微失败永远不阻塞 GitHub 流程。

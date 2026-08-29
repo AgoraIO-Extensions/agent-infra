@@ -118,7 +118,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "pr-agent-review.yml": {
-    needs: ["analyze", "suggestions"],
+    needs: ["analyze", "coverage", "suggestions"],
     operation: "pr-agent-review",
   },
   "pr-gates.yml": {
@@ -763,7 +763,8 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       const allowedGatePublisherLocation =
         step.id === "gate-publisher-token" &&
         ((workflowName === "pr-gates.yml" && jobName === "gates") ||
-          (workflowName === "claude-pr-review.yml" && jobName === "publish"));
+          (workflowName === "claude-pr-review.yml" && jobName === "publish") ||
+          (workflowName === "pr-agent-review.yml" && jobName === "coverage"));
       if (
         (!allowedMembershipLocation && !allowedGatePublisherLocation) ||
         step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
@@ -789,6 +790,7 @@ export function validateTrustedScriptSources(sources) {
   }
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
+  const coverageSource = sources?.["review-coverage.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const pilotSource = sources?.["gh-aw-pilot.mjs"] ?? "";
@@ -820,6 +822,14 @@ export function validateTrustedScriptSources(sources) {
     "assertCurrentReviewTarget(pr, expectedHead)",
     "reviewGateOutcome(blocking)",
   ];
+  const coverageRequirements = [
+    'COVERAGE_CHECK_NAME = "Automated Review Coverage"',
+    "gateCheckRequest,",
+    "requireCurrentReviewTarget({",
+    "selectReviewGateCheck(",
+    "review-coverage-incomplete",
+    "await checkRequest(`/repos/${repository}/check-runs/${check.id}`",
+  ];
   const contractRequirements = [
     "GITHUB_ACTIONS_APP_ID",
     "GATE_PUBLISHER_APP_ID = 4_503_079",
@@ -829,6 +839,9 @@ export function validateTrustedScriptSources(sources) {
   if (
     gateRequirements.some((requirement) => !gateSource.includes(requirement)) ||
     reviewRequirements.some((requirement) => !reviewSource.includes(requirement)) ||
+    coverageRequirements.some(
+      (requirement) => !coverageSource.includes(requirement),
+    ) ||
     contractRequirements.some((requirement) => !contractSource.includes(requirement))
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
@@ -1195,8 +1208,14 @@ export function validateWorkflowDocuments(workflows) {
             step.run === "node .github/scripts/pr-gates.mjs") ||
             (name === "claude-pr-review.yml" &&
               jobName === "publish" &&
-              step.name === "Publish validated Review result" &&
-              step.run === "node .github/scripts/claude-review.mjs"));
+              ((step.name === "Publish validated Review result" &&
+                step.run === "node .github/scripts/claude-review.mjs") ||
+                (step.name === "Publish Automated Review Coverage shadow" &&
+                  step.run === "node .github/scripts/review-coverage.mjs"))) ||
+            (name === "pr-agent-review.yml" &&
+              jobName === "coverage" &&
+              step.name === "Publish Automated Review Coverage shadow" &&
+              step.run === "node .github/scripts/review-coverage.mjs"));
         if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
           errors.push(
             `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
@@ -1485,6 +1504,7 @@ export function validateWorkflowDocuments(workflows) {
   }
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
+  const prAgentCoverage = prAgent?.jobs?.coverage;
   const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
   const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
@@ -1493,7 +1513,21 @@ export function validateWorkflowDocuments(workflows) {
   const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
     (step) => step.name === "Checkout trusted default branch",
   );
+  const prAgentCoverageSteps = prAgentCoverage?.steps ?? [];
+  const prAgentCoverageCheckout = prAgentCoverageSteps.find(
+    (step) => step.name === "Checkout trusted default branch",
+  );
+  const prAgentCoverageSetup = prAgentCoverageSteps.find(
+    (step) => step.name === "Set up Node.js",
+  );
+  const prAgentCoverageToken = prAgentCoverageSteps.find(
+    (step) => step.id === "gate-publisher-token",
+  );
+  const prAgentCoveragePublish = prAgentCoverageSteps.find(
+    (step) => step.name === "Publish Automated Review Coverage shadow",
+  );
   const prAgentCondition = String(prAgentAnalyze?.if ?? "");
+  const prAgentCoverageCondition = String(prAgentCoverage?.if ?? "");
   const prAgentSuggestionsCondition = String(prAgentSuggestions?.if ?? "");
   const prAgentPermissions = {
     contents: "read",
@@ -1513,6 +1547,8 @@ export function validateWorkflowDocuments(workflows) {
     "config.use_wiki_settings_file": "false",
     "config.fallback_models": "[]",
     "config.custom_model_max_tokens":
+      "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+    "config.max_model_tokens":
       "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
     "github_action_config.auto_describe": "false",
     "github_action_config.pr_actions":
@@ -1539,11 +1575,27 @@ export function validateWorkflowDocuments(workflows) {
     !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCondition.includes("github.event.pull_request.draft == false") ||
     prAgentSuggestionsCondition !== prAgentCondition ||
+    !prAgentCoverageCondition.includes("always()") ||
+    !prAgentCoverageCondition.includes("vars.PR_REVIEW_PROVIDER != 'claude'") ||
+    !prAgentCoverageCondition.includes(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    ) ||
+    !prAgentCoverageCondition.includes("github.event.sender.type != 'Bot'") ||
+    !prAgentCoverageCondition.includes("github.event.pull_request.draft == false") ||
     !sameObject(prAgentAnalyze?.permissions, prAgentPermissions) ||
     !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
+    !sameObject(prAgentCoverage?.permissions, {
+      actions: "read",
+      checks: "read",
+      contents: "read",
+      issues: "read",
+      "pull-requests": "read",
+    }) ||
+    prAgentCoverage?.needs !== "analyze" ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
-      ["analyze", "outcome", "suggestions"].join("\0") ||
+      ["analyze", "coverage", "outcome", "suggestions"].join("\0") ||
     prAgentAnalyze?.steps?.length !== 2 ||
+    prAgentCoverageSteps.length !== 4 ||
     prAgentSuggestions?.steps?.length !== 1 ||
     prAgentAnalyzeCheckout?.uses !==
       "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
@@ -1552,6 +1604,35 @@ export function validateWorkflowDocuments(workflows) {
       "fetch-depth": 1,
       "persist-credentials": false,
     }) ||
+    prAgentCoverageCheckout?.uses !== CHECKOUT_ACTION ||
+    !sameObject(prAgentCoverageCheckout?.with, {
+      ref: "${{ github.event.repository.default_branch }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    }) ||
+    prAgentCoverageSetup?.uses !==
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
+    !sameObject(prAgentCoverageSetup?.with, { "node-version": 24 }) ||
+    prAgentCoverageToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
+    !sameObject(prAgentCoverageToken?.with, {
+      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
+      "permission-checks": "write",
+      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
+      owner: "${{ github.repository_owner }}",
+      repositories: "${{ github.event.repository.name }}",
+    }) ||
+    prAgentCoveragePublish?.if !== "always()" ||
+    prAgentCoveragePublish?.run !== "node .github/scripts/review-coverage.mjs" ||
+    !sameObject(prAgentCoveragePublish?.env, {
+      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      PR_NUMBER: "${{ github.event.pull_request.number }}",
+      REVIEW_PROVIDER: "pr-agent",
+      REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
+    }) ||
+    JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
+      JSON.stringify(["analyze", "coverage", "suggestions"]) ||
+    gatePublisherTokenReferences(prAgent).length !== 1 ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.["continue-on-error"] !== true ||
@@ -2012,6 +2093,9 @@ export function validateWorkflowDocuments(workflows) {
   const reviewPublish = reviewPublishSteps.find(
     (step) => step.name === "Publish validated Review result",
   );
+  const reviewCoveragePublish = reviewPublishSteps.find(
+    (step) => step.name === "Publish Automated Review Coverage shadow",
+  );
   const reviewGatePublisherToken = reviewPublishSteps.find(
     (step) => step.id === "gate-publisher-token",
   );
@@ -2025,6 +2109,8 @@ export function validateWorkflowDocuments(workflows) {
     reviewDataCheckout?.with?.path !== "pr-head" ||
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
     reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
+    reviewCoveragePublish?.if !== "always()" ||
+    reviewCoveragePublish?.run !== "node .github/scripts/review-coverage.mjs" ||
     reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     !sameObject(reviewGatePublisherToken?.with, {
       "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
@@ -2042,13 +2128,21 @@ export function validateWorkflowDocuments(workflows) {
       REVIEW_ENABLED: "true",
       STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     }) ||
+    !sameObject(reviewCoveragePublish?.env, {
+      EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+      REVIEW_PROVIDER: "claude",
+      REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
+    }) ||
     !sameObject(review?.jobs?.publish?.permissions, {
       checks: "read",
       contents: "read",
       issues: "write",
       "pull-requests": "write",
     }) ||
-    gatePublisherTokenReferences(review).length !== 1
+    gatePublisherTokenReferences(review).length !== 2
   ) {
     errors.push("Claude PR Review must publish only the completed CI head");
   }
@@ -2414,6 +2508,7 @@ async function main() {
         "codex-worker.mjs",
         "gh-aw-pilot.mjs",
         "pr-gates.mjs",
+        "review-coverage.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
         "workflow-outcome.mjs",
