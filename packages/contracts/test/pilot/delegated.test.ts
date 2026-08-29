@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
 	DelegatedActionRequestV1Schema,
@@ -64,6 +65,13 @@ const validBaseValidationContext = {
 
 const validValidationContext = {
 	...validBaseValidationContext,
+	validateArguments: (input: unknown) => {
+		z.strictObject({
+			issueNumber: z.number().int(),
+			pageCursor: z.string().optional(),
+			userId: z.string().optional(),
+		}).parse(input);
+	},
 	expectedBindings: {
 		agentId: validClaims.agentId,
 		actorId: validClaims.actorId,
@@ -301,6 +309,19 @@ describe("Pilot delegated contracts", () => {
 				context,
 			),
 		).toThrow("Execution Grant verification mismatch");
+		expect(() =>
+			validateDelegatedActionRequestV1(
+				validVerification,
+				{
+					...validRequest,
+					action: {
+						...validRequest.action,
+						arguments: { value: "raw-access-token" },
+					},
+				},
+				context,
+			),
+		).toThrow();
 		for (const [claims, request, override] of [
 			[validClaims, { ...validRequest, traceId: "trace-other" }, {}],
 			[
@@ -422,6 +443,19 @@ describe("Pilot delegated contracts", () => {
 	});
 
 	it("accepts safe results and rejects secret-bearing responses at any depth", () => {
+		const resultValidationContext = {
+			validateOutput: (input: unknown) => {
+				z.union([
+					z.strictObject({
+						issue: z.strictObject({
+							number: z.number().int(),
+							title: z.string(),
+						}),
+					}),
+					z.strictObject({ nextPageToken: z.string() }),
+				]).parse(input);
+			},
+		};
 		const safeResult = {
 			schemaVersion: 1,
 			requestId: "request-1",
@@ -460,6 +494,13 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(() =>
+			validateDelegatedActionResultV1(
+				validRequest,
+				{ ...safeResult, output: "raw-access-token" },
+				resultValidationContext,
+			),
+		).toThrow();
 		expect(
 			DelegatedActionResultV1Schema.safeParse({
 				schemaVersion: 1,
@@ -481,24 +522,28 @@ describe("Pilot delegated contracts", () => {
 			}).success,
 		).toBe(false);
 		expect(() =>
-			validateDelegatedActionResultV1(validRequest, {
-				schemaVersion: 1,
-				requestId: safeResult.requestId,
-				idempotencyKey: safeResult.idempotencyKey,
-				status: "failed",
-				callId: null,
-				actionId: safeResult.actionId,
-				actionVersion: safeResult.actionVersion,
-				traceId: safeResult.traceId,
-				completedAt: safeResult.completedAt,
-				error: {
+			validateDelegatedActionResultV1(
+				validRequest,
+				{
 					schemaVersion: 1,
-					code: "CONNECTION_UNAVAILABLE",
-					message: "Connection is unavailable",
-					retryable: true,
-					traceId: "trace-other",
+					requestId: safeResult.requestId,
+					idempotencyKey: safeResult.idempotencyKey,
+					status: "failed",
+					callId: null,
+					actionId: safeResult.actionId,
+					actionVersion: safeResult.actionVersion,
+					traceId: safeResult.traceId,
+					completedAt: safeResult.completedAt,
+					error: {
+						schemaVersion: 1,
+						code: "CONNECTION_UNAVAILABLE",
+						message: "Connection is unavailable",
+						retryable: true,
+						traceId: "trace-other",
+					},
 				},
-			}),
+				resultValidationContext,
+			),
 		).toThrow("Delegated Action result correlation mismatch");
 	});
 });

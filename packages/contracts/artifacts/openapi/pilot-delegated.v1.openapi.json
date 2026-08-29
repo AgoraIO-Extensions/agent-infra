@@ -384,7 +384,8 @@
                 "type": "string"
               },
               "output": {
-                "$ref": "#/components/schemas/__schema2"
+                "$ref": "#/components/schemas/__schema2",
+                "description": "Validated by the Connection-owned Action Schema before crossing this boundary."
               },
               "requestId": {
                 "minLength": 1,

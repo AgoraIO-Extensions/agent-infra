@@ -187,13 +187,13 @@ export const VerifiedExecutionGrantV1Schema = z.strictObject({
 	claims: ExecutionGrantClaimsV1Schema,
 });
 
-type SafeDelegatedJson =
+type DelegatedJson =
 	| null
 	| boolean
 	| number
 	| string
-	| SafeDelegatedJson[]
-	| { [key: string]: SafeDelegatedJson };
+	| DelegatedJson[]
+	| { [key: string]: DelegatedJson };
 
 const credentialSafeDelegatedJsonKeyPattern =
 	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
@@ -219,27 +219,26 @@ const safeDelegatedArgumentKey = z.union([
 	credentialSafeNonPaginationKey.regex(delegatedAuthoritySelectorKeyPattern),
 ]);
 
-export const SafeDelegatedJsonV1Schema: z.ZodType<SafeDelegatedJson> = z.lazy(
-	() =>
-		z.union([
-			z.null(),
-			z.boolean(),
-			z.number(),
-			z.string(),
-			z.array(SafeDelegatedJsonV1Schema),
-			z.record(safeDelegatedJsonKey, SafeDelegatedJsonV1Schema),
-		]),
+export const DelegatedJsonV1Schema: z.ZodType<DelegatedJson> = z.lazy(() =>
+	z.union([
+		z.null(),
+		z.boolean(),
+		z.number(),
+		z.string(),
+		z.array(DelegatedJsonV1Schema),
+		z.record(safeDelegatedJsonKey, DelegatedJsonV1Schema),
+	]),
 );
 
-export const SafeDelegatedArgumentsV1Schema: z.ZodType<SafeDelegatedJson> =
+export const DelegatedActionArgumentsV1Schema: z.ZodType<DelegatedJson> =
 	z.lazy(() =>
 		z.union([
 			z.null(),
 			z.boolean(),
 			z.number(),
 			z.string(),
-			z.array(SafeDelegatedArgumentsV1Schema),
-			z.record(safeDelegatedArgumentKey, SafeDelegatedArgumentsV1Schema),
+			z.array(DelegatedActionArgumentsV1Schema),
+			z.record(safeDelegatedArgumentKey, DelegatedActionArgumentsV1Schema),
 		]),
 	);
 
@@ -253,7 +252,7 @@ export const DelegatedActionRequestV1Schema = z.strictObject({
 		actionVersion: nonEmptyString(),
 		arguments: z.record(
 			safeDelegatedArgumentKey,
-			SafeDelegatedArgumentsV1Schema,
+			DelegatedActionArgumentsV1Schema,
 		),
 	}),
 	traceId: TraceIdV1Schema,
@@ -265,6 +264,7 @@ export function validateDelegatedActionRequestV1(
 	context: ExecutionGrantValidationContext & {
 		expectedActionSetVersion: string;
 		expectedActionVersion: string;
+		validateArguments: DelegatedPayloadValidatorV1;
 	},
 ) {
 	const request = DelegatedActionRequestV1Schema.parse(requestInput);
@@ -282,6 +282,7 @@ export function validateDelegatedActionRequestV1(
 	) {
 		throw new Error("Delegated Action request exceeds Grant");
 	}
+	context.validateArguments(request.action.arguments);
 	return request;
 }
 
@@ -355,7 +356,10 @@ export const DelegatedActionSucceededV1Schema = z.strictObject({
 	...delegatedResultShape,
 	callId: OpaqueIdV1Schema,
 	status: z.literal("succeeded"),
-	output: SafeDelegatedJsonV1Schema,
+	output: DelegatedJsonV1Schema.meta({
+		description:
+			"Validated by the Connection-owned Action Schema before crossing this boundary.",
+	}),
 });
 
 export const DelegatedActionFailedV1Schema = z.strictObject({
@@ -373,6 +377,7 @@ export const DelegatedActionResultV1Schema = z.discriminatedUnion("status", [
 export function validateDelegatedActionResultV1(
 	requestInput: unknown,
 	resultInput: unknown,
+	context: { validateOutput: DelegatedPayloadValidatorV1 },
 ) {
 	const request = DelegatedActionRequestV1Schema.parse(requestInput);
 	const result = DelegatedActionResultV1Schema.parse(resultInput);
@@ -386,6 +391,7 @@ export function validateDelegatedActionResultV1(
 	) {
 		throw new Error("Delegated Action result correlation mismatch");
 	}
+	if (result.status === "succeeded") context.validateOutput(result.output);
 	return result;
 }
 
@@ -464,3 +470,4 @@ export type DelegatedActionResultV1 = z.infer<
 export type DelegatedActionErrorV1 = z.infer<
 	typeof DelegatedActionErrorV1Schema
 >;
+export type DelegatedPayloadValidatorV1 = (input: unknown) => void;

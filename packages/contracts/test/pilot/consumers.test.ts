@@ -5,6 +5,7 @@ import {
 	validateDelegatedActionResultV1,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 describe("Pilot named consumers", () => {
 	it("gives the RuntimeHost client only a bounded, current Execution Grant", () => {
@@ -45,6 +46,11 @@ describe("Pilot named consumers", () => {
 	});
 
 	it("gives a Fake Connection only delegated Action input and a correlated safe result", () => {
+		const resultValidationContext = {
+			validateOutput: (input: unknown) => {
+				z.strictObject({ issueNumber: z.number().int() }).parse(input);
+			},
+		};
 		const request = {
 			schemaVersion: 1,
 			requestId: "request-connection-1",
@@ -76,7 +82,9 @@ describe("Pilot named consumers", () => {
 
 		expect(DelegatedActionRequestV1Schema.parse(request)).toEqual(request);
 		expect(DelegatedActionResultV1Schema.parse(result)).toEqual(result);
-		expect(validateDelegatedActionResultV1(request, result)).toEqual(result);
+		expect(
+			validateDelegatedActionResultV1(request, result, resultValidationContext),
+		).toEqual(result);
 		for (const mismatch of [
 			{ requestId: "request-other" },
 			{ idempotencyKey: "tool.call_other" },
@@ -85,7 +93,11 @@ describe("Pilot named consumers", () => {
 			{ actionVersion: "v4" },
 		]) {
 			expect(() =>
-				validateDelegatedActionResultV1(request, { ...result, ...mismatch }),
+				validateDelegatedActionResultV1(
+					request,
+					{ ...result, ...mismatch },
+					resultValidationContext,
+				),
 			).toThrow("Delegated Action result correlation mismatch");
 		}
 	});

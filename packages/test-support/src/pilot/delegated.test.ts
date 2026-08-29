@@ -39,12 +39,32 @@ const request = {
 	traceId: "trace-connection-1",
 } as const;
 
+const validateIssueOutput = (input: unknown) => {
+	if (
+		typeof input !== "object" ||
+		input === null ||
+		Array.isArray(input) ||
+		Object.keys(input).length !== 1 ||
+		typeof (input as { issueNumber?: unknown }).issueNumber !== "number"
+	) {
+		throw new Error("Output does not match the Fake Action Schema");
+	}
+};
+
 describe("delegated Action Fakes", () => {
 	it("returns a schema-valid, correlated success", () => {
-		const result = fakeDelegatedActionSuccessV1(request, { issueNumber: 180 });
+		const result = fakeDelegatedActionSuccessV1(
+			request,
+			{ issueNumber: 180 },
+			validateIssueOutput,
+		);
 
 		expect(DelegatedActionResultV1Schema.parse(result)).toEqual(result);
-		expect(validateDelegatedActionResultV1(request, result)).toEqual(result);
+		expect(
+			validateDelegatedActionResultV1(request, result, {
+				validateOutput: validateIssueOutput,
+			}),
+		).toEqual(result);
 		expect(result).toMatchObject({
 			requestId: request.requestId,
 			idempotencyKey: request.idempotencyKey,
@@ -61,7 +81,11 @@ describe("delegated Action Fakes", () => {
 		const result = fakeDelegatedActionFailureV1(request);
 
 		expect(DelegatedActionResultV1Schema.parse(result)).toEqual(result);
-		expect(validateDelegatedActionResultV1(request, result)).toEqual(result);
+		expect(
+			validateDelegatedActionResultV1(request, result, {
+				validateOutput: validateIssueOutput,
+			}),
+		).toEqual(result);
 		expect(result).toMatchObject({
 			requestId: request.requestId,
 			idempotencyKey: request.idempotencyKey,
@@ -81,9 +105,11 @@ describe("delegated Action Fakes", () => {
 
 	it("rejects credential-like successful output", () => {
 		expect(() =>
-			fakeDelegatedActionSuccessV1(request, {
-				accessToken: "must-not-leave-connection",
-			}),
+			fakeDelegatedActionSuccessV1(
+				request,
+				{ accessToken: "must-not-leave-connection" },
+				validateIssueOutput,
+			),
 		).toThrow();
 	});
 });

@@ -505,7 +505,8 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/$defs/DelegatedActionResultV1/$defs/__schema0"
+              "$ref": "#/$defs/DelegatedActionResultV1/$defs/__schema0",
+              "description": "Validated by the Connection-owned Action Schema before crossing this boundary."
             },
             "requestId": {
               "minLength": 1,
