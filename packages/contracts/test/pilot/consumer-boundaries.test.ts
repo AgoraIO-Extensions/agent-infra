@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MessageCommandRequestV1Schema } from "../../src/pilot/index.js";
+import { MessageCommandRequestV1Schema } from "@agent-infra/contracts/pilot";
 
 describe("Pilot consumer contract boundaries", () => {
 	it("fails closed for unknown browser command versions", () => {
