@@ -56,20 +56,25 @@ type ExecutionGrantAudienceV1 =
 	| "platform_tool_gateway"
 	| "connection_api";
 
-type ExecutionGrantValidationContext = {
+type VerifiedExecutionGrantValidationContext = {
 	expectedIssuer: string;
 	requiredAudience: ExecutionGrantAudienceV1;
 	now: string;
-	expectedBindings: {
-		agentId: string;
-		actorId: string;
-		channelId: string;
-		conversationId: string;
-		turnId: string;
-		executionId: string;
-		sessionGeneration: number;
-	};
 };
+
+type ExecutionGrantValidationContext =
+	VerifiedExecutionGrantValidationContext & {
+		expectedBindings: {
+			agentId: string;
+			actorId: string;
+			channelId: string;
+			conversationId: string;
+			turnId: string;
+			executionId: string;
+			sessionGeneration: number;
+			traceId: string;
+		};
+	};
 
 function rfc3339Instant(value: string) {
 	const match = value.match(
@@ -113,9 +118,10 @@ function compareRfc3339Instants(
 			: 0;
 }
 
-export function validateExecutionGrantClaimsV1(
+// The caller must cryptographically verify and decode the compact JWS first.
+export function validateVerifiedExecutionGrantClaimsV1(
 	input: unknown,
-	context: ExecutionGrantValidationContext,
+	context: VerifiedExecutionGrantValidationContext,
 ) {
 	const claims = ExecutionGrantClaimsV1Schema.parse(input);
 	if (claims.issuer !== context.expectedIssuer) {
@@ -123,19 +129,6 @@ export function validateExecutionGrantClaimsV1(
 	}
 	if (!claims.audience.includes(context.requiredAudience)) {
 		throw new Error("Execution Grant audience mismatch");
-	}
-	for (const binding of [
-		"agentId",
-		"actorId",
-		"channelId",
-		"conversationId",
-		"turnId",
-		"executionId",
-		"sessionGeneration",
-	] as const) {
-		if (claims[binding] !== context.expectedBindings[binding]) {
-			throw new Error("Execution Grant binding mismatch");
-		}
 	}
 	const issuedAt = rfc3339Instant(claims.issuedAt);
 	const expiresAt = rfc3339Instant(claims.expiresAt);
@@ -156,6 +149,28 @@ export function validateExecutionGrantClaimsV1(
 		(invokesRuntime && !claims.audience.includes("runtime_host"))
 	) {
 		throw new Error("Execution Grant claims are inconsistent");
+	}
+	return claims;
+}
+
+export function validateExecutionGrantClaimsV1(
+	input: unknown,
+	context: ExecutionGrantValidationContext,
+) {
+	const claims = validateVerifiedExecutionGrantClaimsV1(input, context);
+	for (const binding of [
+		"agentId",
+		"actorId",
+		"channelId",
+		"conversationId",
+		"turnId",
+		"executionId",
+		"sessionGeneration",
+		"traceId",
+	] as const) {
+		if (claims[binding] !== context.expectedBindings[binding]) {
+			throw new Error("Execution Grant binding mismatch");
+		}
 	}
 	return claims;
 }

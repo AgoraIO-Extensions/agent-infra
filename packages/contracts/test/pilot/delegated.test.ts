@@ -9,6 +9,7 @@ import {
 	validateDelegatedActionRequestV1,
 	validateDelegatedActionResultV1,
 	validateExecutionGrantClaimsV1,
+	validateVerifiedExecutionGrantClaimsV1,
 } from "../../src/pilot/delegated.js";
 
 const validClaims = {
@@ -49,10 +50,14 @@ const validRequest = {
 	traceId: "trace-1",
 } as const;
 
-const validValidationContext = {
+const validBaseValidationContext = {
 	expectedIssuer: "agent-platform",
 	requiredAudience: "connection_api" as const,
 	now: "2026-08-28T10:01:00Z",
+};
+
+const validValidationContext = {
+	...validBaseValidationContext,
 	expectedBindings: {
 		agentId: validClaims.agentId,
 		actorId: validClaims.actorId,
@@ -61,6 +66,7 @@ const validValidationContext = {
 		turnId: validClaims.turnId,
 		executionId: validClaims.executionId,
 		sessionGeneration: validClaims.sessionGeneration,
+		traceId: validClaims.traceId,
 	},
 };
 
@@ -101,6 +107,61 @@ const forbiddenCredentialKeys = [
 ] as const;
 
 describe("Pilot delegated contracts", () => {
+	it("validates already-verified RuntimeHost claims without caller-only binding context", () => {
+		for (const command of [
+			"session.status",
+			"events.replay",
+			"capabilities.read",
+			"generation.cancel",
+		] as const) {
+			expect(ExecutionGrantCommandV1Schema.parse(command)).toBe(command);
+			const runtimeClaims = {
+				...validClaims,
+				audience: ["runtime_host"],
+				allowedCommands: [command],
+				actionIds: [],
+			} as const;
+			expect(
+				validateVerifiedExecutionGrantClaimsV1(runtimeClaims, {
+					...validBaseValidationContext,
+					requiredAudience: "runtime_host",
+				}),
+			).toEqual(runtimeClaims);
+		}
+
+		expect(
+			validateVerifiedExecutionGrantClaimsV1(
+				validClaims,
+				validBaseValidationContext,
+			),
+		).toEqual(validClaims);
+		for (const invalidClaims of [
+			{ ...validClaims, actionIds: [] },
+			{ ...validClaims, audience: ["connection_api"] },
+			{ ...validClaims, expiresAt: validClaims.issuedAt },
+		]) {
+			expect(() =>
+				validateVerifiedExecutionGrantClaimsV1(
+					invalidClaims,
+					validBaseValidationContext,
+				),
+			).toThrow("Execution Grant claims are inconsistent");
+		}
+		expect(() =>
+			validateVerifiedExecutionGrantClaimsV1(
+				{
+					...validClaims,
+					audience: ["runtime_host"],
+					allowedCommands: ["turn.submit"],
+				},
+				{
+					...validBaseValidationContext,
+					requiredAudience: "runtime_host",
+				},
+			),
+		).toThrow("Execution Grant claims are inconsistent");
+	});
+
 	it("binds every approved Execution Grant authorization dimension", () => {
 		expect(ExecutionGrantClaimsV1Schema.parse(validClaims)).toEqual(
 			validClaims,
@@ -141,6 +202,7 @@ describe("Pilot delegated contracts", () => {
 			"conversationId",
 			"turnId",
 			"executionId",
+			"traceId",
 		] as const) {
 			expect(() =>
 				validateExecutionGrantClaimsV1(
@@ -155,32 +217,6 @@ describe("Pilot delegated contracts", () => {
 				validValidationContext,
 			),
 		).toThrow("Execution Grant binding mismatch");
-		for (const command of [
-			"session.status",
-			"events.replay",
-			"capabilities.read",
-			"generation.cancel",
-		] as const) {
-			expect(ExecutionGrantCommandV1Schema.parse(command)).toBe(command);
-			const runtimeClaims = {
-				...validClaims,
-				audience: ["runtime_host"],
-				allowedCommands: [command],
-				actionIds: [],
-			} as const;
-			expect(
-				validateExecutionGrantClaimsV1(runtimeClaims, {
-					...validValidationContext,
-					requiredAudience: "runtime_host",
-				}),
-			).toEqual(runtimeClaims);
-			expect(() =>
-				validateExecutionGrantClaimsV1(
-					{ ...runtimeClaims, audience: ["connection_api"] },
-					validValidationContext,
-				),
-			).toThrow("Execution Grant claims are inconsistent");
-		}
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, expiresAt: validClaims.issuedAt },

@@ -30,12 +30,18 @@ describe("Pilot named consumers", () => {
 		};
 
 		expect(ExecutionGrantClaimsV1Schema.parse(claims)).toEqual(claims);
-		expect(
-			ExecutionGrantClaimsV1Schema.safeParse({
-				...claims,
-				connectionId: "caller-selected",
-			}).success,
-		).toBe(false);
+		for (const callerSelected of [
+			{ connectionId: "caller-selected" },
+			{ hostSessionRef: "caller-selected" },
+			{ nativeSessionId: "caller-selected" },
+		]) {
+			expect(
+				ExecutionGrantClaimsV1Schema.safeParse({
+					...claims,
+					...callerSelected,
+				}).success,
+			).toBe(false);
+		}
 	});
 
 	it("gives a Fake Connection only delegated Action input and a correlated safe result", () => {
