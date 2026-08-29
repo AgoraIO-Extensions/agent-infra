@@ -35,7 +35,6 @@ export function createFakeImageRegistryAdapterV1(
 							schemaVersion: 1,
 							requestId: request.requestId,
 							traceId: request.traceId,
-							imageReference: request.imageReference,
 						}
 					: outcome;
 			return validateImageRegistryAdmissionResultV1(request, result);

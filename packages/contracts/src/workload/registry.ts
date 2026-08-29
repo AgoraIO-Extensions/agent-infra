@@ -85,7 +85,6 @@ const registryResultCorrelationV1Schema = {
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	requestId: WorkloadOpaqueIdV1Schema,
 	traceId: WorkloadOpaqueIdV1Schema,
-	imageReference: z.string().min(1),
 } as const;
 
 const imageRegistryAdmittedV1Schema = z.strictObject({
@@ -127,7 +126,6 @@ export function validateImageRegistryAdmissionResultV1(
 	if (
 		result.requestId !== request.requestId ||
 		result.traceId !== request.traceId ||
-		result.imageReference !== request.imageReference ||
 		(result.status === "admitted" &&
 			(result.policyEvidence.policyRef !== request.admissionPolicyRef ||
 				result.policyEvidence.imageDigest !== result.immutableDigest ||

@@ -31,7 +31,6 @@ const admitted = {
 	status: "admitted",
 	requestId: request.requestId,
 	traceId: request.traceId,
-	imageReference: request.imageReference,
 	immutableDigest: `sha256:${"a".repeat(64)}`,
 	ociConfig: {
 		schemaVersion: 1,
@@ -117,7 +116,7 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		).toBe(false);
 	});
 
-	it("rejects a result correlated to another request or image", () => {
+	it("rejects a result correlated to another request or stale evidence", () => {
 		expect(() =>
 			validateImageRegistryAdmissionResultV1(request, {
 				...admitted,
@@ -134,12 +133,12 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}),
 		).toThrow("Image registry result correlation mismatch");
-		expect(() =>
-			validateImageRegistryAdmissionResultV1(request, {
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
 				...admitted,
-				imageReference: "registry.example/agents/other:pilot",
-			}),
-		).toThrow("Image registry result correlation mismatch");
+				imageReference: request.imageReference,
+			}).success,
+		).toBe(false);
 		expect(() =>
 			validateImageRegistryAdmissionResultV1(request, {
 				...admitted,
@@ -195,7 +194,6 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			status: "rejected",
 			requestId: request.requestId,
 			traceId: request.traceId,
-			imageReference: request.imageReference,
 			error: {
 				schemaVersion: 1,
 				code: "IMAGE_NOT_ADMITTED",

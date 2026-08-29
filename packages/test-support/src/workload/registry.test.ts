@@ -71,7 +71,6 @@ describe("Fake ImageRegistryAdapter V1", () => {
 			status: "admitted",
 			requestId: request.requestId,
 			traceId: request.traceId,
-			imageReference: request.imageReference,
 		});
 	});
 

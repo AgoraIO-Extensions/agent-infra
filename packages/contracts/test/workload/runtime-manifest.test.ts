@@ -66,6 +66,22 @@ describe("Runtime Manifest V1 contract", () => {
 		).toBe(false);
 	});
 
+	it.each(["identityResponsibility", "process", "storage", "route"])(
+		"rejects non-Manifest field %s",
+		(field) => {
+			expect(
+				RuntimeManifestV1Schema.safeParse({
+					schemaVersion: 1,
+					interactionMode: "platform-adapter",
+					protocol: "acp",
+					service: { port: 8080 },
+					health: { path: "/healthz" },
+					[field]: {},
+				}).success,
+			).toBe(false);
+		},
+	);
+
 	it.each(["//health", "/a/../health", "/a/./health", "/a%2Fhealth", "/a?x=1"])(
 		"rejects unsafe health path %s",
 		(path) => {
