@@ -354,6 +354,7 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 | `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，不带 `wontfix`，且 Issue `created_at` 严格早于 PR `created_at` |
 | `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
+| `Automated Review Coverage` | 所有适用 PR | 所选 Automated Reviewer 对当前 head 的完整可信 coverage evidence |
 
 head 更新后，旧 head 的 Check Run、CODEOWNER Approve、人工验证和确认记录都
 不能让新 head 通过。Gate 未创建、pending、运行中、失败、取消或输出未发布时都不能合并。
@@ -372,13 +373,17 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   CI 成功后启动，PR-Agent 在适用的 PR head 事件上启动。
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
   闭环；Review 摘要不阻塞合并。
-- Review Coverage Shadow 以 shadow 模式发布 provider-aware 的 `Automated Review Coverage` Check。它只接受所选
+- provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选
   Reviewer 的可信 current-head evidence：PR-Agent 使用当前 workflow run 中 `PR-Agent Analysis` job
-  的确定性 token decision log，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Check 对
+  的确定性 token decision log，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
   完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
-  取消分别返回稳定 reason code。shadow Check 尚不属于 required checks，不改变 merge authority；
-  Review Coverage Enforcement 经 hosted smoke 和 branch-protection readback 后才把同一 contract 提升为
-  required Gate。
+  取消分别返回失败 Check 和稳定 reason code。
+- `Automated Review Coverage` 只由隔离的 check-only App 发布到精确 head；provider workflow 中的
+  publisher job/step 保持 non-blocking 且使用不同名称，不能成为同名 required context。普通 workflow
+  token、模型凭证、inactive provider Check 或旧 head Check 都不能满足 Gate。
+- Coverage failure 通过现有 Workflow Outcome 以 dedicated Check ID 幂等通知。Job Summary 与通知只
+  包含 PR、head、provider、稳定 reason 和 next owner，不包含 prompt、源码正文或 Secret。默认 next
+  owner 是 repository maintainer，处理方式是缩小或拆分 PR，而不是自动 waiver、ignore 或 repair。
 - PR-Agent 的 `config.custom_model_max_tokens` 与 `config.max_model_tokens` 使用同一受控配置，避免
   默认 32k 全局 cap 覆盖部署已批准的模型 context 上限；提高上限不能替代 coverage 判定。不得为
   适配 token budget blanket ignore 生成 Client、OpenAPI、JSON Schema、Fake、测试或其他可评审文本。
@@ -414,6 +419,8 @@ PR 正文列出验证内容。
   code-repair round 绑定 `(PR, authorization cycle)` 并跨 repair 产生的新 head 累计。
 - 基础设施失败、CI flake、P2 finding 和普通评论不触发 code repair。
 - 两轮后仍未通过、输出不完整或发生冲突时停止并进入 `needs-triage`，发送终态通知。
+- `Automated Review Coverage` failure 不进入 CI/Claude code-repair，不消耗或重置 repair 预算，也不
+  接受自动 waiver；required Gate 保持失败直到同一 head 获得完整可信 evidence 或 PR 被人工拆分。
 - CODEOWNERS Team 成员提交 `Request changes` 或明确使用 `@codex` 是新的人工 repair 授权，
   可以开始新的两轮预算。普通清除 `needs-triage` 不重置预算。
 - 人创建的 PR 只有明确使用 `@codex` 才允许 Codex 修改；人直接 push 只重新运行当前-head CI
@@ -520,8 +527,8 @@ event ID 重放最多发送一次。通知只包含 repo、Issue/PR 编号、状
   `status/evidence`；等时、晚建或时间缺失时 Issue Gate fail closed。
 - 每个 required Check Run 和人工验证都绑定当前 head；旧 SHA 不能满足新 head 门禁。
 - 每个适用的 PR 只触发由 `PR_REVIEW_PROVIDER` 选定的 Automated Reviewer；未设置时使用 PR-Agent。
-- 所选 Reviewer 的 current-head coverage evidence 产生可审计 shadow Check；裁剪、缺失、旧 head、
-  无效输出、provider mismatch、失败或取消不能显示为完整覆盖，且 shadow 阶段不改变 required checks。
+- 所选 Reviewer 的 current-head coverage evidence 产生 required `Automated Review Coverage` Gate；
+  裁剪、缺失、旧 head、无效输出、provider mismatch、失败或取消都阻塞合并并给出稳定 reason。
 - 需要人工验证的 PR 在 Team 人员完成当前-head 确认前不能合并；Approve 与验证互不替代。
 - 所有门禁通过后只由 GitHub 原生 Squash Auto-merge 合并；AI 不能 Approve、直接 Merge 或绕过。
 - 失败、取消、跳过和异常中断都有可回读 terminal outcome；企微失败永远不阻塞 GitHub 流程。

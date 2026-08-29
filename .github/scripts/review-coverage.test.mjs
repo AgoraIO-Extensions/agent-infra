@@ -197,7 +197,7 @@ test("maps trusted Claude Review Gate evidence to coverage only", () => {
   }
 });
 
-test("renders bounded shadow Check output", () => {
+test("renders bounded required Gate output", () => {
   assert.deepEqual(
     buildCoverageCheckOutput({
       conclusion: "failure",
@@ -207,14 +207,14 @@ test("renders bounded shadow Check output", () => {
       reasonCode: "review-coverage-incomplete",
     }),
     {
-      title: "Automated Review Coverage: failure (shadow)",
+      title: "Automated Review Coverage: failure",
       summary: [
         "provider: pr-agent",
         `head_sha: ${head}`,
         "reason_code: review-coverage-incomplete",
         "omitted_file_count: 5",
         "",
-        "Shadow coverage evaluation found incomplete current-head Review evidence.",
+        "Coverage Gate rejected current-head Review evidence.",
       ].join("\n"),
     },
   );
@@ -247,7 +247,7 @@ test("selects only the dedicated App current-head Coverage Check", () => {
   );
 });
 
-test("publishes the shadow Check through a current-head dedicated App path", async () => {
+test("publishes the required Gate through a current-head dedicated App path", async () => {
   const requests = [];
   const checkRequests = [];
   let targetReads = 0;
@@ -290,7 +290,7 @@ test("publishes the shadow Check through a current-head dedicated App path", asy
       details_url: "https://github.com/example/repo/actions/runs/1",
       external_id: `agent-infra:pr:42:automated-review-coverage:${head}`,
       output: {
-        title: "Automated Review Coverage: in_progress (shadow)",
+        title: "Automated Review Coverage: in_progress",
         summary: "Waiting for current-head Automated Review coverage evidence.",
       },
     },
@@ -317,7 +317,7 @@ test("renders a bounded Job Summary from coverage facts", () => {
       42,
     ),
     [
-      "## Automated Review Coverage (shadow)",
+      "## Automated Review Coverage",
       "",
       "- Pull request: `#42`",
       "- Provider: `pr-agent`",

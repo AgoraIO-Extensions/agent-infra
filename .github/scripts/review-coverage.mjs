@@ -145,7 +145,7 @@ export function buildCoverageCheckOutput(coverage) {
     ? coverage.omittedFileCount
     : "unknown";
   return {
-    title: `Automated Review Coverage: ${coverage.conclusion} (shadow)`,
+    title: `Automated Review Coverage: ${coverage.conclusion}`,
     summary: [
       `provider: ${coverage.provider}`,
       `head_sha: ${coverage.headSha}`,
@@ -153,8 +153,8 @@ export function buildCoverageCheckOutput(coverage) {
       `omitted_file_count: ${omittedFileCount}`,
       "",
       complete
-        ? "Shadow coverage evaluation found complete current-head Review evidence."
-        : "Shadow coverage evaluation found incomplete current-head Review evidence.",
+        ? "Coverage Gate accepted complete current-head Review evidence."
+        : "Coverage Gate rejected current-head Review evidence.",
     ].join("\n"),
   };
 }
@@ -167,12 +167,41 @@ export function selectCoverageCheck(checkRuns, expectedHead, prNumber) {
   });
 }
 
+function uniqueSummaryValue(summary, prefix) {
+  const values = String(summary ?? "")
+    .split("\n")
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => line.slice(prefix.length));
+  return values.length === 1 ? values[0] : null;
+}
+
+export function coverageCheckFacts(check, expectedHead) {
+  if (
+    check?.status !== "completed" ||
+    !["success", "failure"].includes(check?.conclusion)
+  ) {
+    return null;
+  }
+  const summary = check.output?.summary;
+  const provider = uniqueSummaryValue(summary, "provider: ");
+  const headSha = uniqueSummaryValue(summary, "head_sha: ");
+  const reasonCode = uniqueSummaryValue(summary, "reason_code: ");
+  if (
+    !["claude", "pr-agent"].includes(provider) ||
+    headSha !== expectedHead ||
+    !/^[a-z0-9_-]+$/.test(reasonCode ?? "")
+  ) {
+    return null;
+  }
+  return { conclusion: check.conclusion, provider, reasonCode };
+}
+
 export function buildCoverageJobSummary(coverage, prNumber) {
   const omittedFileCount = Number.isSafeInteger(coverage.omittedFileCount)
     ? coverage.omittedFileCount
     : "unknown";
   return [
-    "## Automated Review Coverage (shadow)",
+    "## Automated Review Coverage",
     "",
     `- Pull request: \`#${prNumber}\``,
     `- Provider: \`${coverage.provider}\``,
@@ -221,7 +250,7 @@ export async function publishCoverageCheck({
           prNumber,
         }),
         output: {
-          title: "Automated Review Coverage: in_progress (shadow)",
+          title: "Automated Review Coverage: in_progress",
           summary: "Waiting for current-head Automated Review coverage evidence.",
         },
       }),
