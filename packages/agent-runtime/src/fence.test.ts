@@ -64,6 +64,78 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost generation and delivery fencing", () => {
+	it("serializes ref-less submit and ref-bound commands for one Session", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-ordering-"));
+		directories.push(directory);
+		const prepared: string[] = [];
+		let releaseSubmit: () => void = () => undefined;
+		const submitReleased = new Promise<void>((resolve) => {
+			releaseSubmit = resolve;
+		});
+		let submitPrepared: () => void = () => undefined;
+		const submitPreparedPromise = new Promise<void>((resolve) => {
+			submitPrepared = resolve;
+		});
+		let supplementPrepared: () => void = () => undefined;
+		const supplementPreparedPromise = new Promise<void>((resolve) => {
+			supplementPrepared = resolve;
+		});
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver: await FakeRuntimeDriver.open(join(directory, "driver.json")),
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+			afterOperationPrepared: async (operationId) => {
+				prepared.push(operationId);
+				if (operationId === "execution-fence-next") {
+					submitPrepared();
+					await submitReleased;
+				}
+				if (operationId === "message-fence-ordered") supplementPrepared();
+			},
+		});
+		const original = submitRequest();
+		const submitted = await runtimeHost.submitTurn(original);
+		prepared.length = 0;
+		const next = {
+			...original,
+			requestId: "request-fence-next",
+			executionId: "execution-fence-next",
+			turnId: "turn-fence-next",
+			grant: signedGrant(
+				{
+					...original,
+					executionId: "execution-fence-next",
+					turnId: "turn-fence-next",
+				},
+				["turn.submit"],
+			),
+		};
+		const nextSubmit = runtimeHost.submitTurn(next);
+		await submitPreparedPromise;
+		const supplement = runtimeHost.supplement({
+			...original,
+			requestId: "request-fence-ordered-supplement",
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+			hostSessionRef: submitted.hostSessionRef,
+			messageId: "message-fence-ordered",
+			grant: signedGrant(original, ["turn.supplement"]),
+			input: { text: "synthetic-ordered-supplement", attachments: [] },
+		});
+		const supplementEnteredWhileSubmitBlocked = await Promise.race([
+			supplementPreparedPromise.then(() => true),
+			new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+		]);
+		releaseSubmit();
+		await Promise.all([nextSubmit, supplement]);
+		await supplementPreparedPromise;
+		expect(supplementEnteredWhileSubmitBlocked).toBe(false);
+		expect(prepared).toEqual(["execution-fence-next", "message-fence-ordered"]);
+	});
+
 	it("deduplicates concurrent delivery and rejects stale or mismatched requests before side effects", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-fence-"));
 		directories.push(directory);

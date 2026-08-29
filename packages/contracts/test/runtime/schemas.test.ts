@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
 	ExecutionGrantV1Schema,
 	RuntimeCapabilitiesV1Schema,
+	RuntimeDriverLookupV1Schema,
+	RuntimeDriverOperationRecordV1Schema,
 	RuntimeEventV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStopRequestV1Schema,
@@ -99,6 +101,35 @@ describe("RuntimeHost V1 wire schemas", () => {
 	});
 
 	it("rejects native protocol leakage, malformed fences, and expanded objects", () => {
+		expect(
+			RuntimeDriverLookupV1Schema.safeParse({
+				state: "found",
+				record: {
+					schemaVersion: 1,
+					operationId: "operation-1",
+					nativeSessionRef: "native-1",
+					result: {
+						outcome: "rejected",
+						code: "UPSTREAM_REJECTED",
+						message: "Provider returned bearer secret-value",
+						retryable: false,
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeDriverOperationRecordV1Schema.safeParse({
+				schemaVersion: 1,
+				operationId: "operation-1",
+				nativeSessionRef: "native-1",
+				result: {
+					outcome: "rejected",
+					code: "RUNTIME_TURN_NOT_ACTIVE",
+					message: "Runtime turn is no longer active",
+					retryable: false,
+				},
+			}).success,
+		).toBe(true);
 		expect(
 			RuntimeSupplementRequestV1Schema.safeParse({
 				...requestContext,

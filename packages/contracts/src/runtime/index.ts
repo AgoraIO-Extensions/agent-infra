@@ -5,6 +5,7 @@ export * from "./host.ts";
 
 import {
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 } from "./driver.ts";
 import {
@@ -60,5 +61,6 @@ export const RuntimeEventV1SchemaDefinitions = {
 
 export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverCommandV1: RuntimeDriverCommandV1Schema,
+	RuntimeDriverLookupV1: RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
 };

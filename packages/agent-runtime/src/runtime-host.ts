@@ -13,9 +13,14 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
+	RuntimeCapabilitiesV1Schema,
+	RuntimeDriverLookupV1Schema,
+	RuntimeDriverOperationRecordV1Schema,
+	RuntimeEventV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
+	RuntimeStatusV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1Schema,
@@ -58,6 +63,34 @@ function nativeSessionRequired(): never {
 	);
 }
 
+function driverInvalid(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_DRIVER_INVALID",
+		"Runtime Driver response is invalid",
+		503,
+		true,
+	);
+}
+
+function parseDriverRecord(value: unknown, operationId: string) {
+	const parsed = RuntimeDriverOperationRecordV1Schema.safeParse(value);
+	if (!parsed.success || parsed.data.operationId !== operationId)
+		driverInvalid();
+	return parsed.data;
+}
+
+function parseDriverLookup(value: unknown, operationId: string) {
+	const parsed = RuntimeDriverLookupV1Schema.safeParse(value);
+	if (!parsed.success) driverInvalid();
+	if (
+		parsed.data.state === "found" &&
+		parsed.data.record.operationId !== operationId
+	) {
+		driverInvalid();
+	}
+	return parsed.data;
+}
+
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
 
@@ -83,7 +116,7 @@ export class RuntimeHost {
 			this.options.grantValidation,
 		);
 		return this.serialize(
-			request.hostSessionRef ?? request.conversationId,
+			this.options.store.sessionQueueKey(request.hostSessionRef, request),
 			async () => {
 				const prepared = await this.options.store.prepareOperation({
 					requestedHostSessionRef: request.hostSessionRef,
@@ -150,14 +183,18 @@ export class RuntimeHost {
 		}
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
+		const status = RuntimeStatusV1Schema.safeParse(
+			await this.options.driver.getStatus(
+				nativeSessionRef,
+				request.executionId,
+			),
+		);
+		if (!status.success) driverInvalid();
 		return {
 			schemaVersion: 1,
 			hostSessionRef: request.hostSessionRef,
 			executionId: request.executionId,
-			status: await this.options.driver.getStatus(
-				nativeSessionRef,
-				request.executionId,
-			),
+			status: status.data,
 		};
 	}
 
@@ -181,9 +218,13 @@ export class RuntimeHost {
 				request.deliveryFence,
 			);
 		}
+		const capabilities = RuntimeCapabilitiesV1Schema.safeParse(
+			await this.options.driver.getCapabilities(),
+		);
+		if (!capabilities.success) driverInvalid();
 		return {
 			schemaVersion: 1,
-			capabilities: await this.options.driver.getCapabilities(),
+			capabilities: capabilities.data,
 		};
 	}
 
@@ -207,13 +248,17 @@ export class RuntimeHost {
 		);
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
-		return {
-			schemaVersion: 1,
-			events: await this.options.driver.replayEvents(
+		const events = RuntimeEventV1Schema.array().safeParse(
+			await this.options.driver.replayEvents(
 				nativeSessionRef,
 				request.executionId,
 				request.afterCursor,
 			),
+		);
+		if (!events.success) driverInvalid();
+		return {
+			schemaVersion: 1,
+			events: events.data,
 		};
 	}
 
@@ -246,13 +291,15 @@ export class RuntimeHost {
 		);
 		const store = this.options.store;
 		return (async function* () {
-			for await (const event of events) {
+			for await (const value of events) {
 				store.getSessionForQuery(
 					request.hostSessionRef,
 					request,
 					request.deliveryFence,
 				);
-				yield event;
+				const event = RuntimeEventV1Schema.safeParse(value);
+				if (!event.success) driverInvalid();
+				yield event.data;
 			}
 		})();
 	}
@@ -428,15 +475,16 @@ export class RuntimeHost {
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
-		const lookup = await this.options.driver.lookupOperation(
+		const lookup = parseDriverLookup(
+			await this.options.driver.lookupOperation(operation.operationId),
 			operation.operationId,
 		);
 		if (lookup.state === "unknown") {
 			const result = {
-				outcome: "unknown" as const,
+				outcome: "unknown",
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 				message: "Runtime command acceptance could not be confirmed",
-			};
+			} as const;
 			await this.options.store.resolveOperation(
 				hostSessionRef,
 				operation.operationId,
@@ -449,10 +497,12 @@ export class RuntimeHost {
 				result,
 			};
 		}
-		const driverRecord =
+		const driverRecord = parseDriverRecord(
 			lookup.state === "found"
 				? lookup.record
-				: await this.options.driver.execute(operation.command);
+				: await this.options.driver.execute(operation.command),
+			operation.operationId,
+		);
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(
 			driverRecord,
@@ -498,7 +548,8 @@ export class RuntimeHost {
 							await this.dispatch(session.hostSessionRef, operation)
 						).result;
 					} else {
-						const lookup = await this.options.driver.lookupOperation(
+						const lookup = parseDriverLookup(
+							await this.options.driver.lookupOperation(operation.operationId),
 							operation.operationId,
 						);
 						if (lookup.state === "found") {
@@ -518,7 +569,7 @@ export class RuntimeHost {
 								outcome: "unknown",
 								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 								message: "Runtime command acceptance could not be confirmed",
-							};
+							} as const;
 							await this.options.store.resolveOperation(
 								session.hostSessionRef,
 								operation.operationId,
@@ -562,12 +613,13 @@ export class RuntimeHost {
 		) {
 			return record.result;
 		}
+		const status = RuntimeStatusV1Schema.safeParse(
+			await this.options.driver.getStatus(record.nativeSessionRef, executionId),
+		);
+		if (!status.success) driverInvalid();
 		return {
 			outcome: "accepted" as const,
-			status: await this.options.driver.getStatus(
-				record.nativeSessionRef,
-				executionId,
-			),
+			status: status.data,
 		};
 	}
 

@@ -1,21 +1,19 @@
 import type {
 	RuntimeCapabilitiesV1,
 	RuntimeDriverCommandV1,
+	RuntimeDriverLookupV1,
 	RuntimeDriverOperationRecordV1,
 	RuntimeEventV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 
-export type RuntimeDriverLookup =
-	| { state: "found"; record: RuntimeDriverOperationRecordV1 }
-	| { state: "missing" }
-	| { state: "unknown" };
+export type RuntimeDriverLookup = RuntimeDriverLookupV1;
 
 export interface RuntimeDriver {
 	execute(
 		command: RuntimeDriverCommandV1,
 	): Promise<RuntimeDriverOperationRecordV1>;
-	lookupOperation(operationId: string): Promise<RuntimeDriverLookup>;
+	lookupOperation(operationId: string): Promise<RuntimeDriverLookupV1>;
 	getStatus(
 		nativeSessionRef: string,
 		executionId: string,

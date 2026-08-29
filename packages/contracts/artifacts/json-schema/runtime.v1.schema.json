@@ -652,6 +652,168 @@
         }
       ]
     },
+    "RuntimeDriverLookupV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "additionalProperties": false,
+              "properties": {
+                "nativeSessionRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "result": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "outcome": {
+                          "const": "accepted",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "idle",
+                            "running",
+                            "completed",
+                            "failed",
+                            "cancelled",
+                            "unavailable",
+                            "unknown"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "status"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "outcome": {
+                          "const": "busy",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "const": "RUNTIME_TURN_NOT_ACTIVE",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Runtime turn is no longer active",
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "const": "rejected",
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "code",
+                        "message",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Runtime command acceptance could not be confirmed",
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "const": "unknown",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "operationId",
+                "nativeSessionRef",
+                "result"
+              ],
+              "type": "object"
+            },
+            "state": {
+              "const": "found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "missing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RuntimeDriverOperationRecordV1": {
       "additionalProperties": false,
       "properties": {
@@ -708,11 +870,11 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
-                  "minLength": 1,
+                  "const": "RUNTIME_TURN_NOT_ACTIVE",
                   "type": "string"
                 },
                 "message": {
-                  "minLength": 1,
+                  "const": "Runtime turn is no longer active",
                   "type": "string"
                 },
                 "outcome": {
@@ -720,6 +882,7 @@
                   "type": "string"
                 },
                 "retryable": {
+                  "const": false,
                   "type": "boolean"
                 }
               },
@@ -735,11 +898,11 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
-                  "minLength": 1,
+                  "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                   "type": "string"
                 },
                 "message": {
-                  "minLength": 1,
+                  "const": "Runtime command acceptance could not be confirmed",
                   "type": "string"
                 },
                 "outcome": {
@@ -1339,11 +1502,11 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
-                  "minLength": 1,
+                  "const": "RUNTIME_TURN_NOT_ACTIVE",
                   "type": "string"
                 },
                 "message": {
-                  "minLength": 1,
+                  "const": "Runtime turn is no longer active",
                   "type": "string"
                 },
                 "outcome": {
@@ -1351,6 +1514,7 @@
                   "type": "string"
                 },
                 "retryable": {
+                  "const": false,
                   "type": "boolean"
                 }
               },
@@ -1366,11 +1530,11 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
-                  "minLength": 1,
+                  "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                   "type": "string"
                 },
                 "message": {
-                  "minLength": 1,
+                  "const": "Runtime command acceptance could not be confirmed",
                   "type": "string"
                 },
                 "outcome": {
@@ -1445,11 +1609,11 @@
           "additionalProperties": false,
           "properties": {
             "code": {
-              "minLength": 1,
+              "const": "RUNTIME_TURN_NOT_ACTIVE",
               "type": "string"
             },
             "message": {
-              "minLength": 1,
+              "const": "Runtime turn is no longer active",
               "type": "string"
             },
             "outcome": {
@@ -1457,6 +1621,7 @@
               "type": "string"
             },
             "retryable": {
+              "const": false,
               "type": "boolean"
             }
           },
@@ -1472,11 +1637,11 @@
           "additionalProperties": false,
           "properties": {
             "code": {
-              "minLength": 1,
+              "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
               "type": "string"
             },
             "message": {
-              "minLength": 1,
+              "const": "Runtime command acceptance could not be confirmed",
               "type": "string"
             },
             "outcome": {

@@ -54,9 +54,19 @@ export const RuntimeDriverOperationRecordV1Schema = z.strictObject({
 	result: RuntimeOperationResultV1Schema,
 });
 
+export const RuntimeDriverLookupV1Schema = z.discriminatedUnion("state", [
+	z.strictObject({
+		state: z.literal("found"),
+		record: RuntimeDriverOperationRecordV1Schema,
+	}),
+	z.strictObject({ state: z.literal("missing") }),
+	z.strictObject({ state: z.literal("unknown") }),
+]);
+
 export type RuntimeDriverCommandV1 = z.infer<
 	typeof RuntimeDriverCommandV1Schema
 >;
 export type RuntimeDriverOperationRecordV1 = z.infer<
 	typeof RuntimeDriverOperationRecordV1Schema
 >;
+export type RuntimeDriverLookupV1 = z.infer<typeof RuntimeDriverLookupV1Schema>;

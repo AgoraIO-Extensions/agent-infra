@@ -88,14 +88,14 @@ export const RuntimeOperationResultV1Schema = z.discriminatedUnion("outcome", [
 	z.strictObject({ outcome: z.literal("busy") }),
 	z.strictObject({
 		outcome: z.literal("rejected"),
-		code: z.string().min(1),
-		message: z.string().min(1),
-		retryable: z.boolean(),
+		code: z.literal("RUNTIME_TURN_NOT_ACTIVE"),
+		message: z.literal("Runtime turn is no longer active"),
+		retryable: z.literal(false),
 	}),
 	z.strictObject({
 		outcome: z.literal("unknown"),
-		code: z.string().min(1),
-		message: z.string().min(1),
+		code: z.literal("RUNTIME_ACCEPTANCE_UNKNOWN"),
+		message: z.literal("Runtime command acceptance could not be confirmed"),
 	}),
 ]);
 

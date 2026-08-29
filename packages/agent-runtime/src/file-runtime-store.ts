@@ -433,6 +433,17 @@ export class FileRuntimeStore {
 		return new FileRuntimeStore(file);
 	}
 
+	sessionQueueKey(
+		requestedHostSessionRef: string | undefined,
+		binding: SessionBinding,
+	) {
+		if (requestedHostSessionRef) return requestedHostSessionRef;
+		const state = this.file.read();
+		assertStoreState(state);
+		const key = sessionBindingKey(binding);
+		return state.sessionBindings[key] ?? key;
+	}
+
 	prepareOperation(input: PrepareOperation) {
 		return this.file.update((state) => {
 			assertStoreState(state);
