@@ -12,6 +12,10 @@ describe("test-support package surface", () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.types).toBe("dist/index.d.mts");
 		expect(manifest.exports["."].types).toBe("./dist/index.d.mts");
+		expect(manifest.exports["./pilot"]).toEqual({
+			types: "./dist/pilot/index.d.mts",
+			import: "./dist/pilot/index.mjs",
+		});
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
@@ -21,6 +25,8 @@ describe("test-support package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
+		expect(packedFiles).toContain("dist/pilot/index.d.mts");
+		expect(packedFiles).toContain("dist/pilot/index.mjs");
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);
