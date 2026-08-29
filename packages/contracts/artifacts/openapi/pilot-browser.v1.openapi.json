@@ -1448,6 +1448,63 @@
         ],
         "type": "object"
       },
+      "AuthorizationRevokedSignalV1": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "AUTHORIZATION_REVOKED",
+                "type": "string"
+              },
+              "message": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "const": false,
+                "type": "boolean"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "traceId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "message",
+              "traceId",
+              "code",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "kind": {
+            "const": "control",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "type": {
+            "const": "authorization.revoked",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "type",
+          "error"
+        ],
+        "type": "object"
+      },
       "BrowserSessionProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -1728,6 +1785,22 @@
           "updatedAt"
         ],
         "type": "object"
+      },
+      "ConversationSseMessageV1": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/PersistedConversationEventV1"
+          },
+          {
+            "$ref": "#/components/schemas/HeartbeatSignalV1"
+          },
+          {
+            "$ref": "#/components/schemas/TimelineReloadSignalV1"
+          },
+          {
+            "$ref": "#/components/schemas/AuthorizationRevokedSignalV1"
+          }
+        ]
       },
       "ExecutionDetailProjectionV1": {
         "oneOf": [
@@ -2017,6 +2090,35 @@
         ],
         "type": "object"
       },
+      "HeartbeatSignalV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "control",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "type": {
+            "const": "heartbeat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "type",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
       "MessageCommandRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -2241,6 +2343,385 @@
           "schemaVersion",
           "modelOptionId",
           "reasoningLevel"
+        ],
+        "type": "object"
+      },
+      "PersistedConversationEventV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationCursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/SseEventIdV1"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "event",
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "type": {
+                "const": "text.delta",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "kind",
+              "eventId",
+              "conversationId",
+              "executionId",
+              "sequence",
+              "conversationCursor",
+              "occurredAt",
+              "type",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationCursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/SseEventIdV1"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "event",
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "submitted",
+                      "processing",
+                      "completed",
+                      "failed",
+                      "cancelled",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "type": {
+                "const": "execution.status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "kind",
+              "eventId",
+              "conversationId",
+              "executionId",
+              "sequence",
+              "conversationCursor",
+              "occurredAt",
+              "type",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationCursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/SseEventIdV1"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "event",
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "callId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "category": {
+                    "enum": [
+                      "status",
+                      "model_call",
+                      "connection_call"
+                    ],
+                    "type": "string"
+                  },
+                  "summary": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "category",
+                  "summary"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "type": {
+                "const": "execution.detail",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "kind",
+              "eventId",
+              "conversationId",
+              "executionId",
+              "sequence",
+              "conversationCursor",
+              "occurredAt",
+              "type",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationCursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/SseEventIdV1"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "event",
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "fileId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "mediaType": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "sizeBytes": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "fileId",
+                  "name",
+                  "mediaType",
+                  "sizeBytes"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "type": {
+                "const": "result.file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "kind",
+              "eventId",
+              "conversationId",
+              "executionId",
+              "sequence",
+              "conversationCursor",
+              "occurredAt",
+              "type",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "conversationCursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "conversationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "eventId": {
+                "$ref": "#/components/schemas/SseEventIdV1"
+              },
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "event",
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "error": {
+                    "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                  }
+                },
+                "required": [
+                  "error"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "sequence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "type": {
+                "const": "conversation.error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "kind",
+              "eventId",
+              "conversationId",
+              "executionId",
+              "sequence",
+              "conversationCursor",
+              "occurredAt",
+              "type",
+              "payload"
+            ],
+            "type": "object"
+          }
         ],
         "type": "object"
       },
@@ -2481,6 +2962,10 @@
         ],
         "type": "object"
       },
+      "SseEventIdV1": {
+        "pattern": "^[^\u0000\\n\\r]+$",
+        "type": "string"
+      },
       "StopCommandRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -2496,6 +2981,44 @@
         "required": [
           "schemaVersion",
           "targetExecutionId"
+        ],
+        "type": "object"
+      },
+      "TimelineReloadSignalV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "control",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "unknown_event_id",
+              "cross_conversation_cursor",
+              "cross_conversation_event_id",
+              "cursor_expired"
+            ],
+            "type": "string"
+          },
+          "resumeCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "type": {
+            "const": "timeline.reload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "type",
+          "reason",
+          "resumeCursor"
         ],
         "type": "object"
       }
@@ -4275,6 +4798,108 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversationId}/events": {
+      "get": {
+        "operationId": "streamConversationEvents",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "schema": {
+              "$ref": "#/components/schemas/SseEventIdV1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSseMessageV1"
+                }
+              }
+            },
+            "description": "Persisted conversation events and bounded control signals"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid replay cursor"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Conversation access is unavailable"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Event stream is temporarily unavailable"
+          }
+        },
+        "x-agent-infra-replay-selector": {
+          "header": "Last-Event-ID",
+          "mode": "at-most-one",
+          "query": "cursor"
+        },
+        "x-agent-infra-sse-framing": {
+          "controlId": null,
+          "persistedEventId": "eventId"
         }
       }
     },

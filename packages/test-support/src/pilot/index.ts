@@ -5,6 +5,19 @@ const protocolError = (
 	traceId: string,
 ) => ({ schemaVersion: 1, code, message, retryable, traceId }) as const;
 
+const replayTextEvent = {
+	schemaVersion: 1,
+	kind: "event",
+	eventId: "event-replay-1",
+	conversationId: "conversation-pilot-1",
+	executionId: "execution-pilot-1",
+	sequence: 1,
+	conversationCursor: "cursor-pilot-1",
+	occurredAt: "2026-08-28T10:00:00Z",
+	type: "text.delta",
+	payload: { text: "Hello" },
+} as const;
+
 export const pilotFakeScenariosV1 = {
 	success: {
 		kind: "http",
@@ -216,4 +229,126 @@ export const pilotFakeScenariosV1 = {
 			),
 		},
 	},
+	replay: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		lastEventId: "event-before-replay",
+		messages: [
+			replayTextEvent,
+			replayTextEvent,
+			{
+				schemaVersion: 1,
+				kind: "event",
+				eventId: "event-replay-2",
+				conversationId: "conversation-pilot-1",
+				executionId: "execution-pilot-1",
+				sequence: 2,
+				conversationCursor: "cursor-pilot-2",
+				occurredAt: "2026-08-28T10:00:01Z",
+				type: "execution.status",
+				payload: { status: "completed" },
+			},
+		],
+	},
+	staleAuthorization: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		messages: [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "authorization.revoked",
+				error: protocolError(
+					"AUTHORIZATION_REVOKED",
+					"Conversation access is no longer available",
+					false,
+					"trace-stale-authorization",
+				),
+			},
+		],
+	},
+	heartbeat: {
+		kind: "sse",
+		conversationId: "conversation-pilot-1",
+		messages: [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "heartbeat",
+				occurredAt: "2026-08-28T10:00:02Z",
+			},
+		],
+	},
 } as const satisfies Record<string, unknown>;
+
+type PilotReplayPositionV1 = {
+	conversationId: string;
+	afterSequence: number;
+};
+
+const pilotCursorPositionsV1: Record<string, PilotReplayPositionV1> = {
+	"cursor-pilot-1": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 1,
+	},
+	"cursor-pilot-2": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 2,
+	},
+	"cursor-other-1": {
+		conversationId: "conversation-other-1",
+		afterSequence: 1,
+	},
+};
+const pilotEventPositionsV1: Record<string, PilotReplayPositionV1> = {
+	"event-before-replay": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 0,
+	},
+	"event-replay-1": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 1,
+	},
+	"event-replay-2": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 2,
+	},
+	"event-other-1": {
+		conversationId: "conversation-other-1",
+		afterSequence: 1,
+	},
+};
+
+type PilotReplayInputV1 =
+	| { conversationId: string; cursor: string; lastEventId?: never }
+	| { conversationId: string; cursor?: never; lastEventId: string };
+
+export function resolvePilotReplayV1(input: PilotReplayInputV1) {
+	const usesCursor = input.cursor !== undefined;
+	const selector = usesCursor ? input.cursor : input.lastEventId;
+	const position = usesCursor
+		? pilotCursorPositionsV1[selector]
+		: pilotEventPositionsV1[selector];
+	if (position?.conversationId !== input.conversationId) {
+		return [
+			{
+				schemaVersion: 1,
+				kind: "control",
+				type: "timeline.reload",
+				reason: position
+					? usesCursor
+						? "cross_conversation_cursor"
+						: "cross_conversation_event_id"
+					: usesCursor
+						? "cursor_expired"
+						: "unknown_event_id",
+				resumeCursor: "cursor-pilot-2",
+			},
+		] as const;
+	}
+	return pilotFakeScenariosV1.replay.messages.filter(
+		(message) =>
+			message.conversationId === input.conversationId &&
+			message.sequence > position.afterSequence,
+	);
+}
