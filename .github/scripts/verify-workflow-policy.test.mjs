@@ -1022,6 +1022,7 @@ test("publishes provider-aware Automated Review Coverage in shadow mode", async 
     (step) => step.name === "Publish Automated Review Coverage shadow",
   );
   assert.equal(claudeCoverage.if, "always()");
+  assert.equal(claudeCoverage["continue-on-error"], true);
   assert.deepEqual(claudeCoverage.env, {
     EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
     GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",

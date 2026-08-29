@@ -10,10 +10,17 @@ import {
 } from "./review-coverage.mjs";
 
 const head = "a".repeat(40);
-const completeLog =
+const completeDecision =
   "Tokens: 18682, total tokens under limit: 32000, returning full diff.";
-const prunedLog =
+const prunedDecision =
   "Tokens: 135314, total tokens over limit: 32000, pruning diff.";
+const logRecord = (message, extra = {}) =>
+  `2026-08-29T00:50:50.5849411Z ${JSON.stringify({
+    record: { extra, message },
+    text: `${message}\n`,
+  })}`;
+const completeLog = logRecord(completeDecision);
+const prunedLog = logRecord(prunedDecision);
 
 test("accepts a complete current-head PR-Agent review", () => {
   assert.deepEqual(
@@ -58,6 +65,14 @@ test("rejects missing, malformed, or mismatched PR-Agent job evidence", () => {
     { analysisLog: "", reasonCode: "review-output-missing" },
     {
       analysisLog: "Review completed without token metadata.",
+      reasonCode: "review-output-invalid",
+    },
+    {
+      analysisLog: completeDecision,
+      reasonCode: "review-output-invalid",
+    },
+    {
+      analysisLog: logRecord("PR diff", { diff: completeDecision }),
       reasonCode: "review-output-invalid",
     },
     {

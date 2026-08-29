@@ -14,9 +14,11 @@ import {
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
 
 const FULL_DIFF_PATTERN =
-  /Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\./g;
+  /^Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\.$/;
 const PRUNED_DIFF_PATTERN =
-  /Tokens: [0-9]+, total tokens over limit: [0-9]+, pruning diff\./g;
+  /^Tokens: [0-9]+, total tokens over limit: [0-9]+, pruning diff\.$/;
+const JOB_LOG_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 function result(provider, headSha, conclusion, reasonCode, omittedFileCount = 0) {
   return { conclusion, headSha, omittedFileCount, provider, reasonCode };
@@ -33,6 +35,26 @@ function runFailure(provider, headSha, runResult) {
     return result(provider, headSha, "failure", "review-output-missing");
   }
   return null;
+}
+
+function jobLogMessages(log) {
+  const messages = [];
+  for (const line of log.split(/\r?\n/)) {
+    const separator = line.indexOf(" ");
+    if (
+      separator < 0 ||
+      !JOB_LOG_TIMESTAMP_PATTERN.test(line.slice(0, separator))
+    ) {
+      continue;
+    }
+    try {
+      const message = JSON.parse(line.slice(separator + 1))?.record?.message;
+      if (typeof message === "string") messages.push(message);
+    } catch {
+      continue;
+    }
+  }
+  return messages;
 }
 
 function evaluatePrAgent({
@@ -53,8 +75,13 @@ function evaluatePrAgent({
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
 
-  const completeMatches = analysisLog.match(FULL_DIFF_PATTERN) ?? [];
-  const prunedMatches = analysisLog.match(PRUNED_DIFF_PATTERN) ?? [];
+  const messages = jobLogMessages(analysisLog);
+  const completeMatches = messages.filter((message) =>
+    FULL_DIFF_PATTERN.test(message),
+  );
+  const prunedMatches = messages.filter((message) =>
+    PRUNED_DIFF_PATTERN.test(message),
+  );
   if (completeMatches.length === 1 && prunedMatches.length === 0) {
     return result("pr-agent", expectedHead, "success", "complete");
   }

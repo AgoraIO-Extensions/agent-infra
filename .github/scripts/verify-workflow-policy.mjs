@@ -2112,6 +2112,7 @@ export function validateWorkflowDocuments(workflows) {
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
     reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
     reviewCoveragePublish?.if !== "always()" ||
+    reviewCoveragePublish?.["continue-on-error"] !== true ||
     reviewCoveragePublish?.run !== "node .github/scripts/review-coverage.mjs" ||
     reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     !sameObject(reviewGatePublisherToken?.with, {

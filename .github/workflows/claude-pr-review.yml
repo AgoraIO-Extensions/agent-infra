@@ -191,6 +191,7 @@ jobs:
 
       - name: Publish Automated Review Coverage shadow
         if: always()
+        continue-on-error: true
         env:
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GATE_CHECK_TOKEN: ${{ steps.gate-publisher-token.outputs.token }}
