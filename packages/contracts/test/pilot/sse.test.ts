@@ -46,6 +46,12 @@ describe("Pilot SSE contracts", () => {
 				type: "vendor.native-event",
 			}).success,
 		).toBe(false);
+		expect(
+			ConversationSseMessageV1Schema.safeParse({
+				...event,
+				schemaVersion: 2,
+			}).success,
+		).toBe(false);
 	});
 
 	it("defines heartbeat, reload, and authorization controls outside persisted events", () => {
