@@ -26,7 +26,6 @@ export const SelfManagedRuntimeManifestV1Schema = z.strictObject({
 	interactionMode: z.literal("self-managed"),
 	service: RuntimeServiceV1Schema,
 	health: RuntimeHealthV1Schema,
-	capabilities: RuntimeCapabilitySetV1Schema.optional(),
 });
 
 export const PlatformAdapterRuntimeManifestV1Schema = z.strictObject({

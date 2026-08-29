@@ -46,7 +46,7 @@ describe("Runtime Manifest V1 contract", () => {
 		});
 	});
 
-	it("forbids protocol declarations and unknown fields for self-managed images", () => {
+	it("forbids protocol and capability declarations for self-managed images", () => {
 		const manifest = {
 			schemaVersion: 1,
 			interactionMode: "self-managed",
@@ -61,7 +61,7 @@ describe("Runtime Manifest V1 contract", () => {
 		expect(
 			RuntimeManifestV1Schema.safeParse({
 				...manifest,
-				capabilities: { unknownCapability: true },
+				capabilities: { connection: true },
 			}).success,
 		).toBe(false);
 	});
