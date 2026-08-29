@@ -44,6 +44,16 @@ function timestamp() {
 	return "2026-08-28T10:00:00Z";
 }
 
+function operationKey(command: RuntimeDriverCommandV1) {
+	return JSON.stringify([
+		command.agentId,
+		command.conversationId,
+		command.sessionGeneration,
+		command.kind,
+		command.operationId,
+	]);
+}
+
 export class FakeRuntimeDriver implements RuntimeDriver {
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
 
@@ -68,7 +78,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 	async execute(command: RuntimeDriverCommandV1) {
 		let eventStreamKey: string | undefined;
 		const record = await this.file.update((state) => {
-			const previous = state.operations[command.operationId];
+			const key = operationKey(command);
+			const previous = state.operations[key];
 			if (previous) return structuredClone(previous);
 			const nativeSessionRef =
 				command.nativeSessionRef ?? `native-${randomUUID()}`;
@@ -174,29 +185,35 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 
 			const record: RuntimeDriverOperationRecordV1 = {
 				schemaVersion: 1,
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				kind: command.kind,
 				operationId: command.operationId,
 				nativeSessionRef,
 				result,
 			};
-			state.operations[command.operationId] = record;
+			state.operations[key] = record;
 			return structuredClone(record);
 		});
 		if (eventStreamKey) this.notifyEventStream(eventStreamKey);
 		return record;
 	}
 
-	async lookupOperation(operationId: string): Promise<RuntimeDriverLookup> {
+	async lookupOperation(
+		command: RuntimeDriverCommandV1,
+	): Promise<RuntimeDriverLookup> {
 		const state = this.file.read();
-		if (state.lookupFailures.includes(operationId)) {
+		if (state.lookupFailures.includes(command.operationId)) {
 			throw new RuntimeHostError(
 				"RUNTIME_DRIVER_RECOVERY_FAILED",
 				"Runtime operation recovery failed",
 				503,
 			);
 		}
-		if (state.unknownOperations.includes(operationId))
-			return { state: "unknown" };
-		const record = state.operations[operationId];
+		const key = operationKey(command);
+		if (state.unknownOperations.includes(key)) return { state: "unknown" };
+		const record = state.operations[key];
 		return record ? { state: "found", record } : { state: "missing" };
 	}
 
@@ -221,21 +238,26 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 
 	makeOperationUnknown(operationId: string) {
 		return this.file.update((state) => {
-			if (!state.operations[operationId]) {
+			const entry = Object.entries(state.operations).find(
+				([, operation]) => operation.operationId === operationId,
+			);
+			if (!entry) {
 				throw new RuntimeHostError(
 					"RUNTIME_FAKE_OPERATION_NOT_FOUND",
 					"Fake Runtime operation was not found",
 					404,
 				);
 			}
-			delete state.operations[operationId];
-			state.unknownOperations.push(operationId);
+			delete state.operations[entry[0]];
+			state.unknownOperations.push(entry[0]);
 		});
 	}
 
 	setOperationStatus(operationId: string, status: RuntimeStatusV1) {
 		return this.file.update((state) => {
-			const operation = state.operations[operationId];
+			const operation = Object.values(state.operations).find(
+				(candidate) => candidate.operationId === operationId,
+			);
 			const session = operation
 				? state.sessions[operation.nativeSessionRef]
 				: undefined;

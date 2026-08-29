@@ -136,6 +136,10 @@ describe("RuntimeHost V1 wire schemas", () => {
 				state: "found",
 				record: {
 					schemaVersion: 1,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 1,
+					kind: "submit-turn",
 					operationId: "operation-1",
 					nativeSessionRef: "native-1",
 					result: {
@@ -150,6 +154,10 @@ describe("RuntimeHost V1 wire schemas", () => {
 		expect(
 			RuntimeDriverOperationRecordV1Schema.safeParse({
 				schemaVersion: 1,
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				sessionGeneration: 1,
+				kind: "submit-turn",
 				operationId: "operation-1",
 				nativeSessionRef: "native-1",
 				result: {

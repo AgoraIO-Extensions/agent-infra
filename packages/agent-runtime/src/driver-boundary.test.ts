@@ -68,6 +68,10 @@ function malformedRecord(
 ) {
 	return {
 		schemaVersion: 1,
+		agentId: command.agentId,
+		conversationId: command.conversationId,
+		sessionGeneration: command.sessionGeneration,
+		kind: command.kind,
 		operationId: command.operationId,
 		nativeSessionRef: "native-driver-boundary",
 		result: { outcome: "busy" },
@@ -176,6 +180,10 @@ describe("Runtime Driver boundary", () => {
 				state: "found",
 				record: {
 					schemaVersion: 1,
+					agentId: original.agentId,
+					conversationId: original.conversationId,
+					sessionGeneration: original.sessionGeneration,
+					kind: "submit-turn",
 					operationId: original.executionId,
 					nativeSessionRef: "native-session-other",
 					result: { outcome: "accepted", status: "running" },
@@ -209,6 +217,10 @@ describe("Runtime Driver boundary", () => {
 			const messageId = `message-native-mismatch-${source}`;
 			const record = {
 				schemaVersion: 1 as const,
+				agentId: original.agentId,
+				conversationId: original.conversationId,
+				sessionGeneration: original.sessionGeneration,
+				kind: "supplement" as const,
 				operationId: messageId,
 				nativeSessionRef: "native-session-other",
 				result: { outcome: "busy" as const },
@@ -234,6 +246,11 @@ describe("Runtime Driver boundary", () => {
 	);
 
 	it.each([
+		[
+			"wrong Session identity",
+			(command: RuntimeDriverCommandV1) =>
+				malformedRecord(command, { conversationId: "conversation-other" }),
+		],
 		[
 			"wrong operation identity",
 			(command: RuntimeDriverCommandV1) =>

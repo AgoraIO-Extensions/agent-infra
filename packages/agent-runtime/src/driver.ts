@@ -13,7 +13,9 @@ export interface RuntimeDriver {
 	execute(
 		command: RuntimeDriverCommandV1,
 	): Promise<RuntimeDriverOperationRecordV1>;
-	lookupOperation(operationId: string): Promise<RuntimeDriverLookupV1>;
+	lookupOperation(
+		command: RuntimeDriverCommandV1,
+	): Promise<RuntimeDriverLookupV1>;
 	getStatus(
 		nativeSessionRef: string,
 		executionId: string,

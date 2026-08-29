@@ -88,6 +88,12 @@ describe("standard contract artifacts", () => {
 				.post.responses,
 		).toHaveProperty("503");
 		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.runtimeOpenapi.security).toEqual([
+			{ RuntimeServiceBearer: [] },
+		]);
+		expect(
+			artifacts.runtimeOpenapi.components.securitySchemes.RuntimeServiceBearer,
+		).toEqual({ type: "http", scheme: "bearer" });
 		expect(Object.keys(artifacts.runtimeOpenapi.paths).sort()).toEqual([
 			"/internal/runtime/v1/capabilities",
 			"/internal/runtime/v1/events/replay",

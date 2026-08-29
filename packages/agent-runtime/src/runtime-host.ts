@@ -127,6 +127,10 @@ function parseDriverRecord(
 			: undefined);
 	if (
 		!parsed.success ||
+		parsed.data.agentId !== operation.command.agentId ||
+		parsed.data.conversationId !== operation.command.conversationId ||
+		parsed.data.sessionGeneration !== operation.command.sessionGeneration ||
+		parsed.data.kind !== operation.command.kind ||
 		parsed.data.operationId !== operation.operationId ||
 		(expectedNativeSessionRef !== undefined &&
 			parsed.data.nativeSessionRef !== expectedNativeSessionRef)
@@ -559,7 +563,7 @@ export class RuntimeHost {
 		await this.options.afterOperationPrepared?.(operation.operationId);
 		const lookup = parseDriverLookup(
 			await callDriver(() =>
-				this.options.driver.lookupOperation(operation.operationId),
+				this.options.driver.lookupOperation(operation.command),
 			),
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
@@ -638,7 +642,7 @@ export class RuntimeHost {
 					} else {
 						const lookup = parseDriverLookup(
 							await callDriver(() =>
-								this.options.driver.lookupOperation(operation.operationId),
+								this.options.driver.lookupOperation(operation.command),
 							),
 							operation,
 							session.nativeSessionRef,

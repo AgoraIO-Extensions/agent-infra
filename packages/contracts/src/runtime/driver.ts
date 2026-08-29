@@ -14,6 +14,14 @@ const binding = {
 	sessionGeneration: z.number().int().positive(),
 };
 
+const operationBinding = {
+	agentId: binding.agentId,
+	conversationId: binding.conversationId,
+	sessionGeneration: binding.sessionGeneration,
+	kind: z.enum(["submit-turn", "supplement", "stop", "generation-cancel"]),
+	operationId: OpaqueIdV1Schema,
+};
+
 export const RuntimeDriverCommandV1Schema = z.discriminatedUnion("kind", [
 	z.strictObject({
 		...binding,
@@ -49,7 +57,7 @@ export const RuntimeDriverCommandV1Schema = z.discriminatedUnion("kind", [
 
 export const RuntimeDriverOperationRecordV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
-	operationId: OpaqueIdV1Schema,
+	...operationBinding,
 	nativeSessionRef: OpaqueIdV1Schema,
 	result: RuntimeOperationResultV1Schema,
 });

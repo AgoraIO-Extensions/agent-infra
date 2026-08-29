@@ -216,6 +216,7 @@ function buildArtifacts() {
 	const runtimeOpenapi = createDocument({
 		openapi: "3.1.0",
 		info: { title: "Agent Infra RuntimeHost Contract", version: "1.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
 		paths: {
 			"/internal/runtime/v1/turns": {
 				post: postOperation(
@@ -282,7 +283,12 @@ function buildArtifacts() {
 				),
 			},
 		},
-		components: { schemas: runtimeOpenApiDefinitions },
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: runtimeOpenApiDefinitions,
+		},
 	});
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",

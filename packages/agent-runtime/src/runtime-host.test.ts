@@ -221,6 +221,33 @@ describe("RuntimeHost durable Session", () => {
 		});
 	});
 
+	it("namespaces identical operation IDs across Sessions", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+		);
+		const first = submitRequest();
+		const secondBinding = {
+			...first,
+			requestId: "request-conformance-collision",
+			conversationId: "conversation-conformance-other",
+			turnId: "turn-conformance-other",
+		};
+		const second = {
+			...secondBinding,
+			grant: grant(secondBinding, ["turn.submit"]),
+		};
+
+		const firstResult = await runtimeHost.submitTurn(first);
+		const secondResult = await runtimeHost.submitTurn(second);
+
+		expect(secondResult.hostSessionRef).not.toBe(firstResult.hostSessionRef);
+		expect(secondResult.result).toMatchObject({ outcome: "accepted" });
+		expect(await driver.sideEffectCount()).toBe(2);
+	});
+
 	it("passes the Session, Turn, event, stop, status, and capability conformance table", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));

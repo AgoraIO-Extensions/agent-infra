@@ -660,6 +660,23 @@
             "record": {
               "additionalProperties": false,
               "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "submit-turn",
+                    "supplement",
+                    "stop",
+                    "generation-cancel"
+                  ],
+                  "type": "string"
+                },
                 "nativeSessionRef": {
                   "minLength": 1,
                   "type": "string"
@@ -765,10 +782,19 @@
                 "schemaVersion": {
                   "const": 1,
                   "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
                 }
               },
               "required": [
                 "schemaVersion",
+                "agentId",
+                "conversationId",
+                "sessionGeneration",
+                "kind",
                 "operationId",
                 "nativeSessionRef",
                 "result"
@@ -817,6 +843,23 @@
     "RuntimeDriverOperationRecordV1": {
       "additionalProperties": false,
       "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "submit-turn",
+            "supplement",
+            "stop",
+            "generation-cancel"
+          ],
+          "type": "string"
+        },
         "nativeSessionRef": {
           "minLength": 1,
           "type": "string"
@@ -922,10 +965,19 @@
         "schemaVersion": {
           "const": 1,
           "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
         }
       },
       "required": [
         "schemaVersion",
+        "agentId",
+        "conversationId",
+        "sessionGeneration",
+        "kind",
         "operationId",
         "nativeSessionRef",
         "result"

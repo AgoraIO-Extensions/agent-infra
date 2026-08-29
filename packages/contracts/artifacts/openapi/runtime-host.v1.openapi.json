@@ -1415,6 +1415,12 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "RuntimeServiceBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -2199,5 +2205,10 @@
         }
       }
     }
-  }
+  },
+  "security": [
+    {
+      "RuntimeServiceBearer": []
+    }
+  ]
 }
