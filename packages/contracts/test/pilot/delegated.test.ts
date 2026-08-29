@@ -5,6 +5,7 @@ import {
 	DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1Schema,
 	ExecutionGrantV1Schema,
+	validateDelegatedActionRequestV1,
 	validateExecutionGrantClaimsV1,
 } from "../../src/pilot/delegated.js";
 
@@ -58,6 +59,14 @@ const forbiddenCredentialKeys = [
 	"id_token",
 	"jwt",
 	"clientKey",
+	"set-cookie",
+	"setCookie",
+	"secretAccessKey",
+	"accessKeyId",
+	"privateKeyPem",
+	"clientSecretValue",
+	"personalAccessToken",
+	"apiToken",
 	"privateKey",
 	"apiKey",
 	"secret",
@@ -89,23 +98,106 @@ describe("Pilot delegated contracts", () => {
 			);
 		}
 		expect(
-			validateExecutionGrantClaimsV1(validClaims, "connection_api"),
+			validateExecutionGrantClaimsV1(validClaims, {
+				expectedIssuer: "agent-platform",
+				requiredAudience: "connection_api",
+				now: "2026-08-28T10:01:00Z",
+			}),
 		).toEqual(validClaims);
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, expiresAt: validClaims.issuedAt },
-				"connection_api",
+				{
+					expectedIssuer: "agent-platform",
+					requiredAudience: "connection_api",
+					now: "2026-08-28T10:01:00Z",
+				},
 			),
 		).toThrow("Execution Grant claims are inconsistent");
 		expect(() =>
-			validateExecutionGrantClaimsV1(validClaims, "runtime_host"),
+			validateExecutionGrantClaimsV1(validClaims, {
+				expectedIssuer: "agent-platform",
+				requiredAudience: "runtime_host",
+				now: "2026-08-28T10:01:00Z",
+			}),
 		).toThrow("Execution Grant audience mismatch");
 		expect(() =>
 			validateExecutionGrantClaimsV1(
 				{ ...validClaims, actionIds: [] },
-				"connection_api",
+				{
+					expectedIssuer: "agent-platform",
+					requiredAudience: "connection_api",
+					now: "2026-08-28T10:01:00Z",
+				},
 			),
 		).toThrow("Execution Grant claims are inconsistent");
+		for (const context of [
+			{
+				expectedIssuer: "other-issuer",
+				requiredAudience: "connection_api" as const,
+				now: "2026-08-28T10:01:00Z",
+			},
+			{
+				expectedIssuer: "agent-platform",
+				requiredAudience: "connection_api" as const,
+				now: "2026-08-28T10:06:00Z",
+			},
+			{
+				expectedIssuer: "agent-platform",
+				requiredAudience: "connection_api" as const,
+				now: "2026-08-28T09:59:00Z",
+			},
+		]) {
+			expect(() =>
+				validateExecutionGrantClaimsV1(validClaims, context),
+			).toThrow();
+		}
+		expect(
+			validateExecutionGrantClaimsV1(
+				{
+					...validClaims,
+					issuedAt: "2026-12-31T23:59:60Z",
+					expiresAt: "2027-01-01T00:00:02Z",
+				},
+				{
+					expectedIssuer: "agent-platform",
+					requiredAudience: "connection_api",
+					now: "2027-01-01T00:00:01Z",
+				},
+			).issuedAt,
+		).toBe("2026-12-31T23:59:60Z");
+	});
+
+	it("binds delegated Action requests to verified Grant claims", () => {
+		const context = {
+			expectedIssuer: "agent-platform",
+			requiredAudience: "connection_api" as const,
+			now: "2026-08-28T10:01:00Z",
+			expectedActionSetVersion: validClaims.actionSetVersion,
+		};
+		expect(
+			validateDelegatedActionRequestV1(validClaims, validRequest, context),
+		).toEqual(validRequest);
+		for (const [claims, request, override] of [
+			[validClaims, { ...validRequest, traceId: "trace-other" }, {}],
+			[
+				validClaims,
+				{
+					...validRequest,
+					action: { ...validRequest.action, actionId: "github.issues.write" },
+				},
+				{},
+			],
+			[{ ...validClaims, allowedCommands: ["turn.submit"] }, validRequest, {}],
+			[validClaims, validRequest, { expectedActionSetVersion: "actions-v8" }],
+		] as const) {
+			expect(() =>
+				validateDelegatedActionRequestV1(claims, request, {
+					...context,
+					...override,
+				}),
+			).toThrow();
+		}
 	});
 
 	it("requires a three-segment compact JWS envelope", () => {

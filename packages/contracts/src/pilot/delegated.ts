@@ -48,24 +48,46 @@ type ExecutionGrantAudienceV1 =
 	| "platform_tool_gateway"
 	| "connection_api";
 
+type ExecutionGrantValidationContext = {
+	expectedIssuer: string;
+	requiredAudience: ExecutionGrantAudienceV1;
+	now: string;
+};
+
+function rfc3339Instant(value: string) {
+	const leapSecond = /:60(?=(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$)/i.test(value);
+	const normalized = leapSecond
+		? value.replace(/:60(?=(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$)/i, ":59")
+		: value;
+	const instant = Date.parse(normalized);
+	if (!Number.isFinite(instant)) {
+		throw new Error("Execution Grant claims are inconsistent");
+	}
+	return instant + (leapSecond ? 1000 : 0);
+}
+
 export function validateExecutionGrantClaimsV1(
 	input: unknown,
-	requiredAudience: ExecutionGrantAudienceV1,
+	context: ExecutionGrantValidationContext,
 ) {
 	const claims = ExecutionGrantClaimsV1Schema.parse(input);
-	if (!claims.audience.includes(requiredAudience)) {
+	if (claims.issuer !== context.expectedIssuer) {
+		throw new Error("Execution Grant issuer mismatch");
+	}
+	if (!claims.audience.includes(context.requiredAudience)) {
 		throw new Error("Execution Grant audience mismatch");
 	}
-	const issuedAt = Date.parse(claims.issuedAt);
-	const expiresAt = Date.parse(claims.expiresAt);
+	const issuedAt = rfc3339Instant(claims.issuedAt);
+	const expiresAt = rfc3339Instant(claims.expiresAt);
+	const now = rfc3339Instant(Rfc3339TimestampV1Schema.parse(context.now));
 	const invokesTools = claims.allowedCommands.includes("tool.invoke");
 	const invokesRuntime = claims.allowedCommands.some((command) =>
 		command.startsWith("turn."),
 	);
 	if (
-		!Number.isFinite(issuedAt) ||
-		!Number.isFinite(expiresAt) ||
 		issuedAt >= expiresAt ||
+		now < issuedAt ||
+		now >= expiresAt ||
 		(invokesTools &&
 			(claims.actionIds.length === 0 ||
 				!claims.audience.includes("platform_tool_gateway") ||
@@ -96,7 +118,7 @@ const safeDelegatedJsonKey = z
 	.string()
 	.min(1)
 	.regex(
-		/^(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Oo][Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Bb][Ee][Aa][Rr][Ee][Rr][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ii][Dd][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Jj][Ww][Tt]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]))?|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$/,
+		/^(?!(?:[Ss][Ee][Tt][_-]?[Cc][Oo][Oo][Kk][Ii][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy](?:[_-]?[Ii][Dd])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy](?:[_-]?[Pp][Ee][Mm])?|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?[Ss][Ee][Cc][Rr][Ee][Tt](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Ee][Rr][Ss][Oo][Nn][Aa][Ll][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Tt][Oo][Kk][Ee][Nn])$)(?!(?:[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Oo][Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Bb][Ee][Aa][Rr][Ee][Rr][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ii][Dd][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Jj][Ww][Tt]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]))?|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt][_-]?(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[Ss]|[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[_-]?[Vv][Aa][Ll][Uu][Ee])?|[Ss][Ee][Cc][Rr][Ee][Tt](?:[Ss]|[_-]?(?:[Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]|[Vv][Aa][Ll][Uu][Ee]))?)$).+$/,
 	);
 
 export const SafeDelegatedJsonV1Schema: z.ZodType<SafeDelegatedJson> = z.lazy(
@@ -123,6 +145,26 @@ export const DelegatedActionRequestV1Schema = z.strictObject({
 	}),
 	traceId: TraceIdV1Schema,
 });
+
+export function validateDelegatedActionRequestV1(
+	verifiedClaimsInput: unknown,
+	requestInput: unknown,
+	context: ExecutionGrantValidationContext & {
+		expectedActionSetVersion: string;
+	},
+) {
+	const claims = validateExecutionGrantClaimsV1(verifiedClaimsInput, context);
+	const request = DelegatedActionRequestV1Schema.parse(requestInput);
+	if (
+		!claims.allowedCommands.includes("tool.invoke") ||
+		!claims.actionIds.includes(request.action.actionId) ||
+		claims.actionSetVersion !== context.expectedActionSetVersion ||
+		claims.traceId !== request.traceId
+	) {
+		throw new Error("Delegated Action request exceeds Grant");
+	}
+	return request;
+}
 
 const delegatedResultShape = {
 	schemaVersion: SchemaVersionV1Schema,
