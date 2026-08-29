@@ -16,6 +16,10 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "./index.ts";
+import {
+	pilotBrowserOpenApiPathsV1,
+	pilotBrowserSchemasV1,
+} from "./pilot/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -30,6 +34,10 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 const artifactPaths = {
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
+	pilotBrowserOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-browser.v1.openapi.json",
+	),
 };
 const schemas = {
 	IdempotencyKeyV1: IdempotencyKeyV1Schema,
@@ -88,7 +96,16 @@ function buildArtifacts() {
 			]),
 		),
 	};
-	return { jsonSchema, openapi };
+	const pilotBrowserOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Browser API",
+			version: "1.0.0",
+		},
+		paths: pilotBrowserOpenApiPathsV1,
+		components: { schemas: pilotBrowserSchemasV1 },
+	});
+	return { jsonSchema, openapi, pilotBrowserOpenapi };
 }
 
 async function writeArtifacts(artifacts) {

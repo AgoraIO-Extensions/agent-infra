@@ -50,6 +50,13 @@ describe("standard contract artifacts", () => {
 		);
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
+		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/messages",
+		);
+		expect(artifacts.pilotBrowserOpenapi.paths).not.toHaveProperty(
+			"/api/v1/conversations/{conversationId}/events",
+		);
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
