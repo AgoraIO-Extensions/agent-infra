@@ -381,7 +381,7 @@
                 },
                 "declaredEnvKeys": {
                   "items": {
-                    "minLength": 1,
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
                     "type": "string"
                   },
                   "type": "array"
@@ -460,6 +460,32 @@
                 {
                   "additionalProperties": false,
                   "properties": {
+                    "capabilities": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attachments": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "connection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "modelSelection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "resultFiles": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "supplementaryInstruction": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
                     "health": {
                       "additionalProperties": false,
                       "properties": {
@@ -531,13 +557,6 @@
                           "type": "boolean"
                         }
                       },
-                      "required": [
-                        "modelSelection",
-                        "attachments",
-                        "resultFiles",
-                        "connection",
-                        "supplementaryInstruction"
-                      ],
                       "type": "object"
                     },
                     "health": {
@@ -965,6 +984,10 @@
       "pattern": "^sha256:[a-f0-9]{64}$",
       "type": "string"
     },
+    "OciDeclaredEnvironmentKeyV1": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
     "OciImageConfigV1": {
       "additionalProperties": false,
       "properties": {
@@ -984,7 +1007,7 @@
         },
         "declaredEnvKeys": {
           "items": {
-            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
             "type": "string"
           },
           "type": "array"
@@ -1044,13 +1067,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "modelSelection",
-        "attachments",
-        "resultFiles",
-        "connection",
-        "supplementaryInstruction"
-      ],
       "type": "object"
     },
     "RuntimeHealthV1": {
@@ -1111,6 +1127,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "capabilities": {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "connection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "modelSelection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "resultFiles": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "supplementaryInstruction": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
             "health": {
               "additionalProperties": false,
               "properties": {
@@ -1182,13 +1224,6 @@
                   "type": "boolean"
                 }
               },
-              "required": [
-                "modelSelection",
-                "attachments",
-                "resultFiles",
-                "connection",
-                "supplementaryInstruction"
-              ],
               "type": "object"
             },
             "health": {

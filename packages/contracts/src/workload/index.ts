@@ -12,6 +12,7 @@ import {
 	ImageRegistryAdmissionRequestV1Schema,
 	ImageRegistryAdmissionResultV1Schema,
 	ImmutableOciDigestV1Schema,
+	OciDeclaredEnvironmentKeyV1Schema,
 	OciImageConfigV1Schema,
 	RuntimeManifestParsingEvidenceV1Schema,
 } from "./registry.ts";
@@ -31,6 +32,7 @@ export {
 	type RuntimeManifestV1,
 	RuntimeManifestV1Schema,
 	RuntimeServiceV1Schema,
+	resolveRuntimeManifestCapabilitiesV1,
 } from "./runtime-manifest.ts";
 
 export const registryManifestSchemasV1 = {
@@ -39,6 +41,7 @@ export const registryManifestSchemasV1 = {
 	ImageRegistryAdmissionRequestV1: ImageRegistryAdmissionRequestV1Schema,
 	ImageRegistryAdmissionResultV1: ImageRegistryAdmissionResultV1Schema,
 	ImmutableOciDigestV1: ImmutableOciDigestV1Schema,
+	OciDeclaredEnvironmentKeyV1: OciDeclaredEnvironmentKeyV1Schema,
 	OciImageConfigV1: OciImageConfigV1Schema,
 	RuntimeCapabilitySetV1: RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1: RuntimeHealthV1Schema,

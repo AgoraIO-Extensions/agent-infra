@@ -10,6 +10,7 @@ describe("Registry and Runtime Manifest V1 JSON Schema family", () => {
 			Object.entries(registryManifestSchemasV1).map(([name, schema]) => [
 				name,
 				z.toJSONSchema(schema, {
+					io: "input",
 					target: "draft-2020-12",
 					unrepresentable: "throw",
 				}),
@@ -22,6 +23,7 @@ describe("Registry and Runtime Manifest V1 JSON Schema family", () => {
 		expect(definitions).toHaveProperty("RuntimeManifestV1");
 		expect(definitions).toHaveProperty("ImageRegistryAdmissionResultV1");
 		expect(definitions).toHaveProperty("ImageRegistryAdmissionErrorV1");
+		expect(definitions).toHaveProperty("OciDeclaredEnvironmentKeyV1");
 		expect(JSON.stringify(definitions)).not.toMatch(
 			/v1beta1|cloudProvider|credential|privateKey|plaintext/,
 		);

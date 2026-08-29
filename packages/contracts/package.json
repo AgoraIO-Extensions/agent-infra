@@ -40,6 +40,7 @@
 		"test": "pnpm build && vitest run src test && pnpm check-generated && pnpm check-compatibility"
 	},
 	"dependencies": {
+		"jsonc-parser": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

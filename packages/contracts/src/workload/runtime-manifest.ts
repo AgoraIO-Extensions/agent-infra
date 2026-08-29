@@ -26,6 +26,7 @@ export const SelfManagedRuntimeManifestV1Schema = z.strictObject({
 	interactionMode: z.literal("self-managed"),
 	service: RuntimeServiceV1Schema,
 	health: RuntimeHealthV1Schema,
+	capabilities: RuntimeCapabilitySetV1Schema.optional(),
 });
 
 export const PlatformAdapterRuntimeManifestV1Schema = z.strictObject({
@@ -46,3 +47,14 @@ export type RuntimeCapabilitySetV1 = z.infer<
 	typeof RuntimeCapabilitySetV1Schema
 >;
 export type RuntimeManifestV1 = z.infer<typeof RuntimeManifestV1Schema>;
+
+export function resolveRuntimeManifestCapabilitiesV1(
+	manifestInput: unknown,
+): RuntimeCapabilitySetV1 {
+	const manifest = RuntimeManifestV1Schema.parse(manifestInput);
+	return RuntimeCapabilitySetV1Schema.parse(
+		manifest.interactionMode === "platform-adapter"
+			? (manifest.capabilities ?? {})
+			: {},
+	);
+}

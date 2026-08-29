@@ -1,3 +1,4 @@
+import { getNodeValue, type Node as JsonNode, parseTree } from "jsonc-parser";
 import { z } from "zod";
 
 import {
@@ -15,6 +16,10 @@ export const ImmutableOciDigestV1Schema = z
 	.string()
 	.regex(/^sha256:[a-f0-9]{64}$/);
 
+export const OciDeclaredEnvironmentKeyV1Schema = z
+	.string()
+	.regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+
 export const OciImageConfigV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	configDigest: ImmutableOciDigestV1Schema,
@@ -24,7 +29,7 @@ export const OciImageConfigV1Schema = z.strictObject({
 	command: z.array(z.string()).optional(),
 	workingDirectory: z.string().min(1).optional(),
 	user: z.string().min(1).optional(),
-	declaredEnvKeys: z.array(z.string().min(1)).optional(),
+	declaredEnvKeys: z.array(OciDeclaredEnvironmentKeyV1Schema).optional(),
 });
 
 export const ImageAdmissionPolicyEvidenceV1Schema = z.strictObject({
@@ -152,6 +157,56 @@ export type ImageRegistryAdmissionResultV1 = z.infer<
 >;
 export type OciImageConfigV1 = z.infer<typeof OciImageConfigV1Schema>;
 
+function inspectJsonNode(
+	node: JsonNode,
+	depth: number,
+): { duplicateKeys: boolean; maxDepth: number } {
+	let duplicateKeys = false;
+	let maxDepth = depth;
+	if (node.type === "object") {
+		const keys = new Set<string>();
+		for (const property of node.children ?? []) {
+			const [key, value] = property.children ?? [];
+			if (typeof key?.value !== "string" || !value) continue;
+			if (keys.has(key.value)) duplicateKeys = true;
+			keys.add(key.value);
+			const inspected = inspectJsonNode(value, depth + 1);
+			duplicateKeys ||= inspected.duplicateKeys;
+			maxDepth = Math.max(maxDepth, inspected.maxDepth);
+		}
+	} else if (node.type === "array") {
+		for (const value of node.children ?? []) {
+			const inspected = inspectJsonNode(value, depth + 1);
+			duplicateKeys ||= inspected.duplicateKeys;
+			maxDepth = Math.max(maxDepth, inspected.maxDepth);
+		}
+	}
+	return { duplicateKeys, maxDepth };
+}
+
+function parseRuntimeManifestLabel(
+	label: string,
+	evidence: z.infer<typeof RuntimeManifestParsingEvidenceV1Schema>,
+) {
+	const errors: { error: number; offset: number; length: number }[] = [];
+	const root = parseTree(label, errors, {
+		allowTrailingComma: false,
+		disallowComments: true,
+	});
+	if (!root || errors.length > 0) {
+		throw new Error("Image registry Runtime Manifest mismatch");
+	}
+	const inspected = inspectJsonNode(root, 1);
+	if (
+		inspected.duplicateKeys ||
+		inspected.maxDepth > 8 ||
+		inspected.maxDepth !== evidence.maxDepth
+	) {
+		throw new Error("Image registry Runtime Manifest mismatch");
+	}
+	return getNodeValue(root);
+}
+
 export function validateImageRegistryAdmissionResultV1(
 	requestInput: unknown,
 	resultInput: unknown,
@@ -174,7 +229,10 @@ export function validateImageRegistryAdmissionResultV1(
 		let labelManifest: RuntimeManifestV1;
 		try {
 			labelManifest = RuntimeManifestV1Schema.parse(
-				JSON.parse(result.runtimeManifestLabel),
+				parseRuntimeManifestLabel(
+					result.runtimeManifestLabel,
+					result.runtimeManifestParsingEvidence,
+				),
 			);
 		} catch {
 			throw new Error("Image registry Runtime Manifest mismatch");

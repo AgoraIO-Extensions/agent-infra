@@ -96,6 +96,21 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}).success,
 		).toBe(false);
+		for (const declaredEnvKey of [
+			"TOKEN=secret-value",
+			"BAD\0KEY",
+			"1INVALID",
+		]) {
+			expect(
+				ImageRegistryAdmissionResultV1Schema.safeParse({
+					...admitted,
+					ociConfig: {
+						...admitted.ociConfig,
+						declaredEnvKeys: [declaredEnvKey],
+					},
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			ImageRegistryAdmissionResultV1Schema.safeParse({
 				...admitted,
@@ -168,6 +183,31 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				runtimeManifestParsingEvidence: {
 					...admitted.runtimeManifestParsingEvidence,
 					utf8ByteLength: Buffer.byteLength(invalidJson, "utf8"),
+				},
+			}),
+		).toThrow("Image registry Runtime Manifest mismatch");
+
+		const duplicateKeyLabel = runtimeManifestLabel.replace(
+			'"schemaVersion":1',
+			'"schemaVersion":1,"schemaVersion":1',
+		);
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestLabel: duplicateKeyLabel,
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					utf8ByteLength: Buffer.byteLength(duplicateKeyLabel, "utf8"),
+					duplicateKeysDetected: false,
+				},
+			}),
+		).toThrow("Image registry Runtime Manifest mismatch");
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					maxDepth: 2,
 				},
 			}),
 		).toThrow("Image registry Runtime Manifest mismatch");

@@ -142,6 +142,28 @@ describe("standard contract artifacts", () => {
 			$ref: `${artifacts.registryManifestJsonSchema.$id}#/$defs/ImmutableOciDigestV1`,
 		});
 		expect(validateDigest(`sha256:${"a".repeat(64)}`)).toBe(true);
+		const validateManifest = ajv.compile({
+			$ref: `${artifacts.registryManifestJsonSchema.$id}#/$defs/RuntimeManifestV1`,
+		});
+		expect(
+			validateManifest({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { modelSelection: true },
+			}),
+		).toBe(true);
+		expect(
+			validateManifest({
+				schemaVersion: 1,
+				interactionMode: "self-managed",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { connection: true },
+			}),
+		).toBe(true);
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {

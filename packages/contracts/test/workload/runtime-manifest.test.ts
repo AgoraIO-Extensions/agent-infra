@@ -1,6 +1,8 @@
+import {
+	RuntimeManifestV1Schema,
+	resolveRuntimeManifestCapabilitiesV1,
+} from "@agent-infra/contracts/workload";
 import { describe, expect, it } from "vitest";
-
-import { RuntimeManifestV1Schema } from "../../src/workload/runtime-manifest.js";
 
 describe("Runtime Manifest V1 contract", () => {
 	it("accepts only ACP for a platform-managed interaction entry", () => {
@@ -46,7 +48,7 @@ describe("Runtime Manifest V1 contract", () => {
 		});
 	});
 
-	it("forbids protocol and capability declarations for self-managed images", () => {
+	it("forbids protocol but ignores capabilities for self-managed images", () => {
 		const manifest = {
 			schemaVersion: 1,
 			interactionMode: "self-managed",
@@ -59,9 +61,27 @@ describe("Runtime Manifest V1 contract", () => {
 				.success,
 		).toBe(false);
 		expect(
-			RuntimeManifestV1Schema.safeParse({
+			RuntimeManifestV1Schema.parse({
 				...manifest,
 				capabilities: { connection: true },
+			}),
+		).toMatchObject({ capabilities: { connection: true } });
+		expect(
+			resolveRuntimeManifestCapabilitiesV1({
+				...manifest,
+				capabilities: { connection: true },
+			}),
+		).toEqual({
+			modelSelection: false,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
+		expect(
+			RuntimeManifestV1Schema.safeParse({
+				...manifest,
+				capabilities: { providerSpecific: true },
 			}).success,
 		).toBe(false);
 	});
