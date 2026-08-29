@@ -41,7 +41,7 @@ describe("contract compatibility command", () => {
 	it("rejects retyped OpenAPI component schemas", () => {
 		const result = compare("openapi-retyped", "openapi-base");
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI component schemas");
+		expect(result.stderr).toContain("changed OpenAPI contract");
 	});
 
 	it.each([
@@ -58,7 +58,7 @@ describe("contract compatibility command", () => {
 				: "openapi-base";
 		const result = compare(fixture, previous);
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI paths");
+		expect(result.stderr).toContain("changed OpenAPI contract");
 	});
 
 	it("rejects introduced const, enum, union, and reference narrowings", () => {

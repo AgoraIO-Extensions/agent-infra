@@ -460,6 +460,26 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			DelegatedActionResultV1Schema.safeParse({
+				schemaVersion: 1,
+				requestId: safeResult.requestId,
+				idempotencyKey: safeResult.idempotencyKey,
+				status: "failed",
+				callId: null,
+				actionId: safeResult.actionId,
+				actionVersion: safeResult.actionVersion,
+				traceId: safeResult.traceId,
+				completedAt: safeResult.completedAt,
+				error: {
+					schemaVersion: 1,
+					code: "CONNECTION_UNAVAILABLE",
+					message: "Provider returned bearer token secret-value",
+					retryable: true,
+					traceId: safeResult.traceId,
+				},
+			}).success,
+		).toBe(false);
 		expect(() =>
 			validateDelegatedActionResultV1(validRequest, {
 				schemaVersion: 1,

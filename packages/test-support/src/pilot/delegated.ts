@@ -1,7 +1,7 @@
 import {
+	type DelegatedActionErrorV1,
 	DelegatedActionRequestV1Schema,
 	type DelegatedActionResultV1,
-	type PilotProtocolErrorV1,
 	validateDelegatedActionResultV1,
 } from "@agent-infra/contracts/pilot";
 
@@ -39,7 +39,7 @@ export function fakeDelegatedActionSuccessV1(
 type DelegatedFailureOptions = {
 	callId?: string | null;
 	completedAt?: string;
-	error?: Omit<PilotProtocolErrorV1, "schemaVersion" | "traceId">;
+	error?: Omit<DelegatedActionErrorV1, "schemaVersion" | "traceId">;
 };
 
 export function fakeDelegatedActionFailureV1(

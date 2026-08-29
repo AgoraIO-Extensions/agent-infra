@@ -1,5 +1,273 @@
 {
   "$defs": {
+    "DelegatedActionErrorV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "CONNECTION_UNAVAILABLE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Connection is unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "PROVIDER_RATE_LIMITED",
+              "type": "string"
+            },
+            "message": {
+              "const": "Provider rate limit reached",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "DEPENDENCY_UNAVAILABLE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Connection dependency is unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "INTERNAL_ERROR",
+              "type": "string"
+            },
+            "message": {
+              "const": "Delegated Action failed",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "CONNECTION_AUTHORIZATION_REQUIRED",
+              "type": "string"
+            },
+            "message": {
+              "const": "Connection authorization is required",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "ACTION_UNAVAILABLE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Action is unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "PROVIDER_REJECTED",
+              "type": "string"
+            },
+            "message": {
+              "const": "Provider rejected the Action",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "DELEGATED_RESULT_REJECTED",
+              "type": "string"
+            },
+            "message": {
+              "const": "Delegated result was rejected",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "traceId",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "DelegatedActionRequestV1": {
       "$defs": {
         "__schema0": {
@@ -298,25 +566,16 @@
               "type": "string"
             },
             "error": {
-              "anyOf": [
+              "oneOf": [
                 {
                   "additionalProperties": false,
                   "properties": {
                     "code": {
-                      "enum": [
-                        "AGENT_BUSY",
-                        "AGENT_STARTING",
-                        "AGENT_UPDATING",
-                        "RUNTIME_UNAVAILABLE",
-                        "CONNECTION_UNAVAILABLE",
-                        "PROVIDER_RATE_LIMITED",
-                        "DEPENDENCY_UNAVAILABLE",
-                        "INTERNAL_ERROR"
-                      ],
+                      "const": "CONNECTION_UNAVAILABLE",
                       "type": "string"
                     },
                     "message": {
-                      "minLength": 1,
+                      "const": "Connection is unavailable",
                       "type": "string"
                     },
                     "retryable": {
@@ -334,9 +593,9 @@
                   },
                   "required": [
                     "schemaVersion",
-                    "message",
                     "traceId",
                     "code",
+                    "message",
                     "retryable"
                   ],
                   "type": "object"
@@ -345,25 +604,110 @@
                   "additionalProperties": false,
                   "properties": {
                     "code": {
-                      "enum": [
-                        "INVALID_REQUEST",
-                        "AUTHENTICATION_REQUIRED",
-                        "RESOURCE_UNAVAILABLE",
-                        "AUTHORIZATION_REVOKED",
-                        "CONVERSATION_UNAVAILABLE",
-                        "EXECUTION_FAILED",
-                        "MODEL_SELECTION_INVALID",
-                        "CONNECTION_AUTHORIZATION_REQUIRED",
-                        "ACTION_UNAVAILABLE",
-                        "PROVIDER_REJECTED",
-                        "DELEGATED_RESULT_REJECTED",
-                        "ORIGINAL_RESPONSE_NOT_STARTED",
-                        "ORIGINAL_RESPONSE_ALREADY_FINISHED"
-                      ],
+                      "const": "PROVIDER_RATE_LIMITED",
                       "type": "string"
                     },
                     "message": {
+                      "const": "Provider rate limit reached",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
                       "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "DEPENDENCY_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Connection dependency is unavailable",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "INTERNAL_ERROR",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Delegated Action failed",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "CONNECTION_AUTHORIZATION_REQUIRED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Connection authorization is required",
                       "type": "string"
                     },
                     "retryable": {
@@ -381,9 +725,108 @@
                   },
                   "required": [
                     "schemaVersion",
-                    "message",
                     "traceId",
                     "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "ACTION_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Action is unavailable",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "PROVIDER_REJECTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Provider rejected the Action",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "DELEGATED_RESULT_REJECTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Delegated result was rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "traceId",
+                    "code",
+                    "message",
                     "retryable"
                   ],
                   "type": "object"

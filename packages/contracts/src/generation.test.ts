@@ -66,6 +66,7 @@ describe("standard contract artifacts", () => {
 		expect(
 			Object.keys(artifacts.pilotDelegatedJsonSchema.$defs).sort(),
 		).toEqual([
+			"DelegatedActionErrorV1",
 			"DelegatedActionRequestV1",
 			"DelegatedActionResultV1",
 			"ExecutionGrantClaimsV1",

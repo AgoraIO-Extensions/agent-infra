@@ -295,6 +295,62 @@ const delegatedResultShape = {
 	completedAt: Rfc3339TimestampV1Schema,
 };
 
+const delegatedErrorShape = {
+	schemaVersion: SchemaVersionV1Schema,
+	traceId: TraceIdV1Schema,
+};
+
+export const DelegatedActionErrorV1Schema = z.discriminatedUnion("code", [
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("CONNECTION_UNAVAILABLE"),
+		message: z.literal("Connection is unavailable"),
+		retryable: z.literal(true),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("PROVIDER_RATE_LIMITED"),
+		message: z.literal("Provider rate limit reached"),
+		retryable: z.literal(true),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("DEPENDENCY_UNAVAILABLE"),
+		message: z.literal("Connection dependency is unavailable"),
+		retryable: z.literal(true),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("INTERNAL_ERROR"),
+		message: z.literal("Delegated Action failed"),
+		retryable: z.literal(true),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("CONNECTION_AUTHORIZATION_REQUIRED"),
+		message: z.literal("Connection authorization is required"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("ACTION_UNAVAILABLE"),
+		message: z.literal("Action is unavailable"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("PROVIDER_REJECTED"),
+		message: z.literal("Provider rejected the Action"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		...delegatedErrorShape,
+		code: z.literal("DELEGATED_RESULT_REJECTED"),
+		message: z.literal("Delegated result was rejected"),
+		retryable: z.literal(false),
+	}),
+]);
+
 export const DelegatedActionSucceededV1Schema = z.strictObject({
 	...delegatedResultShape,
 	callId: OpaqueIdV1Schema,
@@ -306,7 +362,7 @@ export const DelegatedActionFailedV1Schema = z.strictObject({
 	...delegatedResultShape,
 	callId: OpaqueIdV1Schema.nullable(),
 	status: z.literal("failed"),
-	error: PilotProtocolErrorV1Schema,
+	error: DelegatedActionErrorV1Schema,
 });
 
 export const DelegatedActionResultV1Schema = z.discriminatedUnion("status", [
@@ -381,6 +437,7 @@ export const pilotDelegatedOpenApiPathsV1 = {
 } as const;
 
 export const pilotDelegatedSchemasV1 = {
+	DelegatedActionErrorV1: DelegatedActionErrorV1Schema,
 	DelegatedActionRequestV1: DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1: DelegatedActionResultV1Schema,
 	ExecutionGrantClaimsV1: ExecutionGrantClaimsV1Schema,
@@ -403,4 +460,7 @@ export type DelegatedActionRequestV1 = z.infer<
 >;
 export type DelegatedActionResultV1 = z.infer<
 	typeof DelegatedActionResultV1Schema
+>;
+export type DelegatedActionErrorV1 = z.infer<
+	typeof DelegatedActionErrorV1Schema
 >;

@@ -102,6 +102,29 @@ describe("Pilot standard artifacts", () => {
 				}),
 			).toBe(false);
 		}
+		const { output: _output, ...failedResultBase } = result;
+		const failedResult = {
+			...failedResultBase,
+			callId: null,
+			status: "failed",
+			error: {
+				schemaVersion: 1,
+				code: "CONNECTION_UNAVAILABLE",
+				message: "Connection is unavailable",
+				retryable: true,
+				traceId: result.traceId,
+			},
+		};
+		expect(validateDelegatedResult(failedResult)).toBe(true);
+		expect(
+			validateDelegatedResult({
+				...failedResult,
+				error: {
+					...failedResult.error,
+					message: "Provider returned bearer token secret-value",
+				},
+			}),
+		).toBe(false);
 		const delegatedRequestSchema = delegated.DelegatedActionRequestV1;
 		if (!delegatedRequestSchema)
 			throw new Error("Delegated request schema missing");

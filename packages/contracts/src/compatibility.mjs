@@ -535,16 +535,8 @@ function findBreakingChanges(previous, current) {
 	if (previous.openapi !== undefined) {
 		// ponytail: OpenAPI input/output variance is contextual. Fail closed until
 		// a real versioning need justifies a consumer-aware directional diff.
-		if (!sameValue(previous.paths ?? {}, current.paths ?? {})) {
-			changes.push("changed OpenAPI paths");
-		}
-		if (
-			!sameValue(
-				previous.components?.schemas ?? {},
-				current.components?.schemas ?? {},
-			)
-		) {
-			changes.push("changed OpenAPI component schemas");
+		if (!sameValue(previous, current)) {
+			changes.push("changed OpenAPI contract");
 		}
 		return changes.sort();
 	}
