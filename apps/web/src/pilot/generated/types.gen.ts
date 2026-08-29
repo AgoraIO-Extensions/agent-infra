@@ -405,7 +405,7 @@ export type ModelSelectionUpdateRequestV1 = {
 export type PersistedConversationEventV1 = {
     conversationCursor: string;
     conversationId: string;
-    eventId: string;
+    eventId: SseEventIdV1;
     executionId: string;
     kind: 'event';
     occurredAt: string;
@@ -418,7 +418,7 @@ export type PersistedConversationEventV1 = {
 } | {
     conversationCursor: string;
     conversationId: string;
-    eventId: string;
+    eventId: SseEventIdV1;
     executionId: string;
     kind: 'event';
     occurredAt: string;
@@ -431,7 +431,7 @@ export type PersistedConversationEventV1 = {
 } | {
     conversationCursor: string;
     conversationId: string;
-    eventId: string;
+    eventId: SseEventIdV1;
     executionId: string;
     kind: 'event';
     occurredAt: string;
@@ -446,7 +446,7 @@ export type PersistedConversationEventV1 = {
 } | {
     conversationCursor: string;
     conversationId: string;
-    eventId: string;
+    eventId: SseEventIdV1;
     executionId: string;
     kind: 'event';
     occurredAt: string;
@@ -462,7 +462,7 @@ export type PersistedConversationEventV1 = {
 } | {
     conversationCursor: string;
     conversationId: string;
-    eventId: string;
+    eventId: SseEventIdV1;
     executionId: string;
     kind: 'event';
     occurredAt: string;
@@ -517,6 +517,8 @@ export type RegenerateCommandRequestV1 = {
     messageId: string;
     schemaVersion: 1;
 };
+
+export type SseEventIdV1 = string;
 
 export type StopCommandRequestV1 = {
     schemaVersion: 1;
@@ -1469,7 +1471,7 @@ export type GetConversationResponse = GetConversationResponses[keyof GetConversa
 export type StreamConversationEventsData = {
     body?: never;
     headers?: {
-        'Last-Event-ID'?: string;
+        'Last-Event-ID'?: SseEventIdV1;
     };
     path: {
         conversationId: string;

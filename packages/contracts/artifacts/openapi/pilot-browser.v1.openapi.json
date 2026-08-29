@@ -2360,8 +2360,7 @@
                 "type": "string"
               },
               "eventId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/SseEventIdV1"
               },
               "executionId": {
                 "minLength": 1,
@@ -2428,8 +2427,7 @@
                 "type": "string"
               },
               "eventId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/SseEventIdV1"
               },
               "executionId": {
                 "minLength": 1,
@@ -2504,8 +2502,7 @@
                 "type": "string"
               },
               "eventId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/SseEventIdV1"
               },
               "executionId": {
                 "minLength": 1,
@@ -2586,8 +2583,7 @@
                 "type": "string"
               },
               "eventId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/SseEventIdV1"
               },
               "executionId": {
                 "minLength": 1,
@@ -2671,8 +2667,7 @@
                 "type": "string"
               },
               "eventId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/SseEventIdV1"
               },
               "executionId": {
                 "minLength": 1,
@@ -2966,6 +2961,10 @@
           "messageId"
         ],
         "type": "object"
+      },
+      "SseEventIdV1": {
+        "pattern": "^[^\u0000\\n\\r]+$",
+        "type": "string"
       },
       "StopCommandRequestV1": {
         "additionalProperties": false,
@@ -4827,8 +4826,7 @@
             "in": "header",
             "name": "Last-Event-ID",
             "schema": {
-              "minLength": 1,
-              "type": "string"
+              "$ref": "#/components/schemas/SseEventIdV1"
             }
           }
         ],

@@ -13,10 +13,13 @@ import {
 } from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
+const forbiddenSseEventIdCharacters = String.fromCharCode(0, 10, 13);
+const sseEventIdPattern = new RegExp(`^[^${forbiddenSseEventIdCharacters}]+$`);
+export const SseEventIdV1Schema = z.string().regex(sseEventIdPattern);
 const eventShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	kind: z.literal("event"),
-	eventId: OpaqueIdV1Schema,
+	eventId: SseEventIdV1Schema,
 	conversationId: OpaqueIdV1Schema,
 	executionId: OpaqueIdV1Schema,
 	sequence: z.number().int().positive(),
@@ -126,11 +129,11 @@ const replayQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 });
 const replayHeader = z.strictObject({
-	"Last-Event-ID": OpaqueIdV1Schema.optional(),
+	"Last-Event-ID": SseEventIdV1Schema.optional(),
 });
 const replaySelector = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
-	lastEventId: OpaqueIdV1Schema.optional(),
+	lastEventId: SseEventIdV1Schema.optional(),
 });
 
 export function resolvePilotReplaySelectorV1(input: unknown) {
@@ -198,6 +201,7 @@ export const pilotSseSchemasV1 = {
 	ConversationSseMessageV1: ConversationSseMessageV1Schema,
 	HeartbeatSignalV1: HeartbeatSignalV1Schema,
 	PersistedConversationEventV1: PersistedConversationEventV1Schema,
+	SseEventIdV1: SseEventIdV1Schema,
 	TimelineReloadSignalV1: TimelineReloadSignalV1Schema,
 };
 

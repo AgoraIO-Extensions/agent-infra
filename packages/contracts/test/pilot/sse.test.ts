@@ -33,6 +33,19 @@ describe("Pilot SSE contracts", () => {
 			id: event.eventId,
 			data: event,
 		});
+		for (const eventId of [
+			"event-1\nretry: 0",
+			"event-1\rdata: leak",
+			"event-1\0hidden",
+		]) {
+			expect(
+				PersistedConversationEventV1Schema.safeParse({
+					...event,
+					eventId,
+				}).success,
+			).toBe(false);
+			expect(() => framePilotSseMessageV1({ ...event, eventId })).toThrow();
+		}
 		expect(
 			PersistedConversationEventV1Schema.safeParse({
 				...event,

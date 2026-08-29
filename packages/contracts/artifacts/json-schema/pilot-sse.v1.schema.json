@@ -73,7 +73,7 @@
                   "type": "string"
                 },
                 "eventId": {
-                  "minLength": 1,
+                  "pattern": "^[^\u0000\\n\\r]+$",
                   "type": "string"
                 },
                 "executionId": {
@@ -141,7 +141,7 @@
                   "type": "string"
                 },
                 "eventId": {
-                  "minLength": 1,
+                  "pattern": "^[^\u0000\\n\\r]+$",
                   "type": "string"
                 },
                 "executionId": {
@@ -217,7 +217,7 @@
                   "type": "string"
                 },
                 "eventId": {
-                  "minLength": 1,
+                  "pattern": "^[^\u0000\\n\\r]+$",
                   "type": "string"
                 },
                 "executionId": {
@@ -299,7 +299,7 @@
                   "type": "string"
                 },
                 "eventId": {
-                  "minLength": 1,
+                  "pattern": "^[^\u0000\\n\\r]+$",
                   "type": "string"
                 },
                 "executionId": {
@@ -384,7 +384,7 @@
                   "type": "string"
                 },
                 "eventId": {
-                  "minLength": 1,
+                  "pattern": "^[^\u0000\\n\\r]+$",
                   "type": "string"
                 },
                 "executionId": {
@@ -701,7 +701,7 @@
               "type": "string"
             },
             "eventId": {
-              "minLength": 1,
+              "pattern": "^[^\u0000\\n\\r]+$",
               "type": "string"
             },
             "executionId": {
@@ -769,7 +769,7 @@
               "type": "string"
             },
             "eventId": {
-              "minLength": 1,
+              "pattern": "^[^\u0000\\n\\r]+$",
               "type": "string"
             },
             "executionId": {
@@ -845,7 +845,7 @@
               "type": "string"
             },
             "eventId": {
-              "minLength": 1,
+              "pattern": "^[^\u0000\\n\\r]+$",
               "type": "string"
             },
             "executionId": {
@@ -927,7 +927,7 @@
               "type": "string"
             },
             "eventId": {
-              "minLength": 1,
+              "pattern": "^[^\u0000\\n\\r]+$",
               "type": "string"
             },
             "executionId": {
@@ -1012,7 +1012,7 @@
               "type": "string"
             },
             "eventId": {
-              "minLength": 1,
+              "pattern": "^[^\u0000\\n\\r]+$",
               "type": "string"
             },
             "executionId": {
@@ -1159,6 +1159,10 @@
           "type": "object"
         }
       ]
+    },
+    "SseEventIdV1": {
+      "pattern": "^[^\u0000\\n\\r]+$",
+      "type": "string"
     },
     "TimelineReloadSignalV1": {
       "additionalProperties": false,
