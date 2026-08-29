@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+
+import { RuntimeManifestV1Schema } from "../../src/workload/runtime-manifest.js";
+
+describe("Runtime Manifest V1 contract", () => {
+	it("accepts only ACP for a platform-managed interaction entry", () => {
+		expect(
+			RuntimeManifestV1Schema.parse({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { supplementaryInstruction: false },
+			}),
+		).toMatchObject({ protocol: "acp" });
+		expect(
+			RuntimeManifestV1Schema.safeParse({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "vendor-rpc",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+			}).success,
+		).toBe(false);
+	});
+
+	it("forbids protocol declarations and unknown fields for self-managed images", () => {
+		const manifest = {
+			schemaVersion: 1,
+			interactionMode: "self-managed",
+			service: { port: 8080 },
+			health: { path: "/ready" },
+		} as const;
+		expect(RuntimeManifestV1Schema.parse(manifest)).toEqual(manifest);
+		expect(
+			RuntimeManifestV1Schema.safeParse({ ...manifest, protocol: "acp" })
+				.success,
+		).toBe(false);
+		expect(
+			RuntimeManifestV1Schema.safeParse({
+				...manifest,
+				capabilities: { unknownCapability: true },
+			}).success,
+		).toBe(false);
+	});
+
+	it.each(["//health", "/a/../health", "/a/./health", "/a%2Fhealth", "/a?x=1"])(
+		"rejects unsafe health path %s",
+		(path) => {
+			expect(
+				RuntimeManifestV1Schema.safeParse({
+					schemaVersion: 1,
+					interactionMode: "platform-adapter",
+					protocol: "acp",
+					service: { port: 8080 },
+					health: { path },
+				}).success,
+			).toBe(false);
+		},
+	);
+});
