@@ -530,183 +530,24 @@ function compareSchema(previous, current, path, changes) {
 	}
 }
 
-const httpMethods = [
-	"delete",
-	"get",
-	"head",
-	"options",
-	"patch",
-	"post",
-	"put",
-	"trace",
-];
-
-function compareOpenApiContent(previous, current, path, changes) {
-	for (const [mediaType, media] of Object.entries(previous ?? {})) {
-		const currentMedia = current?.[mediaType];
-		if (currentMedia === undefined) {
-			changes.push(`removed ${path} content ${mediaType}`);
-			continue;
-		}
-		if (media.schema !== undefined) {
-			if (currentMedia.schema === undefined) {
-				changes.push(`removed ${path} content ${mediaType} schema`);
-			} else {
-				compareSchema(
-					media.schema,
-					currentMedia.schema,
-					`${path} content ${mediaType}`,
-					changes,
-				);
-			}
-		}
-	}
-}
-
-function compareOpenApiParameters(previous, current, path, changes) {
-	const previousParameters = previous ?? [];
-	const currentParameterList = current ?? [];
-	const currentParameters = new Map(
-		currentParameterList.map((parameter) => [
-			`${parameter.in}:${parameter.name}`,
-			parameter,
-		]),
-	);
-	const previousKeys = new Set();
-	for (const parameter of previousParameters) {
-		if (parameter.$ref !== undefined) {
-			changes.push(`unsupported ${path} parameter $ref`);
-			continue;
-		}
-		const key = `${parameter.in}:${parameter.name}`;
-		previousKeys.add(key);
-		const currentParameter = currentParameters.get(key);
-		if (currentParameter === undefined) {
-			changes.push(`removed ${path} parameter ${key}`);
-			continue;
-		}
-		if (currentParameter.$ref !== undefined) {
-			changes.push(`unsupported ${path} parameter ${key} $ref`);
-			continue;
-		}
-		if (parameter.required !== true && currentParameter.required === true) {
-			changes.push(`narrowed ${path} parameter ${key} required`);
-		}
-		if (parameter.schema !== undefined) {
-			if (currentParameter.schema === undefined) {
-				changes.push(`removed ${path} parameter ${key} schema`);
-			} else {
-				compareSchema(
-					parameter.schema,
-					currentParameter.schema,
-					`${path} parameter ${key}`,
-					changes,
-				);
-			}
-		}
-	}
-	for (const parameter of currentParameterList) {
-		if (parameter.$ref !== undefined) {
-			changes.push(`unsupported ${path} parameter $ref`);
-			continue;
-		}
-		const key = `${parameter.in}:${parameter.name}`;
-		if (parameter.required === true && !previousKeys.has(key)) {
-			changes.push(`added required ${path} parameter ${key}`);
-		}
-	}
-}
-
-function compareOpenApiOperation(previous, current, path, changes) {
-	if (
-		previous.operationId !== undefined &&
-		previous.operationId !== current.operationId
-	) {
-		changes.push(`changed ${path} operationId`);
-	}
-	for (const keyword of ["callbacks", "security", "servers"]) {
-		if (previous[keyword] !== undefined || current[keyword] !== undefined) {
-			changes.push(`unsupported ${path} ${keyword}`);
-		}
-	}
-	compareOpenApiParameters(
-		previous.parameters,
-		current.parameters,
-		path,
-		changes,
-	);
-	if (previous.requestBody === undefined) {
-		if (current.requestBody?.required === true) {
-			changes.push(`added required ${path} requestBody`);
-		}
-	} else {
-		if (current.requestBody === undefined) {
-			changes.push(`removed ${path} requestBody`);
-		} else {
-			if (
-				previous.requestBody.required !== true &&
-				current.requestBody.required
-			) {
-				changes.push(`narrowed ${path} requestBody required`);
-			}
-			compareOpenApiContent(
-				previous.requestBody.content,
-				current.requestBody.content,
-				`${path} requestBody`,
-				changes,
-			);
-		}
-	}
-	for (const [status, response] of Object.entries(previous.responses ?? {})) {
-		const currentResponse = current.responses?.[status];
-		if (currentResponse === undefined) {
-			changes.push(`removed ${path} response ${status}`);
-			continue;
-		}
-		compareOpenApiContent(
-			response.content,
-			currentResponse.content,
-			`${path} response ${status}`,
-			changes,
-		);
-	}
-}
-
-function compareOpenApiPaths(previous, current, changes) {
-	for (const [path, pathItem] of Object.entries(previous.paths ?? {})) {
-		const currentPathItem = current.paths?.[path];
-		if (currentPathItem === undefined) {
-			changes.push(`removed OpenAPI path ${path}`);
-			continue;
-		}
-		if (
-			pathItem.parameters !== undefined ||
-			currentPathItem.parameters !== undefined
-		) {
-			changes.push(`unsupported OpenAPI path ${path} parameters`);
-		}
-		for (const method of httpMethods) {
-			const operation = pathItem[method];
-			if (operation === undefined) continue;
-			const currentOperation = currentPathItem[method];
-			if (currentOperation === undefined) {
-				changes.push(
-					`removed OpenAPI operation ${method.toUpperCase()} ${path}`,
-				);
-				continue;
-			}
-			compareOpenApiOperation(
-				operation,
-				currentOperation,
-				`OpenAPI ${method.toUpperCase()} ${path}`,
-				changes,
-			);
-		}
-	}
-}
-
 function findBreakingChanges(previous, current) {
 	const changes = [];
+	if (previous.openapi !== undefined) {
+		// ponytail: OpenAPI input/output variance is contextual. Fail closed until
+		// a real versioning need justifies a consumer-aware directional diff.
+		if (!sameValue(previous.paths ?? {}, current.paths ?? {})) {
+			changes.push("changed OpenAPI paths");
+		}
+		if (
+			!sameValue(
+				previous.components?.schemas ?? {},
+				current.components?.schemas ?? {},
+			)
+		) {
+			changes.push("changed OpenAPI component schemas");
+		}
+		return changes.sort();
+	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	const currentSchemas = current.$defs ?? current.components?.schemas ?? {};
 	for (const [name, schema] of Object.entries(previousSchemas)) {
@@ -716,9 +557,6 @@ function findBreakingChanges(previous, current) {
 			continue;
 		}
 		compareSchema(schema, currentSchema, `$defs.${name}`, changes);
-	}
-	if (previous.openapi !== undefined) {
-		compareOpenApiPaths(previous, current, changes);
 	}
 	return changes.sort();
 }

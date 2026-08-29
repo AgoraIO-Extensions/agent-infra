@@ -119,6 +119,14 @@ describe("standard contract artifacts", () => {
 				occurredAt: "2026-08-28T10:00:00Z",
 			}),
 		).toBe(true);
+		ajv.addSchema(artifacts.pilotDelegatedJsonSchema);
+		for (const name of Object.keys(artifacts.pilotDelegatedJsonSchema.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.pilotDelegatedJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {

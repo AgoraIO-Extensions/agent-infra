@@ -18,13 +18,13 @@
             },
             {
               "items": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/DelegatedActionRequestV1/$defs/__schema0"
               },
               "type": "array"
             },
             {
               "additionalProperties": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/DelegatedActionRequestV1/$defs/__schema0"
               },
               "propertyNames": {
                 "type": "string"
@@ -49,7 +49,7 @@
             },
             "arguments": {
               "additionalProperties": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/DelegatedActionRequestV1/$defs/__schema0"
               },
               "propertyNames": {
                 "type": "string"
@@ -134,13 +134,13 @@
             },
             {
               "items": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/DelegatedActionResultV1/$defs/__schema0"
               },
               "type": "array"
             },
             {
               "additionalProperties": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/DelegatedActionResultV1/$defs/__schema0"
               },
               "propertyNames": {
                 "minLength": 1,
@@ -180,7 +180,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/$defs/__schema0"
+              "$ref": "#/$defs/DelegatedActionResultV1/$defs/__schema0"
             },
             "requestId": {
               "minLength": 1,

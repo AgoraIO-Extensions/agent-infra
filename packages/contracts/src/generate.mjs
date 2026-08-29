@@ -72,6 +72,26 @@ function withoutSchemaDialect(schema) {
 	return definition;
 }
 
+function rebaseDefinitionRefs(value, definitionName) {
+	if (Array.isArray(value)) {
+		return value.map((entry) => rebaseDefinitionRefs(entry, definitionName));
+	}
+	if (value === null || typeof value !== "object") return value;
+	const definitionPointer = definitionName
+		.replaceAll("~", "~0")
+		.replaceAll("/", "~1");
+	return Object.fromEntries(
+		Object.entries(value).map(([key, entry]) => [
+			key,
+			key === "$ref" &&
+			typeof entry === "string" &&
+			entry.startsWith("#/$defs/")
+				? `#/$defs/${definitionPointer}/$defs/${entry.slice("#/$defs/".length)}`
+				: rebaseDefinitionRefs(entry, definitionName),
+		]),
+	);
+}
+
 function sortKeys(value) {
 	if (Array.isArray(value)) return value.map(sortKeys);
 	if (value === null || typeof value !== "object") return value;
@@ -94,11 +114,14 @@ function jsonSchemaDocument({ id, title, definitions }) {
 		$defs: Object.fromEntries(
 			Object.entries(definitions).map(([name, schema]) => [
 				name,
-				withoutSchemaDialect(
-					z.toJSONSchema(schema, {
-						target: "draft-2020-12",
-						unrepresentable: "throw",
-					}),
+				rebaseDefinitionRefs(
+					withoutSchemaDialect(
+						z.toJSONSchema(schema, {
+							target: "draft-2020-12",
+							unrepresentable: "throw",
+						}),
+					),
+					name,
 				),
 			]),
 		),

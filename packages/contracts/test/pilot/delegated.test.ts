@@ -6,6 +6,7 @@ import {
 	ExecutionGrantClaimsV1Schema,
 	ExecutionGrantCommandV1Schema,
 	ExecutionGrantV1Schema,
+	VerifiedExecutionGrantV1Schema,
 	validateDelegatedActionRequestV1,
 	validateDelegatedActionResultV1,
 	validateExecutionGrantClaimsV1,
@@ -48,6 +49,11 @@ const validRequest = {
 		arguments: { issueNumber: 180 },
 	},
 	traceId: "trace-1",
+} as const;
+
+const validVerification = {
+	token: validRequest.grant.token,
+	claims: validClaims,
 } as const;
 
 const validBaseValidationContext = {
@@ -276,8 +282,22 @@ describe("Pilot delegated contracts", () => {
 			expectedActionVersion: validRequest.action.actionVersion,
 		};
 		expect(
-			validateDelegatedActionRequestV1(validClaims, validRequest, context),
+			validateDelegatedActionRequestV1(
+				validVerification,
+				validRequest,
+				context,
+			),
 		).toEqual(validRequest);
+		expect(() =>
+			validateDelegatedActionRequestV1(
+				validVerification,
+				{
+					...validRequest,
+					grant: { ...validRequest.grant, token: "other.payload.signature" },
+				},
+				context,
+			),
+		).toThrow("Execution Grant verification mismatch");
 		for (const [claims, request, override] of [
 			[validClaims, { ...validRequest, traceId: "trace-other" }, {}],
 			[
@@ -293,10 +313,14 @@ describe("Pilot delegated contracts", () => {
 			[validClaims, validRequest, { expectedActionVersion: "v4" }],
 		] as const) {
 			expect(() =>
-				validateDelegatedActionRequestV1(claims, request, {
-					...context,
-					...override,
-				}),
+				validateDelegatedActionRequestV1(
+					{ token: request.grant.token, claims },
+					request,
+					{
+						...context,
+						...override,
+					},
+				),
 			).toThrow();
 		}
 	});
@@ -317,6 +341,9 @@ describe("Pilot delegated contracts", () => {
 				schemaVersion: 2,
 			}).success,
 		).toBe(false);
+		expect(VerifiedExecutionGrantV1Schema.parse(validVerification)).toEqual(
+			validVerification,
+		);
 	});
 
 	it("accepts only versioned delegated requests without caller-selected identity or Connection", () => {

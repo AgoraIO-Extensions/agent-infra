@@ -181,6 +181,12 @@ export const ExecutionGrantV1Schema = z.strictObject({
 	token: z.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
 });
 
+// Produced only after the compact JWS signature has been verified and decoded.
+export const VerifiedExecutionGrantV1Schema = z.strictObject({
+	token: ExecutionGrantV1Schema.shape.token,
+	claims: ExecutionGrantClaimsV1Schema,
+});
+
 type SafeDelegatedJson =
 	| null
 	| boolean
@@ -222,15 +228,19 @@ export const DelegatedActionRequestV1Schema = z.strictObject({
 });
 
 export function validateDelegatedActionRequestV1(
-	verifiedClaimsInput: unknown,
+	verificationInput: unknown,
 	requestInput: unknown,
 	context: ExecutionGrantValidationContext & {
 		expectedActionSetVersion: string;
 		expectedActionVersion: string;
 	},
 ) {
-	const claims = validateExecutionGrantClaimsV1(verifiedClaimsInput, context);
 	const request = DelegatedActionRequestV1Schema.parse(requestInput);
+	const verification = VerifiedExecutionGrantV1Schema.parse(verificationInput);
+	if (verification.token !== request.grant.token) {
+		throw new Error("Execution Grant verification mismatch");
+	}
+	const claims = validateExecutionGrantClaimsV1(verification.claims, context);
 	if (
 		!claims.allowedCommands.includes("tool.invoke") ||
 		!claims.actionIds.includes(request.action.actionId) ||
@@ -353,6 +363,9 @@ export type ExecutionGrantCommandV1 = z.infer<
 	typeof ExecutionGrantCommandV1Schema
 >;
 export type ExecutionGrantV1 = z.infer<typeof ExecutionGrantV1Schema>;
+export type VerifiedExecutionGrantV1 = z.infer<
+	typeof VerifiedExecutionGrantV1Schema
+>;
 export type DelegatedActionRequestV1 = z.infer<
 	typeof DelegatedActionRequestV1Schema
 >;

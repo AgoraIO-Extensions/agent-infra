@@ -41,28 +41,16 @@ describe("contract compatibility command", () => {
 	it("rejects retyped OpenAPI component schemas", () => {
 		const result = compare("openapi-retyped", "openapi-base");
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("retyped");
+		expect(result.stderr).toContain("changed OpenAPI component schemas");
 	});
 
 	it.each([
-		["openapi-operation-removed", "removed OpenAPI path"],
-		[
-			"openapi-request-media-removed",
-			"removed OpenAPI POST /internal/v1/delegated-actions requestBody content application/json",
-		],
-		[
-			"openapi-response-removed",
-			"removed OpenAPI POST /internal/v1/delegated-actions response 503",
-		],
-		[
-			"openapi-parameter-removed",
-			"removed OpenAPI GET /resource parameter query:cursor",
-		],
-		[
-			"openapi-required-body-added",
-			"added required OpenAPI GET /resource requestBody",
-		],
-	])("rejects %s HTTP contract changes", (fixture, reason) => {
+		"openapi-operation-removed",
+		"openapi-request-media-removed",
+		"openapi-response-removed",
+		"openapi-parameter-removed",
+		"openapi-required-body-added",
+	])("rejects %s HTTP contract changes", (fixture) => {
 		const previous =
 			fixture.startsWith("openapi-parameter") ||
 			fixture === "openapi-required-body-added"
@@ -70,7 +58,7 @@ describe("contract compatibility command", () => {
 				: "openapi-base";
 		const result = compare(fixture, previous);
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain(reason);
+		expect(result.stderr).toContain("changed OpenAPI paths");
 	});
 
 	it("rejects introduced const, enum, union, and reference narrowings", () => {
