@@ -915,7 +915,7 @@ async function loadPullRequestContext({
       : {}),
     ...(reviewCoverage
       ? {
-          review_coverage_failed: `review-coverage-check-${reviewCoverage.checkId}`,
+          review_coverage_failed: `review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}`,
         }
       : {}),
   };

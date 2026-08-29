@@ -1289,7 +1289,7 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
   const headSha = "c".repeat(40);
   const outcomeChecks = [];
   const summaries = [];
-  let deliveries = 0;
+  const deliveredReasons = [];
   const coverageCheck = {
     id: 800,
     app: { id: 4_503_079 },
@@ -1302,7 +1302,7 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
       summary: [
         "provider: pr-agent",
         `head_sha: ${headSha}`,
-        "reason_code: review-coverage-incomplete",
+        "reason_code: review-run-cancelled",
         "omitted_file_count: unknown",
       ].join("\n"),
     },
@@ -1327,7 +1327,7 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
     }
     if (apiPath.endsWith("/check-runs") && options.method === "POST") {
       const check = {
-        id: 801,
+        id: 801 + outcomeChecks.length,
         app: { id: 15_368 },
         head_sha: headSha,
         ...JSON.parse(options.body),
@@ -1335,9 +1335,13 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
       outcomeChecks.push(check);
       return check;
     }
-    if (apiPath.endsWith("/check-runs/801") && options.method === "PATCH") {
-      Object.assign(outcomeChecks[0], JSON.parse(options.body));
-      return outcomeChecks[0];
+    const patchMatch = /\/check-runs\/(\d+)$/.exec(apiPath);
+    if (patchMatch && options.method === "PATCH") {
+      const check = outcomeChecks.find(
+        (candidate) => candidate.id === Number(patchMatch[1]),
+      );
+      Object.assign(check, JSON.parse(options.body));
+      return check;
     }
     throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
   };
@@ -1357,9 +1361,12 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
     }),
   };
   const sendNotification = async ({ record }) => {
-    deliveries += 1;
+    deliveredReasons.push(record.reviewCoverage.reasonCode);
     assert.match(renderWeComMessage(record), /Provider: pr-agent/);
-    assert.match(renderWeComMessage(record), /Reason: review-coverage-incomplete/);
+    assert.match(
+      renderWeComMessage(record),
+      new RegExp(`Reason: ${record.reviewCoverage.reasonCode}`),
+    );
     return {
       configured: true,
       delivered: true,
@@ -1379,21 +1386,32 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
     });
   const first = await invoke();
   const replay = await invoke();
+  coverageCheck.output.summary = coverageCheck.output.summary.replace(
+    "reason_code: review-run-cancelled",
+    "reason_code: review-coverage-incomplete",
+  );
+  const changedReason = await invoke();
 
   assert.equal(first.record.outcome.code, "review_coverage_failed");
   assert.deepEqual(first.record.reviewCoverage, {
     provider: "pr-agent",
-    reasonCode: "review-coverage-incomplete",
+    reasonCode: "review-run-cancelled",
   });
   assert.equal(replay.replay, true);
-  assert.equal(deliveries, 1);
-  assert.equal(outcomeChecks.length, 1);
-  assert.equal(
-    outcomeChecks[0].external_id,
-    "agent-infra:workflow-outcome:review-coverage-check-800:review_coverage_failed",
+  assert.equal(changedReason.replay, false);
+  assert.deepEqual(deliveredReasons, [
+    "review-run-cancelled",
+    "review-coverage-incomplete",
+  ]);
+  assert.deepEqual(
+    outcomeChecks.map((check) => check.external_id),
+    [
+      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-run-cancelled:review_coverage_failed",
+      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-coverage-incomplete:review_coverage_failed",
+    ],
   );
-  assert.match(summaries[0], /Review provider: `pr-agent`/);
-  assert.match(summaries[0], /Coverage reason: `review-coverage-incomplete`/);
+  assert.match(summaries[0], /Coverage reason: `review-run-cancelled`/);
+  assert.match(summaries[2], /Coverage reason: `review-coverage-incomplete`/);
 });
 
 test("finds a semantic Check claim beyond the first filter=all page", async () => {

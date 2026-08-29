@@ -1027,7 +1027,7 @@ export function validateTrustedScriptSources(sources) {
     "REVIEW_PROVIDER_BY_WORKFLOW",
     "selectCoverageCheck(",
     'outcome("review_coverage_failed", "repository-maintainer", true)',
-    "review-coverage-check-${reviewCoverage.checkId}",
+    "review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}",
     "Review provider:",
     "Coverage reason:",
   ];
