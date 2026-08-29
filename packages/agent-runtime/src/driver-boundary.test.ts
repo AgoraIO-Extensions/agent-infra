@@ -17,6 +17,7 @@ import {
 	FileRuntimeStore,
 	type RuntimeDriver,
 	RuntimeHost,
+	RuntimeHostError,
 } from "./index.js";
 
 const directories: string[] = [];
@@ -93,6 +94,72 @@ afterEach(async () => {
 });
 
 describe("Runtime Driver boundary", () => {
+	it("normalizes iterator factory failures and closes cancelled streams", async () => {
+		const { driver, host } = await setup();
+		const submitted = await host.submitTurn(request());
+		const { input: _input, ...context } = request();
+		const streamRequest = {
+			...context,
+			requestId: "request-driver-stream-lifecycle",
+			hostSessionRef: submitted.hostSessionRef,
+			grant: runtimeGrantFixture(context, ["events.replay"]),
+		};
+		Object.assign(driver, {
+			subscribeEvents: async () => ({
+				[Symbol.asyncIterator]() {
+					throw new RuntimeHostError(
+						"UPSTREAM_STREAM_ERROR",
+						"Provider returned bearer secret-value",
+						500,
+					);
+				},
+			}),
+		} as unknown as Partial<RuntimeDriver>);
+		const failedStream = await host.streamEvents(streamRequest);
+		await expect(
+			failedStream[Symbol.asyncIterator]().next(),
+		).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			message: "Runtime Driver response is invalid",
+		});
+
+		let closed = false;
+		Object.assign(driver, {
+			subscribeEvents: async () => ({
+				[Symbol.asyncIterator]() {
+					let emitted = false;
+					return {
+						next: async () => {
+							if (emitted) return { done: true as const, value: undefined };
+							emitted = true;
+							return {
+								done: false as const,
+								value: {
+									schemaVersion: 1 as const,
+									adapterEventKey: "event-stream-lifecycle",
+									executionId: context.executionId,
+									cursor: "cursor-stream-lifecycle",
+									occurredAt: "2026-08-28T10:00:01Z",
+									type: "status" as const,
+									payload: { status: "running" as const },
+								},
+							};
+						},
+						return: async () => {
+							closed = true;
+							return { done: true as const, value: undefined };
+						},
+					};
+				},
+			}),
+		} as unknown as Partial<RuntimeDriver>);
+		const stream = await host.streamEvents(streamRequest);
+		const iterator = stream[Symbol.asyncIterator]();
+		expect((await iterator.next()).done).toBe(false);
+		await iterator.return?.();
+		expect(closed).toBe(true);
+	});
+
 	it("preserves the native Session mapping during initial-submit recovery", async () => {
 		const { directory, driver, host } = await setup();
 		const original = request();

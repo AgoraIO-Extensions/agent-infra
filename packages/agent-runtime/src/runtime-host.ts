@@ -84,20 +84,33 @@ async function* validatedDriverEventStream(
 	events: AsyncIterable<unknown>,
 	executionId: string,
 ) {
-	const iterator = events[Symbol.asyncIterator]();
-	while (true) {
-		let next: IteratorResult<unknown>;
+	let iterator: AsyncIterator<unknown>;
+	try {
+		iterator = events[Symbol.asyncIterator]();
+	} catch {
+		driverInvalid();
+	}
+	try {
+		while (true) {
+			let next: IteratorResult<unknown>;
+			try {
+				next = await iterator.next();
+			} catch {
+				driverInvalid();
+			}
+			if (next.done) return;
+			const event = RuntimeEventV1Schema.safeParse(next.value);
+			if (!event.success || event.data.executionId !== executionId) {
+				driverInvalid();
+			}
+			yield event.data;
+		}
+	} finally {
 		try {
-			next = await iterator.next();
+			await iterator.return?.();
 		} catch {
 			driverInvalid();
 		}
-		if (next.done) return;
-		const event = RuntimeEventV1Schema.safeParse(next.value);
-		if (!event.success || event.data.executionId !== executionId) {
-			driverInvalid();
-		}
-		yield event.data;
 	}
 }
 
