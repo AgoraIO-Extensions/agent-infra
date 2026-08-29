@@ -17,6 +17,7 @@ const validateAcceptedOutput: DelegatedPayloadValidatorV1 = (input) => {
 	) {
 		throw new Error("Fake delegated output does not match its Action Schema");
 	}
+	return input;
 };
 
 function resultBase(requestInput: unknown) {

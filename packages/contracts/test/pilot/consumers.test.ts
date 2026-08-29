@@ -47,9 +47,8 @@ describe("Pilot named consumers", () => {
 
 	it("gives a Fake Connection only delegated Action input and a correlated safe result", () => {
 		const resultValidationContext = {
-			validateOutput: (input: unknown) => {
-				z.strictObject({ issueNumber: z.number().int() }).parse(input);
-			},
+			validateOutput: (input: unknown) =>
+				z.strictObject({ issueNumber: z.number().int() }).parse(input),
 		};
 		const request = {
 			schemaVersion: 1,

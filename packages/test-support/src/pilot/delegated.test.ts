@@ -49,6 +49,7 @@ const validateIssueOutput = (input: unknown) => {
 	) {
 		throw new Error("Output does not match the Fake Action Schema");
 	}
+	return input;
 };
 
 describe("delegated Action Fakes", () => {

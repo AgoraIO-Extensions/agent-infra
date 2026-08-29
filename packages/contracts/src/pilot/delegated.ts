@@ -251,6 +251,10 @@ export const DelegatedActionArgumentsV1Schema = boundedDelegatedJsonSchema(
 	safeDelegatedArgumentKey,
 	DelegatedPayloadMaximumDepthV1,
 );
+const delegatedActionArgumentsRecordV1Schema = z.record(
+	safeDelegatedArgumentKey,
+	DelegatedActionArgumentsV1Schema,
+);
 
 export const DelegatedActionRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
@@ -260,10 +264,7 @@ export const DelegatedActionRequestV1Schema = z.strictObject({
 	action: z.strictObject({
 		actionId: OpaqueIdV1Schema,
 		actionVersion: nonEmptyString(),
-		arguments: z.record(
-			safeDelegatedArgumentKey,
-			DelegatedActionArgumentsV1Schema,
-		),
+		arguments: delegatedActionArgumentsRecordV1Schema,
 	}),
 	traceId: TraceIdV1Schema,
 });
@@ -292,8 +293,10 @@ export function validateDelegatedActionRequestV1(
 	) {
 		throw new Error("Delegated Action request exceeds Grant");
 	}
-	context.validateArguments(request.action.arguments);
-	return request;
+	const arguments_ = delegatedActionArgumentsRecordV1Schema.parse(
+		context.validateArguments(request.action.arguments),
+	);
+	return { ...request, action: { ...request.action, arguments: arguments_ } };
 }
 
 const delegatedResultShape = {
@@ -401,7 +404,12 @@ export function validateDelegatedActionResultV1(
 	) {
 		throw new Error("Delegated Action result correlation mismatch");
 	}
-	if (result.status === "succeeded") context.validateOutput(result.output);
+	if (result.status === "succeeded") {
+		const output = DelegatedJsonV1Schema.parse(
+			context.validateOutput(result.output),
+		);
+		return { ...result, output };
+	}
 	return result;
 }
 
@@ -480,4 +488,4 @@ export type DelegatedActionResultV1 = z.infer<
 export type DelegatedActionErrorV1 = z.infer<
 	typeof DelegatedActionErrorV1Schema
 >;
-export type DelegatedPayloadValidatorV1 = (input: unknown) => void;
+export type DelegatedPayloadValidatorV1 = (input: unknown) => unknown;

@@ -72,13 +72,14 @@ const validBaseValidationContext = {
 
 const validValidationContext = {
 	...validBaseValidationContext,
-	validateArguments: (input: unknown) => {
-		z.strictObject({
-			issueNumber: z.number().int(),
-			pageCursor: z.string().optional(),
-			userId: z.string().optional(),
-		}).parse(input);
-	},
+	validateArguments: (input: unknown) =>
+		z
+			.strictObject({
+				issueNumber: z.number().int(),
+				pageCursor: z.string().optional(),
+				userId: z.string().optional(),
+			})
+			.parse(input),
 	expectedBindings: {
 		agentId: validClaims.agentId,
 		actorId: validClaims.actorId,
@@ -306,6 +307,22 @@ describe("Pilot delegated contracts", () => {
 				context,
 			),
 		).toEqual(validRequest);
+		const canonicalRequest = validateDelegatedActionRequestV1(
+			validVerification,
+			{
+				...validRequest,
+				action: {
+					...validRequest.action,
+					arguments: { issueNumber: 180, ignoredByActionSchema: true },
+				},
+			},
+			{
+				...context,
+				validateArguments: (input: unknown) =>
+					z.object({ issueNumber: z.number().int() }).parse(input),
+			},
+		);
+		expect(canonicalRequest.action.arguments).toEqual({ issueNumber: 180 });
 		expect(() =>
 			validateDelegatedActionRequestV1(
 				validVerification,
@@ -474,17 +491,18 @@ describe("Pilot delegated contracts", () => {
 
 	it("accepts safe results and rejects secret-bearing responses at any depth", () => {
 		const resultValidationContext = {
-			validateOutput: (input: unknown) => {
-				z.union([
-					z.strictObject({
-						issue: z.strictObject({
-							number: z.number().int(),
-							title: z.string(),
+			validateOutput: (input: unknown) =>
+				z
+					.union([
+						z.strictObject({
+							issue: z.strictObject({
+								number: z.number().int(),
+								title: z.string(),
+							}),
 						}),
-					}),
-					z.strictObject({ nextPageToken: z.string() }),
-				]).parse(input);
-			},
+						z.strictObject({ nextPageToken: z.string() }),
+					])
+					.parse(input),
 		};
 		const safeResult = {
 			schemaVersion: 1,
@@ -499,6 +517,19 @@ describe("Pilot delegated contracts", () => {
 			output: { issue: { number: 180, title: "Pilot contracts" } },
 		};
 		expect(DelegatedActionResultV1Schema.parse(safeResult)).toEqual(safeResult);
+		expect(
+			validateDelegatedActionResultV1(
+				validRequest,
+				{
+					...safeResult,
+					output: { issueNumber: 180, ignoredByActionSchema: true },
+				},
+				{
+					validateOutput: (input: unknown) =>
+						z.object({ issueNumber: z.number().int() }).parse(input),
+				},
+			),
+		).toEqual({ ...safeResult, output: { issueNumber: 180 } });
 		expect(
 			DelegatedActionResultV1Schema.safeParse({
 				...safeResult,
