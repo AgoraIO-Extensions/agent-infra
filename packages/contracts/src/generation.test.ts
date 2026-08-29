@@ -50,6 +50,19 @@ describe("standard contract artifacts", () => {
 		);
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
+		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/messages",
+		);
+		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/events",
+		);
+		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
+			"ConversationSseMessageV1",
+		);
+		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
+			"HeartbeatSignalV1",
+		);
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
@@ -71,6 +84,18 @@ describe("standard contract artifacts", () => {
 		});
 		expect(validateTimestamp("2026-12-31T23:59:60Z")).toBe(true);
 		expect(validateTimestamp("2026-08-28t03:00:00z")).toBe(true);
+		ajv.addSchema(artifacts.pilotSseJsonSchema);
+		const validateHeartbeat = ajv.compile({
+			$ref: `${artifacts.pilotSseJsonSchema.$id}#/$defs/HeartbeatSignalV1`,
+		});
+		expect(
+			validateHeartbeat({
+				schemaVersion: 1,
+				kind: "control",
+				type: "heartbeat",
+				occurredAt: "2026-08-28T10:00:00Z",
+			}),
+		).toBe(true);
 	});
 
 	it("rejects deliberately stale committed artifacts", async () => {
