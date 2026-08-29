@@ -58,10 +58,16 @@ describe("contract compatibility command", () => {
 			"openapi-parameter-removed",
 			"removed OpenAPI GET /resource parameter query:cursor",
 		],
+		[
+			"openapi-required-body-added",
+			"added required OpenAPI GET /resource requestBody",
+		],
 	])("rejects %s HTTP contract changes", (fixture, reason) => {
-		const previous = fixture.startsWith("openapi-parameter")
-			? "openapi-parameter-base"
-			: "openapi-base";
+		const previous =
+			fixture.startsWith("openapi-parameter") ||
+			fixture === "openapi-required-body-added"
+				? "openapi-parameter-base"
+				: "openapi-base";
 		const result = compare(fixture, previous);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain(reason);

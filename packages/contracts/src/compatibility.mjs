@@ -606,12 +606,12 @@ function compareOpenApiParameters(previous, current, path, changes) {
 		}
 	}
 	for (const parameter of currentParameterList) {
+		if (parameter.$ref !== undefined) {
+			changes.push(`unsupported ${path} parameter $ref`);
+			continue;
+		}
 		const key = `${parameter.in}:${parameter.name}`;
-		if (
-			parameter.$ref === undefined &&
-			parameter.required === true &&
-			!previousKeys.has(key)
-		) {
+		if (parameter.required === true && !previousKeys.has(key)) {
 			changes.push(`added required ${path} parameter ${key}`);
 		}
 	}
@@ -635,7 +635,11 @@ function compareOpenApiOperation(previous, current, path, changes) {
 		path,
 		changes,
 	);
-	if (previous.requestBody !== undefined) {
+	if (previous.requestBody === undefined) {
+		if (current.requestBody?.required === true) {
+			changes.push(`added required ${path} requestBody`);
+		}
+	} else {
 		if (current.requestBody === undefined) {
 			changes.push(`removed ${path} requestBody`);
 		} else {
