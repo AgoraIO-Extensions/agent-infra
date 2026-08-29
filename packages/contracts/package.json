@@ -10,8 +10,16 @@
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
 		},
+		"./pilot": {
+			"types": "./dist/pilot/index.d.mts",
+			"import": "./dist/pilot/index.mjs"
+		},
 		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",
-		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json"
+		"./json-schema/pilot-delegated.v1": "./artifacts/json-schema/pilot-delegated.v1.schema.json",
+		"./json-schema/pilot-sse.v1": "./artifacts/json-schema/pilot-sse.v1.schema.json",
+		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json",
+		"./openapi/pilot-browser.v1": "./artifacts/openapi/pilot-browser.v1.openapi.json",
+		"./openapi/pilot-delegated.v1": "./artifacts/openapi/pilot-delegated.v1.openapi.json"
 	},
 	"files": [
 		"dist",
@@ -22,9 +30,9 @@
 		"check-compatibility": "node src/compatibility.mjs",
 		"check-types": "tsc --noEmit",
 		"client-smoke": "node src/client-smoke.mjs",
-		"generate": "node src/generate.mjs --write",
-		"check-generated": "node src/generate.mjs --check",
-		"test": "pnpm build && vitest run src && pnpm check-generated && pnpm check-compatibility"
+		"generate": "node src/generate.mjs --write && node src/pilot-client.mjs --write",
+		"check-generated": "node src/generate.mjs --check && node src/pilot-client.mjs --check",
+		"test": "pnpm build && vitest run src test && pnpm check-generated && pnpm check-compatibility"
 	},
 	"dependencies": {
 		"zod": "catalog:"

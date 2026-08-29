@@ -7,7 +7,11 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
 const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/pilot-sse.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
@@ -527,9 +531,15 @@ function compareSchema(previous, current, path, changes) {
 }
 
 function findBreakingChanges(previous, current) {
-	// ponytail: #179 publishes component schemas only; extend this seam for
-	// paths and parameters when #180 adds browser and internal HTTP operations.
 	const changes = [];
+	if (previous.openapi !== undefined) {
+		// ponytail: OpenAPI input/output variance is contextual. Fail closed until
+		// a real versioning need justifies a consumer-aware directional diff.
+		if (!sameValue(previous, current)) {
+			changes.push("changed OpenAPI contract");
+		}
+		return changes.sort();
+	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	const currentSchemas = current.$defs ?? current.components?.schemas ?? {};
 	for (const [name, schema] of Object.entries(previousSchemas)) {

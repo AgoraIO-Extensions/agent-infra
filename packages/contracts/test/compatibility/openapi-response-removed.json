@@ -3,7 +3,7 @@
 		"schemas": {
 			"OpaqueIdV1": {
 				"minLength": 1,
-				"type": "number"
+				"type": "string"
 			}
 		}
 	},
@@ -36,16 +36,6 @@
 							}
 						},
 						"description": "Delegated result"
-					},
-					"503": {
-						"content": {
-							"application/json": {
-								"schema": {
-									"$ref": "#/components/schemas/OpaqueIdV1"
-								}
-							}
-						},
-						"description": "Unavailable"
 					}
 				}
 			}
