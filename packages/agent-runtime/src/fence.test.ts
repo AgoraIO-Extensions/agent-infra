@@ -1,67 +1,51 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
-	ExecutionGrantClaimsV1,
-	RuntimeGrantOperationV1,
+	ExecutionGrantCommandV1,
+	ExecutionGrantV1,
 	RuntimeSubmitTurnRequestV1,
-	SignedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import {
+	openIngressVerifiedRuntimeHost,
+	runtimeGrantFixture,
+	runtimeGrantRequestContext,
+} from "./grant-fixture.test-support.js";
+import { FakeRuntimeDriver, FileRuntimeStore } from "./index.js";
 
 const directories: string[] = [];
-const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 
 function signedGrant(
 	binding: Pick<
 		RuntimeSubmitTurnRequestV1,
 		| "agentId"
+		| "actorId"
+		| "channelId"
 		| "conversationId"
 		| "executionId"
 		| "turnId"
 		| "sessionGeneration"
+		| "traceId"
 	>,
-	operations: RuntimeGrantOperationV1[],
-): SignedExecutionGrantV1 {
-	const claims: ExecutionGrantClaimsV1 = {
-		schemaVersion: 1,
-		issuer: "agent-platform",
-		audience: ["agent-runtime-host"],
-		issuedAt: "2026-08-28T09:59:00Z",
-		expiresAt: "2026-08-28T10:01:00Z",
-		grantId: `grant-${binding.conversationId}-${operations.join("-")}`,
-		actorId: "actor-fence",
-		channelId: "web",
-		agentId: binding.agentId,
-		conversationId: binding.conversationId,
-		executionId: binding.executionId,
-		turnId: binding.turnId,
-		sessionGeneration: binding.sessionGeneration,
-		operations,
-		attachments: [],
+	commands: ExecutionGrantCommandV1[],
+): ExecutionGrantV1 {
+	return runtimeGrantFixture(binding, commands, {
 		actionSetVersion: "actions-fence",
-	};
-	const payload = Buffer.from(JSON.stringify(claims));
-	return {
-		schemaVersion: 1,
-		algorithm: "Ed25519",
-		keyId: "key-fence",
-		payload: payload.toString("base64url"),
-		signature: sign(null, payload, privateKey).toString("base64url"),
-	};
+	});
 }
-
 function submitRequest(): RuntimeSubmitTurnRequestV1 {
 	const binding = {
 		agentId: "agent-fence",
+		actorId: "actor-fence",
+		channelId: "web",
 		conversationId: "conversation-fence",
 		executionId: "execution-fence",
 		turnId: "turn-fence",
 		sessionGeneration: 1,
+		traceId: "trace-fence",
 	};
 	return {
 		schemaVersion: 1,
@@ -84,14 +68,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-fence-"));
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = await RuntimeHost.open({
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const original = submitRequest();
@@ -118,6 +100,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.supplement({
 				schemaVersion: 1,
 				requestId: "request-stale-supplement",
+				...runtimeGrantRequestContext(original),
 				agentId: original.agentId,
 				conversationId: original.conversationId,
 				executionId: original.executionId,
@@ -136,6 +119,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.stop({
 				schemaVersion: 1,
 				requestId: "request-stale-stop",
+				...runtimeGrantRequestContext(original),
 				agentId: original.agentId,
 				conversationId: original.conversationId,
 				executionId: original.executionId,
@@ -157,6 +141,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.replay({
 				schemaVersion: 1,
 				requestId: "request-cross-conversation",
+				...runtimeGrantRequestContext(otherConversation),
 				agentId: otherConversation.agentId,
 				conversationId: otherConversation.conversationId,
 				executionId: otherConversation.executionId,
@@ -173,6 +158,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.status({
 				schemaVersion: 1,
 				requestId: "request-wrong-generation",
+				...runtimeGrantRequestContext(nextGeneration),
 				agentId: nextGeneration.agentId,
 				conversationId: nextGeneration.conversationId,
 				executionId: nextGeneration.executionId,
@@ -184,15 +170,6 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_SESSION_BINDING_MISMATCH" });
 
-		await expect(
-			runtimeHost.submitTurn({
-				...original,
-				requestId: "request-tampered-grant",
-				hostSessionRef: first.hostSessionRef,
-				deliveryFence: 3,
-				grant: { ...original.grant, signature: "dGFtcGVyZWQ" },
-			}),
-		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 		expect(await driver.sideEffectCount()).toBe(1);
 	});
 
@@ -200,14 +177,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-binding-"));
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = await RuntimeHost.open({
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const original = submitRequest();
@@ -223,6 +198,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.status({
 				schemaVersion: 1,
 				requestId: "request-status-wrong-execution",
+				...runtimeGrantRequestContext(wrongExecution),
 				agentId: wrongExecution.agentId,
 				conversationId: wrongExecution.conversationId,
 				executionId: wrongExecution.executionId,
@@ -237,6 +213,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.replay({
 				schemaVersion: 1,
 				requestId: "request-replay-wrong-turn",
+				...runtimeGrantRequestContext(wrongTurn),
 				agentId: wrongTurn.agentId,
 				conversationId: wrongTurn.conversationId,
 				executionId: wrongTurn.executionId,
@@ -251,6 +228,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.supplement({
 				schemaVersion: 1,
 				requestId: "request-supplement-wrong-turn",
+				...runtimeGrantRequestContext(wrongTurn),
 				agentId: wrongTurn.agentId,
 				conversationId: wrongTurn.conversationId,
 				executionId: wrongTurn.executionId,
@@ -268,6 +246,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			runtimeHost.stop({
 				schemaVersion: 1,
 				requestId: "request-stop-wrong-turn",
+				...runtimeGrantRequestContext(wrongTurn),
 				agentId: wrongTurn.agentId,
 				conversationId: wrongTurn.conversationId,
 				executionId: wrongTurn.executionId,
@@ -287,14 +266,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-session-"));
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = await RuntimeHost.open({
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const original = submitRequest();
@@ -321,14 +298,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		);
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = await RuntimeHost.open({
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const original = submitRequest();
@@ -336,6 +311,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const events = await runtimeHost.streamEvents({
 			schemaVersion: 1,
 			requestId: "request-stream-fence-1",
+			...runtimeGrantRequestContext(original),
 			agentId: original.agentId,
 			conversationId: original.conversationId,
 			executionId: original.executionId,
@@ -356,6 +332,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		await runtimeHost.supplement({
 			schemaVersion: 1,
 			requestId: "request-stream-event",
+			...runtimeGrantRequestContext(original),
 			agentId: original.agentId,
 			conversationId: original.conversationId,
 			executionId: original.executionId,
@@ -380,14 +357,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		);
 		directories.push(directory);
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const runtimeHost = await RuntimeHost.open({
+		const runtimeHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const original = submitRequest();
@@ -395,6 +370,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const cancellation = {
 			schemaVersion: 1 as const,
 			requestId: "request-generation-cancel",
+			...runtimeGrantRequestContext(original),
 			agentId: original.agentId,
 			conversationId: original.conversationId,
 			executionId: original.executionId,
@@ -440,26 +416,22 @@ describe("RuntimeHost generation and delivery fencing", () => {
 		const driverPath = join(directory, "driver.json");
 		const driver = await FakeRuntimeDriver.open(driverPath);
 		const original = submitRequest();
-		const firstHost = await RuntimeHost.open({
+		const firstHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const submitted = await firstHost.submitTurn(original);
 		const tombstoneId = "generation-tombstone-crash";
-		const crashingHost = await RuntimeHost.open({
+		const crashingHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: await FakeRuntimeDriver.open(driverPath),
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 			afterOperationResolved: (operationId) => {
 				if (operationId === tombstoneId) {
@@ -472,6 +444,7 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			crashingHost.cancelGeneration({
 				schemaVersion: 1,
 				requestId: "request-generation-crash",
+				...runtimeGrantRequestContext(original),
 				agentId: original.agentId,
 				conversationId: original.conversationId,
 				executionId: original.executionId,
@@ -490,14 +463,12 @@ describe("RuntimeHost generation and delivery fencing", () => {
 			activeState.sessions[submitted.hostSessionRef]?.generationBarrier?.state,
 		).toBe("active");
 
-		await RuntimeHost.open({
+		await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: await FakeRuntimeDriver.open(driverPath),
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-fence", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const recoveredState = JSON.parse(await readFile(hostPath, "utf8")) as {

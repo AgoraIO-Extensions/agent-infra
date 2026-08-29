@@ -29,14 +29,14 @@ import {
 	type StoredOperation,
 } from "./file-runtime-store.js";
 import {
-	type ExecutionGrantVerifierOptions,
-	verifyExecutionGrant,
+	type ExecutionGrantValidationOptions,
+	validateRuntimeExecutionGrant,
 } from "./grant.js";
 
 interface RuntimeHostOptions {
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
-	grantVerifier: ExecutionGrantVerifierOptions;
+	grantValidation: ExecutionGrantValidationOptions;
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
 	afterOperationResolved?: (operationId: string) => void | Promise<void>;
@@ -71,11 +71,17 @@ export class RuntimeHost {
 
 	async submitTurn(
 		value: RuntimeSubmitTurnRequestV1,
+		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
 		const parsed = RuntimeSubmitTurnRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(request, "turn.submit", this.options.grantVerifier);
+		validateRuntimeExecutionGrant(
+			request,
+			"turn.submit",
+			verification,
+			this.options.grantValidation,
+		);
 		return this.serialize(
 			request.hostSessionRef ?? request.conversationId,
 			async () => {
@@ -118,11 +124,17 @@ export class RuntimeHost {
 
 	async status(
 		value: RuntimeStatusRequestV1,
+		verification: unknown,
 	): Promise<RuntimeStatusResponseV1> {
 		const parsed = RuntimeStatusRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(request, "session.status", this.options.grantVerifier);
+		validateRuntimeExecutionGrant(
+			request,
+			"session.status",
+			verification,
+			this.options.grantValidation,
+		);
 		const session = this.options.store.getSessionForQuery(
 			request.hostSessionRef,
 			request,
@@ -151,14 +163,16 @@ export class RuntimeHost {
 
 	async capabilities(
 		value: RuntimeCapabilitiesRequestV1,
+		verification: unknown,
 	): Promise<RuntimeCapabilitiesResponseV1> {
 		const parsed = RuntimeCapabilitiesRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(
+		validateRuntimeExecutionGrant(
 			request,
 			"capabilities.read",
-			this.options.grantVerifier,
+			verification,
+			this.options.grantValidation,
 		);
 		if (request.hostSessionRef) {
 			this.options.store.getSessionForQuery(
@@ -175,11 +189,17 @@ export class RuntimeHost {
 
 	async replay(
 		value: RuntimeReplayRequestV1,
+		verification: unknown,
 	): Promise<RuntimeReplayResponseV1> {
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(request, "events.replay", this.options.grantVerifier);
+		validateRuntimeExecutionGrant(
+			request,
+			"events.replay",
+			verification,
+			this.options.grantValidation,
+		);
 		const session = this.options.store.getSessionForQuery(
 			request.hostSessionRef,
 			request,
@@ -197,11 +217,20 @@ export class RuntimeHost {
 		};
 	}
 
-	async streamEvents(value: RuntimeReplayRequestV1, signal?: AbortSignal) {
+	async streamEvents(
+		value: RuntimeReplayRequestV1,
+		verification: unknown,
+		signal?: AbortSignal,
+	) {
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(request, "events.replay", this.options.grantVerifier);
+		validateRuntimeExecutionGrant(
+			request,
+			"events.replay",
+			verification,
+			this.options.grantValidation,
+		);
 		const session = this.options.store.getSessionForQuery(
 			request.hostSessionRef,
 			request,
@@ -230,14 +259,16 @@ export class RuntimeHost {
 
 	async supplement(
 		value: RuntimeSupplementRequestV1,
+		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
 		const parsed = RuntimeSupplementRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(
+		validateRuntimeExecutionGrant(
 			request,
 			"turn.supplement",
-			this.options.grantVerifier,
+			verification,
+			this.options.grantValidation,
 		);
 		return this.serialize(request.hostSessionRef, async () => {
 			const prepared = await this.options.store.prepareOperation({
@@ -275,11 +306,19 @@ export class RuntimeHost {
 		});
 	}
 
-	async stop(value: RuntimeStopRequestV1): Promise<RuntimeOperationResponseV1> {
+	async stop(
+		value: RuntimeStopRequestV1,
+		verification: unknown,
+	): Promise<RuntimeOperationResponseV1> {
 		const parsed = RuntimeStopRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(request, "turn.stop", this.options.grantVerifier);
+		validateRuntimeExecutionGrant(
+			request,
+			"turn.stop",
+			verification,
+			this.options.grantValidation,
+		);
 		return this.serialize(request.hostSessionRef, async () => {
 			const prepared = await this.options.store.prepareOperation({
 				requestedHostSessionRef: request.hostSessionRef,
@@ -316,14 +355,16 @@ export class RuntimeHost {
 
 	async cancelGeneration(
 		value: RuntimeGenerationCancelRequestV1,
+		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
 		const parsed = RuntimeGenerationCancelRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		verifyExecutionGrant(
+		validateRuntimeExecutionGrant(
 			request,
 			"generation.cancel",
-			this.options.grantVerifier,
+			verification,
+			this.options.grantValidation,
 		);
 		return this.serialize(request.hostSessionRef, async () => {
 			const prepared = await this.options.store.prepareOperation({

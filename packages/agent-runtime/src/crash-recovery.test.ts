@@ -1,20 +1,22 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
-	ExecutionGrantClaimsV1,
-	RuntimeGrantOperationV1,
+	ExecutionGrantCommandV1,
+	ExecutionGrantV1,
 	RuntimeSubmitTurnRequestV1,
-	SignedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import {
+	openIngressVerifiedRuntimeHost,
+	runtimeGrantFixture,
+	runtimeGrantRequestContext,
+} from "./grant-fixture.test-support.js";
+import { FakeRuntimeDriver, FileRuntimeStore } from "./index.js";
 
 const directories: string[] = [];
-const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 
 interface MutableStoredOperation {
 	command?: unknown;
@@ -44,50 +46,36 @@ async function directory() {
 
 type RuntimeBinding = Pick<
 	RuntimeSubmitTurnRequestV1,
-	"agentId" | "conversationId" | "executionId" | "turnId" | "sessionGeneration"
+	| "agentId"
+	| "actorId"
+	| "channelId"
+	| "conversationId"
+	| "executionId"
+	| "turnId"
+	| "sessionGeneration"
+	| "traceId"
 >;
 
 function signedGrant(
 	binding: RuntimeBinding,
-	operations: RuntimeGrantOperationV1[],
-): SignedExecutionGrantV1 {
-	const claims: ExecutionGrantClaimsV1 = {
-		schemaVersion: 1,
-		issuer: "agent-platform",
-		audience: ["agent-runtime-host"],
-		issuedAt: "2026-08-28T09:59:00Z",
-		expiresAt: "2026-08-28T10:01:00Z",
-		grantId: `grant-${binding.executionId}-${operations.join("-")}`,
-		actorId: "actor-crash",
-		channelId: "web",
-		agentId: binding.agentId,
-		conversationId: binding.conversationId,
-		executionId: binding.executionId,
-		turnId: binding.turnId,
-		sessionGeneration: binding.sessionGeneration,
-		operations,
-		attachments: [],
+	commands: ExecutionGrantCommandV1[],
+): ExecutionGrantV1 {
+	return runtimeGrantFixture(binding, commands, {
 		actionSetVersion: "actions-crash",
-	};
-	const payload = Buffer.from(JSON.stringify(claims));
-	return {
-		schemaVersion: 1,
-		algorithm: "Ed25519",
-		keyId: "key-crash",
-		payload: payload.toString("base64url"),
-		signature: sign(null, payload, privateKey).toString("base64url"),
-	};
+	});
 }
-
 function request(
 	overrides: Partial<RuntimeBinding> = {},
 ): RuntimeSubmitTurnRequestV1 {
 	const binding: RuntimeBinding = {
 		agentId: "agent-crash",
+		actorId: "actor-crash",
+		channelId: "web",
 		conversationId: "conversation-crash",
 		executionId: "execution-crash",
 		turnId: "turn-crash",
 		sessionGeneration: 1,
+		traceId: "trace-crash",
 		...overrides,
 	};
 	return {
@@ -108,14 +96,12 @@ function host(
 		afterDriverResult?: () => void;
 	} = {},
 ) {
-	return RuntimeHost.open({
+	return openIngressVerifiedRuntimeHost({
 		store,
 		driver,
-		grantVerifier: {
+		grantValidation: {
 			expectedIssuer: "agent-platform",
-			expectedAudience: "agent-runtime-host",
-			publicKeys: new Map([["key-crash", publicKey]]),
-			now: () => new Date("2026-08-28T10:00:00Z"),
+			now: () => "2026-08-28T10:00:00Z",
 		},
 		...hooks,
 	});
@@ -149,14 +135,12 @@ describe("RuntimeHost crash-window recovery", () => {
 		expect(await driver.sideEffectCount()).toBe(0);
 
 		const restartedDriver = await FakeRuntimeDriver.open(driverPath);
-		const recoveredHost = await RuntimeHost.open({
+		const recoveredHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: restartedDriver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-crash", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		expect(await restartedDriver.sideEffectCount()).toBe(1);
@@ -196,14 +180,12 @@ describe("RuntimeHost crash-window recovery", () => {
 		expect(await driver.sideEffectCount()).toBe(1);
 
 		const restartedDriver = await FakeRuntimeDriver.open(driverPath);
-		const recoveredHost = await RuntimeHost.open({
+		const recoveredHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: restartedDriver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-crash", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const recoveredState = JSON.parse(
@@ -232,14 +214,12 @@ describe("RuntimeHost crash-window recovery", () => {
 		).submitTurn(request());
 		await driver.setOperationStatus("execution-crash", "completed");
 
-		await RuntimeHost.open({
+		await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: await FakeRuntimeDriver.open(driverPath),
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-crash", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const recoveredState = JSON.parse(
@@ -275,14 +255,12 @@ describe("RuntimeHost crash-window recovery", () => {
 		);
 		await driver.makeOperationUnknown("execution-crash");
 
-		const recoveredHost = await RuntimeHost.open({
+		const recoveredHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: await FakeRuntimeDriver.open(driverPath),
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-crash", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		const unknownState = JSON.parse(
@@ -494,20 +472,19 @@ describe("RuntimeHost crash-window recovery", () => {
 		await writeFile(hostPath, JSON.stringify(state), "utf8");
 
 		const restartedDriver = await FakeRuntimeDriver.open(driverPath);
-		const recoveredHost = await RuntimeHost.open({
+		const recoveredHost = await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: restartedDriver,
-			grantVerifier: {
+			grantValidation: {
 				expectedIssuer: "agent-platform",
-				expectedAudience: "agent-runtime-host",
-				publicKeys: new Map([["key-crash", publicKey]]),
-				now: () => new Date("2026-08-28T10:00:00Z"),
+				now: () => "2026-08-28T10:00:00Z",
 			},
 		});
 		expect(
 			await recoveredHost.status({
 				schemaVersion: 1,
 				requestId: "request-status-healthy",
+				...runtimeGrantRequestContext(healthyRequest),
 				agentId: healthyRequest.agentId,
 				conversationId: healthyRequest.conversationId,
 				executionId: healthyRequest.executionId,
@@ -522,6 +499,7 @@ describe("RuntimeHost crash-window recovery", () => {
 			recoveredHost.status({
 				schemaVersion: 1,
 				requestId: "request-status-affected",
+				...runtimeGrantRequestContext(affectedRequest),
 				agentId: affectedRequest.agentId,
 				conversationId: affectedRequest.conversationId,
 				executionId: affectedRequest.executionId,
@@ -571,14 +549,12 @@ describe("RuntimeHost crash-window recovery", () => {
 			await writeFile(hostPath, JSON.stringify(state), "utf8");
 
 			const restartedDriver = await FakeRuntimeDriver.open(driverPath);
-			const recoveredHost = await RuntimeHost.open({
+			const recoveredHost = await openIngressVerifiedRuntimeHost({
 				store: await FileRuntimeStore.open(hostPath),
 				driver: restartedDriver,
-				grantVerifier: {
+				grantValidation: {
 					expectedIssuer: "agent-platform",
-					expectedAudience: "agent-runtime-host",
-					publicKeys: new Map([["key-crash", publicKey]]),
-					now: () => new Date("2026-08-28T10:00:00Z"),
+					now: () => "2026-08-28T10:00:00Z",
 				},
 			});
 			await expect(
@@ -593,6 +569,7 @@ describe("RuntimeHost crash-window recovery", () => {
 				await recoveredHost.status({
 					schemaVersion: 1,
 					requestId: `request-binding-${field}-healthy`,
+					...runtimeGrantRequestContext(healthyRequest),
 					agentId: healthyRequest.agentId,
 					conversationId: healthyRequest.conversationId,
 					executionId: healthyRequest.executionId,
@@ -633,20 +610,19 @@ describe("RuntimeHost crash-window recovery", () => {
 			}
 
 			const restartedDriver = await FakeRuntimeDriver.open(driverPath);
-			const recoveredHost = await RuntimeHost.open({
+			const recoveredHost = await openIngressVerifiedRuntimeHost({
 				store: await FileRuntimeStore.open(hostPath),
 				driver: restartedDriver,
-				grantVerifier: {
+				grantValidation: {
 					expectedIssuer: "agent-platform",
-					expectedAudience: "agent-runtime-host",
-					publicKeys: new Map([["key-crash", publicKey]]),
-					now: () => new Date("2026-08-28T10:00:00Z"),
+					now: () => "2026-08-28T10:00:00Z",
 				},
 			});
 			expect(
 				await recoveredHost.status({
 					schemaVersion: 1,
 					requestId: `request-driver-${failure}-healthy`,
+					...runtimeGrantRequestContext(healthyRequest),
 					agentId: healthyRequest.agentId,
 					conversationId: healthyRequest.conversationId,
 					executionId: healthyRequest.executionId,
@@ -661,6 +637,7 @@ describe("RuntimeHost crash-window recovery", () => {
 				await recoveredHost.status({
 					schemaVersion: 1,
 					requestId: `request-driver-${failure}-affected`,
+					...runtimeGrantRequestContext(affectedRequest),
 					agentId: affectedRequest.agentId,
 					conversationId: affectedRequest.conversationId,
 					executionId: affectedRequest.executionId,
@@ -675,6 +652,7 @@ describe("RuntimeHost crash-window recovery", () => {
 				await recoveredHost.replay({
 					schemaVersion: 1,
 					requestId: `request-driver-${failure}-replay`,
+					...runtimeGrantRequestContext(affectedRequest),
 					agentId: affectedRequest.agentId,
 					conversationId: affectedRequest.conversationId,
 					executionId: affectedRequest.executionId,
@@ -699,6 +677,7 @@ describe("RuntimeHost crash-window recovery", () => {
 				recoveredHost.supplement({
 					schemaVersion: 1,
 					requestId: `request-driver-${failure}-supplement`,
+					...runtimeGrantRequestContext(affectedRequest),
 					agentId: affectedRequest.agentId,
 					conversationId: affectedRequest.conversationId,
 					executionId: affectedRequest.executionId,
@@ -717,6 +696,7 @@ describe("RuntimeHost crash-window recovery", () => {
 				await recoveredHost.cancelGeneration({
 					schemaVersion: 1,
 					requestId: `request-driver-${failure}-cancel`,
+					...runtimeGrantRequestContext(affectedRequest),
 					agentId: affectedRequest.agentId,
 					conversationId: affectedRequest.conversationId,
 					executionId: affectedRequest.executionId,
@@ -729,14 +709,12 @@ describe("RuntimeHost crash-window recovery", () => {
 				}),
 			).toMatchObject({ result: { outcome: "accepted", status: "cancelled" } });
 			await restartedDriver.clearRecoveryFailures();
-			await RuntimeHost.open({
+			await openIngressVerifiedRuntimeHost({
 				store: await FileRuntimeStore.open(hostPath),
 				driver: await FakeRuntimeDriver.open(driverPath),
-				grantVerifier: {
+				grantValidation: {
 					expectedIssuer: "agent-platform",
-					expectedAudience: "agent-runtime-host",
-					publicKeys: new Map([["key-crash", publicKey]]),
-					now: () => new Date("2026-08-28T10:00:00Z"),
+					now: () => "2026-08-28T10:00:00Z",
 				},
 			});
 			const recoveredState = JSON.parse(

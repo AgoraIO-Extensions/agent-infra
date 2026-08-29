@@ -1,26 +1,27 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	ExecutionGrantV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeEventV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1Schema,
-	SignedExecutionGrantV1Schema,
 } from "../../src/runtime/index.js";
 
 const signedGrant = {
 	schemaVersion: 1,
-	algorithm: "Ed25519",
-	keyId: "runtime-grant-key-1",
-	payload: "eyJzY2hlbWFWZXJzaW9uIjoxfQ",
-	signature: "c2lnbmF0dXJl",
+	format: "compact-jws",
+	token: "header.payload.signature",
 } as const;
 
 const requestContext = {
 	schemaVersion: 1,
 	requestId: "request-runtime-1",
+	traceId: "trace-runtime-1",
+	actorId: "actor-1",
+	channelId: "web",
 	agentId: "agent-1",
 	conversationId: "conversation-1",
 	executionId: "execution-1",
@@ -32,9 +33,7 @@ const requestContext = {
 
 describe("RuntimeHost V1 wire schemas", () => {
 	it("accepts versioned grant, command, replay, and normalized event shapes", () => {
-		expect(SignedExecutionGrantV1Schema.parse(signedGrant)).toEqual(
-			signedGrant,
-		);
+		expect(ExecutionGrantV1Schema.parse(signedGrant)).toEqual(signedGrant);
 		expect(
 			RuntimeSubmitTurnRequestV1Schema.parse({
 				...requestContext,
@@ -140,9 +139,9 @@ describe("RuntimeHost V1 wire schemas", () => {
 			}).success,
 		).toBe(false);
 		expect(
-			SignedExecutionGrantV1Schema.safeParse({
+			ExecutionGrantV1Schema.safeParse({
 				...signedGrant,
-				algorithm: "HS256",
+				format: "legacy-envelope",
 			}).success,
 		).toBe(false);
 	});

@@ -1,10 +1,16 @@
 import { createPublicKey } from "node:crypto";
 import { pathToFileURL } from "node:url";
+
 import {
+	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import type {
+	ExecutionGrantV1,
+	VerifiedExecutionGrantV1,
+} from "@agent-infra/contracts/runtime";
 import { serve } from "@hono/node-server";
 
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
@@ -14,6 +20,9 @@ export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 interface StartOptions {
 	host: RuntimeHost;
 	serviceToken: string;
+	verifyGrant: (
+		grant: ExecutionGrantV1,
+	) => VerifiedExecutionGrantV1 | Promise<VerifiedExecutionGrantV1>;
 	log?: (message: string) => void;
 	port?: number;
 }
@@ -56,23 +65,21 @@ async function startFromEnvironment() {
 		throw new Error("Configured Runtime Driver is unavailable");
 	}
 	const dataDirectory = requiredEnvironment("AGENT_INFRA_RUNTIME_DATA_DIR");
+	const keyId = requiredEnvironment("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
 	const publicKey = createPublicKey(
 		requiredEnvironment("AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY"),
 	);
 	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(`${dataDirectory}/host.json`),
 		driver: await FakeRuntimeDriver.open(`${dataDirectory}/fake-driver.json`),
-		grantVerifier: {
+		grantValidation: {
 			expectedIssuer: requiredEnvironment("AGENT_INFRA_RUNTIME_GRANT_ISSUER"),
-			expectedAudience: "agent-runtime-host",
-			publicKeys: new Map([
-				[requiredEnvironment("AGENT_INFRA_RUNTIME_GRANT_KEY_ID"), publicKey],
-			]),
 		},
 	});
 	startRuntimeHost({
 		host,
 		serviceToken: requiredEnvironment("AGENT_INFRA_RUNTIME_SERVICE_TOKEN"),
+		verifyGrant: createExecutionGrantVerifier(new Map([[keyId, publicKey]])),
 	});
 }
 

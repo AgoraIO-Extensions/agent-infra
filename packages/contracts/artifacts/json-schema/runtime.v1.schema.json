@@ -3,6 +3,13 @@
     "ExecutionGrantClaimsV1": {
       "additionalProperties": false,
       "properties": {
+        "actionIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
         "actionSetVersion": {
           "minLength": 1,
           "type": "string"
@@ -15,6 +22,23 @@
           "minLength": 1,
           "type": "string"
         },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "events.replay",
+              "capabilities.read",
+              "generation.cancel",
+              "tool.invoke"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
         "attachments": {
           "items": {
             "additionalProperties": false,
@@ -24,12 +48,13 @@
                 "type": "string"
               },
               "operations": {
-                "prefixItems": [
-                  {
-                    "const": "read",
-                    "type": "string"
-                  }
-                ],
+                "items": {
+                  "enum": [
+                    "read"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
                 "type": "array"
               }
             },
@@ -43,7 +68,11 @@
         },
         "audience": {
           "items": {
-            "minLength": 1,
+            "enum": [
+              "runtime_host",
+              "platform_tool_gateway",
+              "connection_api"
+            ],
             "type": "string"
           },
           "minItems": 1,
@@ -79,22 +108,6 @@
           "minLength": 1,
           "type": "string"
         },
-        "operations": {
-          "items": {
-            "enum": [
-              "turn.submit",
-              "turn.supplement",
-              "turn.stop",
-              "session.status",
-              "events.replay",
-              "capabilities.read",
-              "generation.cancel"
-            ],
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
         "schemaVersion": {
           "const": 1,
           "type": "number"
@@ -103,6 +116,10 @@
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991,
           "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
         },
         "turnId": {
           "minLength": 1,
@@ -116,46 +133,69 @@
         "issuedAt",
         "expiresAt",
         "grantId",
+        "agentId",
         "actorId",
         "channelId",
-        "agentId",
         "conversationId",
-        "executionId",
         "turnId",
+        "executionId",
         "sessionGeneration",
-        "operations",
+        "allowedCommands",
         "attachments",
-        "actionSetVersion"
+        "actionSetVersion",
+        "actionIds",
+        "traceId"
       ],
       "type": "object"
     },
-    "RuntimeAttachmentGrantV1": {
+    "ExecutionGrantCommandV1": {
+      "enum": [
+        "turn.submit",
+        "turn.supplement",
+        "turn.stop",
+        "session.status",
+        "events.replay",
+        "capabilities.read",
+        "generation.cancel",
+        "tool.invoke"
+      ],
+      "type": "string"
+    },
+    "ExecutionGrantV1": {
       "additionalProperties": false,
       "properties": {
-        "attachmentId": {
-          "minLength": 1,
+        "format": {
+          "const": "compact-jws",
           "type": "string"
         },
-        "operations": {
-          "prefixItems": [
-            {
-              "const": "read",
-              "type": "string"
-            }
-          ],
-          "type": "array"
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
         }
       },
       "required": [
-        "attachmentId",
-        "operations"
+        "schemaVersion",
+        "format",
+        "token"
       ],
       "type": "object"
     },
     "RuntimeCapabilitiesRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -175,35 +215,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -224,6 +252,10 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -232,6 +264,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -1110,7 +1145,15 @@
     "RuntimeGenerationCancelRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -1130,35 +1173,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -1183,6 +1214,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -1191,6 +1226,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -1202,18 +1240,6 @@
         "tombstoneId"
       ],
       "type": "object"
-    },
-    "RuntimeGrantOperationV1": {
-      "enum": [
-        "turn.submit",
-        "turn.supplement",
-        "turn.stop",
-        "session.status",
-        "events.replay",
-        "capabilities.read",
-        "generation.cancel"
-      ],
-      "type": "string"
     },
     "RuntimeInputV1": {
       "anyOf": [
@@ -1470,11 +1496,19 @@
     "RuntimeReplayRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "afterCursor": {
           "minLength": 1,
           "type": "string"
         },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -1494,35 +1528,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -1543,6 +1565,10 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -1551,6 +1577,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -1955,7 +1984,15 @@
     "RuntimeStatusRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -1975,35 +2012,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -2024,6 +2049,10 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -2032,6 +2061,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -2094,7 +2126,15 @@
     "RuntimeStopRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -2119,35 +2159,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -2172,6 +2200,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -2180,6 +2212,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -2196,7 +2231,15 @@
     "RuntimeSubmitTurnRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -2216,35 +2259,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -2307,6 +2338,10 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -2315,6 +2350,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -2329,7 +2367,15 @@
     "RuntimeSupplementRequestV1": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
           "minLength": 1,
           "type": "string"
         },
@@ -2354,35 +2400,23 @@
         "grant": {
           "additionalProperties": false,
           "properties": {
-            "algorithm": {
-              "const": "Ed25519",
-              "type": "string"
-            },
-            "keyId": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "payload": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "format": {
+              "const": "compact-jws",
               "type": "string"
             },
             "schemaVersion": {
               "const": 1,
               "type": "number"
             },
-            "signature": {
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
               "type": "string"
             }
           },
           "required": [
             "schemaVersion",
-            "algorithm",
-            "keyId",
-            "payload",
-            "signature"
+            "format",
+            "token"
           ],
           "type": "object"
         },
@@ -2449,6 +2483,10 @@
           "maximum": 9007199254740991,
           "type": "integer"
         },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "turnId": {
           "minLength": 1,
           "type": "string"
@@ -2457,6 +2495,9 @@
       "required": [
         "schemaVersion",
         "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
         "agentId",
         "conversationId",
         "executionId",
@@ -2468,41 +2509,6 @@
         "messageId",
         "executionDeliveryFence",
         "input"
-      ],
-      "type": "object"
-    },
-    "SignedExecutionGrantV1": {
-      "additionalProperties": false,
-      "properties": {
-        "algorithm": {
-          "const": "Ed25519",
-          "type": "string"
-        },
-        "keyId": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "payload": {
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9_-]+$",
-          "type": "string"
-        },
-        "schemaVersion": {
-          "const": 1,
-          "type": "number"
-        },
-        "signature": {
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9_-]+$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "schemaVersion",
-        "algorithm",
-        "keyId",
-        "payload",
-        "signature"
       ],
       "type": "object"
     }

@@ -14,9 +14,8 @@ import {
 } from "./events.ts";
 import {
 	ExecutionGrantClaimsV1Schema,
-	RuntimeAttachmentGrantV1Schema,
-	RuntimeGrantOperationV1Schema,
-	SignedExecutionGrantV1Schema,
+	ExecutionGrantCommandV1Schema,
+	ExecutionGrantV1Schema,
 } from "./grant.ts";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
@@ -36,11 +35,11 @@ import {
 
 export const RuntimeHostV1SchemaDefinitions = {
 	ExecutionGrantClaimsV1: ExecutionGrantClaimsV1Schema,
-	RuntimeAttachmentGrantV1: RuntimeAttachmentGrantV1Schema,
+	ExecutionGrantCommandV1: ExecutionGrantCommandV1Schema,
+	ExecutionGrantV1: ExecutionGrantV1Schema,
 	RuntimeCapabilitiesRequestV1: RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1: RuntimeCapabilitiesResponseV1Schema,
 	RuntimeGenerationCancelRequestV1: RuntimeGenerationCancelRequestV1Schema,
-	RuntimeGrantOperationV1: RuntimeGrantOperationV1Schema,
 	RuntimeInputV1: RuntimeInputV1Schema,
 	RuntimeOperationResponseV1: RuntimeOperationResponseV1Schema,
 	RuntimeOperationResultV1: RuntimeOperationResultV1Schema,
@@ -51,7 +50,6 @@ export const RuntimeHostV1SchemaDefinitions = {
 	RuntimeStopRequestV1: RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1: RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1: RuntimeSupplementRequestV1Schema,
-	SignedExecutionGrantV1: SignedExecutionGrantV1Schema,
 };
 
 export const RuntimeEventV1SchemaDefinitions = {

@@ -11,19 +11,22 @@ import {
 	RuntimeEventV1Schema,
 	RuntimeStatusV1Schema,
 } from "./events.ts";
-import { SignedExecutionGrantV1Schema } from "./grant.ts";
+import { ExecutionGrantV1Schema } from "./grant.ts";
 
 const positiveFence = z.number().int().positive();
 const requestContext = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
+	traceId: OpaqueIdV1Schema,
+	actorId: OpaqueIdV1Schema,
+	channelId: OpaqueIdV1Schema,
 	agentId: OpaqueIdV1Schema,
 	conversationId: OpaqueIdV1Schema,
 	executionId: OpaqueIdV1Schema,
 	turnId: OpaqueIdV1Schema,
 	sessionGeneration: z.number().int().positive(),
 	deliveryFence: positiveFence,
-	grant: SignedExecutionGrantV1Schema,
+	grant: ExecutionGrantV1Schema,
 };
 
 export const RuntimeInputV1Schema = z.union([

@@ -4,17 +4,77 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
-import type { ExecutionGrantClaimsV1 } from "@agent-infra/contracts/runtime";
+import type {
+	ExecutionGrantClaimsV1,
+	ExecutionGrantCommandV1,
+	ExecutionGrantV1,
+} from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createRuntimeHostApp } from "./app.js";
 
 const directories: string[] = [];
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+
+interface GrantBinding {
+	agentId: string;
+	actorId: string;
+	channelId: string;
+	conversationId: string;
+	executionId: string;
+	turnId: string;
+	sessionGeneration: number;
+	traceId: string;
+}
+
+function executionGrant(
+	binding: GrantBinding,
+	allowedCommands: ExecutionGrantCommandV1[],
+	grantId: string,
+): ExecutionGrantV1 {
+	const claims: ExecutionGrantClaimsV1 = {
+		schemaVersion: 1,
+		issuer: "agent-platform",
+		audience: ["runtime_host"],
+		issuedAt: "2026-08-28T09:59:00Z",
+		expiresAt: "2026-08-28T10:01:00Z",
+		grantId,
+		agentId: binding.agentId,
+		actorId: binding.actorId,
+		channelId: binding.channelId,
+		conversationId: binding.conversationId,
+		turnId: binding.turnId,
+		executionId: binding.executionId,
+		sessionGeneration: binding.sessionGeneration,
+		allowedCommands,
+		attachments: [],
+		actionSetVersion: "actions-http",
+		actionIds: [],
+		traceId: binding.traceId,
+	};
+	const protectedSegment = Buffer.from(
+		JSON.stringify({ alg: "EdDSA", kid: "key-http" }),
+	).toString("base64url");
+	const payloadSegment = Buffer.from(JSON.stringify(claims)).toString(
+		"base64url",
+	);
+	const signingInput = `${protectedSegment}.${payloadSegment}`;
+	const signatureSegment = sign(
+		null,
+		Buffer.from(signingInput, "ascii"),
+		privateKey,
+	).toString("base64url");
+	return {
+		schemaVersion: 1,
+		format: "compact-jws",
+		token: `${signingInput}.${signatureSegment}`,
+	};
+}
 
 async function setup() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-http-"));
@@ -23,58 +83,44 @@ async function setup() {
 	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(join(directory, "host.json")),
 		driver,
-		grantVerifier: {
+		grantValidation: {
 			expectedIssuer: "agent-platform",
-			expectedAudience: "agent-runtime-host",
-			publicKeys: new Map([["key-http", publicKey]]),
-			now: () => new Date("2026-08-28T10:00:00Z"),
+			now: () => "2026-08-28T10:00:00Z",
 		},
 	});
 	return {
 		app: createRuntimeHostApp({
 			host,
 			serviceToken: "synthetic-service-proof",
+			verifyGrant: createExecutionGrantVerifier(
+				new Map([["key-http", publicKey]]),
+			),
 		}),
 		driver,
 	};
 }
 
 function submitBody() {
-	const claims: ExecutionGrantClaimsV1 = {
-		schemaVersion: 1,
-		issuer: "agent-platform",
-		audience: ["agent-runtime-host"],
-		issuedAt: "2026-08-28T09:59:00Z",
-		expiresAt: "2026-08-28T10:01:00Z",
-		grantId: "grant-http",
+	const binding = {
+		agentId: "agent-http",
 		actorId: "actor-http",
 		channelId: "web",
-		agentId: "agent-http",
 		conversationId: "conversation-http",
 		executionId: "execution-http",
 		turnId: "turn-http",
 		sessionGeneration: 1,
-		operations: ["turn.submit", "events.replay"],
-		attachments: [],
-		actionSetVersion: "actions-http",
+		traceId: "trace-http",
 	};
-	const payload = Buffer.from(JSON.stringify(claims));
 	return {
-		schemaVersion: 1,
+		schemaVersion: 1 as const,
 		requestId: "request-http",
-		agentId: claims.agentId,
-		conversationId: claims.conversationId,
-		executionId: claims.executionId,
-		turnId: claims.turnId,
-		sessionGeneration: claims.sessionGeneration,
+		...binding,
 		deliveryFence: 1,
-		grant: {
-			schemaVersion: 1,
-			algorithm: "Ed25519",
-			keyId: "key-http",
-			payload: payload.toString("base64url"),
-			signature: sign(null, payload, privateKey).toString("base64url"),
-		},
+		grant: executionGrant(
+			binding,
+			["turn.submit", "events.replay"],
+			"grant-http",
+		),
 		input: { text: "synthetic-http-input", attachments: [] },
 	};
 }
@@ -106,6 +152,16 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 			body: JSON.stringify({ schemaVersion: 1 }),
 		});
 		expect(malformed.status).toBe(400);
+		const invalidGrant = submitBody();
+		const segments = invalidGrant.grant.token.split(".");
+		segments[2] = "dGFtcGVyZWQ";
+		invalidGrant.grant.token = segments.join(".");
+		const rejected = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(invalidGrant),
+		});
+		expect(rejected.status).toBe(403);
 		expect(await driver.sideEffectCount()).toBe(0);
 	});
 
@@ -128,16 +184,10 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 				method: "POST",
 				headers: authorizedHeaders,
 				body: JSON.stringify({
-					schemaVersion: 1,
+					...body,
 					requestId: "request-http-replay",
-					agentId: body.agentId,
-					conversationId: body.conversationId,
-					executionId: body.executionId,
-					turnId: body.turnId,
-					sessionGeneration: body.sessionGeneration,
-					deliveryFence: body.deliveryFence,
 					hostSessionRef: submitted.hostSessionRef,
-					grant: body.grant,
+					input: undefined,
 				}),
 			},
 		);
@@ -170,17 +220,11 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 				headers: authorizedHeaders,
 				signal: abort.signal,
 				body: JSON.stringify({
-					schemaVersion: 1,
+					...body,
 					requestId: "request-http-live",
-					agentId: body.agentId,
-					conversationId: body.conversationId,
-					executionId: body.executionId,
-					turnId: body.turnId,
-					sessionGeneration: body.sessionGeneration,
-					deliveryFence: body.deliveryFence,
 					hostSessionRef: submitted.hostSessionRef,
 					afterCursor: "fake-cursor-1",
-					grant: body.grant,
+					input: undefined,
 				}),
 			},
 		);
@@ -190,11 +234,6 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		);
 		const reader = liveResponse.body?.getReader();
 		if (!reader) throw new Error("expected live SSE body");
-		const claims = JSON.parse(
-			Buffer.from(body.grant.payload, "base64url").toString("utf8"),
-		) as ExecutionGrantClaimsV1;
-		claims.operations = ["turn.supplement"];
-		const payload = Buffer.from(JSON.stringify(claims));
 
 		const supplemented = await app.request(
 			"/internal/runtime/v1/instructions",
@@ -202,22 +241,17 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 				method: "POST",
 				headers: authorizedHeaders,
 				body: JSON.stringify({
-					schemaVersion: 1,
+					...body,
 					requestId: "request-http-live-supplement",
-					agentId: body.agentId,
-					conversationId: body.conversationId,
-					executionId: body.executionId,
-					turnId: body.turnId,
-					sessionGeneration: body.sessionGeneration,
 					deliveryFence: 1,
 					executionDeliveryFence: 1,
 					hostSessionRef: submitted.hostSessionRef,
 					messageId: "message-http-live",
-					grant: {
-						...body.grant,
-						payload: payload.toString("base64url"),
-						signature: sign(null, payload, privateKey).toString("base64url"),
-					},
+					grant: executionGrant(
+						body,
+						["turn.supplement"],
+						"grant-http-supplement",
+					),
 					input: { text: "synthetic-live-supplement", attachments: [] },
 				}),
 			},

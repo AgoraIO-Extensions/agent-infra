@@ -2,37 +2,31 @@ import { type KeyObject, verify } from "node:crypto";
 import { TextDecoder } from "node:util";
 
 import {
-	ExecutionGrantClaimsV1Schema,
-	type RuntimeGrantOperationV1,
-	type SignedExecutionGrantV1,
+	type ExecutionGrantClaimsV1,
+	type ExecutionGrantCommandV1,
+	type ExecutionGrantV1,
+	VerifiedExecutionGrantV1Schema,
+	validateExecutionGrantClaimsV1,
 } from "@agent-infra/contracts/runtime";
 
 import { RuntimeHostError } from "./errors.js";
 
 interface GrantBoundRequest {
 	agentId: string;
+	actorId: string;
+	channelId: string;
 	conversationId: string;
 	executionId: string;
 	turnId: string;
 	sessionGeneration: number;
-	grant: SignedExecutionGrantV1;
+	traceId: string;
+	grant: ExecutionGrantV1;
 	input?: { attachments: string[] };
 }
 
-export interface ExecutionGrantVerifierOptions {
+export interface ExecutionGrantValidationOptions {
 	expectedIssuer: string;
-	expectedAudience: string;
-	publicKeys: ReadonlyMap<string, KeyObject>;
-	now?: () => Date;
-}
-
-const utf8 = new TextDecoder("utf-8", { fatal: true });
-const rfc3339Instant =
-	/^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
-
-interface ComparableInstant {
-	epochSecond: number;
-	fraction: string;
+	now?: () => string;
 }
 
 function authorizationDenied(): never {
@@ -43,101 +37,97 @@ function authorizationDenied(): never {
 	);
 }
 
-function parseInstant(value: string): ComparableInstant | undefined {
-	const match = rfc3339Instant.exec(value);
-	if (!match) return undefined;
-	const [
-		,
-		yearValue,
-		monthValue,
-		dayValue,
-		hourValue,
-		minuteValue,
-		secondValue,
-		fraction = "",
-		zone,
-		sign,
-		offsetHourValue,
-		offsetMinuteValue,
-	] = match;
-	const year = Number(yearValue);
-	const month = Number(monthValue);
-	const day = Number(dayValue);
-	const hour = Number(hourValue);
-	const minute = Number(minuteValue);
-	const second = Number(secondValue);
-	const date = new Date(0);
-	date.setUTCFullYear(year, month - 1, day);
-	date.setUTCHours(hour, minute, Math.min(second, 59), 0);
-	const baseMilliseconds = date.getTime();
-	if (!Number.isFinite(baseMilliseconds)) return undefined;
-	const offsetSeconds =
-		zone === "Z" || zone === "z"
-			? 0
-			: (sign === "+" ? 1 : -1) *
-				(Number(offsetHourValue) * 60 + Number(offsetMinuteValue)) *
-				60;
-	return {
-		epochSecond:
-			baseMilliseconds / 1_000 + (second === 60 ? 1 : 0) - offsetSeconds,
-		fraction,
-	};
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+const base64Url = /^[A-Za-z0-9_-]+$/;
+
+function decodeSegment(segment: string) {
+	if (!base64Url.test(segment)) authorizationDenied();
+	const decoded = Buffer.from(segment, "base64url");
+	if (decoded.toString("base64url") !== segment) authorizationDenied();
+	return decoded;
 }
 
-function instantFromDate(value: Date): ComparableInstant | undefined {
-	const milliseconds = value.getTime();
-	if (!Number.isFinite(milliseconds)) return undefined;
-	const epochSecond = Math.floor(milliseconds / 1_000);
-	const fractionMilliseconds = milliseconds - epochSecond * 1_000;
-	return {
-		epochSecond,
-		fraction:
-			fractionMilliseconds === 0
-				? ""
-				: String(fractionMilliseconds).padStart(3, "0"),
-	};
-}
-
-function compareInstants(left: ComparableInstant, right: ComparableInstant) {
-	if (left.epochSecond !== right.epochSecond) {
-		return left.epochSecond < right.epochSecond ? -1 : 1;
-	}
-	const width = Math.max(left.fraction.length, right.fraction.length);
-	const leftFraction = left.fraction.padEnd(width, "0");
-	const rightFraction = right.fraction.padEnd(width, "0");
-	return leftFraction < rightFraction
-		? -1
-		: leftFraction > rightFraction
-			? 1
-			: 0;
-}
-
-export function verifyExecutionGrant(
-	request: GrantBoundRequest,
-	requiredOperation: RuntimeGrantOperationV1,
-	options: ExecutionGrantVerifierOptions,
+export function createExecutionGrantVerifier(
+	publicKeys: ReadonlyMap<string, KeyObject>,
 ) {
-	const key = options.publicKeys.get(request.grant.keyId);
-	if (!key) authorizationDenied();
+	return (grant: ExecutionGrantV1) => {
+		try {
+			const [protectedSegment, payloadSegment, signatureSegment, extra] =
+				grant.token.split(".");
+			if (
+				!protectedSegment ||
+				!payloadSegment ||
+				!signatureSegment ||
+				extra !== undefined
+			) {
+				authorizationDenied();
+			}
+			const header = JSON.parse(
+				utf8.decode(decodeSegment(protectedSegment)),
+			) as unknown;
+			if (
+				typeof header !== "object" ||
+				header === null ||
+				Array.isArray(header) ||
+				Object.keys(header).sort().join(",") !== "alg,kid" ||
+				(header as { alg?: unknown }).alg !== "EdDSA" ||
+				typeof (header as { kid?: unknown }).kid !== "string" ||
+				(header as { kid: string }).kid.length === 0
+			) {
+				authorizationDenied();
+			}
+			const key = publicKeys.get((header as { kid: string }).kid);
+			if (!key) authorizationDenied();
+			const signingInput = `${protectedSegment}.${payloadSegment}`;
+			if (
+				!verify(
+					null,
+					Buffer.from(signingInput, "ascii"),
+					key,
+					decodeSegment(signatureSegment),
+				)
+			) {
+				authorizationDenied();
+			}
+			return VerifiedExecutionGrantV1Schema.parse({
+				token: grant.token,
+				claims: JSON.parse(utf8.decode(decodeSegment(payloadSegment))),
+			});
+		} catch {
+			authorizationDenied();
+		}
+	};
+}
 
-	let payload: Buffer;
-	let claimsValue: unknown;
+export function validateRuntimeExecutionGrant(
+	request: GrantBoundRequest,
+	requiredCommand: ExecutionGrantCommandV1,
+	verificationInput: unknown,
+	options: ExecutionGrantValidationOptions,
+) {
+	let claims: ExecutionGrantClaimsV1;
 	try {
-		payload = Buffer.from(request.grant.payload, "base64url");
-		const signature = Buffer.from(request.grant.signature, "base64url");
-		if (!verify(null, payload, key, signature)) authorizationDenied();
-		claimsValue = JSON.parse(utf8.decode(payload));
-	} catch (error) {
-		if (error instanceof RuntimeHostError) throw error;
+		const verification =
+			VerifiedExecutionGrantV1Schema.parse(verificationInput);
+		if (verification.token !== request.grant.token) authorizationDenied();
+		claims = validateExecutionGrantClaimsV1(verification.claims, {
+			expectedIssuer: options.expectedIssuer,
+			requiredAudience: "runtime_host",
+			now: (options.now ?? (() => new Date().toISOString()))(),
+			expectedBindings: {
+				agentId: request.agentId,
+				actorId: request.actorId,
+				channelId: request.channelId,
+				conversationId: request.conversationId,
+				turnId: request.turnId,
+				executionId: request.executionId,
+				sessionGeneration: request.sessionGeneration,
+				traceId: request.traceId,
+			},
+		});
+	} catch {
 		authorizationDenied();
 	}
-
-	const parsed = ExecutionGrantClaimsV1Schema.safeParse(claimsValue);
-	if (!parsed.success) authorizationDenied();
-	const claims = parsed.data;
-	const now = instantFromDate((options.now ?? (() => new Date()))());
-	const issuedAt = parseInstant(claims.issuedAt);
-	const expiresAt = parseInstant(claims.expiresAt);
 	const attachments = request.input?.attachments ?? [];
 	const allowedAttachments = new Set(
 		claims.attachments
@@ -146,20 +136,7 @@ export function verifyExecutionGrant(
 	);
 
 	if (
-		!now ||
-		!issuedAt ||
-		!expiresAt ||
-		claims.issuer !== options.expectedIssuer ||
-		!claims.audience.includes(options.expectedAudience) ||
-		compareInstants(issuedAt, now) > 0 ||
-		compareInstants(expiresAt, now) <= 0 ||
-		compareInstants(issuedAt, expiresAt) >= 0 ||
-		claims.agentId !== request.agentId ||
-		claims.conversationId !== request.conversationId ||
-		claims.executionId !== request.executionId ||
-		claims.turnId !== request.turnId ||
-		claims.sessionGeneration !== request.sessionGeneration ||
-		!claims.operations.includes(requiredOperation) ||
+		!claims.allowedCommands.includes(requiredCommand) ||
 		attachments.some((attachmentId) => !allowedAttachments.has(attachmentId))
 	) {
 		authorizationDenied();

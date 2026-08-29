@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { type RuntimeHost, RuntimeHostError } from "@agent-infra/agent-runtime";
 import {
+	type ExecutionGrantV1,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -9,6 +10,7 @@ import {
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1Schema,
+	type VerifiedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -19,6 +21,9 @@ export const runtimeHostService = "agent-runtime-host";
 interface RuntimeHostAppOptions {
 	host: RuntimeHost;
 	serviceToken: string;
+	verifyGrant: (
+		grant: ExecutionGrantV1,
+	) => VerifiedExecutionGrantV1 | Promise<VerifiedExecutionGrantV1>;
 }
 
 interface Parser<T> {
@@ -72,44 +77,74 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		await next();
 	});
 
-	app.post("/internal/runtime/v1/turns", async (context) =>
-		context.json(
+	app.post("/internal/runtime/v1/turns", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSubmitTurnRequestV1Schema,
+		);
+		return context.json(
 			await options.host.submitTurn(
-				await parseBody(context.req.raw, RuntimeSubmitTurnRequestV1Schema),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
-	app.post("/internal/runtime/v1/instructions", async (context) =>
-		context.json(
+		);
+	});
+	app.post("/internal/runtime/v1/instructions", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSupplementRequestV1Schema,
+		);
+		return context.json(
 			await options.host.supplement(
-				await parseBody(context.req.raw, RuntimeSupplementRequestV1Schema),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
-	app.post("/internal/runtime/v1/stops", async (context) =>
-		context.json(
+		);
+	});
+	app.post("/internal/runtime/v1/stops", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeStopRequestV1Schema,
+		);
+		return context.json(
 			await options.host.stop(
-				await parseBody(context.req.raw, RuntimeStopRequestV1Schema),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
-	app.post("/internal/runtime/v1/status", async (context) =>
-		context.json(
+		);
+	});
+	app.post("/internal/runtime/v1/status", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeStatusRequestV1Schema,
+		);
+		return context.json(
 			await options.host.status(
-				await parseBody(context.req.raw, RuntimeStatusRequestV1Schema),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
-	app.post("/internal/runtime/v1/capabilities", async (context) =>
-		context.json(
+		);
+	});
+	app.post("/internal/runtime/v1/capabilities", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeCapabilitiesRequestV1Schema,
+		);
+		return context.json(
 			await options.host.capabilities(
-				await parseBody(context.req.raw, RuntimeCapabilitiesRequestV1Schema),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
+		);
+	});
 	app.post("/internal/runtime/v1/events/replay", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeReplayRequestV1Schema,
+		);
 		const replay = await options.host.replay(
-			await parseBody(context.req.raw, RuntimeReplayRequestV1Schema),
+			request,
+			await options.verifyGrant(request.grant),
 		);
 		return streamSSE(context, async (stream) => {
 			for (const event of replay.events) {
@@ -122,8 +157,13 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		});
 	});
 	app.post("/internal/runtime/v1/events/stream", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeReplayRequestV1Schema,
+		);
 		const events = await options.host.streamEvents(
-			await parseBody(context.req.raw, RuntimeReplayRequestV1Schema),
+			request,
+			await options.verifyGrant(request.grant),
 			context.req.raw.signal,
 		);
 		return streamSSE(context, async (stream) => {
@@ -136,16 +176,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			}
 		});
 	});
-	app.post("/internal/runtime/v1/generations/cancel", async (context) =>
-		context.json(
+	app.post("/internal/runtime/v1/generations/cancel", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeGenerationCancelRequestV1Schema,
+		);
+		return context.json(
 			await options.host.cancelGeneration(
-				await parseBody(
-					context.req.raw,
-					RuntimeGenerationCancelRequestV1Schema,
-				),
+				request,
+				await options.verifyGrant(request.grant),
 			),
-		),
-	);
+		);
+	});
 
 	app.onError((error, context) => {
 		const runtimeError =

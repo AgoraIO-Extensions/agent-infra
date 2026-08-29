@@ -1,16 +1,17 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
-	ExecutionGrantClaimsV1,
-	RuntimeGrantOperationV1,
+	ExecutionGrantCommandV1,
+	ExecutionGrantV1,
 	RuntimeSubmitTurnRequestV1,
-	SignedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
-
+import {
+	ingressVerifiedRuntimeHost,
+	runtimeGrantFixture,
+} from "./grant-fixture.test-support.js";
 import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -19,8 +20,6 @@ import {
 } from "./index.js";
 
 const directories: string[] = [];
-const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-const now = new Date("2026-08-28T10:00:00Z");
 
 async function runtimeDirectory() {
 	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-conformance-"));
@@ -32,48 +31,31 @@ function grant(
 	request: Pick<
 		RuntimeSubmitTurnRequestV1,
 		| "agentId"
+		| "actorId"
+		| "channelId"
 		| "conversationId"
 		| "executionId"
 		| "turnId"
 		| "sessionGeneration"
+		| "traceId"
 	>,
-	operations: RuntimeGrantOperationV1[],
-): SignedExecutionGrantV1 {
-	const claims: ExecutionGrantClaimsV1 = {
-		schemaVersion: 1,
-		issuer: "agent-platform",
-		audience: ["agent-runtime-host"],
-		issuedAt: "2026-08-28T09:59:00Z",
-		expiresAt: "2026-08-28T10:01:00Z",
-		grantId: `grant-${request.executionId}-${operations.join("-")}`,
-		actorId: "actor-conformance",
-		channelId: "web",
-		agentId: request.agentId,
-		conversationId: request.conversationId,
-		executionId: request.executionId,
-		turnId: request.turnId,
-		sessionGeneration: request.sessionGeneration,
-		operations,
-		attachments: [],
+	operations: ExecutionGrantCommandV1[],
+): ExecutionGrantV1 {
+	return runtimeGrantFixture(request, operations, {
 		actionSetVersion: "actions-conformance",
-	};
-	const payload = Buffer.from(JSON.stringify(claims));
-	return {
-		schemaVersion: 1,
-		algorithm: "Ed25519",
-		keyId: "key-conformance",
-		payload: payload.toString("base64url"),
-		signature: sign(null, payload, privateKey).toString("base64url"),
-	};
+	});
 }
 
 function submitRequest(): RuntimeSubmitTurnRequestV1 {
 	const binding = {
 		agentId: "agent-conformance",
+		actorId: "actor-conformance",
+		channelId: "web",
 		conversationId: "conversation-conformance",
 		executionId: "execution-conformance-1",
 		turnId: "turn-conformance-1",
 		sessionGeneration: 1,
+		traceId: "trace-conformance",
 	};
 	return {
 		schemaVersion: 1,
@@ -89,13 +71,11 @@ function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
 	return RuntimeHost.open({
 		store,
 		driver,
-		grantVerifier: {
+		grantValidation: {
 			expectedIssuer: "agent-platform",
-			expectedAudience: "agent-runtime-host",
-			publicKeys: new Map([["key-conformance", publicKey]]),
-			now: () => now,
+			now: () => "2026-08-28T10:00:00Z",
 		},
-	});
+	}).then(ingressVerifiedRuntimeHost);
 }
 
 afterEach(async () => {
@@ -107,6 +87,93 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost durable Session", () => {
+	it("accepts only ingress-verified canonical Grants before Driver side effects", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+		});
+		const request = {
+			...submitRequest(),
+			actorId: "actor-conformance",
+			channelId: "web",
+			traceId: "trace-conformance",
+			grant: {
+				schemaVersion: 1,
+				format: "compact-jws",
+				token: "header.payload.signature",
+			},
+		} as const;
+		const claims = {
+			schemaVersion: 1,
+			issuer: "agent-platform",
+			audience: ["runtime_host"],
+			issuedAt: "2026-08-28T09:59:00Z",
+			expiresAt: "2026-08-28T10:01:00Z",
+			grantId: "grant-canonical",
+			agentId: request.agentId,
+			actorId: request.actorId,
+			channelId: request.channelId,
+			conversationId: request.conversationId,
+			turnId: request.turnId,
+			executionId: request.executionId,
+			sessionGeneration: request.sessionGeneration,
+			allowedCommands: ["turn.submit"],
+			attachments: [],
+			actionSetVersion: "actions-conformance",
+			actionIds: [],
+			traceId: request.traceId,
+		} as const;
+
+		expect(
+			await runtimeHost.submitTurn(request, {
+				token: request.grant.token,
+				claims,
+			}),
+		).toMatchObject({ result: { outcome: "accepted" } });
+		expect(await driver.sideEffectCount()).toBe(1);
+
+		for (const verification of [
+			{ token: "other.payload.signature", claims },
+			{
+				token: request.grant.token,
+				claims: { ...claims, audience: ["connection_api"] },
+			},
+			{
+				token: request.grant.token,
+				claims: { ...claims, allowedCommands: ["session.status"] },
+			},
+			...(
+				[
+					"agentId",
+					"actorId",
+					"channelId",
+					"conversationId",
+					"turnId",
+					"executionId",
+					"traceId",
+				] as const
+			).map((binding) => ({
+				token: request.grant.token,
+				claims: { ...claims, [binding]: `other-${binding}` },
+			})),
+			{
+				token: request.grant.token,
+				claims: { ...claims, sessionGeneration: 2 },
+			},
+		]) {
+			await expect(
+				runtimeHost.submitTurn(request, verification),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		}
+		expect(await driver.sideEffectCount()).toBe(1);
+	});
+
 	it("recovers the same opaque Host Session after Host and Driver restart", async () => {
 		const directory = await runtimeDirectory();
 		const firstHost = await host(
@@ -133,6 +200,9 @@ describe("RuntimeHost durable Session", () => {
 		const status = await restartedHost.status({
 			schemaVersion: 1,
 			requestId: "request-conformance-status",
+			traceId: binding.traceId,
+			actorId: binding.actorId,
+			channelId: binding.channelId,
 			agentId: binding.agentId,
 			conversationId: binding.conversationId,
 			executionId: binding.executionId,
@@ -162,6 +232,9 @@ describe("RuntimeHost durable Session", () => {
 		const submitted = await runtimeHost.submitTurn(submittedRequest);
 		const base = {
 			schemaVersion: 1 as const,
+			traceId: submittedRequest.traceId,
+			actorId: submittedRequest.actorId,
+			channelId: submittedRequest.channelId,
 			agentId: submittedRequest.agentId,
 			conversationId: submittedRequest.conversationId,
 			executionId: submittedRequest.executionId,
