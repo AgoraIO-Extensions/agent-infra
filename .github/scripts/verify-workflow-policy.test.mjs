@@ -398,8 +398,8 @@ test("requires bounded deduplicated outcome and post-merge behavior", async () =
 test("requires deduplicated failed Review Coverage notification", async () => {
   const sources = await actualTrustedScriptSources();
   sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}",
     "review-coverage-check-${reviewCoverage.checkId}",
-    "review-coverage-run-${sourceRun.id}",
   );
   assert.ok(
     validateTrustedScriptSources(sources).some((error) =>
