@@ -63,6 +63,21 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
 			"HeartbeatSignalV1",
 		);
+		expect(
+			Object.keys(artifacts.pilotDelegatedJsonSchema.$defs).sort(),
+		).toEqual([
+			"DelegatedActionRequestV1",
+			"DelegatedActionResultV1",
+			"ExecutionGrantClaimsV1",
+			"ExecutionGrantCommandV1",
+			"ExecutionGrantV1",
+		]);
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantClaimsV1.required,
+		).toEqual(expect.arrayContaining(["sessionGeneration", "allowedCommands"]));
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantCommandV1.enum,
+		).toEqual(expect.arrayContaining(["generation.cancel", "tool.invoke"]));
 
 		const ajv = new Ajv2020({ strict: true });
 		ajv.addFormat("date-time", true);
@@ -118,6 +133,7 @@ describe("standard contract artifacts", () => {
 			);
 			expect(result.status).toBe(1);
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
+			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}
