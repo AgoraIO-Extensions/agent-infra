@@ -151,6 +151,9 @@ describe("Pilot standard artifacts", () => {
 			"connectionIds",
 			"platformUserId",
 			"attachmentIds",
+			"hostSessionId",
+			"nativeSessionRef",
+			"attachmentRef",
 		]) {
 			expect(
 				validateDelegatedRequest({

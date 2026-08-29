@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
+	DelegatedPayloadMaximumDepthV1,
 	ExecutionGrantClaimsV1Schema,
 	ExecutionGrantCommandV1Schema,
 	ExecutionGrantV1Schema,
@@ -56,6 +57,12 @@ const validVerification = {
 	token: validRequest.grant.token,
 	claims: validClaims,
 } as const;
+
+function nestedArray(depth: number) {
+	let value: unknown = "leaf";
+	for (let index = 0; index < depth; index += 1) value = [value];
+	return value;
+}
 
 const validBaseValidationContext = {
 	expectedIssuer: "agent-platform",
@@ -399,8 +406,11 @@ describe("Pilot delegated contracts", () => {
 			"platformSessionId",
 			"actorId",
 			"nativeSessionId",
+			"hostSessionId",
+			"nativeSessionRef",
 			"attachmentId",
 			"attachmentIds",
+			"attachmentRef",
 			"token",
 			"tokenResponse",
 		]) {
@@ -414,6 +424,26 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			DelegatedActionRequestV1Schema.safeParse({
+				...validRequest,
+				action: {
+					...validRequest.action,
+					arguments: { nested: nestedArray(DelegatedPayloadMaximumDepthV1) },
+				},
+			}).success,
+		).toBe(true);
+		expect(
+			DelegatedActionRequestV1Schema.safeParse({
+				...validRequest,
+				action: {
+					...validRequest.action,
+					arguments: {
+						nested: nestedArray(DelegatedPayloadMaximumDepthV1 + 1),
+					},
+				},
+			}).success,
+		).toBe(false);
 		expect(
 			DelegatedActionRequestV1Schema.parse({
 				...validRequest,
@@ -484,6 +514,18 @@ describe("Pilot delegated contracts", () => {
 			status: "succeeded",
 			output: { nextPageToken: "opaque-pagination-cursor" },
 		});
+		expect(
+			DelegatedActionResultV1Schema.safeParse({
+				...safeResult,
+				output: nestedArray(DelegatedPayloadMaximumDepthV1),
+			}).success,
+		).toBe(true);
+		expect(
+			DelegatedActionResultV1Schema.safeParse({
+				...safeResult,
+				output: nestedArray(DelegatedPayloadMaximumDepthV1 + 1),
+			}).success,
+		).toBe(false);
 		for (const key of forbiddenCredentialKeys) {
 			expect(
 				DelegatedActionResultV1Schema.safeParse({

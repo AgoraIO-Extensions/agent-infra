@@ -198,7 +198,7 @@ type DelegatedJson =
 const credentialSafeDelegatedJsonKeyPattern =
 	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
 const delegatedAuthoritySelectorKeyPattern =
-	/^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Rr][Ee][Ff]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Ii][Dd]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][Tt].*[Ii][Dd])).+$/;
+	/^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][Tt])).+$/;
 
 const credentialSafeNonPaginationKey = z
 	.string()
@@ -219,28 +219,38 @@ const safeDelegatedArgumentKey = z.union([
 	credentialSafeNonPaginationKey.regex(delegatedAuthoritySelectorKeyPattern),
 ]);
 
-export const DelegatedJsonV1Schema: z.ZodType<DelegatedJson> = z.lazy(() =>
-	z.union([
-		z.null(),
-		z.boolean(),
-		z.number(),
-		z.string(),
-		z.array(DelegatedJsonV1Schema),
-		z.record(safeDelegatedJsonKey, DelegatedJsonV1Schema),
-	]),
-);
+const delegatedJsonPrimitiveV1Schema: z.ZodType<DelegatedJson> = z.union([
+	z.null(),
+	z.boolean(),
+	z.number().finite(),
+	z.string(),
+]);
 
-export const DelegatedActionArgumentsV1Schema: z.ZodType<DelegatedJson> =
-	z.lazy(() =>
-		z.union([
-			z.null(),
-			z.boolean(),
-			z.number(),
-			z.string(),
-			z.array(DelegatedActionArgumentsV1Schema),
-			z.record(safeDelegatedArgumentKey, DelegatedActionArgumentsV1Schema),
-		]),
-	);
+function boundedDelegatedJsonSchema(
+	key: z.ZodType<string>,
+	maximumDepth: number,
+) {
+	let schema = delegatedJsonPrimitiveV1Schema;
+	for (let depth = 0; depth < maximumDepth; depth += 1) {
+		const child = schema;
+		schema = z.union([
+			delegatedJsonPrimitiveV1Schema,
+			z.array(child),
+			z.record(key, child),
+		]);
+	}
+	return schema;
+}
+
+export const DelegatedPayloadMaximumDepthV1 = 3;
+export const DelegatedJsonV1Schema = boundedDelegatedJsonSchema(
+	safeDelegatedJsonKey,
+	DelegatedPayloadMaximumDepthV1,
+);
+export const DelegatedActionArgumentsV1Schema = boundedDelegatedJsonSchema(
+	safeDelegatedArgumentKey,
+	DelegatedPayloadMaximumDepthV1,
+);
 
 export const DelegatedActionRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
