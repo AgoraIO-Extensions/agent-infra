@@ -51,9 +51,12 @@ describe("Pilot Web SSE consumer", () => {
 
 	it("rejects malformed wire messages before updating timeline state", () => {
 		const consumer = createPilotSseMessageConsumer();
+		const valid = pilotFakeScenariosV1.replay
+			.messages[0] as unknown as ConversationSseMessageV1;
 
 		expect(() =>
 			consumer.consume([
+				valid,
 				{
 					schemaVersion: 2,
 					kind: "control",
@@ -62,6 +65,7 @@ describe("Pilot Web SSE consumer", () => {
 				},
 			]),
 		).toThrow();
+		expect(consumer.consume([valid]).events).toHaveLength(1);
 	});
 
 	it("resets deduplication state after timeline replacement", () => {

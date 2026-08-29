@@ -10,11 +10,12 @@ export function createPilotSseMessageConsumer() {
 	const consume = (messages: readonly unknown[]) => {
 		const events: PersistedEvent[] = [];
 		const controls: ControlSignal[] = [];
+		const parsedMessages = messages.map(
+			(input) =>
+				ConversationSseMessageV1Schema.parse(input) as ConversationSseMessageV1,
+		);
 
-		for (const input of messages) {
-			const message = ConversationSseMessageV1Schema.parse(
-				input,
-			) as ConversationSseMessageV1;
+		for (const message of parsedMessages) {
 			if (message.kind === "control") {
 				controls.push(message);
 				continue;
