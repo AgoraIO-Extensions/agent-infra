@@ -17,6 +17,14 @@ import {
 	TraceIdV1Schema,
 } from "./index.ts";
 import {
+	pilotBrowserOpenApiPathsV1,
+	pilotBrowserSchemasV1,
+	pilotBrowserSseOpenApiPathsV1,
+	pilotDelegatedOpenApiPathsV1,
+	pilotDelegatedSchemasV1,
+	pilotSseSchemasV1,
+} from "./pilot/index.ts";
+import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
@@ -46,6 +54,22 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 const artifactPaths = {
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
+	pilotBrowserOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-browser.v1.openapi.json",
+	),
+	pilotDelegatedJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-delegated.v1.schema.json",
+	),
+	pilotDelegatedOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-delegated.v1.openapi.json",
+	),
+	pilotSseJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-sse.v1.schema.json",
+	),
 	runtimeJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/runtime.v1.schema.json",
@@ -67,6 +91,26 @@ const schemas = {
 function withoutSchemaDialect(schema) {
 	const { $schema: _schema, ...definition } = schema;
 	return definition;
+}
+
+function rebaseDefinitionRefs(value, definitionName) {
+	if (Array.isArray(value)) {
+		return value.map((entry) => rebaseDefinitionRefs(entry, definitionName));
+	}
+	if (value === null || typeof value !== "object") return value;
+	const definitionPointer = definitionName
+		.replaceAll("~", "~0")
+		.replaceAll("/", "~1");
+	return Object.fromEntries(
+		Object.entries(value).map(([key, entry]) => [
+			key,
+			key === "$ref" &&
+			typeof entry === "string" &&
+			entry.startsWith("#/$defs/")
+				? `#/$defs/${definitionPointer}/$defs/${entry.slice("#/$defs/".length)}`
+				: rebaseDefinitionRefs(entry, definitionName),
+		]),
+	);
 }
 
 function sortKeys(value) {
@@ -91,11 +135,14 @@ function jsonSchemaDocument({ id, title, definitions }) {
 		$defs: Object.fromEntries(
 			Object.entries(definitions).map(([name, schema]) => [
 				name,
-				withoutSchemaDialect(
-					z.toJSONSchema(schema, {
-						target: "draft-2020-12",
-						unrepresentable: "throw",
-					}),
+				rebaseDefinitionRefs(
+					withoutSchemaDialect(
+						z.toJSONSchema(schema, {
+							target: "draft-2020-12",
+							unrepresentable: "throw",
+						}),
+					),
+					name,
 				),
 			]),
 		),
@@ -168,10 +215,7 @@ function buildArtifacts() {
 	});
 	const runtimeOpenapi = createDocument({
 		openapi: "3.1.0",
-		info: {
-			title: "Agent Infra RuntimeHost Contract",
-			version: "1.0.0",
-		},
+		info: { title: "Agent Infra RuntimeHost Contract", version: "1.0.0" },
 		paths: {
 			"/internal/runtime/v1/turns": {
 				post: postOperation(
@@ -240,7 +284,49 @@ function buildArtifacts() {
 		},
 		components: { schemas: runtimeOpenApiDefinitions },
 	});
-	return { jsonSchema, openapi, runtimeJsonSchema, runtimeOpenapi };
+	const pilotBrowserOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Browser API",
+			version: "1.0.0",
+		},
+		paths: {
+			...pilotBrowserOpenApiPathsV1,
+			...pilotBrowserSseOpenApiPathsV1,
+		},
+		components: {
+			schemas: { ...pilotBrowserSchemasV1, ...pilotSseSchemasV1 },
+		},
+	});
+	const pilotSseJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v1.schema.json",
+		title: "Agent Infra Pilot SSE Contracts V1",
+		definitions: pilotSseSchemasV1,
+	});
+	const pilotDelegatedJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-delegated.v1.schema.json",
+		title: "Agent Infra Pilot Delegated Contracts V1",
+		definitions: pilotDelegatedSchemasV1,
+	});
+	const pilotDelegatedOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Delegated Action API",
+			version: "1.0.0",
+		},
+		paths: pilotDelegatedOpenApiPathsV1,
+		components: { schemas: pilotDelegatedSchemasV1 },
+	});
+	return {
+		jsonSchema,
+		openapi,
+		pilotBrowserOpenapi,
+		pilotDelegatedJsonSchema,
+		pilotDelegatedOpenapi,
+		pilotSseJsonSchema,
+		runtimeJsonSchema,
+		runtimeOpenapi,
+	};
 }
 
 async function writeArtifacts(artifacts) {

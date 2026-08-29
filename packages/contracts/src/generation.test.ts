@@ -50,6 +50,43 @@ describe("standard contract artifacts", () => {
 		);
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
+		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/messages",
+		);
+		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/events",
+		);
+		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
+			"ConversationSseMessageV1",
+		);
+		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
+			"HeartbeatSignalV1",
+		);
+		expect(
+			Object.keys(artifacts.pilotDelegatedJsonSchema.$defs).sort(),
+		).toEqual([
+			"DelegatedActionErrorV1",
+			"DelegatedActionRequestV1",
+			"DelegatedActionResultV1",
+			"ExecutionGrantClaimsV1",
+			"ExecutionGrantCommandV1",
+			"ExecutionGrantV1",
+		]);
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantClaimsV1.required,
+		).toEqual(expect.arrayContaining(["sessionGeneration", "allowedCommands"]));
+		expect(
+			artifacts.pilotDelegatedJsonSchema.$defs.ExecutionGrantCommandV1.enum,
+		).toEqual(expect.arrayContaining(["generation.cancel", "tool.invoke"]));
+		expect(artifacts.pilotDelegatedOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotDelegatedOpenapi.paths).toHaveProperty(
+			"/internal/v1/delegated-actions.post",
+		);
+		expect(
+			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
+				.post.responses,
+		).toHaveProperty("503");
 		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
 		expect(Object.keys(artifacts.runtimeOpenapi.paths).sort()).toEqual([
 			"/internal/runtime/v1/capabilities",
@@ -106,6 +143,26 @@ describe("standard contract artifacts", () => {
 		});
 		expect(validateTimestamp("2026-12-31T23:59:60Z")).toBe(true);
 		expect(validateTimestamp("2026-08-28t03:00:00z")).toBe(true);
+		ajv.addSchema(artifacts.pilotSseJsonSchema);
+		const validateHeartbeat = ajv.compile({
+			$ref: `${artifacts.pilotSseJsonSchema.$id}#/$defs/HeartbeatSignalV1`,
+		});
+		expect(
+			validateHeartbeat({
+				schemaVersion: 1,
+				kind: "control",
+				type: "heartbeat",
+				occurredAt: "2026-08-28T10:00:00Z",
+			}),
+		).toBe(true);
+		ajv.addSchema(artifacts.pilotDelegatedJsonSchema);
+		for (const name of Object.keys(artifacts.pilotDelegatedJsonSchema.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.pilotDelegatedJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
 		ajv.addSchema(artifacts.runtimeJsonSchema);
 		const validateRuntimeEvent = ajv.compile({
 			$ref: `${artifacts.runtimeJsonSchema.$id}#/$defs/RuntimeEventV1`,
@@ -143,6 +200,8 @@ describe("standard contract artifacts", () => {
 			);
 			expect(result.status).toBe(1);
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
+			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
+			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}

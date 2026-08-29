@@ -6,6 +6,7 @@ import {
   parseSourceRunName,
   processWorkflowOutcome,
   renderJobSummary,
+  renderWeComMessage,
   sendWeComNotification,
   triagePostMergeFailure,
 } from "./workflow-outcome.mjs";
@@ -303,6 +304,27 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
   assert.match(summary, /Cycle: 2/);
   assert.match(summary, /Attempt: 3/);
   assert.doesNotMatch(summary, /malicious title|secret-value/);
+});
+
+test("rejects an inactive Review provider outcome", () => {
+  assert.throws(
+    () =>
+      buildOutcomeRecord({
+        repository: "AgoraIO-Extensions/agent-infra",
+        sourceRun: sourceRun({
+          name: "PR-Agent Review",
+          display_title: "PR #105 | pr-agent-review | synchronize",
+          event: "pull_request_target",
+        }),
+        context: {
+          reviewCoverage: {
+            provider: "claude",
+            reasonCode: "review-coverage-incomplete",
+          },
+        },
+      }),
+    /Review Coverage is invalid/,
+  );
 });
 
 function sourceRun(overrides = {}) {
@@ -1261,6 +1283,135 @@ test("processes a workflow event once and deduplicates notification replays", as
   assert.match(summaries[0], /Notification: `delivery_failed`/);
   assert.match(summaries[1], /Notification: `deduplicated`/);
   assert.doesNotMatch(JSON.stringify({ checks, summaries }), /test-token|webhook/);
+});
+
+test("notifies one failed Automated Review Coverage Gate outcome", async () => {
+  const headSha = "c".repeat(40);
+  const outcomeChecks = [];
+  const summaries = [];
+  const deliveredReasons = [];
+  const coverageCheck = {
+    id: 800,
+    app: { id: 4_503_079 },
+    name: "Automated Review Coverage",
+    head_sha: headSha,
+    external_id: `agent-infra:pr:105:automated-review-coverage:${headSha}`,
+    status: "completed",
+    conclusion: "failure",
+    output: {
+      summary: [
+        "provider: pr-agent",
+        `head_sha: ${headSha}`,
+        "reason_code: review-run-cancelled",
+        "omitted_file_count: unknown",
+      ].join("\n"),
+    },
+  };
+  const request = async (apiPath, options = {}) => {
+    if (apiPath.endsWith("/pulls/105")) {
+      return {
+        number: 105,
+        body: "",
+        head: { sha: headSha, ref: "feat/review", repo: { full_name: "AgoraIO-Extensions/agent-infra" } },
+        base: { ref: "main" },
+        state: "open",
+        draft: false,
+        merged_at: null,
+      };
+    }
+    if (apiPath.includes("check_name=Workflow%20Outcome")) {
+      return { check_runs: outcomeChecks };
+    }
+    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
+      return { check_runs: [coverageCheck], total_count: 1 };
+    }
+    if (apiPath.endsWith("/check-runs") && options.method === "POST") {
+      const check = {
+        id: 801 + outcomeChecks.length,
+        app: { id: 15_368 },
+        head_sha: headSha,
+        ...JSON.parse(options.body),
+      };
+      outcomeChecks.push(check);
+      return check;
+    }
+    const patchMatch = /\/check-runs\/(\d+)$/.exec(apiPath);
+    if (patchMatch && options.method === "PATCH") {
+      const check = outcomeChecks.find(
+        (candidate) => candidate.id === Number(patchMatch[1]),
+      );
+      Object.assign(check, JSON.parse(options.body));
+      return check;
+    }
+    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
+  };
+  const event = {
+    action: "completed",
+    repository: {
+      full_name: "AgoraIO-Extensions/agent-infra",
+      default_branch: "main",
+    },
+    workflow_run: sourceRun({
+      id: 580,
+      name: "PR-Agent Review",
+      display_title: "PR #105 | pr-agent-review | synchronize",
+      event: "pull_request_target",
+      head_sha: headSha,
+      pull_requests: [{ number: 105, head: { sha: headSha } }],
+    }),
+  };
+  const sendNotification = async ({ record }) => {
+    deliveredReasons.push(record.reviewCoverage.reasonCode);
+    assert.match(renderWeComMessage(record), /Provider: pr-agent/);
+    assert.match(
+      renderWeComMessage(record),
+      new RegExp(`Reason: ${record.reviewCoverage.reasonCode}`),
+    );
+    return {
+      configured: true,
+      delivered: true,
+      attempts: [{ attempt: 1, businessCode: 0, httpStatus: 200, status: "delivered" }],
+      warning: null,
+    };
+  };
+
+  const invoke = () =>
+    processWorkflowOutcome({
+      event,
+      token: "test-token",
+      webhookUrl: "https://example.invalid/webhook",
+      request,
+      sendNotification,
+      writeSummary: async (value) => summaries.push(value),
+    });
+  const first = await invoke();
+  const replay = await invoke();
+  coverageCheck.output.summary = coverageCheck.output.summary.replace(
+    "reason_code: review-run-cancelled",
+    "reason_code: review-coverage-incomplete",
+  );
+  const changedReason = await invoke();
+
+  assert.equal(first.record.outcome.code, "review_coverage_failed");
+  assert.deepEqual(first.record.reviewCoverage, {
+    provider: "pr-agent",
+    reasonCode: "review-run-cancelled",
+  });
+  assert.equal(replay.replay, true);
+  assert.equal(changedReason.replay, false);
+  assert.deepEqual(deliveredReasons, [
+    "review-run-cancelled",
+    "review-coverage-incomplete",
+  ]);
+  assert.deepEqual(
+    outcomeChecks.map((check) => check.external_id),
+    [
+      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-run-cancelled:review_coverage_failed",
+      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-coverage-incomplete:review_coverage_failed",
+    ],
+  );
+  assert.match(summaries[0], /Coverage reason: `review-run-cancelled`/);
+  assert.match(summaries[2], /Coverage reason: `review-coverage-incomplete`/);
 });
 
 test("finds a semantic Check claim beyond the first filter=all page", async () => {

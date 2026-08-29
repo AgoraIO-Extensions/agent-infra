@@ -39,6 +39,7 @@ async function actualTrustedScriptSources() {
         "codex-worker.mjs",
         "gh-aw-pilot.mjs",
         "pr-gates.mjs",
+        "review-coverage.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
         "workflow-outcome.mjs",
@@ -390,6 +391,19 @@ test("requires bounded deduplicated outcome and post-merge behavior", async () =
   assert.ok(
     validateTrustedScriptSources(sources).some((error) =>
       error.includes("bounded dedupe and post-merge triage"),
+    ),
+  );
+});
+
+test("requires deduplicated failed Review Coverage notification", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
+    "review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}",
+    "review-coverage-check-${reviewCoverage.checkId}",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Review Coverage notification"),
     ),
   );
 });
@@ -912,6 +926,14 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(reviewAction.env["github_action_config.auto_improve"], "false");
   assert.equal(suggestionsAction.env["github_action_config.auto_review"], "false");
   assert.equal(suggestionsAction.env["github_action_config.auto_improve"], "true");
+  assert.equal(
+    reviewAction.env["config.max_model_tokens"],
+    "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+  );
+  assert.equal(
+    suggestionsAction.env["config.max_model_tokens"],
+    "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+  );
 
   reviewAction.env["config.publish_output"] = "false";
   assert.ok(
@@ -969,6 +991,60 @@ test("uses pinned PR-Agent official inline publishing", async () => {
       error.includes("official inline publishing"),
     ),
   );
+});
+
+test("publishes provider-aware Automated Review Coverage as a required Gate", async () => {
+  const workflows = await actualWorkflows();
+  const prAgent = workflows["pr-agent-review.yml"];
+  const coverage = prAgent.jobs.coverage;
+  const coveragePublisher = coverage.steps.find(
+    (step) => step.name === "Publish Automated Review Coverage",
+  );
+  const coverageToken = coverage.steps.find(
+    (step) => step.id === "gate-publisher-token",
+  );
+
+  assert.deepEqual(coverage.permissions, {
+    actions: "read",
+    checks: "read",
+    contents: "read",
+    "pull-requests": "read",
+  });
+  assert.equal(coverage.name, "Publish Automated Review Coverage");
+  assert.equal(coverage.needs, "analyze");
+  assert.equal(coverage["continue-on-error"], true);
+  assert.deepEqual(prAgent.jobs.outcome.needs, ["analyze", "suggestions"]);
+  assert.equal(coveragePublisher.if, "always()");
+  assert.equal(
+    coveragePublisher.run,
+    "node .github/scripts/review-coverage.mjs",
+  );
+  assert.deepEqual(coveragePublisher.env, {
+    GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
+    GITHUB_TOKEN: "${{ github.token }}",
+    PR_NUMBER: "${{ github.event.pull_request.number }}",
+    REVIEW_PROVIDER: "pr-agent",
+    REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
+  });
+  assert.equal(
+    coverageToken.uses,
+    "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+  );
+
+  const claudePublish = workflows["claude-pr-review.yml"].jobs.publish;
+  const claudeCoverage = claudePublish.steps.find(
+    (step) => step.name === "Publish Automated Review Coverage",
+  );
+  assert.equal(claudeCoverage.if, "always()");
+  assert.equal(claudeCoverage["continue-on-error"], true);
+  assert.deepEqual(claudeCoverage.env, {
+    EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+    GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
+    GITHUB_TOKEN: "${{ github.token }}",
+    PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+    REVIEW_PROVIDER: "claude",
+    REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
+  });
 });
 
 test("requires same-repository PR-Agent runs", async () => {

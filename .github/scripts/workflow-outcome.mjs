@@ -3,6 +3,10 @@ import { pathToFileURL } from "node:url";
 
 import { latestBlockerStateRecord } from "./blocker-contract.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
+import {
+  coverageCheckFacts,
+  selectCoverageCheck,
+} from "./review-coverage.mjs";
 import { validateAuthorizationRecord } from "./worker-contract.mjs";
 import { validateWorkerAttemptRecord } from "./worker-resilience.mjs";
 
@@ -45,6 +49,10 @@ const POST_MERGE_FAILURE_CONCLUSIONS = new Set([
   "failure",
   "startup_failure",
   "timed_out",
+]);
+const REVIEW_PROVIDER_BY_WORKFLOW = new Map([
+  ["Claude PR Review", "claude"],
+  ["PR-Agent Review", "pr-agent"],
 ]);
 
 function positiveInteger(value, name) {
@@ -145,6 +153,9 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
   }
   if (context.postMergeFailure) {
     return outcome("post_merge_failure", "issue-owner", true);
+  }
+  if (context.reviewCoverage) {
+    return outcome("review_coverage_failed", "repository-maintainer", true);
   }
   const attempt = stateExistedWhenRunCompleted(
     sourceRun,
@@ -305,6 +316,16 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
   ) {
     throw new Error("Workflow outcome event id is invalid");
   }
+  const reviewCoverage = context.reviewCoverage;
+  if (
+    reviewCoverage &&
+    (!REVIEW_PROVIDER_BY_WORKFLOW.has(normalizedSourceRun.workflowName) ||
+      REVIEW_PROVIDER_BY_WORKFLOW.get(normalizedSourceRun.workflowName) !==
+        reviewCoverage.provider ||
+      !/^[a-z0-9_-]+$/.test(reviewCoverage.reasonCode ?? ""))
+  ) {
+    throw new Error("Workflow outcome Review Coverage is invalid");
+  }
   return {
     version: 1,
     eventId: semanticEventId ?? `workflow-run-${normalizedSourceRun.id}`,
@@ -322,6 +343,14 @@ export function buildOutcomeRecord({ repository, sourceRun, context = {} }) {
     target,
     cycle: Number.isSafeInteger(context.cycle) ? context.cycle : null,
     attempt: Number.isSafeInteger(context.attempt) ? context.attempt : null,
+    ...(reviewCoverage
+      ? {
+          reviewCoverage: {
+            provider: reviewCoverage.provider,
+            reasonCode: reviewCoverage.reasonCode,
+          },
+        }
+      : {}),
     outcome: classified,
   };
 }
@@ -346,6 +375,12 @@ export function renderJobSummary(record) {
     `- Cycle: ${record.cycle ?? "N/A"}`,
     `- Attempt: ${record.attempt ?? "N/A"}`,
     `- Terminal outcome: \`${record.outcome.code}\` (${record.sourceRun.conclusion})`,
+    ...(record.reviewCoverage
+      ? [
+          `- Review provider: \`${record.reviewCoverage.provider}\``,
+          `- Coverage reason: \`${record.reviewCoverage.reasonCode}\``,
+        ]
+      : []),
     `- Next owner: \`${record.outcome.nextOwner}\``,
   ].join("\n");
 }
@@ -359,7 +394,12 @@ export function renderWeComMessage(record) {
     `> Repository: [${record.repository}](https://github.com/${record.repository})`,
     `> Target: [${target}](${record.target.url})`,
     `> State: ${record.outcome.code}`,
-    `> Reason: ${record.sourceRun.conclusion}`,
+    ...(record.reviewCoverage
+      ? [
+          `> Provider: ${record.reviewCoverage.provider}`,
+          `> Reason: ${record.reviewCoverage.reasonCode}`,
+        ]
+      : [`> Reason: ${record.sourceRun.conclusion}`]),
     `> Run: [${record.sourceRun.id}](${record.sourceRun.url})`,
     `> Next owner: ${record.outcome.nextOwner}`,
   ].join("\n");
@@ -847,6 +887,18 @@ async function loadPullRequestContext({
       .sort((left, right) => right.id - left.id)[0];
   const humanCheck = latestTrustedCheck("Human Validation Gate");
   const claudeCheck = latestTrustedCheck("Claude Review Gate");
+  const sourceProvider = REVIEW_PROVIDER_BY_WORKFLOW.get(sourceRun.workflowName);
+  const coverageCheck = sourceProvider
+    ? selectCoverageCheck(trustedChecks, headSha, pullRequestNumber)
+    : null;
+  const coverageFacts = coverageCheck
+    ? coverageCheckFacts(coverageCheck, headSha)
+    : null;
+  const reviewCoverage =
+    coverageCheck?.conclusion === "failure" &&
+    coverageFacts?.provider === sourceProvider
+      ? { ...coverageFacts, checkId: coverageCheck.id }
+      : null;
   const pullRequestMerged = Boolean(
     parsedRunName.action === "closed" && pullRequest.merged_at,
   );
@@ -860,6 +912,11 @@ async function loadPullRequestContext({
       : {}),
     ...(claudeCheck?.id
       ? { waiver_used: `claude-waiver-check-${claudeCheck.id}` }
+      : {}),
+    ...(reviewCoverage
+      ? {
+          review_coverage_failed: `review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}`,
+        }
       : {}),
   };
   return {
@@ -885,6 +942,7 @@ async function loadPullRequestContext({
         "reason_code: waived_infrastructure_failure",
       ),
     ),
+    reviewCoverage,
     eventIds,
   };
 }
