@@ -291,6 +291,53 @@ export function validateDelegatedActionResultV1(
 	return result;
 }
 
+const delegatedJsonResponse = (description: string, schema: z.ZodType) => ({
+	description,
+	content: { "application/json": { schema } },
+});
+
+export const pilotDelegatedOpenApiPathsV1 = {
+	"/internal/v1/delegated-actions": {
+		post: {
+			operationId: "executeDelegatedAction",
+			description:
+				"Requires deployment-provided service identity in addition to the Execution Grant.",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: DelegatedActionRequestV1Schema },
+				},
+			},
+			responses: {
+				"200": delegatedJsonResponse(
+					"Delegated Action result",
+					DelegatedActionResultV1Schema,
+				),
+				"400": delegatedJsonResponse(
+					"Invalid delegated request",
+					PilotProtocolErrorV1Schema,
+				),
+				"401": delegatedJsonResponse(
+					"Service identity or Execution Grant is invalid",
+					PilotProtocolErrorV1Schema,
+				),
+				"403": delegatedJsonResponse(
+					"Delegated Action is not authorized",
+					PilotProtocolErrorV1Schema,
+				),
+				"409": delegatedJsonResponse(
+					"Delegated request conflicts with an existing operation",
+					PilotProtocolErrorV1Schema,
+				),
+				"503": delegatedJsonResponse(
+					"Connection service is unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
+} as const;
+
 export const pilotDelegatedSchemasV1 = {
 	DelegatedActionRequestV1: DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1: DelegatedActionResultV1Schema,

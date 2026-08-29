@@ -20,6 +20,7 @@ import {
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserSchemasV1,
 	pilotBrowserSseOpenApiPathsV1,
+	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
@@ -44,6 +45,10 @@ const artifactPaths = {
 	pilotDelegatedJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/pilot-delegated.v1.schema.json",
+	),
+	pilotDelegatedOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-delegated.v1.openapi.json",
 	),
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
@@ -139,11 +144,21 @@ function buildArtifacts() {
 		title: "Agent Infra Pilot Delegated Contracts V1",
 		definitions: pilotDelegatedSchemasV1,
 	});
+	const pilotDelegatedOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Delegated Action API",
+			version: "1.0.0",
+		},
+		paths: pilotDelegatedOpenApiPathsV1,
+		components: { schemas: pilotDelegatedSchemasV1 },
+	});
 	return {
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,
 		pilotDelegatedJsonSchema,
+		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
 	};
 }

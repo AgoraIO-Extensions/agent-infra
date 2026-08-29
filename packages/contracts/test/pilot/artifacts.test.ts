@@ -6,6 +6,7 @@ import { createDocument } from "zod-openapi";
 import {
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserSchemasV1,
+	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
 } from "../../src/pilot/index.js";
@@ -101,5 +102,29 @@ describe("Pilot standard artifacts", () => {
 				}),
 			).toBe(false);
 		}
+	});
+
+	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Agent Infra Pilot Delegated Action API",
+				version: "1.0.0",
+			},
+			paths: pilotDelegatedOpenApiPathsV1,
+			components: { schemas: pilotDelegatedSchemasV1 },
+		});
+
+		expect(document.openapi).toBe("3.1.0");
+		expect(document.paths).toHaveProperty(
+			"/internal/v1/delegated-actions.post.operationId",
+			"executeDelegatedAction",
+		);
+		expect(document.paths).toHaveProperty(
+			"/internal/v1/delegated-actions.post.requestBody.content.application/json",
+		);
+		expect(document.paths).toHaveProperty(
+			"/internal/v1/delegated-actions.post.responses.200",
+		);
 	});
 });

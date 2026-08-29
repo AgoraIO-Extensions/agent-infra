@@ -32,6 +32,9 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/pilot-browser.v1"]).toBe(
 			"./artifacts/openapi/pilot-browser.v1.openapi.json",
 		);
+		expect(manifest.exports["./openapi/pilot-delegated.v1"]).toBe(
+			"./artifacts/openapi/pilot-delegated.v1.openapi.json",
+		);
 		expect(manifest.files).toEqual(["dist", "artifacts"]);
 		expect(JSON.stringify(manifest.exports)).not.toContain("test");
 
@@ -53,6 +56,9 @@ describe("contracts package surface", () => {
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-browser.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/openapi/pilot-delegated.v1.openapi.json",
 		);
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
