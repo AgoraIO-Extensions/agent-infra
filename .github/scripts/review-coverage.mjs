@@ -12,6 +12,7 @@ import {
 } from "./claude-review.mjs";
 
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
+const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
 
 const FULL_DIFF_PATTERN =
   /^Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\.$/;
@@ -71,7 +72,7 @@ function evaluatePrAgent({
   if (analysisJobConclusion !== "success") {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
-  if (Buffer.byteLength(analysisLog, "utf8") > 10 * 1024 * 1024) {
+  if (Buffer.byteLength(analysisLog, "utf8") > MAX_EVIDENCE_BYTES) {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
 
@@ -267,6 +268,29 @@ async function githubRequest(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+export async function readBoundedTextResponse(
+  response,
+  maxBytes = MAX_EVIDENCE_BYTES,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      throw new Error("GitHub job log exceeds the evidence size limit");
+    }
+    chunks.push(decoder.decode(value, { stream: true }));
+  }
+  chunks.push(decoder.decode());
+  return chunks.join("");
+}
+
 async function githubTextRequest(path) {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
@@ -278,7 +302,7 @@ async function githubTextRequest(path) {
   if (!response.ok) {
     throw new Error(`GitHub API GET ${path}: ${response.status}`);
   }
-  return response.text();
+  return readBoundedTextResponse(response);
 }
 
 async function collectEvidence({ repository, prNumber, expectedHead, provider }) {

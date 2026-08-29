@@ -7,6 +7,7 @@ import {
   collectReviewEvidence,
   evaluateReviewCoverage,
   publishCoverageCheck,
+  readBoundedTextResponse,
   selectCoverageCheck,
 } from "./review-coverage.mjs";
 
@@ -22,6 +23,14 @@ const logRecord = (message, extra = {}) =>
   })}`;
 const completeLog = logRecord(completeDecision);
 const prunedLog = logRecord(prunedDecision);
+
+test("bounds downloaded review evidence while reading", async () => {
+  assert.equal(await readBoundedTextResponse(new Response("test"), 4), "test");
+  await assert.rejects(
+    readBoundedTextResponse(new Response("large"), 4),
+    /exceeds the evidence size limit/,
+  );
+});
 
 test("skips failed runs and degrades evidence collection errors", async () => {
   let calls = 0;
