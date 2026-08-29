@@ -10,8 +10,12 @@ import {
 import {
 	AgentWorkloadAppliedV1Schema,
 	WorkloadCleanupResultV1Schema,
+	WorkloadIdentityV1Schema,
 } from "./kubernetes.ts";
-import { ImageRegistryAdmissionResultV1Schema } from "./registry.ts";
+import {
+	ImageRegistryAdmissionResultV1Schema,
+	validateImageRegistryAdmissionResultV1,
+} from "./registry.ts";
 import {
 	SecretActivationObservationV1Schema,
 	validateSecretActivationObservationV1,
@@ -29,6 +33,11 @@ const workerCorrelationV1Shape = {
 
 const admitImageCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
+	registryRequestId: WorkloadOpaqueIdV1Schema,
+	registrySubjectRef: WorkloadOpaqueIdV1Schema,
+	imageReference: z.string().min(1),
+	usage: z.enum(["standard-template", "custom-agent"]),
+	admissionPolicyRef: WorkloadOpaqueIdV1Schema,
 } as const;
 
 const activateSecretCorrelationV1Shape = {
@@ -42,12 +51,13 @@ const activateSecretCorrelationV1Shape = {
 
 const reconcileWorkloadCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
-	workloadUid: WorkloadOpaqueIdV1Schema.optional(),
+	expectedWorkload: WorkloadIdentityV1Schema.optional(),
 } as const;
 
 const cleanupWorkloadCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
 	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadGeneration: WorkloadRevisionV1Schema,
 } as const;
 
 export const WorkerWorkloadExpectedRevisionV1Schema = z.discriminatedUnion(
@@ -88,6 +98,7 @@ const succeededWorkerResults = [
 	z.strictObject({
 		...reconcileWorkloadCorrelationV1Shape,
 		workloadUid: WorkloadOpaqueIdV1Schema,
+		workloadGeneration: WorkloadRevisionV1Schema,
 		status: z.literal("succeeded"),
 		operation: z.literal("reconcile-workload"),
 		outcome: AgentWorkloadAppliedV1Schema,
@@ -173,6 +184,29 @@ export function validateWorkerWorkloadResultV1(
 	if (result.operation !== expected.operation) {
 		throw new Error("Worker result revision correlation mismatch");
 	}
+	if ("error" in result && result.error.traceId !== expected.traceId) {
+		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (
+		result.status === "stale" &&
+		(result.currentConfigRevision < expected.configRevision ||
+			result.currentWorkloadRevision < expected.workloadRevision ||
+			(result.currentConfigRevision === expected.configRevision &&
+				result.currentWorkloadRevision === expected.workloadRevision))
+	) {
+		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (
+		expected.operation === "admit-image" &&
+		(result.operation !== "admit-image" ||
+			result.registryRequestId !== expected.registryRequestId ||
+			result.registrySubjectRef !== expected.registrySubjectRef ||
+			result.imageReference !== expected.imageReference ||
+			result.usage !== expected.usage ||
+			result.admissionPolicyRef !== expected.admissionPolicyRef)
+	) {
+		throw new Error("Worker result revision correlation mismatch");
+	}
 	if (
 		expected.operation === "activate-secret" &&
 		(result.operation !== "activate-secret" ||
@@ -189,16 +223,16 @@ export function validateWorkerWorkloadResultV1(
 		expected.operation === "cleanup-workload" &&
 		(result.operation !== "cleanup-workload" ||
 			!("workloadUid" in result) ||
-			result.workloadUid !== expected.workloadUid)
+			result.workloadUid !== expected.workloadUid ||
+			result.workloadGeneration !== expected.workloadGeneration)
 	) {
 		throw new Error("Worker result revision correlation mismatch");
 	}
 	if (
 		expected.operation === "reconcile-workload" &&
-		expected.workloadUid !== undefined &&
 		(result.operation !== "reconcile-workload" ||
-			!("workloadUid" in result) ||
-			result.workloadUid !== expected.workloadUid)
+			JSON.stringify(result.expectedWorkload) !==
+				JSON.stringify(expected.expectedWorkload))
 	) {
 		throw new Error("Worker result revision correlation mismatch");
 	}
@@ -210,9 +244,13 @@ export function validateWorkerWorkloadResultV1(
 			result.outcome.agentId !== expected.agentId ||
 			result.outcome.configRevision !== expected.configRevision ||
 			result.outcome.workloadRevision !== expected.workloadRevision ||
+			result.outcome.fence !== expected.fence ||
 			result.workloadUid !== result.outcome.workloadUid ||
-			(expected.workloadUid !== undefined &&
-				result.outcome.workloadUid !== expected.workloadUid))
+			result.workloadGeneration !== result.outcome.observedGeneration ||
+			(expected.expectedWorkload !== undefined &&
+				(result.outcome.workloadUid !== expected.expectedWorkload.workloadUid ||
+					result.outcome.observedGeneration <
+						expected.expectedWorkload.workloadGeneration)))
 	) {
 		throw new Error("Worker result revision correlation mismatch");
 	}
@@ -245,7 +283,10 @@ export function validateWorkerWorkloadResultV1(
 			result.outcome.configRevision !== expected.configRevision ||
 			result.outcome.workloadRevision !== expected.workloadRevision ||
 			result.outcome.workloadUid !== expected.workloadUid ||
-			result.workloadUid !== expected.workloadUid)
+			result.outcome.workloadGeneration !== expected.workloadGeneration ||
+			result.outcome.fence !== expected.fence ||
+			result.workloadUid !== expected.workloadUid ||
+			result.workloadGeneration !== expected.workloadGeneration)
 	) {
 		throw new Error("Worker result revision correlation mismatch");
 	}
@@ -264,9 +305,27 @@ export function validateWorkerWorkloadResultV1(
 	if (
 		result.status === "succeeded" &&
 		result.operation === "admit-image" &&
-		result.outcome.traceId !== expected.traceId
+		expected.operation === "admit-image"
 	) {
-		throw new Error("Worker result revision correlation mismatch");
+		validateImageRegistryAdmissionResultV1(
+			{
+				schemaVersion: expected.schemaVersion,
+				requestId: expected.registryRequestId,
+				traceId: expected.traceId,
+				subjectRef: expected.registrySubjectRef,
+				agentId: expected.agentId,
+				imageReference: expected.imageReference,
+				usage: expected.usage,
+				admissionPolicyRef: expected.admissionPolicyRef,
+			},
+			result.outcome,
+		);
+		if (
+			result.outcome.status === "rejected" &&
+			result.outcome.error.traceId !== expected.traceId
+		) {
+			throw new Error("Worker result revision correlation mismatch");
+		}
 	}
 	return result;
 }

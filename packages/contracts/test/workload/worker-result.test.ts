@@ -33,17 +33,29 @@ const appliedWorkload = {
 	agentId: expected.agentId,
 	configRevision: expected.configRevision,
 	workloadRevision: expected.workloadRevision,
+	fence: expected.fence,
 	state: "ready",
 	imageDigest: `sha256:${"c".repeat(64)}`,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	service: { name: "agent-01", port: 8080 },
+	healthCheck: {
+		path: "/healthz",
+		timeoutSeconds: 5,
+		failureThreshold: 3,
+	},
 	desiredReplicas: 1,
 	readyReplicas: 1,
 	serviceRef: "service/agent-01",
 	serviceAccountRef: "service-account/agent-01",
 	persistentVolumeRef: "pvc/agent-01-data",
 	networkPolicyRef: "network-policy/agent-01",
-	route: { state: "open", routeRef: "route/agent-01" },
+	route: {
+		state: "open",
+		routeRef: "route/agent-01",
+		workloadUid: "workload_uid_01",
+		workloadRevision: expected.workloadRevision,
+	},
 	health: { state: "healthy", observedAt: "2026-08-28T10:10:00Z" },
 	secretRefs: [secretRef],
 	cleanupState: "not-requested",
@@ -54,6 +66,7 @@ describe("Worker Workload result V1 contract", () => {
 		const result = {
 			...expected,
 			workloadUid: appliedWorkload.workloadUid,
+			workloadGeneration: appliedWorkload.observedGeneration,
 			status: "succeeded",
 			operation: "reconcile-workload",
 			outcome: appliedWorkload,
@@ -95,12 +108,26 @@ describe("Worker Workload result V1 contract", () => {
 				agentId: "agent_02",
 			}),
 		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...stale,
+				currentConfigRevision: expected.configRevision,
+				currentWorkloadRevision: expected.workloadRevision,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...stale,
+				error: { ...stale.error, traceId: "trace_other" },
+			}),
+		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("rejects inconsistent outer and nested Workload UIDs on first reconciliation", () => {
 		const result = {
 			...expected,
 			workloadUid: "workload_uid_02",
+			workloadGeneration: appliedWorkload.observedGeneration,
 			status: "succeeded",
 			operation: "reconcile-workload",
 			outcome: appliedWorkload,
@@ -110,6 +137,43 @@ describe("Worker Workload result V1 contract", () => {
 		expect(() => validateWorkerWorkloadResultV1(expected, result)).toThrow(
 			"Worker result revision correlation mismatch",
 		);
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...result,
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration + 1,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...result,
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration,
+				outcome: { ...appliedWorkload, fence: expected.fence - 1 },
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+	});
+
+	it("requires an existing Workload precondition to match the applied result", () => {
+		const expectedUpdate = {
+			...expected,
+			expectedWorkload: {
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration + 1,
+			},
+		} as const;
+		const result = {
+			...expectedUpdate,
+			workloadUid: appliedWorkload.workloadUid,
+			workloadGeneration: appliedWorkload.observedGeneration,
+			status: "succeeded",
+			operation: "reconcile-workload",
+			outcome: appliedWorkload,
+		} as const;
+
+		expect(() =>
+			validateWorkerWorkloadResultV1(expectedUpdate, result),
+		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("rejects raw provider or Kubernetes failure details", () => {
@@ -133,6 +197,26 @@ describe("Worker Workload result V1 contract", () => {
 				providerResponse: { kind: "StatefulSet", metadata: {} },
 			}).success,
 		).toBe(false);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...failed,
+				schemaVersion: 2,
+			}).success,
+		).toBe(false);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...failed,
+				fence: undefined,
+			}).success,
+		).toBe(false);
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...failed,
+				operation: "cleanup-workload",
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("rejects a nested cleanup outcome for another Workload revision", () => {
@@ -140,6 +224,7 @@ describe("Worker Workload result V1 contract", () => {
 			...expected,
 			operation: "cleanup-workload",
 			workloadUid: "workload_uid_01",
+			workloadGeneration: appliedWorkload.observedGeneration,
 		} as const;
 		const cleanupResult = {
 			...cleanupExpected,
@@ -154,6 +239,8 @@ describe("Worker Workload result V1 contract", () => {
 				configRevision: expected.configRevision,
 				workloadRevision: expected.workloadRevision - 1,
 				workloadUid: "workload_uid_02",
+				workloadGeneration: cleanupExpected.workloadGeneration,
+				fence: expected.fence,
 				deleteNewPersistentVolume: true,
 				deleted: {
 					workload: true,
@@ -169,6 +256,57 @@ describe("Worker Workload result V1 contract", () => {
 
 		expect(() =>
 			validateWorkerWorkloadResultV1(cleanupExpected, cleanupResult),
+		).toThrow("Worker result revision correlation mismatch");
+	});
+
+	it("binds Registry outcomes to the exact admission request", () => {
+		const admissionExpected = {
+			...expected,
+			operation: "admit-image",
+			registryRequestId: "registry_request_01",
+			registrySubjectRef: "subject_01",
+			imageReference: "registry.example/agent:v1",
+			usage: "custom-agent",
+			admissionPolicyRef: "policy_01",
+		} as const;
+		const outcome = {
+			schemaVersion: 1,
+			requestId: admissionExpected.registryRequestId,
+			traceId: admissionExpected.traceId,
+			imageReference: admissionExpected.imageReference,
+			status: "rejected",
+			error: {
+				schemaVersion: 1,
+				code: "IMAGE_POLICY_REJECTED",
+				message: "The image policy rejected the image",
+				retryable: false,
+				traceId: admissionExpected.traceId,
+			},
+		} as const;
+		const result = {
+			...admissionExpected,
+			status: "succeeded",
+			operation: "admit-image",
+			outcome,
+		} as const;
+
+		expect(validateWorkerWorkloadResultV1(admissionExpected, result)).toEqual(
+			result,
+		);
+		expect(() =>
+			validateWorkerWorkloadResultV1(admissionExpected, {
+				...result,
+				outcome: { ...outcome, imageReference: "registry.example/other:v1" },
+			}),
+		).toThrow("Image registry result correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(admissionExpected, {
+				...result,
+				outcome: {
+					...outcome,
+					error: { ...outcome.error, traceId: "trace_other" },
+				},
+			}),
 		).toThrow("Worker result revision correlation mismatch");
 	});
 
