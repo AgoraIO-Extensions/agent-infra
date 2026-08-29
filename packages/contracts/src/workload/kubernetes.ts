@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
 	WorkloadBoundaryErrorV1Schema,
+	WorkloadFenceV1Schema,
 	WorkloadOpaqueIdV1Schema,
 	WorkloadRevisionV1Schema,
 	WorkloadSchemaVersionV1Schema,
@@ -32,6 +33,11 @@ export const WorkloadHealthV1Schema = z.strictObject({
 	path: z.string().min(1),
 	timeoutSeconds: z.number().int().positive(),
 	failureThreshold: z.number().int().positive(),
+});
+
+export const WorkloadIdentityV1Schema = z.strictObject({
+	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadGeneration: WorkloadRevisionV1Schema,
 });
 
 export const WorkloadPersistentVolumeV1Schema = z.strictObject({
@@ -91,6 +97,8 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	agentId: WorkloadOpaqueIdV1Schema,
 	configRevision: WorkloadRevisionV1Schema,
 	workloadRevision: WorkloadRevisionV1Schema,
+	fence: WorkloadFenceV1Schema,
+	expectedWorkload: WorkloadIdentityV1Schema.optional(),
 	namespaceRef: WorkloadOpaqueIdV1Schema,
 	imageDigest: ImmutableOciDigestV1Schema,
 	resourceProfileRef: WorkloadOpaqueIdV1Schema,
@@ -193,6 +201,8 @@ export const AgentWorkloadDesiredV1Schema = z.union([
 const openWorkloadRouteAppliedV1Schema = z.strictObject({
 	state: z.literal("open"),
 	routeRef: WorkloadOpaqueIdV1Schema,
+	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadRevision: WorkloadRevisionV1Schema,
 });
 const pendingWorkloadRouteAppliedV1Schema = z.strictObject({
 	state: z.literal("pending"),
@@ -234,9 +244,12 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	agentId: WorkloadOpaqueIdV1Schema,
 	configRevision: WorkloadRevisionV1Schema,
 	workloadRevision: WorkloadRevisionV1Schema,
+	fence: WorkloadFenceV1Schema,
 	imageDigest: ImmutableOciDigestV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	observedGeneration: WorkloadRevisionV1Schema,
+	service: WorkloadServiceV1Schema,
+	healthCheck: WorkloadHealthV1Schema,
 	serviceRef: WorkloadOpaqueIdV1Schema,
 	serviceAccountRef: WorkloadOpaqueIdV1Schema,
 	persistentVolumeRef: WorkloadOpaqueIdV1Schema,
@@ -303,6 +316,7 @@ const reconcileCorrelationV1Shape = {
 	agentId: WorkloadOpaqueIdV1Schema,
 	configRevision: WorkloadRevisionV1Schema,
 	workloadRevision: WorkloadRevisionV1Schema,
+	fence: WorkloadFenceV1Schema,
 } as const;
 
 export const KubernetesReconcileResultV1Schema = z.discriminatedUnion(
@@ -311,6 +325,8 @@ export const KubernetesReconcileResultV1Schema = z.discriminatedUnion(
 		z.strictObject({
 			...reconcileCorrelationV1Shape,
 			status: z.literal("applied"),
+			workloadUid: WorkloadOpaqueIdV1Schema,
+			workloadGeneration: WorkloadRevisionV1Schema,
 			applied: AgentWorkloadAppliedV1Schema,
 		}),
 		z.strictObject({
@@ -341,6 +357,8 @@ const cleanupCorrelationV1Schema = {
 	configRevision: WorkloadRevisionV1Schema,
 	workloadRevision: WorkloadRevisionV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadGeneration: WorkloadRevisionV1Schema,
+	fence: WorkloadFenceV1Schema,
 	deleteNewPersistentVolume: z.boolean(),
 } as const;
 
@@ -348,22 +366,38 @@ export const WorkloadCleanupRequestV1Schema = z.strictObject({
 	...cleanupCorrelationV1Schema,
 });
 
-const cleanupDeletedResourcesV1Schema = z.strictObject({
-	workload: z.boolean(),
-	service: z.boolean(),
-	serviceAccount: z.boolean(),
-	networkPolicy: z.boolean(),
-	route: z.boolean(),
-	secrets: z.boolean(),
-	persistentVolume: z.boolean(),
+const requiredCleanupResourcesV1Shape = {
+	workload: z.literal(true),
+	service: z.literal(true),
+	serviceAccount: z.literal(true),
+	networkPolicy: z.literal(true),
+	route: z.literal(true),
+	secrets: z.literal(true),
+} as const;
+
+const completedCleanupWithVolumeV1Schema = z.strictObject({
+	...cleanupCorrelationV1Schema,
+	deleteNewPersistentVolume: z.literal(true),
+	status: z.literal("completed"),
+	deleted: z.strictObject({
+		...requiredCleanupResourcesV1Shape,
+		persistentVolume: z.literal(true),
+	}),
 });
 
-export const WorkloadCleanupResultV1Schema = z.discriminatedUnion("status", [
-	z.strictObject({
-		...cleanupCorrelationV1Schema,
-		status: z.literal("completed"),
-		deleted: cleanupDeletedResourcesV1Schema,
+const completedCleanupWithoutVolumeV1Schema = z.strictObject({
+	...cleanupCorrelationV1Schema,
+	deleteNewPersistentVolume: z.literal(false),
+	status: z.literal("completed"),
+	deleted: z.strictObject({
+		...requiredCleanupResourcesV1Shape,
+		persistentVolume: z.literal(false),
 	}),
+});
+
+export const WorkloadCleanupResultV1Schema = z.union([
+	completedCleanupWithVolumeV1Schema,
+	completedCleanupWithoutVolumeV1Schema,
 	z.strictObject({
 		...cleanupCorrelationV1Schema,
 		status: z.literal("failed"),
@@ -423,8 +457,21 @@ export function validateAgentWorkloadAppliedV1(
 		applied.agentId !== desired.agentId ||
 		applied.configRevision !== desired.configRevision ||
 		applied.workloadRevision !== desired.workloadRevision ||
+		applied.fence !== desired.fence ||
 		applied.imageDigest !== desired.imageDigest ||
+		applied.service.name !== desired.service.name ||
+		applied.service.port !== desired.service.port ||
+		applied.healthCheck.path !== desired.health.path ||
+		applied.healthCheck.timeoutSeconds !== desired.health.timeoutSeconds ||
+		applied.healthCheck.failureThreshold !== desired.health.failureThreshold ||
 		applied.desiredReplicas !== desired.replicas ||
+		(desired.expectedWorkload !== undefined &&
+			(applied.workloadUid !== desired.expectedWorkload.workloadUid ||
+				applied.observedGeneration <
+					desired.expectedWorkload.workloadGeneration)) ||
+		(applied.route.state === "open" &&
+			(applied.route.workloadUid !== applied.workloadUid ||
+				applied.route.workloadRevision !== applied.workloadRevision)) ||
 		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets)
 	) {
 		throw new Error("Applied Workload correlation mismatch");
@@ -443,12 +490,30 @@ export function validateKubernetesReconcileResultV1(
 		result.traceId !== desired.traceId ||
 		result.agentId !== desired.agentId ||
 		result.configRevision !== desired.configRevision ||
-		result.workloadRevision !== desired.workloadRevision
+		result.workloadRevision !== desired.workloadRevision ||
+		result.fence !== desired.fence
 	) {
 		throw new Error("Kubernetes reconciliation correlation mismatch");
 	}
 	if (result.status === "applied") {
+		if (
+			result.workloadUid !== result.applied.workloadUid ||
+			result.workloadGeneration !== result.applied.observedGeneration
+		) {
+			throw new Error("Kubernetes reconciliation correlation mismatch");
+		}
 		validateAgentWorkloadAppliedV1(desired, result.applied);
+	} else if (result.error.traceId !== desired.traceId) {
+		throw new Error("Kubernetes reconciliation correlation mismatch");
+	}
+	if (
+		result.status === "stale" &&
+		(result.currentConfigRevision < desired.configRevision ||
+			result.currentWorkloadRevision < desired.workloadRevision ||
+			(result.currentConfigRevision === desired.configRevision &&
+				result.currentWorkloadRevision === desired.workloadRevision))
+	) {
+		throw new Error("Kubernetes reconciliation correlation mismatch");
 	}
 	return result;
 }
@@ -466,6 +531,8 @@ export function validateWorkloadCleanupResultV1(
 		result.configRevision !== request.configRevision ||
 		result.workloadRevision !== request.workloadRevision ||
 		result.workloadUid !== request.workloadUid ||
+		result.workloadGeneration !== request.workloadGeneration ||
+		result.fence !== request.fence ||
 		result.deleteNewPersistentVolume !== request.deleteNewPersistentVolume
 	) {
 		throw new Error("Workload cleanup correlation mismatch");

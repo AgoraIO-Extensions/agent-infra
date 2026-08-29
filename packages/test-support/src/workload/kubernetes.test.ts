@@ -31,6 +31,7 @@ const desired = {
 	agentId: "agent_01",
 	configRevision: 7,
 	workloadRevision: 9,
+	fence: 11,
 	namespaceRef: "pilot-namespace",
 	desiredState: "running",
 	replicas: 1,
@@ -73,17 +74,25 @@ const applied = {
 	agentId: desired.agentId,
 	configRevision: desired.configRevision,
 	workloadRevision: desired.workloadRevision,
+	fence: desired.fence,
 	state: "ready",
 	imageDigest: desired.imageDigest,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	service: desired.service,
+	healthCheck: desired.health,
 	desiredReplicas: 1,
 	readyReplicas: 1,
 	serviceRef: "service/agent-01",
 	serviceAccountRef: "service-account/agent-01",
 	persistentVolumeRef: "pvc/agent-01-data",
 	networkPolicyRef: "network-policy/agent-01",
-	route: { state: "open", routeRef: "route/agent-01" },
+	route: {
+		state: "open",
+		routeRef: "route/agent-01",
+		workloadUid: "workload_uid_01",
+		workloadRevision: desired.workloadRevision,
+	},
 	health: { state: "healthy", observedAt: "2026-08-28T10:10:00Z" },
 	secretRefs: [secretRef],
 	cleanupState: "not-requested",
@@ -97,6 +106,9 @@ const appliedResult = {
 	agentId: desired.agentId,
 	configRevision: desired.configRevision,
 	workloadRevision: desired.workloadRevision,
+	fence: desired.fence,
+	workloadUid: applied.workloadUid,
+	workloadGeneration: applied.observedGeneration,
 	applied,
 } as const;
 
@@ -122,6 +134,7 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			agentId: desired.agentId,
 			configRevision: desired.configRevision,
 			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
 			currentConfigRevision: 8,
 			currentWorkloadRevision: 10,
 			error: {
@@ -138,6 +151,53 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 		});
 
 		expect(await adapter.reconcile(desired)).toEqual(stale);
+	});
+
+	it("reproduces rejection, partial apply, route closure, and crash recovery", async () => {
+		const rejected = {
+			schemaVersion: 1,
+			status: "rejected",
+			requestId: desired.requestId,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
+			error: {
+				schemaVersion: 1,
+				code: "WORKLOAD_POLICY_REJECTED",
+				message: "The Workload policy rejected the request",
+				retryable: false,
+				traceId: desired.traceId,
+			},
+		} as const;
+		const applying = {
+			...applied,
+			state: "applying",
+			desiredReplicas: 1,
+			readyReplicas: 0,
+			route: { state: "closed" },
+			health: { state: "unknown" },
+			cleanupState: "pending",
+		} as const;
+		const outcomes = [
+			rejected,
+			{ ...appliedResult, applied: applying },
+			appliedResult,
+		] as const;
+		let call = 0;
+		const adapter = createFakeKubernetesRuntimeAdapterV1({
+			capabilities,
+			reconcile: () => outcomes[call++],
+		});
+
+		expect((await adapter.reconcile(desired)).status).toBe("rejected");
+		const partial = await adapter.reconcile(desired);
+		expect(partial.status).toBe("applied");
+		if (partial.status === "applied") {
+			expect(partial.applied.route.state).toBe("closed");
+		}
+		expect(await adapter.reconcile(desired)).toEqual(appliedResult);
 	});
 
 	it.each([
@@ -179,6 +239,8 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			configRevision: desired.configRevision,
 			workloadRevision: desired.workloadRevision,
 			workloadUid: applied.workloadUid,
+			workloadGeneration: applied.observedGeneration,
+			fence: desired.fence,
 			deleteNewPersistentVolume: true,
 		} as const;
 		const cleanupResult = {

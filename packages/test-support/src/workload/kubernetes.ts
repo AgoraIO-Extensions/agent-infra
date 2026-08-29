@@ -38,6 +38,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				agentId: desired.agentId,
 				configRevision: desired.configRevision,
 				workloadRevision: desired.workloadRevision,
+				fence: desired.fence,
 				error: {
 					schemaVersion: 1,
 					code: "FAKE_RECONCILE_RESULT_MISSING",

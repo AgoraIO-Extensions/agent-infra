@@ -38,6 +38,7 @@ const desired = {
 	agentId: "agent_01",
 	configRevision: 7,
 	workloadRevision: 9,
+	fence: 11,
 	namespaceRef: "pilot-namespace",
 	desiredState: "running",
 	replicas: 1,
@@ -85,17 +86,25 @@ const applied = {
 	agentId: desired.agentId,
 	configRevision: desired.configRevision,
 	workloadRevision: desired.workloadRevision,
+	fence: desired.fence,
 	state: "ready",
 	imageDigest: desired.imageDigest,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	service: desired.service,
+	healthCheck: desired.health,
 	desiredReplicas: 1,
 	readyReplicas: 1,
 	serviceRef: "service/agent-01",
 	serviceAccountRef: "service-account/agent-01",
 	persistentVolumeRef: "pvc/agent-01-data",
 	networkPolicyRef: "network-policy/agent-01",
-	route: { state: "open", routeRef: "route/agent-01" },
+	route: {
+		state: "open",
+		routeRef: "route/agent-01",
+		workloadUid: "workload_uid_01",
+		workloadRevision: desired.workloadRevision,
+	},
 	health: { state: "healthy", observedAt: "2026-08-28T10:10:00Z" },
 	secretRefs: [secretRef],
 	cleanupState: "not-requested",
@@ -232,6 +241,47 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 				secretRefs: [{ ...secretRef, secretVersion: 3 }],
 			}),
 		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				fence: desired.fence - 1,
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				service: { ...applied.service, port: 9090 },
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				route: { ...applied.route, workloadUid: "workload_uid_02" },
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(
+			AgentWorkloadAppliedV1Schema.safeParse({
+				...applied,
+				state: "degraded",
+				readyReplicas: 0,
+				health: {
+					state: "unhealthy",
+					observedAt: "2026-08-28T10:10:00Z",
+				},
+			}).success,
+		).toBe(false);
+		expect(() =>
+			validateAgentWorkloadAppliedV1(
+				{
+					...desired,
+					expectedWorkload: {
+						workloadUid: applied.workloadUid,
+						workloadGeneration: applied.observedGeneration + 1,
+					},
+				},
+				applied,
+			),
+		).toThrow("Applied Workload correlation mismatch");
 	});
 
 	it("represents stale reconciliation without applying an old revision", () => {
@@ -243,6 +293,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			agentId: desired.agentId,
 			configRevision: desired.configRevision,
 			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
 			currentConfigRevision: desired.configRevision + 1,
 			currentWorkloadRevision: desired.workloadRevision + 1,
 			error: {
@@ -262,6 +313,45 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 				requestId: "request_workload_02",
 			}),
 		).toThrow("Kubernetes reconciliation correlation mismatch");
+		expect(() =>
+			validateKubernetesReconcileResultV1(desired, {
+				...stale,
+				currentConfigRevision: desired.configRevision,
+				currentWorkloadRevision: desired.workloadRevision,
+			}),
+		).toThrow("Kubernetes reconciliation correlation mismatch");
+		expect(() =>
+			validateKubernetesReconcileResultV1(desired, {
+				...stale,
+				error: { ...stale.error, traceId: "trace_other" },
+			}),
+		).toThrow("Kubernetes reconciliation correlation mismatch");
+	});
+
+	it("binds an applied reconciliation envelope to its nested Workload", () => {
+		const result = {
+			schemaVersion: 1,
+			status: "applied",
+			requestId: desired.requestId,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
+			workloadUid: applied.workloadUid,
+			workloadGeneration: applied.observedGeneration,
+			applied,
+		} as const;
+
+		expect(validateKubernetesReconcileResultV1(desired, result)).toEqual(
+			result,
+		);
+		expect(() =>
+			validateKubernetesReconcileResultV1(desired, {
+				...result,
+				workloadGeneration: result.workloadGeneration + 1,
+			}),
+		).toThrow("Kubernetes reconciliation correlation mismatch");
 	});
 
 	it("correlates cleanup to the exact Workload revision", () => {
@@ -273,6 +363,8 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			configRevision: desired.configRevision,
 			workloadRevision: desired.workloadRevision,
 			workloadUid: applied.workloadUid,
+			workloadGeneration: applied.observedGeneration,
+			fence: desired.fence,
 			deleteNewPersistentVolume: true,
 		} as const;
 		const result = {
@@ -302,6 +394,12 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			WorkloadCleanupResultV1Schema.safeParse({
 				...result,
 				providerOperationId: "must-not-cross-the-port",
+			}).success,
+		).toBe(false);
+		expect(
+			WorkloadCleanupResultV1Schema.safeParse({
+				...result,
+				deleted: { ...result.deleted, route: false },
 			}).success,
 		).toBe(false);
 	});
