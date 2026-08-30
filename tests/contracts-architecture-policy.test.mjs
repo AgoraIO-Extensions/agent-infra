@@ -24,6 +24,7 @@ test("contracts source accepts tooling dependencies but rejects forbidden module
 		"react-dom",
 		"@hono/node-server",
 		"drizzle-zod",
+		"postgres",
 		"@kubernetes/client-node",
 		"@agent-infra/platform-core",
 	]) {
@@ -170,6 +171,7 @@ test("contracts manifest cannot depend on repository runtime modules", () => {
 		"react",
 		"@hono/node-server",
 		"drizzle-orm",
+		"postgres",
 		"@kubernetes/client-node",
 	]) {
 		assert.match(

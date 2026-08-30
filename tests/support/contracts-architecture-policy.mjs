@@ -9,6 +9,7 @@ const forbiddenContractImports = [
 	/^react(?:-|\/|$)/,
 	/^(?:@hono\/|hono(?:-|\/|$))/,
 	/^drizzle(?:-|\/|$)/,
+	/^postgres$/,
 	/^@kubernetes(?:\/|$)/,
 	/^@agent-infra\//,
 ];
