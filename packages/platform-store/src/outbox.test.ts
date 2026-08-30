@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
+import { transitionTerminalAfterLock } from "./outbox.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -630,6 +630,62 @@ describe("PostgreSQL outbox store", () => {
 			);
 		} finally {
 			await Promise.all([store.close(), blocker.end(), setup.end()]);
+		}
+	});
+
+	it("decides terminal ownership inside the mutation after the row is locked", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-after-lock");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			const claimed = await store.claim({
+				itemId: "outbox-after-lock",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 500,
+			});
+			if (!claimed) throw new Error("After-lock test item was not claimed");
+
+			await setup.begin(async (transaction) => {
+				await transaction`
+					select id from platform.outbox_items
+					where id = 'outbox-after-lock' for update
+				`;
+				await transaction`select pg_sleep(0.75)`;
+				const clockRows = await transaction<{ database_now: Date }[]>`
+					select clock_timestamp() as database_now
+				`;
+				expect(clockRows[0]?.database_now.getTime()).toBeGreaterThanOrEqual(
+					claimed.leaseExpiresAt.getTime(),
+				);
+
+				expect(
+					await transitionTerminalAfterLock(
+						transaction,
+						{
+							itemId: "outbox-after-lock",
+							leaseOwner: "worker-a",
+							deliveryFence: 1n,
+						},
+						"succeeded",
+					),
+				).toBeNull();
+				const state = await transaction`
+					select status, lease_owner from platform.outbox_items
+					where id = 'outbox-after-lock'
+				`;
+				expect([...state]).toEqual([
+					{ status: "processing", lease_owner: "worker-a" },
+				]);
+				const events = await transaction`
+					select event_id from platform.persisted_events
+					where stream_id = 'outbox:outbox-after-lock'
+				`;
+				expect(events).toHaveLength(0);
+			});
+		} finally {
+			await Promise.all([store.close(), setup.end()]);
 		}
 	});
 });

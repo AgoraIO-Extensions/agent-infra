@@ -245,28 +245,16 @@ async function lockOutboxItem(
 	return rows.length === 1;
 }
 
-async function databaseDecisionAt(
-	transaction: postgres.TransactionSql,
-): Promise<Date> {
-	const rows = await transaction<{ decision_at: Date }[]>`
-		select clock_timestamp() as decision_at
-	`;
-	const decisionAt = rows[0]?.decision_at;
-	if (!decisionAt) throw new Error("PostgreSQL clock is unavailable");
-	return decisionAt;
-}
-
 function ownedLiveLease(
-	client: ReturnType<typeof postgres>,
+	transaction: postgres.TransactionSql,
 	input: OwnedOutboxLeaseInput,
-	decisionAt: Date,
 ) {
-	return client`
+	return transaction`
 		id = ${input.itemId}
 		and status = 'processing'
 		and lease_owner = ${input.leaseOwner}
 		and delivery_fence = ${input.deliveryFence.toString()}
-		and lease_expires_at > ${decisionAt}
+		and lease_expires_at > decision_time.decision_at
 	`;
 }
 
@@ -293,8 +281,10 @@ async function recordOutboxAttempt(
 	`;
 }
 
-async function markTerminal<TStatus extends TerminalOutboxStatus>(
-	client: ReturnType<typeof postgres>,
+export async function transitionTerminalAfterLock<
+	TStatus extends TerminalOutboxStatus,
+>(
+	transaction: postgres.TransactionSql,
 	input: CompleteOutboxItemInput,
 	status: TStatus,
 	errorCode?: string,
@@ -305,36 +295,43 @@ async function markTerminal<TStatus extends TerminalOutboxStatus>(
 	deliveryFence: bigint;
 	updatedAt: Date;
 } | null> {
-	requireOwnedLease(input);
-	return databaseOperation(() =>
-		client.begin(async (transaction) => {
-			if (!(await lockOutboxItem(transaction, input.itemId))) return null;
-			const decisionAt = await databaseDecisionAt(transaction);
-			const rows = await transaction<TransitionedOutboxRow[]>`
+	const rows = await transaction<TransitionedOutboxRow[]>`
+		with decision_time as materialized (
+			select clock_timestamp() as decision_at
+		)
 			update platform.outbox_items
 			set status = ${status},
 				lease_owner = null,
 				lease_expires_at = null,
-				updated_at = ${decisionAt}
-			where ${ownedLiveLease(client, input, decisionAt)}
+				updated_at = decision_time.decision_at
+			from decision_time
+			where ${ownedLiveLease(transaction, input)}
 			returning id, attempt_count, delivery_fence::text, trace_id, updated_at
-		`;
-			const row = rows[0];
-			if (!row) return null;
+	`;
+	const row = rows[0];
+	if (!row) return null;
 
-			await recordOutboxAttempt(
-				transaction,
-				row,
-				`outbox.${status}`,
-				errorCode,
-			);
-			return {
-				itemId: row.id,
-				status,
-				attemptCount: row.attempt_count,
-				deliveryFence: BigInt(row.delivery_fence),
-				updatedAt: row.updated_at,
-			};
+	await recordOutboxAttempt(transaction, row, `outbox.${status}`, errorCode);
+	return {
+		itemId: row.id,
+		status,
+		attemptCount: row.attempt_count,
+		deliveryFence: BigInt(row.delivery_fence),
+		updatedAt: row.updated_at,
+	};
+}
+
+async function markTerminal<TStatus extends TerminalOutboxStatus>(
+	client: ReturnType<typeof postgres>,
+	input: CompleteOutboxItemInput,
+	status: TStatus,
+	errorCode?: string,
+) {
+	requireOwnedLease(input);
+	return databaseOperation(() =>
+		client.begin(async (transaction) => {
+			if (!(await lockOutboxItem(transaction, input.itemId))) return null;
+			return transitionTerminalAfterLock(transaction, input, status, errorCode);
 		}),
 	);
 }
@@ -358,21 +355,26 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 			return databaseOperation(() =>
 				client.begin(async (transaction) => {
 					if (!(await lockOutboxItem(transaction, input.itemId))) return null;
-					const decisionAt = await databaseDecisionAt(transaction);
 					const rows = await transaction<ClaimedOutboxRow[]>`
-						update platform.outbox_items
-					set status = 'processing',
-						attempt_count = attempt_count + 1,
-						lease_owner = ${input.leaseOwner},
-						lease_expires_at = ${decisionAt} +
-							(${input.leaseDurationMs}::bigint * interval '1 millisecond'),
-						delivery_fence = delivery_fence + 1,
-						updated_at = ${decisionAt}
-					where id = ${input.itemId}
-						and (
-							(status in ('pending', 'retry_scheduled') and available_at <= ${decisionAt})
-							or (status = 'processing' and lease_expires_at <= ${decisionAt})
-						)
+							with decision_time as materialized (
+								select clock_timestamp() as decision_at
+							)
+							update platform.outbox_items
+						set status = 'processing',
+							attempt_count = attempt_count + 1,
+							lease_owner = ${input.leaseOwner},
+							lease_expires_at = decision_time.decision_at +
+								(${input.leaseDurationMs}::bigint * interval '1 millisecond'),
+							delivery_fence = delivery_fence + 1,
+							updated_at = decision_time.decision_at
+						from decision_time
+						where id = ${input.itemId}
+							and (
+								(status in ('pending', 'retry_scheduled')
+									and available_at <= decision_time.decision_at)
+								or (status = 'processing'
+									and lease_expires_at <= decision_time.decision_at)
+							)
 					returning id, scope_type, scope_id, operation, payload, trace_id,
 						attempt_count, delivery_fence::text, lease_owner, lease_expires_at,
 						updated_at
@@ -392,16 +394,19 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 			return databaseOperation(() =>
 				client.begin(async (transaction) => {
 					if (!(await lockOutboxItem(transaction, input.itemId))) return null;
-					const decisionAt = await databaseDecisionAt(transaction);
 					const rows = await transaction<ClaimedOutboxRow[]>`
-						update platform.outbox_items
-					set lease_expires_at = greatest(
-							lease_expires_at,
-							${decisionAt} +
-								(${input.leaseDurationMs}::bigint * interval '1 millisecond')
-						),
-						updated_at = ${decisionAt}
-					where ${ownedLiveLease(client, input, decisionAt)}
+							with decision_time as materialized (
+								select clock_timestamp() as decision_at
+							)
+							update platform.outbox_items
+						set lease_expires_at = greatest(
+								lease_expires_at,
+								decision_time.decision_at +
+									(${input.leaseDurationMs}::bigint * interval '1 millisecond')
+							),
+							updated_at = decision_time.decision_at
+						from decision_time
+						where ${ownedLiveLease(transaction, input)}
 					returning id, scope_type, scope_id, operation, payload, trace_id,
 						attempt_count, delivery_fence::text, lease_owner, lease_expires_at,
 						updated_at
@@ -422,16 +427,19 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 			return databaseOperation(() =>
 				client.begin(async (transaction) => {
 					if (!(await lockOutboxItem(transaction, input.itemId))) return null;
-					const decisionAt = await databaseDecisionAt(transaction);
 					const rows = await transaction<RetryOutboxRow[]>`
-						update platform.outbox_items
-						set status = 'retry_scheduled',
-							available_at = ${decisionAt} +
-								(${input.retryDelayMs}::bigint * interval '1 millisecond'),
-							lease_owner = null,
-							lease_expires_at = null,
-							updated_at = ${decisionAt}
-						where ${ownedLiveLease(client, input, decisionAt)}
+							with decision_time as materialized (
+								select clock_timestamp() as decision_at
+							)
+							update platform.outbox_items
+							set status = 'retry_scheduled',
+								available_at = decision_time.decision_at +
+									(${input.retryDelayMs}::bigint * interval '1 millisecond'),
+								lease_owner = null,
+								lease_expires_at = null,
+								updated_at = decision_time.decision_at
+							from decision_time
+							where ${ownedLiveLease(transaction, input)}
 						returning id, attempt_count, delivery_fence::text, available_at,
 							trace_id, updated_at
 					`;
