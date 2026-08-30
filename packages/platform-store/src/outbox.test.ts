@@ -9,7 +9,9 @@ import {
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
+type PostgresClient = ReturnType<typeof postgres>;
 
+const maximumDelayMs = 86_400_000;
 let testDatabase: PostgresTestDatabase | undefined;
 
 beforeAll(async () => {
@@ -21,584 +23,103 @@ beforeAll(async () => {
 
 afterAll(async () => testDatabase?.stop());
 
+function databaseUrl(): string {
+	if (!testDatabase) throw new Error("PostgreSQL test database is unavailable");
+	return testDatabase.databaseUrl;
+}
+
+async function insertOutboxItem(
+	client: PostgresClient,
+	itemId: string,
+	payload: postgres.JSONValue = {},
+): Promise<void> {
+	await client`
+		insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, available_at, trace_id)
+		values
+			(${itemId}, 'agent', ${`agent-${itemId}`}, 'deploy',
+			 ${client.json(payload)}, clock_timestamp(), ${`trace-${itemId}`})
+	`;
+}
+
+async function readDatabaseTime(client: PostgresClient): Promise<Date> {
+	const rows = await client<{ decision_at: Date }[]>`
+		select clock_timestamp() as decision_at
+	`;
+	const decisionAt = rows[0]?.decision_at;
+	if (!decisionAt) throw new Error("PostgreSQL did not return its clock");
+	return decisionAt;
+}
+
+async function forceLeaseExpiry(
+	client: PostgresClient,
+	itemId: string,
+): Promise<void> {
+	await client`
+		update platform.outbox_items
+		set lease_expires_at = clock_timestamp() - interval '1 second'
+		where id = ${itemId}
+	`;
+}
+
+async function forceRetryDue(
+	client: PostgresClient,
+	itemId: string,
+): Promise<void> {
+	await client`
+		update platform.outbox_items
+		set available_at = clock_timestamp() - interval '1 second'
+		where id = ${itemId}
+	`;
+}
+
+function expectDatabaseOrdered(value: Date, before: Date, after: Date): void {
+	expect(value.getTime()).toBeGreaterThanOrEqual(before.getTime());
+	expect(value.getTime()).toBeLessThanOrEqual(after.getTime());
+}
+
+async function expectQueuedOperationExpires(
+	blocker: PostgresClient,
+	itemId: string,
+	leaseExpiresAt: Date,
+	operation: () => Promise<unknown>,
+): Promise<void> {
+	let releaseLock = () => {};
+	const released = new Promise<void>((resolve) => {
+		releaseLock = resolve;
+	});
+	let reportRemaining = (_remainingMs: number) => {};
+	const ready = new Promise<number>((resolve) => {
+		reportRemaining = resolve;
+	});
+	const lockHolder = blocker.begin(async (transaction) => {
+		await transaction`
+			select id from platform.outbox_items where id = ${itemId} for update
+		`;
+		const clockRows = await transaction<{ decision_at: Date }[]>`
+			select clock_timestamp() as decision_at
+		`;
+		const lockedAt = clockRows[0]?.decision_at;
+		if (!lockedAt) throw new Error("PostgreSQL did not return its clock");
+		reportRemaining(leaseExpiresAt.getTime() - lockedAt.getTime());
+		await released;
+	});
+
+	const remainingMs = await ready;
+	const pendingOperation = operation();
+	await new Promise((resolve) =>
+		setTimeout(resolve, Math.max(remainingMs + 75, 100)),
+	);
+	releaseLock();
+	await lockHolder;
+	expect(remainingMs).toBeGreaterThan(250);
+	expect(await pendingOperation).toBeNull();
+}
+
 describe("PostgreSQL outbox store", () => {
-	it("rejects malformed runtime inputs with stable validation errors", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		expect(() => builtStore.createPostgresOutboxStore(null as never)).toThrow(
-			"input must be an object",
-		);
-		expect(() =>
-			builtStore.createPostgresOutboxStore({ databaseUrl: "https://db" }),
-		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
-
-		const store = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			await expect(
-				store.claim({
-					itemId: "outbox-input",
-					leaseOwner: null,
-					now: new Date("2026-08-30T00:00:00.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T00:01:00.000Z"),
-				} as never),
-			).rejects.toThrow("leaseOwner must be a non-empty string");
-			await expect(
-				store.claim({
-					itemId: "outbox-input",
-					leaseOwner: "worker-a",
-					now: "2026-08-30T00:00:00.000Z",
-					leaseExpiresAt: new Date("2026-08-30T00:01:00.000Z"),
-				} as never),
-			).rejects.toThrow("now must be a valid Date");
-			await expect(
-				store.renew({
-					itemId: "outbox-input",
-					leaseOwner: "worker-a",
-					deliveryFence: 1,
-					now: new Date("2026-08-30T00:00:00.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T00:01:00.000Z"),
-				} as never),
-			).rejects.toThrow("deliveryFence must be a positive bigint");
-		} finally {
-			await store.close();
-		}
-	});
-
-	it("gives concurrent claimers one owner and protects its live lease", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-race', 'agent', 'agent-1', 'reconcile', ${setup.json({ revision: 3 })},
-				 ${new Date("2026-08-30T00:00:00.000Z")}, 'trace-race')
-		`;
-		await setup.end();
-
-		const first = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		const second = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			const now = new Date("2026-08-30T00:01:00.000Z");
-			const leaseExpiresAt = new Date("2026-08-30T00:02:00.000Z");
-			const claims = await Promise.all([
-				first.claim({
-					itemId: "outbox-race",
-					leaseOwner: "worker-a",
-					now,
-					leaseExpiresAt,
-				}),
-				second.claim({
-					itemId: "outbox-race",
-					leaseOwner: "worker-b",
-					now,
-					leaseExpiresAt,
-				}),
-			]);
-			const winner = claims.find((claim) => claim !== null);
-			expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
-			expect(winner).toMatchObject({
-				itemId: "outbox-race",
-				payload: { revision: 3 },
-				attemptCount: 1,
-				deliveryFence: 1n,
-				leaseExpiresAt,
-			});
-
-			const losingStore = winner?.leaseOwner === "worker-a" ? second : first;
-			expect(
-				await losingStore.claim({
-					itemId: "outbox-race",
-					leaseOwner: "worker-c",
-					now: new Date("2026-08-30T00:01:30.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T00:03:00.000Z"),
-				}),
-			).toBeNull();
-		} finally {
-			await Promise.all([first.close(), second.close()]);
-		}
-	});
-
-	it("renews a live lease and fences its expired owner after takeover", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-takeover', 'agent', 'agent-2', 'reconcile', '{}',
-				 ${new Date("2026-08-30T01:00:00.000Z")}, 'trace-takeover')
-		`;
-		await setup.end();
-
-		const first = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		const second = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			const firstClaim = await first.claim({
-				itemId: "outbox-takeover",
-				leaseOwner: "worker-a",
-				now: new Date("2026-08-30T01:01:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T01:02:00.000Z"),
-			});
-			expect(firstClaim?.deliveryFence).toBe(1n);
-			expect(
-				await first.renew({
-					itemId: "outbox-takeover",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T01:01:30.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T01:03:00.000Z"),
-				}),
-			).toMatchObject({
-				itemId: "outbox-takeover",
-				deliveryFence: 1n,
-				leaseExpiresAt: new Date("2026-08-30T01:03:00.000Z"),
-			});
-			expect(
-				await second.claim({
-					itemId: "outbox-takeover",
-					leaseOwner: "worker-b",
-					now: new Date("2026-08-30T01:02:30.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T01:04:00.000Z"),
-				}),
-			).toBeNull();
-
-			const takeover = await second.claim({
-				itemId: "outbox-takeover",
-				leaseOwner: "worker-b",
-				now: new Date("2026-08-30T01:03:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T01:04:00.000Z"),
-			});
-			expect(takeover).toMatchObject({
-				attemptCount: 2,
-				deliveryFence: 2n,
-				leaseOwner: "worker-b",
-			});
-			expect(
-				await first.renew({
-					itemId: "outbox-takeover",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T01:03:01.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T01:05:00.000Z"),
-				}),
-			).toBeNull();
-		} finally {
-			await Promise.all([first.close(), second.close()]);
-		}
-	});
-
-	it("schedules one sanitized retry that becomes claimable at its due time", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-retry', 'agent', 'agent-3', 'deploy',
-				 ${setup.json({ command: "deploy" })},
-				 ${new Date("2026-08-30T02:00:00.000Z")}, 'trace-retry')
-		`;
-
-		const first = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		const second = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			await first.claim({
-				itemId: "outbox-retry",
-				leaseOwner: "worker-a",
-				now: new Date("2026-08-30T02:01:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T02:10:00.000Z"),
-			});
-			await expect(
-				first.scheduleRetry({
-					itemId: "outbox-retry",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T02:02:00.000Z"),
-					availableAt: new Date("2026-08-30T02:05:00.000Z"),
-					errorCode: "RUNTIME_UNAVAILABLE",
-					message: "raw runtime detail",
-				} as never),
-			).rejects.toThrow("scheduleRetry input contains unsupported fields");
-			await expect(
-				first.scheduleRetry({
-					itemId: "outbox-retry",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T02:02:00.000Z"),
-					availableAt: new Date("2026-08-30T02:05:00.000Z"),
-					errorCode: "runtime failed with details",
-				}),
-			).rejects.toThrow("errorCode must be a symbolic code");
-
-			const scheduled = await first.scheduleRetry({
-				itemId: "outbox-retry",
-				leaseOwner: "worker-a",
-				deliveryFence: 1n,
-				now: new Date("2026-08-30T02:02:00.000Z"),
-				availableAt: new Date("2026-08-30T02:05:00.000Z"),
-				errorCode: "RUNTIME_UNAVAILABLE",
-			});
-			expect(scheduled).toEqual({
-				itemId: "outbox-retry",
-				status: "retry_scheduled",
-				attemptCount: 1,
-				deliveryFence: 1n,
-				availableAt: new Date("2026-08-30T02:05:00.000Z"),
-			});
-			expect(
-				await first.scheduleRetry({
-					itemId: "outbox-retry",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T02:02:01.000Z"),
-					availableAt: new Date("2026-08-30T02:05:00.000Z"),
-					errorCode: "RUNTIME_UNAVAILABLE",
-				}),
-			).toBeNull();
-			expect(
-				await second.claim({
-					itemId: "outbox-retry",
-					leaseOwner: "worker-b",
-					now: new Date("2026-08-30T02:04:59.999Z"),
-					leaseExpiresAt: new Date("2026-08-30T02:10:00.000Z"),
-				}),
-			).toBeNull();
-
-			const retryClaim = await second.claim({
-				itemId: "outbox-retry",
-				leaseOwner: "worker-b",
-				now: new Date("2026-08-30T02:05:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T02:10:00.000Z"),
-			});
-			expect(retryClaim).toMatchObject({
-				payload: { command: "deploy" },
-				attemptCount: 2,
-				deliveryFence: 2n,
-				leaseOwner: "worker-b",
-			});
-
-			const events = await setup`
-				select event_id, stream_id, sequence::text, stream_cursor::text,
-					event_type, payload, trace_id, occurred_at
-				from platform.persisted_events
-				where stream_id = 'outbox:outbox-retry'
-			`;
-			expect([...events]).toEqual([
-				{
-					event_id: "outbox:outbox-retry:1",
-					stream_id: "outbox:outbox-retry",
-					sequence: "1",
-					stream_cursor: "1",
-					event_type: "outbox.retry_scheduled",
-					payload: {
-						attemptCount: 1,
-						deliveryFence: "1",
-						errorCode: "RUNTIME_UNAVAILABLE",
-					},
-					trace_id: "trace-retry",
-					occurred_at: new Date("2026-08-30T02:02:00.000Z"),
-				},
-			]);
-		} finally {
-			await Promise.all([first.close(), second.close(), setup.end()]);
-		}
-	});
-
-	it("rejects stale completion and records one successful terminal transition", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-success', 'agent', 'agent-4', 'deploy', '{}',
-				 ${new Date("2026-08-30T03:00:00.000Z")}, 'trace-success')
-		`;
-
-		const first = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		const second = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			await first.claim({
-				itemId: "outbox-success",
-				leaseOwner: "worker-a",
-				now: new Date("2026-08-30T03:01:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T03:02:00.000Z"),
-			});
-			await second.claim({
-				itemId: "outbox-success",
-				leaseOwner: "worker-b",
-				now: new Date("2026-08-30T03:02:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T03:05:00.000Z"),
-			});
-
-			expect(
-				await first.markSucceeded({
-					itemId: "outbox-success",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T03:02:01.000Z"),
-				}),
-			).toBeNull();
-			expect(
-				await second.markSucceeded({
-					itemId: "outbox-success",
-					leaseOwner: "worker-b",
-					deliveryFence: 2n,
-					now: new Date("2026-08-30T03:03:00.000Z"),
-				}),
-			).toEqual({
-				itemId: "outbox-success",
-				status: "succeeded",
-				attemptCount: 2,
-				deliveryFence: 2n,
-			});
-			expect(
-				await second.markSucceeded({
-					itemId: "outbox-success",
-					leaseOwner: "worker-b",
-					deliveryFence: 2n,
-					now: new Date("2026-08-30T03:03:01.000Z"),
-				}),
-			).toBeNull();
-			expect(
-				await first.claim({
-					itemId: "outbox-success",
-					leaseOwner: "worker-c",
-					now: new Date("2026-08-30T04:00:00.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T04:01:00.000Z"),
-				}),
-			).toBeNull();
-
-			const events = await setup`
-				select event_id, stream_id, sequence::text, stream_cursor::text,
-					event_type, payload, trace_id, occurred_at
-				from platform.persisted_events
-				where stream_id = 'outbox:outbox-success'
-			`;
-			expect([...events]).toEqual([
-				{
-					event_id: "outbox:outbox-success:2",
-					stream_id: "outbox:outbox-success",
-					sequence: "2",
-					stream_cursor: "2",
-					event_type: "outbox.succeeded",
-					payload: { attemptCount: 2, deliveryFence: "2" },
-					trace_id: "trace-success",
-					occurred_at: new Date("2026-08-30T03:03:00.000Z"),
-				},
-			]);
-		} finally {
-			await Promise.all([first.close(), second.close(), setup.end()]);
-		}
-	});
-
-	it("records one sanitized terminal failure and keeps it terminal", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-failure', 'agent', 'agent-5', 'deploy', '{}',
-				 ${new Date("2026-08-30T04:00:00.000Z")}, 'trace-failure')
-		`;
-
-		const store = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			await store.claim({
-				itemId: "outbox-failure",
-				leaseOwner: "worker-a",
-				now: new Date("2026-08-30T04:01:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T04:10:00.000Z"),
-			});
-			await expect(
-				store.markFailed({
-					itemId: "outbox-failure",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T04:02:00.000Z"),
-					errorCode: "secret=should-not-persist",
-				}),
-			).rejects.toThrow("errorCode must be a symbolic code");
-			expect(
-				await store.markFailed({
-					itemId: "outbox-failure",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T04:02:00.000Z"),
-					errorCode: "DEPLOYMENT_REJECTED",
-				}),
-			).toEqual({
-				itemId: "outbox-failure",
-				status: "failed",
-				attemptCount: 1,
-				deliveryFence: 1n,
-			});
-			expect(
-				await store.markFailed({
-					itemId: "outbox-failure",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T04:02:01.000Z"),
-					errorCode: "DEPLOYMENT_REJECTED",
-				}),
-			).toBeNull();
-			expect(
-				await store.markSucceeded({
-					itemId: "outbox-failure",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T04:02:01.000Z"),
-				}),
-			).toBeNull();
-			expect(
-				await store.claim({
-					itemId: "outbox-failure",
-					leaseOwner: "worker-b",
-					now: new Date("2026-08-30T05:00:00.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T05:01:00.000Z"),
-				}),
-			).toBeNull();
-
-			const events = await setup`
-				select event_id, stream_id, sequence::text, stream_cursor::text,
-					event_type, payload, trace_id, occurred_at
-				from platform.persisted_events
-				where stream_id = 'outbox:outbox-failure'
-			`;
-			expect([...events]).toEqual([
-				{
-					event_id: "outbox:outbox-failure:1",
-					stream_id: "outbox:outbox-failure",
-					sequence: "1",
-					stream_cursor: "1",
-					event_type: "outbox.failed",
-					payload: {
-						attemptCount: 1,
-						deliveryFence: "1",
-						errorCode: "DEPLOYMENT_REJECTED",
-					},
-					trace_id: "trace-failure",
-					occurred_at: new Date("2026-08-30T04:02:00.000Z"),
-				},
-			]);
-		} finally {
-			await Promise.all([store.close(), setup.end()]);
-		}
-	});
-
-	it("rolls back a transition when its attempt event cannot commit", async () => {
-		if (!testDatabase)
-			throw new Error("PostgreSQL test database is unavailable");
-		const setup = postgres(testDatabase.databaseUrl, { max: 1 });
-		await setup`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, available_at, trace_id)
-			values
-				('outbox-crash', 'agent', 'agent-6', 'deploy', '{}',
-				 ${new Date("2026-08-30T05:00:00.000Z")}, 'trace-crash')
-		`;
-
-		const store = builtStore.createPostgresOutboxStore({
-			databaseUrl: testDatabase.databaseUrl,
-		});
-		try {
-			await store.claim({
-				itemId: "outbox-crash",
-				leaseOwner: "worker-a",
-				now: new Date("2026-08-30T05:01:00.000Z"),
-				leaseExpiresAt: new Date("2026-08-30T05:10:00.000Z"),
-			});
-			await setup`
-				insert into platform.persisted_events
-					(event_id, stream_id, sequence, stream_cursor, event_type,
-					 payload, trace_id, occurred_at)
-				values
-					('outbox:outbox-crash:1', 'outbox:outbox-crash', 1, 1,
-					 'outbox.test_collision', '{}', 'trace-crash',
-					 ${new Date("2026-08-30T05:01:30.000Z")})
-			`;
-
-			const failedTransition = await store
-				.scheduleRetry({
-					itemId: "outbox-crash",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T05:02:00.000Z"),
-					availableAt: new Date("2026-08-30T05:05:00.000Z"),
-					errorCode: "RUNTIME_UNAVAILABLE",
-				})
-				.catch((error: unknown) => error);
-			expect(failedTransition).toMatchObject({
-				name: "OutboxStoreError",
-				code: "OUTBOX_STORE_ERROR",
-				message: "Outbox store operation failed",
-				retryable: false,
-			});
-			expect(failedTransition).not.toHaveProperty("constraint_name");
-			expect(failedTransition).not.toHaveProperty("cause");
-			expect(
-				await store.renew({
-					itemId: "outbox-crash",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T05:02:01.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T05:20:00.000Z"),
-				}),
-			).toMatchObject({
-				itemId: "outbox-crash",
-				deliveryFence: 1n,
-				leaseOwner: "worker-a",
-			});
-
-			await setup`
-				delete from platform.persisted_events
-				where event_id = 'outbox:outbox-crash:1'
-			`;
-			expect(
-				await store.scheduleRetry({
-					itemId: "outbox-crash",
-					leaseOwner: "worker-a",
-					deliveryFence: 1n,
-					now: new Date("2026-08-30T05:03:00.000Z"),
-					availableAt: new Date("2026-08-30T05:05:00.000Z"),
-					errorCode: "RUNTIME_UNAVAILABLE",
-				}),
-			).toMatchObject({ status: "retry_scheduled", deliveryFence: 1n });
-		} finally {
-			await Promise.all([store.close(), setup.end()]);
-		}
-	});
-
-	it("classifies an unavailable PostgreSQL connection as safely retryable", async () => {
+	it("rejects legacy clocks and invalid durations before database access", async () => {
 		const unavailableDatabase = await startPostgresTestDatabase(
-			"platform-store-unavailable",
+			"platform-store-inputs",
 		);
 		const store = builtStore.createPostgresOutboxStore({
 			databaseUrl: unavailableDatabase.databaseUrl,
@@ -606,16 +127,88 @@ describe("PostgreSQL outbox store", () => {
 		await unavailableDatabase.stop();
 
 		try {
+			await expect(
+				store.claim({
+					itemId: "outbox-legacy-claim",
+					leaseOwner: "worker-a",
+					leaseDurationMs: 1_000,
+					now: new Date(),
+					leaseExpiresAt: new Date(),
+				} as never),
+			).rejects.toThrow("claim input contains unsupported fields");
+			await expect(
+				store.renew({
+					itemId: "outbox-legacy-renew",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					leaseDurationMs: 1_000,
+					now: new Date(),
+					leaseExpiresAt: new Date(),
+				} as never),
+			).rejects.toThrow("renew input contains unsupported fields");
+			await expect(
+				store.scheduleRetry({
+					itemId: "outbox-legacy-retry",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_UNAVAILABLE",
+					now: new Date(),
+					availableAt: new Date(),
+				} as never),
+			).rejects.toThrow("scheduleRetry input contains unsupported fields");
+			await expect(
+				store.markSucceeded({
+					itemId: "outbox-legacy-terminal",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					now: new Date(),
+				} as never),
+			).rejects.toThrow("markSucceeded input contains unsupported fields");
+
+			for (const leaseDurationMs of [0, -1, 1.5, maximumDelayMs + 1]) {
+				await expect(
+					store.claim({
+						itemId: "outbox-invalid-claim",
+						leaseOwner: "worker-a",
+						leaseDurationMs,
+					}),
+				).rejects.toThrow(
+					"leaseDurationMs must be an integer between 1 and 86400000",
+				);
+				await expect(
+					store.renew({
+						itemId: "outbox-invalid-renew",
+						leaseOwner: "worker-a",
+						deliveryFence: 1n,
+						leaseDurationMs,
+					}),
+				).rejects.toThrow(
+					"leaseDurationMs must be an integer between 1 and 86400000",
+				);
+			}
+			for (const retryDelayMs of [-1, 0.5, maximumDelayMs + 1]) {
+				await expect(
+					store.scheduleRetry({
+						itemId: "outbox-invalid-retry",
+						leaseOwner: "worker-a",
+						deliveryFence: 1n,
+						retryDelayMs,
+						errorCode: "RUNTIME_UNAVAILABLE",
+					}),
+				).rejects.toThrow(
+					"retryDelayMs must be an integer between 0 and 86400000",
+				);
+			}
+
 			const failure = await store
 				.claim({
 					itemId: "outbox-unavailable",
 					leaseOwner: "worker-a",
-					now: new Date("2026-08-30T06:00:00.000Z"),
-					leaseExpiresAt: new Date("2026-08-30T06:01:00.000Z"),
+					leaseDurationMs: 1_000,
 				})
 				.catch((error: unknown) => error);
 			expect(failure).toMatchObject({
-				name: "OutboxStoreError",
 				code: "OUTBOX_STORE_ERROR",
 				message: "Outbox store operation failed",
 				retryable: true,
@@ -624,6 +217,419 @@ describe("PostgreSQL outbox store", () => {
 			expect(String(failure)).not.toContain(unavailableDatabase.databaseUrl);
 		} finally {
 			await store.close().catch(() => {});
+		}
+	});
+
+	it("gives one concurrent owner and takes over only after database expiry", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-claim", { revision: 3 });
+		const first = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		const second = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			const before = await readDatabaseTime(setup);
+			const claims = await Promise.all([
+				first.claim({
+					itemId: "outbox-claim",
+					leaseOwner: "worker-a",
+					leaseDurationMs: 60_000,
+				}),
+				second.claim({
+					itemId: "outbox-claim",
+					leaseOwner: "worker-b",
+					leaseDurationMs: 60_000,
+				}),
+			]);
+			const after = await readDatabaseTime(setup);
+			const winner = claims.find((claim) => claim !== null);
+			expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
+			expect(winner).toMatchObject({
+				itemId: "outbox-claim",
+				payload: { revision: 3 },
+				attemptCount: 1,
+				deliveryFence: 1n,
+			});
+			if (!winner) throw new Error("Concurrent claim did not produce a winner");
+			expectDatabaseOrdered(winner.updatedAt, before, after);
+			expect(winner.leaseExpiresAt.getTime() - winner.updatedAt.getTime()).toBe(
+				60_000,
+			);
+
+			expect(
+				await first.claim({
+					itemId: "outbox-claim",
+					leaseOwner: "worker-c",
+					leaseDurationMs: 60_000,
+				}),
+			).toBeNull();
+			await forceLeaseExpiry(setup, "outbox-claim");
+			const takeover = await second.claim({
+				itemId: "outbox-claim",
+				leaseOwner: "worker-c",
+				leaseDurationMs: 30_000,
+			});
+			expect(takeover).toMatchObject({
+				attemptCount: 2,
+				deliveryFence: 2n,
+				leaseOwner: "worker-c",
+			});
+		} finally {
+			await Promise.all([first.close(), second.close(), setup.end()]);
+		}
+	});
+
+	it("renews a database-live lease without shortening it", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-renew");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			const claimed = await store.claim({
+				itemId: "outbox-renew",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			if (!claimed) throw new Error("Outbox item was not claimed");
+			const unchanged = await store.renew({
+				itemId: "outbox-renew",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				leaseDurationMs: 1,
+			});
+			expect(unchanged?.leaseExpiresAt).toEqual(claimed.leaseExpiresAt);
+
+			const extended = await store.renew({
+				itemId: "outbox-renew",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				leaseDurationMs: 120_000,
+			});
+			if (!extended) throw new Error("Live lease was not renewed");
+			expect(
+				extended.leaseExpiresAt.getTime() - extended.updatedAt.getTime(),
+			).toBe(120_000);
+		} finally {
+			await Promise.all([store.close(), setup.end()]);
+		}
+	});
+
+	it("schedules retries from database time and preserves private attempt metadata", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-retry", { command: "deploy" });
+		await insertOutboxItem(setup, "outbox-retry-zero");
+		const first = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		const second = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			await first.claim({
+				itemId: "outbox-retry",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			const before = await readDatabaseTime(setup);
+			const scheduled = await first.scheduleRetry({
+				itemId: "outbox-retry",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				retryDelayMs: 60_000,
+				errorCode: "RUNTIME_UNAVAILABLE",
+			});
+			const after = await readDatabaseTime(setup);
+			if (!scheduled) throw new Error("Retry was not scheduled");
+			expectDatabaseOrdered(scheduled.updatedAt, before, after);
+			expect(
+				scheduled.availableAt.getTime() - scheduled.updatedAt.getTime(),
+			).toBe(60_000);
+			expect(
+				await first.scheduleRetry({
+					itemId: "outbox-retry",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					retryDelayMs: 60_000,
+					errorCode: "RUNTIME_UNAVAILABLE",
+				}),
+			).toBeNull();
+			expect(
+				await second.claim({
+					itemId: "outbox-retry",
+					leaseOwner: "worker-b",
+					leaseDurationMs: 60_000,
+				}),
+			).toBeNull();
+			await forceRetryDue(setup, "outbox-retry");
+			expect(
+				await second.claim({
+					itemId: "outbox-retry",
+					leaseOwner: "worker-b",
+					leaseDurationMs: 60_000,
+				}),
+			).toMatchObject({
+				payload: { command: "deploy" },
+				attemptCount: 2,
+				deliveryFence: 2n,
+			});
+
+			const events = await setup`
+				select event_type, payload, occurred_at
+				from platform.persisted_events
+				where stream_id = 'outbox:outbox-retry'
+			`;
+			expect([...events]).toEqual([
+				{
+					event_type: "outbox.retry_scheduled",
+					payload: {
+						attemptCount: 1,
+						deliveryFence: "1",
+						errorCode: "RUNTIME_UNAVAILABLE",
+					},
+					occurred_at: scheduled.updatedAt,
+				},
+			]);
+
+			await first.claim({
+				itemId: "outbox-retry-zero",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			const immediate = await first.scheduleRetry({
+				itemId: "outbox-retry-zero",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				retryDelayMs: 0,
+				errorCode: "RUNTIME_UNAVAILABLE",
+			});
+			expect(immediate?.availableAt).toEqual(immediate?.updatedAt);
+			expect(
+				await second.claim({
+					itemId: "outbox-retry-zero",
+					leaseOwner: "worker-b",
+					leaseDurationMs: 60_000,
+				}),
+			).toMatchObject({ deliveryFence: 2n });
+		} finally {
+			await Promise.all([first.close(), second.close(), setup.end()]);
+		}
+	});
+
+	it("rejects stale terminal writes and records database decision timestamps", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-success");
+		await insertOutboxItem(setup, "outbox-failure");
+		const first = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		const second = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			await first.claim({
+				itemId: "outbox-success",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			await forceLeaseExpiry(setup, "outbox-success");
+			await second.claim({
+				itemId: "outbox-success",
+				leaseOwner: "worker-b",
+				leaseDurationMs: 60_000,
+			});
+			expect(
+				await first.markSucceeded({
+					itemId: "outbox-success",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+				}),
+			).toBeNull();
+			const before = await readDatabaseTime(setup);
+			const succeeded = await second.markSucceeded({
+				itemId: "outbox-success",
+				leaseOwner: "worker-b",
+				deliveryFence: 2n,
+			});
+			const after = await readDatabaseTime(setup);
+			if (!succeeded)
+				throw new Error("Current owner did not complete outbox item");
+			expectDatabaseOrdered(succeeded.updatedAt, before, after);
+			expect(
+				await second.markSucceeded({
+					itemId: "outbox-success",
+					leaseOwner: "worker-b",
+					deliveryFence: 2n,
+				}),
+			).toBeNull();
+
+			await first.claim({
+				itemId: "outbox-failure",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			await expect(
+				first.markFailed({
+					itemId: "outbox-failure",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					errorCode: "DEPLOYMENT_REJECTED",
+					message: "raw runtime detail",
+				} as never),
+			).rejects.toThrow("markFailed input contains unsupported fields");
+			const failed = await first.markFailed({
+				itemId: "outbox-failure",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				errorCode: "DEPLOYMENT_REJECTED",
+			});
+			if (!failed) throw new Error("Current owner did not fail outbox item");
+			expect(
+				await first.markFailed({
+					itemId: "outbox-failure",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					errorCode: "DEPLOYMENT_REJECTED",
+				}),
+			).toBeNull();
+
+			const events = await setup`
+				select stream_id, event_type, payload, occurred_at
+				from platform.persisted_events
+				where stream_id in ('outbox:outbox-success', 'outbox:outbox-failure')
+				order by stream_id
+			`;
+			expect([...events]).toEqual([
+				{
+					stream_id: "outbox:outbox-failure",
+					event_type: "outbox.failed",
+					payload: {
+						attemptCount: 1,
+						deliveryFence: "1",
+						errorCode: "DEPLOYMENT_REJECTED",
+					},
+					occurred_at: failed.updatedAt,
+				},
+				{
+					stream_id: "outbox:outbox-success",
+					event_type: "outbox.succeeded",
+					payload: { attemptCount: 2, deliveryFence: "2" },
+					occurred_at: succeeded.updatedAt,
+				},
+			]);
+		} finally {
+			await Promise.all([first.close(), second.close(), setup.end()]);
+		}
+	});
+
+	it("rolls back state when its private attempt event cannot commit", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-crash");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			await store.claim({
+				itemId: "outbox-crash",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			await setup`
+				insert into platform.persisted_events
+					(event_id, stream_id, sequence, stream_cursor, event_type,
+					 payload, trace_id, occurred_at)
+				values
+					('outbox:outbox-crash:1', 'outbox:outbox-crash', 1, 1,
+					 'outbox.test_collision', '{}', 'trace-outbox-crash', clock_timestamp())
+			`;
+			const failure = await store
+				.scheduleRetry({
+					itemId: "outbox-crash",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_UNAVAILABLE",
+				})
+				.catch((error: unknown) => error);
+			expect(failure).toMatchObject({
+				code: "OUTBOX_STORE_ERROR",
+				retryable: false,
+			});
+			expect(failure).not.toHaveProperty("constraint_name");
+			expect(
+				await store.renew({
+					itemId: "outbox-crash",
+					leaseOwner: "worker-a",
+					deliveryFence: 1n,
+					leaseDurationMs: 60_000,
+				}),
+			).toMatchObject({ deliveryFence: 1n });
+			await setup`
+				delete from platform.persisted_events
+				where event_id = 'outbox:outbox-crash:1'
+			`;
+			const scheduled = await store.scheduleRetry({
+				itemId: "outbox-crash",
+				leaseOwner: "worker-a",
+				deliveryFence: 1n,
+				retryDelayMs: 0,
+				errorCode: "RUNTIME_UNAVAILABLE",
+			});
+			expect(scheduled?.availableAt).toEqual(scheduled?.updatedAt);
+		} finally {
+			await Promise.all([store.close(), setup.end()]);
+		}
+	});
+
+	it("decides queued renew and terminal writes only after acquiring the row lock", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		const blocker = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-lock-renew");
+		await insertOutboxItem(setup, "outbox-lock-terminal");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		try {
+			const renewClaim = await store.claim({
+				itemId: "outbox-lock-renew",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 1_500,
+			});
+			if (!renewClaim) throw new Error("Renew test item was not claimed");
+			await expectQueuedOperationExpires(
+				blocker,
+				"outbox-lock-renew",
+				renewClaim.leaseExpiresAt,
+				() =>
+					store.renew({
+						itemId: "outbox-lock-renew",
+						leaseOwner: "worker-a",
+						deliveryFence: 1n,
+						leaseDurationMs: 60_000,
+					}),
+			);
+
+			const terminalClaim = await store.claim({
+				itemId: "outbox-lock-terminal",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 1_500,
+			});
+			if (!terminalClaim) throw new Error("Terminal test item was not claimed");
+			await expectQueuedOperationExpires(
+				blocker,
+				"outbox-lock-terminal",
+				terminalClaim.leaseExpiresAt,
+				() =>
+					store.markSucceeded({
+						itemId: "outbox-lock-terminal",
+						leaseOwner: "worker-a",
+						deliveryFence: 1n,
+					}),
+			);
+		} finally {
+			await Promise.all([store.close(), blocker.end(), setup.end()]);
 		}
 	});
 });
