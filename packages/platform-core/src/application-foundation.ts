@@ -169,85 +169,112 @@ const requiredStrings = [
 	"sourceReference",
 	"traceId",
 ] as const;
-const commandKeys = new Set<PropertyKey>([
+const commandKeys = [
 	"schemaVersion",
 	...requiredStrings,
 	"submittedAt",
-]);
-const actorContextKeys = new Set<PropertyKey>(["schemaVersion", "userId"]);
+] as const;
+const actorContextKeys = ["schemaVersion", "userId"] as const;
 
-function hasExactOwnKeys(
-	value: object,
-	allowed: ReadonlySet<PropertyKey>,
-): boolean {
-	const ownKeys = Reflect.ownKeys(value);
-	return (
-		ownKeys.length === allowed.size && ownKeys.every((key) => allowed.has(key))
-	);
+function snapshotExactDataValues(
+	value: unknown,
+	expectedKeys: readonly string[],
+): Record<string, unknown> | undefined {
+	try {
+		if (typeof value !== "object" || value === null) return undefined;
+		const descriptors = Object.getOwnPropertyDescriptors(value);
+		const ownKeys = Reflect.ownKeys(descriptors);
+		const expected = new Set(expectedKeys);
+		if (
+			ownKeys.length !== expected.size ||
+			ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
+		) {
+			return undefined;
+		}
+		const normalized: Record<string, unknown> = {};
+		for (const key of expectedKeys) {
+			const descriptor = descriptors[key];
+			if (
+				descriptor?.enumerable !== true ||
+				!Object.hasOwn(descriptor, "value") ||
+				Object.hasOwn(descriptor, "get") ||
+				Object.hasOwn(descriptor, "set")
+			) {
+				return undefined;
+			}
+			normalized[key] = descriptor.value;
+		}
+		return normalized;
+	} catch {
+		return undefined;
+	}
 }
 
 function invalidApplicationFoundationInput(): never {
 	throw new ApplicationFoundationError("invalid_command");
 }
 
-function isApplicationFoundationCommandV1(
+function parseApplicationFoundationCommandV1(
 	command: unknown,
-): command is CommitApplicationFoundationCommandV1 {
-	try {
-		if (typeof command !== "object" || command === null) return false;
-		const candidate = command as Partial<CommitApplicationFoundationCommandV1>;
-		const nameLength =
-			typeof candidate.name === "string"
-				? Array.from(candidate.name).length
-				: 0;
-		return !(
-			!hasExactOwnKeys(command, commandKeys) ||
-			candidate.schemaVersion !== 1 ||
-			requiredStrings.some(
-				(field) =>
-					typeof candidate[field] !== "string" || candidate[field].length === 0,
-			) ||
-			nameLength > 200 ||
-			!(candidate.submittedAt instanceof Date) ||
-			!Number.isFinite(candidate.submittedAt.valueOf())
-		);
-	} catch {
-		return false;
-	}
-}
-
-function assertApplicationFoundationCommandV1(
-	command: unknown,
-): asserts command is CommitApplicationFoundationCommandV1 {
-	if (!isApplicationFoundationCommandV1(command)) {
+): CommitApplicationFoundationCommandV1 {
+	const values = snapshotExactDataValues(command, commandKeys);
+	if (!values) invalidApplicationFoundationInput();
+	const {
+		schemaVersion,
+		applicationId,
+		agentId,
+		requestId,
+		name,
+		description,
+		sourceReference,
+		traceId,
+		submittedAt,
+	} = values;
+	if (
+		schemaVersion !== 1 ||
+		![
+			applicationId,
+			agentId,
+			requestId,
+			name,
+			description,
+			sourceReference,
+			traceId,
+		].every((value) => typeof value === "string" && value.length > 0) ||
+		typeof name !== "string" ||
+		Array.from(name).length > 200 ||
+		!(submittedAt instanceof Date) ||
+		!Number.isFinite(Date.prototype.getTime.call(submittedAt))
+	) {
 		invalidApplicationFoundationInput();
 	}
+	return {
+		schemaVersion,
+		applicationId: applicationId as string,
+		agentId: agentId as string,
+		requestId: requestId as string,
+		name,
+		description: description as string,
+		sourceReference: sourceReference as string,
+		traceId: traceId as string,
+		submittedAt,
+	};
 }
 
-function isApplicationFoundationActorContextV1(
+function parseApplicationFoundationActorContextV1(
 	actorContext: unknown,
-): actorContext is ApplicationFoundationActorContextV1 {
-	try {
-		if (typeof actorContext !== "object" || actorContext === null) return false;
-		const candidate =
-			actorContext as Partial<ApplicationFoundationActorContextV1>;
-		return !(
-			!hasExactOwnKeys(actorContext, actorContextKeys) ||
-			candidate.schemaVersion !== 1 ||
-			typeof candidate.userId !== "string" ||
-			candidate.userId.length === 0
-		);
-	} catch {
-		return false;
-	}
-}
-
-function assertApplicationFoundationActorContextV1(
-	actorContext: unknown,
-): asserts actorContext is ApplicationFoundationActorContextV1 {
-	if (!isApplicationFoundationActorContextV1(actorContext)) {
+): ApplicationFoundationActorContextV1 {
+	const values = snapshotExactDataValues(actorContext, actorContextKeys);
+	if (!values) invalidApplicationFoundationInput();
+	const { schemaVersion, userId } = values;
+	if (
+		schemaVersion !== 1 ||
+		typeof userId !== "string" ||
+		userId.length === 0
+	) {
 		invalidApplicationFoundationInput();
 	}
+	return { schemaVersion, userId };
 }
 
 const initialConfigurationRevision = 1 as const;
@@ -257,61 +284,64 @@ export function createApplicationFoundationUseCaseV1(
 ): ApplicationFoundationUseCaseV1 {
 	return {
 		async submit(command, actorContext) {
-			assertApplicationFoundationCommandV1(command);
-			assertApplicationFoundationActorContextV1(actorContext);
-			const submittedAt = new Date(command.submittedAt.valueOf());
+			const normalizedCommand = parseApplicationFoundationCommandV1(command);
+			const normalizedActorContext =
+				parseApplicationFoundationActorContextV1(actorContext);
+			const submittedAt = new Date(
+				Date.prototype.getTime.call(normalizedCommand.submittedAt),
+			);
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {
-					agentId: command.agentId,
+					agentId: normalizedCommand.agentId,
 					currentConfigurationRevision: initialConfigurationRevision,
 					createdAt: submittedAt,
 				},
 				application: {
-					applicationId: command.applicationId,
-					agentId: command.agentId,
-					applicantId: actorContext.userId,
-					name: command.name,
-					description: command.description,
+					applicationId: normalizedCommand.applicationId,
+					agentId: normalizedCommand.agentId,
+					applicantId: normalizedActorContext.userId,
+					name: normalizedCommand.name,
+					description: normalizedCommand.description,
 					status: "pending_approval",
-					traceId: command.traceId,
-					requestId: command.requestId,
+					traceId: normalizedCommand.traceId,
+					requestId: normalizedCommand.requestId,
 					submittedAt,
 				},
 				configurationRevision: {
-					agentId: command.agentId,
+					agentId: normalizedCommand.agentId,
 					revision: initialConfigurationRevision,
-					sourceReference: command.sourceReference,
+					sourceReference: normalizedCommand.sourceReference,
 					createdAt: submittedAt,
 				},
 				owner: {
-					agentId: command.agentId,
-					ownerId: actorContext.userId,
+					agentId: normalizedCommand.agentId,
+					ownerId: normalizedActorContext.userId,
 					createdAt: submittedAt,
 				},
 				outboxIntent: {
 					scopeType: "agent",
-					scopeId: command.agentId,
+					scopeId: normalizedCommand.agentId,
 					operation: "agent.application.submitted.v1",
 					payload: {
 						schemaVersion: 1,
-						applicationId: command.applicationId,
-						agentId: command.agentId,
+						applicationId: normalizedCommand.applicationId,
+						agentId: normalizedCommand.agentId,
 						configurationRevision: initialConfigurationRevision,
 					},
-					traceId: command.traceId,
-					requestId: command.requestId,
+					traceId: normalizedCommand.traceId,
+					requestId: normalizedCommand.requestId,
 					occurredAt: submittedAt,
 				},
 				auditEvent: {
-					traceId: command.traceId,
-					requestId: command.requestId,
-					agentId: command.agentId,
+					traceId: normalizedCommand.traceId,
+					requestId: normalizedCommand.requestId,
+					agentId: normalizedCommand.agentId,
 					actorType: "user",
-					actorId: actorContext.userId,
+					actorId: normalizedActorContext.userId,
 					action: "agent.application.submitted",
 					targetType: "agent_application",
-					targetId: command.applicationId,
+					targetId: normalizedCommand.applicationId,
 					outcome: "succeeded",
 					occurredAt: submittedAt,
 				},

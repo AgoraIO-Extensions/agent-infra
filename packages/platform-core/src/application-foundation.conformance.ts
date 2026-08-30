@@ -30,7 +30,7 @@ export interface ApplicationFoundationConformanceHarness {
 	close(): Promise<void>;
 }
 
-const command: CommitApplicationFoundationCommandV1 = {
+const command: CommitApplicationFoundationCommandV1 = Object.freeze({
 	schemaVersion: 1,
 	applicationId: "application opaque alpha",
 	agentId: "agent opaque alpha",
@@ -40,11 +40,11 @@ const command: CommitApplicationFoundationCommandV1 = {
 	sourceReference: "template opaque alpha",
 	traceId: "trace opaque alpha",
 	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
-};
-const actorContext = {
+});
+const actorContext = Object.freeze({
 	schemaVersion: 1 as const,
 	userId: "user opaque alpha",
-};
+});
 const supplementaryNameCharacter = "\u{1f600}";
 
 const emptySnapshot: ApplicationFoundationSnapshot = {

@@ -2,27 +2,31 @@ import { describe, expect, it } from "vitest";
 
 import { applicationFoundationTransactionConformance } from "./application-foundation.conformance.ts";
 import {
+	type ApplicationFoundationActorContextV1,
 	ApplicationFoundationError,
 	type ApplicationFoundationWritePlanV1,
+	type CommitApplicationFoundationCommandV1,
 	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 
-const validCommand = () => ({
-	schemaVersion: 1 as const,
-	applicationId: "application core errors",
-	agentId: "agent core errors",
-	requestId: "request core errors",
-	name: "Core Error Agent",
-	description: "Verifies Core error normalization",
-	sourceReference: "source core errors",
-	traceId: "trace core errors",
-	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
-});
-const actorContext = () => ({
-	schemaVersion: 1 as const,
-	userId: "user core errors",
-});
+const validCommand = () =>
+	Object.freeze({
+		schemaVersion: 1 as const,
+		applicationId: "application core errors",
+		agentId: "agent core errors",
+		requestId: "request core errors",
+		name: "Core Error Agent",
+		description: "Verifies Core error normalization",
+		sourceReference: "source core errors",
+		traceId: "trace core errors",
+		submittedAt: new Date("2026-08-30T12:00:00.000Z"),
+	});
+const actorContext = () =>
+	Object.freeze({
+		schemaVersion: 1 as const,
+		userId: "user core errors",
+	});
 const errorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
 );
@@ -39,6 +43,36 @@ async function normalizedPortFailure(failure: unknown): Promise<unknown> {
 	);
 }
 
+async function rejectedBeforePort(
+	command: unknown,
+	context: unknown,
+): Promise<{ error: unknown; portCalls: number }> {
+	let portCalls = 0;
+	const useCase = createApplicationFoundationUseCaseV1({
+		async commit() {
+			portCalls += 1;
+		},
+	});
+	const error = await useCase
+		.submit(
+			command as CommitApplicationFoundationCommandV1,
+			context as ApplicationFoundationActorContextV1,
+		)
+		.then(
+			() => expect.fail("Expected input parsing to fail before the Port"),
+			(reason: unknown) => reason,
+		);
+	return { error, portCalls };
+}
+
+function expectInvalidCommand(error: unknown): void {
+	expect(error).toMatchObject({
+		name: "ApplicationFoundationError",
+		code: "invalid_command",
+		message: "Application foundation invalid command",
+	});
+}
+
 function immutableBrandedError(
 	message: string,
 	code = "conflict",
@@ -53,6 +87,131 @@ function immutableBrandedError(
 }
 
 describe("Application foundation use case", () => {
+	it("rejects a staged actor getter before it can split persisted identity", async () => {
+		let getterReads = 0;
+		const context = Object.defineProperty({ schemaVersion: 1 }, "userId", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return `staged-user-${getterReads}`;
+			},
+		});
+		const { error, portCalls } = await rejectedBeforePort(
+			validCommand(),
+			context,
+		);
+
+		expectInvalidCommand(error);
+		expect(getterReads).toBe(0);
+		expect(portCalls).toBe(0);
+	});
+
+	it("rejects staged command correlation getters before persistence", async () => {
+		let getterReads = 0;
+		const command = { ...validCommand() };
+		for (const field of ["requestId", "traceId"] as const) {
+			Object.defineProperty(command, field, {
+				enumerable: true,
+				get() {
+					getterReads += 1;
+					return `${field}-${getterReads}`;
+				},
+			});
+		}
+		const { error, portCalls } = await rejectedBeforePort(
+			command,
+			actorContext(),
+		);
+
+		expectInvalidCommand(error);
+		expect(getterReads).toBe(0);
+		expect(portCalls).toBe(0);
+	});
+
+	it("does not reread an accessor that throws after old validation", async () => {
+		let getterReads = 0;
+		const command = { ...validCommand() };
+		Object.defineProperty(command, "requestId", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				if (getterReads <= 2) return "request before persistence";
+				throw new Error("sensitive post-validation failure");
+			},
+		});
+		const { error, portCalls } = await rejectedBeforePort(
+			command,
+			actorContext(),
+		);
+
+		expectInvalidCommand(error);
+		expect(String(error)).not.toContain("sensitive");
+		expect(getterReads).toBe(0);
+		expect(portCalls).toBe(0);
+	});
+
+	it.each([
+		[
+			"command ownKeys",
+			new Proxy(validCommand(), {
+				ownKeys() {
+					throw new Error("sensitive command ownKeys trap");
+				},
+			}),
+			actorContext(),
+		],
+		[
+			"command descriptor",
+			new Proxy(validCommand(), {
+				getOwnPropertyDescriptor() {
+					throw new Error("sensitive command descriptor trap");
+				},
+			}),
+			actorContext(),
+		],
+		[
+			"context ownKeys",
+			validCommand(),
+			new Proxy(actorContext(), {
+				ownKeys() {
+					throw new Error("sensitive context ownKeys trap");
+				},
+			}),
+		],
+		[
+			"context descriptor",
+			validCommand(),
+			new Proxy(actorContext(), {
+				getOwnPropertyDescriptor() {
+					throw new Error("sensitive context descriptor trap");
+				},
+			}),
+		],
+	])("sanitizes a %s trap before the Port", async (_name, command, context) => {
+		const { error, portCalls } = await rejectedBeforePort(command, context);
+
+		expectInvalidCommand(error);
+		expect(String(error)).not.toContain("sensitive");
+		expect(portCalls).toBe(0);
+	});
+
+	it("accepts ordinary frozen command and actor objects", async () => {
+		let portCalls = 0;
+		const useCase = createApplicationFoundationUseCaseV1({
+			async commit() {
+				portCalls += 1;
+			},
+		});
+
+		await expect(
+			useCase.submit(validCommand(), actorContext()),
+		).resolves.toMatchObject({
+			applicationId: "application core errors",
+			agentId: "agent core errors",
+		});
+		expect(portCalls).toBe(1);
+	});
+
 	it.each([
 		["raw Error", new Error("sensitive infrastructure detail")],
 		["SQL-like object", { code: "XX000", detail: "sensitive SQL detail" }],
