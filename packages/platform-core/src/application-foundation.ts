@@ -95,11 +95,17 @@ const applicationFoundationErrorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
 );
 
+function applicationFoundationErrorMessage(
+	code: ApplicationFoundationErrorCode,
+): string {
+	return `Application foundation ${code.replaceAll("_", " ")}`;
+}
+
 export class ApplicationFoundationError extends Error {
 	readonly code: ApplicationFoundationErrorCode;
 
 	constructor(code: ApplicationFoundationErrorCode) {
-		super(`Application foundation ${code.replaceAll("_", " ")}`);
+		super(applicationFoundationErrorMessage(code));
 		this.name = "ApplicationFoundationError";
 		this.code = code;
 		Object.defineProperty(this, applicationFoundationErrorBrand, {
@@ -108,17 +114,45 @@ export class ApplicationFoundationError extends Error {
 	}
 }
 
-function isApplicationFoundationError(
-	error: unknown,
-): error is ApplicationFoundationError {
+function isApplicationFoundationErrorCode(
+	value: unknown,
+): value is ApplicationFoundationErrorCode {
 	return (
-		error instanceof ApplicationFoundationError ||
-		(typeof error === "object" &&
-			error !== null &&
-			(error as Record<PropertyKey, unknown>)[
-				applicationFoundationErrorBrand
-			] === true)
+		value === "invalid_command" ||
+		value === "conflict" ||
+		value === "persistence_failed"
 	);
+}
+
+function recognizedApplicationFoundationErrorCode(
+	error: unknown,
+): ApplicationFoundationErrorCode | undefined {
+	try {
+		if (!(error instanceof Error)) return undefined;
+		const code = (error as Error & { code?: unknown }).code;
+		if (
+			error.name !== "ApplicationFoundationError" ||
+			!isApplicationFoundationErrorCode(code) ||
+			error.message !== applicationFoundationErrorMessage(code)
+		) {
+			return undefined;
+		}
+		const descriptor = Object.getOwnPropertyDescriptor(
+			error,
+			applicationFoundationErrorBrand,
+		);
+		if (
+			descriptor?.value !== true ||
+			descriptor.writable !== false ||
+			descriptor.configurable !== false ||
+			descriptor.enumerable !== false
+		) {
+			return undefined;
+		}
+		return code;
+	} catch {
+		return undefined;
+	}
 }
 
 const requiredStrings = [
@@ -223,8 +257,10 @@ export function createApplicationFoundationUseCaseV1(
 			try {
 				await transaction.commit(plan);
 			} catch (error) {
-				if (isApplicationFoundationError(error)) throw error;
-				throw new ApplicationFoundationError("persistence_failed");
+				throw new ApplicationFoundationError(
+					recognizedApplicationFoundationErrorCode(error) ??
+						"persistence_failed",
+				);
 			}
 			return {
 				schemaVersion: 1,

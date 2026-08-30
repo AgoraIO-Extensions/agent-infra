@@ -20,21 +20,74 @@ const validCommand = () => ({
 	traceId: "trace core errors",
 	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
 });
+const errorBrand = Symbol.for(
+	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
+);
+
+async function normalizedPortFailure(failure: unknown): Promise<unknown> {
+	const useCase = createApplicationFoundationUseCaseV1({
+		async commit() {
+			throw failure;
+		},
+	});
+	return useCase.submit(validCommand()).then(
+		() => expect.fail("Expected the transaction Port to fail"),
+		(reason: unknown) => reason,
+	);
+}
+
+function immutableBrandedError(
+	message: string,
+	code = "conflict",
+	name = "ApplicationFoundationError",
+): Error & { code: string } {
+	const error = Object.assign(new Error(message), {
+		name,
+		code,
+	});
+	Object.defineProperty(error, errorBrand, { value: true });
+	return error;
+}
 
 describe("Application foundation use case", () => {
 	it.each([
 		["raw Error", new Error("sensitive infrastructure detail")],
 		["SQL-like object", { code: "XX000", detail: "sensitive SQL detail" }],
-	])("sanitizes a %s from the transaction Port", async (_name, failure) => {
-		const useCase = createApplicationFoundationUseCaseV1({
-			async commit() {
-				throw failure;
+		[
+			"plain forged brand",
+			{
+				name: "ApplicationFoundationError",
+				message: "Application foundation conflict",
+				code: "conflict",
+				[errorBrand]: true,
 			},
-		});
-		const error = await useCase.submit(validCommand()).then(
-			() => expect.fail("Expected the transaction Port to fail"),
-			(reason: unknown) => reason,
-		);
+		],
+		[
+			"mutable Error brand",
+			Object.assign(new Error("Application foundation conflict"), {
+				name: "ApplicationFoundationError",
+				code: "conflict",
+				[errorBrand]: true,
+			}),
+		],
+		[
+			"noncanonical-message branded Error",
+			immutableBrandedError("sensitive noncanonical message"),
+		],
+		[
+			"noncanonical-name branded Error",
+			immutableBrandedError(
+				"Application foundation conflict",
+				"conflict",
+				"ForgedApplicationFoundationError",
+			),
+		],
+		[
+			"unsupported-code branded Error",
+			immutableBrandedError("Application foundation forged", "forged"),
+		],
+	])("sanitizes a %s from the transaction Port", async (_name, failure) => {
+		const error = await normalizedPortFailure(failure);
 
 		expect(error).toBeInstanceOf(ApplicationFoundationError);
 		expect(error).not.toBe(failure);
@@ -47,15 +100,22 @@ describe("Application foundation use case", () => {
 		expect(String(error)).not.toContain("sensitive");
 	});
 
-	it("preserves a domain conflict from the transaction Port", async () => {
-		const conflict = new ApplicationFoundationError("conflict");
-		const useCase = createApplicationFoundationUseCaseV1({
-			async commit() {
-				throw conflict;
-			},
+	it("preserves only the code from a canonical domain conflict", async () => {
+		const conflict = Object.assign(new ApplicationFoundationError("conflict"), {
+			cause: new Error("sensitive conflict cause"),
+			sensitive: "sensitive conflict detail",
 		});
+		const error = await normalizedPortFailure(conflict);
 
-		await expect(useCase.submit(validCommand())).rejects.toBe(conflict);
+		expect(error).toBeInstanceOf(ApplicationFoundationError);
+		expect(error).not.toBe(conflict);
+		expect(error).toMatchObject({
+			name: "ApplicationFoundationError",
+			code: "conflict",
+			message: "Application foundation conflict",
+		});
+		expect(error).not.toHaveProperty("cause");
+		expect(error).not.toHaveProperty("sensitive");
 	});
 
 	it("copies the submitted instant before awaiting persistence", async () => {
