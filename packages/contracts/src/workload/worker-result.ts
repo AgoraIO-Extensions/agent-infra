@@ -9,7 +9,10 @@ import {
 } from "./common.ts";
 import {
 	AgentWorkloadDesiredV1Schema,
+	KubernetesReconcileResultV1Schema,
 	validateAgentWorkloadDesiredV1,
+	validateKubernetesReconcileResultV1,
+	WorkloadExpectationV1Schema,
 } from "./kubernetes.ts";
 import {
 	ImageRegistryAdmissionResultV1Schema,
@@ -48,6 +51,11 @@ const activateSecretCorrelationV1Shape = {
 	kubernetesSecretName: KubernetesResourceNameV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	workloadGeneration: WorkloadRevisionV1Schema,
+} as const;
+
+const reconcileWorkloadCorrelationV1Shape = {
+	...workerCorrelationV1Shape,
+	expectedWorkload: WorkloadExpectationV1Schema,
 } as const;
 
 const reconcileWorkloadExpectedV1Shape = {
@@ -123,6 +131,20 @@ const succeededWorkerResults = [
 		operation: z.literal("activate-secret"),
 		outcome: SecretActivationObservationV1Schema,
 	}),
+	z.strictObject({
+		...reconcileWorkloadCorrelationV1Shape,
+		status: z.literal("succeeded"),
+		operation: z.literal("reconcile-workload"),
+		outcome: KubernetesReconcileResultV1Schema,
+	}),
+	z.strictObject({
+		...reconcileWorkloadCorrelationV1Shape,
+		workloadUid: WorkloadOpaqueIdV1Schema,
+		workloadGeneration: WorkloadRevisionV1Schema,
+		status: z.literal("succeeded"),
+		operation: z.literal("reconcile-workload"),
+		outcome: KubernetesReconcileResultV1Schema,
+	}),
 ] as const;
 
 function createWorkerErrorResultSchemas<
@@ -163,6 +185,10 @@ const errorWorkerResults = [
 	...createWorkerErrorResultSchemas(
 		"activate-secret",
 		activateSecretCorrelationV1Shape,
+	),
+	...createWorkerErrorResultSchemas(
+		"reconcile-workload",
+		reconcileWorkloadCorrelationV1Shape,
 	),
 ] as const;
 
@@ -253,6 +279,35 @@ export function validateWorkerWorkloadResultV1(
 			result.workloadGeneration !== expected.workloadGeneration)
 	) {
 		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (
+		expected.operation === "reconcile-workload" &&
+		(result.operation !== "reconcile-workload" ||
+			JSON.stringify(result.expectedWorkload) !==
+				JSON.stringify(expected.desiredWorkload.expectedWorkload))
+	) {
+		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (
+		result.status === "succeeded" &&
+		result.operation === "reconcile-workload" &&
+		expected.operation === "reconcile-workload"
+	) {
+		const outcome = validateKubernetesReconcileResultV1(
+			expected.desiredWorkload,
+			result.outcome,
+		);
+		if (
+			(outcome.status === "applied" &&
+				(!("workloadUid" in result) ||
+					!("workloadGeneration" in result) ||
+					result.workloadUid !== outcome.workloadUid ||
+					result.workloadGeneration !== outcome.workloadGeneration)) ||
+			(outcome.status !== "applied" &&
+				("workloadUid" in result || "workloadGeneration" in result))
+		) {
+			throw new Error("Worker result revision correlation mismatch");
+		}
 	}
 	if (
 		result.status === "succeeded" &&
