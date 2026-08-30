@@ -24,6 +24,22 @@ import {
 	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
+import {
+	RuntimeCapabilitiesRequestV1Schema,
+	RuntimeCapabilitiesResponseV1Schema,
+	RuntimeDriverV1SchemaDefinitions,
+	RuntimeEventV1Schema,
+	RuntimeEventV1SchemaDefinitions,
+	RuntimeGenerationCancelRequestV1Schema,
+	RuntimeHostV1SchemaDefinitions,
+	RuntimeOperationResponseV1Schema,
+	RuntimeReplayRequestV1Schema,
+	RuntimeStatusRequestV1Schema,
+	RuntimeStatusResponseV1Schema,
+	RuntimeStopRequestV1Schema,
+	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSupplementRequestV1Schema,
+} from "./runtime/index.ts";
 import { registryManifestSchemasV1 } from "./workload/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,6 +75,11 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/registry-manifest.v1.schema.json",
 	),
+	runtimeJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime.v1.schema.json",
+	),
+	runtimeOpenapi: resolve(artifactRoot, "openapi/runtime-host.v1.openapi.json"),
 };
 const schemas = {
 	IdempotencyKeyV1: IdempotencyKeyV1Schema,
@@ -134,6 +155,40 @@ function jsonSchemaDocument({ id, title, definitions, io = "output" }) {
 	};
 }
 
+function protocolErrorResponse(description) {
+	return {
+		description,
+		content: { "application/json": { schema: ProtocolErrorV1Schema } },
+	};
+}
+
+const runtimeErrorResponses = {
+	400: protocolErrorResponse("Invalid RuntimeHost request"),
+	401: protocolErrorResponse("RuntimeHost authentication required"),
+	403: protocolErrorResponse("Execution Grant is not authorized"),
+	404: protocolErrorResponse("Runtime session or operation is unavailable"),
+	409: protocolErrorResponse("Generation, fence, or operation conflict"),
+	500: protocolErrorResponse("RuntimeHost operation failed"),
+	503: protocolErrorResponse("Runtime or Driver is unavailable"),
+};
+
+function postOperation(operationId, requestSchema, responseSchema, mediaType) {
+	return {
+		operationId,
+		requestBody: {
+			required: true,
+			content: { "application/json": { schema: requestSchema } },
+		},
+		responses: {
+			200: {
+				description: "RuntimeHost response",
+				content: { [mediaType]: { schema: responseSchema } },
+			},
+			...runtimeErrorResponses,
+		},
+	};
+}
+
 function buildArtifacts() {
 	const openapi = createDocument({
 		openapi: "3.1.0",
@@ -148,6 +203,98 @@ function buildArtifacts() {
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/common.v1.schema.json",
 		title: "Agent Infra Common Contracts V1",
 		definitions: schemas,
+	});
+	const runtimeDefinitions = {
+		...RuntimeHostV1SchemaDefinitions,
+		...RuntimeEventV1SchemaDefinitions,
+		...RuntimeDriverV1SchemaDefinitions,
+	};
+	const runtimeOpenApiDefinitions = {
+		ProtocolErrorV1: ProtocolErrorV1Schema,
+		...RuntimeHostV1SchemaDefinitions,
+		...RuntimeEventV1SchemaDefinitions,
+	};
+	const runtimeJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v1.schema.json",
+		title: "Agent Infra Runtime Contracts V1",
+		definitions: runtimeDefinitions,
+	});
+	const runtimeOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "1.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v1/turns": {
+				post: postOperation(
+					"submitRuntimeTurnV1",
+					RuntimeSubmitTurnRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/instructions": {
+				post: postOperation(
+					"supplementRuntimeTurnV1",
+					RuntimeSupplementRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/stops": {
+				post: postOperation(
+					"stopRuntimeTurnV1",
+					RuntimeStopRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/status": {
+				post: postOperation(
+					"readRuntimeStatusV1",
+					RuntimeStatusRequestV1Schema,
+					RuntimeStatusResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/capabilities": {
+				post: postOperation(
+					"readRuntimeCapabilitiesV1",
+					RuntimeCapabilitiesRequestV1Schema,
+					RuntimeCapabilitiesResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/events/replay": {
+				post: postOperation(
+					"replayRuntimeEventsV1",
+					RuntimeReplayRequestV1Schema,
+					RuntimeEventV1Schema,
+					"text/event-stream",
+				),
+			},
+			"/internal/runtime/v1/events/stream": {
+				post: postOperation(
+					"streamRuntimeEventsV1",
+					RuntimeReplayRequestV1Schema,
+					RuntimeEventV1Schema,
+					"text/event-stream",
+				),
+			},
+			"/internal/runtime/v1/generations/cancel": {
+				post: postOperation(
+					"cancelRuntimeGenerationV1",
+					RuntimeGenerationCancelRequestV1Schema,
+					RuntimeOperationResponseV1Schema,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: runtimeOpenApiDefinitions,
+		},
 	});
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",
@@ -196,6 +343,8 @@ function buildArtifacts() {
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
 		registryManifestJsonSchema,
+		runtimeJsonSchema,
+		runtimeOpenapi,
 	};
 }
 
