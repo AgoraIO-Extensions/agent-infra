@@ -97,6 +97,28 @@
 				}
 			]
 		},
+		"UntypedDiscriminatedChoiceV1": {
+			"oneOf": [
+				{
+					"properties": {
+						"kind": { "const": "a" }
+					},
+					"required": ["kind"]
+				},
+				{
+					"properties": {
+						"kind": { "const": "b" }
+					},
+					"required": ["kind"]
+				},
+				{
+					"properties": {
+						"kind": { "const": "c" }
+					},
+					"required": ["kind"]
+				}
+			]
+		},
 		"IntegerV1": {
 			"type": "integer"
 		},

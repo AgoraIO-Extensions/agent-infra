@@ -119,6 +119,9 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain(
 			"narrowed $defs.DiscriminatedChoiceV1 oneOf",
 		);
+		expect(result.stderr).toContain(
+			"narrowed $defs.UntypedDiscriminatedChoiceV1 oneOf",
+		);
 	});
 
 	it("rejects shortening a closed tuple prefix", () => {

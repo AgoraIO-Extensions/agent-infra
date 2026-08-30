@@ -84,7 +84,9 @@ function literalSchemasAreDisjoint(left, right) {
 		!left ||
 		!right ||
 		typeof left !== "object" ||
-		typeof right !== "object"
+		typeof right !== "object" ||
+		!sameValue(valueSet(left.type), ["object"]) ||
+		!sameValue(valueSet(right.type), ["object"])
 	) {
 		return false;
 	}
