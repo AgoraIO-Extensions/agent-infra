@@ -24,6 +24,7 @@ test("contracts source accepts tooling dependencies but rejects forbidden module
 		"react-dom",
 		"@hono/node-server",
 		"drizzle-zod",
+		"postgres",
 		"@kubernetes/client-node",
 		"@agent-infra/platform-core",
 	]) {
@@ -47,6 +48,68 @@ test("production source rejects test-support while test-support consumes contrac
 		checkSourceImports(
 			'import { ProtocolErrorV1Schema } from "@agent-infra/contracts";',
 			{ path: "packages/test-support/src/index.ts" },
+		),
+		[],
+	);
+});
+
+test("only dedicated Store packages import database implementation dependencies", () => {
+	for (const path of [
+		"apps/platform-api/src/app.ts",
+		"apps/platform-worker/src/index.ts",
+		"packages/agent-runtime/src/store.ts",
+		"packages/contracts/src/schema.ts",
+		"packages/platform-core/src/index.ts",
+	]) {
+		for (const dependency of ["drizzle-orm", "postgres"]) {
+			assert.match(
+				checkSourceImports(`import "${dependency}";`, { path })[0],
+				/contracts source must not import|only dedicated Store packages/,
+			);
+		}
+	}
+	assert.deepEqual(
+		checkSourceImports('import { drizzle } from "drizzle-orm/postgres-js";', {
+			path: "packages/platform-store/src/migrate.ts",
+		}),
+		[],
+	);
+	assert.deepEqual(
+		checkSourceImports('import postgres from "postgres";', {
+			path: "packages/connection-store/src/database.ts",
+		}),
+		[],
+	);
+});
+
+test("only dedicated Store packages declare database runtime dependencies", () => {
+	for (const path of [
+		"apps/platform-api",
+		"packages/agent-runtime",
+		"packages/contracts",
+		"packages/platform-core",
+	]) {
+		for (const dependency of ["drizzle-orm", "postgres"]) {
+			assert.match(
+				checkProductionManifestDependencies(
+					{ dependencies: { [dependency]: "1.0.0" } },
+					{ path },
+				)[0],
+				/only dedicated Store packages/,
+			);
+		}
+	}
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
+			{ path: "packages/platform-store" },
+		),
+		[],
+	);
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
+			{ path: "packages/connection-store" },
 		),
 		[],
 	);
@@ -108,6 +171,7 @@ test("contracts manifest cannot depend on repository runtime modules", () => {
 		"react",
 		"@hono/node-server",
 		"drizzle-orm",
+		"postgres",
 		"@kubernetes/client-node",
 	]) {
 		assert.match(

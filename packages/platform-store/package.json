@@ -1,0 +1,36 @@
+{
+	"name": "@agent-infra/platform-store",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"main": "dist/index.mjs",
+	"types": "dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsdown && node src/copy-migrations.mjs",
+		"check-migrations": "node src/check-migrations.mjs",
+		"check-types": "tsc --noEmit",
+		"migrate": "pnpm build && node dist/migrate-cli.mjs",
+		"test": "pnpm build && pnpm check-migrations && vitest run src"
+	},
+	"dependencies": {
+		"drizzle-orm": "catalog:",
+		"postgres": "catalog:"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"drizzle-kit": "catalog:",
+		"tsdown": "0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}
