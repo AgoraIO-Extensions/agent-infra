@@ -257,6 +257,18 @@ const removedCleanupResources = {
 	secrets: true,
 } as const;
 
+const cleanupCompletedResult = {
+	...cleanupExpected,
+	status: "succeeded",
+	outcome: {
+		...cleanupOutcomeCorrelation,
+		persistentVolumeIntent: "delete-new",
+		status: "completed",
+		routeClosed: true,
+		removed: { ...removedCleanupResources, persistentVolume: true },
+	},
+} as const;
+
 describe("Worker admission and Secret result V1 contract", () => {
 	it("represents fence-only staleness and rejects equal or regressed context", () => {
 		const fenceStale = {
@@ -725,36 +737,24 @@ describe("Worker Workload cleanup result V1 contract", () => {
 	);
 
 	it("binds outer and nested cleanup facts to the exact work item", () => {
-		const result = {
-			...cleanupExpected,
-			status: "succeeded",
-			outcome: {
-				...cleanupOutcomeCorrelation,
-				persistentVolumeIntent: "delete-new",
-				status: "completed",
-				routeClosed: true,
-				removed: { ...removedCleanupResources, persistentVolume: true },
-			},
-		} as const;
-
 		expect(() =>
 			validateWorkerWorkloadResultV1(cleanupExpected, {
-				...result,
+				...cleanupCompletedResult,
 				workloadUid: "workload_uid_02",
 			}),
 		).toThrow("Worker result revision correlation mismatch");
 		expect(() =>
 			validateWorkerWorkloadResultV1(cleanupExpected, {
-				...result,
+				...cleanupCompletedResult,
 				outcome: {
-					...result.outcome,
+					...cleanupCompletedResult.outcome,
 					workloadGeneration: cleanupExpected.workloadGeneration + 1,
 				},
 			}),
 		).toThrow("Workload cleanup correlation mismatch");
 		expect(() =>
 			validateWorkerWorkloadResultV1(cleanupExpected, {
-				...result,
+				...cleanupCompletedResult,
 				persistentVolumeIntent: "retain-existing",
 			}),
 		).toThrow("Worker result revision correlation mismatch");
@@ -897,15 +897,15 @@ describe("Worker Workload cleanup result V1 contract", () => {
 			validateWorkerWorkloadResultV1(retainExpected, contradictory),
 		).toThrow("Workload cleanup correlation mismatch");
 		for (const invalid of [
-			{ ...cleanupExpected, schemaVersion: 2 },
+			{ ...cleanupCompletedResult, schemaVersion: 2 },
 			{
-				...contradictory,
-				outcome: { ...contradictory.outcome, schemaVersion: 2 },
+				...cleanupCompletedResult,
+				outcome: { ...cleanupCompletedResult.outcome, schemaVersion: 2 },
 			},
-			{ ...cleanupExpected, workloadGeneration: undefined },
-			{ ...cleanupExpected, persistentVolumeIntent: "snapshot" },
-			{ ...contradictory, operation: "reconcile-workload" },
-			{ ...contradictory, outcome: undefined },
+			{ ...cleanupCompletedResult, workloadGeneration: undefined },
+			{ ...cleanupCompletedResult, persistentVolumeIntent: "snapshot" },
+			{ ...cleanupCompletedResult, operation: "reconcile-workload" },
+			{ ...cleanupCompletedResult, outcome: undefined },
 			{
 				...cleanupExpected,
 				status: "succeeded",
