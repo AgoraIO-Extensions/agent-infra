@@ -19,6 +19,7 @@
 			"import": "./dist/runtime/index.mjs"
 		},
 		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",
+		"./json-schema/kubernetes-workload.v1": "./artifacts/json-schema/kubernetes-workload.v1.schema.json",
 		"./json-schema/pilot-delegated.v1": "./artifacts/json-schema/pilot-delegated.v1.schema.json",
 		"./json-schema/pilot-sse.v1": "./artifacts/json-schema/pilot-sse.v1.schema.json",
 		"./json-schema/registry-manifest.v1": "./artifacts/json-schema/registry-manifest.v1.schema.json",

@@ -23,6 +23,7 @@ const schemaNames = [
 function generate() {
 	return execFileSync(process.execPath, [generatorPath, "--stdout"], {
 		encoding: "utf8",
+		maxBuffer: 8 * 1024 * 1024,
 	});
 }
 
@@ -87,6 +88,15 @@ describe("standard contract artifacts", () => {
 			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
 				.post.responses,
 		).toHaveProperty("503");
+		expect(artifacts.kubernetesWorkloadJsonSchema.$schema).toBe(
+			"https://json-schema.org/draft/2020-12/schema",
+		);
+		expect(artifacts.kubernetesWorkloadJsonSchema.$defs).toHaveProperty(
+			"AgentWorkloadDesiredV1",
+		);
+		expect(artifacts.kubernetesWorkloadJsonSchema.$defs).toHaveProperty(
+			"WorkloadCleanupResultV1",
+		);
 		expect(artifacts.registryManifestJsonSchema.$schema).toBe(
 			"https://json-schema.org/draft/2020-12/schema",
 		);
@@ -184,6 +194,16 @@ describe("standard contract artifacts", () => {
 			expect(() =>
 				ajv.compile({
 					$ref: `${artifacts.pilotDelegatedJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
+		ajv.addSchema(artifacts.kubernetesWorkloadJsonSchema);
+		for (const name of Object.keys(
+			artifacts.kubernetesWorkloadJsonSchema.$defs,
+		)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.kubernetesWorkloadJsonSchema.$id}#/$defs/${name}`,
 				}),
 			).not.toThrow();
 		}
