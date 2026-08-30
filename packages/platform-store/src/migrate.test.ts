@@ -21,6 +21,7 @@ const postgresImage =
 const username = "platform_test";
 const password = "platform_test_password";
 const database = "platform_test";
+type PostgresClient = ReturnType<typeof postgres>;
 
 let containerName = "";
 let databaseUrl = "";
@@ -83,6 +84,45 @@ async function expectConstraintFailure(
 	} catch (error) {
 		expect(error).toMatchObject({ constraint_name: constraint });
 	}
+}
+
+async function readPlatformCatalog(client: PostgresClient) {
+	const columns = await client`
+		select table_name, column_name, ordinal_position, data_type, udt_schema,
+			udt_name, is_nullable, column_default
+		from information_schema.columns
+		where table_schema = 'platform'
+		order by table_name, ordinal_position
+	`;
+	const checks = await client`
+		select t.relname as table_name, c.conname as constraint_name,
+			pg_get_constraintdef(c.oid, true) as definition
+		from pg_constraint c
+		join pg_class t on t.oid = c.conrelid
+		join pg_namespace n on n.oid = t.relnamespace
+		where n.nspname = 'platform' and c.contype = 'c'
+		order by t.relname, c.conname
+	`;
+	const indexes = await client`
+		select tablename, indexname, indexdef
+		from pg_indexes
+		where schemaname = 'platform'
+		order by tablename, indexname
+	`;
+	const enums = await client`
+		select t.typname, e.enumlabel, e.enumsortorder
+		from pg_type t
+		join pg_enum e on e.enumtypid = t.oid
+		join pg_namespace n on n.oid = t.typnamespace
+		where n.nspname = 'platform'
+		order by t.typname, e.enumsortorder
+	`;
+	return {
+		columns: [...columns],
+		checks: [...checks],
+		indexes: [...indexes],
+		enums: [...enums],
+	};
 }
 
 beforeAll(async () => {
@@ -196,7 +236,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 				outbox_status: [...platformStatusValues.outboxStatus],
 			});
 
+			const catalogBeforeReplay = await readPlatformCatalog(client);
 			await migratePlatformDatabase({ databaseUrl });
+			const catalogAfterReplay = await readPlatformCatalog(client);
+			expect(catalogAfterReplay).toEqual(catalogBeforeReplay);
 			const replayedHistory = await client`
 					select id, hash, created_at
 					from platform_migrations.history

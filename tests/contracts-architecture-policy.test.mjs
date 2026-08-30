@@ -52,16 +52,18 @@ test("production source rejects test-support while test-support consumes contrac
 	);
 });
 
-test("only platform-store imports PostgreSQL implementation dependencies", () => {
+test("only dedicated Store packages import database implementation dependencies", () => {
 	for (const path of [
 		"apps/platform-api/src/app.ts",
 		"apps/platform-worker/src/index.ts",
+		"packages/agent-runtime/src/store.ts",
+		"packages/contracts/src/schema.ts",
 		"packages/platform-core/src/index.ts",
 	]) {
 		for (const dependency of ["drizzle-orm", "postgres"]) {
 			assert.match(
 				checkSourceImports(`import "${dependency}";`, { path })[0],
-				/only platform-store/,
+				/contracts source must not import|only dedicated Store packages/,
 			);
 		}
 	}
@@ -71,17 +73,28 @@ test("only platform-store imports PostgreSQL implementation dependencies", () =>
 		}),
 		[],
 	);
+	assert.deepEqual(
+		checkSourceImports('import postgres from "postgres";', {
+			path: "packages/connection-store/src/database.ts",
+		}),
+		[],
+	);
 });
 
-test("only platform-store declares PostgreSQL runtime dependencies", () => {
-	for (const path of ["apps/platform-api", "packages/platform-core"]) {
+test("only dedicated Store packages declare database runtime dependencies", () => {
+	for (const path of [
+		"apps/platform-api",
+		"packages/agent-runtime",
+		"packages/contracts",
+		"packages/platform-core",
+	]) {
 		for (const dependency of ["drizzle-orm", "postgres"]) {
 			assert.match(
 				checkProductionManifestDependencies(
 					{ dependencies: { [dependency]: "1.0.0" } },
 					{ path },
 				)[0],
-				/only platform-store/,
+				/only dedicated Store packages/,
 			);
 		}
 	}
@@ -89,6 +102,13 @@ test("only platform-store declares PostgreSQL runtime dependencies", () => {
 		checkProductionManifestDependencies(
 			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
 			{ path: "packages/platform-store" },
+		),
+		[],
+	);
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
+			{ path: "packages/connection-store" },
 		),
 		[],
 	);

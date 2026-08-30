@@ -1,0 +1,577 @@
+{
+  "id": "a91807c3-9419-4a32-b6f7-b8e6c9df3373",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "platform.audit_events": {
+      "name": "audit_events",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "trace_id": {
+          "name": "trace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_type": {
+          "name": "actor_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "audit_outcome",
+          "typeSchema": "platform",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "audit_trace_idx": {
+          "name": "audit_trace_idx",
+          "columns": [
+            {
+              "expression": "trace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "audit_id_non_empty": {
+          "name": "audit_id_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"id\") > 0"
+        },
+        "audit_trace_id_non_empty": {
+          "name": "audit_trace_id_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"trace_id\") > 0"
+        },
+        "audit_actor_id_non_empty": {
+          "name": "audit_actor_id_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"actor_id\") > 0"
+        },
+        "audit_target_id_non_empty": {
+          "name": "audit_target_id_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"target_id\") > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.idempotency_records": {
+      "name": "idempotency_records",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "scope_type": {
+          "name": "scope_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "command_type": {
+          "name": "command_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_digest": {
+          "name": "request_digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "idempotency_status",
+          "typeSchema": "platform",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'reserved'"
+        },
+        "result": {
+          "name": "result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idempotency_scope_key_unique": {
+          "name": "idempotency_scope_key_unique",
+          "columns": [
+            {
+              "expression": "scope_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "command_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "idempotency_id_non_empty": {
+          "name": "idempotency_id_non_empty",
+          "value": "char_length(\"platform\".\"idempotency_records\".\"id\") > 0"
+        },
+        "idempotency_scope_id_non_empty": {
+          "name": "idempotency_scope_id_non_empty",
+          "value": "char_length(\"platform\".\"idempotency_records\".\"scope_id\") > 0"
+        },
+        "idempotency_actor_id_non_empty": {
+          "name": "idempotency_actor_id_non_empty",
+          "value": "char_length(\"platform\".\"idempotency_records\".\"actor_id\") > 0"
+        },
+        "idempotency_key_format": {
+          "name": "idempotency_key_format",
+          "value": "\"platform\".\"idempotency_records\".\"idempotency_key\" ~ '^[A-Za-z0-9._~-]{1,128}$'"
+        },
+        "idempotency_digest_format": {
+          "name": "idempotency_digest_format",
+          "value": "\"platform\".\"idempotency_records\".\"request_digest\" ~ '^[a-f0-9]{64}$'"
+        },
+        "idempotency_result_state": {
+          "name": "idempotency_result_state",
+          "value": "(\"platform\".\"idempotency_records\".\"status\" = 'reserved' AND \"platform\".\"idempotency_records\".\"result\" IS NULL) OR (\"platform\".\"idempotency_records\".\"status\" = 'completed' AND \"platform\".\"idempotency_records\".\"result\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.outbox_items": {
+      "name": "outbox_items",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "scope_type": {
+          "name": "scope_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "outbox_status",
+          "typeSchema": "platform",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "available_at": {
+          "name": "available_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "lease_owner": {
+          "name": "lease_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delivery_fence": {
+          "name": "delivery_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "trace_id": {
+          "name": "trace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "outbox_eligibility_idx": {
+          "name": "outbox_eligibility_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "outbox_id_non_empty": {
+          "name": "outbox_id_non_empty",
+          "value": "char_length(\"platform\".\"outbox_items\".\"id\") > 0"
+        },
+        "outbox_scope_id_non_empty": {
+          "name": "outbox_scope_id_non_empty",
+          "value": "char_length(\"platform\".\"outbox_items\".\"scope_id\") > 0"
+        },
+        "outbox_trace_id_non_empty": {
+          "name": "outbox_trace_id_non_empty",
+          "value": "char_length(\"platform\".\"outbox_items\".\"trace_id\") > 0"
+        },
+        "outbox_attempt_count_non_negative": {
+          "name": "outbox_attempt_count_non_negative",
+          "value": "\"platform\".\"outbox_items\".\"attempt_count\" >= 0"
+        },
+        "outbox_delivery_fence_non_negative": {
+          "name": "outbox_delivery_fence_non_negative",
+          "value": "\"platform\".\"outbox_items\".\"delivery_fence\" >= 0"
+        },
+        "outbox_lease_pair": {
+          "name": "outbox_lease_pair",
+          "value": "(\"platform\".\"outbox_items\".\"lease_owner\" IS NULL) = (\"platform\".\"outbox_items\".\"lease_expires_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.persisted_events": {
+      "name": "persisted_events",
+      "schema": "platform",
+      "columns": {
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "stream_id": {
+          "name": "stream_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stream_cursor": {
+          "name": "stream_cursor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trace_id": {
+          "name": "trace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "persisted_event_stream_sequence_unique": {
+          "name": "persisted_event_stream_sequence_unique",
+          "columns": [
+            {
+              "expression": "stream_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "persisted_event_stream_cursor_unique": {
+          "name": "persisted_event_stream_cursor_unique",
+          "columns": [
+            {
+              "expression": "stream_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "stream_cursor",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "persisted_event_id_non_empty": {
+          "name": "persisted_event_id_non_empty",
+          "value": "char_length(\"platform\".\"persisted_events\".\"event_id\") > 0"
+        },
+        "persisted_event_stream_id_non_empty": {
+          "name": "persisted_event_stream_id_non_empty",
+          "value": "char_length(\"platform\".\"persisted_events\".\"stream_id\") > 0"
+        },
+        "persisted_event_trace_id_non_empty": {
+          "name": "persisted_event_trace_id_non_empty",
+          "value": "char_length(\"platform\".\"persisted_events\".\"trace_id\") > 0"
+        },
+        "persisted_event_sequence_non_negative": {
+          "name": "persisted_event_sequence_non_negative",
+          "value": "\"platform\".\"persisted_events\".\"sequence\" >= 0"
+        },
+        "persisted_event_cursor_non_negative": {
+          "name": "persisted_event_cursor_non_negative",
+          "value": "\"platform\".\"persisted_events\".\"stream_cursor\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "platform.audit_outcome": {
+      "name": "audit_outcome",
+      "schema": "platform",
+      "values": [
+        "succeeded",
+        "rejected",
+        "failed"
+      ]
+    },
+    "platform.idempotency_status": {
+      "name": "idempotency_status",
+      "schema": "platform",
+      "values": [
+        "reserved",
+        "completed"
+      ]
+    },
+    "platform.outbox_status": {
+      "name": "outbox_status",
+      "schema": "platform",
+      "values": [
+        "pending",
+        "processing",
+        "retry_scheduled",
+        "succeeded",
+        "failed"
+      ]
+    }
+  },
+  "schemas": {
+    "platform": "platform"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

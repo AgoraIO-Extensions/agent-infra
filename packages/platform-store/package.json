@@ -16,9 +16,10 @@
 	],
 	"scripts": {
 		"build": "tsdown",
+		"check-migrations": "node src/check-migrations.mjs",
 		"check-types": "tsc --noEmit",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",
-		"test": "pnpm build && vitest run src"
+		"test": "pnpm build && pnpm check-migrations && vitest run src"
 	},
 	"dependencies": {
 		"drizzle-orm": "catalog:",
@@ -27,6 +28,7 @@
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
+		"drizzle-kit": "catalog:",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"

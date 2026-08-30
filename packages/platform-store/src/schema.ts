@@ -12,7 +12,7 @@ import {
 	varchar,
 } from "drizzle-orm/pg-core";
 
-const platform = pgSchema("platform");
+export const platformSchema = pgSchema("platform");
 
 export const platformStatusValues = {
 	outboxStatus: [
@@ -26,17 +26,17 @@ export const platformStatusValues = {
 	idempotencyStatus: ["reserved", "completed"],
 } as const;
 
-const outboxStatus = platform.enum("outbox_status", [
+export const outboxStatus = platformSchema.enum("outbox_status", [
 	...platformStatusValues.outboxStatus,
 ]);
-const auditOutcome = platform.enum("audit_outcome", [
+export const auditOutcome = platformSchema.enum("audit_outcome", [
 	...platformStatusValues.auditOutcome,
 ]);
-const idempotencyStatus = platform.enum("idempotency_status", [
+export const idempotencyStatus = platformSchema.enum("idempotency_status", [
 	...platformStatusValues.idempotencyStatus,
 ]);
 
-export const outboxItems = platform.table(
+export const outboxItems = platformSchema.table(
 	"outbox_items",
 	{
 		id: text("id").primaryKey(),
@@ -52,7 +52,7 @@ export const outboxItems = platform.table(
 		leaseOwner: text("lease_owner"),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		deliveryFence: bigint("delivery_fence", { mode: "bigint" })
-			.default(0n)
+			.default(sql`0`)
 			.notNull(),
 		traceId: text("trace_id").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -79,7 +79,7 @@ export const outboxItems = platform.table(
 	],
 );
 
-export const auditEvents = platform.table(
+export const auditEvents = platformSchema.table(
 	"audit_events",
 	{
 		id: text("id").primaryKey(),
@@ -103,7 +103,7 @@ export const auditEvents = platform.table(
 	],
 );
 
-export const idempotencyRecords = platform.table(
+export const idempotencyRecords = platformSchema.table(
 	"idempotency_records",
 	{
 		id: text("id").primaryKey(),
@@ -154,7 +154,7 @@ export const idempotencyRecords = platform.table(
 	],
 );
 
-export const persistedEvents = platform.table(
+export const persistedEvents = platformSchema.table(
 	"persisted_events",
 	{
 		eventId: text("event_id").primaryKey(),
