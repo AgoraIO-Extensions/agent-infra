@@ -71,6 +71,32 @@
 				}
 			]
 		},
+		"DiscriminatedChoiceV1": {
+			"oneOf": [
+				{
+					"properties": {
+						"kind": { "const": "a" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				},
+				{
+					"properties": {
+						"kind": { "const": "b" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				},
+				{
+					"properties": {
+						"detail": { "type": "string" },
+						"kind": { "const": "a" }
+					},
+					"required": ["kind", "detail"],
+					"type": "object"
+				}
+			]
+		},
 		"IntegerV1": {
 			"type": "integer"
 		},

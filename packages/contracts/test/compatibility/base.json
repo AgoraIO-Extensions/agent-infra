@@ -10,6 +10,24 @@
 				}
 			]
 		},
+		"DiscriminatedChoiceV1": {
+			"oneOf": [
+				{
+					"properties": {
+						"kind": { "const": "a" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				},
+				{
+					"properties": {
+						"kind": { "const": "b" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				}
+			]
+		},
 		"OpaqueIdV1": {
 			"minLength": 1,
 			"type": "string"

@@ -70,14 +70,42 @@ function literalValues(schema) {
 function literalSchemasAreDisjoint(left, right) {
 	const leftValues = literalValues(left);
 	const rightValues = literalValues(right);
-	return (
-		leftValues !== undefined &&
-		rightValues !== undefined &&
-		leftValues.every(
-			(leftValue) =>
-				!rightValues.some((rightValue) => sameValue(leftValue, rightValue)),
-		)
-	);
+	if (leftValues !== undefined || rightValues !== undefined) {
+		return (
+			leftValues !== undefined &&
+			rightValues !== undefined &&
+			leftValues.every(
+				(leftValue) =>
+					!rightValues.some((rightValue) => sameValue(leftValue, rightValue)),
+			)
+		);
+	}
+	if (
+		!left ||
+		!right ||
+		typeof left !== "object" ||
+		typeof right !== "object"
+	) {
+		return false;
+	}
+	const leftRequired = new Set(left.required ?? []);
+	const rightRequired = new Set(right.required ?? []);
+	return Object.entries(left.properties ?? {}).some(([name, leftProperty]) => {
+		if (!leftRequired.has(name) || !rightRequired.has(name)) return false;
+		const rightProperty = right.properties?.[name];
+		const leftPropertyValues = literalValues(leftProperty);
+		const rightPropertyValues = literalValues(rightProperty);
+		return (
+			leftPropertyValues !== undefined &&
+			rightPropertyValues !== undefined &&
+			leftPropertyValues.every(
+				(leftValue) =>
+					!rightPropertyValues.some((rightValue) =>
+						sameValue(leftValue, rightValue),
+					),
+			)
+		);
+	});
 }
 
 function hasSchemaConstraints(value) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	validateWorkerWorkloadExpectedRevisionV1,
 	validateWorkerWorkloadResultV1,
 	WorkerWorkloadExpectedRevisionV1Schema,
 	WorkerWorkloadResultV1Schema,
@@ -61,6 +62,100 @@ const activationFence = {
 	workloadUid: activationExpected.workloadUid,
 	workloadGeneration: activationExpected.workloadGeneration,
 	fence: activationExpected.fence,
+} as const;
+
+const runtimeManifest = {
+	schemaVersion: 1,
+	interactionMode: "platform-adapter",
+	protocol: "acp",
+	service: { port: 8080 },
+	health: { path: "/healthz" },
+	capabilities: {
+		modelSelection: false,
+		attachments: false,
+		resultFiles: false,
+		connection: true,
+		supplementaryInstruction: false,
+	},
+} as const;
+const imageDigest = `sha256:${"c".repeat(64)}` as const;
+const registryAdmission = {
+	schemaVersion: 1,
+	immutableDigest: imageDigest,
+	runtimeManifest,
+	runtimeManifestParsingEvidence: {
+		schemaVersion: 1,
+		labelName: "io.agora.agent.runtime.manifest",
+		utf8ByteLength: 256,
+		maxDepth: 3,
+		duplicateKeysDetected: false,
+		unknownFieldsDetected: false,
+	},
+	policyEvidence: {
+		schemaVersion: 1,
+		policyRef: "policy_01",
+		decisionRef: "decision_01",
+		subjectRef: "subject_01",
+		agentId: workerCorrelation.agentId,
+		imageDigest,
+		evaluatedAt: "2026-08-28T10:00:00Z",
+	},
+} as const;
+
+const desiredWorkload = {
+	schemaVersion: 1,
+	requestId: workerCorrelation.requestId,
+	traceId: workerCorrelation.traceId,
+	agentId: workerCorrelation.agentId,
+	configRevision: workerCorrelation.configRevision,
+	workloadRevision: workerCorrelation.workloadRevision,
+	fence: workerCorrelation.fence,
+	expectedWorkload: { state: "absent" },
+	namespaceRef: "pilot-namespace",
+	desiredState: "running",
+	replicas: 1,
+	imageDigest,
+	registryAdmission,
+	runtimeManifest,
+	resourceProfileRef: "resource-profile_01",
+	env: { LOG_LEVEL: "info" },
+	service: { name: "agent-01", port: 8080 },
+	health: {
+		path: "/healthz",
+		timeoutSeconds: 5,
+		failureThreshold: 3,
+	},
+	route: {
+		name: "agent-01",
+		exposure: "internal-only",
+		tlsRequired: true,
+	},
+	persistentVolume: {
+		name: "agent-01-data",
+		mountPath: "/workspace",
+		storageProfileRef: "storage-profile_01",
+		accessMode: "ReadWriteOnce",
+		retention: "retain",
+	},
+	serviceAccount: {
+		name: "agent-01",
+		kubernetesApiAccess: false,
+	},
+	networkPolicy: {
+		deploymentPolicyRef: "deployment-policy_01",
+		ingressMode: "runtime-host-client-only",
+		kubernetesApiAccess: false,
+		platformDatabaseAccess: false,
+		connectionDatabaseAccess: false,
+		decryptionKeyringAccess: false,
+	},
+	secretRefs: [secretRef],
+} as const;
+
+const reconcileExpected = {
+	...workerCorrelation,
+	operation: "reconcile-workload",
+	desiredWorkload,
 } as const;
 
 describe("Worker admission and Secret result V1 contract", () => {
@@ -274,5 +369,46 @@ describe("Worker admission and Secret result V1 contract", () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("Worker Workload reconcile expected context V1 contract", () => {
+	it("binds a complete desired Workload to the outer work item", () => {
+		expect(validateWorkerWorkloadExpectedRevisionV1(reconcileExpected)).toEqual(
+			reconcileExpected,
+		);
+		expect(
+			WorkerWorkloadExpectedRevisionV1Schema.safeParse({
+				...reconcileExpected,
+				schemaVersion: 2,
+			}).success,
+		).toBe(false);
+		expect(
+			WorkerWorkloadExpectedRevisionV1Schema.safeParse({
+				...reconcileExpected,
+				desiredWorkload: {
+					...desiredWorkload,
+					expectedWorkload: undefined,
+				},
+			}).success,
+		).toBe(false);
+		expect(() =>
+			validateWorkerWorkloadExpectedRevisionV1({
+				...reconcileExpected,
+				desiredWorkload: {
+					...desiredWorkload,
+					service: { ...desiredWorkload.service, port: 9090 },
+				},
+			}),
+		).toThrow("Desired Workload correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadExpectedRevisionV1({
+				...reconcileExpected,
+				desiredWorkload: {
+					...desiredWorkload,
+					fence: reconcileExpected.fence + 1,
+				},
+			}),
+		).toThrow("Worker expected revision correlation mismatch");
 	});
 });
