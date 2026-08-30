@@ -1,239 +1,245 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
+import {
+	afterAll,
+	beforeAll,
+	describe,
+	expect,
+	expectTypeOf,
+	it,
+} from "vitest";
+import type { PlatformIdempotencyBoundScope } from "./idempotency.ts";
+import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.ts";
 
-import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-const execFile = promisify(execFileCallback);
-const postgresImage =
-	"postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
-const username = "platform_test";
-const password = "platform_test_password";
-const database = "platform_test";
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
 
-let containerName = "";
+const baseScope = {
+	resourceType: "agent",
+	resourceId: "agent_01",
+	actorId: "user_01",
+	operation: "platform.update-agent",
+} as const;
+const acceptedResult = {
+	schemaVersion: 1 as const,
+	outcome: "accepted" as const,
+	references: [
+		{
+			resourceType: "agent" as const,
+			resourceId: "agent_01",
+			revision: 2,
+		},
+	],
+};
+
+let testDatabase: PostgresTestDatabase | undefined;
 let databaseUrl = "";
 
-function openStore(clock: () => Date = () => new Date()) {
-	return builtStore.openPlatformIdempotencyStore({
+function openStore(scope: PlatformIdempotencyBoundScope = baseScope) {
+	return builtStore.openPostgresPlatformIdempotencyStore({
 		databaseUrl,
-		reservationTimeoutMs: 60_000,
-		clock,
+		scope,
 	});
-}
-
-async function removeContainer(): Promise<void> {
-	if (containerName) {
-		await execFile("docker", ["rm", "--force", containerName]).catch(() => {});
-	}
-}
-
-async function startPostgres(): Promise<string> {
-	containerName = `agent-infra-idempotency-${randomUUID()}`;
-	await execFile("docker", [
-		"run",
-		"--detach",
-		"--rm",
-		"--name",
-		containerName,
-		"--env",
-		`POSTGRES_USER=${username}`,
-		"--env",
-		`POSTGRES_PASSWORD=${password}`,
-		"--env",
-		`POSTGRES_DB=${database}`,
-		"--publish",
-		"127.0.0.1::5432",
-		postgresImage,
-	]);
-	const { stdout } = await execFile("docker", [
-		"port",
-		containerName,
-		"5432/tcp",
-	]);
-	const port = stdout.trim().match(/:(\d+)$/)?.[1];
-	if (!port) throw new Error("PostgreSQL did not publish a test port");
-	const url = `postgres://${username}:${password}@127.0.0.1:${port}/${database}`;
-
-	for (let attempt = 0; attempt < 80; attempt += 1) {
-		const client = postgres(url, { connect_timeout: 1, max: 1 });
-		try {
-			await client`select 1`;
-			await client.end();
-			return url;
-		} catch {
-			await client.end({ timeout: 0 });
-			await new Promise((resolve) => setTimeout(resolve, 250));
-		}
-	}
-	throw new Error("PostgreSQL test container did not become ready");
 }
 
 beforeAll(async () => {
-	databaseUrl = await startPostgres().catch(async (error) => {
-		await removeContainer();
-		throw error;
-	});
+	testDatabase = await startPostgresTestDatabase("platform-store-idempotency");
+	databaseUrl = testDatabase.databaseUrl;
 	await builtStore.migratePlatformDatabase({ databaseUrl });
 }, 120_000);
 
-afterAll(removeContainer);
+afterAll(async () => testDatabase?.stop());
 
 describe("Platform PostgreSQL idempotency store", () => {
-	it("replays the original result for equivalent canonical input", async () => {
+	it("canonicalizes requests before the Store receives only their digest", async () => {
+		const firstDigest = builtStore.canonicalPlatformIdempotencyRequestDigest({
+			model: { name: "gpt", reasoning: "medium" },
+			revision: 2,
+		});
+		const equivalentDigest =
+			builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 2,
+				model: { reasoning: "medium", name: "gpt" },
+			});
+		const differentDigest =
+			builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 3,
+				model: { reasoning: "medium", name: "gpt" },
+			});
+		expect(equivalentDigest).toBe(firstDigest);
+		expect(differentDigest).not.toBe(firstDigest);
+		expect(firstDigest).toMatch(/^[a-f0-9]{64}$/);
+
 		const store = openStore();
-		const scope = {
-			resourceType: "agent",
-			resourceId: "agent_01",
-			actorId: "user_01",
-			operation: "update-agent",
-		};
-		const first = await store.reserve({
-			scope,
+		expectTypeOf<Parameters<typeof store.reserve>[0]>().toEqualTypeOf<{
+			readonly key: string;
+			readonly requestDigest: string;
+		}>();
+		const reserved = await store.reserve({
 			key: "Retry_A",
-			request: { model: { name: "gpt", reasoning: "medium" }, revision: 2 },
+			requestDigest: firstDigest,
 		});
-		expect(first.state).toBe("reserved");
-		if (first.state !== "reserved") throw new Error("Expected reservation");
-
-		const result = {
-			status: "accepted",
-			resource: { type: "agent", id: "agent_01", revision: 2 },
-		};
-		expect(
-			await store.complete({ reservation: first.reservation, result }),
-		).toEqual({ state: "completed", result });
-
-		expect(
-			await store.reserve({
-				scope,
-				key: "Retry_A",
-				request: {
-					revision: 2,
-					model: { reasoning: "medium", name: "gpt" },
-				},
-			}),
-		).toEqual({ state: "completed", result });
-
-		await store.close();
-	});
-
-	it("keeps the original record when the same key has different input", async () => {
-		const store = openStore();
-		const scope = {
-			resourceType: "agent",
-			resourceId: "agent_02",
-			actorId: "user_01",
-			operation: "update-agent",
-		};
-		const first = await store.reserve({
-			scope,
-			key: "Mismatch_A",
-			request: { revision: 1 },
-		});
-		if (first.state !== "reserved") throw new Error("Expected reservation");
-
-		expect(
-			await store.reserve({
-				scope,
-				key: "Mismatch_A",
-				request: { revision: 2 },
-			}),
-		).toEqual({ state: "conflict" });
-
-		const originalResult = {
-			status: "accepted",
-			resource: { type: "agent", id: "agent_02", revision: 1 },
-		};
-		await store.complete({
-			reservation: first.reservation,
-			result: originalResult,
-		});
-		expect(
-			await store.reserve({
-				scope,
-				key: "Mismatch_A",
-				request: { revision: 1 },
-			}),
-		).toEqual({ state: "completed", result: originalResult });
-
-		await store.close();
-	});
-
-	it("separates case-sensitive keys and server-derived scope", async () => {
-		const store = openStore();
-		const scope = {
-			resourceType: "agent",
-			resourceId: "agent_03",
-			actorId: "user_01",
-			operation: "update-agent",
-		};
-		const request = { revision: 3 };
-		const original = await store.reserve({
-			scope,
-			key: "Case_A",
-			request,
-		});
-		if (original.state !== "reserved") throw new Error("Expected reservation");
-
-		const independent = await Promise.all([
-			store.reserve({ scope, key: "case_A", request }),
-			store.reserve({
-				scope: { ...scope, actorId: "user_02" },
-				key: "Case_A",
-				request,
-			}),
-			store.reserve({
-				scope: { ...scope, operation: "restart-agent" },
-				key: "Case_A",
-				request,
-			}),
-			store.reserve({
-				scope: { ...scope, resourceId: "agent_04" },
-				key: "Case_A",
-				request,
-			}),
-		]);
-		expect(independent.map((result) => result.state)).toEqual([
-			"reserved",
-			"reserved",
-			"reserved",
-			"reserved",
-		]);
-
+		if (reserved.state !== "reserved") throw new Error("Expected reservation");
 		expect(
 			await store.complete({
-				reservation: {
-					...original.reservation,
-					scope: { ...scope, actorId: "user_02" },
+				reservationId: reserved.reservationId,
+				result: acceptedResult,
+			}),
+		).toEqual({ state: "completed", result: acceptedResult });
+		expect(
+			await store.complete({
+				reservationId: reserved.reservationId,
+				result: {
+					...acceptedResult,
+					outcome: "completed",
+					references: [
+						{
+							resourceType: "agent",
+							resourceId: "agent_01",
+							revision: 99,
+						},
+					],
 				},
-				result: { status: "accepted" },
+			}),
+		).toEqual({ state: "completed", result: acceptedResult });
+		expect(
+			await store.reserve({
+				key: "Retry_A",
+				requestDigest: equivalentDigest,
+			}),
+		).toEqual({ state: "completed", result: acceptedResult });
+		await store.close();
+	});
+
+	it("returns conflict without replacing the original digest or result", async () => {
+		const store = openStore({ ...baseScope, resourceId: "agent_02" });
+		const originalDigest = builtStore.canonicalPlatformIdempotencyRequestDigest(
+			{
+				revision: 1,
+			},
+		);
+		const differentDigest =
+			builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 2,
+			});
+		const first = await store.reserve({
+			key: "Mismatch_A",
+			requestDigest: originalDigest,
+		});
+		if (first.state !== "reserved") throw new Error("Expected reservation");
+		expect(
+			await store.reserve({
+				key: "Mismatch_A",
+				requestDigest: differentDigest,
 			}),
 		).toEqual({ state: "conflict" });
-		expect(await store.reserve({ scope, key: "Case_A", request })).toEqual({
-			state: "in_progress",
-		});
 
+		await store.complete({
+			reservationId: first.reservationId,
+			result: acceptedResult,
+		});
+		expect(
+			await store.reserve({
+				key: "Mismatch_A",
+				requestDigest: originalDigest,
+			}),
+		).toEqual({ state: "completed", result: acceptedResult });
+		await store.close();
+	});
+
+	it("binds Platform scope outside retry input and rejects other domains", async () => {
+		const digest = builtStore.canonicalPlatformIdempotencyRequestDigest({
+			revision: 3,
+		});
+		const store = openStore({ ...baseScope, resourceId: "agent_scope" });
+		await expect(
+			store.reserve({
+				key: "Bound_A",
+				requestDigest: digest,
+				actorId: "attacker",
+				operation: "runtime.submit",
+				resourceType: "connection",
+				resourceId: "connection_01",
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(
+			(await store.reserve({ key: "Bound_A", requestDigest: digest })).state,
+		).toBe("reserved");
+		expect(
+			await store.reserve({ key: "Bound_A", requestDigest: digest }),
+		).toEqual({ state: "in_progress" });
+
+		const independentStores = [
+			openStore({
+				...baseScope,
+				resourceId: "agent_scope",
+				actorId: "user_02",
+			}),
+			openStore({
+				...baseScope,
+				resourceId: "agent_scope",
+				operation: "platform.restart-agent",
+			}),
+			openStore({ ...baseScope, resourceId: "agent_other" }),
+		];
+		const independent = await Promise.all(
+			independentStores.map((candidate) =>
+				candidate.reserve({ key: "Bound_A", requestDigest: digest }),
+			),
+		);
+		expect(independent.map((decision) => decision.state)).toEqual([
+			"reserved",
+			"reserved",
+			"reserved",
+		]);
+
+		for (const invalidScope of [
+			{ ...baseScope, resourceType: "connection" },
+			{ ...baseScope, resourceType: "runtime_session" },
+			{ ...baseScope, operation: "connection.invoke" },
+			{ ...baseScope, operation: "runtime.submit" },
+		]) {
+			expect(() =>
+				builtStore.openPostgresPlatformIdempotencyStore({
+					databaseUrl,
+					scope: invalidScope as never,
+				}),
+			).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		}
+
+		await store.close();
+		await Promise.all(independentStores.map((candidate) => candidate.close()));
+	});
+
+	it("keeps case-sensitive keys independent", async () => {
+		const store = openStore({ ...baseScope, resourceId: "agent_case" });
+		const requestDigest = builtStore.canonicalPlatformIdempotencyRequestDigest({
+			revision: 4,
+		});
+		expect(
+			(
+				await Promise.all([
+					store.reserve({ key: "Case_A", requestDigest }),
+					store.reserve({ key: "case_A", requestDigest }),
+				])
+			).map((decision) => decision.state),
+		).toEqual(["reserved", "reserved"]);
 		await store.close();
 	});
 
 	it("selects one durable reservation across concurrent connections", async () => {
-		const stores = [openStore(), openStore()];
+		const stores = [
+			openStore({ ...baseScope, resourceId: "agent_concurrent" }),
+			openStore({ ...baseScope, resourceId: "agent_concurrent" }),
+		];
 		const input = {
-			scope: {
-				resourceType: "agent",
-				resourceId: "agent_05",
-				actorId: "user_01",
-				operation: "update-agent",
-			},
 			key: "Concurrent_A",
-			request: { revision: 4 },
+			requestDigest: builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 5,
+			}),
 		};
-
 		const decisions = await Promise.all(
 			stores.map((store) => store.reserve(input)),
 		);
@@ -241,217 +247,121 @@ describe("Platform PostgreSQL idempotency store", () => {
 			"in_progress",
 			"reserved",
 		]);
-
 		await Promise.all(stores.map((store) => store.close()));
 	});
 
-	it("reclaims a timed-out reservation after the original process crashes", async () => {
-		let now = new Date("2026-08-30T12:00:00.000Z");
-		const clock = () => now;
+	it("keeps crash state fail-closed without granting a second side effect", async () => {
 		const input = {
-			scope: {
-				resourceType: "agent",
-				resourceId: "agent_06",
-				actorId: "user_01",
-				operation: "update-agent",
-			},
 			key: "Crash_A",
-			request: { revision: 5 },
+			requestDigest: builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 6,
+			}),
 		};
-		const crashedStore = openStore(clock);
-		expect((await crashedStore.reserve(input)).state).toBe("reserved");
+		let sideEffects = 0;
+		const crashedStore = openStore({ ...baseScope, resourceId: "agent_crash" });
+		const original = await crashedStore.reserve(input);
+		if (original.state === "reserved") sideEffects += 1;
 		await crashedStore.close();
 
-		const recoveringStore = openStore(clock);
-		expect(await recoveringStore.reserve(input)).toEqual({
-			state: "in_progress",
-		});
-		now = new Date("2026-08-30T12:01:00.000Z");
-		const reclaimed = await recoveringStore.reserve(input);
-		if (reclaimed.state !== "reserved") {
-			throw new Error("Expected timed-out reservation reclaim");
-		}
-		const originalResult = {
-			status: "accepted",
-			resource: { type: "agent", id: "agent_06", revision: 5 },
-		};
-		expect(
-			await recoveringStore.complete({
-				reservation: reclaimed.reservation,
-				result: originalResult,
-			}),
-		).toEqual({ state: "completed", result: originalResult });
-		expect(
-			await recoveringStore.complete({
-				reservation: reclaimed.reservation,
-				result: { status: "different" },
-			}),
-		).toEqual({ state: "completed", result: originalResult });
-		await recoveringStore.close();
-
-		const replayStore = openStore(clock);
-		expect(await replayStore.reserve(input)).toEqual({
-			state: "completed",
-			result: originalResult,
-		});
-		await replayStore.close();
-	});
-
-	it("selects one reclaim owner and rejects the stale reservation", async () => {
-		let now = new Date("2026-08-30T13:00:00.000Z");
-		const clock = () => now;
-		const input = {
-			scope: {
-				resourceType: "agent",
-				resourceId: "agent_reclaim",
-				actorId: "user_01",
-				operation: "update-agent",
-			},
-			key: "Crash_Race_A",
-			request: { revision: 6 },
-		};
-		const originalStore = openStore(clock);
-		const original = await originalStore.reserve(input);
-		if (original.state !== "reserved") throw new Error("Expected reservation");
-		now = new Date("2026-08-30T13:01:00.000Z");
-		const recoveringStores = [openStore(clock), openStore(clock)];
-		const decisions = await Promise.all(
-			recoveringStores.map((store) => store.reserve(input)),
+		const retryStores = [
+			openStore({ ...baseScope, resourceId: "agent_crash" }),
+			openStore({ ...baseScope, resourceId: "agent_crash" }),
+		];
+		const retries = await Promise.all(
+			retryStores.map((store) => store.reserve(input)),
 		);
-		expect(decisions.map((decision) => decision.state).toSorted()).toEqual([
-			"in_progress",
-			"reserved",
-		]);
-		expect(
-			await originalStore.complete({
-				reservation: original.reservation,
-				result: { status: "stale" },
-			}),
-		).toEqual({ state: "conflict" });
-
-		await originalStore.close();
-		await Promise.all(recoveringStores.map((store) => store.close()));
-	});
-
-	it("rejects credential-bearing completed results without echoing them", async () => {
-		const store = openStore();
-		const reserved = await store.reserve({
-			scope: {
-				resourceType: "agent",
-				resourceId: "agent_07",
-				actorId: "user_01",
-				operation: "update-agent",
-			},
-			key: "Sanitize_A",
-			request: { revision: 6 },
-		});
-		if (reserved.state !== "reserved") throw new Error("Expected reservation");
-
-		const completion = store.complete({
-			reservation: reserved.reservation,
-			result: { status: "accepted", accessToken: "credential-value" },
-		});
-		await expect(completion).rejects.toMatchObject({
-			name: "PlatformIdempotencyError",
-			code: "invalid_input",
-			message: "Invalid idempotency input",
-		});
-		await expect(completion).rejects.not.toThrow("credential-value");
-
-		await store.close();
-	});
-
-	it("rejects raw provider results", async () => {
-		const store = openStore();
-		const reserved = await store.reserve({
-			scope: {
-				resourceType: "agent",
-				resourceId: "agent_08",
-				actorId: "user_01",
-				operation: "update-agent",
-			},
-			key: "Sanitize_B",
-			request: { revision: 7 },
-		});
-		if (reserved.state !== "reserved") throw new Error("Expected reservation");
-
-		await expect(
-			store.complete({
-				reservation: reserved.reservation,
-				result: {
-					status: "accepted",
-					providerResponse: { headers: {}, body: { remoteId: "remote_01" } },
-				},
-			}),
-		).rejects.toMatchObject({ code: "invalid_input" });
-
-		class ProviderResult {
-			readonly remoteId = "remote_01";
+		for (const retry of retries) {
+			if (retry.state === "reserved") sideEffects += 1;
 		}
-		await expect(
-			store.complete({
-				reservation: reserved.reservation,
-				result: {
-					status: "accepted",
-					providerId: "provider_01",
-					providerResult: new ProviderResult(),
-				} as never,
-			}),
-		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(retries).toEqual([
+			{ state: "in_progress" },
+			{ state: "in_progress" },
+		]);
+		expect(sideEffects).toBe(1);
+		await Promise.all(retryStores.map((store) => store.close()));
+	});
 
+	it("accepts only the versioned allowlisted Platform result shape", async () => {
+		const store = openStore({ ...baseScope, resourceId: "agent_result" });
+		const reserved = await store.reserve({
+			key: "Result_A",
+			requestDigest: builtStore.canonicalPlatformIdempotencyRequestDigest({
+				revision: 7,
+			}),
+		});
+		if (reserved.state !== "reserved") throw new Error("Expected reservation");
+
+		for (const result of [
+			{ ...acceptedResult, accessToken: "credential-value" },
+			{ ...acceptedResult, providerResponse: { body: { remoteId: "remote" } } },
+			{ ...acceptedResult, sqlError: { query: "select secret" } },
+			new Error("database detail"),
+			{ ...acceptedResult, schemaVersion: 2 },
+			{ ...acceptedResult, references: [] },
+			{
+				...acceptedResult,
+				references: Object.assign([...acceptedResult.references], {
+					providerResponse: { body: { remoteId: "remote" } },
+				}),
+			},
+			{
+				...acceptedResult,
+				references: [
+					{
+						resourceType: "connection",
+						resourceId: "connection_01",
+						revision: null,
+					},
+				],
+			},
+		]) {
+			await expect(
+				store.complete({
+					reservationId: reserved.reservationId,
+					result: result as never,
+				}),
+			).rejects.toMatchObject({
+				name: "PlatformIdempotencyError",
+				code: "invalid_input",
+				message: "Invalid idempotency input",
+			});
+		}
+
+		expect(
+			await store.complete({
+				reservationId: reserved.reservationId,
+				result: acceptedResult,
+			}),
+		).toEqual({ state: "completed", result: acceptedResult });
 		await store.close();
 	});
 
-	it("bounds canonical requests and completed results", async () => {
-		const store = openStore();
-		const scope = {
-			resourceType: "agent",
-			resourceId: "agent_09",
-			actorId: "user_01",
-			operation: "update-agent",
-		};
-		const oversized = "x".repeat(64 * 1024);
-		await expect(
-			store.reserve({
-				scope,
-				key: "Bound_A",
-				request: { value: oversized },
+	it("bounds canonical request input and rejects malformed digests", async () => {
+		expect(() =>
+			builtStore.canonicalPlatformIdempotencyRequestDigest({
+				value: "x".repeat(64 * 1024),
 			}),
-		).rejects.toMatchObject({ code: "invalid_input" });
-
-		const reserved = await store.reserve({
-			scope,
-			key: "Bound_B",
-			request: { revision: 8 },
-		});
-		if (reserved.state !== "reserved") throw new Error("Expected reservation");
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		const store = openStore({ ...baseScope, resourceId: "agent_bounds" });
 		await expect(
-			store.complete({
-				reservation: reserved.reservation,
-				result: { value: oversized },
-			}),
+			store.reserve({ key: "Bound_A", requestDigest: "not-a-digest" }),
 		).rejects.toMatchObject({ code: "invalid_input" });
-
 		await store.close();
 	});
 
 	it("sanitizes PostgreSQL failures at the public interface", async () => {
-		const store = builtStore.openPlatformIdempotencyStore({
+		const store = builtStore.openPostgresPlatformIdempotencyStore({
 			databaseUrl:
 				"postgres://platform_user:database-secret@127.0.0.1:1/platform",
-			reservationTimeoutMs: 60_000,
+			scope: baseScope,
 		});
 		let failure: unknown;
 		try {
 			await store.reserve({
-				scope: {
-					resourceType: "agent",
-					resourceId: "agent_10",
-					actorId: "user_01",
-					operation: "update-agent",
-				},
 				key: "Failure_A",
-				request: { revision: 9 },
+				requestDigest: builtStore.canonicalPlatformIdempotencyRequestDigest({
+					revision: 8,
+				}),
 			});
 		} catch (error) {
 			failure = error;

@@ -40,8 +40,9 @@ describe("platform-store package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"PlatformIdempotencyError",
+			"canonicalPlatformIdempotencyRequestDigest",
 			"migratePlatformDatabase",
-			"openPlatformIdempotencyStore",
+			"openPostgresPlatformIdempotencyStore",
 			"platformDatabaseUrlFromEnvironment",
 		]);
 

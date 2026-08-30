@@ -1,12 +1,11 @@
 export {
-	openPlatformIdempotencyStore,
-	type PlatformIdempotencyCompleteResult,
+	canonicalPlatformIdempotencyRequestDigest,
+	openPostgresPlatformIdempotencyStore,
+	type PlatformIdempotencyBoundScope,
+	type PlatformIdempotencyDomainResultV1,
 	PlatformIdempotencyError,
-	type PlatformIdempotencyJson,
-	type PlatformIdempotencyReservation,
-	type PlatformIdempotencyReserveResult,
-	type PlatformIdempotencyScope,
-	type PlatformIdempotencyStore,
+	type PlatformIdempotencyRequestJson,
+	type PlatformIdempotencyResourceTypeV1,
 } from "./idempotency.ts";
 export {
 	migratePlatformDatabase,
