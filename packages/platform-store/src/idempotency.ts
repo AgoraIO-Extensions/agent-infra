@@ -135,6 +135,18 @@ function exactObject(
 	return value as Readonly<Record<string, unknown>>;
 }
 
+function validateKeyAndDigest(key: unknown, requestDigest: unknown) {
+	if (
+		typeof key !== "string" ||
+		!idempotencyKeyPattern.test(key) ||
+		typeof requestDigest !== "string" ||
+		!requestDigestPattern.test(requestDigest)
+	) {
+		fail("invalid_input");
+	}
+	return { key, requestDigest };
+}
+
 function canonicalJson(value: unknown, depth = 0): string {
 	if (depth > maxJsonDepth) fail("invalid_input");
 	if (
@@ -308,16 +320,10 @@ export function openPostgresPlatformIdempotencyStore(options: {
 				["key", "requestDigest"],
 				"invalid_input",
 			);
-			if (
-				typeof reserveInput.key !== "string" ||
-				!idempotencyKeyPattern.test(reserveInput.key) ||
-				typeof reserveInput.requestDigest !== "string" ||
-				!requestDigestPattern.test(reserveInput.requestDigest)
-			) {
-				fail("invalid_input");
-			}
-			const key = reserveInput.key;
-			const requestDigest = reserveInput.requestDigest;
+			const { key, requestDigest } = validateKeyAndDigest(
+				reserveInput.key,
+				reserveInput.requestDigest,
+			);
 			const id = randomUUID();
 
 			return withoutSqlDetails(async () => {
@@ -351,6 +357,64 @@ export function openPostgresPlatformIdempotencyStore(options: {
 				}
 				if (record.status === "reserved") {
 					// Reassignment cannot distinguish a crashed owner from a slow live owner.
+					return { state: "in_progress" as const };
+				}
+				return {
+					state: "completed" as const,
+					result: mapDomainResult(record.result, "unavailable"),
+				};
+			});
+		},
+
+		async reconcileObservedCompletion(input: {
+			readonly key: string;
+			readonly requestDigest: string;
+			readonly observedResult: PlatformIdempotencyDomainResultV1;
+		}) {
+			const reconciliation = exactObject(
+				input,
+				["key", "requestDigest", "observedResult"],
+				"invalid_input",
+			);
+			const { key, requestDigest } = validateKeyAndDigest(
+				reconciliation.key,
+				reconciliation.requestDigest,
+			);
+			const result = mapDomainResult(reconciliation.observedResult);
+
+			return withoutSqlDetails(async () => {
+				// This records a feature-layer observation; it never reserves work.
+				const completed = await client<Pick<IdempotencyRow, "result">[]>`
+						update platform.idempotency_records
+						set status = 'completed', result = ${client.json(result as unknown as PostgresJson)}, updated_at = now()
+						where scope_type = ${scope.resourceType}
+							and scope_id = ${scope.resourceId}
+							and actor_id = ${scope.actorId}
+							and command_type = ${scope.operation}
+							and idempotency_key = ${key}
+							and request_digest = ${requestDigest}
+							and status = 'reserved'
+						returning result
+					`;
+				if (completed[0]) {
+					return { state: "completed" as const, result };
+				}
+
+				const [record] = await client<
+					Pick<IdempotencyRow, "request_digest" | "status" | "result">[]
+				>`
+						select request_digest, status, result
+						from platform.idempotency_records
+						where scope_type = ${scope.resourceType}
+							and scope_id = ${scope.resourceId}
+							and actor_id = ${scope.actorId}
+							and command_type = ${scope.operation}
+							and idempotency_key = ${key}
+					`;
+				if (!record || record.request_digest !== requestDigest) {
+					return { state: "conflict" as const };
+				}
+				if (record.status === "reserved") {
 					return { state: "in_progress" as const };
 				}
 				return {

@@ -250,7 +250,7 @@ describe("Platform PostgreSQL idempotency store", () => {
 		await Promise.all(stores.map((store) => store.close()));
 	});
 
-	it("keeps crash state fail-closed without granting a second side effect", async () => {
+	it("reconciles an observed crash result without granting another side effect", async () => {
 		const input = {
 			key: "Crash_A",
 			requestDigest: builtStore.canonicalPlatformIdempotencyRequestDigest({
@@ -259,9 +259,19 @@ describe("Platform PostgreSQL idempotency store", () => {
 		};
 		let sideEffects = 0;
 		const crashedStore = openStore({ ...baseScope, resourceId: "agent_crash" });
-		const original = await crashedStore.reserve(input);
-		if (original.state === "reserved") sideEffects += 1;
+		if ((await crashedStore.reserve(input)).state === "reserved")
+			sideEffects += 1;
 		await crashedStore.close();
+		const observedResult = {
+			...acceptedResult,
+			references: [
+				{
+					resourceType: "agent" as const,
+					resourceId: "agent_crash",
+					revision: 6,
+				},
+			],
+		};
 
 		const retryStores = [
 			openStore({ ...baseScope, resourceId: "agent_crash" }),
@@ -278,6 +288,60 @@ describe("Platform PostgreSQL idempotency store", () => {
 			{ state: "in_progress" },
 		]);
 		expect(sideEffects).toBe(1);
+
+		const wrongScopeStore = openStore({
+			...baseScope,
+			resourceId: "agent_crash",
+			actorId: "user_02",
+		});
+		expect(
+			await wrongScopeStore.reconcileObservedCompletion({
+				...input,
+				observedResult,
+			}),
+		).toEqual({ state: "conflict" });
+		const wrongDigest = builtStore.canonicalPlatformIdempotencyRequestDigest({
+			revision: 7,
+		});
+		expect(
+			await retryStores[0]?.reconcileObservedCompletion({
+				key: input.key,
+				requestDigest: wrongDigest,
+				observedResult,
+			}),
+		).toEqual({ state: "conflict" });
+		expect(await retryStores[0]?.reserve(input)).toEqual({
+			state: "in_progress",
+		});
+
+		expect(
+			await retryStores[0]?.reconcileObservedCompletion({
+				...input,
+				observedResult,
+			}),
+		).toEqual({ state: "completed", result: observedResult });
+		expect(
+			await retryStores[1]?.reconcileObservedCompletion({
+				...input,
+				observedResult: {
+					...observedResult,
+					outcome: "completed",
+					references: [
+						{
+							resourceType: "agent",
+							resourceId: "agent_crash",
+							revision: 99,
+						},
+					],
+				},
+			}),
+		).toEqual({ state: "completed", result: observedResult });
+		expect(await retryStores[0]?.reserve(input)).toEqual({
+			state: "completed",
+			result: observedResult,
+		});
+		expect(sideEffects).toBe(1);
+		await wrongScopeStore.close();
 		await Promise.all(retryStores.map((store) => store.close()));
 	});
 
