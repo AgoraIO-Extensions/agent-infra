@@ -158,6 +158,74 @@ const reconcileExpected = {
 	desiredWorkload,
 } as const;
 
+const reconcileResultCorrelation = {
+	...workerCorrelation,
+	operation: "reconcile-workload",
+	expectedWorkload: desiredWorkload.expectedWorkload,
+} as const;
+
+const appliedWorkload = {
+	schemaVersion: 1,
+	requestId: desiredWorkload.requestId,
+	traceId: desiredWorkload.traceId,
+	agentId: desiredWorkload.agentId,
+	configRevision: desiredWorkload.configRevision,
+	workloadRevision: desiredWorkload.workloadRevision,
+	fence: desiredWorkload.fence,
+	state: "ready",
+	imageDigest: desiredWorkload.imageDigest,
+	workloadUid: "workload_uid_01",
+	observedGeneration: 4,
+	resourceProfileRef: desiredWorkload.resourceProfileRef,
+	service: desiredWorkload.service,
+	healthCheck: desiredWorkload.health,
+	routeIntent: desiredWorkload.route,
+	persistentVolume: desiredWorkload.persistentVolume,
+	serviceAccount: desiredWorkload.serviceAccount,
+	networkPolicy: desiredWorkload.networkPolicy,
+	desiredReplicas: 1,
+	readyReplicas: 1,
+	serviceRef: "service/agent-01",
+	serviceAccountRef: "service-account/agent-01",
+	persistentVolumeRef: "pvc/agent-01-data",
+	networkPolicyRef: "network-policy/agent-01",
+	route: {
+		state: "open",
+		routeRef: "route/agent-01",
+		workloadUid: "workload_uid_01",
+		workloadRevision: desiredWorkload.workloadRevision,
+	},
+	health: { state: "healthy", observedAt: "2026-08-28T10:10:00Z" },
+	secretRefs: [secretRef],
+	cleanupState: "not-requested",
+} as const;
+
+const kubernetesOutcomeCorrelation = {
+	schemaVersion: 1,
+	requestId: desiredWorkload.requestId,
+	traceId: desiredWorkload.traceId,
+	agentId: desiredWorkload.agentId,
+	configRevision: desiredWorkload.configRevision,
+	workloadRevision: desiredWorkload.workloadRevision,
+	fence: desiredWorkload.fence,
+} as const;
+
+const kubernetesAppliedOutcome = {
+	...kubernetesOutcomeCorrelation,
+	status: "applied",
+	workloadUid: appliedWorkload.workloadUid,
+	workloadGeneration: appliedWorkload.observedGeneration,
+	applied: appliedWorkload,
+} as const;
+
+const reconcileAppliedResult = {
+	...reconcileResultCorrelation,
+	status: "succeeded",
+	workloadUid: appliedWorkload.workloadUid,
+	workloadGeneration: appliedWorkload.observedGeneration,
+	outcome: kubernetesAppliedOutcome,
+} as const;
+
 describe("Worker admission and Secret result V1 contract", () => {
 	it("represents fence-only staleness and rejects equal or regressed context", () => {
 		const fenceStale = {
@@ -410,5 +478,189 @@ describe("Worker Workload reconcile expected context V1 contract", () => {
 				},
 			}),
 		).toThrow("Worker expected revision correlation mismatch");
+	});
+});
+
+describe("Worker Workload reconcile result V1 contract", () => {
+	it("accepts an applied result bound to the outer Workload identity", () => {
+		expect(WorkerWorkloadResultV1Schema.parse(reconcileAppliedResult)).toEqual(
+			reconcileAppliedResult,
+		);
+		expect(
+			validateWorkerWorkloadResultV1(reconcileExpected, reconcileAppliedResult),
+		).toEqual(reconcileAppliedResult);
+	});
+
+	it("requires an all-or-nothing outer Workload identity for applied outcomes", () => {
+		for (const partialIdentity of [
+			{ workloadUid: undefined },
+			{ workloadGeneration: undefined },
+		]) {
+			expect(
+				WorkerWorkloadResultV1Schema.safeParse({
+					...reconcileAppliedResult,
+					...partialIdentity,
+				}).success,
+			).toBe(false);
+		}
+		expect(() =>
+			validateWorkerWorkloadResultV1(reconcileExpected, {
+				...reconcileResultCorrelation,
+				status: "succeeded",
+				outcome: kubernetesAppliedOutcome,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(reconcileExpected, {
+				...reconcileAppliedResult,
+				workloadUid: "workload_uid_02",
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+	});
+
+	it.each([
+		{
+			...kubernetesOutcomeCorrelation,
+			status: "stale",
+			currentConfigRevision: desiredWorkload.configRevision + 1,
+			currentWorkloadRevision: desiredWorkload.workloadRevision,
+			error: {
+				schemaVersion: 1,
+				code: "KUBERNETES_STALE_REVISION",
+				message: "A newer Workload revision is already current",
+				retryable: false,
+				traceId: desiredWorkload.traceId,
+			},
+		},
+		{
+			...kubernetesOutcomeCorrelation,
+			status: "rejected",
+			error: {
+				schemaVersion: 1,
+				code: "KUBERNETES_POLICY_REJECTED",
+				message: "Kubernetes policy rejected the Workload",
+				retryable: false,
+				traceId: desiredWorkload.traceId,
+			},
+		},
+		{
+			...kubernetesOutcomeCorrelation,
+			status: "failed",
+			error: {
+				schemaVersion: 1,
+				code: "KUBERNETES_HEALTH_CHECK_FAILED",
+				message: "Kubernetes Workload failed its health check",
+				retryable: true,
+				traceId: desiredWorkload.traceId,
+			},
+		},
+	])(
+		"preserves a sanitized Kubernetes $status outcome without identity",
+		(outcome) => {
+			const result = {
+				...reconcileResultCorrelation,
+				status: "succeeded",
+				outcome,
+			} as const;
+
+			expect(validateWorkerWorkloadResultV1(reconcileExpected, result)).toEqual(
+				result,
+			);
+			expect(() =>
+				validateWorkerWorkloadResultV1(reconcileExpected, {
+					...result,
+					workloadUid: appliedWorkload.workloadUid,
+					workloadGeneration: appliedWorkload.observedGeneration,
+				}),
+			).toThrow("Worker result revision correlation mismatch");
+			expect(
+				WorkerWorkloadResultV1Schema.safeParse({
+					...result,
+					outcome: {
+						...outcome,
+						error: {
+							...outcome.error,
+							message: "Kubernetes returned bearer secret-token",
+						},
+					},
+				}).success,
+			).toBe(false);
+		},
+	);
+
+	it("reuses Worker stale fence validation for reconcile failures", () => {
+		const stale = {
+			...reconcileResultCorrelation,
+			status: "stale",
+			currentConfigRevision: reconcileExpected.configRevision,
+			currentWorkloadRevision: reconcileExpected.workloadRevision,
+			currentFence: reconcileExpected.fence + 1,
+			error: {
+				schemaVersion: 1,
+				code: "WORKER_RESULT_STALE",
+				message: "The Worker result is stale",
+				retryable: false,
+				traceId: reconcileExpected.traceId,
+			},
+		} as const;
+
+		expect(validateWorkerWorkloadResultV1(reconcileExpected, stale)).toEqual(
+			stale,
+		);
+		expect(() =>
+			validateWorkerWorkloadResultV1(reconcileExpected, {
+				...stale,
+				currentFence: reconcileExpected.fence,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...stale,
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration,
+			}).success,
+		).toBe(false);
+	});
+
+	it.each([
+		{
+			...appliedWorkload,
+			service: { ...appliedWorkload.service, port: 9090 },
+		},
+		{ ...appliedWorkload, resourceProfileRef: "resource-profile_02" },
+	])("rejects a desired/applied Workload resource mismatch", (applied) => {
+		expect(() =>
+			validateWorkerWorkloadResultV1(reconcileExpected, {
+				...reconcileAppliedResult,
+				outcome: { ...kubernetesAppliedOutcome, applied },
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+	});
+
+	it("fails closed on result context, versions, operations and required fields", () => {
+		expect(() =>
+			validateWorkerWorkloadResultV1(reconcileExpected, {
+				...reconcileAppliedResult,
+				expectedWorkload: {
+					state: "present",
+					workloadUid: appliedWorkload.workloadUid,
+					workloadGeneration: appliedWorkload.observedGeneration,
+				},
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		for (const result of [
+			{ ...reconcileAppliedResult, schemaVersion: 2 },
+			{
+				...reconcileAppliedResult,
+				outcome: { ...kubernetesAppliedOutcome, schemaVersion: 2 },
+			},
+			{ ...reconcileAppliedResult, operation: "cleanup-workload" },
+			{ ...reconcileAppliedResult, outcome: undefined },
+			{ ...reconcileAppliedResult, expectedWorkload: undefined },
+		]) {
+			expect(WorkerWorkloadResultV1Schema.safeParse(result).success).toBe(
+				false,
+			);
+		}
 	});
 });
