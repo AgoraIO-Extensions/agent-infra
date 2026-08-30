@@ -31,7 +31,7 @@ export function createFakeImageRegistryAdapterV1(
 						},
 					}
 				: configured;
-			const rejected =
+			const rejectedError =
 				typeof outcome === "object" &&
 				outcome !== null &&
 				"status" in outcome &&
@@ -39,13 +39,15 @@ export function createFakeImageRegistryAdapterV1(
 				"error" in outcome &&
 				typeof outcome.error === "object" &&
 				outcome.error !== null &&
-				!Array.isArray(outcome.error);
+				!Array.isArray(outcome.error)
+					? outcome.error
+					: undefined;
 			const result =
 				typeof outcome === "object" && outcome !== null
 					? {
 							...outcome,
-							...(rejected
-								? { error: { ...outcome.error, traceId: request.traceId } }
+							...(rejectedError
+								? { error: { ...rejectedError, traceId: request.traceId } }
 								: {}),
 							schemaVersion: 1,
 							requestId: request.requestId,
