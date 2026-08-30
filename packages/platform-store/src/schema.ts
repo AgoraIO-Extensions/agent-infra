@@ -89,10 +89,6 @@ export const agentApplications = platformSchema.table(
 			sql`char_length(${table.description}) > 0`,
 		),
 		check(
-			"agent_application_initial_status",
-			sql`${table.status} = 'pending_approval'`,
-		),
-		check(
 			"agent_application_trace_id_non_empty",
 			sql`char_length(${table.traceId}) > 0`,
 		),

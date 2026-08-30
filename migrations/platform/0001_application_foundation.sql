@@ -12,7 +12,6 @@ CREATE TABLE "platform"."agent_applications" (
 	CONSTRAINT "agent_application_applicant_non_empty" CHECK (char_length("platform"."agent_applications"."applicant_id") > 0),
 	CONSTRAINT "agent_application_name_non_empty" CHECK (char_length("platform"."agent_applications"."name") > 0),
 	CONSTRAINT "agent_application_description_non_empty" CHECK (char_length("platform"."agent_applications"."description") > 0),
-	CONSTRAINT "agent_application_initial_status" CHECK ("platform"."agent_applications"."status" = 'pending_approval'),
 	CONSTRAINT "agent_application_trace_id_non_empty" CHECK (char_length("platform"."agent_applications"."trace_id") > 0),
 	CONSTRAINT "agent_application_request_id_non_empty" CHECK (char_length("platform"."agent_applications"."request_id") > 0)
 );

@@ -1,5 +1,5 @@
 {
-  "id": "63b95564-e750-4552-b456-8b4d7af91089",
+  "id": "29874e8e-de13-4002-b34f-4e9f79b5ad9b",
   "prevId": "7cc0cb5c-6611-4353-98af-9819046367ed",
   "version": "7",
   "dialect": "postgresql",
@@ -116,10 +116,6 @@
         "agent_application_description_non_empty": {
           "name": "agent_application_description_non_empty",
           "value": "char_length(\"platform\".\"agent_applications\".\"description\") > 0"
-        },
-        "agent_application_initial_status": {
-          "name": "agent_application_initial_status",
-          "value": "\"platform\".\"agent_applications\".\"status\" = 'pending_approval'"
         },
         "agent_application_trace_id_non_empty": {
           "name": "agent_application_trace_id_non_empty",

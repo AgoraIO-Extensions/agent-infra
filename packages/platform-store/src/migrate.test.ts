@@ -193,6 +193,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					getTableConfig(table).checks.map((check) => check.name),
 				)
 				.toSorted();
+			expect(authoredChecks).not.toContain("agent_application_initial_status");
 			const migratedChecks = await client`
 					select c.conname as constraint_name
 					from pg_constraint c
