@@ -56,6 +56,15 @@ const commandTextFields = [
 	"sourceReference",
 	"traceId",
 ] as const;
+const boundedCommandTextFields = [
+	["applicationId", 1024],
+	["agentId", 1024],
+	["requestId", 1024],
+	["traceId", 1024],
+	["sourceReference", 4096],
+	["description", 65_536],
+] as const;
+const unpairedSurrogates = ["\ud800", "\udc00"] as const;
 
 const emptySnapshot: ApplicationFoundationSnapshot = {
 	agents: [],
@@ -68,6 +77,21 @@ const emptySnapshot: ApplicationFoundationSnapshot = {
 
 function createUseCase(transaction: ApplicationFoundationTransactionPortV1) {
 	return createApplicationFoundationUseCaseV1(transaction, { now: fixedNow });
+}
+
+async function expectInvalidCommand(
+	submission: Promise<unknown>,
+): Promise<void> {
+	const error = await submission.then(
+		() => expect.fail("Expected an invalid foundation command"),
+		(reason: unknown) => reason,
+	);
+	expect(error).toMatchObject({
+		name: "ApplicationFoundationError",
+		code: "invalid_command",
+		message: "Application foundation invalid command",
+	});
+	expect(error).not.toHaveProperty("cause");
 }
 
 export function applicationFoundationTransactionConformance(
@@ -164,12 +188,105 @@ export function applicationFoundationTransactionConformance(
 		}
 	});
 
+	it("rejects every captured text value above its UTF-8 byte limit", async () => {
+		const harness = await createHarness();
+		const useCase = createUseCase(harness.transaction);
+		try {
+			for (const [field, maxBytes] of boundedCommandTextFields) {
+				await expectInvalidCommand(
+					useCase.submit(
+						{ ...command, [field]: `${"a".repeat(maxBytes - 2)}\u754c` },
+						actorContext,
+					),
+				);
+			}
+			await expectInvalidCommand(
+				useCase.submit(command, {
+					...actorContext,
+					userId: `${"a".repeat(1022)}\u754c`,
+				}),
+			);
+			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("accepts every captured text value at its UTF-8 byte limit", async () => {
+		const harness = await createHarness();
+		const useCase = createUseCase(harness.transaction);
+		const exactCommand: CommitApplicationFoundationCommandV1 = {
+			...command,
+			applicationId: `${"a".repeat(1021)}\u754c`,
+			agentId: `${"g".repeat(1021)}\u754c`,
+			requestId: `${"r".repeat(1021)}\u754c`,
+			traceId: `${"t".repeat(1021)}\u754c`,
+			sourceReference: `${"s".repeat(4093)}\u754c`,
+			description: `${"d".repeat(65_533)}\u754c`,
+		};
+		const exactActor = {
+			...actorContext,
+			userId: `${"u".repeat(1021)}\u754c`,
+		};
+		try {
+			await expect(
+				useCase.submit(exactCommand, exactActor),
+			).resolves.toMatchObject({
+				applicationId: exactCommand.applicationId,
+				agentId: exactCommand.agentId,
+			});
+			await expect(harness.snapshot()).resolves.toMatchObject({
+				applications: [
+					{
+						applicationId: exactCommand.applicationId,
+						agentId: exactCommand.agentId,
+						applicantId: exactActor.userId,
+						requestId: exactCommand.requestId,
+						traceId: exactCommand.traceId,
+						description: exactCommand.description,
+					},
+				],
+				configurationRevisions: [
+					{ sourceReference: exactCommand.sourceReference },
+				],
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("rejects lone surrogates in every captured text value", async () => {
+		const harness = await createHarness();
+		const useCase = createUseCase(harness.transaction);
+		try {
+			for (const surrogate of unpairedSurrogates) {
+				for (const field of commandTextFields) {
+					await expectInvalidCommand(
+						useCase.submit(
+							{ ...command, [field]: `${command[field]}${surrogate}` },
+							actorContext,
+						),
+					);
+				}
+				await expectInvalidCommand(
+					useCase.submit(command, {
+						...actorContext,
+						userId: `${actorContext.userId}${surrogate}`,
+					}),
+				);
+			}
+			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("accepts ordinary Unicode in every captured text value", async () => {
 		const harness = await createHarness();
 		const useCase = createUseCase(harness.transaction);
 		const unicodeCommand: CommitApplicationFoundationCommandV1 = {
 			...command,
-			applicationId: "application-\u5e94\u7528-\u{1f600}",
+			applicationId: `${"\u754c".repeat(129)}-\u{1f600}`,
 			agentId: "agent-\u667a\u80fd-\u{1f680}",
 			requestId: "request-\u8bf7\u6c42-\u03b1",
 			name: "\u8fd0\u7ef4\u52a9\u624b \u{1f642}",

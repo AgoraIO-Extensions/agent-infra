@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 export interface CommitApplicationFoundationCommandV1 {
 	readonly schemaVersion: 1;
 	readonly applicationId: string;
@@ -213,8 +215,16 @@ function invalidApplicationFoundationInput(): never {
 	throw new ApplicationFoundationError("invalid_command");
 }
 
-function isCapturedText(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0 && !value.includes("\0");
+function isCapturedText(value: unknown, maxBytes?: number): value is string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.includes("\0") ||
+		!String.prototype.isWellFormed.call(value)
+	) {
+		return false;
+	}
+	return maxBytes === undefined || Buffer.byteLength(value, "utf8") <= maxBytes;
 }
 
 function parseApplicationFoundationCommandV1(
@@ -235,16 +245,13 @@ function parseApplicationFoundationCommandV1(
 		} = values;
 		if (
 			schemaVersion !== 1 ||
-			![
-				applicationId,
-				agentId,
-				requestId,
-				name,
-				description,
-				sourceReference,
-				traceId,
-			].every(isCapturedText) ||
-			!isCapturedText(name)
+			!isCapturedText(applicationId, 1024) ||
+			!isCapturedText(agentId, 1024) ||
+			!isCapturedText(requestId, 1024) ||
+			!isCapturedText(name) ||
+			!isCapturedText(description, 65_536) ||
+			!isCapturedText(sourceReference, 4096) ||
+			!isCapturedText(traceId, 1024)
 		) {
 			invalidApplicationFoundationInput();
 		}
@@ -275,7 +282,7 @@ function parseApplicationFoundationActorContextV1(
 	const values = snapshotExactDataValues(actorContext, actorContextKeys);
 	if (!values) invalidApplicationFoundationInput();
 	const { schemaVersion, userId } = values;
-	if (schemaVersion !== 1 || !isCapturedText(userId)) {
+	if (schemaVersion !== 1 || !isCapturedText(userId, 1024)) {
 		invalidApplicationFoundationInput();
 	}
 	return { schemaVersion, userId };
