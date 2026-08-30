@@ -32,6 +32,29 @@ const runtimeManifest = {
 		supplementaryInstruction: false,
 	},
 } as const;
+const imageDigest = `sha256:${"c".repeat(64)}` as const;
+const registryAdmission = {
+	schemaVersion: 1,
+	immutableDigest: imageDigest,
+	runtimeManifest,
+	runtimeManifestParsingEvidence: {
+		schemaVersion: 1,
+		labelName: "io.agora.agent.runtime.manifest",
+		utf8ByteLength: 256,
+		maxDepth: 3,
+		duplicateKeysDetected: false,
+		unknownFieldsDetected: false,
+	},
+	policyEvidence: {
+		schemaVersion: 1,
+		policyRef: "policy/pilot-v1",
+		decisionRef: "decision_01",
+		subjectRef: "subject_01",
+		agentId: "agent_01",
+		imageDigest,
+		evaluatedAt: "2026-08-28T10:00:00Z",
+	},
+} as const;
 
 const secretRef = {
 	schemaVersion: 1,
@@ -55,10 +78,12 @@ const desired = {
 	configRevision: 7,
 	workloadRevision: 9,
 	fence: 11,
+	expectedWorkload: { state: "absent" },
 	namespaceRef: "pilot-namespace",
 	desiredState: "running",
 	replicas: 1,
-	imageDigest: `sha256:${"c".repeat(64)}`,
+	imageDigest,
+	registryAdmission,
 	runtimeManifest,
 	resourceProfileRef: "resource-profile/pilot-standard",
 	env: { LOG_LEVEL: "info" },
@@ -161,6 +186,11 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 
 	it("expresses a complete running Workload without exposing Kubernetes objects", () => {
 		expect(validateAgentWorkloadDesiredV1(desired)).toEqual(desired);
+		const { expectedWorkload: _expectedWorkload, ...withoutExpectation } =
+			desired;
+		expect(
+			AgentWorkloadDesiredV1Schema.safeParse(withoutExpectation).success,
+		).toBe(false);
 		expect(
 			AgentWorkloadDesiredV1Schema.safeParse({
 				...desired,
@@ -192,6 +222,39 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 	});
 
 	it.each([
+		[
+			"Registry digest",
+			{
+				registryAdmission: {
+					...registryAdmission,
+					immutableDigest: `sha256:${"d".repeat(64)}`,
+				},
+			},
+		],
+		[
+			"Registry policy Agent",
+			{
+				registryAdmission: {
+					...registryAdmission,
+					policyEvidence: {
+						...registryAdmission.policyEvidence,
+						agentId: "agent_02",
+					},
+				},
+			},
+		],
+		[
+			"Registry Runtime Manifest",
+			{
+				registryAdmission: {
+					...registryAdmission,
+					runtimeManifest: {
+						...runtimeManifest,
+						service: { port: 9090 },
+					},
+				},
+			},
+		],
 		["Secret Agent", { secretRefs: [{ ...secretRef, agentId: "agent_02" }] }],
 		[
 			"Secret config revision",
@@ -209,14 +272,19 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 	});
 
 	it("binds each self-managed identity choice to exactly one route policy", () => {
+		const selfManagedManifest = {
+			schemaVersion: 1,
+			interactionMode: "self-managed",
+			service: { port: 8080 },
+			health: { path: "/healthz" },
+		} as const;
 		const selfManaged = {
 			...desired,
-			runtimeManifest: {
-				schemaVersion: 1,
-				interactionMode: "self-managed",
-				service: { port: 8080 },
-				health: { path: "/healthz" },
+			registryAdmission: {
+				...registryAdmission,
+				runtimeManifest: selfManagedManifest,
 			},
+			runtimeManifest: selfManagedManifest,
 			route: {
 				...desired.route,
 				exposure: "platform-auth",
@@ -227,9 +295,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			},
 		} as const;
 
-		expect(AgentWorkloadDesiredV1Schema.parse(selfManaged)).toEqual(
-			selfManaged,
-		);
+		expect(validateAgentWorkloadDesiredV1(selfManaged)).toEqual(selfManaged);
 		expect(
 			AgentWorkloadDesiredV1Schema.safeParse({
 				...selfManaged,
@@ -329,6 +395,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 				{
 					...desired,
 					expectedWorkload: {
+						state: "present",
 						workloadUid: applied.workloadUid,
 						workloadGeneration: applied.observedGeneration + 1,
 					},
@@ -543,6 +610,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			status: "completed",
 			routeClosed: true,
 			removed: {
+				route: true,
 				workload: true,
 				service: true,
 				serviceAccount: true,
@@ -580,6 +648,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			phase: "closing-route",
 			routeClosed: false,
 			removed: {
+				route: false,
 				workload: false,
 				service: false,
 				serviceAccount: false,

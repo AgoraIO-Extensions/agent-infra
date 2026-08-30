@@ -17,9 +17,9 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 	const capabilities = KubernetesRuntimeCapabilitiesV1Schema.parse(
 		options.capabilities,
 	);
-	const reconcileAttempts = new Map<string, number>();
-	const routeSwitchAttempts = new Map<string, number>();
-	const cleanupAttempts = new Map<string, number>();
+	const persistedReconcileAttempts = new Map<string, number>();
+	const persistedRouteSwitchAttempts = new Map<string, number>();
+	const persistedCleanupAttempts = new Map<string, number>();
 	const nextAttempt = (attempts: Map<string, number>, requestId: string) => {
 		const attempt = attempts.get(requestId) ?? 0;
 		attempts.set(requestId, attempt + 1);
@@ -33,7 +33,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 			const desired = validateAgentWorkloadDesiredV1(desiredInput);
 			const configured = options.reconcile?.(
 				structuredClone(desired),
-				nextAttempt(reconcileAttempts, desired.requestId),
+				nextAttempt(persistedReconcileAttempts, desired.requestId),
 			) ?? {
 				schemaVersion: 1,
 				status: "failed",
@@ -59,7 +59,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 			const request = validateWorkloadRouteSwitchRequestV1(requestInput);
 			const configured = options.switchRoute?.(
 				structuredClone(request),
-				nextAttempt(routeSwitchAttempts, request.requestId),
+				nextAttempt(persistedRouteSwitchAttempts, request.requestId),
 			) ?? {
 				schemaVersion: request.schemaVersion,
 				requestId: request.requestId,
@@ -85,13 +85,14 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 			const request = WorkloadCleanupRequestV1Schema.parse(requestInput);
 			const configured = options.cleanup?.(
 				structuredClone(request),
-				nextAttempt(cleanupAttempts, request.requestId),
+				nextAttempt(persistedCleanupAttempts, request.requestId),
 			) ?? {
 				...request,
 				status: "failed",
 				phase: "closing-route",
 				routeClosed: false,
 				removed: {
+					route: false,
 					workload: false,
 					service: false,
 					serviceAccount: false,
@@ -113,7 +114,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 			);
 		},
 		restart() {
-			return this;
+			return { ...this };
 		},
 	};
 }

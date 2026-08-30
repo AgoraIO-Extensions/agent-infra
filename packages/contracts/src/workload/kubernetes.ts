@@ -7,9 +7,14 @@ import {
 	WorkloadSchemaVersionV1Schema,
 	WorkloadTimestampV1Schema,
 } from "./common.ts";
-import { ImmutableOciDigestV1Schema } from "./registry.ts";
+import {
+	ImageAdmissionPolicyEvidenceV1Schema,
+	ImmutableOciDigestV1Schema,
+	RuntimeManifestParsingEvidenceV1Schema,
+} from "./registry.ts";
 import {
 	PlatformAdapterRuntimeManifestV1Schema,
+	RuntimeManifestV1Schema,
 	SelfManagedRuntimeManifestV1Schema,
 } from "./runtime-manifest.ts";
 import { KubernetesSecretReferenceV1Schema } from "./secret.ts";
@@ -97,6 +102,19 @@ export const WorkloadIdentityV1Schema = z.strictObject({
 	workloadGeneration: WorkloadRevisionV1Schema,
 });
 
+export const WorkloadExpectationV1Schema = z.discriminatedUnion("state", [
+	z.strictObject({ state: z.literal("absent") }),
+	WorkloadIdentityV1Schema.extend({ state: z.literal("present") }),
+]);
+
+export const WorkloadRegistryAdmissionV1Schema = z.strictObject({
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	immutableDigest: ImmutableOciDigestV1Schema,
+	runtimeManifest: RuntimeManifestV1Schema,
+	policyEvidence: ImageAdmissionPolicyEvidenceV1Schema,
+	runtimeManifestParsingEvidence: RuntimeManifestParsingEvidenceV1Schema,
+});
+
 export const WorkloadPersistentVolumeV1Schema = z.strictObject({
 	name: z.string().min(1),
 	mountPath: z.string().startsWith("/"),
@@ -155,9 +173,10 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	configRevision: WorkloadRevisionV1Schema,
 	workloadRevision: WorkloadRevisionV1Schema,
 	fence: WorkloadFenceV1Schema,
-	expectedWorkload: WorkloadIdentityV1Schema.optional(),
+	expectedWorkload: WorkloadExpectationV1Schema,
 	namespaceRef: WorkloadOpaqueIdV1Schema,
 	imageDigest: ImmutableOciDigestV1Schema,
+	registryAdmission: WorkloadRegistryAdmissionV1Schema,
 	resourceProfileRef: WorkloadOpaqueIdV1Schema,
 	env: z.record(z.string().min(1), z.string()),
 	service: WorkloadServiceV1Schema,
@@ -488,6 +507,7 @@ export const WorkloadCleanupRequestV1Schema = z.strictObject({
 });
 
 const cleanupResourcesV1Shape = {
+	route: z.literal(true),
 	workload: z.literal(true),
 	service: z.literal(true),
 	serviceAccount: z.literal(true),
@@ -497,6 +517,7 @@ const cleanupResourcesV1Shape = {
 } as const;
 
 const pendingCleanupResourcesV1Schema = z.strictObject({
+	route: z.boolean(),
 	workload: z.boolean(),
 	service: z.boolean(),
 	serviceAccount: z.boolean(),
@@ -507,6 +528,7 @@ const pendingCleanupResourcesV1Schema = z.strictObject({
 });
 
 const untouchedCleanupResourcesV1Schema = z.strictObject({
+	route: z.literal(false),
 	workload: z.literal(false),
 	service: z.literal(false),
 	serviceAccount: z.literal(false),
@@ -592,6 +614,12 @@ export function validateAgentWorkloadDesiredV1(
 ): AgentWorkloadDesiredV1 {
 	const desired = AgentWorkloadDesiredV1Schema.parse(desiredInput);
 	if (
+		desired.registryAdmission.immutableDigest !== desired.imageDigest ||
+		desired.registryAdmission.policyEvidence.agentId !== desired.agentId ||
+		desired.registryAdmission.policyEvidence.imageDigest !==
+			desired.imageDigest ||
+		JSON.stringify(desired.registryAdmission.runtimeManifest) !==
+			JSON.stringify(desired.runtimeManifest) ||
 		desired.service.port !== desired.runtimeManifest.service.port ||
 		desired.health.path !== desired.runtimeManifest.health.path ||
 		desired.secretRefs.some(
@@ -639,7 +667,7 @@ export function validateAgentWorkloadAppliedV1(
 		JSON.stringify(applied.networkPolicy) !==
 			JSON.stringify(desired.networkPolicy) ||
 		applied.desiredReplicas !== desired.replicas ||
-		(desired.expectedWorkload !== undefined &&
+		(desired.expectedWorkload.state === "present" &&
 			(applied.workloadUid !== desired.expectedWorkload.workloadUid ||
 				applied.observedGeneration <
 					desired.expectedWorkload.workloadGeneration)) ||

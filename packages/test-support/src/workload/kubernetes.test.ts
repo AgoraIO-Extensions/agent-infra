@@ -29,6 +29,43 @@ const secretRef = {
 	wrappingKeyVersion: "key-2026-08",
 	name: "agent-01-secret-01-v2-r7",
 } as const;
+const runtimeManifest = {
+	schemaVersion: 1,
+	interactionMode: "platform-adapter",
+	protocol: "acp",
+	service: { port: 8080 },
+	health: { path: "/healthz" },
+	capabilities: {
+		modelSelection: false,
+		attachments: false,
+		resultFiles: false,
+		connection: false,
+		supplementaryInstruction: false,
+	},
+} as const;
+const imageDigest = `sha256:${"c".repeat(64)}` as const;
+const registryAdmission = {
+	schemaVersion: 1,
+	immutableDigest: imageDigest,
+	runtimeManifest,
+	runtimeManifestParsingEvidence: {
+		schemaVersion: 1,
+		labelName: "io.agora.agent.runtime.manifest",
+		utf8ByteLength: 256,
+		maxDepth: 3,
+		duplicateKeysDetected: false,
+		unknownFieldsDetected: false,
+	},
+	policyEvidence: {
+		schemaVersion: 1,
+		policyRef: "policy/pilot-v1",
+		decisionRef: "decision_01",
+		subjectRef: "subject_01",
+		agentId: "agent_01",
+		imageDigest,
+		evaluatedAt: "2026-08-28T10:00:00Z",
+	},
+} as const;
 
 const desired = {
 	schemaVersion: 1,
@@ -38,24 +75,13 @@ const desired = {
 	configRevision: 7,
 	workloadRevision: 9,
 	fence: 11,
+	expectedWorkload: { state: "absent" },
 	namespaceRef: "pilot-namespace",
 	desiredState: "running",
 	replicas: 1,
-	imageDigest: `sha256:${"c".repeat(64)}`,
-	runtimeManifest: {
-		schemaVersion: 1,
-		interactionMode: "platform-adapter",
-		protocol: "acp",
-		service: { port: 8080 },
-		health: { path: "/healthz" },
-		capabilities: {
-			modelSelection: false,
-			attachments: false,
-			resultFiles: false,
-			connection: false,
-			supplementaryInstruction: false,
-		},
-	},
+	imageDigest,
+	registryAdmission,
+	runtimeManifest,
 	resourceProfileRef: "resource-profile/pilot-standard",
 	env: { LOG_LEVEL: "info" },
 	service: { name: "agent-01", port: 8080 },
@@ -230,7 +256,9 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 		if (partial.status === "applied") {
 			expect(partial.applied.route.state).toBe("closed");
 		}
-		expect(await adapter.restart().reconcile(desired)).toEqual(appliedResult);
+		const restarted = adapter.restart();
+		expect(restarted).not.toBe(adapter);
+		expect(await restarted.reconcile(desired)).toEqual(appliedResult);
 	});
 
 	it("keeps a failed candidate closed and restores the previous route", async () => {
@@ -323,6 +351,7 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			status: "completed",
 			routeClosed: true,
 			removed: {
+				route: true,
 				workload: true,
 				service: true,
 				serviceAccount: true,
@@ -363,6 +392,7 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			persistentVolumeIntent: "retain-existing",
 		} as const;
 		const removed = {
+			route: false,
 			workload: false,
 			service: false,
 			serviceAccount: false,
@@ -387,6 +417,7 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 							status: "completed",
 							routeClosed: true,
 							removed: {
+								route: true,
 								workload: true,
 								service: true,
 								serviceAccount: true,
@@ -400,7 +431,9 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 
 		const partial = await adapter.cleanup(request);
 		expect(partial.status).toBe("in-progress");
-		const completed = await adapter.restart().cleanup(request);
+		const restarted = adapter.restart();
+		expect(restarted).not.toBe(adapter);
+		const completed = await restarted.cleanup(request);
 		expect(completed.status).toBe("completed");
 		expect(completed.removed.persistentVolume).toBe(false);
 	});

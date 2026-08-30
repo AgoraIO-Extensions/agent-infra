@@ -29,23 +29,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -153,6 +175,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -400,8 +682,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -444,23 +728,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -568,6 +874,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -815,8 +1381,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -859,23 +1427,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -983,6 +1573,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -1230,8 +2080,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -1274,23 +2126,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -1398,6 +2272,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -1640,8 +2774,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -1684,23 +2820,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -1808,6 +2966,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -2050,8 +3468,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -2094,23 +3514,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -2218,6 +3660,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -2460,8 +4162,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -2504,23 +4208,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -2628,6 +4354,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -2870,8 +4856,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -2914,23 +4902,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -3038,6 +5048,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -3280,8 +5550,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -3324,23 +5596,45 @@
               "type": "object"
             },
             "expectedWorkload": {
-              "additionalProperties": false,
-              "properties": {
-                "workloadGeneration": {
-                  "maximum": 9007199254740991,
-                  "minimum": 0,
-                  "type": "integer"
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "absent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
                 },
-                "workloadUid": {
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "present",
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workloadUid",
+                    "workloadGeneration",
+                    "state"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "workloadUid",
-                "workloadGeneration"
-              ],
-              "type": "object"
+              ]
             },
             "fence": {
               "maximum": 9007199254740991,
@@ -3448,6 +5742,266 @@
                 "storageProfileRef",
                 "accessMode",
                 "retention"
+              ],
+              "type": "object"
+            },
+            "registryAdmission": {
+              "additionalProperties": false,
+              "properties": {
+                "immutableDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "decisionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "evaluatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "policyRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "subjectRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "policyRef",
+                    "decisionRef",
+                    "subjectRef",
+                    "agentId",
+                    "imageDigest",
+                    "evaluatedAt"
+                  ],
+                  "type": "object"
+                },
+                "runtimeManifest": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "self-managed",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attachments": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "connection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "modelSelection": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "resultFiles": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "supplementaryInstruction": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "health": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "interactionMode": {
+                          "const": "platform-adapter",
+                          "type": "string"
+                        },
+                        "protocol": {
+                          "const": "acp",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "service": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "port": {
+                              "maximum": 65535,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "interactionMode",
+                        "protocol",
+                        "service",
+                        "health"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "runtimeManifestParsingEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duplicateKeysDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "labelName": {
+                      "const": "io.agora.agent.runtime.manifest",
+                      "type": "string"
+                    },
+                    "maxDepth": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "unknownFieldsDetected": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "utf8ByteLength": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 65536,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "labelName",
+                    "utf8ByteLength",
+                    "maxDepth",
+                    "duplicateKeysDetected",
+                    "unknownFieldsDetected"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "immutableDigest",
+                "runtimeManifest",
+                "policyEvidence",
+                "runtimeManifestParsingEvidence"
               ],
               "type": "object"
             },
@@ -3690,8 +6244,10 @@
             "configRevision",
             "workloadRevision",
             "fence",
+            "expectedWorkload",
             "namespaceRef",
             "imageDigest",
+            "registryAdmission",
             "resourceProfileRef",
             "env",
             "service",
@@ -6549,6 +9105,10 @@
                   "const": false,
                   "type": "boolean"
                 },
+                "route": {
+                  "const": false,
+                  "type": "boolean"
+                },
                 "secrets": {
                   "const": false,
                   "type": "boolean"
@@ -6567,6 +9127,7 @@
                 }
               },
               "required": [
+                "route",
                 "workload",
                 "service",
                 "serviceAccount",
@@ -6670,6 +9231,9 @@
                 "persistentVolume": {
                   "type": "boolean"
                 },
+                "route": {
+                  "type": "boolean"
+                },
                 "secrets": {
                   "type": "boolean"
                 },
@@ -6684,6 +9248,7 @@
                 }
               },
               "required": [
+                "route",
                 "workload",
                 "service",
                 "serviceAccount",
@@ -6783,6 +9348,10 @@
                   "const": true,
                   "type": "boolean"
                 },
+                "route": {
+                  "const": true,
+                  "type": "boolean"
+                },
                 "secrets": {
                   "const": true,
                   "type": "boolean"
@@ -6801,6 +9370,7 @@
                 }
               },
               "required": [
+                "route",
                 "workload",
                 "service",
                 "serviceAccount",
@@ -6899,6 +9469,10 @@
                   "const": false,
                   "type": "boolean"
                 },
+                "route": {
+                  "const": true,
+                  "type": "boolean"
+                },
                 "secrets": {
                   "const": true,
                   "type": "boolean"
@@ -6917,6 +9491,7 @@
                 }
               },
               "required": [
+                "route",
                 "workload",
                 "service",
                 "serviceAccount",
@@ -7055,6 +9630,9 @@
                 "persistentVolume": {
                   "type": "boolean"
                 },
+                "route": {
+                  "type": "boolean"
+                },
                 "secrets": {
                   "type": "boolean"
                 },
@@ -7069,6 +9647,7 @@
                 }
               },
               "required": [
+                "route",
                 "workload",
                 "service",
                 "serviceAccount",
