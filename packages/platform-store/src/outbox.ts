@@ -258,29 +258,6 @@ function ownedLiveLease(
 	`;
 }
 
-async function recordOutboxAttempt(
-	transaction: postgres.TransactionSql,
-	row: TransitionedOutboxRow,
-	eventType: "outbox.retry_scheduled" | "outbox.succeeded" | "outbox.failed",
-	errorCode?: string,
-): Promise<void> {
-	await transaction`
-		insert into platform.persisted_events
-			(event_id, stream_id, sequence, stream_cursor, event_type,
-			 payload, trace_id, occurred_at)
-		values
-			(${`outbox:${row.id}:${row.delivery_fence}`},
-			 ${`outbox:${row.id}`}, ${row.delivery_fence}, ${row.delivery_fence},
-			 ${eventType},
-			 ${transaction.json({
-					attemptCount: row.attempt_count,
-					deliveryFence: row.delivery_fence,
-					...(errorCode ? { errorCode } : {}),
-				})},
-			 ${row.trace_id}, ${row.updated_at})
-	`;
-}
-
 export async function transitionTerminalAfterLock<
 	TStatus extends TerminalOutboxStatus,
 >(
@@ -295,10 +272,11 @@ export async function transitionTerminalAfterLock<
 	deliveryFence: bigint;
 	updatedAt: Date;
 } | null> {
+	const eventType = `outbox.${status}`;
 	const rows = await transaction<TransitionedOutboxRow[]>`
 		with decision_time as materialized (
 			select clock_timestamp() as decision_at
-		)
+		), transitioned as (
 			update platform.outbox_items
 			set status = ${status},
 				lease_owner = null,
@@ -306,12 +284,31 @@ export async function transitionTerminalAfterLock<
 				updated_at = decision_time.decision_at
 			from decision_time
 			where ${ownedLiveLease(transaction, input)}
-			returning id, attempt_count, delivery_fence::text, trace_id, updated_at
+			returning id, attempt_count, delivery_fence, trace_id, updated_at
+		), attempt_event as (
+			insert into platform.persisted_events
+				(event_id, stream_id, sequence, stream_cursor, event_type,
+				 payload, trace_id, occurred_at)
+			select concat('outbox:', transitioned.id, ':', transitioned.delivery_fence),
+				concat('outbox:', transitioned.id),
+				transitioned.delivery_fence, transitioned.delivery_fence, ${eventType},
+				jsonb_strip_nulls(jsonb_build_object(
+					'attemptCount', transitioned.attempt_count,
+					'deliveryFence', transitioned.delivery_fence::text,
+					'errorCode', ${errorCode ?? null}::text
+				)),
+				transitioned.trace_id, transitioned.updated_at
+			from transitioned
+			returning event_id
+		)
+		select transitioned.id, transitioned.attempt_count,
+			transitioned.delivery_fence::text as delivery_fence,
+			transitioned.trace_id, transitioned.updated_at
+		from transitioned
+		join attempt_event on true
 	`;
 	const row = rows[0];
 	if (!row) return null;
-
-	await recordOutboxAttempt(transaction, row, `outbox.${status}`, errorCode);
 	return {
 		itemId: row.id,
 		status,
@@ -430,7 +427,7 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 					const rows = await transaction<RetryOutboxRow[]>`
 							with decision_time as materialized (
 								select clock_timestamp() as decision_at
-							)
+							), transitioned as (
 							update platform.outbox_items
 							set status = 'retry_scheduled',
 								available_at = decision_time.decision_at +
@@ -440,18 +437,36 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 								updated_at = decision_time.decision_at
 							from decision_time
 							where ${ownedLiveLease(transaction, input)}
-						returning id, attempt_count, delivery_fence::text, available_at,
+						returning id, attempt_count, delivery_fence, available_at,
 							trace_id, updated_at
+						), attempt_event as (
+							insert into platform.persisted_events
+								(event_id, stream_id, sequence, stream_cursor, event_type,
+								 payload, trace_id, occurred_at)
+							select concat(
+									'outbox:', transitioned.id, ':', transitioned.delivery_fence
+								),
+								concat('outbox:', transitioned.id),
+								transitioned.delivery_fence, transitioned.delivery_fence,
+								'outbox.retry_scheduled',
+								jsonb_build_object(
+									'attemptCount', transitioned.attempt_count,
+									'deliveryFence', transitioned.delivery_fence::text,
+									'errorCode', ${input.errorCode}::text
+								),
+								transitioned.trace_id, transitioned.updated_at
+							from transitioned
+							returning event_id
+						)
+						select transitioned.id, transitioned.attempt_count,
+							transitioned.delivery_fence::text as delivery_fence,
+							transitioned.available_at, transitioned.trace_id,
+							transitioned.updated_at
+						from transitioned
+						join attempt_event on true
 					`;
 					const row = rows[0];
 					if (!row) return null;
-
-					await recordOutboxAttempt(
-						transaction,
-						row,
-						"outbox.retry_scheduled",
-						input.errorCode,
-					);
 
 					return {
 						itemId: row.id,

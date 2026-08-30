@@ -363,6 +363,25 @@ describe("PostgreSQL outbox store", () => {
 					leaseDurationMs: 60_000,
 				}),
 			).toBeNull();
+			const events = await setup`
+				select events.event_type, events.payload,
+					items.updated_at = events.occurred_at as timestamp_matches
+				from platform.persisted_events events
+				join platform.outbox_items items
+					on items.id = 'outbox-retry'
+				where events.stream_id = 'outbox:outbox-retry'
+			`;
+			expect([...events]).toEqual([
+				{
+					event_type: "outbox.retry_scheduled",
+					payload: {
+						attemptCount: 1,
+						deliveryFence: "1",
+						errorCode: "RUNTIME_UNAVAILABLE",
+					},
+					timestamp_matches: true,
+				},
+			]);
 			await forceRetryDue(setup, "outbox-retry");
 			expect(
 				await second.claim({
@@ -375,24 +394,6 @@ describe("PostgreSQL outbox store", () => {
 				attemptCount: 2,
 				deliveryFence: 2n,
 			});
-
-			const events = await setup`
-				select event_type, payload, occurred_at
-				from platform.persisted_events
-				where stream_id = 'outbox:outbox-retry'
-			`;
-			expect([...events]).toEqual([
-				{
-					event_type: "outbox.retry_scheduled",
-					payload: {
-						attemptCount: 1,
-						deliveryFence: "1",
-						errorCode: "RUNTIME_UNAVAILABLE",
-					},
-					occurred_at: scheduled.updatedAt,
-				},
-			]);
-
 			await first.claim({
 				itemId: "outbox-retry-zero",
 				leaseOwner: "worker-a",
@@ -496,10 +497,15 @@ describe("PostgreSQL outbox store", () => {
 			).toBeNull();
 
 			const events = await setup`
-				select stream_id, event_type, payload, occurred_at
-				from platform.persisted_events
-				where stream_id in ('outbox:outbox-success', 'outbox:outbox-failure')
-				order by stream_id
+				select events.stream_id, events.event_type, events.payload,
+					items.updated_at = events.occurred_at as timestamp_matches
+				from platform.persisted_events events
+				join platform.outbox_items items
+					on 'outbox:' || items.id = events.stream_id
+				where events.stream_id in (
+					'outbox:outbox-success', 'outbox:outbox-failure'
+				)
+				order by events.stream_id
 			`;
 			expect([...events]).toEqual([
 				{
@@ -510,13 +516,13 @@ describe("PostgreSQL outbox store", () => {
 						deliveryFence: "1",
 						errorCode: "DEPLOYMENT_REJECTED",
 					},
-					occurred_at: failed.updatedAt,
+					timestamp_matches: true,
 				},
 				{
 					stream_id: "outbox:outbox-success",
 					event_type: "outbox.succeeded",
 					payload: { attemptCount: 2, deliveryFence: "2" },
-					occurred_at: succeeded.updatedAt,
+					timestamp_matches: true,
 				},
 			]);
 		} finally {
@@ -643,7 +649,7 @@ describe("PostgreSQL outbox store", () => {
 			const claimed = await store.claim({
 				itemId: "outbox-after-lock",
 				leaseOwner: "worker-a",
-				leaseDurationMs: 500,
+				leaseDurationMs: 1_000,
 			});
 			if (!claimed) throw new Error("After-lock test item was not claimed");
 
@@ -652,12 +658,41 @@ describe("PostgreSQL outbox store", () => {
 					select id from platform.outbox_items
 					where id = 'outbox-after-lock' for update
 				`;
-				await transaction`select pg_sleep(0.75)`;
-				const clockRows = await transaction<{ database_now: Date }[]>`
-					select clock_timestamp() as database_now
+				const marginMs = 200;
+				const beforeRows = await transaction<
+					{ database_now: Date; lease_expires_at: Date; remaining_ms: number }[]
+				>`
+					with test_clock as materialized (
+						select clock_timestamp() as database_now
+					)
+					select test_clock.database_now, items.lease_expires_at,
+						(extract(epoch from (
+							items.lease_expires_at - test_clock.database_now
+						)) * 1000)::double precision as remaining_ms
+					from platform.outbox_items items, test_clock
+					where items.id = 'outbox-after-lock'
 				`;
-				expect(clockRows[0]?.database_now.getTime()).toBeGreaterThanOrEqual(
-					claimed.leaseExpiresAt.getTime(),
+				const before = beforeRows[0];
+				if (!before) throw new Error("Locked outbox item disappeared");
+				expect(before.database_now.getTime()).toBeLessThan(
+					before.lease_expires_at.getTime(),
+				);
+				expect(before.remaining_ms).toBeGreaterThan(500);
+				await transaction`
+					select pg_sleep(
+						(${before.remaining_ms}::double precision + ${marginMs}) / 1000
+					)
+				`;
+				const afterRows = await transaction<
+					{ database_now: Date; lease_expires_at: Date }[]
+				>`
+					select clock_timestamp() as database_now, lease_expires_at
+					from platform.outbox_items where id = 'outbox-after-lock'
+				`;
+				const after = afterRows[0];
+				if (!after) throw new Error("Locked outbox item disappeared");
+				expect(after.database_now.getTime()).toBeGreaterThanOrEqual(
+					after.lease_expires_at.getTime(),
 				);
 
 				expect(
