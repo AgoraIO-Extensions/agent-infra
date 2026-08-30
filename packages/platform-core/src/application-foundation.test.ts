@@ -295,6 +295,26 @@ describe("Application foundation use case", () => {
 	});
 
 	it.each([
+		[
+			"same-bundle canonical invalid command",
+			Object.assign(new ApplicationFoundationError("invalid_command"), {
+				cause: new Error("sensitive invalid command cause"),
+				sensitive: "sensitive invalid command detail",
+			}),
+		],
+		[
+			"cross-bundle canonical invalid command",
+			Object.assign(
+				immutableBrandedError(
+					"Application foundation invalid command",
+					"invalid_command",
+				),
+				{
+					cause: new Error("sensitive cross-bundle invalid command cause"),
+					sensitive: "sensitive cross-bundle invalid command detail",
+				},
+			),
+		],
 		["raw Error", new Error("sensitive infrastructure detail")],
 		["SQL-like object", { code: "XX000", detail: "sensitive SQL detail" }],
 		[
@@ -341,14 +361,26 @@ describe("Application foundation use case", () => {
 			message: "Application foundation persistence failed",
 		});
 		expect(error).not.toHaveProperty("cause");
+		expect(error).not.toHaveProperty("sensitive");
 		expect(String(error)).not.toContain("sensitive");
 	});
 
-	it("preserves only the code from a canonical domain conflict", async () => {
-		const conflict = Object.assign(new ApplicationFoundationError("conflict"), {
-			cause: new Error("sensitive conflict cause"),
-			sensitive: "sensitive conflict detail",
-		});
+	it.each([
+		[
+			"same-bundle",
+			Object.assign(new ApplicationFoundationError("conflict"), {
+				cause: new Error("sensitive conflict cause"),
+				sensitive: "sensitive conflict detail",
+			}),
+		],
+		[
+			"cross-bundle",
+			Object.assign(immutableBrandedError("Application foundation conflict"), {
+				cause: new Error("sensitive cross-bundle conflict cause"),
+				sensitive: "sensitive cross-bundle conflict detail",
+			}),
+		],
+	])("preserves only a canonical %s conflict", async (_name, conflict) => {
 		const error = await normalizedPortFailure(conflict);
 
 		expect(error).toBeInstanceOf(ApplicationFoundationError);

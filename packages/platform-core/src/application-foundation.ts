@@ -243,10 +243,15 @@ function parseApplicationFoundationCommandV1(
 				traceId,
 			].every((value) => typeof value === "string" && value.length > 0) ||
 			typeof name !== "string" ||
-			Array.from(name).length > 200 ||
 			!(submittedAt instanceof Date)
 		) {
 			invalidApplicationFoundationInput();
+		}
+		let nameCodePointCount = 0;
+		for (let offset = 0; offset < name.length; nameCodePointCount += 1) {
+			const codePoint = name.codePointAt(offset);
+			offset += (codePoint ?? 0) > 0xffff ? 2 : 1;
+			if (nameCodePointCount >= 200) invalidApplicationFoundationInput();
 		}
 		const submittedAtMilliseconds = Date.prototype.getTime.call(submittedAt);
 		if (!Number.isFinite(submittedAtMilliseconds)) {
@@ -355,8 +360,9 @@ export function createApplicationFoundationUseCaseV1(
 				await transaction.commit(plan);
 			} catch (error) {
 				throw new ApplicationFoundationError(
-					recognizedApplicationFoundationErrorCode(error) ??
-						"persistence_failed",
+					recognizedApplicationFoundationErrorCode(error) === "conflict"
+						? "conflict"
+						: "persistence_failed",
 				);
 			}
 			return {
