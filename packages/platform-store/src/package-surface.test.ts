@@ -40,9 +40,7 @@ describe("platform-store package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"OutboxStoreError",
-			"PlatformIdempotencyError",
 			"PostgresApplicationFoundationTransactionV1",
-			"canonicalPlatformIdempotencyRequestDigest",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
 			"openPostgresPlatformIdempotencyStore",

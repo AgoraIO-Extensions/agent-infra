@@ -3,13 +3,8 @@ export {
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
 export {
-	canonicalPlatformIdempotencyRequestDigest,
 	openPostgresPlatformIdempotencyStore,
-	type PlatformIdempotencyBoundScope,
-	type PlatformIdempotencyDomainResultV1,
-	PlatformIdempotencyError,
-	type PlatformIdempotencyRequestJson,
-	type PlatformIdempotencyResourceTypeV1,
+	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
 export {
 	migratePlatformDatabase,
