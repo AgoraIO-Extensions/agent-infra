@@ -114,6 +114,7 @@ type TerminalOutboxStatus = "succeeded" | "failed";
 
 const symbolicErrorCode = /^[A-Z][A-Z0-9_]{0,63}$/;
 const maximumDurationMs = 86_400_000;
+const lockTimeout = "5s";
 const claimInputKeys = ["itemId", "leaseOwner", "leaseDurationMs"];
 const renewInputKeys = [...claimInputKeys, "deliveryFence"];
 const ownedLeaseInputKeys = ["itemId", "leaseOwner", "deliveryFence"];
@@ -239,6 +240,9 @@ async function lockOutboxItem(
 	transaction: postgres.TransactionSql,
 	itemId: string,
 ): Promise<boolean> {
+	await transaction`
+		select set_config('lock_timeout', ${lockTimeout}, true)
+	`;
 	const rows = await transaction<{ id: string }[]>`
 		select id from platform.outbox_items where id = ${itemId} for update
 	`;
@@ -338,7 +342,7 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 	const databaseUrl = platformDatabaseUrlFromEnvironment({
 		PLATFORM_DATABASE_URL: options.databaseUrl,
 	});
-	const client = postgres(databaseUrl, { max: 1 });
+	const client = postgres(databaseUrl);
 	return {
 		async claim(
 			input: ClaimOutboxItemInput,

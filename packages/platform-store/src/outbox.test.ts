@@ -116,6 +116,46 @@ async function expectQueuedOperationExpires(
 	expect(await pendingOperation).toBeNull();
 }
 
+async function waitForBlockedOutboxOperation(
+	client: PostgresClient,
+): Promise<void> {
+	const deadline = Date.now() + 2_000;
+	while (Date.now() < deadline) {
+		const rows = await client<{ blocked: boolean }[]>`
+			select exists (
+				select 1 from pg_stat_activity
+				where datname = current_database()
+					and pid <> pg_backend_pid()
+					and wait_event_type = 'Lock'
+					and query like '%platform.outbox_items%for update%'
+			) as blocked
+		`;
+		if (rows[0]?.blocked) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Outbox operation did not block on the row lock");
+}
+
+async function holdOutboxItemLock(client: PostgresClient, itemId: string) {
+	let release = () => {};
+	const released = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let reportLocked = () => {};
+	const locked = new Promise<void>((resolve) => {
+		reportLocked = resolve;
+	});
+	const completed = client.begin(async (transaction) => {
+		await transaction`
+			select id from platform.outbox_items where id = ${itemId} for update
+		`;
+		reportLocked();
+		await released;
+	});
+	await locked;
+	return { completed, release };
+}
+
 describe("PostgreSQL outbox store", () => {
 	it("rejects legacy clocks and invalid durations before database access", async () => {
 		const unavailableDatabase = await startPostgresTestDatabase(
@@ -280,6 +320,89 @@ describe("PostgreSQL outbox store", () => {
 			await Promise.all([first.close(), second.close(), setup.end()]);
 		}
 	});
+
+	it("keeps unrelated items available while one row lock is blocked", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		const blocker = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-blocked");
+		await insertOutboxItem(setup, "outbox-unrelated");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		const lock = await holdOutboxItemLock(blocker, "outbox-blocked");
+
+		try {
+			const blockedClaim = store.claim({
+				itemId: "outbox-blocked",
+				leaseOwner: "worker-a",
+				leaseDurationMs: 60_000,
+			});
+			await waitForBlockedOutboxOperation(setup);
+
+			await expect(
+				Promise.race([
+					store.claim({
+						itemId: "outbox-unrelated",
+						leaseOwner: "worker-b",
+						leaseDurationMs: 60_000,
+					}),
+					new Promise((_, reject) =>
+						setTimeout(
+							() => reject(new Error("Unrelated outbox claim was blocked")),
+							1_000,
+						),
+					),
+				]),
+			).resolves.toMatchObject({ itemId: "outbox-unrelated" });
+			lock.release();
+			await lock.completed;
+			await expect(blockedClaim).resolves.toMatchObject({
+				itemId: "outbox-blocked",
+			});
+		} finally {
+			lock.release();
+			await Promise.all([
+				lock.completed,
+				store.close(),
+				blocker.end(),
+				setup.end(),
+			]);
+		}
+	});
+
+	it("bounds row-lock waits as retryable store failures", async () => {
+		const setup = postgres(databaseUrl(), { max: 1 });
+		const blocker = postgres(databaseUrl(), { max: 1 });
+		await insertOutboxItem(setup, "outbox-lock-timeout");
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: databaseUrl(),
+		});
+		const lock = await holdOutboxItemLock(blocker, "outbox-lock-timeout");
+
+		try {
+			const failure = await store
+				.claim({
+					itemId: "outbox-lock-timeout",
+					leaseOwner: "worker-a",
+					leaseDurationMs: 60_000,
+				})
+				.catch((error: unknown) => error);
+			expect(failure).toMatchObject({
+				code: "OUTBOX_STORE_ERROR",
+				message: "Outbox store operation failed",
+				retryable: true,
+			});
+			expect(failure).not.toHaveProperty("cause");
+		} finally {
+			lock.release();
+			await Promise.all([
+				lock.completed,
+				store.close(),
+				blocker.end(),
+				setup.end(),
+			]);
+		}
+	}, 10_000);
 
 	it("renews a database-live lease without shortening it", async () => {
 		const setup = postgres(databaseUrl(), { max: 1 });
