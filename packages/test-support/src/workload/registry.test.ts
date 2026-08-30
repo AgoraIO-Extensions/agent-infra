@@ -142,6 +142,30 @@ describe("Fake ImageRegistryAdapter V1", () => {
 		});
 	});
 
+	it("returns a fixed redacted retryable failure", async () => {
+		const unavailable = {
+			status: "rejected",
+			error: {
+				schemaVersion: 1,
+				code: "IMAGE_REGISTRY_UNAVAILABLE",
+				message: "Image registry is unavailable",
+				retryable: true,
+				traceId: request.traceId,
+			},
+		};
+		const result = await createFakeImageRegistryAdapterV1({
+			[request.imageReference]: unavailable,
+		}).admit(request);
+
+		expect(result).toEqual({
+			...unavailable,
+			schemaVersion: 1,
+			requestId: request.requestId,
+			traceId: request.traceId,
+		});
+		expect(JSON.stringify(result)).not.toContain("providerResponse");
+	});
+
 	it("rejects stale admission policy evidence", async () => {
 		const adapter = createFakeImageRegistryAdapterV1({
 			[request.imageReference]: {

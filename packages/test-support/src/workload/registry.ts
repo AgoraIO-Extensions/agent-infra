@@ -1,18 +1,13 @@
 import {
 	ImageRegistryAdmissionRequestV1Schema,
-	type ImageRegistryAdmissionResultV1,
 	validateImageRegistryAdmissionResultV1,
 } from "@agent-infra/contracts/workload";
 
-export interface FakeImageRegistryAdapterV1 {
-	admit(request: unknown): Promise<ImageRegistryAdmissionResultV1>;
-}
-
 export function createFakeImageRegistryAdapterV1(
 	outcomesByImageReference: Readonly<Record<string, unknown>>,
-): FakeImageRegistryAdapterV1 {
+) {
 	return {
-		async admit(requestInput) {
+		async admit(requestInput: unknown) {
 			const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
 			const hasConfiguredOutcome = Object.hasOwn(
 				outcomesByImageReference,
