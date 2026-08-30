@@ -18,8 +18,8 @@ describe("Application foundation use case", () => {
 		});
 		const useCase = createApplicationFoundationUseCaseV1({
 			async commit(plan) {
-				observedPlans.push(plan);
 				await persistenceDelay;
+				observedPlans.push(plan);
 			},
 		});
 
