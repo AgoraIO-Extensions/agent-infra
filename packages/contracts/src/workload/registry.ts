@@ -20,7 +20,19 @@ export const ImmutableOciDigestV1Schema = z
 const ociDomainComponent = "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?";
 const ociPort =
 	"(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])";
-const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[[A-Fa-f0-9:]+\\])(?::${ociPort})?`;
+const ipv6Hextet = "[A-Fa-f0-9]{1,4}";
+const ipv6Address = [
+	`(?:${ipv6Hextet}:){7}${ipv6Hextet}`,
+	`(?:${ipv6Hextet}:){1,7}:`,
+	`(?:${ipv6Hextet}:){1,6}:${ipv6Hextet}`,
+	`(?:${ipv6Hextet}:){1,5}(?::${ipv6Hextet}){1,2}`,
+	`(?:${ipv6Hextet}:){1,4}(?::${ipv6Hextet}){1,3}`,
+	`(?:${ipv6Hextet}:){1,3}(?::${ipv6Hextet}){1,4}`,
+	`(?:${ipv6Hextet}:){1,2}(?::${ipv6Hextet}){1,5}`,
+	`${ipv6Hextet}:(?:(?::${ipv6Hextet}){1,6})`,
+	`:(?:(?::${ipv6Hextet}){1,7}|:)`,
+].join("|");
+const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[(?:${ipv6Address})\\])(?::${ociPort})?`;
 const ociPathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
 const ociImageReferencePattern = new RegExp(
 	`^(?=.{1,512}(?![\\s\\S]))(?:${ociDomain}/)?${ociPathComponent}(?:/${ociPathComponent})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])`,

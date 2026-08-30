@@ -84,6 +84,8 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			"registry.example:65535/agents/codex:pilot",
 			`registry.example/agents/codex@sha256:${"a".repeat(64)}`,
 			`[2001:db8::1]:5000/agents/codex:pilot@sha256:${"a".repeat(64)}`,
+			"[2001:db8:0:1:1:1:1:1]/agents/codex:pilot",
+			"[::1]/agents/codex:pilot",
 		]) {
 			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(true);
 		}
@@ -98,6 +100,9 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			"registry.example:0/agents/codex:pilot",
 			"registry.example:65536/agents/codex:pilot",
 			"registry.example:99999/agents/codex:pilot",
+			"[:::]/agents/codex:pilot",
+			"[2001::db8::1]/agents/codex:pilot",
+			"[2001:db8:00000::1]/agents/codex:pilot",
 		]) {
 			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(
 				false,
