@@ -27,7 +27,7 @@ const authenticationTagBase64 = z
 	.length(24)
 	.regex(canonicalBase64Pattern)
 	.regex(/==$/);
-const kubernetesResourceName = z
+export const KubernetesResourceNameV1Schema = z
 	.string()
 	.max(253)
 	.regex(
@@ -143,7 +143,7 @@ export const KubernetesSecretReferenceV1Schema = z.strictObject({
 	algorithmVersion: secretAlgorithmVersion,
 	wrappingAlgorithmVersion: secretWrappingAlgorithmVersion,
 	wrappingKeyVersion: WorkloadOpaqueIdV1Schema,
-	name: kubernetesResourceName,
+	name: KubernetesResourceNameV1Schema,
 });
 
 export const SecretActivationFenceV1Schema = z.strictObject({
@@ -152,7 +152,7 @@ export const SecretActivationFenceV1Schema = z.strictObject({
 	secretId: WorkloadOpaqueIdV1Schema,
 	secretVersion: z.number().int().positive(),
 	configRevision: WorkloadRevisionV1Schema,
-	kubernetesSecretName: kubernetesResourceName,
+	kubernetesSecretName: KubernetesResourceNameV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	workloadGeneration: WorkloadRevisionV1Schema,
 	fence: WorkloadFenceV1Schema,
