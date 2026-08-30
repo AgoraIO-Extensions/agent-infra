@@ -154,7 +154,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 	});
 
 	it("applies, replays, and enforces the authored infrastructure schema", async () => {
-		await builtStore.migratePlatformDatabase({ databaseUrl });
+		await Promise.all([
+			builtStore.migratePlatformDatabase({ databaseUrl }),
+			builtStore.migratePlatformDatabase({ databaseUrl }),
+		]);
 		const client = postgres(databaseUrl, { max: 1 });
 		try {
 			const serverVersion = await client`show server_version`;

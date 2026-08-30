@@ -35,8 +35,14 @@ export function platformDatabaseUrlFromEnvironment(
 export async function migratePlatformDatabase({
 	databaseUrl,
 }: PlatformMigrationOptions): Promise<void> {
+	// Keep the session lock and every migration statement on one connection.
 	const client = postgres(databaseUrl, { max: 1 });
 	try {
+		await client`
+			select pg_catalog.pg_advisory_lock(
+				pg_catalog.hashtextextended('agent-infra:platform:migrations', 0)
+			)
+		`;
 		await migrate(drizzle(client), {
 			migrationsFolder: defaultMigrationsFolder,
 			migrationsSchema: "platform_migrations",
