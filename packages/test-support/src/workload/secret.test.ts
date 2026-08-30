@@ -3,12 +3,29 @@ import { describe, expect, it } from "vitest";
 
 import { createFakeSecretActivationAdapterV1 } from "./secret.js";
 
+const secretIdentity = {
+	secretId: "secret_01",
+	ownerType: "agent-owner",
+	ownerId: "user_01",
+	agentId: "agent_01",
+	name: "MODEL_API_KEY",
+	secretVersion: 2,
+	configRevision: 7,
+} as const;
+
 const cryptoMetadata = {
 	schemaVersion: 1,
 	algorithmVersion: "aes-256-gcm:v1",
-	aadVersion: "platform-secret-aad:v1",
 	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 	wrappingKeyVersion: "key-2026-08",
+	aadBinding: {
+		schemaVersion: 1,
+		aadVersion: "platform-secret-aad:v1",
+		...secretIdentity,
+		algorithmVersion: "aes-256-gcm:v1",
+		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+		wrappingKeyVersion: "key-2026-08",
+	},
 	dekFingerprint: "a".repeat(64),
 	nonce: "AAAAAAAAAAAAAAAA",
 	ciphertext: "c2VhbGVkLXNlY3JldA==",
@@ -18,10 +35,15 @@ const cryptoMetadata = {
 
 const secretRef = {
 	schemaVersion: 1,
-	agentId: "agent_01",
-	secretId: "secret_01",
-	secretVersion: 2,
-	configRevision: 7,
+	ownerType: secretIdentity.ownerType,
+	ownerId: secretIdentity.ownerId,
+	agentId: secretIdentity.agentId,
+	secretId: secretIdentity.secretId,
+	secretVersion: secretIdentity.secretVersion,
+	configRevision: secretIdentity.configRevision,
+	algorithmVersion: cryptoMetadata.algorithmVersion,
+	wrappingAlgorithmVersion: cryptoMetadata.wrappingAlgorithmVersion,
+	wrappingKeyVersion: cryptoMetadata.wrappingKeyVersion,
 	name: "agent-01-secret-01-v2-r7",
 } as const;
 
@@ -39,13 +61,7 @@ const activationFence = {
 
 const applying = {
 	schemaVersion: 1,
-	secretId: secretRef.secretId,
-	ownerType: "agent-owner",
-	ownerId: "user_01",
-	agentId: secretRef.agentId,
-	name: "MODEL_API_KEY",
-	secretVersion: secretRef.secretVersion,
-	configRevision: secretRef.configRevision,
+	...secretIdentity,
 	crypto: cryptoMetadata,
 	createdAt: "2026-08-28T10:00:00Z",
 	updatedAt: "2026-08-28T10:01:00Z",
@@ -110,7 +126,7 @@ describe("Fake Secret activation V1", () => {
 			error: {
 				schemaVersion: 1,
 				code: "SECRET_ACTIVATION_FAILED",
-				message: "The candidate Workload did not become healthy",
+				message: "Secret activation failed",
 				retryable: true,
 				traceId: "trace_secret_01",
 			},
@@ -119,6 +135,54 @@ describe("Fake Secret activation V1", () => {
 		expect(failed.lifecycleState).toBe("failed");
 		expect(JSON.stringify(failed)).not.toContain("plaintext");
 		expect(PlatformSecretRecordV1Schema.parse(failed)).toEqual(failed);
+	});
+
+	it("recovers a failed record created before a Secret reference existed", () => {
+		const adapter = createFakeSecretActivationAdapterV1();
+		const {
+			activationFence: _activationFence,
+			kubernetesSecretRef: _secretRef,
+			...recordWithoutReference
+		} = applying;
+		const failed = {
+			...recordWithoutReference,
+			lifecycleState: "failed",
+			error: {
+				schemaVersion: 1,
+				code: "SECRET_METADATA_INVALID",
+				message: "Secret metadata is invalid",
+				retryable: false,
+				traceId: "trace_secret_01",
+			},
+		} as const;
+
+		expect(adapter.recover([failed])).toEqual([failed]);
+		const failedAfterSecretCreation = {
+			...failed,
+			kubernetesSecretRef: secretRef,
+		} as const;
+		expect(adapter.recover([failedAfterSecretCreation])).toEqual([
+			failedAfterSecretCreation,
+		]);
+	});
+
+	it("rejects non-sanitized failure details", () => {
+		const adapter = createFakeSecretActivationAdapterV1();
+		expect(() =>
+			adapter.observe(applying, activationFence, {
+				schemaVersion: 1,
+				status: "failed",
+				activationFence,
+				health: "unhealthy",
+				error: {
+					schemaVersion: 1,
+					code: "SECRET_ACTIVATION_FAILED",
+					message: "Kubernetes returned credential=secret",
+					retryable: true,
+					traceId: "trace_secret_01",
+				},
+			}),
+		).toThrow();
 	});
 
 	it("recovers old active and candidate versions without collapsing them", () => {
@@ -141,6 +205,14 @@ describe("Fake Secret activation V1", () => {
 			...applying,
 			secretVersion: 1,
 			configRevision: 6,
+			crypto: {
+				...cryptoMetadata,
+				aadBinding: {
+					...cryptoMetadata.aadBinding,
+					secretVersion: 1,
+					configRevision: 6,
+				},
+			},
 			lifecycleState: "active",
 			kubernetesSecretRef: oldSecretRef,
 			activationFence: oldFence,

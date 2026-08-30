@@ -8,18 +8,37 @@ import {
 	SecretAuditEventV1Schema,
 	SecretEncryptionKeySetV1Schema,
 	SecretKeyRotationV1Schema,
+	SecretLifecycleErrorV1Schema,
 	SecretWorkerKeyringDescriptorV1Schema,
 	validatePlatformSecretRecordV1,
 	validateSecretActivationObservationV1,
 	validateSecretEncryptionKeySetV1,
+	validateSecretKeyRotationV1,
 } from "../../src/workload/secret.js";
+
+const secretIdentity = {
+	secretId: "secret_01",
+	ownerType: "agent-owner",
+	ownerId: "user_01",
+	agentId: "agent_01",
+	name: "MODEL_API_KEY",
+	secretVersion: 2,
+	configRevision: 7,
+} as const;
 
 const cryptoMetadata = {
 	schemaVersion: 1,
 	algorithmVersion: "aes-256-gcm:v1",
-	aadVersion: "platform-secret-aad:v1",
 	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 	wrappingKeyVersion: "key-2026-08",
+	aadBinding: {
+		schemaVersion: 1,
+		aadVersion: "platform-secret-aad:v1",
+		...secretIdentity,
+		algorithmVersion: "aes-256-gcm:v1",
+		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+		wrappingKeyVersion: "key-2026-08",
+	},
 	dekFingerprint: "a".repeat(64),
 	nonce: "AAAAAAAAAAAAAAAA",
 	ciphertext: "c2VhbGVkLXNlY3JldA==",
@@ -50,13 +69,7 @@ const encryptionKeys = {
 
 const recordBase = {
 	schemaVersion: 1,
-	secretId: "secret_01",
-	ownerType: "agent-owner",
-	ownerId: "user_01",
-	agentId: "agent_01",
-	name: "MODEL_API_KEY",
-	secretVersion: 2,
-	configRevision: 7,
+	...secretIdentity,
 	crypto: cryptoMetadata,
 	createdAt: "2026-08-28T10:00:00Z",
 	updatedAt: "2026-08-28T10:01:00Z",
@@ -64,10 +77,15 @@ const recordBase = {
 
 const kubernetesSecretRef = {
 	schemaVersion: 1,
+	ownerType: recordBase.ownerType,
+	ownerId: recordBase.ownerId,
 	agentId: recordBase.agentId,
 	secretId: recordBase.secretId,
 	secretVersion: recordBase.secretVersion,
 	configRevision: recordBase.configRevision,
+	algorithmVersion: cryptoMetadata.algorithmVersion,
+	wrappingAlgorithmVersion: cryptoMetadata.wrappingAlgorithmVersion,
+	wrappingKeyVersion: cryptoMetadata.wrappingKeyVersion,
 	name: "agent-01-secret-01-v2-r7",
 } as const;
 
@@ -183,7 +201,10 @@ describe("Platform Secret V1 contract", () => {
 			PlatformSecretRecordV1Schema.safeParse({
 				...recordBase,
 				lifecycleState: "pending",
-				crypto: { ...cryptoMetadata, aadVersion: "ad-hoc" },
+				crypto: {
+					...cryptoMetadata,
+					aadBinding: { ...cryptoMetadata.aadBinding, aadVersion: "ad-hoc" },
+				},
 			}).success,
 		).toBe(false);
 		expect(
@@ -278,6 +299,63 @@ describe("Platform Secret V1 contract", () => {
 				plaintext: "must-never-cross-the-contract",
 			}).success,
 		).toBe(false);
+	});
+
+	it.each([
+		["owner", { ownerId: "user_02" }],
+		["Agent", { agentId: "agent_02" }],
+		["Secret", { secretId: "secret_02" }],
+		["version", { secretVersion: 3 }],
+		["config revision", { configRevision: 8 }],
+		["wrapping key", { wrappingKeyVersion: "key-2026-09" }],
+	] as const)(
+		"rejects a ciphertext with a mismatched %s AAD binding",
+		(_name, mismatch) => {
+			expect(() =>
+				validatePlatformSecretRecordV1({
+					...recordBase,
+					lifecycleState: "pending",
+					crypto: {
+						...cryptoMetadata,
+						aadBinding: { ...cryptoMetadata.aadBinding, ...mismatch },
+					},
+				}),
+			).toThrow("Platform Secret record correlation mismatch");
+		},
+	);
+
+	it("rejects a ciphertext outside the fixed algorithm binding", () => {
+		expect(
+			PlatformSecretRecordV1Schema.safeParse({
+				...recordBase,
+				lifecycleState: "pending",
+				crypto: {
+					...cryptoMetadata,
+					algorithmVersion: "legacy-cipher:v0",
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("rejects an immutable Secret reference with mismatched ownership or crypto metadata", () => {
+		const active = {
+			...recordBase,
+			lifecycleState: "active",
+			kubernetesSecretRef,
+			activationFence,
+		} as const;
+
+		for (const mismatch of [
+			{ ownerId: "user_02" },
+			{ wrappingKeyVersion: "key-2026-09" },
+		]) {
+			expect(() =>
+				validatePlatformSecretRecordV1({
+					...active,
+					kubernetesSecretRef: { ...kubernetesSecretRef, ...mismatch },
+				}),
+			).toThrow("Platform Secret record correlation mismatch");
+		}
 	});
 
 	it("rejects stale or mismatched activation observations", () => {
@@ -385,7 +463,7 @@ describe("Platform Secret V1 contract", () => {
 		} as const;
 
 		expect(SecretAuditEventV1Schema.parse(auditEvent)).toEqual(auditEvent);
-		expect(SecretKeyRotationV1Schema.parse(rotation)).toEqual(rotation);
+		expect(validateSecretKeyRotationV1(rotation)).toEqual(rotation);
 		expect(
 			SecretKeyRotationV1Schema.safeParse({
 				...rotation,
@@ -405,5 +483,59 @@ describe("Platform Secret V1 contract", () => {
 				secretValue: "must-not-be-audit-data",
 			}).success,
 		).toBe(false);
+	});
+
+	it("rejects semantically invalid or key-set-mismatched rotations", () => {
+		const rotation = {
+			schemaVersion: 1,
+			rotationId: "rotation_01",
+			state: "rewrapping",
+			sourceKeyVersions: ["key-2026-07"],
+			targetKeyVersion: "key-2026-08",
+			processedSecrets: 12,
+			remainingSecrets: 3,
+			updatedAt: "2026-08-28T10:03:00Z",
+		} as const;
+		const retiringPublicKey = {
+			...activePublicKey,
+			keyVersion: "key-2026-07",
+			status: "retiring",
+		} as const;
+		const keySet = {
+			...encryptionKeys,
+			keys: [activePublicKey, retiringPublicKey],
+		} as const;
+
+		expect(validateSecretKeyRotationV1(rotation, keySet)).toEqual(rotation);
+		for (const invalid of [
+			{ ...rotation, sourceKeyVersions: ["key-2026-07", "key-2026-07"] },
+			{ ...rotation, sourceKeyVersions: [rotation.targetKeyVersion] },
+			{ ...rotation, sourceKeyVersions: ["key-missing"] },
+		]) {
+			expect(() => validateSecretKeyRotationV1(invalid, keySet)).toThrow(
+				"Secret key rotation mismatch",
+			);
+		}
+	});
+
+	it("accepts only fixed sanitized Secret lifecycle errors", () => {
+		const error = {
+			schemaVersion: 1,
+			code: "SECRET_ACTIVATION_FAILED",
+			message: "Secret activation failed",
+			retryable: true,
+			traceId: "trace_secret_01",
+		} as const;
+
+		expect(SecretLifecycleErrorV1Schema.parse(error)).toEqual(error);
+		for (const unsafeError of [
+			{ ...error, message: "Kubernetes returned token=secret" },
+			{ ...error, code: "PROVIDER_SPECIFIC_FAILURE" },
+			{ ...error, detail: "secret material" },
+		]) {
+			expect(SecretLifecycleErrorV1Schema.safeParse(unsafeError).success).toBe(
+				false,
+			);
+		}
 	});
 });

@@ -60,7 +60,9 @@ export function createFakeSecretActivationAdapterV1(): FakeSecretActivationAdapt
 					: {
 							...record,
 							lifecycleState: "failed",
-							kubernetesSecretRef: observation.kubernetesSecretRef,
+							...(observation.kubernetesSecretRef === undefined
+								? {}
+								: { kubernetesSecretRef: observation.kubernetesSecretRef }),
 							activationFence: observation.activationFence,
 							error: observation.error,
 						},

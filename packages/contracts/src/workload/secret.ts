@@ -33,11 +33,15 @@ const kubernetesResourceName = z
 	.regex(
 		/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/,
 	);
+const secretOwnerType = z.enum(["agent-owner", "platform"]);
+const secretAlgorithmVersion = z.literal("aes-256-gcm:v1");
+const secretAadVersion = z.literal("platform-secret-aad:v1");
+const secretWrappingAlgorithmVersion = z.literal("rsa-oaep-sha256:v1");
 
 export const SecretPublicKeyDescriptorV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	keyVersion: WorkloadOpaqueIdV1Schema,
-	wrappingAlgorithmVersion: z.literal("rsa-oaep-sha256:v1"),
+	wrappingAlgorithmVersion: secretWrappingAlgorithmVersion,
 	publicKeySpkiDerBase64: spkiDerBase64,
 	publicKeyFingerprint: sha256Hex,
 	rsaModulusBits: z.number().int().min(3072),
@@ -96,12 +100,27 @@ export const SecretWorkerKeyringDescriptorV1Schema = z.strictObject({
 	canDecrypt: z.literal(true),
 });
 
+export const SecretAadBindingV1Schema = z.strictObject({
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	aadVersion: secretAadVersion,
+	secretId: WorkloadOpaqueIdV1Schema,
+	ownerType: secretOwnerType,
+	ownerId: WorkloadOpaqueIdV1Schema,
+	agentId: WorkloadOpaqueIdV1Schema,
+	name: z.string().min(1),
+	secretVersion: z.number().int().positive(),
+	configRevision: WorkloadRevisionV1Schema,
+	algorithmVersion: secretAlgorithmVersion,
+	wrappingAlgorithmVersion: secretWrappingAlgorithmVersion,
+	wrappingKeyVersion: WorkloadOpaqueIdV1Schema,
+});
+
 export const SecretCryptoMetadataV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
-	algorithmVersion: z.literal("aes-256-gcm:v1"),
-	aadVersion: z.literal("platform-secret-aad:v1"),
-	wrappingAlgorithmVersion: z.literal("rsa-oaep-sha256:v1"),
+	algorithmVersion: secretAlgorithmVersion,
+	wrappingAlgorithmVersion: secretWrappingAlgorithmVersion,
 	wrappingKeyVersion: WorkloadOpaqueIdV1Schema,
+	aadBinding: SecretAadBindingV1Schema,
 	dekFingerprint: sha256Hex,
 	nonce: nonceBase64,
 	ciphertext: base64,
@@ -111,10 +130,15 @@ export const SecretCryptoMetadataV1Schema = z.strictObject({
 
 export const KubernetesSecretReferenceV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
+	ownerType: secretOwnerType,
+	ownerId: WorkloadOpaqueIdV1Schema,
 	agentId: WorkloadOpaqueIdV1Schema,
 	secretId: WorkloadOpaqueIdV1Schema,
 	secretVersion: z.number().int().positive(),
 	configRevision: WorkloadRevisionV1Schema,
+	algorithmVersion: secretAlgorithmVersion,
+	wrappingAlgorithmVersion: secretWrappingAlgorithmVersion,
+	wrappingKeyVersion: WorkloadOpaqueIdV1Schema,
 	name: kubernetesResourceName,
 });
 
@@ -133,7 +157,7 @@ export const SecretActivationFenceV1Schema = z.strictObject({
 const secretRecordBaseV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	secretId: WorkloadOpaqueIdV1Schema,
-	ownerType: z.enum(["agent-owner", "platform"]),
+	ownerType: secretOwnerType,
 	ownerId: WorkloadOpaqueIdV1Schema,
 	agentId: WorkloadOpaqueIdV1Schema,
 	name: z.string().min(1),
@@ -143,6 +167,49 @@ const secretRecordBaseV1Schema = z.strictObject({
 	createdAt: WorkloadTimestampV1Schema,
 	updatedAt: WorkloadTimestampV1Schema,
 });
+
+const secretLifecycleErrorV1Schema = <
+	const Code extends string,
+	const Message extends string,
+	const Retryable extends boolean,
+>(
+	code: Code,
+	message: Message,
+	retryable: Retryable,
+) =>
+	WorkloadBoundaryErrorV1Schema.extend({
+		code: z.literal(code),
+		message: z.literal(message),
+		retryable: z.literal(retryable),
+	});
+
+export const SecretLifecycleErrorV1Schema = z.discriminatedUnion("code", [
+	secretLifecycleErrorV1Schema(
+		"SECRET_KEY_UNAVAILABLE",
+		"Secret key is unavailable",
+		true,
+	),
+	secretLifecycleErrorV1Schema(
+		"SECRET_METADATA_INVALID",
+		"Secret metadata is invalid",
+		false,
+	),
+	secretLifecycleErrorV1Schema(
+		"SECRET_AUTHENTICATION_FAILED",
+		"Secret authentication failed",
+		false,
+	),
+	secretLifecycleErrorV1Schema(
+		"SECRET_ACTIVATION_FAILED",
+		"Secret activation failed",
+		true,
+	),
+	secretLifecycleErrorV1Schema(
+		"SECRET_ROTATION_FAILED",
+		"Secret key rotation failed",
+		true,
+	),
+]);
 
 const pendingSecretRecordV1Schema = secretRecordBaseV1Schema.extend({
 	lifecycleState: z.literal("pending"),
@@ -170,7 +237,7 @@ const failedSecretRecordV1Schema = secretRecordBaseV1Schema.extend({
 	lifecycleState: z.literal("failed"),
 	kubernetesSecretRef: KubernetesSecretReferenceV1Schema.optional(),
 	activationFence: SecretActivationFenceV1Schema.optional(),
-	error: WorkloadBoundaryErrorV1Schema,
+	error: SecretLifecycleErrorV1Schema,
 });
 
 export const PlatformSecretRecordV1Schema = z.discriminatedUnion(
@@ -198,7 +265,7 @@ const failedActivationV1Schema = z.strictObject({
 	kubernetesSecretRef: KubernetesSecretReferenceV1Schema.optional(),
 	activationFence: SecretActivationFenceV1Schema,
 	health: z.enum(["unknown", "unhealthy"]),
-	error: WorkloadBoundaryErrorV1Schema,
+	error: SecretLifecycleErrorV1Schema,
 });
 
 export const SecretActivationObservationV1Schema = z.discriminatedUnion(
@@ -253,7 +320,7 @@ export const SecretKeyRotationV1Schema = z.discriminatedUnion("state", [
 	z.strictObject({
 		...secretKeyRotationV1Shape,
 		state: z.literal("failed"),
-		error: WorkloadBoundaryErrorV1Schema,
+		error: SecretLifecycleErrorV1Schema,
 	}),
 ]);
 
@@ -266,6 +333,7 @@ export type SecretActivationFenceV1 = z.infer<
 export type SecretActivationObservationV1 = z.infer<
 	typeof SecretActivationObservationV1Schema
 >;
+export type SecretKeyRotationV1 = z.infer<typeof SecretKeyRotationV1Schema>;
 
 const fenceKeys = [
 	"agentId",
@@ -298,20 +366,38 @@ export function validatePlatformSecretRecordV1(
 		expectedFenceInput === undefined
 			? undefined
 			: SecretActivationFenceV1Schema.parse(expectedFenceInput);
+	const aad = record.crypto.aadBinding;
 	if (
-		(secretRef === undefined) !== (activationFence === undefined) ||
 		(expectedFence !== undefined && activationFence === undefined) ||
+		aad.secretId !== record.secretId ||
+		aad.ownerType !== record.ownerType ||
+		aad.ownerId !== record.ownerId ||
+		aad.agentId !== record.agentId ||
+		aad.name !== record.name ||
+		aad.secretVersion !== record.secretVersion ||
+		aad.configRevision !== record.configRevision ||
+		aad.algorithmVersion !== record.crypto.algorithmVersion ||
+		aad.wrappingAlgorithmVersion !== record.crypto.wrappingAlgorithmVersion ||
+		aad.wrappingKeyVersion !== record.crypto.wrappingKeyVersion ||
+		(secretRef !== undefined &&
+			(record.ownerType !== secretRef.ownerType ||
+				record.ownerId !== secretRef.ownerId ||
+				record.agentId !== secretRef.agentId ||
+				record.secretId !== secretRef.secretId ||
+				record.secretVersion !== secretRef.secretVersion ||
+				record.configRevision !== secretRef.configRevision ||
+				record.crypto.algorithmVersion !== secretRef.algorithmVersion ||
+				record.crypto.wrappingAlgorithmVersion !==
+					secretRef.wrappingAlgorithmVersion ||
+				record.crypto.wrappingKeyVersion !== secretRef.wrappingKeyVersion)) ||
+		(activationFence !== undefined &&
+			(record.agentId !== activationFence.agentId ||
+				record.secretId !== activationFence.secretId ||
+				record.secretVersion !== activationFence.secretVersion ||
+				record.configRevision !== activationFence.configRevision)) ||
 		(secretRef !== undefined &&
 			activationFence !== undefined &&
-			(record.agentId !== secretRef.agentId ||
-				record.agentId !== activationFence.agentId ||
-				record.secretId !== secretRef.secretId ||
-				record.secretId !== activationFence.secretId ||
-				record.secretVersion !== secretRef.secretVersion ||
-				record.secretVersion !== activationFence.secretVersion ||
-				record.configRevision !== secretRef.configRevision ||
-				record.configRevision !== activationFence.configRevision ||
-				secretRef.name !== activationFence.kubernetesSecretName)) ||
+			secretRef.name !== activationFence.kubernetesSecretName) ||
 		(expectedFence !== undefined &&
 			activationFence !== undefined &&
 			!activationFencesMatch(activationFence, expectedFence))
@@ -319,6 +405,34 @@ export function validatePlatformSecretRecordV1(
 		throw new Error("Platform Secret record correlation mismatch");
 	}
 	return record;
+}
+
+export function validateSecretKeyRotationV1(
+	rotationInput: unknown,
+	keySetInput?: unknown,
+): SecretKeyRotationV1 {
+	const rotation = SecretKeyRotationV1Schema.parse(rotationInput);
+	const sourceVersions = new Set(rotation.sourceKeyVersions);
+	if (
+		sourceVersions.size !== rotation.sourceKeyVersions.length ||
+		sourceVersions.has(rotation.targetKeyVersion)
+	) {
+		throw new Error("Secret key rotation mismatch");
+	}
+	if (keySetInput !== undefined) {
+		const keySet = validateSecretEncryptionKeySetV1(keySetInput);
+		if (
+			rotation.targetKeyVersion !== keySet.activeWrappingKeyVersion ||
+			rotation.sourceKeyVersions.some(
+				(sourceVersion) =>
+					keySet.keys.find(({ keyVersion }) => keyVersion === sourceVersion)
+						?.status !== "retiring",
+			)
+		) {
+			throw new Error("Secret key rotation mismatch");
+		}
+	}
+	return rotation;
 }
 
 export function validateSecretActivationObservationV1(
