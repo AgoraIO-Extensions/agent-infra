@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 
 import type {
-	ApplicationFoundationTransactionV1,
-	CommitApplicationFoundationCommandV1,
+	ApplicationFoundationTransactionPortV1,
+	ApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe } from "vitest";
@@ -132,7 +132,7 @@ async function snapshot() {
 		`,
 		adminClient`
 			select id as application_id, agent_id, applicant_id, name, description,
-				status, trace_id
+				status, trace_id, request_id
 			from platform.agent_applications order by id
 		`,
 		adminClient`
@@ -144,11 +144,12 @@ async function snapshot() {
 			from platform.agent_owners order by agent_id, owner_id
 		`,
 		adminClient`
-			select scope_type, scope_id, operation, payload, trace_id
+			select scope_type, scope_id, operation, payload, trace_id, request_id
 			from platform.outbox_items order by id
 		`,
 		adminClient`
-			select trace_id, actor_type, actor_id, action, target_type, target_id, outcome
+			select trace_id, request_id, agent_id, actor_type, actor_id, action,
+				target_type, target_id, outcome
 			from platform.audit_events order by id
 		`,
 	]);
@@ -165,6 +166,7 @@ async function snapshot() {
 			description: String(row.description),
 			status: row.status as "pending_approval",
 			traceId: String(row.trace_id),
+			requestId: String(row.request_id),
 		})),
 		configurationRevisions: configurationRevisions.map((row) => ({
 			agentId: String(row.agent_id),
@@ -186,9 +188,12 @@ async function snapshot() {
 				configurationRevision: 1;
 			},
 			traceId: String(row.trace_id),
+			requestId: String(row.request_id),
 		})),
 		auditEvents: auditEvents.map((row) => ({
 			traceId: String(row.trace_id),
+			requestId: String(row.request_id),
+			agentId: String(row.agent_id),
 			actorType: row.actor_type as "user",
 			actorId: String(row.actor_id),
 			action: row.action as "agent.application.submitted",
@@ -222,10 +227,10 @@ describe("PostgreSQL application foundation transaction", () => {
 			databaseUrl,
 		});
 		let armedPoint: ApplicationFoundationFailurePoint | undefined;
-		const transaction: ApplicationFoundationTransactionV1 = {
-			async commit(command: CommitApplicationFoundationCommandV1) {
+		const transaction: ApplicationFoundationTransactionPortV1 = {
+			async commit(plan: ApplicationFoundationWritePlanV1) {
 				try {
-					return await adapter.commit(command);
+					return await adapter.commit(plan);
 				} finally {
 					await disarmFailure(armedPoint);
 					armedPoint = undefined;

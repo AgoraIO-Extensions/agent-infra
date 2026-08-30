@@ -1,8 +1,9 @@
 import { expect, it } from "vitest";
 
-import type {
-	ApplicationFoundationTransactionV1,
-	CommitApplicationFoundationCommandV1,
+import {
+	type ApplicationFoundationTransactionPortV1,
+	type CommitApplicationFoundationCommandV1,
+	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import type { ApplicationFoundationSnapshot } from "./fake-application-foundation.ts";
 
@@ -20,7 +21,7 @@ export type ApplicationFoundationFailurePoint =
 	(typeof applicationFoundationFailurePoints)[number];
 
 export interface ApplicationFoundationConformanceHarness {
-	transaction: ApplicationFoundationTransactionV1;
+	transaction: ApplicationFoundationTransactionPortV1;
 	failNextBefore(
 		point: ApplicationFoundationFailurePoint,
 	): Promise<void> | void;
@@ -33,6 +34,7 @@ const command: CommitApplicationFoundationCommandV1 = {
 	applicationId: "application opaque alpha",
 	agentId: "agent opaque alpha",
 	applicantId: "user opaque alpha",
+	requestId: "request opaque alpha",
 	name: "Operations Assistant",
 	description: "Assists with operational workflows",
 	sourceReference: "template opaque alpha",
@@ -54,16 +56,16 @@ export function applicationFoundationTransactionConformance(
 ): void {
 	it("rejects invalid commands without crossing the transaction seam", async () => {
 		const harness = await createHarness();
+		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		try {
 			for (const invalid of [
 				{ schemaVersion: 1 },
 				{ ...command, applicationId: "" },
+				{ ...command, requestId: "" },
 				{ ...command, name: "n".repeat(201) },
 			]) {
 				await expect(
-					harness.transaction.commit(
-						invalid as CommitApplicationFoundationCommandV1,
-					),
+					useCase.submit(invalid as CommitApplicationFoundationCommandV1),
 				).rejects.toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "invalid_command",
@@ -77,8 +79,9 @@ export function applicationFoundationTransactionConformance(
 
 	it("atomically starts an opaque Agent at monotonic revision one with sanitized correlations", async () => {
 		const harness = await createHarness();
+		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		try {
-			await expect(harness.transaction.commit(command)).resolves.toEqual({
+			await expect(useCase.submit(command)).resolves.toEqual({
 				schemaVersion: 1,
 				applicationId: command.applicationId,
 				agentId: command.agentId,
@@ -101,6 +104,7 @@ export function applicationFoundationTransactionConformance(
 						description: command.description,
 						status: "pending_approval",
 						traceId: command.traceId,
+						requestId: command.requestId,
 					},
 				],
 				configurationRevisions: [
@@ -123,11 +127,14 @@ export function applicationFoundationTransactionConformance(
 							configurationRevision: 1,
 						},
 						traceId: command.traceId,
+						requestId: command.requestId,
 					},
 				],
 				auditEvents: [
 					{
 						traceId: command.traceId,
+						requestId: command.requestId,
+						agentId: command.agentId,
 						actorType: "user",
 						actorId: command.applicantId,
 						action: "agent.application.submitted",
@@ -144,9 +151,10 @@ export function applicationFoundationTransactionConformance(
 
 	it("maps duplicate opaque IDs to a domain conflict", async () => {
 		const harness = await createHarness();
+		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		try {
-			await harness.transaction.commit(command);
-			await expect(harness.transaction.commit(command)).rejects.toMatchObject({
+			await useCase.submit(command);
+			await expect(useCase.submit(command)).rejects.toMatchObject({
 				name: "ApplicationFoundationError",
 				code: "conflict",
 			});
@@ -158,18 +166,15 @@ export function applicationFoundationTransactionConformance(
 	for (const point of applicationFoundationFailurePoints) {
 		it(`rolls back every write when ${point} fails`, async () => {
 			const harness = await createHarness();
+			const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 			try {
 				await harness.failNextBefore(point);
-				await expect(harness.transaction.commit(command)).rejects.toMatchObject(
-					{
-						name: "ApplicationFoundationError",
-						code: "persistence_failed",
-					},
-				);
+				await expect(useCase.submit(command)).rejects.toMatchObject({
+					name: "ApplicationFoundationError",
+					code: "persistence_failed",
+				});
 				await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
-				await expect(
-					harness.transaction.commit(command),
-				).resolves.toMatchObject({
+				await expect(useCase.submit(command)).resolves.toMatchObject({
 					applicationId: command.applicationId,
 					agentId: command.agentId,
 					configurationRevision: 1,

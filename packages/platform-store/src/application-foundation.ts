@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import {
 	ApplicationFoundationError,
-	type ApplicationFoundationTransactionV1,
-	assertApplicationFoundationCommandV1,
-	type CommitApplicationFoundationCommandV1,
-	type CommitApplicationFoundationResultV1,
+	type ApplicationFoundationTransactionPortV1,
+	type ApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -24,7 +22,7 @@ export interface PostgresApplicationFoundationOptions {
 }
 
 export class PostgresApplicationFoundationTransactionV1
-	implements ApplicationFoundationTransactionV1
+	implements ApplicationFoundationTransactionPortV1
 {
 	readonly #client;
 	readonly #database;
@@ -34,72 +32,61 @@ export class PostgresApplicationFoundationTransactionV1
 		this.#database = drizzle(this.#client);
 	}
 
-	async commit(
-		command: CommitApplicationFoundationCommandV1,
-	): Promise<CommitApplicationFoundationResultV1> {
-		assertApplicationFoundationCommandV1(command);
+	async commit(plan: ApplicationFoundationWritePlanV1): Promise<void> {
 		try {
-			return await this.#database.transaction(async (transaction) => {
+			await this.#database.transaction(async (transaction) => {
 				await transaction.insert(agents).values({
-					id: command.agentId,
-					currentConfigurationRevision: 1,
-					createdAt: command.submittedAt,
+					id: plan.agent.agentId,
+					currentConfigurationRevision: plan.agent.currentConfigurationRevision,
+					createdAt: plan.agent.createdAt,
 				});
 				await transaction.insert(agentApplications).values({
-					id: command.applicationId,
-					agentId: command.agentId,
-					applicantId: command.applicantId,
-					name: command.name,
-					description: command.description,
-					status: "pending_approval",
-					traceId: command.traceId,
-					submittedAt: command.submittedAt,
+					id: plan.application.applicationId,
+					agentId: plan.application.agentId,
+					applicantId: plan.application.applicantId,
+					name: plan.application.name,
+					description: plan.application.description,
+					status: plan.application.status,
+					traceId: plan.application.traceId,
+					requestId: plan.application.requestId,
+					submittedAt: plan.application.submittedAt,
 				});
 				await transaction.insert(agentConfigurationRevisions).values({
-					agentId: command.agentId,
-					revision: 1,
-					sourceReference: command.sourceReference,
-					createdAt: command.submittedAt,
+					agentId: plan.configurationRevision.agentId,
+					revision: plan.configurationRevision.revision,
+					sourceReference: plan.configurationRevision.sourceReference,
+					createdAt: plan.configurationRevision.createdAt,
 				});
 				await transaction.insert(agentOwners).values({
-					agentId: command.agentId,
-					ownerId: command.applicantId,
-					createdAt: command.submittedAt,
+					agentId: plan.owner.agentId,
+					ownerId: plan.owner.ownerId,
+					createdAt: plan.owner.createdAt,
 				});
 				await transaction.insert(outboxItems).values({
 					id: randomUUID(),
-					scopeType: "agent",
-					scopeId: command.agentId,
-					operation: "agent.application.submitted.v1",
-					payload: {
-						schemaVersion: 1,
-						applicationId: command.applicationId,
-						agentId: command.agentId,
-						configurationRevision: 1,
-					},
-					traceId: command.traceId,
-					availableAt: command.submittedAt,
-					createdAt: command.submittedAt,
-					updatedAt: command.submittedAt,
+					scopeType: plan.outboxIntent.scopeType,
+					scopeId: plan.outboxIntent.scopeId,
+					operation: plan.outboxIntent.operation,
+					payload: plan.outboxIntent.payload,
+					traceId: plan.outboxIntent.traceId,
+					requestId: plan.outboxIntent.requestId,
+					availableAt: plan.outboxIntent.occurredAt,
+					createdAt: plan.outboxIntent.occurredAt,
+					updatedAt: plan.outboxIntent.occurredAt,
 				});
 				await transaction.insert(auditEvents).values({
 					id: randomUUID(),
-					traceId: command.traceId,
-					actorType: "user",
-					actorId: command.applicantId,
-					action: "agent.application.submitted",
-					targetType: "agent_application",
-					targetId: command.applicationId,
-					outcome: "succeeded",
-					occurredAt: command.submittedAt,
+					traceId: plan.auditEvent.traceId,
+					requestId: plan.auditEvent.requestId,
+					agentId: plan.auditEvent.agentId,
+					actorType: plan.auditEvent.actorType,
+					actorId: plan.auditEvent.actorId,
+					action: plan.auditEvent.action,
+					targetType: plan.auditEvent.targetType,
+					targetId: plan.auditEvent.targetId,
+					outcome: plan.auditEvent.outcome,
+					occurredAt: plan.auditEvent.occurredAt,
 				});
-				return {
-					schemaVersion: 1,
-					applicationId: command.applicationId,
-					agentId: command.agentId,
-					configurationRevision: 1,
-					status: "pending_approval",
-				};
 			});
 		} catch (error) {
 			if (isPostgresError(error, "23505")) {

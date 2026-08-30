@@ -3,6 +3,7 @@ export interface CommitApplicationFoundationCommandV1 {
 	readonly applicationId: string;
 	readonly agentId: string;
 	readonly applicantId: string;
+	readonly requestId: string;
 	readonly name: string;
 	readonly description: string;
 	readonly sourceReference: string;
@@ -18,8 +19,69 @@ export interface CommitApplicationFoundationResultV1 {
 	readonly status: "pending_approval";
 }
 
-export interface ApplicationFoundationTransactionV1 {
-	commit(
+export interface ApplicationFoundationWritePlanV1 {
+	readonly schemaVersion: 1;
+	readonly agent: {
+		readonly agentId: string;
+		readonly currentConfigurationRevision: 1;
+		readonly createdAt: Date;
+	};
+	readonly application: {
+		readonly applicationId: string;
+		readonly agentId: string;
+		readonly applicantId: string;
+		readonly name: string;
+		readonly description: string;
+		readonly status: "pending_approval";
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly submittedAt: Date;
+	};
+	readonly configurationRevision: {
+		readonly agentId: string;
+		readonly revision: 1;
+		readonly sourceReference: string;
+		readonly createdAt: Date;
+	};
+	readonly owner: {
+		readonly agentId: string;
+		readonly ownerId: string;
+		readonly createdAt: Date;
+	};
+	readonly outboxIntent: {
+		readonly scopeType: "agent";
+		readonly scopeId: string;
+		readonly operation: "agent.application.submitted.v1";
+		readonly payload: {
+			readonly schemaVersion: 1;
+			readonly applicationId: string;
+			readonly agentId: string;
+			readonly configurationRevision: 1;
+		};
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly auditEvent: {
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly agentId: string;
+		readonly actorType: "user";
+		readonly actorId: string;
+		readonly action: "agent.application.submitted";
+		readonly targetType: "agent_application";
+		readonly targetId: string;
+		readonly outcome: "succeeded";
+		readonly occurredAt: Date;
+	};
+}
+
+export interface ApplicationFoundationTransactionPortV1 {
+	commit(plan: ApplicationFoundationWritePlanV1): Promise<void>;
+}
+
+export interface ApplicationFoundationUseCaseV1 {
+	submit(
 		command: CommitApplicationFoundationCommandV1,
 	): Promise<CommitApplicationFoundationResultV1>;
 }
@@ -43,13 +105,14 @@ const requiredStrings = [
 	"applicationId",
 	"agentId",
 	"applicantId",
+	"requestId",
 	"name",
 	"description",
 	"sourceReference",
 	"traceId",
 ] as const;
 
-export function assertApplicationFoundationCommandV1(
+function assertApplicationFoundationCommandV1(
 	command: unknown,
 ): asserts command is CommitApplicationFoundationCommandV1 {
 	if (typeof command !== "object" || command === null) {
@@ -68,4 +131,80 @@ export function assertApplicationFoundationCommandV1(
 	) {
 		throw new ApplicationFoundationError("invalid_command");
 	}
+}
+
+const initialConfigurationRevision = 1 as const;
+
+export function createApplicationFoundationUseCaseV1(
+	transaction: ApplicationFoundationTransactionPortV1,
+): ApplicationFoundationUseCaseV1 {
+	return {
+		async submit(command) {
+			assertApplicationFoundationCommandV1(command);
+			const plan: ApplicationFoundationWritePlanV1 = {
+				schemaVersion: 1,
+				agent: {
+					agentId: command.agentId,
+					currentConfigurationRevision: initialConfigurationRevision,
+					createdAt: command.submittedAt,
+				},
+				application: {
+					applicationId: command.applicationId,
+					agentId: command.agentId,
+					applicantId: command.applicantId,
+					name: command.name,
+					description: command.description,
+					status: "pending_approval",
+					traceId: command.traceId,
+					requestId: command.requestId,
+					submittedAt: command.submittedAt,
+				},
+				configurationRevision: {
+					agentId: command.agentId,
+					revision: initialConfigurationRevision,
+					sourceReference: command.sourceReference,
+					createdAt: command.submittedAt,
+				},
+				owner: {
+					agentId: command.agentId,
+					ownerId: command.applicantId,
+					createdAt: command.submittedAt,
+				},
+				outboxIntent: {
+					scopeType: "agent",
+					scopeId: command.agentId,
+					operation: "agent.application.submitted.v1",
+					payload: {
+						schemaVersion: 1,
+						applicationId: command.applicationId,
+						agentId: command.agentId,
+						configurationRevision: initialConfigurationRevision,
+					},
+					traceId: command.traceId,
+					requestId: command.requestId,
+					occurredAt: command.submittedAt,
+				},
+				auditEvent: {
+					traceId: command.traceId,
+					requestId: command.requestId,
+					agentId: command.agentId,
+					actorType: "user",
+					actorId: command.applicantId,
+					action: "agent.application.submitted",
+					targetType: "agent_application",
+					targetId: command.applicationId,
+					outcome: "succeeded",
+					occurredAt: command.submittedAt,
+				},
+			};
+			await transaction.commit(plan);
+			return {
+				schemaVersion: 1,
+				applicationId: plan.application.applicationId,
+				agentId: plan.agent.agentId,
+				configurationRevision: plan.configurationRevision.revision,
+				status: plan.application.status,
+			};
+		},
+	};
 }

@@ -28,7 +28,7 @@ describe("platform-core package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"ApplicationFoundationError",
-			"assertApplicationFoundationCommandV1",
+			"createApplicationFoundationUseCaseV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
@@ -36,6 +36,13 @@ describe("platform-core package surface", () => {
 		expect(Object.keys(testingSurface)).toEqual([
 			"FakeApplicationFoundationTransactionV1",
 		]);
+		expect(
+			Object.keys(
+				surface.createApplicationFoundationUseCaseV1(
+					new testingSurface.FakeApplicationFoundationTransactionV1(),
+				),
+			),
+		).toEqual(["submit"]);
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {

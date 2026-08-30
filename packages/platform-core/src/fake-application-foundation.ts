@@ -1,9 +1,7 @@
 import {
 	ApplicationFoundationError,
-	type ApplicationFoundationTransactionV1,
-	assertApplicationFoundationCommandV1,
-	type CommitApplicationFoundationCommandV1,
-	type CommitApplicationFoundationResultV1,
+	type ApplicationFoundationTransactionPortV1,
+	type ApplicationFoundationWritePlanV1,
 } from "./application-foundation.js";
 
 type FailurePoint =
@@ -25,6 +23,7 @@ export interface ApplicationFoundationSnapshot {
 		description: string;
 		status: "pending_approval";
 		traceId: string;
+		requestId: string;
 	}[];
 	configurationRevisions: {
 		agentId: string;
@@ -43,9 +42,12 @@ export interface ApplicationFoundationSnapshot {
 			configurationRevision: 1;
 		};
 		traceId: string;
+		requestId: string;
 	}[];
 	auditEvents: {
 		traceId: string;
+		requestId: string;
+		agentId: string;
 		actorType: "user";
 		actorId: string;
 		action: "agent.application.submitted";
@@ -71,7 +73,7 @@ const emptySnapshot = (): ApplicationFoundationSnapshot => ({
 });
 
 export class FakeApplicationFoundationTransactionV1
-	implements ApplicationFoundationTransactionV1
+	implements ApplicationFoundationTransactionPortV1
 {
 	#state = emptySnapshot();
 	#failurePoint: FailurePoint | undefined;
@@ -84,14 +86,13 @@ export class FakeApplicationFoundationTransactionV1
 		return cloneSnapshot(this.#state);
 	}
 
-	async commit(
-		command: CommitApplicationFoundationCommandV1,
-	): Promise<CommitApplicationFoundationResultV1> {
-		assertApplicationFoundationCommandV1(command);
+	async commit(plan: ApplicationFoundationWritePlanV1): Promise<void> {
 		if (
-			this.#state.agents.some(({ agentId }) => agentId === command.agentId) ||
+			this.#state.agents.some(
+				({ agentId }) => agentId === plan.agent.agentId,
+			) ||
 			this.#state.applications.some(
-				({ applicationId }) => applicationId === command.applicationId,
+				({ applicationId }) => applicationId === plan.application.applicationId,
 			)
 		) {
 			throw new ApplicationFoundationError("conflict");
@@ -101,68 +102,60 @@ export class FakeApplicationFoundationTransactionV1
 		try {
 			this.#failBefore("agent");
 			draft.agents.push({
-				agentId: command.agentId,
-				currentConfigurationRevision: 1,
+				agentId: plan.agent.agentId,
+				currentConfigurationRevision: plan.agent.currentConfigurationRevision,
 			});
 
 			this.#failBefore("application");
 			draft.applications.push({
-				applicationId: command.applicationId,
-				agentId: command.agentId,
-				applicantId: command.applicantId,
-				name: command.name,
-				description: command.description,
-				status: "pending_approval",
-				traceId: command.traceId,
+				applicationId: plan.application.applicationId,
+				agentId: plan.application.agentId,
+				applicantId: plan.application.applicantId,
+				name: plan.application.name,
+				description: plan.application.description,
+				status: plan.application.status,
+				traceId: plan.application.traceId,
+				requestId: plan.application.requestId,
 			});
 
 			this.#failBefore("configuration_revision");
 			draft.configurationRevisions.push({
-				agentId: command.agentId,
-				revision: 1,
-				sourceReference: command.sourceReference,
+				agentId: plan.configurationRevision.agentId,
+				revision: plan.configurationRevision.revision,
+				sourceReference: plan.configurationRevision.sourceReference,
 			});
 
 			this.#failBefore("owner");
 			draft.owners.push({
-				agentId: command.agentId,
-				ownerId: command.applicantId,
+				agentId: plan.owner.agentId,
+				ownerId: plan.owner.ownerId,
 			});
 
 			this.#failBefore("outbox");
 			draft.outboxIntents.push({
-				scopeType: "agent",
-				scopeId: command.agentId,
-				operation: "agent.application.submitted.v1",
-				payload: {
-					schemaVersion: 1,
-					applicationId: command.applicationId,
-					agentId: command.agentId,
-					configurationRevision: 1,
-				},
-				traceId: command.traceId,
+				scopeType: plan.outboxIntent.scopeType,
+				scopeId: plan.outboxIntent.scopeId,
+				operation: plan.outboxIntent.operation,
+				payload: { ...plan.outboxIntent.payload },
+				traceId: plan.outboxIntent.traceId,
+				requestId: plan.outboxIntent.requestId,
 			});
 
 			this.#failBefore("audit");
 			draft.auditEvents.push({
-				traceId: command.traceId,
-				actorType: "user",
-				actorId: command.applicantId,
-				action: "agent.application.submitted",
-				targetType: "agent_application",
-				targetId: command.applicationId,
-				outcome: "succeeded",
+				traceId: plan.auditEvent.traceId,
+				requestId: plan.auditEvent.requestId,
+				agentId: plan.auditEvent.agentId,
+				actorType: plan.auditEvent.actorType,
+				actorId: plan.auditEvent.actorId,
+				action: plan.auditEvent.action,
+				targetType: plan.auditEvent.targetType,
+				targetId: plan.auditEvent.targetId,
+				outcome: plan.auditEvent.outcome,
 			});
 
 			this.#failBefore("commit");
 			this.#state = draft;
-			return {
-				schemaVersion: 1,
-				applicationId: command.applicationId,
-				agentId: command.agentId,
-				configurationRevision: 1,
-				status: "pending_approval",
-			};
 		} catch (error) {
 			if (error instanceof ApplicationFoundationError) throw error;
 			throw new ApplicationFoundationError("persistence_failed");

@@ -71,6 +71,7 @@ export const agentApplications = platformSchema.table(
 			.default("pending_approval")
 			.notNull(),
 		traceId: text("trace_id").notNull(),
+		requestId: text("request_id").notNull(),
 		submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull(),
 	},
 	(table) => [
@@ -94,6 +95,10 @@ export const agentApplications = platformSchema.table(
 		check(
 			"agent_application_trace_id_non_empty",
 			sql`char_length(${table.traceId}) > 0`,
+		),
+		check(
+			"agent_application_request_id_non_empty",
+			sql`char_length(${table.requestId}) > 0`,
 		),
 		uniqueIndex("agent_application_agent_unique").on(table.agentId),
 	],
@@ -162,6 +167,7 @@ export const outboxItems = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		requestId: text("request_id"),
 	},
 	(table) => [
 		check("outbox_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -175,6 +181,10 @@ export const outboxItems = platformSchema.table(
 			sql`char_length(${table.operation}) > 0`,
 		),
 		check("outbox_trace_id_non_empty", sql`char_length(${table.traceId}) > 0`),
+		check(
+			"outbox_request_id_non_empty",
+			sql`${table.requestId} IS NULL OR char_length(${table.requestId}) > 0`,
+		),
 		check("outbox_attempt_count_non_negative", sql`${table.attemptCount} >= 0`),
 		check(
 			"outbox_delivery_fence_non_negative",
@@ -210,10 +220,20 @@ export const auditEvents = platformSchema.table(
 		occurredAt: timestamp("occurred_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		requestId: text("request_id"),
+		agentId: text("agent_id"),
 	},
 	(table) => [
 		check("audit_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check("audit_trace_id_non_empty", sql`char_length(${table.traceId}) > 0`),
+		check(
+			"audit_request_id_non_empty",
+			sql`${table.requestId} IS NULL OR char_length(${table.requestId}) > 0`,
+		),
+		check(
+			"audit_agent_id_non_empty",
+			sql`${table.agentId} IS NULL OR char_length(${table.agentId}) > 0`,
+		),
 		check(
 			"audit_actor_type_non_empty",
 			sql`char_length(${table.actorType}) > 0`,
