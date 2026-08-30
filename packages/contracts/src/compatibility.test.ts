@@ -41,7 +41,24 @@ describe("contract compatibility command", () => {
 	it("rejects retyped OpenAPI component schemas", () => {
 		const result = compare("openapi-retyped", "openapi-base");
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("retyped");
+		expect(result.stderr).toContain("changed OpenAPI contract");
+	});
+
+	it.each([
+		"openapi-operation-removed",
+		"openapi-request-media-removed",
+		"openapi-response-removed",
+		"openapi-parameter-removed",
+		"openapi-required-body-added",
+	])("rejects %s HTTP contract changes", (fixture) => {
+		const previous =
+			fixture.startsWith("openapi-parameter") ||
+			fixture === "openapi-required-body-added"
+				? "openapi-parameter-base"
+				: "openapi-base";
+		const result = compare(fixture, previous);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("changed OpenAPI contract");
 	});
 
 	it("rejects introduced const, enum, union, and reference narrowings", () => {

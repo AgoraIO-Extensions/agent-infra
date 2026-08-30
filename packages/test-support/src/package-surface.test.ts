@@ -12,6 +12,28 @@ describe("test-support package surface", () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.types).toBe("dist/index.d.mts");
 		expect(manifest.exports["."].types).toBe("./dist/index.d.mts");
+		expect(manifest.exports["./pilot"]).toEqual({
+			types: "./dist/pilot/index.d.mts",
+			import: "./dist/pilot/index.mjs",
+		});
+		expect(manifest.exports["./workload"]).toEqual({
+			types: "./dist/workload/index.d.mts",
+			import: "./dist/workload/index.mjs",
+		});
+		const pilotSurface = await import(
+			new URL("../dist/pilot/index.mjs", import.meta.url).href
+		);
+		expect(pilotSurface.fakeDelegatedActionSuccessV1).toBeTypeOf("function");
+		expect(pilotSurface.fakeDelegatedActionFailureV1).toBeTypeOf("function");
+		const workloadSurface = await import(
+			new URL("../dist/workload/index.mjs", import.meta.url).href
+		);
+		expect(workloadSurface.createFakeImageRegistryAdapterV1).toBeTypeOf(
+			"function",
+		);
+		expect(workloadSurface.createFakeSecretActivationAdapterV1).toBeTypeOf(
+			"function",
+		);
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
@@ -21,6 +43,10 @@ describe("test-support package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
+		expect(packedFiles).toContain("dist/pilot/index.d.mts");
+		expect(packedFiles).toContain("dist/pilot/index.mjs");
+		expect(packedFiles).toContain("dist/workload/index.d.mts");
+		expect(packedFiles).toContain("dist/workload/index.mjs");
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);
