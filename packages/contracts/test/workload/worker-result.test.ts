@@ -6,7 +6,7 @@ import {
 	WorkerWorkloadResultV1Schema,
 } from "../../src/workload/worker-result.js";
 
-const expected = {
+const workerCorrelation = {
 	schemaVersion: 1,
 	outboxItemId: "outbox_01",
 	requestId: "request_workload_01",
@@ -15,7 +15,12 @@ const expected = {
 	configRevision: 7,
 	workloadRevision: 9,
 	fence: 11,
+} as const;
+
+const expected = {
+	...workerCorrelation,
 	operation: "reconcile-workload",
+	expectedWorkload: { state: "absent" },
 } as const;
 
 const secretRef = {
@@ -206,6 +211,7 @@ describe("Worker Workload result V1 contract", () => {
 		const expectedUpdate = {
 			...expected,
 			expectedWorkload: {
+				state: "present",
 				workloadUid: appliedWorkload.workloadUid,
 				workloadGeneration: appliedWorkload.observedGeneration + 1,
 			},
@@ -299,18 +305,20 @@ describe("Worker Workload result V1 contract", () => {
 		).toBe(false);
 		expect(() =>
 			validateWorkerWorkloadResultV1(expected, {
-				...failed,
+				...workerCorrelation,
+				status: "failed",
 				operation: "cleanup-workload",
 				workloadUid: appliedWorkload.workloadUid,
 				workloadGeneration: appliedWorkload.observedGeneration,
 				persistentVolumeIntent: "retain-existing",
+				error: failed.error,
 			}),
 		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("rejects mismatched nested cleanup facts", () => {
 		const cleanupExpected = {
-			...expected,
+			...workerCorrelation,
 			requestId: "request_cleanup_01",
 			operation: "cleanup-workload",
 			workloadUid: "workload_uid_01",
@@ -335,6 +343,7 @@ describe("Worker Workload result V1 contract", () => {
 				persistentVolumeIntent: "delete-new",
 				routeClosed: true,
 				removed: {
+					route: true,
 					workload: true,
 					service: true,
 					serviceAccount: true,
@@ -380,7 +389,7 @@ describe("Worker Workload result V1 contract", () => {
 
 	it("binds Registry outcomes to the exact admission request", () => {
 		const admissionExpected = {
-			...expected,
+			...workerCorrelation,
 			requestId: "registry_request_01",
 			operation: "admit-image",
 			registrySubjectRef: "subject_01",
@@ -430,7 +439,7 @@ describe("Worker Workload result V1 contract", () => {
 
 	it("requires full Secret and Workload context on failed activation results", () => {
 		const activationExpected = {
-			...expected,
+			...workerCorrelation,
 			requestId: "request_secret_01",
 			operation: "activate-secret",
 			secretId: "secret_01",
@@ -480,7 +489,7 @@ describe("Worker Workload result V1 contract", () => {
 
 	it("rejects a Secret observation reference outside the activation fence", () => {
 		const activationExpected = {
-			...expected,
+			...workerCorrelation,
 			operation: "activate-secret",
 			secretId: "secret_01",
 			secretVersion: 2,

@@ -11,7 +11,7 @@ import {
 	AgentWorkloadAppliedV1Schema,
 	validateWorkloadCleanupResultV1,
 	WorkloadCleanupResultV1Schema,
-	WorkloadIdentityV1Schema,
+	WorkloadExpectationV1Schema,
 } from "./kubernetes.ts";
 import {
 	ImageRegistryAdmissionResultV1Schema,
@@ -52,7 +52,7 @@ const activateSecretCorrelationV1Shape = {
 
 const reconcileWorkloadCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
-	expectedWorkload: WorkloadIdentityV1Schema.optional(),
+	expectedWorkload: WorkloadExpectationV1Schema,
 } as const;
 
 const cleanupWorkloadCorrelationV1Shape = {
@@ -300,7 +300,7 @@ export function validateWorkerWorkloadResultV1(
 			(result.outcome.health.state === "unhealthy" &&
 				result.outcome.health.error !== undefined &&
 				result.outcome.health.error.traceId !== expected.traceId) ||
-			(expected.expectedWorkload !== undefined &&
+			(expected.expectedWorkload.state === "present" &&
 				(result.outcome.workloadUid !== expected.expectedWorkload.workloadUid ||
 					result.outcome.observedGeneration <
 						expected.expectedWorkload.workloadGeneration)))

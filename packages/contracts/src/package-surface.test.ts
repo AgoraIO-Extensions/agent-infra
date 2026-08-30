@@ -46,6 +46,9 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./json-schema/secret-lifecycle.v1"]).toBe(
 			"./artifacts/json-schema/secret-lifecycle.v1.schema.json",
 		);
+		expect(manifest.exports["./json-schema/worker-result.v1"]).toBe(
+			"./artifacts/json-schema/worker-result.v1.schema.json",
+		);
 		expect(manifest.exports["./openapi/pilot-browser.v1"]).toBe(
 			"./artifacts/openapi/pilot-browser.v1.openapi.json",
 		);
@@ -87,6 +90,9 @@ describe("contracts package surface", () => {
 		);
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/secret-lifecycle.v1.schema.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/worker-result.v1.schema.json",
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-browser.v1.openapi.json",
