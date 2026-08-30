@@ -115,6 +115,31 @@ test("only dedicated Store packages declare database runtime dependencies", () =
 	);
 });
 
+test("platform-core rejects protocol and implementation dependencies", () => {
+	for (const dependency of [
+		"hono",
+		"@kubernetes/client-node",
+		"drizzle-orm",
+		"postgres",
+		"@agent-infra/platform-store",
+		"@agent-infra/contracts",
+	]) {
+		assert.match(
+			checkSourceImports(`import "${dependency}";`, {
+				path: "packages/platform-core/src/application-foundation.ts",
+			})[0],
+			/platform-core source must not import|only dedicated Store packages/,
+		);
+		assert.match(
+			checkProductionManifestDependencies(
+				{ dependencies: { [dependency]: "1.0.0" } },
+				{ path: "packages/platform-core" },
+			)[0],
+			/platform-core must not depend on|only dedicated Store packages/,
+		);
+	}
+});
+
 test("production manifests reject test-support runtime dependencies", () => {
 	for (const section of [
 		"dependencies",
