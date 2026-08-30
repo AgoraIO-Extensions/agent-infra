@@ -3,6 +3,10 @@
     "ImageAdmissionPolicyEvidenceV1": {
       "additionalProperties": false,
       "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "decisionRef": {
           "minLength": 1,
           "type": "string"
@@ -23,12 +27,18 @@
         "schemaVersion": {
           "const": 1,
           "type": "number"
+        },
+        "subjectRef": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "required": [
         "schemaVersion",
         "policyRef",
         "decisionRef",
+        "subjectRef",
+        "agentId",
         "imageDigest",
         "evaluatedAt"
       ],
@@ -314,7 +324,7 @@
           "type": "string"
         },
         "imageReference": {
-          "minLength": 1,
+          "pattern": "^(?=.{1,512}$)(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$",
           "type": "string"
         },
         "requestId": {
@@ -420,6 +430,10 @@
             "policyEvidence": {
               "additionalProperties": false,
               "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
                 "decisionRef": {
                   "minLength": 1,
                   "type": "string"
@@ -440,12 +454,18 @@
                 "schemaVersion": {
                   "const": 1,
                   "type": "number"
+                },
+                "subjectRef": {
+                  "minLength": 1,
+                  "type": "string"
                 }
               },
               "required": [
                 "schemaVersion",
                 "policyRef",
                 "decisionRef",
+                "subjectRef",
+                "agentId",
                 "imageDigest",
                 "evaluatedAt"
               ],
@@ -1043,6 +1063,10 @@
         "architecture"
       ],
       "type": "object"
+    },
+    "OciImageReferenceV1": {
+      "pattern": "^(?=.{1,512}$)(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$",
+      "type": "string"
     },
     "RuntimeCapabilitySetV1": {
       "additionalProperties": false,

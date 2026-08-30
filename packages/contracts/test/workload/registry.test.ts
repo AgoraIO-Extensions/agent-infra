@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	ImageRegistryAdmissionRequestV1Schema,
 	ImageRegistryAdmissionResultV1Schema,
+	OciImageReferenceV1Schema,
 	validateImageRegistryAdmissionResultV1,
 } from "../../src/workload/registry.js";
 
@@ -68,12 +69,37 @@ const admitted = {
 		schemaVersion: 1,
 		policyRef: request.admissionPolicyRef,
 		decisionRef: "decision_01",
+		subjectRef: request.subjectRef,
+		agentId: request.agentId,
 		imageDigest: `sha256:${"a".repeat(64)}`,
 		evaluatedAt: "2026-08-28T10:00:00Z",
 	},
 } as const;
 
 describe("ImageRegistryAdapter V1 contract", () => {
+	it("accepts canonical OCI references and rejects credential-bearing input", () => {
+		for (const reference of [
+			"library/ubuntu:latest",
+			"registry.example:5000/agents/codex:pilot",
+			`registry.example/agents/codex@sha256:${"a".repeat(64)}`,
+			`[2001:db8::1]:5000/agents/codex:pilot@sha256:${"a".repeat(64)}`,
+		]) {
+			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(true);
+		}
+		for (const reference of [
+			"https://registry.example/agents/codex:pilot",
+			"https://user:secret@registry.example/agents/codex:pilot",
+			"registry.example/agents/codex:pilot?token=secret",
+			"registry.example/agents/codex:pilot#fragment",
+			"registry.example/agents/Codex:pilot",
+			"registry.example/agents/codex:pilot\nsecret",
+		]) {
+			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(
+				false,
+			);
+		}
+	});
+
 	it("accepts an admitted immutable image without leaking deployment details", () => {
 		expect(ImageRegistryAdmissionRequestV1Schema.parse(request)).toEqual(
 			request,
@@ -144,6 +170,17 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				requestId: "request_registry_02",
 			}),
 		).toThrow("Image registry result correlation mismatch");
+		for (const mismatch of [
+			{ subjectRef: "subject_other" },
+			{ agentId: "agent_other" },
+		]) {
+			expect(() =>
+				validateImageRegistryAdmissionResultV1(request, {
+					...admitted,
+					policyEvidence: { ...admitted.policyEvidence, ...mismatch },
+				}),
+			).toThrow("Image registry result correlation mismatch");
+		}
 		expect(() =>
 			validateImageRegistryAdmissionResultV1(request, {
 				...admitted,

@@ -54,6 +54,8 @@ const admittedOutcome = {
 		schemaVersion: 1,
 		policyRef: request.admissionPolicyRef,
 		decisionRef: "decision_01",
+		subjectRef: request.subjectRef,
+		agentId: request.agentId,
 		imageDigest: `sha256:${"a".repeat(64)}`,
 		evaluatedAt: "2026-08-28T10:00:00Z",
 	},

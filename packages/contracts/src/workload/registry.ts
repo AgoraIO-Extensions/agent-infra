@@ -16,6 +16,17 @@ export const ImmutableOciDigestV1Schema = z
 	.string()
 	.regex(/^sha256:[a-f0-9]{64}$/);
 
+const ociDomainComponent = "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?";
+const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?`;
+const ociPathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const ociImageReferencePattern = new RegExp(
+	`^(?=.{1,512}$)(?:${ociDomain}/)?${ociPathComponent}(?:/${ociPathComponent})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`,
+);
+
+export const OciImageReferenceV1Schema = z
+	.string()
+	.regex(ociImageReferencePattern);
+
 export const OciDeclaredEnvironmentKeyV1Schema = z
 	.string()
 	.regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -36,6 +47,8 @@ export const ImageAdmissionPolicyEvidenceV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	policyRef: WorkloadOpaqueIdV1Schema,
 	decisionRef: WorkloadOpaqueIdV1Schema,
+	subjectRef: WorkloadOpaqueIdV1Schema,
+	agentId: WorkloadOpaqueIdV1Schema,
 	imageDigest: ImmutableOciDigestV1Schema,
 	evaluatedAt: WorkloadTimestampV1Schema,
 });
@@ -116,7 +129,7 @@ export const ImageRegistryAdmissionRequestV1Schema = z.strictObject({
 	traceId: WorkloadOpaqueIdV1Schema,
 	subjectRef: WorkloadOpaqueIdV1Schema,
 	agentId: WorkloadOpaqueIdV1Schema,
-	imageReference: z.string().min(1),
+	imageReference: OciImageReferenceV1Schema,
 	usage: z.enum(["standard-template", "custom-agent"]),
 	admissionPolicyRef: WorkloadOpaqueIdV1Schema,
 });
@@ -219,6 +232,8 @@ export function validateImageRegistryAdmissionResultV1(
 		result.traceId !== request.traceId ||
 		(result.status === "admitted" &&
 			(result.policyEvidence.policyRef !== request.admissionPolicyRef ||
+				result.policyEvidence.subjectRef !== request.subjectRef ||
+				result.policyEvidence.agentId !== request.agentId ||
 				result.policyEvidence.imageDigest !== result.immutableDigest ||
 				result.runtimeManifestParsingEvidence.utf8ByteLength !==
 					Buffer.byteLength(result.runtimeManifestLabel, "utf8"))) ||

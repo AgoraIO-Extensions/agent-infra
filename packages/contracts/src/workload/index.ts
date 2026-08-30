@@ -14,6 +14,7 @@ import {
 	ImmutableOciDigestV1Schema,
 	OciDeclaredEnvironmentKeyV1Schema,
 	OciImageConfigV1Schema,
+	OciImageReferenceV1Schema,
 	RuntimeManifestParsingEvidenceV1Schema,
 } from "./registry.ts";
 import {
@@ -43,6 +44,7 @@ export const registryManifestSchemasV1 = {
 	ImmutableOciDigestV1: ImmutableOciDigestV1Schema,
 	OciDeclaredEnvironmentKeyV1: OciDeclaredEnvironmentKeyV1Schema,
 	OciImageConfigV1: OciImageConfigV1Schema,
+	OciImageReferenceV1: OciImageReferenceV1Schema,
 	RuntimeCapabilitySetV1: RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1: RuntimeHealthV1Schema,
 	RuntimeManifestParsingEvidenceV1: RuntimeManifestParsingEvidenceV1Schema,
