@@ -7,7 +7,7 @@ import {
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-
+import { isPostgresError } from "./postgres-error.js";
 import {
 	agentApplications,
 	agentConfigurationRevisions,
@@ -99,14 +99,4 @@ export class PostgresApplicationFoundationTransactionV1
 	async close(): Promise<void> {
 		await this.#client.end();
 	}
-}
-
-function isPostgresError(error: unknown, code: string): boolean {
-	let current = error;
-	for (let depth = 0; depth < 4; depth += 1) {
-		if (typeof current !== "object" || current === null) return false;
-		if ("code" in current && current.code === code) return true;
-		current = "cause" in current ? current.cause : undefined;
-	}
-	return false;
 }

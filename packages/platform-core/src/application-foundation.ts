@@ -213,6 +213,10 @@ function invalidApplicationFoundationInput(): never {
 	throw new ApplicationFoundationError("invalid_command");
 }
 
+function isCapturedText(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+
 function parseApplicationFoundationCommandV1(
 	command: unknown,
 ): CommitApplicationFoundationCommandV1 {
@@ -239,8 +243,8 @@ function parseApplicationFoundationCommandV1(
 				description,
 				sourceReference,
 				traceId,
-			].every((value) => typeof value === "string" && value.length > 0) ||
-			typeof name !== "string"
+			].every(isCapturedText) ||
+			!isCapturedText(name)
 		) {
 			invalidApplicationFoundationInput();
 		}
@@ -271,11 +275,7 @@ function parseApplicationFoundationActorContextV1(
 	const values = snapshotExactDataValues(actorContext, actorContextKeys);
 	if (!values) invalidApplicationFoundationInput();
 	const { schemaVersion, userId } = values;
-	if (
-		schemaVersion !== 1 ||
-		typeof userId !== "string" ||
-		userId.length === 0
-	) {
+	if (schemaVersion !== 1 || !isCapturedText(userId)) {
 		invalidApplicationFoundationInput();
 	}
 	return { schemaVersion, userId };

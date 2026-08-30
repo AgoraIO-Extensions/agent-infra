@@ -47,6 +47,15 @@ const actorContext = Object.freeze({
 	userId: "user opaque alpha",
 });
 const supplementaryNameCharacter = "\u{1f600}";
+const commandTextFields = [
+	"applicationId",
+	"agentId",
+	"requestId",
+	"name",
+	"description",
+	"sourceReference",
+	"traceId",
+] as const;
 
 const emptySnapshot: ApplicationFoundationSnapshot = {
 	agents: [],
@@ -120,6 +129,75 @@ export function applicationFoundationTransactionConformance(
 				});
 			}
 			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("rejects embedded NUL in every captured text value", async () => {
+		const harness = await createHarness();
+		const useCase = createUseCase(harness.transaction);
+		try {
+			for (const field of commandTextFields) {
+				await expect(
+					useCase.submit(
+						{ ...command, [field]: `${command[field]}\0forged` },
+						actorContext,
+					),
+				).rejects.toMatchObject({
+					name: "ApplicationFoundationError",
+					code: "invalid_command",
+				});
+			}
+			await expect(
+				useCase.submit(command, {
+					...actorContext,
+					userId: `${actorContext.userId}\0forged`,
+				}),
+			).rejects.toMatchObject({
+				name: "ApplicationFoundationError",
+				code: "invalid_command",
+			});
+			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("accepts ordinary Unicode in every captured text value", async () => {
+		const harness = await createHarness();
+		const useCase = createUseCase(harness.transaction);
+		const unicodeCommand: CommitApplicationFoundationCommandV1 = {
+			...command,
+			applicationId: "application-\u5e94\u7528-\u{1f600}",
+			agentId: "agent-\u667a\u80fd-\u{1f680}",
+			requestId: "request-\u8bf7\u6c42-\u03b1",
+			name: "\u8fd0\u7ef4\u52a9\u624b \u{1f642}",
+			description:
+				"\u5904\u7406\u53ef\u89c2\u6d4b\u7684\u8fd0\u7ef4\u6d41\u7a0b",
+			sourceReference: "template-\u6a21\u677f-\u03b2",
+			traceId: "trace-\u8ffd\u8e2a-\u03b3",
+		};
+		const unicodeActor = {
+			...actorContext,
+			userId: "user-\u7528\u6237-\u{1f9d1}",
+		};
+		try {
+			await expect(
+				useCase.submit(unicodeCommand, unicodeActor),
+			).resolves.toMatchObject({
+				applicationId: unicodeCommand.applicationId,
+				agentId: unicodeCommand.agentId,
+			});
+			await expect(harness.snapshot()).resolves.toMatchObject({
+				applications: [
+					{
+						applicantId: unicodeActor.userId,
+						name: unicodeCommand.name,
+						description: unicodeCommand.description,
+					},
+				],
+			});
 		} finally {
 			await harness.close();
 		}
@@ -249,12 +327,17 @@ export function applicationFoundationTransactionConformance(
 			const useCase = createUseCase(harness.transaction);
 			try {
 				await harness.failNextBefore(point);
-				await expect(
-					useCase.submit(command, actorContext),
-				).rejects.toMatchObject({
+				const error = await useCase.submit(command, actorContext).then(
+					() => expect.fail("Expected foundation persistence to fail"),
+					(reason: unknown) => reason,
+				);
+				expect(error).toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "persistence_failed",
+					message: "Application foundation persistence failed",
 				});
+				expect(error).not.toHaveProperty("cause");
+				expect(String(error).toLowerCase()).not.toContain("injected");
 				await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
 				await expect(
 					useCase.submit(command, actorContext),
