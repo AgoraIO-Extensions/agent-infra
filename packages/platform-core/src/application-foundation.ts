@@ -119,13 +119,15 @@ function assertApplicationFoundationCommandV1(
 		throw new ApplicationFoundationError("invalid_command");
 	}
 	const candidate = command as Partial<CommitApplicationFoundationCommandV1>;
+	const nameLength =
+		typeof candidate.name === "string" ? Array.from(candidate.name).length : 0;
 	if (
 		candidate.schemaVersion !== 1 ||
 		requiredStrings.some(
 			(field) =>
 				typeof candidate[field] !== "string" || candidate[field].length === 0,
 		) ||
-		(candidate.name?.length ?? 0) > 200 ||
+		nameLength > 200 ||
 		!(candidate.submittedAt instanceof Date) ||
 		!Number.isFinite(candidate.submittedAt.valueOf())
 	) {

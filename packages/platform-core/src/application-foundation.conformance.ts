@@ -41,6 +41,7 @@ const command: CommitApplicationFoundationCommandV1 = {
 	traceId: "trace opaque alpha",
 	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
 };
+const supplementaryNameCharacter = "\u{1f600}";
 
 const emptySnapshot: ApplicationFoundationSnapshot = {
 	agents: [],
@@ -63,6 +64,7 @@ export function applicationFoundationTransactionConformance(
 				{ ...command, applicationId: "" },
 				{ ...command, requestId: "" },
 				{ ...command, name: "n".repeat(201) },
+				{ ...command, name: supplementaryNameCharacter.repeat(201) },
 			]) {
 				await expect(
 					useCase.submit(invalid as CommitApplicationFoundationCommandV1),
@@ -72,6 +74,25 @@ export function applicationFoundationTransactionConformance(
 				});
 			}
 			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("counts supplementary Unicode code points as one name character", async () => {
+		const harness = await createHarness();
+		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const name = supplementaryNameCharacter.repeat(101);
+		try {
+			await expect(useCase.submit({ ...command, name })).resolves.toMatchObject(
+				{
+					applicationId: command.applicationId,
+					agentId: command.agentId,
+				},
+			);
+			await expect(harness.snapshot()).resolves.toMatchObject({
+				applications: [{ name }],
+			});
 		} finally {
 			await harness.close();
 		}
