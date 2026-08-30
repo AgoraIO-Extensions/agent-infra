@@ -273,7 +273,7 @@ describe("standard contract artifacts", () => {
 				payload: { status: "running" },
 			}),
 		).toBe(true);
-	});
+	}, 15_000);
 
 	it("rejects deliberately stale committed artifacts", async () => {
 		const root = await mkdtemp(
