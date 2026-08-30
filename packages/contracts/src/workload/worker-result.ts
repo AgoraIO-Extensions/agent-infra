@@ -8,13 +8,17 @@ import {
 	WorkloadSchemaVersionV1Schema,
 } from "./common.ts";
 import {
-	AgentWorkloadAppliedV1Schema,
+	AgentWorkloadDesiredV1Schema,
+	KubernetesReconcileResultV1Schema,
+	validateAgentWorkloadDesiredV1,
+	validateKubernetesReconcileResultV1,
 	validateWorkloadCleanupResultV1,
 	WorkloadCleanupResultV1Schema,
 	WorkloadExpectationV1Schema,
 } from "./kubernetes.ts";
 import {
 	ImageRegistryAdmissionResultV1Schema,
+	OciImageReferenceV1Schema,
 	validateImageRegistryAdmissionResultV1,
 } from "./registry.ts";
 import {
@@ -36,7 +40,7 @@ const workerCorrelationV1Shape = {
 const admitImageCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
 	registrySubjectRef: WorkloadOpaqueIdV1Schema,
-	imageReference: z.string().min(1),
+	imageReference: OciImageReferenceV1Schema,
 	usage: z.enum(["standard-template", "custom-agent"]),
 	admissionPolicyRef: WorkloadOpaqueIdV1Schema,
 } as const;
@@ -53,6 +57,11 @@ const activateSecretCorrelationV1Shape = {
 const reconcileWorkloadCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
 	expectedWorkload: WorkloadExpectationV1Schema,
+} as const;
+
+const reconcileWorkloadExpectedV1Shape = {
+	...workerCorrelationV1Shape,
+	desiredWorkload: AgentWorkloadDesiredV1Schema,
 } as const;
 
 const cleanupWorkloadCorrelationV1Shape = {
@@ -111,7 +120,7 @@ export const WorkerWorkloadExpectedRevisionV1Schema = z.discriminatedUnion(
 			operation: z.literal("activate-secret"),
 		}),
 		z.strictObject({
-			...reconcileWorkloadCorrelationV1Shape,
+			...reconcileWorkloadExpectedV1Shape,
 			operation: z.literal("reconcile-workload"),
 		}),
 		z.strictObject({
@@ -136,11 +145,11 @@ const succeededWorkerResults = [
 	}),
 	z.strictObject({
 		...reconcileWorkloadCorrelationV1Shape,
-		workloadUid: WorkloadOpaqueIdV1Schema,
-		workloadGeneration: WorkloadRevisionV1Schema,
+		workloadUid: WorkloadOpaqueIdV1Schema.optional(),
+		workloadGeneration: WorkloadRevisionV1Schema.optional(),
 		status: z.literal("succeeded"),
 		operation: z.literal("reconcile-workload"),
-		outcome: AgentWorkloadAppliedV1Schema,
+		outcome: KubernetesReconcileResultV1Schema,
 	}),
 	z.strictObject({
 		...cleanupWorkloadCorrelationV1Shape,
@@ -211,8 +220,7 @@ export type WorkerWorkloadResultV1 = z.infer<
 >;
 export type WorkerWorkloadErrorV1 = z.infer<typeof WorkerWorkloadErrorV1Schema>;
 
-const correlationKeys = [
-	"outboxItemId",
+const desiredCorrelationKeys = [
 	"requestId",
 	"traceId",
 	"agentId",
@@ -220,6 +228,7 @@ const correlationKeys = [
 	"workloadRevision",
 	"fence",
 ] as const;
+const correlationKeys = ["outboxItemId", ...desiredCorrelationKeys] as const;
 
 export function validateWorkerWorkloadResultV1(
 	expectedInput: unknown,
@@ -281,31 +290,35 @@ export function validateWorkerWorkloadResultV1(
 		expected.operation === "reconcile-workload" &&
 		(result.operation !== "reconcile-workload" ||
 			JSON.stringify(result.expectedWorkload) !==
-				JSON.stringify(expected.expectedWorkload))
+				JSON.stringify(expected.desiredWorkload.expectedWorkload))
 	) {
 		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (expected.operation === "reconcile-workload") {
+		const desired = validateAgentWorkloadDesiredV1(expected.desiredWorkload);
+		if (desiredCorrelationKeys.some((key) => desired[key] !== expected[key])) {
+			throw new Error("Worker result revision correlation mismatch");
+		}
 	}
 	if (
 		result.status === "succeeded" &&
 		result.operation === "reconcile-workload" &&
-		(expected.operation !== "reconcile-workload" ||
-			result.outcome.requestId !== expected.requestId ||
-			result.outcome.traceId !== expected.traceId ||
-			result.outcome.agentId !== expected.agentId ||
-			result.outcome.configRevision !== expected.configRevision ||
-			result.outcome.workloadRevision !== expected.workloadRevision ||
-			result.outcome.fence !== expected.fence ||
-			result.workloadUid !== result.outcome.workloadUid ||
-			result.workloadGeneration !== result.outcome.observedGeneration ||
-			(result.outcome.health.state === "unhealthy" &&
-				result.outcome.health.error !== undefined &&
-				result.outcome.health.error.traceId !== expected.traceId) ||
-			(expected.expectedWorkload.state === "present" &&
-				(result.outcome.workloadUid !== expected.expectedWorkload.workloadUid ||
-					result.outcome.observedGeneration <
-						expected.expectedWorkload.workloadGeneration)))
+		expected.operation === "reconcile-workload"
 	) {
-		throw new Error("Worker result revision correlation mismatch");
+		const outcome = validateKubernetesReconcileResultV1(
+			expected.desiredWorkload,
+			result.outcome,
+		);
+		if (
+			(outcome.status === "applied" &&
+				(result.workloadUid !== outcome.workloadUid ||
+					result.workloadGeneration !== outcome.workloadGeneration)) ||
+			(outcome.status !== "applied" &&
+				(result.workloadUid !== undefined ||
+					result.workloadGeneration !== undefined))
+		) {
+			throw new Error("Worker result revision correlation mismatch");
+		}
 	}
 	if (
 		result.status === "succeeded" &&
@@ -359,18 +372,6 @@ export function validateWorkerWorkloadResultV1(
 		) {
 			throw new Error("Worker result revision correlation mismatch");
 		}
-	}
-	if (
-		result.status === "succeeded" &&
-		result.operation === "activate-secret" &&
-		(expected.operation !== "activate-secret" ||
-			result.secretId !== expected.secretId ||
-			result.secretVersion !== expected.secretVersion ||
-			result.kubernetesSecretName !== expected.kubernetesSecretName ||
-			result.workloadUid !== expected.workloadUid ||
-			result.workloadGeneration !== expected.workloadGeneration)
-	) {
-		throw new Error("Worker result revision correlation mismatch");
 	}
 	if (
 		result.status === "succeeded" &&
