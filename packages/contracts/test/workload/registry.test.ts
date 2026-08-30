@@ -93,6 +93,7 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			"registry.example/agents/codex:pilot#fragment",
 			"registry.example/agents/Codex:pilot",
 			"registry.example/agents/codex:pilot\nsecret",
+			"registry.example/agents/codex:pilot\n",
 		]) {
 			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(
 				false,
@@ -119,6 +120,21 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				runtimeManifestParsingEvidence: {
 					...admitted.runtimeManifestParsingEvidence,
 					duplicateKeysDetected: true,
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...admitted,
+				immutableDigest: `${admitted.immutableDigest}\n`,
+			}).success,
+		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...admitted,
+				ociConfig: {
+					...admitted.ociConfig,
+					declaredEnvKeys: ["MODEL_ENDPOINT\n"],
 				},
 			}).success,
 		).toBe(false);
@@ -181,6 +197,16 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				}),
 			).toThrow("Image registry result correlation mismatch");
 		}
+		const requestedDigest = `sha256:${"d".repeat(64)}`;
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(
+				{
+					...request,
+					imageReference: `registry.example/agents/codex@${requestedDigest}`,
+				},
+				admitted,
+			),
+		).toThrow("Image registry result correlation mismatch");
 		expect(() =>
 			validateImageRegistryAdmissionResultV1(request, {
 				...admitted,

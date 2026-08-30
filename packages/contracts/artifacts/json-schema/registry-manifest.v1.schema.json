@@ -17,7 +17,7 @@
           "type": "string"
         },
         "imageDigest": {
-          "pattern": "^sha256:[a-f0-9]{64}$",
+          "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
           "type": "string"
         },
         "policyRef": {
@@ -324,7 +324,7 @@
           "type": "string"
         },
         "imageReference": {
-          "pattern": "^(?=.{1,512}$)(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$",
+          "pattern": "^(?=.{1,512}(?![\\s\\S]))(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])",
           "type": "string"
         },
         "requestId": {
@@ -369,7 +369,7 @@
           "additionalProperties": false,
           "properties": {
             "immutableDigest": {
-              "pattern": "^sha256:[a-f0-9]{64}$",
+              "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
               "type": "string"
             },
             "ociConfig": {
@@ -386,12 +386,12 @@
                   "type": "array"
                 },
                 "configDigest": {
-                  "pattern": "^sha256:[a-f0-9]{64}$",
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
                   "type": "string"
                 },
                 "declaredEnvKeys": {
                   "items": {
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
                     "type": "string"
                   },
                   "type": "array"
@@ -444,7 +444,7 @@
                   "type": "string"
                 },
                 "imageDigest": {
-                  "pattern": "^sha256:[a-f0-9]{64}$",
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
                   "type": "string"
                 },
                 "policyRef": {
@@ -510,7 +510,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "path": {
-                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*$",
+                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
                           "type": "string"
                         }
                       },
@@ -583,7 +583,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "path": {
-                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*$",
+                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
                           "type": "string"
                         }
                       },
@@ -1002,11 +1002,11 @@
       ]
     },
     "ImmutableOciDigestV1": {
-      "pattern": "^sha256:[a-f0-9]{64}$",
+      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
       "type": "string"
     },
     "OciDeclaredEnvironmentKeyV1": {
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
       "type": "string"
     },
     "OciImageConfigV1": {
@@ -1023,12 +1023,12 @@
           "type": "array"
         },
         "configDigest": {
-          "pattern": "^sha256:[a-f0-9]{64}$",
+          "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
           "type": "string"
         },
         "declaredEnvKeys": {
           "items": {
-            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
             "type": "string"
           },
           "type": "array"
@@ -1065,7 +1065,7 @@
       "type": "object"
     },
     "OciImageReferenceV1": {
-      "pattern": "^(?=.{1,512}$)(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$",
+      "pattern": "^(?=.{1,512}(?![\\s\\S]))(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])",
       "type": "string"
     },
     "RuntimeCapabilitySetV1": {
@@ -1098,7 +1098,7 @@
       "additionalProperties": false,
       "properties": {
         "path": {
-          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*$",
+          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
           "type": "string"
         }
       },
@@ -1182,7 +1182,7 @@
               "additionalProperties": false,
               "properties": {
                 "path": {
-                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*$",
+                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
                   "type": "string"
                 }
               },
@@ -1255,7 +1255,7 @@
               "additionalProperties": false,
               "properties": {
                 "path": {
-                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*$",
+                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
                   "type": "string"
                 }
               },

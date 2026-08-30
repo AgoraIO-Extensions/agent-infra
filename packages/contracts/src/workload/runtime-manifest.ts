@@ -3,7 +3,7 @@ import { z } from "zod";
 import { WorkloadSchemaVersionV1Schema } from "./common.ts";
 
 const healthPathPattern =
-	/^\/(?!\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))(?!.*\/\/)[A-Za-z0-9._~/-]*$/;
+	/^\/(?!\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))(?!.*\/\/)[A-Za-z0-9._~/-]*(?![\s\S])/;
 
 export const RuntimeCapabilitySetV1Schema = z.strictObject({
 	modelSelection: z.boolean().default(false),

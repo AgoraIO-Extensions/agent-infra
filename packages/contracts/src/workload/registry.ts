@@ -14,13 +14,13 @@ import {
 
 export const ImmutableOciDigestV1Schema = z
 	.string()
-	.regex(/^sha256:[a-f0-9]{64}$/);
+	.regex(/^sha256:[a-f0-9]{64}(?![\s\S])/);
 
 const ociDomainComponent = "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?";
 const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?`;
 const ociPathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
 const ociImageReferencePattern = new RegExp(
-	`^(?=.{1,512}$)(?:${ociDomain}/)?${ociPathComponent}(?:/${ociPathComponent})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`,
+	`^(?=.{1,512}(?![\\s\\S]))(?:${ociDomain}/)?${ociPathComponent}(?:/${ociPathComponent})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])`,
 );
 
 export const OciImageReferenceV1Schema = z
@@ -29,7 +29,7 @@ export const OciImageReferenceV1Schema = z
 
 export const OciDeclaredEnvironmentKeyV1Schema = z
 	.string()
-	.regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+	.regex(/^[A-Za-z_][A-Za-z0-9_]*(?![\s\S])/);
 
 export const OciImageConfigV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
@@ -227,6 +227,11 @@ export function validateImageRegistryAdmissionResultV1(
 ): ImageRegistryAdmissionResultV1 {
 	const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
 	const result = ImageRegistryAdmissionResultV1Schema.parse(resultInput);
+	const digestSeparator = request.imageReference.lastIndexOf("@");
+	const requestedDigest =
+		digestSeparator === -1
+			? undefined
+			: request.imageReference.slice(digestSeparator + 1);
 	if (
 		result.requestId !== request.requestId ||
 		result.traceId !== request.traceId ||
@@ -235,6 +240,8 @@ export function validateImageRegistryAdmissionResultV1(
 				result.policyEvidence.subjectRef !== request.subjectRef ||
 				result.policyEvidence.agentId !== request.agentId ||
 				result.policyEvidence.imageDigest !== result.immutableDigest ||
+				(requestedDigest !== undefined &&
+					result.immutableDigest !== requestedDigest) ||
 				result.runtimeManifestParsingEvidence.utf8ByteLength !==
 					Buffer.byteLength(result.runtimeManifestLabel, "utf8"))) ||
 		(result.status === "rejected" && result.error.traceId !== request.traceId)

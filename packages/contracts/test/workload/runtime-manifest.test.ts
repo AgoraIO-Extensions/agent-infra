@@ -102,18 +102,22 @@ describe("Runtime Manifest V1 contract", () => {
 		},
 	);
 
-	it.each(["//health", "/a/../health", "/a/./health", "/a%2Fhealth", "/a?x=1"])(
-		"rejects unsafe health path %s",
-		(path) => {
-			expect(
-				RuntimeManifestV1Schema.safeParse({
-					schemaVersion: 1,
-					interactionMode: "platform-adapter",
-					protocol: "acp",
-					service: { port: 8080 },
-					health: { path },
-				}).success,
-			).toBe(false);
-		},
-	);
+	it.each([
+		"//health",
+		"/a/../health",
+		"/a/./health",
+		"/a%2Fhealth",
+		"/a?x=1",
+		"/healthz\n",
+	])("rejects unsafe health path %s", (path) => {
+		expect(
+			RuntimeManifestV1Schema.safeParse({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path },
+			}).success,
+		).toBe(false);
+	});
 });
