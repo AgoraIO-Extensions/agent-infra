@@ -129,6 +129,12 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				registryProduct: "vendor-specific-registry",
 			}).success,
 		).toBe(false);
+		expect(
+			ImageRegistryAdmissionResultV1Schema.safeParse({
+				...admitted,
+				runtimeManifestLabel: "x".repeat(65_537),
+			}).success,
+		).toBe(false);
 	});
 
 	it("rejects a result correlated to another request or stale evidence", () => {

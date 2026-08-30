@@ -14,7 +14,12 @@ export function createFakeImageRegistryAdapterV1(
 	return {
 		async admit(requestInput) {
 			const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
-			const configured = outcomesByImageReference[request.imageReference];
+			const configured = Object.hasOwn(
+				outcomesByImageReference,
+				request.imageReference,
+			)
+				? outcomesByImageReference[request.imageReference]
+				: undefined;
 			const outcome =
 				configured === undefined
 					? {

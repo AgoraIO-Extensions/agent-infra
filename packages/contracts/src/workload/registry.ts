@@ -132,7 +132,7 @@ const imageRegistryAdmittedV1Schema = z.strictObject({
 	status: z.literal("admitted"),
 	immutableDigest: ImmutableOciDigestV1Schema,
 	ociConfig: OciImageConfigV1Schema,
-	runtimeManifestLabel: z.string().min(1),
+	runtimeManifestLabel: z.string().min(1).max(65_536),
 	runtimeManifest: RuntimeManifestV1Schema,
 	runtimeManifestParsingEvidence: RuntimeManifestParsingEvidenceV1Schema,
 	policyEvidence: ImageAdmissionPolicyEvidenceV1Schema,

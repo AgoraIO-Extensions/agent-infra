@@ -88,6 +88,19 @@ describe("Fake ImageRegistryAdapter V1", () => {
 		}
 	});
 
+	it("treats inherited object keys as unknown images", async () => {
+		const adapter = createFakeImageRegistryAdapterV1({});
+		const result = await adapter.admit({
+			...request,
+			imageReference: "constructor",
+		});
+
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_NOT_ADMITTED" },
+		});
+	});
+
 	it("returns a configured redacted policy rejection", async () => {
 		const adapter = createFakeImageRegistryAdapterV1({
 			[request.imageReference]: {
