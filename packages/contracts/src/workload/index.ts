@@ -23,6 +23,20 @@ import {
 	RuntimeManifestV1Schema,
 	RuntimeServiceV1Schema,
 } from "./runtime-manifest.ts";
+import {
+	KubernetesSecretReferenceV1Schema,
+	PlatformSecretRecordV1Schema,
+	SecretAadBindingV1Schema,
+	SecretActivationFenceV1Schema,
+	SecretActivationObservationV1Schema,
+	SecretAuditEventV1Schema,
+	SecretCryptoMetadataV1Schema,
+	SecretEncryptionKeySetV1Schema,
+	SecretKeyRotationV1Schema,
+	SecretLifecycleErrorV1Schema,
+	SecretPublicKeyDescriptorV1Schema,
+	SecretWorkerKeyringDescriptorV1Schema,
+} from "./secret.ts";
 
 export * from "./common.ts";
 export * from "./registry.ts";
@@ -35,6 +49,7 @@ export {
 	RuntimeServiceV1Schema,
 	resolveRuntimeManifestCapabilitiesV1,
 } from "./runtime-manifest.ts";
+export * from "./secret.ts";
 
 export const registryManifestSchemasV1 = {
 	ImageAdmissionPolicyEvidenceV1: ImageAdmissionPolicyEvidenceV1Schema,
@@ -50,6 +65,27 @@ export const registryManifestSchemasV1 = {
 	RuntimeManifestParsingEvidenceV1: RuntimeManifestParsingEvidenceV1Schema,
 	RuntimeManifestV1: RuntimeManifestV1Schema,
 	RuntimeServiceV1: RuntimeServiceV1Schema,
+	WorkloadBoundaryErrorV1: WorkloadBoundaryErrorV1Schema,
+	WorkloadFenceV1: WorkloadFenceV1Schema,
+	WorkloadOpaqueIdV1: WorkloadOpaqueIdV1Schema,
+	WorkloadRevisionV1: WorkloadRevisionV1Schema,
+	WorkloadSchemaVersionV1: WorkloadSchemaVersionV1Schema,
+	WorkloadTimestampV1: WorkloadTimestampV1Schema,
+} as const;
+
+export const secretLifecycleSchemasV1 = {
+	KubernetesSecretReferenceV1: KubernetesSecretReferenceV1Schema,
+	PlatformSecretRecordV1: PlatformSecretRecordV1Schema,
+	SecretAadBindingV1: SecretAadBindingV1Schema,
+	SecretActivationFenceV1: SecretActivationFenceV1Schema,
+	SecretActivationObservationV1: SecretActivationObservationV1Schema,
+	SecretAuditEventV1: SecretAuditEventV1Schema,
+	SecretCryptoMetadataV1: SecretCryptoMetadataV1Schema,
+	SecretEncryptionKeySetV1: SecretEncryptionKeySetV1Schema,
+	SecretKeyRotationV1: SecretKeyRotationV1Schema,
+	SecretLifecycleErrorV1: SecretLifecycleErrorV1Schema,
+	SecretPublicKeyDescriptorV1: SecretPublicKeyDescriptorV1Schema,
+	SecretWorkerKeyringDescriptorV1: SecretWorkerKeyringDescriptorV1Schema,
 	WorkloadBoundaryErrorV1: WorkloadBoundaryErrorV1Schema,
 	WorkloadFenceV1: WorkloadFenceV1Schema,
 	WorkloadOpaqueIdV1: WorkloadOpaqueIdV1Schema,

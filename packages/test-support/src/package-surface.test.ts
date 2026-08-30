@@ -31,6 +31,9 @@ describe("test-support package surface", () => {
 		expect(workloadSurface.createFakeImageRegistryAdapterV1).toBeTypeOf(
 			"function",
 		);
+		expect(workloadSurface.createFakeSecretActivationAdapterV1).toBeTypeOf(
+			"function",
+		);
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {

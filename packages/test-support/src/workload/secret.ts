@@ -6,17 +6,6 @@ import {
 	validateSecretActivationObservationV1,
 } from "@agent-infra/contracts/workload";
 
-export interface FakeSecretActivationAdapterV1 {
-	read(record: unknown): PlatformSecretRecordV1;
-	observe(
-		record: unknown,
-		expectedFence: unknown,
-		observation: unknown,
-	): PlatformSecretRecordV1;
-	activate(record: unknown, expectedFence: unknown): PlatformSecretRecordV1;
-	recover(records: readonly unknown[]): PlatformSecretRecordV1[];
-}
-
 function validateRecordFence(
 	recordInput: unknown,
 	expectedInput: unknown,
@@ -29,12 +18,16 @@ function validateRecordFence(
 	return { record, expected };
 }
 
-export function createFakeSecretActivationAdapterV1(): FakeSecretActivationAdapterV1 {
+export function createFakeSecretActivationAdapterV1() {
 	return {
-		read(recordInput) {
+		read(recordInput: unknown) {
 			return structuredClone(validatePlatformSecretRecordV1(recordInput));
 		},
-		observe(recordInput, expectedInput, observationInput) {
+		observe(
+			recordInput: unknown,
+			expectedInput: unknown,
+			observationInput: unknown,
+		) {
 			const { record, expected } = validateRecordFence(
 				recordInput,
 				expectedInput,
@@ -68,7 +61,7 @@ export function createFakeSecretActivationAdapterV1(): FakeSecretActivationAdapt
 						},
 			);
 		},
-		activate(recordInput, expectedInput) {
+		activate(recordInput: unknown, expectedInput: unknown) {
 			const { record, expected } = validateRecordFence(
 				recordInput,
 				expectedInput,
@@ -92,7 +85,7 @@ export function createFakeSecretActivationAdapterV1(): FakeSecretActivationAdapt
 				expected,
 			);
 		},
-		recover(recordsInput) {
+		recover(recordsInput: readonly unknown[]) {
 			return recordsInput.map((record) =>
 				structuredClone(validatePlatformSecretRecordV1(record)),
 			);
