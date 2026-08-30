@@ -71,6 +71,54 @@
 				}
 			]
 		},
+		"DiscriminatedChoiceV1": {
+			"oneOf": [
+				{
+					"properties": {
+						"kind": { "const": "a" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				},
+				{
+					"properties": {
+						"kind": { "const": "b" }
+					},
+					"required": ["kind"],
+					"type": "object"
+				},
+				{
+					"properties": {
+						"detail": { "type": "string" },
+						"kind": { "const": "a" }
+					},
+					"required": ["kind", "detail"],
+					"type": "object"
+				}
+			]
+		},
+		"UntypedDiscriminatedChoiceV1": {
+			"oneOf": [
+				{
+					"properties": {
+						"kind": { "const": "a" }
+					},
+					"required": ["kind"]
+				},
+				{
+					"properties": {
+						"kind": { "const": "b" }
+					},
+					"required": ["kind"]
+				},
+				{
+					"properties": {
+						"kind": { "const": "c" }
+					},
+					"required": ["kind"]
+				}
+			]
+		},
 		"IntegerV1": {
 			"type": "integer"
 		},

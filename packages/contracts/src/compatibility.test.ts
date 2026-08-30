@@ -116,6 +116,12 @@ describe("contract compatibility command", () => {
 		const result = compare("advanced-narrowed", "advanced-base");
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("narrowed $defs.ExclusiveChoiceV1 oneOf");
+		expect(result.stderr).toContain(
+			"narrowed $defs.DiscriminatedChoiceV1 oneOf",
+		);
+		expect(result.stderr).toContain(
+			"narrowed $defs.UntypedDiscriminatedChoiceV1 oneOf",
+		);
 	});
 
 	it("rejects shortening a closed tuple prefix", () => {

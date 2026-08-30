@@ -8,6 +8,10 @@ import {
 	WorkloadSchemaVersionV1Schema,
 } from "./common.ts";
 import {
+	AgentWorkloadDesiredV1Schema,
+	validateAgentWorkloadDesiredV1,
+} from "./kubernetes.ts";
+import {
 	ImageRegistryAdmissionResultV1Schema,
 	OciImageReferenceV1Schema,
 	validateImageRegistryAdmissionResultV1,
@@ -44,6 +48,11 @@ const activateSecretCorrelationV1Shape = {
 	kubernetesSecretName: KubernetesResourceNameV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	workloadGeneration: WorkloadRevisionV1Schema,
+} as const;
+
+const reconcileWorkloadExpectedV1Shape = {
+	...workerCorrelationV1Shape,
+	desiredWorkload: AgentWorkloadDesiredV1Schema,
 } as const;
 
 const workerWorkloadErrorV1Schema = <
@@ -93,6 +102,10 @@ export const WorkerWorkloadExpectedRevisionV1Schema = z.discriminatedUnion(
 		z.strictObject({
 			...activateSecretCorrelationV1Shape,
 			operation: z.literal("activate-secret"),
+		}),
+		z.strictObject({
+			...reconcileWorkloadExpectedV1Shape,
+			operation: z.literal("reconcile-workload"),
 		}),
 	],
 );
@@ -166,8 +179,7 @@ export type WorkerWorkloadResultV1 = z.infer<
 >;
 export type WorkerWorkloadErrorV1 = z.infer<typeof WorkerWorkloadErrorV1Schema>;
 
-const correlationKeys = [
-	"outboxItemId",
+const desiredCorrelationKeys = [
 	"requestId",
 	"traceId",
 	"agentId",
@@ -175,12 +187,26 @@ const correlationKeys = [
 	"workloadRevision",
 	"fence",
 ] as const;
+const correlationKeys = ["outboxItemId", ...desiredCorrelationKeys] as const;
+
+export function validateWorkerWorkloadExpectedRevisionV1(
+	expectedInput: unknown,
+): WorkerWorkloadExpectedRevisionV1 {
+	const expected = WorkerWorkloadExpectedRevisionV1Schema.parse(expectedInput);
+	if (expected.operation === "reconcile-workload") {
+		const desired = validateAgentWorkloadDesiredV1(expected.desiredWorkload);
+		if (desiredCorrelationKeys.some((key) => desired[key] !== expected[key])) {
+			throw new Error("Worker expected revision correlation mismatch");
+		}
+	}
+	return expected;
+}
 
 export function validateWorkerWorkloadResultV1(
 	expectedInput: unknown,
 	resultInput: unknown,
 ): WorkerWorkloadResultV1 {
-	const expected = WorkerWorkloadExpectedRevisionV1Schema.parse(expectedInput);
+	const expected = validateWorkerWorkloadExpectedRevisionV1(expectedInput);
 	const result = WorkerWorkloadResultV1Schema.parse(resultInput);
 	if (
 		correlationKeys.some((key) => result[key] !== expected[key]) ||

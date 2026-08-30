@@ -16,6 +16,8 @@
 		"DependentObjectV1": {},
 		"ExcludedV1": {},
 		"ExclusiveChoiceV1": {},
+		"DiscriminatedChoiceV1": {},
+		"UntypedDiscriminatedChoiceV1": {},
 		"IntegerV1": {
 			"type": "number"
 		},
