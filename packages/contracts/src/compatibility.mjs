@@ -7,6 +7,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
 const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/kubernetes-workload.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-sse.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/registry-manifest.v1.schema.json",

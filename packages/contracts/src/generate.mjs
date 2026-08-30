@@ -41,6 +41,7 @@ import {
 	RuntimeSupplementRequestV1Schema,
 } from "./runtime/index.ts";
 import {
+	kubernetesWorkloadSchemasV1,
 	registryManifestSchemasV1,
 	secretLifecycleSchemasV1,
 } from "./workload/index.ts";
@@ -77,6 +78,10 @@ const artifactPaths = {
 	registryManifestJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/registry-manifest.v1.schema.json",
+	),
+	kubernetesWorkloadJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/kubernetes-workload.v1.schema.json",
 	),
 	secretLifecycleJsonSchema: resolve(
 		artifactRoot,
@@ -342,6 +347,12 @@ function buildArtifacts() {
 		definitions: registryManifestSchemasV1,
 		io: "input",
 	});
+	const kubernetesWorkloadJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/kubernetes-workload.v1.schema.json",
+		title: "Agent Infra Kubernetes Workload Contracts V1",
+		definitions: kubernetesWorkloadSchemasV1,
+		io: "input",
+	});
 	const secretLifecycleJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/secret-lifecycle.v1.schema.json",
 		title: "Agent Infra Secret Lifecycle Contracts V1",
@@ -355,6 +366,7 @@ function buildArtifacts() {
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
+		kubernetesWorkloadJsonSchema,
 		registryManifestJsonSchema,
 		secretLifecycleJsonSchema,
 		runtimeJsonSchema,

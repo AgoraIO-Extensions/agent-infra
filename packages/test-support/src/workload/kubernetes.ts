@@ -1,5 +1,4 @@
 import {
-	type KubernetesReconcileResultV1,
 	KubernetesRuntimeCapabilitiesV1Schema,
 	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
@@ -7,26 +6,14 @@ import {
 	validateWorkloadRouteSwitchRequestV1,
 	validateWorkloadRouteSwitchResultV1,
 	WorkloadCleanupRequestV1Schema,
-	type WorkloadCleanupResultV1,
-	type WorkloadRouteSwitchResultV1,
 } from "@agent-infra/contracts/workload";
-
-export interface FakeKubernetesRuntimeAdapterV1 {
-	capabilities(): ReturnType<
-		typeof KubernetesRuntimeCapabilitiesV1Schema.parse
-	>;
-	reconcile(desired: unknown): Promise<KubernetesReconcileResultV1>;
-	switchRoute(request: unknown): Promise<WorkloadRouteSwitchResultV1>;
-	cleanup(request: unknown): Promise<WorkloadCleanupResultV1>;
-	restart(): FakeKubernetesRuntimeAdapterV1;
-}
 
 export function createFakeKubernetesRuntimeAdapterV1(options: {
 	capabilities: unknown;
 	reconcile?: (desired: unknown, attempt: number) => unknown;
 	switchRoute?: (request: unknown, attempt: number) => unknown;
 	cleanup?: (request: unknown, attempt: number) => unknown;
-}): FakeKubernetesRuntimeAdapterV1 {
+}) {
 	const capabilities = KubernetesRuntimeCapabilitiesV1Schema.parse(
 		options.capabilities,
 	);
@@ -38,11 +25,11 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 		attempts.set(requestId, attempt + 1);
 		return attempt;
 	};
-	const build = (): FakeKubernetesRuntimeAdapterV1 => ({
+	return {
 		capabilities() {
 			return structuredClone(capabilities);
 		},
-		async reconcile(desiredInput) {
+		async reconcile(desiredInput: unknown) {
 			const desired = validateAgentWorkloadDesiredV1(desiredInput);
 			const configured = options.reconcile?.(
 				structuredClone(desired),
@@ -68,7 +55,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				validateKubernetesReconcileResultV1(desired, configured),
 			);
 		},
-		async switchRoute(requestInput) {
+		async switchRoute(requestInput: unknown) {
 			const request = validateWorkloadRouteSwitchRequestV1(requestInput);
 			const configured = options.switchRoute?.(
 				structuredClone(request),
@@ -94,7 +81,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				validateWorkloadRouteSwitchResultV1(request, configured),
 			);
 		},
-		async cleanup(requestInput) {
+		async cleanup(requestInput: unknown) {
 			const request = WorkloadCleanupRequestV1Schema.parse(requestInput);
 			const configured = options.cleanup?.(
 				structuredClone(request),
@@ -125,7 +112,8 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				validateWorkloadCleanupResultV1(request, configured),
 			);
 		},
-		restart: build,
-	});
-	return build();
+		restart() {
+			return this;
+		},
+	};
 }

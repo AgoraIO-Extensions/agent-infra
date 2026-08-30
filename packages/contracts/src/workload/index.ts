@@ -7,6 +7,15 @@ import {
 	WorkloadTimestampV1Schema,
 } from "./common.ts";
 import {
+	AgentWorkloadDesiredV1Schema,
+	KubernetesReconcileResultV1Schema,
+	KubernetesRuntimeCapabilitiesV1Schema,
+	WorkloadCleanupRequestV1Schema,
+	WorkloadCleanupResultV1Schema,
+	WorkloadRouteSwitchRequestV1Schema,
+	WorkloadRouteSwitchResultV1Schema,
+} from "./kubernetes.ts";
+import {
 	ImageAdmissionPolicyEvidenceV1Schema,
 	ImageRegistryAdmissionErrorV1Schema,
 	ImageRegistryAdmissionRequestV1Schema,
@@ -39,6 +48,7 @@ import {
 } from "./secret.ts";
 
 export * from "./common.ts";
+export * from "./kubernetes.ts";
 export * from "./registry.ts";
 export {
 	type RuntimeCapabilitySetV1,
@@ -50,6 +60,16 @@ export {
 	resolveRuntimeManifestCapabilitiesV1,
 } from "./runtime-manifest.ts";
 export * from "./secret.ts";
+
+export const kubernetesWorkloadSchemasV1 = {
+	AgentWorkloadDesiredV1: AgentWorkloadDesiredV1Schema,
+	KubernetesReconcileResultV1: KubernetesReconcileResultV1Schema,
+	KubernetesRuntimeCapabilitiesV1: KubernetesRuntimeCapabilitiesV1Schema,
+	WorkloadCleanupRequestV1: WorkloadCleanupRequestV1Schema,
+	WorkloadCleanupResultV1: WorkloadCleanupResultV1Schema,
+	WorkloadRouteSwitchRequestV1: WorkloadRouteSwitchRequestV1Schema,
+	WorkloadRouteSwitchResultV1: WorkloadRouteSwitchResultV1Schema,
+} as const;
 
 export const registryManifestSchemasV1 = {
 	ImageAdmissionPolicyEvidenceV1: ImageAdmissionPolicyEvidenceV1Schema,
