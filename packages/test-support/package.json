@@ -9,6 +9,14 @@
 		".": {
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
+		},
+		"./pilot": {
+			"types": "./dist/pilot/index.d.mts",
+			"import": "./dist/pilot/index.mjs"
+		},
+		"./workload": {
+			"types": "./dist/workload/index.d.mts",
+			"import": "./dist/workload/index.mjs"
 		}
 	},
 	"files": [
@@ -17,7 +25,7 @@
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"test": "pnpm build && vitest run src"
+		"test": "pnpm build && vitest run src test"
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*"

@@ -21,6 +21,9 @@ catalogs:
     ajv:
       specifier: 8.20.0
       version: 8.20.0
+    jsonc-parser:
+      specifier: 3.3.1
+      version: 3.3.1
     react:
       specifier: ^19.2.8
       version: 19.2.8
@@ -68,6 +71,40 @@ importers:
       yaml:
         specifier: 2.8.3
         version: 2.8.3
+
+  apps/agent-runtime-host:
+    dependencies:
+      '@agent-infra/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@hono/node-server':
+        specifier: ^2.0.12
+        version: 2.1.0(hono@4.13.0)
+      hono:
+        specifier: ^4.12.32
+        version: 4.13.0
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.5
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
   apps/connection-api:
     dependencies:
@@ -148,6 +185,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
@@ -164,6 +204,9 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@agent-infra/test-support':
+        specifier: workspace:*
+        version: link:../../packages/test-support
       '@tanstack/router-plugin':
         specifier: ^1.168.23
         version: 1.168.23(@tanstack/react-router@1.170.18(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(esbuild@0.28.1)(rolldown@1.2.2)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
@@ -191,11 +234,39 @@ importers:
       vite:
         specifier: ^8.1.5
         version: 8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
+
+  packages/agent-runtime:
+    dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
   packages/config: {}
 
   packages/contracts:
     dependencies:
+      jsonc-parser:
+        specifier: 'catalog:'
+        version: 3.3.1
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -1865,6 +1936,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
 
   jsonfile@6.2.1:
     resolution: {integrity: sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q==}
@@ -4261,6 +4335,8 @@ snapshots:
   json-schema-typed@8.0.2: {}
 
   json5@2.2.3: {}
+
+  jsonc-parser@3.3.1: {}
 
   jsonfile@6.2.1:
     dependencies:
