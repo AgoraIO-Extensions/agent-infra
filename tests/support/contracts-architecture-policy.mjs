@@ -14,6 +14,14 @@ const forbiddenContractImports = [
 	/^@agent-infra\//,
 ];
 const rawDatabaseImports = [/^drizzle(?:-|\/|$)/, /^postgres$/];
+const forbiddenPlatformCoreImports = [
+	/^(?:@hono\/|hono(?:-|\/|$))/,
+	/^@kubernetes(?:\/|$)/,
+	/^drizzle(?:-|\/|$)/,
+	/^postgres$/,
+	/^@agent-infra\/platform-store(?:\/|$)/,
+	/^@agent-infra\/contracts(?:\/|$)/,
+];
 const dedicatedStorePaths = new Set([
 	"packages/platform-store",
 	"packages/connection-store",
@@ -83,6 +91,15 @@ export function checkSourceImports(source, { path }) {
 		}
 		if (
 			!testFile.test(normalizedPath) &&
+			normalizedPath.startsWith("packages/platform-core/src/") &&
+			forbiddenPlatformCoreImports.some((pattern) => pattern.test(specifier))
+		) {
+			violations.push(
+				`platform-core source must not import ${specifier}: ${path}`,
+			);
+		}
+		if (
+			!testFile.test(normalizedPath) &&
 			!normalizedPath.startsWith("packages/test-support/") &&
 			(specifier === "@agent-infra/test-support" ||
 				specifier.startsWith("@agent-infra/test-support/"))
@@ -124,6 +141,19 @@ export function checkProductionManifestDependencies(manifest, { path }) {
 				if (rawDatabaseImports.some((pattern) => pattern.test(dependency))) {
 					violations.push(
 						`only dedicated Store packages may depend on ${dependency} via ${section}: ${path}`,
+					);
+				}
+			}
+		}
+		if (path === "packages/platform-core") {
+			for (const dependency of Object.keys(manifest[section] ?? {})) {
+				if (
+					forbiddenPlatformCoreImports.some((pattern) =>
+						pattern.test(dependency),
+					)
+				) {
+					violations.push(
+						`platform-core must not depend on ${dependency} via ${section}`,
 					);
 				}
 			}
