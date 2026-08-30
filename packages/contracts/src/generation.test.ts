@@ -96,6 +96,15 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.registryManifestJsonSchema.$defs).toHaveProperty(
 			"RuntimeManifestV1",
 		);
+		expect(artifacts.secretLifecycleJsonSchema.$schema).toBe(
+			"https://json-schema.org/draft/2020-12/schema",
+		);
+		expect(artifacts.secretLifecycleJsonSchema.$defs).toHaveProperty(
+			"PlatformSecretRecordV1",
+		);
+		expect(artifacts.secretLifecycleJsonSchema.$defs).toHaveProperty(
+			"SecretEncryptionKeySetV1",
+		);
 		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
 		expect(artifacts.runtimeOpenapi.security).toEqual([
 			{ RuntimeServiceBearer: [] },
@@ -205,6 +214,14 @@ describe("standard contract artifacts", () => {
 				capabilities: { connection: true },
 			}),
 		).toBe(true);
+		ajv.addSchema(artifacts.secretLifecycleJsonSchema);
+		for (const name of Object.keys(artifacts.secretLifecycleJsonSchema.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.secretLifecycleJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
 		ajv.addSchema(artifacts.runtimeJsonSchema);
 		const validateRuntimeEvent = ajv.compile({
 			$ref: `${artifacts.runtimeJsonSchema.$id}#/$defs/RuntimeEventV1`,

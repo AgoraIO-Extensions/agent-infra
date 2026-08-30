@@ -40,7 +40,10 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "./runtime/index.ts";
-import { registryManifestSchemasV1 } from "./workload/index.ts";
+import {
+	registryManifestSchemasV1,
+	secretLifecycleSchemasV1,
+} from "./workload/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -74,6 +77,10 @@ const artifactPaths = {
 	registryManifestJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/registry-manifest.v1.schema.json",
+	),
+	secretLifecycleJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/secret-lifecycle.v1.schema.json",
 	),
 	runtimeJsonSchema: resolve(
 		artifactRoot,
@@ -335,6 +342,12 @@ function buildArtifacts() {
 		definitions: registryManifestSchemasV1,
 		io: "input",
 	});
+	const secretLifecycleJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/secret-lifecycle.v1.schema.json",
+		title: "Agent Infra Secret Lifecycle Contracts V1",
+		definitions: secretLifecycleSchemasV1,
+		io: "input",
+	});
 	return {
 		jsonSchema,
 		openapi,
@@ -343,6 +356,7 @@ function buildArtifacts() {
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
 		registryManifestJsonSchema,
+		secretLifecycleJsonSchema,
 		runtimeJsonSchema,
 		runtimeOpenapi,
 	};
