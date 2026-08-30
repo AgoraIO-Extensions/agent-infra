@@ -4,10 +4,12 @@ import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 
 export class OutboxStoreError extends Error {
 	readonly code = "OUTBOX_STORE_ERROR";
+	readonly retryable: boolean;
 
-	constructor() {
+	constructor(retryable: boolean) {
 		super("Outbox store operation failed");
 		this.name = "OutboxStoreError";
+		this.retryable = retryable;
 	}
 }
 
@@ -111,6 +113,25 @@ const renewInputKeys = [...claimInputKeys, "deliveryFence"];
 const ownedLeaseInputKeys = ["itemId", "leaseOwner", "deliveryFence", "now"];
 const retryInputKeys = [...ownedLeaseInputKeys, "availableAt", "errorCode"];
 const failureInputKeys = [...ownedLeaseInputKeys, "errorCode"];
+const retryableDatabaseCodes = new Set([
+	"CONNECT_TIMEOUT",
+	"CONNECTION_CLOSED",
+	"CONNECTION_DESTROYED",
+	"CONNECTION_ENDED",
+	"EAI_AGAIN",
+	"ECONNREFUSED",
+	"ECONNRESET",
+	"EHOSTDOWN",
+	"EHOSTUNREACH",
+	"ENETDOWN",
+	"ENETUNREACH",
+	"EPIPE",
+	"ETIMEDOUT",
+	"55P03",
+	"57P01",
+	"57P02",
+	"57P03",
+]);
 
 function requireInput(value: unknown): void {
 	if (typeof value !== "object" || value === null) {
@@ -163,11 +184,25 @@ function requireOwnedLease(input: OwnedOutboxLeaseInput): void {
 	requireValidDate(input.now, "now");
 }
 
+function isRetryableDatabaseError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null || !("code" in error)) {
+		return false;
+	}
+	const code = error.code;
+	if (typeof code !== "string") return false;
+	return (
+		retryableDatabaseCodes.has(code) ||
+		code.startsWith("08") ||
+		code.startsWith("40") ||
+		code.startsWith("53")
+	);
+}
+
 async function databaseOperation<T>(operation: () => Promise<T>): Promise<T> {
 	try {
 		return await operation();
-	} catch {
-		throw new OutboxStoreError();
+	} catch (error) {
+		throw new OutboxStoreError(isRetryableDatabaseError(error));
 	}
 }
 
@@ -184,6 +219,19 @@ function claimedOutboxItem(row: ClaimedOutboxRow): ClaimedOutboxItem {
 		leaseOwner: row.lease_owner,
 		leaseExpiresAt: row.lease_expires_at,
 	};
+}
+
+function ownedLiveLease(
+	client: ReturnType<typeof postgres>,
+	input: OwnedOutboxLeaseInput,
+) {
+	return client`
+		id = ${input.itemId}
+		and status = 'processing'
+		and lease_owner = ${input.leaseOwner}
+		and delivery_fence = ${input.deliveryFence.toString()}
+		and lease_expires_at > ${input.now}
+	`;
 }
 
 async function recordOutboxAttempt(
@@ -230,11 +278,7 @@ async function markTerminal<TStatus extends TerminalOutboxStatus>(
 				lease_owner = null,
 				lease_expires_at = null,
 				updated_at = ${input.now}
-			where id = ${input.itemId}
-				and status = 'processing'
-				and lease_owner = ${input.leaseOwner}
-				and delivery_fence = ${input.deliveryFence.toString()}
-				and lease_expires_at > ${input.now}
+			where ${ownedLiveLease(client, input)}
 			returning id, attempt_count, delivery_fence::text, trace_id
 		`;
 			const row = rows[0];
@@ -313,11 +357,7 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 					update platform.outbox_items
 				set lease_expires_at = ${input.leaseExpiresAt},
 					updated_at = ${input.now}
-				where id = ${input.itemId}
-					and status = 'processing'
-					and lease_owner = ${input.leaseOwner}
-					and delivery_fence = ${input.deliveryFence.toString()}
-					and lease_expires_at > ${input.now}
+				where ${ownedLiveLease(client, input)}
 					and lease_expires_at < ${input.leaseExpiresAt}
 				returning id, scope_type, scope_id, operation, payload, trace_id,
 					attempt_count, delivery_fence::text, lease_owner, lease_expires_at
@@ -346,11 +386,7 @@ export function createPostgresOutboxStore(options: PostgresOutboxStoreOptions) {
 						lease_owner = null,
 						lease_expires_at = null,
 						updated_at = ${input.now}
-					where id = ${input.itemId}
-						and status = 'processing'
-						and lease_owner = ${input.leaseOwner}
-						and delivery_fence = ${input.deliveryFence.toString()}
-						and lease_expires_at > ${input.now}
+					where ${ownedLiveLease(client, input)}
 					returning id, attempt_count, delivery_fence::text, available_at, trace_id
 				`;
 					const row = rows[0];

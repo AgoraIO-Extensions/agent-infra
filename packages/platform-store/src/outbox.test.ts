@@ -559,8 +559,10 @@ describe("PostgreSQL outbox store", () => {
 				name: "OutboxStoreError",
 				code: "OUTBOX_STORE_ERROR",
 				message: "Outbox store operation failed",
+				retryable: false,
 			});
 			expect(failedTransition).not.toHaveProperty("constraint_name");
+			expect(failedTransition).not.toHaveProperty("cause");
 			expect(
 				await store.renew({
 					itemId: "outbox-crash",
@@ -591,6 +593,37 @@ describe("PostgreSQL outbox store", () => {
 			).toMatchObject({ status: "retry_scheduled", deliveryFence: 1n });
 		} finally {
 			await Promise.all([store.close(), setup.end()]);
+		}
+	});
+
+	it("classifies an unavailable PostgreSQL connection as safely retryable", async () => {
+		const unavailableDatabase = await startPostgresTestDatabase(
+			"platform-store-unavailable",
+		);
+		const store = builtStore.createPostgresOutboxStore({
+			databaseUrl: unavailableDatabase.databaseUrl,
+		});
+		await unavailableDatabase.stop();
+
+		try {
+			const failure = await store
+				.claim({
+					itemId: "outbox-unavailable",
+					leaseOwner: "worker-a",
+					now: new Date("2026-08-30T06:00:00.000Z"),
+					leaseExpiresAt: new Date("2026-08-30T06:01:00.000Z"),
+				})
+				.catch((error: unknown) => error);
+			expect(failure).toMatchObject({
+				name: "OutboxStoreError",
+				code: "OUTBOX_STORE_ERROR",
+				message: "Outbox store operation failed",
+				retryable: true,
+			});
+			expect(failure).not.toHaveProperty("cause");
+			expect(String(failure)).not.toContain(unavailableDatabase.databaseUrl);
+		} finally {
+			await store.close().catch(() => {});
 		}
 	});
 });
