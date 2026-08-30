@@ -161,6 +161,7 @@ function inspectJsonNode(
 	node: JsonNode,
 	depth: number,
 ): { duplicateKeys: boolean; maxDepth: number } {
+	if (depth > 8) return { duplicateKeys: false, maxDepth: depth };
 	let duplicateKeys = false;
 	let maxDepth = depth;
 	if (node.type === "object") {

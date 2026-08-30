@@ -208,6 +208,18 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}),
 		).toThrow("Image registry Runtime Manifest mismatch");
+		const deeplyNestedLabel = `${"[".repeat(9)}0${"]".repeat(9)}`;
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestLabel: deeplyNestedLabel,
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					utf8ByteLength: Buffer.byteLength(deeplyNestedLabel, "utf8"),
+					maxDepth: 8,
+				},
+			}),
+		).toThrow("Image registry Runtime Manifest mismatch");
 		expect(() =>
 			validateImageRegistryAdmissionResultV1(request, {
 				...admitted,

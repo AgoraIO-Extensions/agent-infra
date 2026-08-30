@@ -101,6 +101,14 @@ describe("Fake ImageRegistryAdapter V1", () => {
 		});
 	});
 
+	it("rejects an explicitly undefined configured outcome", async () => {
+		const adapter = createFakeImageRegistryAdapterV1({
+			[request.imageReference]: undefined,
+		});
+
+		await expect(adapter.admit(request)).rejects.toThrow();
+	});
+
 	it("returns a configured redacted policy rejection", async () => {
 		const adapter = createFakeImageRegistryAdapterV1({
 			[request.imageReference]: {
@@ -121,6 +129,15 @@ describe("Fake ImageRegistryAdapter V1", () => {
 			error: { code: "IMAGE_NOT_ADMITTED", retryable: false },
 		});
 		expect(JSON.stringify(result)).not.toContain("providerResponse");
+		const otherTrace = await adapter.admit({
+			...request,
+			requestId: "request_registry_02",
+			traceId: "trace_registry_02",
+		});
+		expect(otherTrace).toMatchObject({
+			traceId: "trace_registry_02",
+			error: { traceId: "trace_registry_02" },
+		});
 	});
 
 	it("rejects stale admission policy evidence", async () => {

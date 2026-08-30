@@ -14,29 +14,39 @@ export function createFakeImageRegistryAdapterV1(
 	return {
 		async admit(requestInput) {
 			const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
-			const configured = Object.hasOwn(
+			const hasConfiguredOutcome = Object.hasOwn(
 				outcomesByImageReference,
 				request.imageReference,
-			)
-				? outcomesByImageReference[request.imageReference]
-				: undefined;
-			const outcome =
-				configured === undefined
-					? {
-							status: "rejected",
-							error: {
-								schemaVersion: 1,
-								code: "IMAGE_NOT_ADMITTED",
-								message: "The image is not admitted by deployment policy",
-								retryable: false,
-								traceId: request.traceId,
-							},
-						}
-					: configured;
+			);
+			const configured = outcomesByImageReference[request.imageReference];
+			const outcome = !hasConfiguredOutcome
+				? {
+						status: "rejected",
+						error: {
+							schemaVersion: 1,
+							code: "IMAGE_NOT_ADMITTED",
+							message: "The image is not admitted by deployment policy",
+							retryable: false,
+							traceId: request.traceId,
+						},
+					}
+				: configured;
+			const rejected =
+				typeof outcome === "object" &&
+				outcome !== null &&
+				"status" in outcome &&
+				outcome.status === "rejected" &&
+				"error" in outcome &&
+				typeof outcome.error === "object" &&
+				outcome.error !== null &&
+				!Array.isArray(outcome.error);
 			const result =
 				typeof outcome === "object" && outcome !== null
 					? {
 							...outcome,
+							...(rejected
+								? { error: { ...outcome.error, traceId: request.traceId } }
+								: {}),
 							schemaVersion: 1,
 							requestId: request.requestId,
 							traceId: request.traceId,
