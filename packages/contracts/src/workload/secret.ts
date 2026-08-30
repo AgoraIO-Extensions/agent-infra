@@ -353,6 +353,14 @@ function activationFencesMatch(
 	return fenceKeys.every((key) => left[key] === right[key]);
 }
 
+function secretNameMatchesRevision(
+	secretRef: z.infer<typeof KubernetesSecretReferenceV1Schema>,
+) {
+	return secretRef.name.endsWith(
+		`-v${secretRef.secretVersion}-r${secretRef.configRevision}`,
+	);
+}
+
 export function validatePlatformSecretRecordV1(
 	recordInput: unknown,
 	expectedFenceInput?: unknown,
@@ -379,6 +387,7 @@ export function validatePlatformSecretRecordV1(
 		aad.algorithmVersion !== record.crypto.algorithmVersion ||
 		aad.wrappingAlgorithmVersion !== record.crypto.wrappingAlgorithmVersion ||
 		aad.wrappingKeyVersion !== record.crypto.wrappingKeyVersion ||
+		(secretRef !== undefined && !secretNameMatchesRevision(secretRef)) ||
 		(secretRef !== undefined &&
 			(record.ownerType !== secretRef.ownerType ||
 				record.ownerId !== secretRef.ownerId ||
@@ -445,7 +454,8 @@ export function validateSecretActivationObservationV1(
 	if (
 		!activationFencesMatch(observation.activationFence, expected) ||
 		(observation.kubernetesSecretRef !== undefined &&
-			(observation.kubernetesSecretRef.agentId !== expected.agentId ||
+			(!secretNameMatchesRevision(observation.kubernetesSecretRef) ||
+				observation.kubernetesSecretRef.agentId !== expected.agentId ||
 				observation.kubernetesSecretRef.secretId !== expected.secretId ||
 				observation.kubernetesSecretRef.secretVersion !==
 					expected.secretVersion ||

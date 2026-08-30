@@ -373,24 +373,23 @@ describe("Platform Secret V1 contract", () => {
 		expect(
 			validateSecretActivationObservationV1(activationFence, observed),
 		).toEqual(observed);
-		expect(() =>
-			validateSecretActivationObservationV1(activationFence, {
-				...observed,
-				activationFence: {
-					...activationFence,
-					kubernetesSecretName: "agent-01-secret-01-v2-r8",
-				},
-			}),
-		).toThrow("Secret activation fence mismatch");
-		expect(() =>
-			validateSecretActivationObservationV1(activationFence, {
-				...observed,
-				activationFence: {
-					...activationFence,
-					configRevision: activationFence.configRevision - 1,
-				},
-			}),
-		).toThrow("Secret activation fence mismatch");
+		for (const mismatch of [
+			{ agentId: "agent_02" },
+			{ secretId: "secret_02" },
+			{ secretVersion: activationFence.secretVersion - 1 },
+			{ configRevision: activationFence.configRevision - 1 },
+			{ kubernetesSecretName: "agent-01-secret-01-v2-r8" },
+			{ workloadUid: "workload_uid_02" },
+			{ workloadGeneration: activationFence.workloadGeneration - 1 },
+			{ fence: activationFence.fence - 1 },
+		]) {
+			expect(() =>
+				validateSecretActivationObservationV1(activationFence, {
+					...observed,
+					activationFence: { ...activationFence, ...mismatch },
+				}),
+			).toThrow("Secret activation fence mismatch");
+		}
 		expect(() =>
 			validateSecretActivationObservationV1(activationFence, {
 				...observed,
@@ -428,6 +427,20 @@ describe("Platform Secret V1 contract", () => {
 				kubernetesSecretRef: {
 					...kubernetesSecretRef,
 					name: "agent-01-secret-01-v2-r8",
+				},
+			}),
+		).toThrow("Platform Secret record correlation mismatch");
+		const reusedName = "agent-01-secret-01-v1-r7";
+		expect(() =>
+			validatePlatformSecretRecordV1({
+				...active,
+				kubernetesSecretRef: {
+					...kubernetesSecretRef,
+					name: reusedName,
+				},
+				activationFence: {
+					...activationFence,
+					kubernetesSecretName: reusedName,
 				},
 			}),
 		).toThrow("Platform Secret record correlation mismatch");
