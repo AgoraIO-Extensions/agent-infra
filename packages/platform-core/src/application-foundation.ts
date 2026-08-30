@@ -217,22 +217,11 @@ function invalidApplicationFoundationInput(): never {
 function parseApplicationFoundationCommandV1(
 	command: unknown,
 ): CommitApplicationFoundationCommandV1 {
-	const values = snapshotExactDataValues(command, commandKeys);
-	if (!values) invalidApplicationFoundationInput();
-	const {
-		schemaVersion,
-		applicationId,
-		agentId,
-		requestId,
-		name,
-		description,
-		sourceReference,
-		traceId,
-		submittedAt,
-	} = values;
-	if (
-		schemaVersion !== 1 ||
-		![
+	try {
+		const values = snapshotExactDataValues(command, commandKeys);
+		if (!values) invalidApplicationFoundationInput();
+		const {
+			schemaVersion,
 			applicationId,
 			agentId,
 			requestId,
@@ -240,25 +229,43 @@ function parseApplicationFoundationCommandV1(
 			description,
 			sourceReference,
 			traceId,
-		].every((value) => typeof value === "string" && value.length > 0) ||
-		typeof name !== "string" ||
-		Array.from(name).length > 200 ||
-		!(submittedAt instanceof Date) ||
-		!Number.isFinite(Date.prototype.getTime.call(submittedAt))
-	) {
+			submittedAt,
+		} = values;
+		if (
+			schemaVersion !== 1 ||
+			![
+				applicationId,
+				agentId,
+				requestId,
+				name,
+				description,
+				sourceReference,
+				traceId,
+			].every((value) => typeof value === "string" && value.length > 0) ||
+			typeof name !== "string" ||
+			Array.from(name).length > 200 ||
+			!(submittedAt instanceof Date)
+		) {
+			invalidApplicationFoundationInput();
+		}
+		const submittedAtMilliseconds = Date.prototype.getTime.call(submittedAt);
+		if (!Number.isFinite(submittedAtMilliseconds)) {
+			invalidApplicationFoundationInput();
+		}
+		return {
+			schemaVersion,
+			applicationId: applicationId as string,
+			agentId: agentId as string,
+			requestId: requestId as string,
+			name,
+			description: description as string,
+			sourceReference: sourceReference as string,
+			traceId: traceId as string,
+			submittedAt: new Date(submittedAtMilliseconds),
+		};
+	} catch {
 		invalidApplicationFoundationInput();
 	}
-	return {
-		schemaVersion,
-		applicationId: applicationId as string,
-		agentId: agentId as string,
-		requestId: requestId as string,
-		name,
-		description: description as string,
-		sourceReference: sourceReference as string,
-		traceId: traceId as string,
-		submittedAt,
-	};
 }
 
 function parseApplicationFoundationActorContextV1(
@@ -287,9 +294,7 @@ export function createApplicationFoundationUseCaseV1(
 			const normalizedCommand = parseApplicationFoundationCommandV1(command);
 			const normalizedActorContext =
 				parseApplicationFoundationActorContextV1(actorContext);
-			const submittedAt = new Date(
-				Date.prototype.getTime.call(normalizedCommand.submittedAt),
-			);
+			const submittedAt = normalizedCommand.submittedAt;
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {

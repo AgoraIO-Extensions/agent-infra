@@ -195,6 +195,88 @@ describe("Application foundation use case", () => {
 		expect(portCalls).toBe(0);
 	});
 
+	it.each([
+		[
+			"transparent Date proxy",
+			new Proxy(new Date("2026-08-30T12:00:00.000Z"), {}),
+		],
+		[
+			"nested Date prototype trap",
+			new Proxy(new Date("2026-08-30T12:00:00.000Z"), {
+				getPrototypeOf() {
+					throw new Error("sensitive nested Date prototype trap");
+				},
+			}),
+		],
+		["invalid Date internal slot", Object.create(Date.prototype)],
+		["nonfinite Date", new Date(Number.NaN)],
+	])("sanitizes a %s before the Port", async (_name, submittedAt) => {
+		const { error, portCalls } = await rejectedBeforePort(
+			{ ...validCommand(), submittedAt },
+			actorContext(),
+		);
+
+		expectInvalidCommand(error);
+		expect(String(error)).not.toContain("sensitive");
+		expect(portCalls).toBe(0);
+	});
+
+	it.each(["ownKeys", "descriptor"] as const)(
+		"clones the submitted instant before actor-context %s side effects",
+		async (mode) => {
+			const originalInstant = "2026-08-30T12:00:00.000Z";
+			const callerDate = new Date(originalInstant);
+			const command = { ...validCommand(), submittedAt: callerDate };
+			const targetContext = actorContext();
+			let sideEffects = 0;
+			const mutateCallerDate = () => {
+				sideEffects += 1;
+				callerDate.setTime(new Date("2030-01-01T00:00:00.000Z").valueOf());
+			};
+			const context = new Proxy(
+				targetContext,
+				mode === "ownKeys"
+					? {
+							ownKeys(target) {
+								mutateCallerDate();
+								return Reflect.ownKeys(target);
+							},
+						}
+					: {
+							getOwnPropertyDescriptor(target, property) {
+								mutateCallerDate();
+								return Reflect.getOwnPropertyDescriptor(target, property);
+							},
+						},
+			);
+			let observedPlan: ApplicationFoundationWritePlanV1 | undefined;
+			const useCase = createApplicationFoundationUseCaseV1({
+				async commit(plan) {
+					observedPlan = plan;
+				},
+			});
+
+			await expect(useCase.submit(command, context)).resolves.toMatchObject({
+				applicationId: command.applicationId,
+				agentId: command.agentId,
+			});
+			expect(sideEffects).toBeGreaterThan(0);
+			expect(callerDate.toISOString()).toBe("2030-01-01T00:00:00.000Z");
+			const plan = observedPlan;
+			if (!plan) throw new Error("Persistence did not observe the write plan");
+			for (const timestamp of [
+				plan.agent.createdAt,
+				plan.application.submittedAt,
+				plan.configurationRevision.createdAt,
+				plan.owner.createdAt,
+				plan.outboxIntent.occurredAt,
+				plan.auditEvent.occurredAt,
+			]) {
+				expect(timestamp.toISOString()).toBe(originalInstant);
+			}
+		},
+	);
+
 	it("accepts ordinary frozen command and actor objects", async () => {
 		let portCalls = 0;
 		const useCase = createApplicationFoundationUseCaseV1({
