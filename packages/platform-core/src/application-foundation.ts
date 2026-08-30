@@ -2,13 +2,17 @@ export interface CommitApplicationFoundationCommandV1 {
 	readonly schemaVersion: 1;
 	readonly applicationId: string;
 	readonly agentId: string;
-	readonly applicantId: string;
 	readonly requestId: string;
 	readonly name: string;
 	readonly description: string;
 	readonly sourceReference: string;
 	readonly traceId: string;
 	readonly submittedAt: Date;
+}
+
+export interface ApplicationFoundationActorContextV1 {
+	readonly schemaVersion: 1;
+	readonly userId: string;
 }
 
 export interface CommitApplicationFoundationResultV1 {
@@ -83,6 +87,7 @@ export interface ApplicationFoundationTransactionPortV1 {
 export interface ApplicationFoundationUseCaseV1 {
 	submit(
 		command: CommitApplicationFoundationCommandV1,
+		actorContext: ApplicationFoundationActorContextV1,
 	): Promise<CommitApplicationFoundationResultV1>;
 }
 
@@ -158,34 +163,90 @@ function recognizedApplicationFoundationErrorCode(
 const requiredStrings = [
 	"applicationId",
 	"agentId",
-	"applicantId",
 	"requestId",
 	"name",
 	"description",
 	"sourceReference",
 	"traceId",
 ] as const;
+const commandKeys = new Set<PropertyKey>([
+	"schemaVersion",
+	...requiredStrings,
+	"submittedAt",
+]);
+const actorContextKeys = new Set<PropertyKey>(["schemaVersion", "userId"]);
+
+function hasExactOwnKeys(
+	value: object,
+	allowed: ReadonlySet<PropertyKey>,
+): boolean {
+	const ownKeys = Reflect.ownKeys(value);
+	return (
+		ownKeys.length === allowed.size && ownKeys.every((key) => allowed.has(key))
+	);
+}
+
+function invalidApplicationFoundationInput(): never {
+	throw new ApplicationFoundationError("invalid_command");
+}
+
+function isApplicationFoundationCommandV1(
+	command: unknown,
+): command is CommitApplicationFoundationCommandV1 {
+	try {
+		if (typeof command !== "object" || command === null) return false;
+		const candidate = command as Partial<CommitApplicationFoundationCommandV1>;
+		const nameLength =
+			typeof candidate.name === "string"
+				? Array.from(candidate.name).length
+				: 0;
+		return !(
+			!hasExactOwnKeys(command, commandKeys) ||
+			candidate.schemaVersion !== 1 ||
+			requiredStrings.some(
+				(field) =>
+					typeof candidate[field] !== "string" || candidate[field].length === 0,
+			) ||
+			nameLength > 200 ||
+			!(candidate.submittedAt instanceof Date) ||
+			!Number.isFinite(candidate.submittedAt.valueOf())
+		);
+	} catch {
+		return false;
+	}
+}
 
 function assertApplicationFoundationCommandV1(
 	command: unknown,
 ): asserts command is CommitApplicationFoundationCommandV1 {
-	if (typeof command !== "object" || command === null) {
-		throw new ApplicationFoundationError("invalid_command");
+	if (!isApplicationFoundationCommandV1(command)) {
+		invalidApplicationFoundationInput();
 	}
-	const candidate = command as Partial<CommitApplicationFoundationCommandV1>;
-	const nameLength =
-		typeof candidate.name === "string" ? Array.from(candidate.name).length : 0;
-	if (
-		candidate.schemaVersion !== 1 ||
-		requiredStrings.some(
-			(field) =>
-				typeof candidate[field] !== "string" || candidate[field].length === 0,
-		) ||
-		nameLength > 200 ||
-		!(candidate.submittedAt instanceof Date) ||
-		!Number.isFinite(candidate.submittedAt.valueOf())
-	) {
-		throw new ApplicationFoundationError("invalid_command");
+}
+
+function isApplicationFoundationActorContextV1(
+	actorContext: unknown,
+): actorContext is ApplicationFoundationActorContextV1 {
+	try {
+		if (typeof actorContext !== "object" || actorContext === null) return false;
+		const candidate =
+			actorContext as Partial<ApplicationFoundationActorContextV1>;
+		return !(
+			!hasExactOwnKeys(actorContext, actorContextKeys) ||
+			candidate.schemaVersion !== 1 ||
+			typeof candidate.userId !== "string" ||
+			candidate.userId.length === 0
+		);
+	} catch {
+		return false;
+	}
+}
+
+function assertApplicationFoundationActorContextV1(
+	actorContext: unknown,
+): asserts actorContext is ApplicationFoundationActorContextV1 {
+	if (!isApplicationFoundationActorContextV1(actorContext)) {
+		invalidApplicationFoundationInput();
 	}
 }
 
@@ -195,8 +256,9 @@ export function createApplicationFoundationUseCaseV1(
 	transaction: ApplicationFoundationTransactionPortV1,
 ): ApplicationFoundationUseCaseV1 {
 	return {
-		async submit(command) {
+		async submit(command, actorContext) {
 			assertApplicationFoundationCommandV1(command);
+			assertApplicationFoundationActorContextV1(actorContext);
 			const submittedAt = new Date(command.submittedAt.valueOf());
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
@@ -208,7 +270,7 @@ export function createApplicationFoundationUseCaseV1(
 				application: {
 					applicationId: command.applicationId,
 					agentId: command.agentId,
-					applicantId: command.applicantId,
+					applicantId: actorContext.userId,
 					name: command.name,
 					description: command.description,
 					status: "pending_approval",
@@ -224,7 +286,7 @@ export function createApplicationFoundationUseCaseV1(
 				},
 				owner: {
 					agentId: command.agentId,
-					ownerId: command.applicantId,
+					ownerId: actorContext.userId,
 					createdAt: submittedAt,
 				},
 				outboxIntent: {
@@ -246,7 +308,7 @@ export function createApplicationFoundationUseCaseV1(
 					requestId: command.requestId,
 					agentId: command.agentId,
 					actorType: "user",
-					actorId: command.applicantId,
+					actorId: actorContext.userId,
 					action: "agent.application.submitted",
 					targetType: "agent_application",
 					targetId: command.applicationId,

@@ -12,13 +12,16 @@ const validCommand = () => ({
 	schemaVersion: 1 as const,
 	applicationId: "application core errors",
 	agentId: "agent core errors",
-	applicantId: "user core errors",
 	requestId: "request core errors",
 	name: "Core Error Agent",
 	description: "Verifies Core error normalization",
 	sourceReference: "source core errors",
 	traceId: "trace core errors",
 	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
+});
+const actorContext = () => ({
+	schemaVersion: 1 as const,
+	userId: "user core errors",
 });
 const errorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
@@ -30,7 +33,7 @@ async function normalizedPortFailure(failure: unknown): Promise<unknown> {
 			throw failure;
 		},
 	});
-	return useCase.submit(validCommand()).then(
+	return useCase.submit(validCommand(), actorContext()).then(
 		() => expect.fail("Expected the transaction Port to fail"),
 		(reason: unknown) => reason,
 	);
@@ -133,18 +136,23 @@ describe("Application foundation use case", () => {
 			},
 		});
 
-		const result = useCase.submit({
-			schemaVersion: 1,
-			applicationId: "application date copy",
-			agentId: "agent date copy",
-			applicantId: "user date copy",
-			requestId: "request date copy",
-			name: "Date Copy Agent",
-			description: "Verifies timestamp ownership",
-			sourceReference: "source date copy",
-			traceId: "trace date copy",
-			submittedAt,
-		});
+		const result = useCase.submit(
+			{
+				schemaVersion: 1,
+				applicationId: "application date copy",
+				agentId: "agent date copy",
+				requestId: "request date copy",
+				name: "Date Copy Agent",
+				description: "Verifies timestamp ownership",
+				sourceReference: "source date copy",
+				traceId: "trace date copy",
+				submittedAt,
+			},
+			{
+				schemaVersion: 1,
+				userId: "user date copy",
+			},
+		);
 		submittedAt.setTime(new Date("2030-01-01T00:00:00.000Z").valueOf());
 		releasePersistence();
 

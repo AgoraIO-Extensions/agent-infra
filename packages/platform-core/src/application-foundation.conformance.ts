@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 
 import {
+	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
 	type CommitApplicationFoundationCommandV1,
 	createApplicationFoundationUseCaseV1,
@@ -33,13 +34,16 @@ const command: CommitApplicationFoundationCommandV1 = {
 	schemaVersion: 1,
 	applicationId: "application opaque alpha",
 	agentId: "agent opaque alpha",
-	applicantId: "user opaque alpha",
 	requestId: "request opaque alpha",
 	name: "Operations Assistant",
 	description: "Assists with operational workflows",
 	sourceReference: "template opaque alpha",
 	traceId: "trace opaque alpha",
 	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
+};
+const actorContext = {
+	schemaVersion: 1 as const,
+	userId: "user opaque alpha",
 };
 const supplementaryNameCharacter = "\u{1f600}";
 
@@ -65,9 +69,42 @@ export function applicationFoundationTransactionConformance(
 				{ ...command, requestId: "" },
 				{ ...command, name: "n".repeat(201) },
 				{ ...command, name: supplementaryNameCharacter.repeat(201) },
+				{ ...command, applicantId: "caller forged user" },
 			]) {
 				await expect(
-					useCase.submit(invalid as CommitApplicationFoundationCommandV1),
+					useCase.submit(
+						invalid as CommitApplicationFoundationCommandV1,
+						actorContext,
+					),
+				).rejects.toMatchObject({
+					name: "ApplicationFoundationError",
+					code: "invalid_command",
+				});
+			}
+			await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("rejects invalid actor context before persistence", async () => {
+		const harness = await createHarness();
+		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		try {
+			for (const invalid of [
+				{ schemaVersion: 1 },
+				{ schemaVersion: 1, userId: "" },
+				{ schemaVersion: 2, userId: actorContext.userId },
+				{ ...actorContext, applicantId: "caller forged user" },
+				Object.defineProperty({ schemaVersion: 1 }, "userId", {
+					enumerable: true,
+					get() {
+						throw new ApplicationFoundationError("conflict");
+					},
+				}),
+			]) {
+				await expect(
+					useCase.submit(command, invalid as never),
 				).rejects.toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "invalid_command",
@@ -84,12 +121,12 @@ export function applicationFoundationTransactionConformance(
 		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		const name = supplementaryNameCharacter.repeat(101);
 		try {
-			await expect(useCase.submit({ ...command, name })).resolves.toMatchObject(
-				{
-					applicationId: command.applicationId,
-					agentId: command.agentId,
-				},
-			);
+			await expect(
+				useCase.submit({ ...command, name }, actorContext),
+			).resolves.toMatchObject({
+				applicationId: command.applicationId,
+				agentId: command.agentId,
+			});
 			await expect(harness.snapshot()).resolves.toMatchObject({
 				applications: [{ name }],
 			});
@@ -102,7 +139,7 @@ export function applicationFoundationTransactionConformance(
 		const harness = await createHarness();
 		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		try {
-			await expect(useCase.submit(command)).resolves.toEqual({
+			await expect(useCase.submit(command, actorContext)).resolves.toEqual({
 				schemaVersion: 1,
 				applicationId: command.applicationId,
 				agentId: command.agentId,
@@ -120,7 +157,7 @@ export function applicationFoundationTransactionConformance(
 					{
 						applicationId: command.applicationId,
 						agentId: command.agentId,
-						applicantId: command.applicantId,
+						applicantId: actorContext.userId,
 						name: command.name,
 						description: command.description,
 						status: "pending_approval",
@@ -135,7 +172,7 @@ export function applicationFoundationTransactionConformance(
 						sourceReference: command.sourceReference,
 					},
 				],
-				owners: [{ agentId: command.agentId, ownerId: command.applicantId }],
+				owners: [{ agentId: command.agentId, ownerId: actorContext.userId }],
 				outboxIntents: [
 					{
 						scopeType: "agent",
@@ -157,7 +194,7 @@ export function applicationFoundationTransactionConformance(
 						requestId: command.requestId,
 						agentId: command.agentId,
 						actorType: "user",
-						actorId: command.applicantId,
+						actorId: actorContext.userId,
 						action: "agent.application.submitted",
 						targetType: "agent_application",
 						targetId: command.applicationId,
@@ -174,11 +211,13 @@ export function applicationFoundationTransactionConformance(
 		const harness = await createHarness();
 		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 		try {
-			await useCase.submit(command);
-			await expect(useCase.submit(command)).rejects.toMatchObject({
-				name: "ApplicationFoundationError",
-				code: "conflict",
-			});
+			await useCase.submit(command, actorContext);
+			await expect(useCase.submit(command, actorContext)).rejects.toMatchObject(
+				{
+					name: "ApplicationFoundationError",
+					code: "conflict",
+				},
+			);
 		} finally {
 			await harness.close();
 		}
@@ -190,12 +229,16 @@ export function applicationFoundationTransactionConformance(
 			const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
 			try {
 				await harness.failNextBefore(point);
-				await expect(useCase.submit(command)).rejects.toMatchObject({
+				await expect(
+					useCase.submit(command, actorContext),
+				).rejects.toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "persistence_failed",
 				});
 				await expect(harness.snapshot()).resolves.toEqual(emptySnapshot);
-				await expect(useCase.submit(command)).resolves.toMatchObject({
+				await expect(
+					useCase.submit(command, actorContext),
+				).resolves.toMatchObject({
 					applicationId: command.applicationId,
 					agentId: command.agentId,
 					configurationRevision: 1,
