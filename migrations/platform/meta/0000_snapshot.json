@@ -1,5 +1,5 @@
 {
-  "id": "a91807c3-9419-4a32-b6f7-b8e6c9df3373",
+  "id": "7cc0cb5c-6611-4353-98af-9819046367ed",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -95,9 +95,21 @@
           "name": "audit_trace_id_non_empty",
           "value": "char_length(\"platform\".\"audit_events\".\"trace_id\") > 0"
         },
+        "audit_actor_type_non_empty": {
+          "name": "audit_actor_type_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"actor_type\") > 0"
+        },
         "audit_actor_id_non_empty": {
           "name": "audit_actor_id_non_empty",
           "value": "char_length(\"platform\".\"audit_events\".\"actor_id\") > 0"
+        },
+        "audit_action_non_empty": {
+          "name": "audit_action_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"action\") > 0"
+        },
+        "audit_target_type_non_empty": {
+          "name": "audit_target_type_non_empty",
+          "value": "char_length(\"platform\".\"audit_events\".\"target_type\") > 0"
         },
         "audit_target_id_non_empty": {
           "name": "audit_target_id_non_empty",
@@ -231,6 +243,10 @@
           "name": "idempotency_id_non_empty",
           "value": "char_length(\"platform\".\"idempotency_records\".\"id\") > 0"
         },
+        "idempotency_scope_type_non_empty": {
+          "name": "idempotency_scope_type_non_empty",
+          "value": "char_length(\"platform\".\"idempotency_records\".\"scope_type\") > 0"
+        },
         "idempotency_scope_id_non_empty": {
           "name": "idempotency_scope_id_non_empty",
           "value": "char_length(\"platform\".\"idempotency_records\".\"scope_id\") > 0"
@@ -238,6 +254,10 @@
         "idempotency_actor_id_non_empty": {
           "name": "idempotency_actor_id_non_empty",
           "value": "char_length(\"platform\".\"idempotency_records\".\"actor_id\") > 0"
+        },
+        "idempotency_command_type_non_empty": {
+          "name": "idempotency_command_type_non_empty",
+          "value": "char_length(\"platform\".\"idempotency_records\".\"command_type\") > 0"
         },
         "idempotency_key_format": {
           "name": "idempotency_key_format",
@@ -382,9 +402,17 @@
           "name": "outbox_id_non_empty",
           "value": "char_length(\"platform\".\"outbox_items\".\"id\") > 0"
         },
+        "outbox_scope_type_non_empty": {
+          "name": "outbox_scope_type_non_empty",
+          "value": "char_length(\"platform\".\"outbox_items\".\"scope_type\") > 0"
+        },
         "outbox_scope_id_non_empty": {
           "name": "outbox_scope_id_non_empty",
           "value": "char_length(\"platform\".\"outbox_items\".\"scope_id\") > 0"
+        },
+        "outbox_operation_non_empty": {
+          "name": "outbox_operation_non_empty",
+          "value": "char_length(\"platform\".\"outbox_items\".\"operation\") > 0"
         },
         "outbox_trace_id_non_empty": {
           "name": "outbox_trace_id_non_empty",
@@ -401,6 +429,14 @@
         "outbox_lease_pair": {
           "name": "outbox_lease_pair",
           "value": "(\"platform\".\"outbox_items\".\"lease_owner\" IS NULL) = (\"platform\".\"outbox_items\".\"lease_expires_at\" IS NULL)"
+        },
+        "outbox_lease_owner_non_empty": {
+          "name": "outbox_lease_owner_non_empty",
+          "value": "\"platform\".\"outbox_items\".\"lease_owner\" IS NULL OR char_length(\"platform\".\"outbox_items\".\"lease_owner\") > 0"
+        },
+        "outbox_processing_lease": {
+          "name": "outbox_processing_lease",
+          "value": "(\"platform\".\"outbox_items\".\"status\" = 'processing') = (\"platform\".\"outbox_items\".\"lease_owner\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -519,6 +555,10 @@
         "persisted_event_trace_id_non_empty": {
           "name": "persisted_event_trace_id_non_empty",
           "value": "char_length(\"platform\".\"persisted_events\".\"trace_id\") > 0"
+        },
+        "persisted_event_type_non_empty": {
+          "name": "persisted_event_type_non_empty",
+          "value": "char_length(\"platform\".\"persisted_events\".\"event_type\") > 0"
         },
         "persisted_event_sequence_non_negative": {
           "name": "persisted_event_sequence_non_negative",

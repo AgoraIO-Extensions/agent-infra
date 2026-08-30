@@ -15,7 +15,7 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "tsdown",
+		"build": "tsdown && node src/copy-migrations.mjs",
 		"check-migrations": "node src/check-migrations.mjs",
 		"check-types": "tsc --noEmit",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",

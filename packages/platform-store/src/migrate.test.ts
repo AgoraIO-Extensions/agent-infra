@@ -6,10 +6,7 @@ import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import {
-	migratePlatformDatabase,
-	platformDatabaseUrlFromEnvironment,
-} from "./migrate.ts";
+import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import {
 	platformInfrastructureTables,
 	platformStatusValues,
@@ -22,6 +19,9 @@ const username = "platform_test";
 const password = "platform_test_password";
 const database = "platform_test";
 type PostgresClient = ReturnType<typeof postgres>;
+const builtStore: typeof import("./index.ts") = await import(
+	new URL("../dist/index.mjs", import.meta.url).href
+);
 
 let containerName = "";
 let databaseUrl = "";
@@ -154,7 +154,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 	});
 
 	it("applies, replays, and enforces the authored infrastructure schema", async () => {
-		await migratePlatformDatabase({ databaseUrl });
+		await builtStore.migratePlatformDatabase({ databaseUrl });
 		const client = postgres(databaseUrl, { max: 1 });
 		try {
 			const serverVersion = await client`show server_version`;
@@ -237,7 +237,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 			});
 
 			const catalogBeforeReplay = await readPlatformCatalog(client);
-			await migratePlatformDatabase({ databaseUrl });
+			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const catalogAfterReplay = await readPlatformCatalog(client);
 			expect(catalogAfterReplay).toEqual(catalogBeforeReplay);
 			const replayedHistory = await client`

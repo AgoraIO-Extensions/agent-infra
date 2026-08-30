@@ -64,7 +64,15 @@ export const outboxItems = platformSchema.table(
 	},
 	(table) => [
 		check("outbox_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"outbox_scope_type_non_empty",
+			sql`char_length(${table.scopeType}) > 0`,
+		),
 		check("outbox_scope_id_non_empty", sql`char_length(${table.scopeId}) > 0`),
+		check(
+			"outbox_operation_non_empty",
+			sql`char_length(${table.operation}) > 0`,
+		),
 		check("outbox_trace_id_non_empty", sql`char_length(${table.traceId}) > 0`),
 		check("outbox_attempt_count_non_negative", sql`${table.attemptCount} >= 0`),
 		check(
@@ -74,6 +82,14 @@ export const outboxItems = platformSchema.table(
 		check(
 			"outbox_lease_pair",
 			sql`(${table.leaseOwner} IS NULL) = (${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"outbox_lease_owner_non_empty",
+			sql`${table.leaseOwner} IS NULL OR char_length(${table.leaseOwner}) > 0`,
+		),
+		check(
+			"outbox_processing_lease",
+			sql`(${table.status} = 'processing') = (${table.leaseOwner} IS NOT NULL)`,
 		),
 		index("outbox_eligibility_idx").on(table.status, table.availableAt),
 	],
@@ -97,7 +113,16 @@ export const auditEvents = platformSchema.table(
 	(table) => [
 		check("audit_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check("audit_trace_id_non_empty", sql`char_length(${table.traceId}) > 0`),
+		check(
+			"audit_actor_type_non_empty",
+			sql`char_length(${table.actorType}) > 0`,
+		),
 		check("audit_actor_id_non_empty", sql`char_length(${table.actorId}) > 0`),
+		check("audit_action_non_empty", sql`char_length(${table.action}) > 0`),
+		check(
+			"audit_target_type_non_empty",
+			sql`char_length(${table.targetType}) > 0`,
+		),
 		check("audit_target_id_non_empty", sql`char_length(${table.targetId}) > 0`),
 		index("audit_trace_idx").on(table.traceId),
 	],
@@ -125,12 +150,20 @@ export const idempotencyRecords = platformSchema.table(
 	(table) => [
 		check("idempotency_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
+			"idempotency_scope_type_non_empty",
+			sql`char_length(${table.scopeType}) > 0`,
+		),
+		check(
 			"idempotency_scope_id_non_empty",
 			sql`char_length(${table.scopeId}) > 0`,
 		),
 		check(
 			"idempotency_actor_id_non_empty",
 			sql`char_length(${table.actorId}) > 0`,
+		),
+		check(
+			"idempotency_command_type_non_empty",
+			sql`char_length(${table.commandType}) > 0`,
 		),
 		check(
 			"idempotency_key_format",
@@ -180,6 +213,10 @@ export const persistedEvents = platformSchema.table(
 		check(
 			"persisted_event_trace_id_non_empty",
 			sql`char_length(${table.traceId}) > 0`,
+		),
+		check(
+			"persisted_event_type_non_empty",
+			sql`char_length(${table.eventType}) > 0`,
 		),
 		check("persisted_event_sequence_non_negative", sql`${table.sequence} >= 0`),
 		check(

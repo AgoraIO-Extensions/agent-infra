@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -10,7 +10,9 @@ export interface PlatformMigrationOptions {
 
 const defaultMigrationsFolder = resolve(
 	import.meta.dirname,
-	"../../../migrations/platform",
+	basename(import.meta.dirname) === "src"
+		? "../../../migrations/platform"
+		: "migrations",
 );
 
 export function platformDatabaseUrlFromEnvironment(

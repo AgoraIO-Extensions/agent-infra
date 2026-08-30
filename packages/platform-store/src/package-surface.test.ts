@@ -51,7 +51,13 @@ describe("platform-store package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toEqual(
-			expect.arrayContaining(["dist/index.d.mts", "dist/index.mjs"]),
+			expect.arrayContaining([
+				"dist/index.d.mts",
+				"dist/index.mjs",
+				"dist/migrations/0000_platform_infrastructure.sql",
+				"dist/migrations/meta/0000_snapshot.json",
+				"dist/migrations/meta/_journal.json",
+			]),
 		);
 		expect(
 			packedFiles.some((path: string) =>

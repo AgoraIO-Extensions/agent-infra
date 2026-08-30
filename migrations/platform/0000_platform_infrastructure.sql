@@ -15,7 +15,10 @@ CREATE TABLE "platform"."audit_events" (
 	"occurred_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "audit_id_non_empty" CHECK (char_length("platform"."audit_events"."id") > 0),
 	CONSTRAINT "audit_trace_id_non_empty" CHECK (char_length("platform"."audit_events"."trace_id") > 0),
+	CONSTRAINT "audit_actor_type_non_empty" CHECK (char_length("platform"."audit_events"."actor_type") > 0),
 	CONSTRAINT "audit_actor_id_non_empty" CHECK (char_length("platform"."audit_events"."actor_id") > 0),
+	CONSTRAINT "audit_action_non_empty" CHECK (char_length("platform"."audit_events"."action") > 0),
+	CONSTRAINT "audit_target_type_non_empty" CHECK (char_length("platform"."audit_events"."target_type") > 0),
 	CONSTRAINT "audit_target_id_non_empty" CHECK (char_length("platform"."audit_events"."target_id") > 0)
 );
 --> statement-breakpoint
@@ -32,8 +35,10 @@ CREATE TABLE "platform"."idempotency_records" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "idempotency_id_non_empty" CHECK (char_length("platform"."idempotency_records"."id") > 0),
+	CONSTRAINT "idempotency_scope_type_non_empty" CHECK (char_length("platform"."idempotency_records"."scope_type") > 0),
 	CONSTRAINT "idempotency_scope_id_non_empty" CHECK (char_length("platform"."idempotency_records"."scope_id") > 0),
 	CONSTRAINT "idempotency_actor_id_non_empty" CHECK (char_length("platform"."idempotency_records"."actor_id") > 0),
+	CONSTRAINT "idempotency_command_type_non_empty" CHECK (char_length("platform"."idempotency_records"."command_type") > 0),
 	CONSTRAINT "idempotency_key_format" CHECK ("platform"."idempotency_records"."idempotency_key" ~ '^[A-Za-z0-9._~-]{1,128}$'),
 	CONSTRAINT "idempotency_digest_format" CHECK ("platform"."idempotency_records"."request_digest" ~ '^[a-f0-9]{64}$'),
 	CONSTRAINT "idempotency_result_state" CHECK (("platform"."idempotency_records"."status" = 'reserved' AND "platform"."idempotency_records"."result" IS NULL) OR ("platform"."idempotency_records"."status" = 'completed' AND "platform"."idempotency_records"."result" IS NOT NULL))
@@ -55,11 +60,15 @@ CREATE TABLE "platform"."outbox_items" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "outbox_id_non_empty" CHECK (char_length("platform"."outbox_items"."id") > 0),
+	CONSTRAINT "outbox_scope_type_non_empty" CHECK (char_length("platform"."outbox_items"."scope_type") > 0),
 	CONSTRAINT "outbox_scope_id_non_empty" CHECK (char_length("platform"."outbox_items"."scope_id") > 0),
+	CONSTRAINT "outbox_operation_non_empty" CHECK (char_length("platform"."outbox_items"."operation") > 0),
 	CONSTRAINT "outbox_trace_id_non_empty" CHECK (char_length("platform"."outbox_items"."trace_id") > 0),
 	CONSTRAINT "outbox_attempt_count_non_negative" CHECK ("platform"."outbox_items"."attempt_count" >= 0),
 	CONSTRAINT "outbox_delivery_fence_non_negative" CHECK ("platform"."outbox_items"."delivery_fence" >= 0),
-	CONSTRAINT "outbox_lease_pair" CHECK (("platform"."outbox_items"."lease_owner" IS NULL) = ("platform"."outbox_items"."lease_expires_at" IS NULL))
+	CONSTRAINT "outbox_lease_pair" CHECK (("platform"."outbox_items"."lease_owner" IS NULL) = ("platform"."outbox_items"."lease_expires_at" IS NULL)),
+	CONSTRAINT "outbox_lease_owner_non_empty" CHECK ("platform"."outbox_items"."lease_owner" IS NULL OR char_length("platform"."outbox_items"."lease_owner") > 0),
+	CONSTRAINT "outbox_processing_lease" CHECK (("platform"."outbox_items"."status" = 'processing') = ("platform"."outbox_items"."lease_owner" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "platform"."persisted_events" (
@@ -74,6 +83,7 @@ CREATE TABLE "platform"."persisted_events" (
 	CONSTRAINT "persisted_event_id_non_empty" CHECK (char_length("platform"."persisted_events"."event_id") > 0),
 	CONSTRAINT "persisted_event_stream_id_non_empty" CHECK (char_length("platform"."persisted_events"."stream_id") > 0),
 	CONSTRAINT "persisted_event_trace_id_non_empty" CHECK (char_length("platform"."persisted_events"."trace_id") > 0),
+	CONSTRAINT "persisted_event_type_non_empty" CHECK (char_length("platform"."persisted_events"."event_type") > 0),
 	CONSTRAINT "persisted_event_sequence_non_negative" CHECK ("platform"."persisted_events"."sequence" >= 0),
 	CONSTRAINT "persisted_event_cursor_non_negative" CHECK ("platform"."persisted_events"."stream_cursor" >= 0)
 );
