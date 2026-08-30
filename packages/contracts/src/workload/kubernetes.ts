@@ -480,6 +480,7 @@ export const WorkloadRouteSwitchResultV1Schema = z.discriminatedUnion(
 		z.strictObject({
 			...routeSwitchResultBaseV1Shape,
 			status: z.literal("completed"),
+			routedWorkloads: z.array(WorkloadRouteTargetV1Schema).length(1),
 		}),
 		z.strictObject({
 			...routeSwitchResultBaseV1Shape,

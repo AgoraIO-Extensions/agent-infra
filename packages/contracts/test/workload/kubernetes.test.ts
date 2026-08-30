@@ -549,6 +549,12 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 				routedWorkloads: [previousRoute, candidateRoute],
 			}).success,
 		).toBe(false);
+		expect(
+			WorkloadRouteSwitchResultV1Schema.safeParse({
+				...promoted,
+				routedWorkloads: [],
+			}).success,
+		).toBe(false);
 
 		const failedPromotion = {
 			...promoted,
