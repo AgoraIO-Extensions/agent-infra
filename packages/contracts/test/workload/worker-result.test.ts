@@ -200,6 +200,25 @@ describe("Worker admission and Secret result V1 contract", () => {
 				},
 			}),
 		).toThrow("Secret activation fence mismatch");
+		const failedOutcome = {
+			schemaVersion: 1,
+			status: "failed",
+			activationFence,
+			health: "unhealthy",
+			error: {
+				schemaVersion: 1,
+				code: "SECRET_ACTIVATION_FAILED",
+				message: "Secret activation failed",
+				retryable: true,
+				traceId: "trace_other",
+			},
+		} as const;
+		expect(() =>
+			validateWorkerWorkloadResultV1(activationExpected, {
+				...result,
+				outcome: failedOutcome,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("requires full operation context and fixed sanitized Worker errors", () => {
@@ -231,6 +250,12 @@ describe("Worker admission and Secret result V1 contract", () => {
 		expect(
 			validateWorkerWorkloadResultV1(activationExpected, completeFailure),
 		).toEqual(completeFailure);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...completeFailure,
+				kubernetesSecretName: "Invalid Secret Name",
+			}).success,
+		).toBe(false);
 		expect(
 			WorkerWorkloadResultV1Schema.safeParse({
 				...completeFailure,

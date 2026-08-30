@@ -13,6 +13,7 @@ import {
 	validateImageRegistryAdmissionResultV1,
 } from "./registry.ts";
 import {
+	KubernetesResourceNameV1Schema,
 	SecretActivationObservationV1Schema,
 	validateSecretActivationObservationV1,
 } from "./secret.ts";
@@ -40,7 +41,7 @@ const activateSecretCorrelationV1Shape = {
 	...workerCorrelationV1Shape,
 	secretId: WorkloadOpaqueIdV1Schema,
 	secretVersion: z.number().int().positive(),
-	kubernetesSecretName: WorkloadOpaqueIdV1Schema,
+	kubernetesSecretName: KubernetesResourceNameV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	workloadGeneration: WorkloadRevisionV1Schema,
 } as const;
@@ -246,6 +247,12 @@ export function validateWorkerWorkloadResultV1(
 			},
 			result.outcome,
 		);
+		if (
+			result.outcome.status === "failed" &&
+			result.outcome.error.traceId !== expected.traceId
+		) {
+			throw new Error("Worker result revision correlation mismatch");
+		}
 	}
 	if (
 		result.status === "succeeded" &&
