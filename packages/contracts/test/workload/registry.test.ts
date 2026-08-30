@@ -270,26 +270,56 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		const labelWithoutCapabilities = JSON.stringify(
 			manifestWithoutCapabilities,
 		);
-		expect(
-			validateImageRegistryAdmissionResultV1(request, {
-				...admitted,
-				runtimeManifestLabel: labelWithoutCapabilities,
-				runtimeManifest: {
-					...manifestWithoutCapabilities,
-					capabilities: {
-						modelSelection: false,
-						attachments: false,
-						resultFiles: false,
-						connection: false,
-						supplementaryInstruction: false,
-					},
+		const normalized = validateImageRegistryAdmissionResultV1(request, {
+			...admitted,
+			runtimeManifestLabel: labelWithoutCapabilities,
+			runtimeManifest: {
+				...manifestWithoutCapabilities,
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
 				},
-				runtimeManifestParsingEvidence: {
-					...admitted.runtimeManifestParsingEvidence,
-					utf8ByteLength: Buffer.byteLength(labelWithoutCapabilities, "utf8"),
+			},
+			runtimeManifestParsingEvidence: {
+				...admitted.runtimeManifestParsingEvidence,
+				utf8ByteLength: Buffer.byteLength(labelWithoutCapabilities, "utf8"),
+			},
+		});
+		expect(normalized).toMatchObject({
+			status: "admitted",
+			runtimeManifest: {
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
 				},
-			}),
-		).toMatchObject({ status: "admitted" });
+			},
+		});
+
+		const selfManagedLabel = JSON.stringify({
+			schemaVersion: 1,
+			interactionMode: "self-managed",
+			service: { port: 8080 },
+			health: { path: "/healthz" },
+			capabilities: { connection: true },
+		});
+		const selfManaged = validateImageRegistryAdmissionResultV1(request, {
+			...admitted,
+			runtimeManifestLabel: selfManagedLabel,
+			runtimeManifest: JSON.parse(selfManagedLabel),
+			runtimeManifestParsingEvidence: {
+				...admitted.runtimeManifestParsingEvidence,
+				utf8ByteLength: Buffer.byteLength(selfManagedLabel, "utf8"),
+			},
+		});
+		expect(selfManaged).toMatchObject({
+			runtimeManifest: { capabilities: { connection: false } },
+		});
 
 		const duplicateKeyLabel = runtimeManifestLabel.replace(
 			'"schemaVersion":1',

@@ -271,12 +271,11 @@ export function validateImageRegistryAdmissionResultV1(
 		} catch {
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
-		if (
-			JSON.stringify(labelManifest) !==
-			JSON.stringify(canonicalRuntimeManifest(result.runtimeManifest))
-		) {
+		const resultManifest = canonicalRuntimeManifest(result.runtimeManifest);
+		if (JSON.stringify(labelManifest) !== JSON.stringify(resultManifest)) {
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
+		return { ...result, runtimeManifest: resultManifest };
 	}
 	return result;
 }
