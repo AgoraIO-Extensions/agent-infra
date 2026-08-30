@@ -9,6 +9,7 @@ import {
 const expected = {
 	schemaVersion: 1,
 	outboxItemId: "outbox_01",
+	requestId: "request_workload_01",
 	traceId: "trace_worker_01",
 	agentId: "agent_01",
 	configRevision: 7,
@@ -19,16 +20,21 @@ const expected = {
 
 const secretRef = {
 	schemaVersion: 1,
+	ownerType: "agent-owner",
+	ownerId: "owner_01",
 	agentId: expected.agentId,
 	secretId: "secret_01",
 	secretVersion: 2,
 	configRevision: expected.configRevision,
+	algorithmVersion: "aes-256-gcm:v1",
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+	wrappingKeyVersion: "wrapping-key-v1",
 	name: "agent-01-secret-01-v2-r7",
 } as const;
 
 const appliedWorkload = {
 	schemaVersion: 1,
-	requestId: "request_workload_01",
+	requestId: expected.requestId,
 	traceId: expected.traceId,
 	agentId: expected.agentId,
 	configRevision: expected.configRevision,
@@ -38,11 +44,36 @@ const appliedWorkload = {
 	imageDigest: `sha256:${"c".repeat(64)}`,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	resourceProfileRef: "resource-profile_01",
 	service: { name: "agent-01", port: 8080 },
 	healthCheck: {
 		path: "/healthz",
 		timeoutSeconds: 5,
 		failureThreshold: 3,
+	},
+	routeIntent: {
+		name: "agent-01",
+		exposure: "internal-only",
+		tlsRequired: true,
+	},
+	persistentVolume: {
+		name: "agent-01-data",
+		mountPath: "/workspace",
+		storageProfileRef: "storage-profile_01",
+		accessMode: "ReadWriteOnce",
+		retention: "retain",
+	},
+	serviceAccount: {
+		name: "agent-01",
+		kubernetesApiAccess: false,
+	},
+	networkPolicy: {
+		deploymentPolicyRef: "deployment-policy_01",
+		ingressMode: "runtime-host-client-only",
+		kubernetesApiAccess: false,
+		platformDatabaseAccess: false,
+		connectionDatabaseAccess: false,
+		decryptionKeyringAccess: false,
 	},
 	desiredReplicas: 1,
 	readyReplicas: 1,
@@ -88,8 +119,8 @@ describe("Worker Workload result V1 contract", () => {
 			currentWorkloadRevision: 10,
 			error: {
 				schemaVersion: 1,
-				code: "STALE_WORKLOAD_REVISION",
-				message: "The Workload revision is stale",
+				code: "WORKER_RESULT_STALE",
+				message: "The Worker result is stale",
 				retryable: false,
 				traceId: expected.traceId,
 			},
@@ -121,6 +152,12 @@ describe("Worker Workload result V1 contract", () => {
 				error: { ...stale.error, traceId: "trace_other" },
 			}),
 		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...stale,
+				requestId: "request_workload_02",
+			}),
+		).toThrow("Worker result revision correlation mismatch");
 	});
 
 	it("rejects inconsistent outer and nested Workload UIDs on first reconciliation", () => {
@@ -142,6 +179,17 @@ describe("Worker Workload result V1 contract", () => {
 				...result,
 				workloadUid: appliedWorkload.workloadUid,
 				workloadGeneration: appliedWorkload.observedGeneration + 1,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(expected, {
+				...result,
+				workloadUid: appliedWorkload.workloadUid,
+				workloadGeneration: appliedWorkload.observedGeneration,
+				outcome: {
+					...appliedWorkload,
+					requestId: "request_workload_02",
+				},
 			}),
 		).toThrow("Worker result revision correlation mismatch");
 		expect(() =>
@@ -183,8 +231,8 @@ describe("Worker Workload result V1 contract", () => {
 			operation: "reconcile-workload",
 			error: {
 				schemaVersion: 1,
-				code: "WORKLOAD_APPLY_FAILED",
-				message: "The Workload could not be applied",
+				code: "WORKER_REQUEST_FAILED",
+				message: "The Worker request failed",
 				retryable: true,
 				traceId: expected.traceId,
 			},
@@ -200,6 +248,21 @@ describe("Worker Workload result V1 contract", () => {
 		expect(
 			WorkerWorkloadResultV1Schema.safeParse({
 				...failed,
+				error: {
+					...failed.error,
+					message: "Kubernetes returned bearer super-secret-token",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...failed,
+				error: { ...failed.error, code: "PROVIDER_SPECIFIC_FAILURE" },
+			}).success,
+		).toBe(false);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...failed,
 				schemaVersion: 2,
 			}).success,
 		).toBe(false);
@@ -209,22 +272,50 @@ describe("Worker Workload result V1 contract", () => {
 				fence: undefined,
 			}).success,
 		).toBe(false);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...failed,
+				requestId: undefined,
+			}).success,
+		).toBe(false);
+		const rejected = {
+			...expected,
+			status: "rejected",
+			operation: "reconcile-workload",
+			error: {
+				schemaVersion: 1,
+				code: "WORKER_REQUEST_REJECTED",
+				message: "The Worker request was rejected",
+				retryable: false,
+				traceId: expected.traceId,
+			},
+		} as const;
+		expect(WorkerWorkloadResultV1Schema.parse(rejected)).toEqual(rejected);
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...rejected,
+				error: { ...rejected.error, retryable: true },
+			}).success,
+		).toBe(false);
 		expect(() =>
 			validateWorkerWorkloadResultV1(expected, {
 				...failed,
 				operation: "cleanup-workload",
 				workloadUid: appliedWorkload.workloadUid,
 				workloadGeneration: appliedWorkload.observedGeneration,
+				persistentVolumeIntent: "retain-existing",
 			}),
 		).toThrow("Worker result revision correlation mismatch");
 	});
 
-	it("rejects a nested cleanup outcome for another Workload revision", () => {
+	it("rejects mismatched nested cleanup facts", () => {
 		const cleanupExpected = {
 			...expected,
+			requestId: "request_cleanup_01",
 			operation: "cleanup-workload",
 			workloadUid: "workload_uid_01",
 			workloadGeneration: appliedWorkload.observedGeneration,
+			persistentVolumeIntent: "delete-new",
 		} as const;
 		const cleanupResult = {
 			...cleanupExpected,
@@ -233,7 +324,7 @@ describe("Worker Workload result V1 contract", () => {
 			outcome: {
 				schemaVersion: 1,
 				status: "completed",
-				requestId: "request_cleanup_01",
+				requestId: cleanupExpected.requestId,
 				traceId: expected.traceId,
 				agentId: expected.agentId,
 				configRevision: expected.configRevision,
@@ -241,13 +332,14 @@ describe("Worker Workload result V1 contract", () => {
 				workloadUid: "workload_uid_02",
 				workloadGeneration: cleanupExpected.workloadGeneration,
 				fence: expected.fence,
-				deleteNewPersistentVolume: true,
-				deleted: {
+				persistentVolumeIntent: "delete-new",
+				routeClosed: true,
+				removed: {
 					workload: true,
 					service: true,
 					serviceAccount: true,
 					networkPolicy: true,
-					route: true,
+					configuration: true,
 					secrets: true,
 					persistentVolume: true,
 				},
@@ -256,14 +348,41 @@ describe("Worker Workload result V1 contract", () => {
 
 		expect(() =>
 			validateWorkerWorkloadResultV1(cleanupExpected, cleanupResult),
-		).toThrow("Worker result revision correlation mismatch");
+		).toThrow("Workload cleanup correlation mismatch");
+
+		const correlated = {
+			...cleanupResult,
+			outcome: {
+				...cleanupResult.outcome,
+				workloadRevision: cleanupExpected.workloadRevision,
+				workloadUid: cleanupExpected.workloadUid,
+			},
+		} as const;
+		expect(validateWorkerWorkloadResultV1(cleanupExpected, correlated)).toEqual(
+			correlated,
+		);
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...correlated,
+				outcome: {
+					...correlated.outcome,
+					requestId: "request_cleanup_02",
+				},
+			}),
+		).toThrow("Workload cleanup correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(
+				{ ...cleanupExpected, persistentVolumeIntent: "retain-existing" },
+				{ ...correlated, persistentVolumeIntent: "retain-existing" },
+			),
+		).toThrow("Workload cleanup correlation mismatch");
 	});
 
 	it("binds Registry outcomes to the exact admission request", () => {
 		const admissionExpected = {
 			...expected,
+			requestId: "registry_request_01",
 			operation: "admit-image",
-			registryRequestId: "registry_request_01",
 			registrySubjectRef: "subject_01",
 			imageReference: "registry.example/agent:v1",
 			usage: "custom-agent",
@@ -271,14 +390,13 @@ describe("Worker Workload result V1 contract", () => {
 		} as const;
 		const outcome = {
 			schemaVersion: 1,
-			requestId: admissionExpected.registryRequestId,
+			requestId: admissionExpected.requestId,
 			traceId: admissionExpected.traceId,
-			imageReference: admissionExpected.imageReference,
 			status: "rejected",
 			error: {
 				schemaVersion: 1,
-				code: "IMAGE_POLICY_REJECTED",
-				message: "The image policy rejected the image",
+				code: "IMAGE_NOT_ADMITTED",
+				message: "The image is not admitted by deployment policy",
 				retryable: false,
 				traceId: admissionExpected.traceId,
 			},
@@ -296,7 +414,7 @@ describe("Worker Workload result V1 contract", () => {
 		expect(() =>
 			validateWorkerWorkloadResultV1(admissionExpected, {
 				...result,
-				outcome: { ...outcome, imageReference: "registry.example/other:v1" },
+				outcome: { ...outcome, requestId: "registry_request_02" },
 			}),
 		).toThrow("Image registry result correlation mismatch");
 		expect(() =>
@@ -307,12 +425,13 @@ describe("Worker Workload result V1 contract", () => {
 					error: { ...outcome.error, traceId: "trace_other" },
 				},
 			}),
-		).toThrow("Worker result revision correlation mismatch");
+		).toThrow("Image registry result correlation mismatch");
 	});
 
 	it("requires full Secret and Workload context on failed activation results", () => {
 		const activationExpected = {
 			...expected,
+			requestId: "request_secret_01",
 			operation: "activate-secret",
 			secretId: "secret_01",
 			secretVersion: 2,
@@ -323,6 +442,7 @@ describe("Worker Workload result V1 contract", () => {
 		const incompleteFailure = {
 			schemaVersion: 1,
 			outboxItemId: activationExpected.outboxItemId,
+			requestId: activationExpected.requestId,
 			traceId: activationExpected.traceId,
 			agentId: activationExpected.agentId,
 			configRevision: activationExpected.configRevision,
@@ -332,8 +452,8 @@ describe("Worker Workload result V1 contract", () => {
 			operation: "activate-secret",
 			error: {
 				schemaVersion: 1,
-				code: "SECRET_ACTIVATION_FAILED",
-				message: "The Secret activation failed",
+				code: "WORKER_REQUEST_FAILED",
+				message: "The Worker request failed",
 				retryable: true,
 				traceId: activationExpected.traceId,
 			},
