@@ -115,6 +115,14 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.secretLifecycleJsonSchema.$defs).toHaveProperty(
 			"SecretEncryptionKeySetV1",
 		);
+		expect(artifacts.workerResultJsonSchema.$schema).toBe(
+			"https://json-schema.org/draft/2020-12/schema",
+		);
+		expect(Object.keys(artifacts.workerResultJsonSchema.$defs)).toEqual([
+			"WorkerWorkloadErrorV1",
+			"WorkerWorkloadExpectedRevisionV1",
+			"WorkerWorkloadResultV1",
+		]);
 		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
 		expect(artifacts.runtimeOpenapi.security).toEqual([
 			{ RuntimeServiceBearer: [] },
@@ -239,6 +247,14 @@ describe("standard contract artifacts", () => {
 			expect(() =>
 				ajv.compile({
 					$ref: `${artifacts.secretLifecycleJsonSchema.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
+		ajv.addSchema(artifacts.workerResultJsonSchema);
+		for (const name of Object.keys(artifacts.workerResultJsonSchema.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.workerResultJsonSchema.$id}#/$defs/${name}`,
 				}),
 			).not.toThrow();
 		}

@@ -46,6 +46,11 @@ import {
 	SecretPublicKeyDescriptorV1Schema,
 	SecretWorkerKeyringDescriptorV1Schema,
 } from "./secret.ts";
+import {
+	WorkerWorkloadErrorV1Schema,
+	WorkerWorkloadExpectedRevisionV1Schema,
+	WorkerWorkloadResultV1Schema,
+} from "./worker-result.ts";
 
 export * from "./common.ts";
 export * from "./kubernetes.ts";
@@ -60,6 +65,7 @@ export {
 	resolveRuntimeManifestCapabilitiesV1,
 } from "./runtime-manifest.ts";
 export * from "./secret.ts";
+export * from "./worker-result.ts";
 
 export const kubernetesWorkloadSchemasV1 = {
 	AgentWorkloadDesiredV1: AgentWorkloadDesiredV1Schema,
@@ -112,4 +118,10 @@ export const secretLifecycleSchemasV1 = {
 	WorkloadRevisionV1: WorkloadRevisionV1Schema,
 	WorkloadSchemaVersionV1: WorkloadSchemaVersionV1Schema,
 	WorkloadTimestampV1: WorkloadTimestampV1Schema,
+} as const;
+
+export const workerResultSchemasV1 = {
+	WorkerWorkloadErrorV1: WorkerWorkloadErrorV1Schema,
+	WorkerWorkloadExpectedRevisionV1: WorkerWorkloadExpectedRevisionV1Schema,
+	WorkerWorkloadResultV1: WorkerWorkloadResultV1Schema,
 } as const;
