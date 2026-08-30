@@ -69,6 +69,40 @@ importers:
         specifier: 2.8.3
         version: 2.8.3
 
+  apps/agent-runtime-host:
+    dependencies:
+      '@agent-infra/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@hono/node-server':
+        specifier: ^2.0.12
+        version: 2.1.0(hono@4.13.0)
+      hono:
+        specifier: ^4.12.32
+        version: 4.13.0
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.5
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
+
   apps/connection-api:
     dependencies:
       '@hono/node-server':
@@ -197,6 +231,28 @@ importers:
       vite:
         specifier: ^8.1.5
         version: 8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
+
+  packages/agent-runtime:
+    dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
       vitest:
         specifier: 'catalog:'
         version: 4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))

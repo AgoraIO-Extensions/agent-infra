@@ -3,8 +3,7 @@
 	"compilerOptions": {
 		"allowImportingTsExtensions": true,
 		"paths": {
-			"@agent-infra/contracts/pilot": ["./src/pilot/index.ts"],
-			"@agent-infra/contracts/runtime": ["./src/runtime/index.ts"]
+			"@agent-infra/contracts/runtime": ["../contracts/src/runtime/index.ts"]
 		}
 	}
 }
