@@ -112,7 +112,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					from platform_migrations.history
 					order by id
 				`;
-			expect(migrationHistory).toHaveLength(1);
+			expect(migrationHistory).toHaveLength(2);
 
 			const migratedColumns = await client`
 					select table_name, array_agg(column_name order by ordinal_position) as columns
@@ -137,6 +137,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					getTableConfig(table).checks.map((check) => check.name),
 				)
 				.toSorted();
+			expect(authoredChecks).not.toContain("agent_application_initial_status");
 			const migratedChecks = await client`
 					select c.conname as constraint_name
 					from pg_constraint c
@@ -155,10 +156,15 @@ describe("Platform PostgreSQL migration foundation", () => {
 				)
 				.toSorted();
 			const migratedIndexes = await client`
-					select indexname
-					from pg_indexes
-					where schemaname = 'platform' and indexname not like '%_pkey'
-					order by indexname
+					select indexes.indexname
+					from pg_indexes indexes
+					join pg_class index_class on index_class.relname = indexes.indexname
+					join pg_namespace namespace on namespace.oid = index_class.relnamespace
+					join pg_index metadata on metadata.indexrelid = index_class.oid
+					where indexes.schemaname = 'platform'
+						and namespace.nspname = 'platform'
+						and not metadata.indisprimary
+					order by indexes.indexname
 				`;
 			expect(migratedIndexes.map((row) => row.indexname)).toEqual(
 				authoredIndexes,
@@ -212,6 +218,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"target_id",
 				"outcome",
 				"occurred_at",
+				"request_id",
+				"agent_id",
 			]);
 
 			await expectConstraintFailure(
@@ -234,12 +242,87 @@ describe("Platform PostgreSQL migration foundation", () => {
 			);
 			await expectConstraintFailure(
 				client`
+						insert into platform.outbox_items
+							(id, scope_type, scope_id, operation, payload, trace_id, request_id)
+						values
+							('outbox empty request', 'agent', 'agent_01', 'reconcile', '{}', 'trace_01', '')
+					`,
+				"outbox_request_id_non_empty",
+			);
+			await expectConstraintFailure(
+				client`
+						insert into platform.audit_events
+							(id, trace_id, request_id, agent_id, actor_type, actor_id,
+								action, target_type, target_id, outcome)
+						values
+							('audit empty request', 'trace_01', '', 'agent_01', 'user',
+								'user_01', 'application.submit', 'agent_application',
+								'application_01', 'succeeded')
+					`,
+				"audit_request_id_non_empty",
+			);
+			await expectConstraintFailure(
+				client`
+						insert into platform.audit_events
+							(id, trace_id, request_id, agent_id, actor_type, actor_id,
+								action, target_type, target_id, outcome)
+						values
+							('audit empty agent', 'trace_01', 'request_01', '', 'user',
+								'user_01', 'application.submit', 'agent_application',
+								'application_01', 'succeeded')
+					`,
+				"audit_agent_id_non_empty",
+			);
+			await expectConstraintFailure(
+				client`
 						insert into platform.idempotency_records
 							(id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest)
 						values
 							('idem_01', 'agent', 'agent_01', 'user_01', 'create', 'invalid key', ${"a".repeat(64)})
 					`,
 				"idempotency_key_format",
+			);
+
+			await client`
+					insert into platform.agents
+						(id, current_configuration_revision)
+					values
+						('agent revision constraints', 1)
+				`;
+			await expectConstraintFailure(
+				client`
+						insert into platform.agent_applications
+							(id, agent_id, applicant_id, name, description, trace_id,
+								request_id, submitted_at)
+						values
+							('application empty request', 'agent revision constraints',
+								'user_01', 'Agent', 'Description', 'trace_01', '', now())
+					`,
+				"agent_application_request_id_non_empty",
+			);
+			await expectConstraintFailure(
+				client`
+						insert into platform.agent_configuration_revisions
+							(agent_id, revision, source_reference, created_at)
+						values
+							('agent revision constraints', 0, 'source opaque', now())
+					`,
+				"agent_configuration_revision_number_positive",
+			);
+			await client`
+					insert into platform.agent_configuration_revisions
+						(agent_id, revision, source_reference, created_at)
+					values
+						('agent revision constraints', 1, 'source opaque', now())
+				`;
+			await expectConstraintFailure(
+				client`
+						insert into platform.agent_configuration_revisions
+							(agent_id, revision, source_reference, created_at)
+						values
+							('agent revision constraints', 1, 'source duplicate', now())
+					`,
+				"agent_configuration_revisions_agent_id_revision_pk",
 			);
 
 			await client`

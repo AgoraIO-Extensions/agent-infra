@@ -1,6 +1,7 @@
 import postgres from "postgres";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
+import { matchesPostgresErrorCode } from "./postgres-error.ts";
 
 export class OutboxStoreError extends Error {
 	readonly code = "OUTBOX_STORE_ERROR";
@@ -185,16 +186,13 @@ function requireOwnedLease(input: OwnedOutboxLeaseInput): void {
 }
 
 function isRetryableDatabaseError(error: unknown): boolean {
-	if (typeof error !== "object" || error === null || !("code" in error)) {
-		return false;
-	}
-	const code = error.code;
-	if (typeof code !== "string") return false;
-	return (
-		retryableDatabaseCodes.has(code) ||
-		code.startsWith("08") ||
-		code.startsWith("40") ||
-		code.startsWith("53")
+	return matchesPostgresErrorCode(
+		error,
+		(code) =>
+			retryableDatabaseCodes.has(code) ||
+			code.startsWith("08") ||
+			code.startsWith("40") ||
+			code.startsWith("53"),
 	);
 }
 
