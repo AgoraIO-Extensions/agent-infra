@@ -127,29 +127,30 @@ async function snapshot() {
 		auditEvents,
 	] = await Promise.all([
 		adminClient`
-			select id as agent_id, current_configuration_revision
+			select id as agent_id, current_configuration_revision, created_at
 			from platform.agents order by id
 		`,
 		adminClient`
 			select id as application_id, agent_id, applicant_id, name, description,
-				status, trace_id, request_id
+				status, trace_id, request_id, submitted_at
 			from platform.agent_applications order by id
 		`,
 		adminClient`
-			select agent_id, revision, source_reference
+			select agent_id, revision, source_reference, created_at
 			from platform.agent_configuration_revisions order by agent_id, revision
 		`,
 		adminClient`
-			select agent_id, owner_id
+			select agent_id, owner_id, created_at
 			from platform.agent_owners order by agent_id, owner_id
 		`,
 		adminClient`
-			select scope_type, scope_id, operation, payload, trace_id, request_id
+			select scope_type, scope_id, operation, payload, trace_id, request_id,
+				available_at
 			from platform.outbox_items order by id
 		`,
 		adminClient`
 			select trace_id, request_id, agent_id, actor_type, actor_id, action,
-				target_type, target_id, outcome
+				target_type, target_id, outcome, occurred_at
 			from platform.audit_events order by id
 		`,
 	]);
@@ -157,6 +158,7 @@ async function snapshot() {
 		agents: agents.map((row) => ({
 			agentId: String(row.agent_id),
 			currentConfigurationRevision: Number(row.current_configuration_revision),
+			createdAt: row.created_at as Date,
 		})),
 		applications: applications.map((row) => ({
 			applicationId: String(row.application_id),
@@ -167,15 +169,18 @@ async function snapshot() {
 			status: row.status as "pending_approval",
 			traceId: String(row.trace_id),
 			requestId: String(row.request_id),
+			submittedAt: row.submitted_at as Date,
 		})),
 		configurationRevisions: configurationRevisions.map((row) => ({
 			agentId: String(row.agent_id),
 			revision: Number(row.revision),
 			sourceReference: String(row.source_reference),
+			createdAt: row.created_at as Date,
 		})),
 		owners: owners.map((row) => ({
 			agentId: String(row.agent_id),
 			ownerId: String(row.owner_id),
+			createdAt: row.created_at as Date,
 		})),
 		outboxIntents: outboxIntents.map((row) => ({
 			scopeType: row.scope_type as "agent",
@@ -189,6 +194,7 @@ async function snapshot() {
 			},
 			traceId: String(row.trace_id),
 			requestId: String(row.request_id),
+			availableAt: row.available_at as Date,
 		})),
 		auditEvents: auditEvents.map((row) => ({
 			traceId: String(row.trace_id),
@@ -200,6 +206,7 @@ async function snapshot() {
 			targetType: row.target_type as "agent_application",
 			targetId: String(row.target_id),
 			outcome: row.outcome as "succeeded",
+			occurredAt: row.occurred_at as Date,
 		})),
 	};
 }

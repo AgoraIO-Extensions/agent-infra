@@ -7,7 +7,6 @@ export interface CommitApplicationFoundationCommandV1 {
 	readonly description: string;
 	readonly sourceReference: string;
 	readonly traceId: string;
-	readonly submittedAt: Date;
 }
 
 export interface ApplicationFoundationActorContextV1 {
@@ -91,6 +90,10 @@ export interface ApplicationFoundationUseCaseV1 {
 	): Promise<CommitApplicationFoundationResultV1>;
 }
 
+export interface ApplicationFoundationUseCaseOptionsV1 {
+	readonly now?: () => Date;
+}
+
 export type ApplicationFoundationErrorCode =
 	| "invalid_command"
 	| "conflict"
@@ -169,11 +172,7 @@ const requiredStrings = [
 	"sourceReference",
 	"traceId",
 ] as const;
-const commandKeys = [
-	"schemaVersion",
-	...requiredStrings,
-	"submittedAt",
-] as const;
+const commandKeys = ["schemaVersion", ...requiredStrings] as const;
 const actorContextKeys = ["schemaVersion", "userId"] as const;
 
 function snapshotExactDataValues(
@@ -229,7 +228,6 @@ function parseApplicationFoundationCommandV1(
 			description,
 			sourceReference,
 			traceId,
-			submittedAt,
 		} = values;
 		if (
 			schemaVersion !== 1 ||
@@ -242,8 +240,7 @@ function parseApplicationFoundationCommandV1(
 				sourceReference,
 				traceId,
 			].every((value) => typeof value === "string" && value.length > 0) ||
-			typeof name !== "string" ||
-			!(submittedAt instanceof Date)
+			typeof name !== "string"
 		) {
 			invalidApplicationFoundationInput();
 		}
@@ -252,10 +249,6 @@ function parseApplicationFoundationCommandV1(
 			const codePoint = name.codePointAt(offset);
 			offset += (codePoint ?? 0) > 0xffff ? 2 : 1;
 			if (nameCodePointCount >= 200) invalidApplicationFoundationInput();
-		}
-		const submittedAtMilliseconds = Date.prototype.getTime.call(submittedAt);
-		if (!Number.isFinite(submittedAtMilliseconds)) {
-			invalidApplicationFoundationInput();
 		}
 		return {
 			schemaVersion,
@@ -266,7 +259,6 @@ function parseApplicationFoundationCommandV1(
 			description: description as string,
 			sourceReference: sourceReference as string,
 			traceId: traceId as string,
-			submittedAt: new Date(submittedAtMilliseconds),
 		};
 	} catch {
 		invalidApplicationFoundationInput();
@@ -290,16 +282,26 @@ function parseApplicationFoundationActorContextV1(
 }
 
 const initialConfigurationRevision = 1 as const;
+const systemNow = (): Date => new Date();
 
 export function createApplicationFoundationUseCaseV1(
 	transaction: ApplicationFoundationTransactionPortV1,
+	options: ApplicationFoundationUseCaseOptionsV1 = {},
 ): ApplicationFoundationUseCaseV1 {
+	const now = options.now ?? systemNow;
 	return {
 		async submit(command, actorContext) {
 			const normalizedCommand = parseApplicationFoundationCommandV1(command);
 			const normalizedActorContext =
 				parseApplicationFoundationActorContextV1(actorContext);
-			const submittedAt = normalizedCommand.submittedAt;
+			let submittedAt: Date;
+			try {
+				const milliseconds = Date.prototype.getTime.call(now());
+				if (!Number.isFinite(milliseconds)) throw new Error();
+				submittedAt = new Date(milliseconds);
+			} catch {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {

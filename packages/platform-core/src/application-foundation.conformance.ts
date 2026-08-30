@@ -39,8 +39,9 @@ const command: CommitApplicationFoundationCommandV1 = Object.freeze({
 	description: "Assists with operational workflows",
 	sourceReference: "template opaque alpha",
 	traceId: "trace opaque alpha",
-	submittedAt: new Date("2026-08-30T12:00:00.000Z"),
 });
+const serverInstant = new Date("2026-08-30T12:00:00.000Z");
+const fixedNow = () => new Date(serverInstant.valueOf());
 const actorContext = Object.freeze({
 	schemaVersion: 1 as const,
 	userId: "user opaque alpha",
@@ -56,12 +57,16 @@ const emptySnapshot: ApplicationFoundationSnapshot = {
 	auditEvents: [],
 };
 
+function createUseCase(transaction: ApplicationFoundationTransactionPortV1) {
+	return createApplicationFoundationUseCaseV1(transaction, { now: fixedNow });
+}
+
 export function applicationFoundationTransactionConformance(
 	createHarness: () => Promise<ApplicationFoundationConformanceHarness>,
 ): void {
 	it("rejects invalid commands without crossing the transaction seam", async () => {
 		const harness = await createHarness();
-		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const useCase = createUseCase(harness.transaction);
 		try {
 			for (const invalid of [
 				{ schemaVersion: 1 },
@@ -70,6 +75,10 @@ export function applicationFoundationTransactionConformance(
 				{ ...command, name: "n".repeat(201) },
 				{ ...command, name: supplementaryNameCharacter.repeat(201) },
 				{ ...command, applicantId: "caller forged user" },
+				{
+					...command,
+					submittedAt: new Date("2099-01-01T00:00:00.000Z"),
+				},
 			]) {
 				await expect(
 					useCase.submit(
@@ -89,7 +98,7 @@ export function applicationFoundationTransactionConformance(
 
 	it("rejects invalid actor context before persistence", async () => {
 		const harness = await createHarness();
-		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const useCase = createUseCase(harness.transaction);
 		try {
 			for (const invalid of [
 				{ schemaVersion: 1 },
@@ -118,7 +127,7 @@ export function applicationFoundationTransactionConformance(
 
 	it("counts supplementary Unicode code points as one name character", async () => {
 		const harness = await createHarness();
-		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const useCase = createUseCase(harness.transaction);
 		const name = supplementaryNameCharacter.repeat(101);
 		try {
 			await expect(
@@ -137,7 +146,7 @@ export function applicationFoundationTransactionConformance(
 
 	it("atomically starts an opaque Agent at monotonic revision one with sanitized correlations", async () => {
 		const harness = await createHarness();
-		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const useCase = createUseCase(harness.transaction);
 		try {
 			await expect(useCase.submit(command, actorContext)).resolves.toEqual({
 				schemaVersion: 1,
@@ -151,6 +160,7 @@ export function applicationFoundationTransactionConformance(
 					{
 						agentId: command.agentId,
 						currentConfigurationRevision: 1,
+						createdAt: serverInstant,
 					},
 				],
 				applications: [
@@ -163,6 +173,7 @@ export function applicationFoundationTransactionConformance(
 						status: "pending_approval",
 						traceId: command.traceId,
 						requestId: command.requestId,
+						submittedAt: serverInstant,
 					},
 				],
 				configurationRevisions: [
@@ -170,9 +181,16 @@ export function applicationFoundationTransactionConformance(
 						agentId: command.agentId,
 						revision: 1,
 						sourceReference: command.sourceReference,
+						createdAt: serverInstant,
 					},
 				],
-				owners: [{ agentId: command.agentId, ownerId: actorContext.userId }],
+				owners: [
+					{
+						agentId: command.agentId,
+						ownerId: actorContext.userId,
+						createdAt: serverInstant,
+					},
+				],
 				outboxIntents: [
 					{
 						scopeType: "agent",
@@ -186,6 +204,7 @@ export function applicationFoundationTransactionConformance(
 						},
 						traceId: command.traceId,
 						requestId: command.requestId,
+						availableAt: serverInstant,
 					},
 				],
 				auditEvents: [
@@ -199,6 +218,7 @@ export function applicationFoundationTransactionConformance(
 						targetType: "agent_application",
 						targetId: command.applicationId,
 						outcome: "succeeded",
+						occurredAt: serverInstant,
 					},
 				],
 			});
@@ -209,7 +229,7 @@ export function applicationFoundationTransactionConformance(
 
 	it("maps duplicate opaque IDs to a domain conflict", async () => {
 		const harness = await createHarness();
-		const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+		const useCase = createUseCase(harness.transaction);
 		try {
 			await useCase.submit(command, actorContext);
 			await expect(useCase.submit(command, actorContext)).rejects.toMatchObject(
@@ -226,7 +246,7 @@ export function applicationFoundationTransactionConformance(
 	for (const point of applicationFoundationFailurePoints) {
 		it(`rolls back every write when ${point} fails`, async () => {
 			const harness = await createHarness();
-			const useCase = createApplicationFoundationUseCaseV1(harness.transaction);
+			const useCase = createUseCase(harness.transaction);
 			try {
 				await harness.failNextBefore(point);
 				await expect(

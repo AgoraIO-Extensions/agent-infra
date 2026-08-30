@@ -4,6 +4,7 @@ import { applicationFoundationTransactionConformance } from "./application-found
 import {
 	type ApplicationFoundationActorContextV1,
 	ApplicationFoundationError,
+	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationCommandV1,
 	createApplicationFoundationUseCaseV1,
@@ -20,8 +21,9 @@ const validCommand = () =>
 		description: "Verifies Core error normalization",
 		sourceReference: "source core errors",
 		traceId: "trace core errors",
-		submittedAt: new Date("2026-08-30T12:00:00.000Z"),
 	});
+const fixedServerInstant = "2026-08-30T12:00:00.000Z";
+const fixedNow = () => new Date(fixedServerInstant);
 const actorContext = () =>
 	Object.freeze({
 		schemaVersion: 1 as const,
@@ -31,8 +33,15 @@ const errorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
 );
 
+function createUseCase(
+	transaction: ApplicationFoundationTransactionPortV1,
+	now: () => Date = fixedNow,
+) {
+	return createApplicationFoundationUseCaseV1(transaction, { now });
+}
+
 async function normalizedPortFailure(failure: unknown): Promise<unknown> {
-	const useCase = createApplicationFoundationUseCaseV1({
+	const useCase = createUseCase({
 		async commit() {
 			throw failure;
 		},
@@ -46,13 +55,20 @@ async function normalizedPortFailure(failure: unknown): Promise<unknown> {
 async function rejectedBeforePort(
 	command: unknown,
 	context: unknown,
-): Promise<{ error: unknown; portCalls: number }> {
+): Promise<{ error: unknown; nowCalls: number; portCalls: number }> {
+	let nowCalls = 0;
 	let portCalls = 0;
-	const useCase = createApplicationFoundationUseCaseV1({
-		async commit() {
-			portCalls += 1;
+	const useCase = createUseCase(
+		{
+			async commit() {
+				portCalls += 1;
+			},
 		},
-	});
+		() => {
+			nowCalls += 1;
+			return fixedNow();
+		},
+	);
 	const error = await useCase
 		.submit(
 			command as CommitApplicationFoundationCommandV1,
@@ -62,7 +78,7 @@ async function rejectedBeforePort(
 			() => expect.fail("Expected input parsing to fail before the Port"),
 			(reason: unknown) => reason,
 		);
-	return { error, portCalls };
+	return { error, nowCalls, portCalls };
 }
 
 function expectInvalidCommand(error: unknown): void {
@@ -188,98 +204,110 @@ describe("Application foundation use case", () => {
 			}),
 		],
 	])("sanitizes a %s trap before the Port", async (_name, command, context) => {
-		const { error, portCalls } = await rejectedBeforePort(command, context);
-
-		expectInvalidCommand(error);
-		expect(String(error)).not.toContain("sensitive");
-		expect(portCalls).toBe(0);
-	});
-
-	it.each([
-		[
-			"transparent Date proxy",
-			new Proxy(new Date("2026-08-30T12:00:00.000Z"), {}),
-		],
-		[
-			"nested Date prototype trap",
-			new Proxy(new Date("2026-08-30T12:00:00.000Z"), {
-				getPrototypeOf() {
-					throw new Error("sensitive nested Date prototype trap");
-				},
-			}),
-		],
-		["invalid Date internal slot", Object.create(Date.prototype)],
-		["nonfinite Date", new Date(Number.NaN)],
-	])("sanitizes a %s before the Port", async (_name, submittedAt) => {
-		const { error, portCalls } = await rejectedBeforePort(
-			{ ...validCommand(), submittedAt },
-			actorContext(),
+		const { error, nowCalls, portCalls } = await rejectedBeforePort(
+			command,
+			context,
 		);
 
 		expectInvalidCommand(error);
 		expect(String(error)).not.toContain("sensitive");
+		expect(nowCalls).toBe(0);
 		expect(portCalls).toBe(0);
 	});
 
-	it.each(["ownKeys", "descriptor"] as const)(
-		"clones the submitted instant before actor-context %s side effects",
-		async (mode) => {
-			const originalInstant = "2026-08-30T12:00:00.000Z";
-			const callerDate = new Date(originalInstant);
-			const command = { ...validCommand(), submittedAt: callerDate };
-			const targetContext = actorContext();
-			let sideEffects = 0;
-			const mutateCallerDate = () => {
-				sideEffects += 1;
-				callerDate.setTime(new Date("2030-01-01T00:00:00.000Z").valueOf());
-			};
-			const context = new Proxy(
-				targetContext,
-				mode === "ownKeys"
-					? {
-							ownKeys(target) {
-								mutateCallerDate();
-								return Reflect.ownKeys(target);
-							},
-						}
-					: {
-							getOwnPropertyDescriptor(target, property) {
-								mutateCallerDate();
-								return Reflect.getOwnPropertyDescriptor(target, property);
-							},
-						},
-			);
-			let observedPlan: ApplicationFoundationWritePlanV1 | undefined;
-			const useCase = createApplicationFoundationUseCaseV1({
+	it("rejects caller-submitted time before reading the server clock", async () => {
+		const { error, nowCalls, portCalls } = await rejectedBeforePort(
+			{
+				...validCommand(),
+				submittedAt: new Date("2099-01-01T00:00:00.000Z"),
+			},
+			actorContext(),
+		);
+
+		expectInvalidCommand(error);
+		expect(nowCalls).toBe(0);
+		expect(portCalls).toBe(0);
+	});
+
+	it("owns one server-clock instant for every foundation timestamp", async () => {
+		const originalInstant = "2042-03-04T05:06:07.000Z";
+		const clockDate = new Date(originalInstant);
+		let clockCalls = 0;
+		let observedPlan: ApplicationFoundationWritePlanV1 | undefined;
+		const useCase = createUseCase(
+			{
 				async commit(plan) {
+					clockDate.setTime(new Date("2099-01-01T00:00:00.000Z").valueOf());
 					observedPlan = plan;
 				},
-			});
+			},
+			() => {
+				clockCalls += 1;
+				return clockDate;
+			},
+		);
 
-			await expect(useCase.submit(command, context)).resolves.toMatchObject({
-				applicationId: command.applicationId,
-				agentId: command.agentId,
-			});
-			expect(sideEffects).toBeGreaterThan(0);
-			expect(callerDate.toISOString()).toBe("2030-01-01T00:00:00.000Z");
-			const plan = observedPlan;
-			if (!plan) throw new Error("Persistence did not observe the write plan");
-			for (const timestamp of [
-				plan.agent.createdAt,
-				plan.application.submittedAt,
-				plan.configurationRevision.createdAt,
-				plan.owner.createdAt,
-				plan.outboxIntent.occurredAt,
-				plan.auditEvent.occurredAt,
-			]) {
-				expect(timestamp.toISOString()).toBe(originalInstant);
-			}
-		},
-	);
+		await expect(
+			useCase.submit(validCommand(), actorContext()),
+		).resolves.toMatchObject({
+			applicationId: "application core errors",
+			agentId: "agent core errors",
+		});
+		expect(clockCalls).toBe(1);
+		const plan = observedPlan;
+		if (!plan) throw new Error("Persistence did not observe the write plan");
+		for (const timestamp of [
+			plan.agent.createdAt,
+			plan.application.submittedAt,
+			plan.configurationRevision.createdAt,
+			plan.owner.createdAt,
+			plan.outboxIntent.occurredAt,
+			plan.auditEvent.occurredAt,
+		]) {
+			expect(timestamp.toISOString()).toBe(originalInstant);
+		}
+	});
+
+	it.each([
+		[
+			"throwing clock",
+			() => {
+				throw new Error("sensitive clock failure");
+			},
+		],
+		["proxied Date", () => new Proxy(new Date("2026-08-30T12:00:00.000Z"), {})],
+		["invalid Date internal slot", () => Object.create(Date.prototype)],
+		["nonfinite Date", () => new Date(Number.NaN)],
+	])("sanitizes a %s before the Port", async (_name, clock) => {
+		let portCalls = 0;
+		const useCase = createUseCase(
+			{
+				async commit() {
+					portCalls += 1;
+				},
+			},
+			clock as () => Date,
+		);
+		const error = await useCase.submit(validCommand(), actorContext()).then(
+			() => expect.fail("Expected the server clock to fail"),
+			(reason: unknown) => reason,
+		);
+
+		expect(error).toBeInstanceOf(ApplicationFoundationError);
+		expect(error).toMatchObject({
+			name: "ApplicationFoundationError",
+			code: "persistence_failed",
+			message: "Application foundation persistence failed",
+		});
+		expect(error).not.toHaveProperty("cause");
+		expect(error).not.toHaveProperty("sensitive");
+		expect(String(error)).not.toContain("sensitive");
+		expect(portCalls).toBe(0);
+	});
 
 	it("accepts ordinary frozen command and actor objects", async () => {
 		let portCalls = 0;
-		const useCase = createApplicationFoundationUseCaseV1({
+		const useCase = createUseCase({
 			async commit() {
 				portCalls += 1;
 			},
@@ -392,59 +420,6 @@ describe("Application foundation use case", () => {
 		});
 		expect(error).not.toHaveProperty("cause");
 		expect(error).not.toHaveProperty("sensitive");
-	});
-
-	it("copies the submitted instant before awaiting persistence", async () => {
-		const originalInstant = "2026-08-30T12:00:00.000Z";
-		const submittedAt = new Date(originalInstant);
-		const observedPlans: ApplicationFoundationWritePlanV1[] = [];
-		let releasePersistence = () => {};
-		const persistenceDelay = new Promise<void>((resolve) => {
-			releasePersistence = resolve;
-		});
-		const useCase = createApplicationFoundationUseCaseV1({
-			async commit(plan) {
-				await persistenceDelay;
-				observedPlans.push(plan);
-			},
-		});
-
-		const result = useCase.submit(
-			{
-				schemaVersion: 1,
-				applicationId: "application date copy",
-				agentId: "agent date copy",
-				requestId: "request date copy",
-				name: "Date Copy Agent",
-				description: "Verifies timestamp ownership",
-				sourceReference: "source date copy",
-				traceId: "trace date copy",
-				submittedAt,
-			},
-			{
-				schemaVersion: 1,
-				userId: "user date copy",
-			},
-		);
-		submittedAt.setTime(new Date("2030-01-01T00:00:00.000Z").valueOf());
-		releasePersistence();
-
-		await expect(result).resolves.toMatchObject({
-			applicationId: "application date copy",
-			agentId: "agent date copy",
-		});
-		const plan = observedPlans[0];
-		if (!plan) throw new Error("Persistence did not observe the write plan");
-		for (const timestamp of [
-			plan.agent.createdAt,
-			plan.application.submittedAt,
-			plan.configurationRevision.createdAt,
-			plan.owner.createdAt,
-			plan.outboxIntent.occurredAt,
-			plan.auditEvent.occurredAt,
-		]) {
-			expect(timestamp.toISOString()).toBe(originalInstant);
-		}
 	});
 });
 

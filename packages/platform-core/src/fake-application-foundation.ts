@@ -14,7 +14,11 @@ type FailurePoint =
 	| "commit";
 
 export interface ApplicationFoundationSnapshot {
-	agents: { agentId: string; currentConfigurationRevision: number }[];
+	agents: {
+		agentId: string;
+		currentConfigurationRevision: number;
+		createdAt: Date;
+	}[];
 	applications: {
 		applicationId: string;
 		agentId: string;
@@ -24,13 +28,15 @@ export interface ApplicationFoundationSnapshot {
 		status: "pending_approval";
 		traceId: string;
 		requestId: string;
+		submittedAt: Date;
 	}[];
 	configurationRevisions: {
 		agentId: string;
 		revision: number;
 		sourceReference: string;
+		createdAt: Date;
 	}[];
-	owners: { agentId: string; ownerId: string }[];
+	owners: { agentId: string; ownerId: string; createdAt: Date }[];
 	outboxIntents: {
 		scopeType: "agent";
 		scopeId: string;
@@ -43,6 +49,7 @@ export interface ApplicationFoundationSnapshot {
 		};
 		traceId: string;
 		requestId: string;
+		availableAt: Date;
 	}[];
 	auditEvents: {
 		traceId: string;
@@ -54,6 +61,7 @@ export interface ApplicationFoundationSnapshot {
 		targetType: "agent_application";
 		targetId: string;
 		outcome: "succeeded";
+		occurredAt: Date;
 	}[];
 }
 
@@ -104,6 +112,7 @@ export class FakeApplicationFoundationTransactionV1
 			draft.agents.push({
 				agentId: plan.agent.agentId,
 				currentConfigurationRevision: plan.agent.currentConfigurationRevision,
+				createdAt: plan.agent.createdAt,
 			});
 
 			this.#failBefore("application");
@@ -116,6 +125,7 @@ export class FakeApplicationFoundationTransactionV1
 				status: plan.application.status,
 				traceId: plan.application.traceId,
 				requestId: plan.application.requestId,
+				submittedAt: plan.application.submittedAt,
 			});
 
 			this.#failBefore("configuration_revision");
@@ -123,12 +133,14 @@ export class FakeApplicationFoundationTransactionV1
 				agentId: plan.configurationRevision.agentId,
 				revision: plan.configurationRevision.revision,
 				sourceReference: plan.configurationRevision.sourceReference,
+				createdAt: plan.configurationRevision.createdAt,
 			});
 
 			this.#failBefore("owner");
 			draft.owners.push({
 				agentId: plan.owner.agentId,
 				ownerId: plan.owner.ownerId,
+				createdAt: plan.owner.createdAt,
 			});
 
 			this.#failBefore("outbox");
@@ -139,6 +151,7 @@ export class FakeApplicationFoundationTransactionV1
 				payload: { ...plan.outboxIntent.payload },
 				traceId: plan.outboxIntent.traceId,
 				requestId: plan.outboxIntent.requestId,
+				availableAt: plan.outboxIntent.occurredAt,
 			});
 
 			this.#failBefore("audit");
@@ -152,6 +165,7 @@ export class FakeApplicationFoundationTransactionV1
 				targetType: plan.auditEvent.targetType,
 				targetId: plan.auditEvent.targetId,
 				outcome: plan.auditEvent.outcome,
+				occurredAt: plan.auditEvent.occurredAt,
 			});
 
 			this.#failBefore("commit");
