@@ -91,6 +91,10 @@ export type ApplicationFoundationErrorCode =
 	| "conflict"
 	| "persistence_failed";
 
+const applicationFoundationErrorBrand = Symbol.for(
+	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
+);
+
 export class ApplicationFoundationError extends Error {
 	readonly code: ApplicationFoundationErrorCode;
 
@@ -98,7 +102,23 @@ export class ApplicationFoundationError extends Error {
 		super(`Application foundation ${code.replaceAll("_", " ")}`);
 		this.name = "ApplicationFoundationError";
 		this.code = code;
+		Object.defineProperty(this, applicationFoundationErrorBrand, {
+			value: true,
+		});
 	}
+}
+
+function isApplicationFoundationError(
+	error: unknown,
+): error is ApplicationFoundationError {
+	return (
+		error instanceof ApplicationFoundationError ||
+		(typeof error === "object" &&
+			error !== null &&
+			(error as Record<PropertyKey, unknown>)[
+				applicationFoundationErrorBrand
+			] === true)
+	);
 }
 
 const requiredStrings = [
@@ -200,7 +220,12 @@ export function createApplicationFoundationUseCaseV1(
 					occurredAt: submittedAt,
 				},
 			};
-			await transaction.commit(plan);
+			try {
+				await transaction.commit(plan);
+			} catch (error) {
+				if (isApplicationFoundationError(error)) throw error;
+				throw new ApplicationFoundationError("persistence_failed");
+			}
 			return {
 				schemaVersion: 1,
 				applicationId: plan.application.applicationId,
