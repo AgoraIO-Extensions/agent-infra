@@ -13,6 +13,10 @@
 		"./pilot": {
 			"types": "./dist/pilot/index.d.mts",
 			"import": "./dist/pilot/index.mjs"
+		},
+		"./workload": {
+			"types": "./dist/workload/index.d.mts",
+			"import": "./dist/workload/index.mjs"
 		}
 	},
 	"files": [

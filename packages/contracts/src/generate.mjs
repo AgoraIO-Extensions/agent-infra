@@ -40,6 +40,7 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "./runtime/index.ts";
+import { registryManifestSchemasV1 } from "./workload/index.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const command = process.argv[2];
@@ -69,6 +70,10 @@ const artifactPaths = {
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/pilot-sse.v1.schema.json",
+	),
+	registryManifestJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/registry-manifest.v1.schema.json",
 	),
 	runtimeJsonSchema: resolve(
 		artifactRoot,
@@ -127,7 +132,7 @@ function serialize(value) {
 	return `${JSON.stringify(sortKeys(value), null, 2)}\n`;
 }
 
-function jsonSchemaDocument({ id, title, definitions }) {
+function jsonSchemaDocument({ id, title, definitions, io = "output" }) {
 	return {
 		$schema: "https://json-schema.org/draft/2020-12/schema",
 		$id: id,
@@ -138,6 +143,7 @@ function jsonSchemaDocument({ id, title, definitions }) {
 				rebaseDefinitionRefs(
 					withoutSchemaDialect(
 						z.toJSONSchema(schema, {
+							io,
 							target: "draft-2020-12",
 							unrepresentable: "throw",
 						}),
@@ -323,6 +329,12 @@ function buildArtifacts() {
 		paths: pilotDelegatedOpenApiPathsV1,
 		components: { schemas: pilotDelegatedSchemasV1 },
 	});
+	const registryManifestJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",
+		title: "Agent Infra Registry and Runtime Manifest Contracts V1",
+		definitions: registryManifestSchemasV1,
+		io: "input",
+	});
 	return {
 		jsonSchema,
 		openapi,
@@ -330,6 +342,7 @@ function buildArtifacts() {
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
+		registryManifestJsonSchema,
 		runtimeJsonSchema,
 		runtimeOpenapi,
 	};

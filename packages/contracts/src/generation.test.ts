@@ -87,6 +87,15 @@ describe("standard contract artifacts", () => {
 			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
 				.post.responses,
 		).toHaveProperty("503");
+		expect(artifacts.registryManifestJsonSchema.$schema).toBe(
+			"https://json-schema.org/draft/2020-12/schema",
+		);
+		expect(artifacts.registryManifestJsonSchema.$defs).toHaveProperty(
+			"ImageRegistryAdmissionResultV1",
+		);
+		expect(artifacts.registryManifestJsonSchema.$defs).toHaveProperty(
+			"RuntimeManifestV1",
+		);
 		expect(artifacts.runtimeOpenapi.openapi).toBe("3.1.0");
 		expect(artifacts.runtimeOpenapi.security).toEqual([
 			{ RuntimeServiceBearer: [] },
@@ -169,6 +178,33 @@ describe("standard contract artifacts", () => {
 				}),
 			).not.toThrow();
 		}
+		ajv.addSchema(artifacts.registryManifestJsonSchema);
+		const validateDigest = ajv.compile({
+			$ref: `${artifacts.registryManifestJsonSchema.$id}#/$defs/ImmutableOciDigestV1`,
+		});
+		expect(validateDigest(`sha256:${"a".repeat(64)}`)).toBe(true);
+		const validateManifest = ajv.compile({
+			$ref: `${artifacts.registryManifestJsonSchema.$id}#/$defs/RuntimeManifestV1`,
+		});
+		expect(
+			validateManifest({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { modelSelection: true },
+			}),
+		).toBe(true);
+		expect(
+			validateManifest({
+				schemaVersion: 1,
+				interactionMode: "self-managed",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: { connection: true },
+			}),
+		).toBe(true);
 		ajv.addSchema(artifacts.runtimeJsonSchema);
 		const validateRuntimeEvent = ajv.compile({
 			$ref: `${artifacts.runtimeJsonSchema.$id}#/$defs/RuntimeEventV1`,
@@ -208,6 +244,7 @@ describe("standard contract artifacts", () => {
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
 			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
 			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
+			expect(result.stderr).toContain("registry-manifest.v1.schema.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}
