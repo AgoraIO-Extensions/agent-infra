@@ -52,6 +52,48 @@ test("production source rejects test-support while test-support consumes contrac
 	);
 });
 
+test("only platform-store imports PostgreSQL implementation dependencies", () => {
+	for (const path of [
+		"apps/platform-api/src/app.ts",
+		"apps/platform-worker/src/index.ts",
+		"packages/platform-core/src/index.ts",
+	]) {
+		for (const dependency of ["drizzle-orm", "postgres"]) {
+			assert.match(
+				checkSourceImports(`import "${dependency}";`, { path })[0],
+				/only platform-store/,
+			);
+		}
+	}
+	assert.deepEqual(
+		checkSourceImports('import { drizzle } from "drizzle-orm/postgres-js";', {
+			path: "packages/platform-store/src/migrate.ts",
+		}),
+		[],
+	);
+});
+
+test("only platform-store declares PostgreSQL runtime dependencies", () => {
+	for (const path of ["apps/platform-api", "packages/platform-core"]) {
+		for (const dependency of ["drizzle-orm", "postgres"]) {
+			assert.match(
+				checkProductionManifestDependencies(
+					{ dependencies: { [dependency]: "1.0.0" } },
+					{ path },
+				)[0],
+				/only platform-store/,
+			);
+		}
+	}
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
+			{ path: "packages/platform-store" },
+		),
+		[],
+	);
+});
+
 test("production manifests reject test-support runtime dependencies", () => {
 	for (const section of [
 		"dependencies",
