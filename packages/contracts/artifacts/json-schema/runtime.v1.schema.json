@@ -1,0 +1,2792 @@
+{
+  "$defs": {
+    "ExecutionGrantClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actionIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "actionSetVersion": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "events.replay",
+              "capabilities.read",
+              "generation.cancel",
+              "tool.invoke"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attachmentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "read"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "attachmentId",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "items": {
+            "enum": [
+              "runtime_host",
+              "platform_tool_gateway",
+              "connection_api"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "audience",
+        "issuedAt",
+        "expiresAt",
+        "grantId",
+        "agentId",
+        "actorId",
+        "channelId",
+        "conversationId",
+        "turnId",
+        "executionId",
+        "sessionGeneration",
+        "allowedCommands",
+        "attachments",
+        "actionSetVersion",
+        "actionIds",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "ExecutionGrantCommandV1": {
+      "enum": [
+        "turn.submit",
+        "turn.supplement",
+        "turn.stop",
+        "session.status",
+        "events.replay",
+        "capabilities.read",
+        "generation.cancel",
+        "tool.invoke"
+      ],
+      "type": "string"
+    },
+    "ExecutionGrantV1": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "compact-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "RuntimeCapabilitiesRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant"
+      ],
+      "type": "object"
+    },
+    "RuntimeCapabilitiesResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "type": "boolean"
+            },
+            "connection": {
+              "type": "boolean"
+            },
+            "modelSelection": {
+              "type": "boolean"
+            },
+            "resultFiles": {
+              "type": "boolean"
+            },
+            "supplementaryInstruction": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "modelSelection",
+            "attachments",
+            "resultFiles",
+            "connection",
+            "supplementaryInstruction"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "RuntimeCapabilitiesV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "type": "boolean"
+        },
+        "connection": {
+          "type": "boolean"
+        },
+        "modelSelection": {
+          "type": "boolean"
+        },
+        "resultFiles": {
+          "type": "boolean"
+        },
+        "supplementaryInstruction": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "modelSelection",
+        "attachments",
+        "resultFiles",
+        "connection",
+        "supplementaryInstruction"
+      ],
+      "type": "object"
+    },
+    "RuntimeDriverCommandV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "attachments"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "attachments"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "kind": {
+              "const": "submit-turn",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "attachments"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "attachments"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "kind": {
+              "const": "supplement",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "nativeSessionRef",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "stop",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "nativeSessionRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "generation-cancel",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "nativeSessionRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeDriverLookupV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "submit-turn",
+                    "supplement",
+                    "stop",
+                    "generation-cancel"
+                  ],
+                  "type": "string"
+                },
+                "nativeSessionRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "result": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "outcome": {
+                          "const": "accepted",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "idle",
+                            "running",
+                            "completed",
+                            "failed",
+                            "cancelled",
+                            "unavailable",
+                            "unknown"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "status"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "outcome": {
+                          "const": "busy",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "const": "RUNTIME_TURN_NOT_ACTIVE",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Runtime turn is no longer active",
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "const": "rejected",
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "code",
+                        "message",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Runtime command acceptance could not be confirmed",
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "const": "unknown",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "agentId",
+                "conversationId",
+                "sessionGeneration",
+                "kind",
+                "operationId",
+                "nativeSessionRef",
+                "result"
+              ],
+              "type": "object"
+            },
+            "state": {
+              "const": "found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "missing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeDriverOperationRecordV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "submit-turn",
+            "supplement",
+            "stop",
+            "generation-cancel"
+          ],
+          "type": "string"
+        },
+        "nativeSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "accepted",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "idle",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "unavailable",
+                    "unknown"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "busy",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_TURN_NOT_ACTIVE",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn is no longer active",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime command acceptance could not be confirmed",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "agentId",
+        "conversationId",
+        "sessionGeneration",
+        "kind",
+        "operationId",
+        "nativeSessionRef",
+        "result"
+      ],
+      "type": "object"
+    },
+    "RuntimeEventV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "delta": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "delta"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "enum": [
+                    "idle",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "unavailable",
+                    "unknown"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "phase": {
+                  "enum": [
+                    "started",
+                    "completed",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                "toolCallId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "toolCallId",
+                "name",
+                "phase"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "tool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "fileId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "mimeType": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "fileId",
+                "name",
+                "mimeType",
+                "sizeBytes"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "enum": [
+                    "completed",
+                    "failed",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapterEventKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "payload": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_EXECUTION_FAILED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime execution failed",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_DEPENDENCY_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime dependency is unavailable",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "adapterEventKey",
+            "executionId",
+            "cursor",
+            "occurredAt",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeGenerationCancelRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "tombstoneId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "hostSessionRef",
+        "tombstoneId"
+      ],
+      "type": "object"
+    },
+    "RuntimeInputV1": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "text": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "attachments"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "attachments"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeOperationResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "accepted",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "idle",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "unavailable",
+                    "unknown"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "busy",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_TURN_NOT_ACTIVE",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn is no longer active",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime command acceptance could not be confirmed",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "hostSessionRef",
+        "operationId",
+        "result"
+      ],
+      "type": "object"
+    },
+    "RuntimeOperationResultV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "accepted",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "idle",
+                "running",
+                "completed",
+                "failed",
+                "cancelled",
+                "unavailable",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "busy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "RUNTIME_TURN_NOT_ACTIVE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Runtime turn is no longer active",
+              "type": "string"
+            },
+            "outcome": {
+              "const": "rejected",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "outcome",
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+              "type": "string"
+            },
+            "message": {
+              "const": "Runtime command acceptance could not be confirmed",
+              "type": "string"
+            },
+            "outcome": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "code",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeReplayRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "afterCursor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "hostSessionRef"
+      ],
+      "type": "object"
+    },
+    "RuntimeReplayResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "delta": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "delta"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "text",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "idle",
+                          "running",
+                          "completed",
+                          "failed",
+                          "cancelled",
+                          "unavailable",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "phase": {
+                        "enum": [
+                          "started",
+                          "completed",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "toolCallId": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "toolCallId",
+                      "name",
+                      "phase"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "tool",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "mimeType": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "name": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "sizeBytes": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "fileId",
+                      "name",
+                      "mimeType",
+                      "sizeBytes"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "file",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "completed",
+                          "failed",
+                          "cancelled"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "completed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "adapterEventKey": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cursor": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "const": "RUNTIME_EXECUTION_FAILED",
+                            "type": "string"
+                          },
+                          "message": {
+                            "const": "Runtime execution failed",
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "const": false,
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "const": "RUNTIME_DEPENDENCY_UNAVAILABLE",
+                            "type": "string"
+                          },
+                          "message": {
+                            "const": "Runtime dependency is unavailable",
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "const": true,
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "error",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "adapterEventKey",
+                  "executionId",
+                  "cursor",
+                  "occurredAt",
+                  "type",
+                  "payload"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "events"
+      ],
+      "type": "object"
+    },
+    "RuntimeStatusRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "hostSessionRef"
+      ],
+      "type": "object"
+    },
+    "RuntimeStatusResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "idle",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "unavailable",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "hostSessionRef",
+        "executionId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "RuntimeStatusV1": {
+      "enum": [
+        "idle",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "RuntimeStopRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionDeliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "stopRequestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "hostSessionRef",
+        "stopRequestId",
+        "executionDeliveryFence"
+      ],
+      "type": "object"
+    },
+    "RuntimeSubmitTurnRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "attachments"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "attachments"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "input"
+      ],
+      "type": "object"
+    },
+    "RuntimeSupplementRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionDeliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "compact-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "attachments"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "attachments"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "messageId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "actorId",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "deliveryFence",
+        "grant",
+        "hostSessionRef",
+        "messageId",
+        "executionDeliveryFence",
+        "input"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Runtime Contracts V1"
+}
