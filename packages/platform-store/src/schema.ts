@@ -6,6 +6,7 @@ import {
 	integer,
 	jsonb,
 	pgSchema,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -35,6 +36,106 @@ export const auditOutcome = platformSchema.enum("audit_outcome", [
 export const idempotencyStatus = platformSchema.enum("idempotency_status", [
 	...platformStatusValues.idempotencyStatus,
 ]);
+
+export const agents = platformSchema.table(
+	"agents",
+	{
+		id: text("id").primaryKey(),
+		currentConfigurationRevision: integer("current_configuration_revision")
+			.default(1)
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"agent_configuration_revision_positive",
+			sql`${table.currentConfigurationRevision} > 0`,
+		),
+	],
+);
+
+export const agentApplications = platformSchema.table(
+	"agent_applications",
+	{
+		id: text("id").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		applicantId: text("applicant_id").notNull(),
+		name: varchar("name", { length: 200 }).notNull(),
+		description: text("description").notNull(),
+		status: varchar("status", { length: 32 })
+			.default("pending_approval")
+			.notNull(),
+		traceId: text("trace_id").notNull(),
+		submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		check("agent_application_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"agent_application_applicant_non_empty",
+			sql`char_length(${table.applicantId}) > 0`,
+		),
+		check(
+			"agent_application_name_non_empty",
+			sql`char_length(${table.name}) > 0`,
+		),
+		check(
+			"agent_application_description_non_empty",
+			sql`char_length(${table.description}) > 0`,
+		),
+		check(
+			"agent_application_initial_status",
+			sql`${table.status} = 'pending_approval'`,
+		),
+		check(
+			"agent_application_trace_id_non_empty",
+			sql`char_length(${table.traceId}) > 0`,
+		),
+		uniqueIndex("agent_application_agent_unique").on(table.agentId),
+	],
+);
+
+export const agentConfigurationRevisions = platformSchema.table(
+	"agent_configuration_revisions",
+	{
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		revision: integer("revision").notNull(),
+		sourceReference: text("source_reference").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.agentId, table.revision] }),
+		check(
+			"agent_configuration_revision_number_positive",
+			sql`${table.revision} > 0`,
+		),
+		check(
+			"agent_configuration_source_reference_non_empty",
+			sql`char_length(${table.sourceReference}) > 0`,
+		),
+	],
+);
+
+export const agentOwners = platformSchema.table(
+	"agent_owners",
+	{
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		ownerId: text("owner_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.agentId, table.ownerId] }),
+		check("agent_owner_id_non_empty", sql`char_length(${table.ownerId}) > 0`),
+	],
+);
 
 export const outboxItems = platformSchema.table(
 	"outbox_items",
@@ -235,6 +336,10 @@ export const persistedEvents = platformSchema.table(
 );
 
 export const platformInfrastructureTables = [
+	agents,
+	agentApplications,
+	agentConfigurationRevisions,
+	agentOwners,
 	outboxItems,
 	auditEvents,
 	idempotencyRecords,
