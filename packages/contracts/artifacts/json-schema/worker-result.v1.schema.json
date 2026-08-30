@@ -6589,6 +6589,81 @@
             "operation"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "fence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "cleanup-workload",
+              "type": "string"
+            },
+            "outboxItemId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "persistentVolumeIntent": {
+              "enum": [
+                "delete-new",
+                "retain-existing"
+              ],
+              "type": "string"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workloadGeneration": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadUid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outboxItemId",
+            "requestId",
+            "traceId",
+            "agentId",
+            "configRevision",
+            "workloadRevision",
+            "fence",
+            "workloadUid",
+            "workloadGeneration",
+            "persistentVolumeIntent",
+            "operation"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -13487,6 +13562,740 @@
         {
           "additionalProperties": false,
           "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "fence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "cleanup-workload",
+              "type": "string"
+            },
+            "outboxItemId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "persistentVolumeIntent": {
+                      "enum": [
+                        "delete-new",
+                        "retain-existing"
+                      ],
+                      "type": "string"
+                    },
+                    "phase": {
+                      "const": "closing-route",
+                      "type": "string"
+                    },
+                    "removed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "configuration": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "networkPolicy": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "persistentVolume": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "route": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "secrets": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "service": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "serviceAccount": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "workload": {
+                          "const": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "workload",
+                        "service",
+                        "serviceAccount",
+                        "networkPolicy",
+                        "configuration",
+                        "secrets",
+                        "persistentVolume"
+                      ],
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "in-progress",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "workloadUid",
+                    "workloadGeneration",
+                    "fence",
+                    "persistentVolumeIntent",
+                    "status",
+                    "phase",
+                    "routeClosed",
+                    "removed"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "persistentVolumeIntent": {
+                      "enum": [
+                        "delete-new",
+                        "retain-existing"
+                      ],
+                      "type": "string"
+                    },
+                    "phase": {
+                      "const": "removing-resources",
+                      "type": "string"
+                    },
+                    "removed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "configuration": {
+                          "type": "boolean"
+                        },
+                        "networkPolicy": {
+                          "type": "boolean"
+                        },
+                        "persistentVolume": {
+                          "type": "boolean"
+                        },
+                        "route": {
+                          "type": "boolean"
+                        },
+                        "secrets": {
+                          "type": "boolean"
+                        },
+                        "service": {
+                          "type": "boolean"
+                        },
+                        "serviceAccount": {
+                          "type": "boolean"
+                        },
+                        "workload": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "workload",
+                        "service",
+                        "serviceAccount",
+                        "networkPolicy",
+                        "configuration",
+                        "secrets",
+                        "persistentVolume"
+                      ],
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "in-progress",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "workloadUid",
+                    "workloadGeneration",
+                    "fence",
+                    "persistentVolumeIntent",
+                    "status",
+                    "phase",
+                    "routeClosed",
+                    "removed"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "persistentVolumeIntent": {
+                      "const": "delete-new",
+                      "type": "string"
+                    },
+                    "removed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "configuration": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "networkPolicy": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "persistentVolume": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "route": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "secrets": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "service": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "serviceAccount": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "workload": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "workload",
+                        "service",
+                        "serviceAccount",
+                        "networkPolicy",
+                        "configuration",
+                        "secrets",
+                        "persistentVolume"
+                      ],
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "completed",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "workloadUid",
+                    "workloadGeneration",
+                    "fence",
+                    "persistentVolumeIntent",
+                    "status",
+                    "routeClosed",
+                    "removed"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "persistentVolumeIntent": {
+                      "const": "retain-existing",
+                      "type": "string"
+                    },
+                    "removed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "configuration": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "networkPolicy": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "persistentVolume": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "route": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "secrets": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "service": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "serviceAccount": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "workload": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "workload",
+                        "service",
+                        "serviceAccount",
+                        "networkPolicy",
+                        "configuration",
+                        "secrets",
+                        "persistentVolume"
+                      ],
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "completed",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "workloadUid",
+                    "workloadGeneration",
+                    "fence",
+                    "persistentVolumeIntent",
+                    "status",
+                    "routeClosed",
+                    "removed"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "const": "KUBERNETES_CLEANUP_FAILED",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Kubernetes Workload cleanup did not complete",
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "traceId",
+                        "code",
+                        "message",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "persistentVolumeIntent": {
+                      "enum": [
+                        "delete-new",
+                        "retain-existing"
+                      ],
+                      "type": "string"
+                    },
+                    "phase": {
+                      "enum": [
+                        "closing-route",
+                        "removing-resources"
+                      ],
+                      "type": "string"
+                    },
+                    "removed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "configuration": {
+                          "type": "boolean"
+                        },
+                        "networkPolicy": {
+                          "type": "boolean"
+                        },
+                        "persistentVolume": {
+                          "type": "boolean"
+                        },
+                        "route": {
+                          "type": "boolean"
+                        },
+                        "secrets": {
+                          "type": "boolean"
+                        },
+                        "service": {
+                          "type": "boolean"
+                        },
+                        "serviceAccount": {
+                          "type": "boolean"
+                        },
+                        "workload": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "workload",
+                        "service",
+                        "serviceAccount",
+                        "networkPolicy",
+                        "configuration",
+                        "secrets",
+                        "persistentVolume"
+                      ],
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "failed",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadGeneration": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "workloadUid": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "workloadUid",
+                    "workloadGeneration",
+                    "fence",
+                    "persistentVolumeIntent",
+                    "status",
+                    "phase",
+                    "routeClosed",
+                    "removed",
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "persistentVolumeIntent": {
+              "enum": [
+                "delete-new",
+                "retain-existing"
+              ],
+              "type": "string"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workloadGeneration": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadUid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outboxItemId",
+            "requestId",
+            "traceId",
+            "agentId",
+            "configRevision",
+            "workloadRevision",
+            "fence",
+            "workloadUid",
+            "workloadGeneration",
+            "persistentVolumeIntent",
+            "status",
+            "operation",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "admissionPolicyRef": {
               "minLength": 1,
               "type": "string"
@@ -14666,6 +15475,366 @@
             "workloadRevision",
             "fence",
             "expectedWorkload",
+            "operation",
+            "status",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "currentConfigRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "currentFence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "currentWorkloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "error": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "WORKER_RESULT_STALE",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "The Worker result is stale",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "code",
+                "message",
+                "retryable",
+                "traceId"
+              ],
+              "type": "object"
+            },
+            "fence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "cleanup-workload",
+              "type": "string"
+            },
+            "outboxItemId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "persistentVolumeIntent": {
+              "enum": [
+                "delete-new",
+                "retain-existing"
+              ],
+              "type": "string"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "stale",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workloadGeneration": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadUid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outboxItemId",
+            "requestId",
+            "traceId",
+            "agentId",
+            "configRevision",
+            "workloadRevision",
+            "fence",
+            "workloadUid",
+            "workloadGeneration",
+            "persistentVolumeIntent",
+            "operation",
+            "status",
+            "currentConfigRevision",
+            "currentWorkloadRevision",
+            "currentFence",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "error": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "WORKER_REQUEST_REJECTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "The Worker request was rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "code",
+                "message",
+                "retryable",
+                "traceId"
+              ],
+              "type": "object"
+            },
+            "fence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "cleanup-workload",
+              "type": "string"
+            },
+            "outboxItemId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "persistentVolumeIntent": {
+              "enum": [
+                "delete-new",
+                "retain-existing"
+              ],
+              "type": "string"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "rejected",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workloadGeneration": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadUid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outboxItemId",
+            "requestId",
+            "traceId",
+            "agentId",
+            "configRevision",
+            "workloadRevision",
+            "fence",
+            "workloadUid",
+            "workloadGeneration",
+            "persistentVolumeIntent",
+            "operation",
+            "status",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "error": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "WORKER_REQUEST_FAILED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "The Worker request failed",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": true,
+                  "type": "boolean"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "code",
+                "message",
+                "retryable",
+                "traceId"
+              ],
+              "type": "object"
+            },
+            "fence": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "cleanup-workload",
+              "type": "string"
+            },
+            "outboxItemId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "persistentVolumeIntent": {
+              "enum": [
+                "delete-new",
+                "retain-existing"
+              ],
+              "type": "string"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "failed",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workloadGeneration": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workloadUid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outboxItemId",
+            "requestId",
+            "traceId",
+            "agentId",
+            "configRevision",
+            "workloadRevision",
+            "fence",
+            "workloadUid",
+            "workloadGeneration",
+            "persistentVolumeIntent",
             "operation",
             "status",
             "error"

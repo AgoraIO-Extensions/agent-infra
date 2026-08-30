@@ -226,6 +226,49 @@ const reconcileAppliedResult = {
 	outcome: kubernetesAppliedOutcome,
 } as const;
 
+const cleanupExpected = {
+	...workerCorrelation,
+	requestId: "request_cleanup_01",
+	operation: "cleanup-workload",
+	workloadUid: appliedWorkload.workloadUid,
+	workloadGeneration: appliedWorkload.observedGeneration,
+	persistentVolumeIntent: "delete-new",
+} as const;
+
+const cleanupOutcomeCorrelation = {
+	schemaVersion: 1,
+	requestId: cleanupExpected.requestId,
+	traceId: cleanupExpected.traceId,
+	agentId: cleanupExpected.agentId,
+	configRevision: cleanupExpected.configRevision,
+	workloadRevision: cleanupExpected.workloadRevision,
+	workloadUid: cleanupExpected.workloadUid,
+	workloadGeneration: cleanupExpected.workloadGeneration,
+	fence: cleanupExpected.fence,
+} as const;
+
+const removedCleanupResources = {
+	route: true,
+	workload: true,
+	service: true,
+	serviceAccount: true,
+	networkPolicy: true,
+	configuration: true,
+	secrets: true,
+} as const;
+
+const cleanupCompletedResult = {
+	...cleanupExpected,
+	status: "succeeded",
+	outcome: {
+		...cleanupOutcomeCorrelation,
+		persistentVolumeIntent: "delete-new",
+		status: "completed",
+		routeClosed: true,
+		removed: { ...removedCleanupResources, persistentVolume: true },
+	},
+} as const;
+
 describe("Worker admission and Secret result V1 contract", () => {
 	it("represents fence-only staleness and rejects equal or regressed context", () => {
 		const fenceStale = {
@@ -659,6 +702,227 @@ describe("Worker Workload reconcile result V1 contract", () => {
 			{ ...reconcileAppliedResult, expectedWorkload: undefined },
 		]) {
 			expect(WorkerWorkloadResultV1Schema.safeParse(result).success).toBe(
+				false,
+			);
+		}
+	});
+});
+
+describe("Worker Workload cleanup result V1 contract", () => {
+	it.each([
+		["delete-new", true],
+		["retain-existing", false],
+	] as const)(
+		"accepts completed cleanup with %s PVC intent",
+		(persistentVolumeIntent, persistentVolume) => {
+			const expected = { ...cleanupExpected, persistentVolumeIntent } as const;
+			const result = {
+				...expected,
+				status: "succeeded",
+				outcome: {
+					...cleanupOutcomeCorrelation,
+					persistentVolumeIntent,
+					status: "completed",
+					routeClosed: true,
+					removed: { ...removedCleanupResources, persistentVolume },
+				},
+			} as const;
+
+			expect(WorkerWorkloadExpectedRevisionV1Schema.parse(expected)).toEqual(
+				expected,
+			);
+			expect(WorkerWorkloadResultV1Schema.parse(result)).toEqual(result);
+			expect(validateWorkerWorkloadResultV1(expected, result)).toEqual(result);
+		},
+	);
+
+	it("binds outer and nested cleanup facts to the exact work item", () => {
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...cleanupCompletedResult,
+				workloadUid: "workload_uid_02",
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...cleanupCompletedResult,
+				outcome: {
+					...cleanupCompletedResult.outcome,
+					workloadGeneration: cleanupExpected.workloadGeneration + 1,
+				},
+			}),
+		).toThrow("Workload cleanup correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...cleanupCompletedResult,
+				persistentVolumeIntent: "retain-existing",
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+	});
+
+	it("preserves route-first in-progress and fixed failed cleanup outcomes", () => {
+		const untouched = {
+			route: false,
+			workload: false,
+			service: false,
+			serviceAccount: false,
+			networkPolicy: false,
+			configuration: false,
+			secrets: false,
+			persistentVolume: false,
+		} as const;
+		const closingRoute = {
+			...cleanupOutcomeCorrelation,
+			persistentVolumeIntent: "delete-new",
+			status: "in-progress",
+			phase: "closing-route",
+			routeClosed: false,
+			removed: untouched,
+		} as const;
+		const removingResources = {
+			...closingRoute,
+			phase: "removing-resources",
+			routeClosed: true,
+			removed: { ...untouched, route: true },
+		} as const;
+		const failed = {
+			...closingRoute,
+			status: "failed",
+			error: {
+				schemaVersion: 1,
+				code: "KUBERNETES_CLEANUP_FAILED",
+				message: "Kubernetes Workload cleanup did not complete",
+				retryable: true,
+				traceId: cleanupExpected.traceId,
+			},
+		} as const;
+
+		for (const outcome of [closingRoute, removingResources, failed]) {
+			const result = {
+				...cleanupExpected,
+				status: "succeeded",
+				outcome,
+			} as const;
+			expect(validateWorkerWorkloadResultV1(cleanupExpected, result)).toEqual(
+				result,
+			);
+		}
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...cleanupExpected,
+				status: "succeeded",
+				outcome: {
+					...failed,
+					removed: { ...failed.removed, workload: true },
+				},
+			}),
+		).toThrow("Workload cleanup correlation mismatch");
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...cleanupExpected,
+				status: "succeeded",
+				outcome: { ...failed, phase: "removing-resources" },
+			}),
+		).toThrow("Workload cleanup correlation mismatch");
+		expect(
+			WorkerWorkloadResultV1Schema.safeParse({
+				...cleanupExpected,
+				status: "succeeded",
+				outcome: {
+					...failed,
+					error: {
+						...failed.error,
+						message: "Kubernetes returned bearer secret-token",
+					},
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("reuses Worker stale fence validation for cleanup errors", () => {
+		const stale = {
+			...cleanupExpected,
+			status: "stale",
+			currentConfigRevision: cleanupExpected.configRevision,
+			currentWorkloadRevision: cleanupExpected.workloadRevision,
+			currentFence: cleanupExpected.fence + 1,
+			error: {
+				schemaVersion: 1,
+				code: "WORKER_RESULT_STALE",
+				message: "The Worker result is stale",
+				retryable: false,
+				traceId: cleanupExpected.traceId,
+			},
+		} as const;
+
+		expect(validateWorkerWorkloadResultV1(cleanupExpected, stale)).toEqual(
+			stale,
+		);
+		expect(() =>
+			validateWorkerWorkloadResultV1(cleanupExpected, {
+				...stale,
+				currentFence: cleanupExpected.fence,
+			}),
+		).toThrow("Worker result revision correlation mismatch");
+	});
+
+	it("fails closed on PVC contradictions and incomplete cleanup results", () => {
+		const retainExpected = {
+			...cleanupExpected,
+			persistentVolumeIntent: "retain-existing",
+		} as const;
+		const contradictory = {
+			...retainExpected,
+			status: "succeeded",
+			outcome: {
+				...cleanupOutcomeCorrelation,
+				persistentVolumeIntent: "retain-existing",
+				status: "in-progress",
+				phase: "removing-resources",
+				routeClosed: true,
+				removed: {
+					route: true,
+					workload: false,
+					service: false,
+					serviceAccount: false,
+					networkPolicy: false,
+					configuration: false,
+					secrets: false,
+					persistentVolume: true,
+				},
+			},
+		} as const;
+
+		expect(() =>
+			validateWorkerWorkloadResultV1(retainExpected, contradictory),
+		).toThrow("Workload cleanup correlation mismatch");
+		for (const invalid of [
+			{ ...cleanupCompletedResult, schemaVersion: 2 },
+			{
+				...cleanupCompletedResult,
+				outcome: { ...cleanupCompletedResult.outcome, schemaVersion: 2 },
+			},
+			{ ...cleanupCompletedResult, workloadGeneration: undefined },
+			{ ...cleanupCompletedResult, persistentVolumeIntent: "snapshot" },
+			{ ...cleanupCompletedResult, operation: "reconcile-workload" },
+			{ ...cleanupCompletedResult, outcome: undefined },
+			{
+				...cleanupExpected,
+				status: "succeeded",
+				outcome: {
+					...cleanupOutcomeCorrelation,
+					persistentVolumeIntent: "delete-new",
+					status: "completed",
+					routeClosed: true,
+					removed: {
+						...removedCleanupResources,
+						service: false,
+						persistentVolume: true,
+					},
+				},
+			},
+		]) {
+			expect(WorkerWorkloadResultV1Schema.safeParse(invalid).success).toBe(
 				false,
 			);
 		}

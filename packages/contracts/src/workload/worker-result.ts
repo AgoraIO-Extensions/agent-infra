@@ -12,6 +12,8 @@ import {
 	KubernetesReconcileResultV1Schema,
 	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
+	validateWorkloadCleanupResultV1,
+	WorkloadCleanupResultV1Schema,
 	WorkloadExpectationV1Schema,
 } from "./kubernetes.ts";
 import {
@@ -61,6 +63,13 @@ const reconcileWorkloadCorrelationV1Shape = {
 const reconcileWorkloadExpectedV1Shape = {
 	...workerCorrelationV1Shape,
 	desiredWorkload: AgentWorkloadDesiredV1Schema,
+} as const;
+
+const cleanupWorkloadCorrelationV1Shape = {
+	...workerCorrelationV1Shape,
+	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadGeneration: WorkloadRevisionV1Schema,
+	persistentVolumeIntent: z.enum(["delete-new", "retain-existing"]),
 } as const;
 
 const workerWorkloadErrorV1Schema = <
@@ -115,6 +124,10 @@ export const WorkerWorkloadExpectedRevisionV1Schema = z.discriminatedUnion(
 			...reconcileWorkloadExpectedV1Shape,
 			operation: z.literal("reconcile-workload"),
 		}),
+		z.strictObject({
+			...cleanupWorkloadCorrelationV1Shape,
+			operation: z.literal("cleanup-workload"),
+		}),
 	],
 );
 
@@ -144,6 +157,12 @@ const succeededWorkerResults = [
 		status: z.literal("succeeded"),
 		operation: z.literal("reconcile-workload"),
 		outcome: KubernetesReconcileResultV1Schema,
+	}),
+	z.strictObject({
+		...cleanupWorkloadCorrelationV1Shape,
+		status: z.literal("succeeded"),
+		operation: z.literal("cleanup-workload"),
+		outcome: WorkloadCleanupResultV1Schema,
 	}),
 ] as const;
 
@@ -189,6 +208,10 @@ const errorWorkerResults = [
 	...createWorkerErrorResultSchemas(
 		"reconcile-workload",
 		reconcileWorkloadCorrelationV1Shape,
+	),
+	...createWorkerErrorResultSchemas(
+		"cleanup-workload",
+		cleanupWorkloadCorrelationV1Shape,
 	),
 ] as const;
 
@@ -289,6 +312,16 @@ export function validateWorkerWorkloadResultV1(
 		throw new Error("Worker result revision correlation mismatch");
 	}
 	if (
+		expected.operation === "cleanup-workload" &&
+		(result.operation !== "cleanup-workload" ||
+			!("workloadUid" in result) ||
+			result.workloadUid !== expected.workloadUid ||
+			result.workloadGeneration !== expected.workloadGeneration ||
+			result.persistentVolumeIntent !== expected.persistentVolumeIntent)
+	) {
+		throw new Error("Worker result revision correlation mismatch");
+	}
+	if (
 		result.status === "succeeded" &&
 		result.operation === "reconcile-workload" &&
 		expected.operation === "reconcile-workload"
@@ -308,6 +341,27 @@ export function validateWorkerWorkloadResultV1(
 		) {
 			throw new Error("Worker result revision correlation mismatch");
 		}
+	}
+	if (
+		result.status === "succeeded" &&
+		result.operation === "cleanup-workload" &&
+		expected.operation === "cleanup-workload"
+	) {
+		validateWorkloadCleanupResultV1(
+			{
+				schemaVersion: expected.schemaVersion,
+				requestId: expected.requestId,
+				traceId: expected.traceId,
+				agentId: expected.agentId,
+				configRevision: expected.configRevision,
+				workloadRevision: expected.workloadRevision,
+				workloadUid: expected.workloadUid,
+				workloadGeneration: expected.workloadGeneration,
+				fence: expected.fence,
+				persistentVolumeIntent: expected.persistentVolumeIntent,
+			},
+			result.outcome,
+		);
 	}
 	if (
 		result.status === "succeeded" &&
