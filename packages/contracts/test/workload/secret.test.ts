@@ -181,6 +181,22 @@ describe("Platform Secret V1 contract", () => {
 		).toThrow("Secret active wrapping key mismatch");
 	});
 
+	it("rejects different key versions that alias the same RSA key", () => {
+		expect(() =>
+			validateSecretEncryptionKeySetV1({
+				...encryptionKeys,
+				keys: [
+					activePublicKey,
+					{
+						...activePublicKey,
+						keyVersion: "key-2026-07",
+						status: "retiring",
+					},
+				],
+			}),
+		).toThrow("Secret active wrapping key mismatch");
+	});
+
 	it("rejects malformed or mismatched public key descriptors", () => {
 		for (const descriptor of [
 			{ ...activePublicKey, publicKeySpkiDerBase64: "A".repeat(512) },
@@ -290,6 +306,15 @@ describe("Platform Secret V1 contract", () => {
 				kubernetesSecretRef: {
 					...kubernetesSecretRef,
 					name: "agent-01..secret-01",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			PlatformSecretRecordV1Schema.safeParse({
+				...active,
+				kubernetesSecretRef: {
+					...kubernetesSecretRef,
+					name: `${"a".repeat(64)}.secret-v2-r7`,
 				},
 			}).success,
 		).toBe(false);
@@ -509,9 +534,17 @@ describe("Platform Secret V1 contract", () => {
 			remainingSecrets: 3,
 			updatedAt: "2026-08-28T10:03:00Z",
 		} as const;
+		const { publicKey: retiringKey } = generateKeyPairSync("rsa", {
+			modulusLength: 3072,
+		});
+		const retiringKeyDer = retiringKey.export({ format: "der", type: "spki" });
 		const retiringPublicKey = {
 			...activePublicKey,
 			keyVersion: "key-2026-07",
+			publicKeySpkiDerBase64: retiringKeyDer.toString("base64"),
+			publicKeyFingerprint: createHash("sha256")
+				.update(retiringKeyDer)
+				.digest("hex"),
 			status: "retiring",
 		} as const;
 		const keySet = {

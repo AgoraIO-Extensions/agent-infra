@@ -31,7 +31,7 @@ const kubernetesResourceName = z
 	.string()
 	.max(253)
 	.regex(
-		/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/,
+		/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$/,
 	);
 const secretOwnerType = z.enum(["agent-owner", "platform"]);
 const secretAlgorithmVersion = z.literal("aes-256-gcm:v1");
@@ -60,10 +60,14 @@ export function validateSecretEncryptionKeySetV1(input: unknown) {
 	const uniqueKeyVersions = new Set(
 		keySet.keys.map(({ keyVersion }) => keyVersion),
 	);
+	const uniqueKeyFingerprints = new Set(
+		keySet.keys.map(({ publicKeyFingerprint }) => publicKeyFingerprint),
+	);
 	if (
 		activeKeys.length !== 1 ||
 		activeKeys[0]?.keyVersion !== keySet.activeWrappingKeyVersion ||
-		uniqueKeyVersions.size !== keySet.keys.length
+		uniqueKeyVersions.size !== keySet.keys.length ||
+		uniqueKeyFingerprints.size !== keySet.keys.length
 	) {
 		throw new Error("Secret active wrapping key mismatch");
 	}
