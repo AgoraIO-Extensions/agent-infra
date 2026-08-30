@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-	WorkloadBoundaryErrorV1Schema,
 	WorkloadFenceV1Schema,
 	WorkloadOpaqueIdV1Schema,
 	WorkloadRevisionV1Schema,
@@ -14,6 +13,64 @@ import {
 	SelfManagedRuntimeManifestV1Schema,
 } from "./runtime-manifest.ts";
 import { KubernetesSecretReferenceV1Schema } from "./secret.ts";
+
+const kubernetesErrorBaseV1Shape = {
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	traceId: WorkloadOpaqueIdV1Schema,
+} as const;
+
+const kubernetesPolicyRejectedErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_POLICY_REJECTED"),
+	message: z.literal("Kubernetes policy rejected the Workload"),
+	retryable: z.literal(false),
+});
+const kubernetesStaleRevisionErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_STALE_REVISION"),
+	message: z.literal("A newer Workload revision is already current"),
+	retryable: z.literal(false),
+});
+const kubernetesApplyIncompleteErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_APPLY_INCOMPLETE"),
+	message: z.literal("Kubernetes Workload did not fully converge"),
+	retryable: z.literal(true),
+});
+const kubernetesHealthCheckFailedErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_HEALTH_CHECK_FAILED"),
+	message: z.literal("Kubernetes Workload failed its health check"),
+	retryable: z.literal(true),
+});
+const kubernetesRouteSwitchFailedErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_ROUTE_SWITCH_FAILED"),
+	message: z.literal("Kubernetes route switch did not converge"),
+	retryable: z.literal(true),
+});
+const kubernetesCleanupFailedErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_CLEANUP_FAILED"),
+	message: z.literal("Kubernetes Workload cleanup did not complete"),
+	retryable: z.literal(true),
+});
+const kubernetesAdapterUnavailableErrorV1Schema = z.strictObject({
+	...kubernetesErrorBaseV1Shape,
+	code: z.literal("KUBERNETES_ADAPTER_UNAVAILABLE"),
+	message: z.literal("Kubernetes reconciliation is temporarily unavailable"),
+	retryable: z.literal(true),
+});
+
+export const KubernetesBoundaryErrorV1Schema = z.discriminatedUnion("code", [
+	kubernetesPolicyRejectedErrorV1Schema,
+	kubernetesStaleRevisionErrorV1Schema,
+	kubernetesApplyIncompleteErrorV1Schema,
+	kubernetesHealthCheckFailedErrorV1Schema,
+	kubernetesRouteSwitchFailedErrorV1Schema,
+	kubernetesCleanupFailedErrorV1Schema,
+	kubernetesAdapterUnavailableErrorV1Schema,
+]);
 
 export const KubernetesRuntimeCapabilitiesV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
@@ -225,7 +282,7 @@ const healthyWorkloadAppliedV1Schema = z.strictObject({
 const unhealthyWorkloadAppliedV1Schema = z.strictObject({
 	state: z.literal("unhealthy"),
 	observedAt: WorkloadTimestampV1Schema,
-	error: WorkloadBoundaryErrorV1Schema.optional(),
+	error: KubernetesBoundaryErrorV1Schema.optional(),
 });
 const unknownWorkloadAppliedV1Schema = z.strictObject({
 	state: z.literal("unknown"),
@@ -248,8 +305,13 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	imageDigest: ImmutableOciDigestV1Schema,
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	observedGeneration: WorkloadRevisionV1Schema,
+	resourceProfileRef: WorkloadOpaqueIdV1Schema,
 	service: WorkloadServiceV1Schema,
 	healthCheck: WorkloadHealthV1Schema,
+	routeIntent: WorkloadRouteV1Schema,
+	persistentVolume: WorkloadPersistentVolumeV1Schema,
+	serviceAccount: WorkloadServiceAccountV1Schema,
+	networkPolicy: WorkloadNetworkPolicyV1Schema,
 	serviceRef: WorkloadOpaqueIdV1Schema,
 	serviceAccountRef: WorkloadOpaqueIdV1Schema,
 	persistentVolumeRef: WorkloadOpaqueIdV1Schema,
@@ -334,17 +396,76 @@ export const KubernetesReconcileResultV1Schema = z.discriminatedUnion(
 			status: z.literal("stale"),
 			currentConfigRevision: WorkloadRevisionV1Schema,
 			currentWorkloadRevision: WorkloadRevisionV1Schema,
-			error: WorkloadBoundaryErrorV1Schema,
+			error: kubernetesStaleRevisionErrorV1Schema,
 		}),
 		z.strictObject({
 			...reconcileCorrelationV1Shape,
 			status: z.literal("rejected"),
-			error: WorkloadBoundaryErrorV1Schema,
+			error: kubernetesPolicyRejectedErrorV1Schema,
 		}),
 		z.strictObject({
 			...reconcileCorrelationV1Shape,
 			status: z.literal("failed"),
-			error: WorkloadBoundaryErrorV1Schema,
+			error: z.union([
+				kubernetesApplyIncompleteErrorV1Schema,
+				kubernetesHealthCheckFailedErrorV1Schema,
+				kubernetesAdapterUnavailableErrorV1Schema,
+			]),
+		}),
+	],
+);
+
+export const WorkloadRouteTargetV1Schema = z.strictObject({
+	routeRef: WorkloadOpaqueIdV1Schema,
+	workloadUid: WorkloadOpaqueIdV1Schema,
+	workloadRevision: WorkloadRevisionV1Schema,
+	workloadGeneration: WorkloadRevisionV1Schema,
+});
+
+const routeSwitchCorrelationV1Shape = {
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	requestId: WorkloadOpaqueIdV1Schema,
+	traceId: WorkloadOpaqueIdV1Schema,
+	agentId: WorkloadOpaqueIdV1Schema,
+	fence: WorkloadFenceV1Schema,
+} as const;
+
+const promoteWorkloadRouteRequestV1Schema = z.strictObject({
+	...routeSwitchCorrelationV1Shape,
+	action: z.literal("promote"),
+	previousRoute: WorkloadRouteTargetV1Schema.optional(),
+	candidateRoute: WorkloadRouteTargetV1Schema,
+	candidateValidated: z.literal(true),
+});
+const rollbackWorkloadRouteRequestV1Schema = z.strictObject({
+	...routeSwitchCorrelationV1Shape,
+	action: z.literal("rollback"),
+	previousRoute: WorkloadRouteTargetV1Schema,
+	candidateRoute: WorkloadRouteTargetV1Schema,
+});
+
+export const WorkloadRouteSwitchRequestV1Schema = z.discriminatedUnion(
+	"action",
+	[promoteWorkloadRouteRequestV1Schema, rollbackWorkloadRouteRequestV1Schema],
+);
+
+const routeSwitchResultBaseV1Shape = {
+	...routeSwitchCorrelationV1Shape,
+	action: z.enum(["promote", "rollback"]),
+	routedWorkloads: z.array(WorkloadRouteTargetV1Schema).max(1),
+} as const;
+
+export const WorkloadRouteSwitchResultV1Schema = z.discriminatedUnion(
+	"status",
+	[
+		z.strictObject({
+			...routeSwitchResultBaseV1Shape,
+			status: z.literal("completed"),
+		}),
+		z.strictObject({
+			...routeSwitchResultBaseV1Shape,
+			status: z.literal("failed"),
+			error: kubernetesRouteSwitchFailedErrorV1Schema,
 		}),
 	],
 );
@@ -359,49 +480,88 @@ const cleanupCorrelationV1Schema = {
 	workloadUid: WorkloadOpaqueIdV1Schema,
 	workloadGeneration: WorkloadRevisionV1Schema,
 	fence: WorkloadFenceV1Schema,
-	deleteNewPersistentVolume: z.boolean(),
+	persistentVolumeIntent: z.enum(["delete-new", "retain-existing"]),
 } as const;
 
 export const WorkloadCleanupRequestV1Schema = z.strictObject({
 	...cleanupCorrelationV1Schema,
 });
 
-const requiredCleanupResourcesV1Shape = {
+const cleanupResourcesV1Shape = {
 	workload: z.literal(true),
 	service: z.literal(true),
 	serviceAccount: z.literal(true),
 	networkPolicy: z.literal(true),
-	route: z.literal(true),
+	configuration: z.literal(true),
 	secrets: z.literal(true),
 } as const;
 
+const pendingCleanupResourcesV1Schema = z.strictObject({
+	workload: z.boolean(),
+	service: z.boolean(),
+	serviceAccount: z.boolean(),
+	networkPolicy: z.boolean(),
+	configuration: z.boolean(),
+	secrets: z.boolean(),
+	persistentVolume: z.boolean(),
+});
+
+const untouchedCleanupResourcesV1Schema = z.strictObject({
+	workload: z.literal(false),
+	service: z.literal(false),
+	serviceAccount: z.literal(false),
+	networkPolicy: z.literal(false),
+	configuration: z.literal(false),
+	secrets: z.literal(false),
+	persistentVolume: z.literal(false),
+});
+
 const completedCleanupWithVolumeV1Schema = z.strictObject({
 	...cleanupCorrelationV1Schema,
-	deleteNewPersistentVolume: z.literal(true),
+	persistentVolumeIntent: z.literal("delete-new"),
 	status: z.literal("completed"),
-	deleted: z.strictObject({
-		...requiredCleanupResourcesV1Shape,
+	routeClosed: z.literal(true),
+	removed: z.strictObject({
+		...cleanupResourcesV1Shape,
 		persistentVolume: z.literal(true),
 	}),
 });
 
 const completedCleanupWithoutVolumeV1Schema = z.strictObject({
 	...cleanupCorrelationV1Schema,
-	deleteNewPersistentVolume: z.literal(false),
+	persistentVolumeIntent: z.literal("retain-existing"),
 	status: z.literal("completed"),
-	deleted: z.strictObject({
-		...requiredCleanupResourcesV1Shape,
+	routeClosed: z.literal(true),
+	removed: z.strictObject({
+		...cleanupResourcesV1Shape,
 		persistentVolume: z.literal(false),
 	}),
 });
 
 export const WorkloadCleanupResultV1Schema = z.union([
+	z.strictObject({
+		...cleanupCorrelationV1Schema,
+		status: z.literal("in-progress"),
+		phase: z.literal("closing-route"),
+		routeClosed: z.literal(false),
+		removed: untouchedCleanupResourcesV1Schema,
+	}),
+	z.strictObject({
+		...cleanupCorrelationV1Schema,
+		status: z.literal("in-progress"),
+		phase: z.literal("removing-resources"),
+		routeClosed: z.literal(true),
+		removed: pendingCleanupResourcesV1Schema,
+	}),
 	completedCleanupWithVolumeV1Schema,
 	completedCleanupWithoutVolumeV1Schema,
 	z.strictObject({
 		...cleanupCorrelationV1Schema,
 		status: z.literal("failed"),
-		error: WorkloadBoundaryErrorV1Schema,
+		phase: z.enum(["closing-route", "removing-resources"]),
+		routeClosed: z.boolean(),
+		removed: pendingCleanupResourcesV1Schema,
+		error: kubernetesCleanupFailedErrorV1Schema,
 	}),
 ]);
 
@@ -413,6 +573,12 @@ export type AgentWorkloadAppliedV1 = z.infer<
 >;
 export type KubernetesReconcileResultV1 = z.infer<
 	typeof KubernetesReconcileResultV1Schema
+>;
+export type WorkloadRouteSwitchRequestV1 = z.infer<
+	typeof WorkloadRouteSwitchRequestV1Schema
+>;
+export type WorkloadRouteSwitchResultV1 = z.infer<
+	typeof WorkloadRouteSwitchResultV1Schema
 >;
 export type WorkloadCleanupRequestV1 = z.infer<
 	typeof WorkloadCleanupRequestV1Schema
@@ -459,11 +625,19 @@ export function validateAgentWorkloadAppliedV1(
 		applied.workloadRevision !== desired.workloadRevision ||
 		applied.fence !== desired.fence ||
 		applied.imageDigest !== desired.imageDigest ||
+		applied.resourceProfileRef !== desired.resourceProfileRef ||
 		applied.service.name !== desired.service.name ||
 		applied.service.port !== desired.service.port ||
 		applied.healthCheck.path !== desired.health.path ||
 		applied.healthCheck.timeoutSeconds !== desired.health.timeoutSeconds ||
 		applied.healthCheck.failureThreshold !== desired.health.failureThreshold ||
+		JSON.stringify(applied.routeIntent) !== JSON.stringify(desired.route) ||
+		JSON.stringify(applied.persistentVolume) !==
+			JSON.stringify(desired.persistentVolume) ||
+		JSON.stringify(applied.serviceAccount) !==
+			JSON.stringify(desired.serviceAccount) ||
+		JSON.stringify(applied.networkPolicy) !==
+			JSON.stringify(desired.networkPolicy) ||
 		applied.desiredReplicas !== desired.replicas ||
 		(desired.expectedWorkload !== undefined &&
 			(applied.workloadUid !== desired.expectedWorkload.workloadUid ||
@@ -518,6 +692,66 @@ export function validateKubernetesReconcileResultV1(
 	return result;
 }
 
+function workloadRouteTargetMatchesV1(
+	left: z.infer<typeof WorkloadRouteTargetV1Schema>,
+	right: z.infer<typeof WorkloadRouteTargetV1Schema>,
+): boolean {
+	return (
+		left.routeRef === right.routeRef &&
+		left.workloadUid === right.workloadUid &&
+		left.workloadRevision === right.workloadRevision &&
+		left.workloadGeneration === right.workloadGeneration
+	);
+}
+
+export function validateWorkloadRouteSwitchRequestV1(
+	requestInput: unknown,
+): WorkloadRouteSwitchRequestV1 {
+	const request = WorkloadRouteSwitchRequestV1Schema.parse(requestInput);
+	if (
+		request.previousRoute !== undefined &&
+		request.candidateRoute.workloadRevision <=
+			request.previousRoute.workloadRevision
+	) {
+		throw new Error("Kubernetes route switch correlation mismatch");
+	}
+	return request;
+}
+
+export function validateWorkloadRouteSwitchResultV1(
+	requestInput: unknown,
+	resultInput: unknown,
+): WorkloadRouteSwitchResultV1 {
+	const request = validateWorkloadRouteSwitchRequestV1(requestInput);
+	const result = WorkloadRouteSwitchResultV1Schema.parse(resultInput);
+	const expectedRoute =
+		request.action === "promote"
+			? request.candidateRoute
+			: request.previousRoute;
+	const routedWorkload = result.routedWorkloads[0];
+	if (
+		result.requestId !== request.requestId ||
+		result.traceId !== request.traceId ||
+		result.agentId !== request.agentId ||
+		result.fence !== request.fence ||
+		result.action !== request.action ||
+		(result.status === "completed" &&
+			(routedWorkload === undefined ||
+				!workloadRouteTargetMatchesV1(routedWorkload, expectedRoute))) ||
+		(result.status === "failed" &&
+			(result.error.traceId !== request.traceId ||
+				(routedWorkload !== undefined &&
+					(request.previousRoute === undefined ||
+						!workloadRouteTargetMatchesV1(
+							routedWorkload,
+							request.previousRoute,
+						)))))
+	) {
+		throw new Error("Kubernetes route switch correlation mismatch");
+	}
+	return result;
+}
+
 export function validateWorkloadCleanupResultV1(
 	requestInput: unknown,
 	resultInput: unknown,
@@ -533,7 +767,15 @@ export function validateWorkloadCleanupResultV1(
 		result.workloadUid !== request.workloadUid ||
 		result.workloadGeneration !== request.workloadGeneration ||
 		result.fence !== request.fence ||
-		result.deleteNewPersistentVolume !== request.deleteNewPersistentVolume
+		result.persistentVolumeIntent !== request.persistentVolumeIntent ||
+		(result.persistentVolumeIntent === "retain-existing" &&
+			result.removed.persistentVolume) ||
+		(result.status === "failed" &&
+			(result.error.traceId !== request.traceId ||
+				(result.phase === "closing-route" &&
+					(result.routeClosed ||
+						Object.values(result.removed).some(Boolean))) ||
+				(result.phase === "removing-resources" && !result.routeClosed)))
 	) {
 		throw new Error("Workload cleanup correlation mismatch");
 	}

@@ -3,14 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
 	AgentWorkloadAppliedV1Schema,
 	AgentWorkloadDesiredV1Schema,
+	KubernetesBoundaryErrorV1Schema,
 	KubernetesReconcileResultV1Schema,
 	KubernetesRuntimeCapabilitiesV1Schema,
 	validateAgentWorkloadAppliedV1,
 	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
 	validateWorkloadCleanupResultV1,
+	validateWorkloadRouteSwitchRequestV1,
+	validateWorkloadRouteSwitchResultV1,
 	WorkloadCleanupRequestV1Schema,
 	WorkloadCleanupResultV1Schema,
+	WorkloadRouteSwitchRequestV1Schema,
+	WorkloadRouteSwitchResultV1Schema,
 } from "../../src/workload/kubernetes.js";
 
 const runtimeManifest = {
@@ -19,15 +24,26 @@ const runtimeManifest = {
 	protocol: "acp",
 	service: { port: 8080 },
 	health: { path: "/healthz" },
-	capabilities: { connection: true },
+	capabilities: {
+		modelSelection: false,
+		attachments: false,
+		resultFiles: false,
+		connection: true,
+		supplementaryInstruction: false,
+	},
 } as const;
 
 const secretRef = {
 	schemaVersion: 1,
+	ownerType: "agent-owner",
+	ownerId: "user_01",
 	agentId: "agent_01",
 	secretId: "secret_01",
 	secretVersion: 2,
 	configRevision: 7,
+	algorithmVersion: "aes-256-gcm:v1",
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+	wrappingKeyVersion: "key-2026-08",
 	name: "agent-01-secret-01-v2-r7",
 } as const;
 
@@ -91,8 +107,13 @@ const applied = {
 	imageDigest: desired.imageDigest,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	resourceProfileRef: desired.resourceProfileRef,
 	service: desired.service,
 	healthCheck: desired.health,
+	routeIntent: desired.route,
+	persistentVolume: desired.persistentVolume,
+	serviceAccount: desired.serviceAccount,
+	networkPolicy: desired.networkPolicy,
 	desiredReplicas: 1,
 	readyReplicas: 1,
 	serviceRef: "service/agent-01",
@@ -256,6 +277,39 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(() =>
 			validateAgentWorkloadAppliedV1(desired, {
 				...applied,
+				persistentVolume: {
+					...applied.persistentVolume,
+					storageProfileRef: "storage/other",
+				},
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				serviceAccount: {
+					...applied.serviceAccount,
+					name: "agent-other",
+				},
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				networkPolicy: {
+					...applied.networkPolicy,
+					deploymentPolicyRef: "network/other",
+				},
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
+				routeIntent: { ...applied.routeIntent, name: "agent-other" },
+			}),
+		).toThrow("Applied Workload correlation mismatch");
+		expect(() =>
+			validateAgentWorkloadAppliedV1(desired, {
+				...applied,
 				route: { ...applied.route, workloadUid: "workload_uid_02" },
 			}),
 		).toThrow("Applied Workload correlation mismatch");
@@ -298,7 +352,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			currentWorkloadRevision: desired.workloadRevision + 1,
 			error: {
 				schemaVersion: 1,
-				code: "STALE_WORKLOAD_REVISION",
+				code: "KUBERNETES_STALE_REVISION",
 				message: "A newer Workload revision is already current",
 				retryable: false,
 				traceId: desired.traceId,
@@ -328,6 +382,30 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		).toThrow("Kubernetes reconciliation correlation mismatch");
 	});
 
+	it("accepts only fixed sanitized Kubernetes errors", () => {
+		const error = {
+			schemaVersion: 1,
+			code: "KUBERNETES_APPLY_INCOMPLETE",
+			message: "Kubernetes Workload did not fully converge",
+			retryable: true,
+			traceId: desired.traceId,
+		} as const;
+
+		expect(KubernetesBoundaryErrorV1Schema.parse(error)).toEqual(error);
+		expect(
+			KubernetesBoundaryErrorV1Schema.safeParse({
+				...error,
+				message: "pods agent-01-token-raw failed: provider detail",
+			}).success,
+		).toBe(false);
+		expect(
+			KubernetesBoundaryErrorV1Schema.safeParse({
+				...error,
+				code: "PROVIDER_ERROR",
+			}).success,
+		).toBe(false);
+	});
+
 	it("binds an applied reconciliation envelope to its nested Workload", () => {
 		const result = {
 			schemaVersion: 1,
@@ -354,6 +432,99 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		).toThrow("Kubernetes reconciliation correlation mismatch");
 	});
 
+	it("promotes or rolls back exactly one validated route target", () => {
+		const previousRoute = {
+			routeRef: "route/agent-01",
+			workloadUid: "workload_uid_01",
+			workloadRevision: 8,
+			workloadGeneration: 3,
+		} as const;
+		const candidateRoute = {
+			...previousRoute,
+			workloadRevision: desired.workloadRevision,
+			workloadGeneration: applied.observedGeneration,
+		} as const;
+		const promote = {
+			schemaVersion: 1,
+			requestId: "request_route_01",
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote",
+			previousRoute,
+			candidateRoute,
+			candidateValidated: true,
+		} as const;
+		const promoted = {
+			schemaVersion: 1,
+			requestId: promote.requestId,
+			traceId: promote.traceId,
+			agentId: promote.agentId,
+			fence: promote.fence,
+			action: promote.action,
+			status: "completed",
+			routedWorkloads: [candidateRoute],
+		} as const;
+
+		expect(validateWorkloadRouteSwitchRequestV1(promote)).toEqual(promote);
+		expect(validateWorkloadRouteSwitchResultV1(promote, promoted)).toEqual(
+			promoted,
+		);
+		expect(
+			WorkloadRouteSwitchRequestV1Schema.safeParse({
+				...promote,
+				candidateValidated: false,
+			}).success,
+		).toBe(false);
+		expect(
+			WorkloadRouteSwitchResultV1Schema.safeParse({
+				...promoted,
+				routedWorkloads: [previousRoute, candidateRoute],
+			}).success,
+		).toBe(false);
+
+		const failedPromotion = {
+			...promoted,
+			status: "failed",
+			routedWorkloads: [candidateRoute],
+			error: {
+				schemaVersion: 1,
+				code: "KUBERNETES_ROUTE_SWITCH_FAILED",
+				message: "Kubernetes route switch did not converge",
+				retryable: true,
+				traceId: promote.traceId,
+			},
+		} as const;
+		expect(() =>
+			validateWorkloadRouteSwitchResultV1(promote, failedPromotion),
+		).toThrow("Kubernetes route switch correlation mismatch");
+		expect(() =>
+			validateWorkloadRouteSwitchResultV1(promote, {
+				...failedPromotion,
+				routedWorkloads: [
+					{ ...candidateRoute, workloadUid: "workload_uid_other" },
+				],
+			}),
+		).toThrow("Kubernetes route switch correlation mismatch");
+
+		const rollback = {
+			...promote,
+			requestId: "request_route_02",
+			action: "rollback",
+		} as const;
+		const { candidateValidated: _candidateValidated, ...rollbackRequest } =
+			rollback;
+		const rolledBack = {
+			...promoted,
+			requestId: rollbackRequest.requestId,
+			action: rollbackRequest.action,
+			routedWorkloads: [previousRoute],
+		} as const;
+		expect(
+			validateWorkloadRouteSwitchResultV1(rollbackRequest, rolledBack),
+		).toEqual(rolledBack);
+	});
+
 	it("correlates cleanup to the exact Workload revision", () => {
 		const request = {
 			schemaVersion: 1,
@@ -365,17 +536,18 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			workloadUid: applied.workloadUid,
 			workloadGeneration: applied.observedGeneration,
 			fence: desired.fence,
-			deleteNewPersistentVolume: true,
+			persistentVolumeIntent: "delete-new",
 		} as const;
 		const result = {
 			...request,
 			status: "completed",
-			deleted: {
+			routeClosed: true,
+			removed: {
 				workload: true,
 				service: true,
 				serviceAccount: true,
 				networkPolicy: true,
-				route: true,
+				configuration: true,
 				secrets: true,
 				persistentVolume: true,
 			},
@@ -399,8 +571,46 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(
 			WorkloadCleanupResultV1Schema.safeParse({
 				...result,
-				deleted: { ...result.deleted, route: false },
+				removed: { ...result.removed, service: false },
 			}).success,
 		).toBe(false);
+		const closingRoute = {
+			...request,
+			status: "in-progress",
+			phase: "closing-route",
+			routeClosed: false,
+			removed: {
+				workload: false,
+				service: false,
+				serviceAccount: false,
+				networkPolicy: false,
+				configuration: false,
+				secrets: false,
+				persistentVolume: false,
+			},
+		} as const;
+		expect(validateWorkloadCleanupResultV1(request, closingRoute)).toEqual(
+			closingRoute,
+		);
+		expect(
+			WorkloadCleanupResultV1Schema.safeParse({
+				...closingRoute,
+				removed: { ...closingRoute.removed, workload: true },
+			}).success,
+		).toBe(false);
+
+		const retainRequest = {
+			...request,
+			persistentVolumeIntent: "retain-existing",
+		} as const;
+		expect(() =>
+			validateWorkloadCleanupResultV1(retainRequest, {
+				...closingRoute,
+				persistentVolumeIntent: "retain-existing",
+				phase: "removing-resources",
+				routeClosed: true,
+				removed: { ...closingRoute.removed, persistentVolume: true },
+			}),
+		).toThrow("Workload cleanup correlation mismatch");
 	});
 });

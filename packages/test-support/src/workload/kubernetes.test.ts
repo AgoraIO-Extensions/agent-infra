@@ -1,6 +1,7 @@
 import {
 	KubernetesReconcileResultV1Schema,
 	WorkloadCleanupResultV1Schema,
+	WorkloadRouteSwitchResultV1Schema,
 } from "@agent-infra/contracts/workload";
 import { describe, expect, it } from "vitest";
 
@@ -17,10 +18,15 @@ const capabilities = {
 
 const secretRef = {
 	schemaVersion: 1,
+	ownerType: "agent-owner",
+	ownerId: "user_01",
 	agentId: "agent_01",
 	secretId: "secret_01",
 	secretVersion: 2,
 	configRevision: 7,
+	algorithmVersion: "aes-256-gcm:v1",
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+	wrappingKeyVersion: "key-2026-08",
 	name: "agent-01-secret-01-v2-r7",
 } as const;
 
@@ -42,6 +48,13 @@ const desired = {
 		protocol: "acp",
 		service: { port: 8080 },
 		health: { path: "/healthz" },
+		capabilities: {
+			modelSelection: false,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		},
 	},
 	resourceProfileRef: "resource-profile/pilot-standard",
 	env: { LOG_LEVEL: "info" },
@@ -79,8 +92,13 @@ const applied = {
 	imageDigest: desired.imageDigest,
 	workloadUid: "workload_uid_01",
 	observedGeneration: 4,
+	resourceProfileRef: desired.resourceProfileRef,
 	service: desired.service,
 	healthCheck: desired.health,
+	routeIntent: desired.route,
+	persistentVolume: desired.persistentVolume,
+	serviceAccount: desired.serviceAccount,
+	networkPolicy: desired.networkPolicy,
 	desiredReplicas: 1,
 	readyReplicas: 1,
 	serviceRef: "service/agent-01",
@@ -125,6 +143,22 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 		expect(result.status).toBe("applied");
 	});
 
+	it("fails closed with a fixed sanitized error when no result is configured", async () => {
+		const adapter = createFakeKubernetesRuntimeAdapterV1({ capabilities });
+
+		const result = await adapter.reconcile(desired);
+		expect(result.status).toBe("failed");
+		if (result.status === "failed") {
+			expect(result.error).toEqual({
+				schemaVersion: 1,
+				code: "KUBERNETES_ADAPTER_UNAVAILABLE",
+				message: "Kubernetes reconciliation is temporarily unavailable",
+				retryable: true,
+				traceId: desired.traceId,
+			});
+		}
+	});
+
 	it("reproduces a stale revision without applying it", async () => {
 		const stale = {
 			schemaVersion: 1,
@@ -139,8 +173,8 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			currentWorkloadRevision: 10,
 			error: {
 				schemaVersion: 1,
-				code: "STALE_WORKLOAD_REVISION",
-				message: "A newer Workload revision is current",
+				code: "KUBERNETES_STALE_REVISION",
+				message: "A newer Workload revision is already current",
 				retryable: false,
 				traceId: desired.traceId,
 			},
@@ -165,8 +199,8 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			fence: desired.fence,
 			error: {
 				schemaVersion: 1,
-				code: "WORKLOAD_POLICY_REJECTED",
-				message: "The Workload policy rejected the request",
+				code: "KUBERNETES_POLICY_REJECTED",
+				message: "Kubernetes policy rejected the Workload",
 				retryable: false,
 				traceId: desired.traceId,
 			},
@@ -185,10 +219,9 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			{ ...appliedResult, applied: applying },
 			appliedResult,
 		] as const;
-		let call = 0;
 		const adapter = createFakeKubernetesRuntimeAdapterV1({
 			capabilities,
-			reconcile: () => outcomes[call++],
+			reconcile: (_desired, attempt) => outcomes[attempt],
 		});
 
 		expect((await adapter.reconcile(desired)).status).toBe("rejected");
@@ -197,7 +230,49 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 		if (partial.status === "applied") {
 			expect(partial.applied.route.state).toBe("closed");
 		}
-		expect(await adapter.reconcile(desired)).toEqual(appliedResult);
+		expect(await adapter.restart().reconcile(desired)).toEqual(appliedResult);
+	});
+
+	it("keeps a failed candidate closed and restores the previous route", async () => {
+		const previousRoute = {
+			routeRef: "route/agent-01",
+			workloadUid: applied.workloadUid,
+			workloadRevision: desired.workloadRevision - 1,
+			workloadGeneration: applied.observedGeneration - 1,
+		} as const;
+		const candidateRoute = {
+			...previousRoute,
+			workloadRevision: desired.workloadRevision,
+			workloadGeneration: applied.observedGeneration,
+		} as const;
+		const request = {
+			schemaVersion: 1,
+			requestId: "request_route_01",
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "rollback",
+			previousRoute,
+			candidateRoute,
+		} as const;
+		const result = {
+			schemaVersion: 1,
+			requestId: request.requestId,
+			traceId: request.traceId,
+			agentId: request.agentId,
+			fence: request.fence,
+			action: request.action,
+			status: "completed",
+			routedWorkloads: [previousRoute],
+		} as const;
+		const adapter = createFakeKubernetesRuntimeAdapterV1({
+			capabilities,
+			switchRoute: () => result,
+		});
+
+		const switched = await adapter.switchRoute(request);
+		expect(WorkloadRouteSwitchResultV1Schema.parse(switched)).toEqual(result);
+		expect(switched.routedWorkloads).toEqual([previousRoute]);
 	});
 
 	it.each([
@@ -241,17 +316,18 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 			workloadUid: applied.workloadUid,
 			workloadGeneration: applied.observedGeneration,
 			fence: desired.fence,
-			deleteNewPersistentVolume: true,
+			persistentVolumeIntent: "delete-new",
 		} as const;
 		const cleanupResult = {
 			...cleanupRequest,
 			status: "completed",
-			deleted: {
+			routeClosed: true,
+			removed: {
 				workload: true,
 				service: true,
 				serviceAccount: true,
 				networkPolicy: true,
-				route: true,
+				configuration: true,
 				secrets: true,
 				persistentVolume: true,
 			},
@@ -271,5 +347,61 @@ describe("Fake KubernetesRuntimeAdapter V1", () => {
 		await expect(mismatched.reconcile(desired)).rejects.toThrow(
 			"Kubernetes reconciliation correlation mismatch",
 		);
+	});
+
+	it("resumes cleanup after route closure without deleting a retained PVC", async () => {
+		const request = {
+			schemaVersion: 1,
+			requestId: "request_cleanup_restart_01",
+			traceId: "trace_cleanup_restart_01",
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			workloadUid: applied.workloadUid,
+			workloadGeneration: applied.observedGeneration,
+			fence: desired.fence,
+			persistentVolumeIntent: "retain-existing",
+		} as const;
+		const removed = {
+			workload: false,
+			service: false,
+			serviceAccount: false,
+			networkPolicy: false,
+			configuration: false,
+			secrets: false,
+			persistentVolume: false,
+		} as const;
+		const adapter = createFakeKubernetesRuntimeAdapterV1({
+			capabilities,
+			cleanup: (_request, attempt) =>
+				attempt === 0
+					? {
+							...request,
+							status: "in-progress",
+							phase: "removing-resources",
+							routeClosed: true,
+							removed,
+						}
+					: {
+							...request,
+							status: "completed",
+							routeClosed: true,
+							removed: {
+								workload: true,
+								service: true,
+								serviceAccount: true,
+								networkPolicy: true,
+								configuration: true,
+								secrets: true,
+								persistentVolume: false,
+							},
+						},
+		});
+
+		const partial = await adapter.cleanup(request);
+		expect(partial.status).toBe("in-progress");
+		const completed = await adapter.restart().cleanup(request);
+		expect(completed.status).toBe("completed");
+		expect(completed.removed.persistentVolume).toBe(false);
 	});
 });

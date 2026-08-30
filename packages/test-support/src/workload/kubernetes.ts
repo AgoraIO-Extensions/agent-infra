@@ -4,8 +4,11 @@ import {
 	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
 	validateWorkloadCleanupResultV1,
+	validateWorkloadRouteSwitchRequestV1,
+	validateWorkloadRouteSwitchResultV1,
 	WorkloadCleanupRequestV1Schema,
 	type WorkloadCleanupResultV1,
+	type WorkloadRouteSwitchResultV1,
 } from "@agent-infra/contracts/workload";
 
 export interface FakeKubernetesRuntimeAdapterV1 {
@@ -13,24 +16,38 @@ export interface FakeKubernetesRuntimeAdapterV1 {
 		typeof KubernetesRuntimeCapabilitiesV1Schema.parse
 	>;
 	reconcile(desired: unknown): Promise<KubernetesReconcileResultV1>;
+	switchRoute(request: unknown): Promise<WorkloadRouteSwitchResultV1>;
 	cleanup(request: unknown): Promise<WorkloadCleanupResultV1>;
+	restart(): FakeKubernetesRuntimeAdapterV1;
 }
 
 export function createFakeKubernetesRuntimeAdapterV1(options: {
 	capabilities: unknown;
-	reconcile?: (desired: unknown) => unknown;
-	cleanup?: (request: unknown) => unknown;
+	reconcile?: (desired: unknown, attempt: number) => unknown;
+	switchRoute?: (request: unknown, attempt: number) => unknown;
+	cleanup?: (request: unknown, attempt: number) => unknown;
 }): FakeKubernetesRuntimeAdapterV1 {
 	const capabilities = KubernetesRuntimeCapabilitiesV1Schema.parse(
 		options.capabilities,
 	);
-	return {
+	const reconcileAttempts = new Map<string, number>();
+	const routeSwitchAttempts = new Map<string, number>();
+	const cleanupAttempts = new Map<string, number>();
+	const nextAttempt = (attempts: Map<string, number>, requestId: string) => {
+		const attempt = attempts.get(requestId) ?? 0;
+		attempts.set(requestId, attempt + 1);
+		return attempt;
+	};
+	const build = (): FakeKubernetesRuntimeAdapterV1 => ({
 		capabilities() {
 			return structuredClone(capabilities);
 		},
 		async reconcile(desiredInput) {
 			const desired = validateAgentWorkloadDesiredV1(desiredInput);
-			const configured = options.reconcile?.(structuredClone(desired)) ?? {
+			const configured = options.reconcile?.(
+				structuredClone(desired),
+				nextAttempt(reconcileAttempts, desired.requestId),
+			) ?? {
 				schemaVersion: 1,
 				status: "failed",
 				requestId: desired.requestId,
@@ -41,9 +58,9 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				fence: desired.fence,
 				error: {
 					schemaVersion: 1,
-					code: "FAKE_RECONCILE_RESULT_MISSING",
-					message: "No Fake reconciliation result was configured",
-					retryable: false,
+					code: "KUBERNETES_ADAPTER_UNAVAILABLE",
+					message: "Kubernetes reconciliation is temporarily unavailable",
+					retryable: true,
 					traceId: desired.traceId,
 				},
 			};
@@ -51,16 +68,56 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				validateKubernetesReconcileResultV1(desired, configured),
 			);
 		},
-		async cleanup(requestInput) {
-			const request = WorkloadCleanupRequestV1Schema.parse(requestInput);
-			const configured = options.cleanup?.(structuredClone(request)) ?? {
-				...request,
+		async switchRoute(requestInput) {
+			const request = validateWorkloadRouteSwitchRequestV1(requestInput);
+			const configured = options.switchRoute?.(
+				structuredClone(request),
+				nextAttempt(routeSwitchAttempts, request.requestId),
+			) ?? {
+				schemaVersion: request.schemaVersion,
+				requestId: request.requestId,
+				traceId: request.traceId,
+				agentId: request.agentId,
+				fence: request.fence,
+				action: request.action,
 				status: "failed",
+				routedWorkloads: request.previousRoute ? [request.previousRoute] : [],
 				error: {
 					schemaVersion: 1,
-					code: "FAKE_CLEANUP_RESULT_MISSING",
-					message: "No Fake cleanup result was configured",
-					retryable: false,
+					code: "KUBERNETES_ROUTE_SWITCH_FAILED",
+					message: "Kubernetes route switch did not converge",
+					retryable: true,
+					traceId: request.traceId,
+				},
+			};
+			return structuredClone(
+				validateWorkloadRouteSwitchResultV1(request, configured),
+			);
+		},
+		async cleanup(requestInput) {
+			const request = WorkloadCleanupRequestV1Schema.parse(requestInput);
+			const configured = options.cleanup?.(
+				structuredClone(request),
+				nextAttempt(cleanupAttempts, request.requestId),
+			) ?? {
+				...request,
+				status: "failed",
+				phase: "closing-route",
+				routeClosed: false,
+				removed: {
+					workload: false,
+					service: false,
+					serviceAccount: false,
+					networkPolicy: false,
+					configuration: false,
+					secrets: false,
+					persistentVolume: false,
+				},
+				error: {
+					schemaVersion: 1,
+					code: "KUBERNETES_CLEANUP_FAILED",
+					message: "Kubernetes Workload cleanup did not complete",
+					retryable: true,
 					traceId: request.traceId,
 				},
 			};
@@ -68,5 +125,7 @@ export function createFakeKubernetesRuntimeAdapterV1(options: {
 				validateWorkloadCleanupResultV1(request, configured),
 			);
 		},
-	};
+		restart: build,
+	});
+	return build();
 }
