@@ -141,12 +141,13 @@ export function createApplicationFoundationUseCaseV1(
 	return {
 		async submit(command) {
 			assertApplicationFoundationCommandV1(command);
+			const submittedAt = new Date(command.submittedAt.valueOf());
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {
 					agentId: command.agentId,
 					currentConfigurationRevision: initialConfigurationRevision,
-					createdAt: command.submittedAt,
+					createdAt: submittedAt,
 				},
 				application: {
 					applicationId: command.applicationId,
@@ -157,18 +158,18 @@ export function createApplicationFoundationUseCaseV1(
 					status: "pending_approval",
 					traceId: command.traceId,
 					requestId: command.requestId,
-					submittedAt: command.submittedAt,
+					submittedAt,
 				},
 				configurationRevision: {
 					agentId: command.agentId,
 					revision: initialConfigurationRevision,
 					sourceReference: command.sourceReference,
-					createdAt: command.submittedAt,
+					createdAt: submittedAt,
 				},
 				owner: {
 					agentId: command.agentId,
 					ownerId: command.applicantId,
-					createdAt: command.submittedAt,
+					createdAt: submittedAt,
 				},
 				outboxIntent: {
 					scopeType: "agent",
@@ -182,7 +183,7 @@ export function createApplicationFoundationUseCaseV1(
 					},
 					traceId: command.traceId,
 					requestId: command.requestId,
-					occurredAt: command.submittedAt,
+					occurredAt: submittedAt,
 				},
 				auditEvent: {
 					traceId: command.traceId,
@@ -194,7 +195,7 @@ export function createApplicationFoundationUseCaseV1(
 					targetType: "agent_application",
 					targetId: command.applicationId,
 					outcome: "succeeded",
-					occurredAt: command.submittedAt,
+					occurredAt: submittedAt,
 				},
 			};
 			await transaction.commit(plan);
