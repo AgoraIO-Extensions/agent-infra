@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
 const maxCanonicalBytes = 64 * 1024;
+const maxCanonicalArrayItems = 16_384;
 const maxJsonDepth = 32;
 const maxResultReferences = 8;
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
@@ -137,6 +138,59 @@ function snapshotExactDataValues(
 	}
 }
 
+function snapshotDenseArray(
+	value: unknown,
+	maxItems: number,
+): unknown[] | undefined {
+	try {
+		if (
+			!Array.isArray(value) ||
+			Object.getPrototypeOf(value) !== Array.prototype
+		) {
+			return undefined;
+		}
+		const descriptors = Object.getOwnPropertyDescriptors(
+			value,
+		) as unknown as Record<PropertyKey, PropertyDescriptor>;
+		const ownKeys = Reflect.ownKeys(descriptors);
+		const lengthDescriptor = descriptors.length;
+		if (lengthDescriptor?.enumerable !== false) return undefined;
+		if (
+			!Object.hasOwn(lengthDescriptor, "value") ||
+			Object.hasOwn(lengthDescriptor, "get") ||
+			Object.hasOwn(lengthDescriptor, "set")
+		) {
+			return undefined;
+		}
+		const length = lengthDescriptor.value;
+		if (
+			typeof length !== "number" ||
+			!Number.isSafeInteger(length) ||
+			length < 0 ||
+			length > maxItems ||
+			ownKeys.length !== length + 1
+		) {
+			return undefined;
+		}
+		const snapshot: unknown[] = [];
+		for (let index = 0; index < length; index += 1) {
+			const descriptor = descriptors[String(index)];
+			if (
+				descriptor?.enumerable !== true ||
+				!Object.hasOwn(descriptor, "value") ||
+				Object.hasOwn(descriptor, "get") ||
+				Object.hasOwn(descriptor, "set")
+			) {
+				return undefined;
+			}
+			snapshot[index] = descriptor.value;
+		}
+		return snapshot;
+	} catch {
+		return undefined;
+	}
+}
+
 function isCapturedText(value: unknown, maxBytes: number): value is string {
 	return (
 		typeof value === "string" &&
@@ -188,14 +242,22 @@ function parseResult(input: unknown): PlatformIdempotencyDomainResultV1 {
 	if (
 		values?.schemaVersion !== 1 ||
 		(values.outcome !== "accepted" && values.outcome !== "completed") ||
-		!Array.isArray(values.references) ||
-		values.references.length < 1 ||
-		values.references.length > maxResultReferences ||
-		Reflect.ownKeys(values.references).length !== values.references.length + 1
+		!Array.isArray(values.references)
 	) {
 		invalidInput();
 	}
-	const references = values.references.map((inputReference) => {
+	const referenceValues = snapshotDenseArray(
+		values.references,
+		maxResultReferences,
+	);
+	if (!referenceValues || referenceValues.length < 1) invalidInput();
+	const references: {
+		resourceType: PlatformIdempotencyResourceTypeV1;
+		resourceId: string;
+		revision: number | null;
+	}[] = [];
+	for (let index = 0; index < referenceValues.length; index += 1) {
+		const inputReference = referenceValues[index];
 		const reference = snapshotExactDataValues(inputReference, [
 			"resourceType",
 			"resourceId",
@@ -212,12 +274,12 @@ function parseResult(input: unknown): PlatformIdempotencyDomainResultV1 {
 		) {
 			invalidInput();
 		}
-		return {
+		references.push({
 			resourceType: reference.resourceType,
 			resourceId: reference.resourceId,
 			revision: reference.revision as number | null,
-		};
-	});
+		});
+	}
 	return {
 		schemaVersion: 1,
 		outcome: values.outcome,
@@ -291,8 +353,13 @@ function canonicalJson(value: unknown, depth = 0): string {
 		return JSON.stringify(value);
 	}
 	if (Array.isArray(value)) {
-		if (Reflect.ownKeys(value).length !== value.length + 1) invalidInput();
-		return `[${value.map((item) => canonicalJson(item, depth + 1)).join(",")}]`;
+		const snapshot = snapshotDenseArray(value, maxCanonicalArrayItems);
+		if (!snapshot) invalidInput();
+		const serialized: string[] = [];
+		for (let index = 0; index < snapshot.length; index += 1) {
+			serialized[index] = canonicalJson(snapshot[index], depth + 1);
+		}
+		return `[${Array.prototype.join.call(serialized, ",")}]`;
 	}
 	if (typeof value !== "object") invalidInput();
 	const prototype = Object.getPrototypeOf(value);

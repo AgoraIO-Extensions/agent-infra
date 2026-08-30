@@ -90,6 +90,144 @@ describe("Platform idempotency domain", () => {
 			);
 		}
 	});
+
+	it("snapshots only bounded dense canonical arrays without invoking them", () => {
+		const zeroDigest = platformIdempotencyV1.canonicalRequestDigest({
+			values: [0],
+		});
+		const oneDigest = platformIdempotencyV1.canonicalRequestDigest({
+			values: [1],
+		});
+		expect(zeroDigest).not.toBe(oneDigest);
+
+		const customPrototype = [0];
+		const prototype = Object.create(Array.prototype);
+		Object.defineProperty(prototype, "map", {
+			value: () => ["1"],
+		});
+		Object.setPrototypeOf(customPrototype, prototype);
+		expect(() =>
+			platformIdempotencyV1.canonicalRequestDigest({
+				values: customPrototype,
+			}),
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
+
+		let getterCalls = 0;
+		const accessorElement = [0];
+		Object.defineProperty(accessorElement, "0", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				getterCalls += 1;
+				return 1;
+			},
+		});
+		expect(() =>
+			platformIdempotencyV1.canonicalRequestDigest({
+				values: accessorElement,
+			}),
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		expect(getterCalls).toBe(0);
+
+		const hole: unknown[] = [];
+		hole.length = 1;
+		const extraProperty = [0] as number[] & { providerPayload?: unknown };
+		extraProperty.providerPayload = { remoteId: "remote_01" };
+		const symbolProperty = [0] as number[] & Record<symbol, unknown>;
+		symbolProperty[Symbol("provider")] = "remote_01";
+		const ownKeysTrap = new Proxy([0], {
+			ownKeys() {
+				throw new Error("untrusted ownKeys trap");
+			},
+		});
+		const descriptorTrap = new Proxy([0], {
+			getOwnPropertyDescriptor() {
+				throw new Error("untrusted descriptor trap");
+			},
+		});
+		const oversized = Array.from({ length: 16_385 }, () => 0);
+		for (const invalid of [
+			hole,
+			extraProperty,
+			symbolProperty,
+			ownKeysTrap,
+			descriptorTrap,
+			oversized,
+		]) {
+			expect(() =>
+				platformIdempotencyV1.canonicalRequestDigest({
+					values: invalid as never,
+				}),
+			).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		}
+
+		expect(
+			platformIdempotencyV1.canonicalRequestDigest({
+				tag: "nested",
+				values: [
+					[1, 2],
+					[3, [4]],
+				],
+			}),
+		).toBe(
+			platformIdempotencyV1.canonicalRequestDigest({
+				values: [
+					[1, 2],
+					[3, [4]],
+				],
+				tag: "nested",
+			}),
+		);
+	});
+
+	it("snapshots result references without invoking array or element accessors", () => {
+		const reference = {
+			resourceType: "agent" as const,
+			resourceId: "agent_array",
+			revision: 1,
+		};
+		const result = (references: unknown) => ({
+			schemaVersion: 1,
+			outcome: "accepted",
+			references,
+		});
+
+		const customPrototype = [reference];
+		Object.setPrototypeOf(customPrototype, Object.create(Array.prototype));
+		expect(() =>
+			platformIdempotencyV1.parseResult(result(customPrototype)),
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
+
+		let getterCalls = 0;
+		const accessorElement = [reference];
+		Object.defineProperty(accessorElement, "0", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				getterCalls += 1;
+				return reference;
+			},
+		});
+		expect(() =>
+			platformIdempotencyV1.parseResult(result(accessorElement)),
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		expect(getterCalls).toBe(0);
+
+		const providerArray = [reference] as (typeof reference)[] & {
+			providerPayload?: unknown;
+		};
+		providerArray.providerPayload = { remoteId: "remote_01" };
+		const providerElement = [{ ...reference, providerPayload: "remote_01" }];
+		for (const invalid of [providerArray, providerElement]) {
+			expect(() => platformIdempotencyV1.parseResult(result(invalid))).toThrow(
+				expect.objectContaining({ code: "invalid_input" }),
+			);
+		}
+
+		expect(platformIdempotencyV1.parseResult(result([reference]))).toEqual(
+			result([reference]),
+		);
+	});
 });
 
 describe("Fake Platform idempotency Port", () => {
