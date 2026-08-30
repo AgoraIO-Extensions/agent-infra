@@ -81,6 +81,7 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		for (const reference of [
 			"library/ubuntu:latest",
 			"registry.example:5000/agents/codex:pilot",
+			"registry.example:65535/agents/codex:pilot",
 			`registry.example/agents/codex@sha256:${"a".repeat(64)}`,
 			`[2001:db8::1]:5000/agents/codex:pilot@sha256:${"a".repeat(64)}`,
 		]) {
@@ -94,6 +95,9 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			"registry.example/agents/Codex:pilot",
 			"registry.example/agents/codex:pilot\nsecret",
 			"registry.example/agents/codex:pilot\n",
+			"registry.example:0/agents/codex:pilot",
+			"registry.example:65536/agents/codex:pilot",
+			"registry.example:99999/agents/codex:pilot",
 		]) {
 			expect(OciImageReferenceV1Schema.safeParse(reference).success).toBe(
 				false,
@@ -255,6 +259,37 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}),
 		).toThrow("Image registry Runtime Manifest mismatch");
+
+		const manifestWithoutCapabilities = {
+			schemaVersion: 1 as const,
+			interactionMode: "platform-adapter" as const,
+			protocol: "acp" as const,
+			service: { port: 8080 },
+			health: { path: "/healthz" },
+		};
+		const labelWithoutCapabilities = JSON.stringify(
+			manifestWithoutCapabilities,
+		);
+		expect(
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestLabel: labelWithoutCapabilities,
+				runtimeManifest: {
+					...manifestWithoutCapabilities,
+					capabilities: {
+						modelSelection: false,
+						attachments: false,
+						resultFiles: false,
+						connection: false,
+						supplementaryInstruction: false,
+					},
+				},
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					utf8ByteLength: Buffer.byteLength(labelWithoutCapabilities, "utf8"),
+				},
+			}),
+		).toMatchObject({ status: "admitted" });
 
 		const duplicateKeyLabel = runtimeManifestLabel.replace(
 			'"schemaVersion":1',

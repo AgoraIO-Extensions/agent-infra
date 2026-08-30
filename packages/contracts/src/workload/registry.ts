@@ -10,6 +10,7 @@ import {
 import {
 	type RuntimeManifestV1,
 	RuntimeManifestV1Schema,
+	resolveRuntimeManifestCapabilitiesV1,
 } from "./runtime-manifest.ts";
 
 export const ImmutableOciDigestV1Schema = z
@@ -17,7 +18,9 @@ export const ImmutableOciDigestV1Schema = z
 	.regex(/^sha256:[a-f0-9]{64}(?![\s\S])/);
 
 const ociDomainComponent = "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?";
-const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[[A-Fa-f0-9:]+\\])(?::[0-9]+)?`;
+const ociPort =
+	"(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])";
+const ociDomain = `(?:${ociDomainComponent}(?:\\.${ociDomainComponent})*|\\[[A-Fa-f0-9:]+\\])(?::${ociPort})?`;
 const ociPathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
 const ociImageReferencePattern = new RegExp(
 	`^(?=.{1,512}(?![\\s\\S]))(?:${ociDomain}/)?${ociPathComponent}(?:/${ociPathComponent})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])`,
@@ -221,6 +224,14 @@ function parseRuntimeManifestLabel(
 	return getNodeValue(root);
 }
 
+function canonicalRuntimeManifest(manifestInput: unknown) {
+	const manifest = RuntimeManifestV1Schema.parse(manifestInput);
+	return {
+		...manifest,
+		capabilities: resolveRuntimeManifestCapabilitiesV1(manifest),
+	};
+}
+
 export function validateImageRegistryAdmissionResultV1(
 	requestInput: unknown,
 	resultInput: unknown,
@@ -251,7 +262,7 @@ export function validateImageRegistryAdmissionResultV1(
 	if (result.status === "admitted") {
 		let labelManifest: RuntimeManifestV1;
 		try {
-			labelManifest = RuntimeManifestV1Schema.parse(
+			labelManifest = canonicalRuntimeManifest(
 				parseRuntimeManifestLabel(
 					result.runtimeManifestLabel,
 					result.runtimeManifestParsingEvidence,
@@ -261,7 +272,8 @@ export function validateImageRegistryAdmissionResultV1(
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
 		if (
-			JSON.stringify(labelManifest) !== JSON.stringify(result.runtimeManifest)
+			JSON.stringify(labelManifest) !==
+			JSON.stringify(canonicalRuntimeManifest(result.runtimeManifest))
 		) {
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
