@@ -110,7 +110,9 @@ function snapshotExactDataValues(
 	expectedKeys: readonly string[],
 ): Record<string, unknown> | undefined {
 	try {
-		if (typeof value !== "object" || value === null) return undefined;
+		if (typeof value !== "object" || value === null || types.isProxy(value)) {
+			return undefined;
+		}
 		const descriptors = Object.getOwnPropertyDescriptors(value);
 		const ownKeys = Reflect.ownKeys(descriptors);
 		const expected = new Set(expectedKeys);
@@ -341,43 +343,83 @@ function parseObservedCompletionInput(
 	};
 }
 
-function canonicalJson(value: unknown, depth = 0): string {
+interface CanonicalBudget {
+	remainingBytes: number;
+}
+
+function consumeCanonicalToken(token: string, budget: CanonicalBudget): string {
+	const byteLength = Buffer.byteLength(token, "utf8");
+	if (byteLength > budget.remainingBytes) invalidInput();
+	budget.remainingBytes -= byteLength;
+	return token;
+}
+
+function canonicalJson(
+	value: unknown,
+	depth: number,
+	budget: CanonicalBudget,
+): string {
 	if (depth > maxJsonDepth) invalidInput();
-	if (
-		value === null ||
-		typeof value === "boolean" ||
-		typeof value === "string"
-	) {
-		return JSON.stringify(value);
+	if (value === null || typeof value === "boolean") {
+		return consumeCanonicalToken(JSON.stringify(value), budget);
+	}
+	if (typeof value === "string") {
+		if (Buffer.byteLength(value, "utf8") > budget.remainingBytes)
+			invalidInput();
+		return consumeCanonicalToken(JSON.stringify(value), budget);
 	}
 	if (typeof value === "number") {
 		if (!Number.isFinite(value)) invalidInput();
-		return JSON.stringify(value);
+		return consumeCanonicalToken(JSON.stringify(value), budget);
 	}
 	if (Array.isArray(value)) {
 		const snapshot = snapshotDenseArray(value, maxCanonicalArrayItems);
 		if (!snapshot) invalidInput();
+		consumeCanonicalToken("[", budget);
 		const serialized: string[] = [];
 		for (let index = 0; index < snapshot.length; index += 1) {
-			serialized[index] = canonicalJson(snapshot[index], depth + 1);
+			if (index > 0) consumeCanonicalToken(",", budget);
+			serialized[index] = canonicalJson(snapshot[index], depth + 1, budget);
 		}
+		consumeCanonicalToken("]", budget);
 		return `[${Array.prototype.join.call(serialized, ",")}]`;
 	}
-	if (typeof value !== "object") invalidInput();
+	if (typeof value !== "object" || types.isProxy(value)) invalidInput();
 	const prototype = Object.getPrototypeOf(value);
 	if (prototype !== Object.prototype && prototype !== null) invalidInput();
-	if (Object.getOwnPropertySymbols(value).length > 0) invalidInput();
-	const descriptors = Object.getOwnPropertyDescriptors(value);
-	const keys = Object.keys(descriptors).sort();
-	return `{${keys
-		.map((key) => {
-			const descriptor = descriptors[key];
-			if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-				invalidInput();
-			}
-			return `${JSON.stringify(key)}:${canonicalJson(descriptor.value, depth + 1)}`;
-		})
-		.join(",")}}`;
+	const ownKeys = Reflect.ownKeys(value);
+	if (ownKeys.some((key) => typeof key !== "string")) invalidInput();
+	const keys = ownKeys as string[];
+	consumeCanonicalToken("{", budget);
+	for (let index = 0; index < keys.length; index += 1) {
+		if (index > 0) consumeCanonicalToken(",", budget);
+		const key = keys[index];
+		if (
+			key === undefined ||
+			Buffer.byteLength(key, "utf8") > budget.remainingBytes
+		) {
+			invalidInput();
+		}
+		consumeCanonicalToken(JSON.stringify(key), budget);
+		consumeCanonicalToken(":", budget);
+	}
+	keys.sort();
+	const serialized: string[] = [];
+	for (let index = 0; index < keys.length; index += 1) {
+		const key = keys[index];
+		if (key === undefined) invalidInput();
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+			invalidInput();
+		}
+		serialized[index] = `${JSON.stringify(key)}:${canonicalJson(
+			descriptor.value,
+			depth + 1,
+			budget,
+		)}`;
+	}
+	consumeCanonicalToken("}", budget);
+	return `{${serialized.join(",")}}`;
 }
 
 function canonicalRequestDigest(
@@ -391,9 +433,9 @@ function canonicalRequestDigest(
 		) {
 			invalidInput();
 		}
-		const canonical = canonicalJson(request);
-		if (Buffer.byteLength(canonical, "utf8") > maxCanonicalBytes)
-			invalidInput();
+		const canonical = canonicalJson(request, 0, {
+			remainingBytes: maxCanonicalBytes,
+		});
 		return createHash("sha256").update(canonical, "utf8").digest("hex");
 	} catch (error) {
 		if (error instanceof PlatformIdempotencyError) throw error;
