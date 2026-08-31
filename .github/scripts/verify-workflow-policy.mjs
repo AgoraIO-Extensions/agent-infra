@@ -1565,6 +1565,8 @@ export function validateWorkflowDocuments(workflows) {
     "config.use_repo_settings_file": "false",
     "config.use_wiki_settings_file": "false",
     "config.fallback_models": "[]",
+    "config.ai_timeout":
+      "${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}",
     "config.custom_model_max_tokens":
       "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
     "config.max_model_tokens":
