@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
+import {
+	agentAccessTargetKey,
+	parseAgentAccessTargets,
+} from "./agent-management-access-policy.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
 export class AgentManagementError extends Error {
@@ -226,59 +230,6 @@ export interface AgentAccessQueryV1 {
 	readonly intent: "discover" | "use" | "manage";
 }
 
-export interface AgentAccessUpdateCommandV1 {
-	readonly schemaVersion: 1;
-	readonly agentId: string;
-	readonly expectedRevision: number;
-	readonly desiredOwnerIds: readonly string[];
-	readonly desiredAvailability: AgentManagementStateV1["availability"];
-	readonly requestId: string;
-	readonly traceId: string;
-}
-
-export interface AgentAccessAuthorityContextV1 {
-	readonly schemaVersion: 1;
-	readonly users: readonly {
-		readonly userId: string;
-		readonly accountStatus: "active" | "disabled" | "revoked";
-	}[];
-	readonly organizationIds: readonly string[];
-}
-
-export interface AgentAccessUpdateWritePlanV1 {
-	readonly schemaVersion: 1;
-	readonly operation: "agent.access.updated.v1";
-	readonly agentId: string;
-	readonly expectedRevision: number;
-	readonly ownerIds: readonly string[];
-	readonly availability: AgentManagementStateV1["availability"];
-	readonly auditEvent: {
-		readonly action: "agent.access.updated";
-		readonly actorId: string;
-		readonly subjectType: "agent";
-		readonly subjectId: string;
-		readonly traceId: string;
-		readonly requestId: string;
-	};
-}
-
-export type AgentAccessUpdateDecisionV1 =
-	| {
-			readonly outcome: "accepted";
-			readonly writePlan: AgentAccessUpdateWritePlanV1;
-	  }
-	| { readonly outcome: "denied"; readonly writePlan: null }
-	| {
-			readonly outcome: "conflict";
-			readonly reason:
-				| "invalid_access_update"
-				| "invalid_target"
-				| "last_valid_owner_required"
-				| "no_change"
-				| "stale_revision";
-			readonly writePlan: null;
-	  };
-
 export interface AgentManagementStateV1 {
 	readonly schemaVersion: 1;
 	readonly applicationId: string;
@@ -286,6 +237,7 @@ export interface AgentManagementStateV1 {
 	readonly applicantId: string;
 	readonly status: AgentManagementStatusV1;
 	readonly revision: number;
+	readonly approvalRevision: number | null;
 	readonly decisionReason: string | null;
 	readonly serviceAvailability: AgentServiceAvailabilityV1 | null;
 	readonly desiredState: "running" | "stopped";
@@ -309,6 +261,7 @@ function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
 			"applicantId",
 			"status",
 			"revision",
+			"approvalRevision",
 			"decisionReason",
 			"serviceAvailability",
 			"desiredState",
@@ -341,6 +294,9 @@ function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
 			!capturedText(values.applicantId) ||
 			!statuses.includes(values.status as AgentManagementStatusV1) ||
 			!nonNegativeInteger(values.revision) ||
+			(values.approvalRevision !== null &&
+				(!Number.isSafeInteger(values.approvalRevision) ||
+					(values.approvalRevision as number) < 1)) ||
 			(values.decisionReason !== null &&
 				!capturedText(values.decisionReason, 4096)) ||
 			(values.serviceAvailability !== null &&
@@ -365,7 +321,17 @@ function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
 			status === "withdrawn";
 		if (
 			(preApproval &&
-				(values.desiredState !== "stopped" || serviceAvailability !== null)) ||
+				(values.desiredState !== "stopped" ||
+					serviceAvailability !== null ||
+					values.approvalRevision !== null ||
+					values.workloadRevision !== 0 ||
+					values.fence !== 0 ||
+					values.failureCode !== null)) ||
+			(!preApproval &&
+				(values.approvalRevision === null ||
+					(values.approvalRevision as number) > (values.revision as number) ||
+					(values.workloadRevision as number) < 1 ||
+					(values.fence as number) < 1)) ||
 			((status === "creating" || status === "creation_failed") &&
 				(values.desiredState !== "running" || serviceAvailability !== null)) ||
 			(status === "available" &&
@@ -386,28 +352,13 @@ function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
 		}
 		const ownerIds = stringArray(values.ownerIds);
 		if (ownerIds.length === 0) invalidInput();
-		const availability: AgentManagementStateV1["availability"][number][] = [];
-		const availabilityKeys = new Set<string>();
-		for (const targetInput of dataArray(values.availability, 4096)) {
-			const target = snapshotDataObject(targetInput);
-			if (target.kind === "user") {
-				requireExactKeys(target, ["kind", "userId"]);
-				if (!capturedText(target.userId)) invalidInput();
-				availability.push({ kind: "user", userId: target.userId });
-				availabilityKeys.add(`user:${target.userId}`);
-			} else if (target.kind === "organization") {
-				requireExactKeys(target, ["kind", "organizationId"]);
-				if (!capturedText(target.organizationId)) invalidInput();
-				availability.push({
-					kind: "organization",
-					organizationId: target.organizationId,
-				});
-				availabilityKeys.add(`organization:${target.organizationId}`);
-			} else {
-				invalidInput();
-			}
+		const availability = parseAgentAccessTargets(values.availability);
+		if (
+			new Set(availability.map(agentAccessTargetKey)).size !==
+			availability.length
+		) {
+			invalidInput();
 		}
-		if (availabilityKeys.size !== availability.length) invalidInput();
 		return {
 			schemaVersion: 1,
 			applicationId: values.applicationId,
@@ -415,6 +366,7 @@ function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
 			applicantId: values.applicantId,
 			status,
 			revision: values.revision,
+			approvalRevision: values.approvalRevision as number | null,
 			decisionReason: values.decisionReason as string | null,
 			serviceAvailability,
 			desiredState: values.desiredState,
@@ -509,6 +461,7 @@ export type AgentManagementDecisionV1 =
 			readonly outcome: "conflict";
 			readonly reason:
 				| "idempotency_conflict"
+				| "counter_overflow"
 				| "invalid_transition"
 				| "stale_revision"
 				| "invalid_observation"
@@ -540,12 +493,6 @@ export interface AgentManagementInterfaceV1 {
 		query: AgentAccessQueryV1,
 		actorContext: AgentManagementActorContextV1,
 	): Promise<AgentAccessDecisionV1>;
-	decideAccessUpdate(
-		command: AgentAccessUpdateCommandV1,
-		state: AgentManagementStateV1 | undefined,
-		actorContext: AgentManagementActorContextV1,
-		authorityContext: AgentAccessAuthorityContextV1,
-	): AgentAccessUpdateDecisionV1;
 }
 
 export interface AgentManagementTransactionRequestV1 {
@@ -719,127 +666,6 @@ function parseAccessQuery(input: unknown): AgentAccessQueryV1 {
 		agentId: values.agentId,
 		intent: values.intent,
 	};
-}
-
-function accessTargetKey(
-	target: AgentManagementStateV1["availability"][number],
-): string {
-	return target.kind === "user"
-		? `user:${target.userId}`
-		: `organization:${target.organizationId}`;
-}
-
-function parseAccessTargets(
-	input: unknown,
-): AgentManagementStateV1["availability"] {
-	const targets: AgentManagementStateV1["availability"][number][] = [];
-	for (const targetInput of dataArray(input, 4096)) {
-		const target = snapshotDataObject(targetInput);
-		if (target.kind === "user") {
-			requireExactKeys(target, ["kind", "userId"]);
-			if (!capturedText(target.userId)) invalidInput();
-			targets.push({ kind: "user", userId: target.userId });
-		} else if (target.kind === "organization") {
-			requireExactKeys(target, ["kind", "organizationId"]);
-			if (!capturedText(target.organizationId)) invalidInput();
-			targets.push({
-				kind: "organization",
-				organizationId: target.organizationId,
-			});
-		} else {
-			invalidInput();
-		}
-	}
-	return targets;
-}
-
-function parseAccessUpdateCommand(input: unknown): AgentAccessUpdateCommandV1 {
-	const values = snapshotDataObject(input);
-	requireExactKeys(values, [
-		"schemaVersion",
-		"agentId",
-		"expectedRevision",
-		"desiredOwnerIds",
-		"desiredAvailability",
-		"requestId",
-		"traceId",
-	]);
-	if (
-		values.schemaVersion !== 1 ||
-		!capturedText(values.agentId) ||
-		!nonNegativeInteger(values.expectedRevision) ||
-		!capturedText(values.requestId) ||
-		!capturedText(values.traceId)
-	) {
-		invalidInput();
-	}
-	const desiredOwnerIds = dataArray(values.desiredOwnerIds, 4096).map(
-		(ownerId) => {
-			if (!capturedText(ownerId)) invalidInput();
-			return ownerId;
-		},
-	);
-	return {
-		schemaVersion: 1,
-		agentId: values.agentId,
-		expectedRevision: values.expectedRevision,
-		desiredOwnerIds,
-		desiredAvailability: parseAccessTargets(values.desiredAvailability),
-		requestId: values.requestId,
-		traceId: values.traceId,
-	};
-}
-
-function parseAccessAuthorityContext(
-	input: unknown,
-): AgentAccessAuthorityContextV1 {
-	try {
-		const values = snapshotDataObject(input);
-		requireExactKeys(values, ["schemaVersion", "users", "organizationIds"]);
-		if (values.schemaVersion !== 1) invalidInput();
-		const users: AgentAccessAuthorityContextV1["users"][number][] = [];
-		const userIds = new Set<string>();
-		for (const userInput of dataArray(values.users, 4096)) {
-			const user = snapshotDataObject(userInput);
-			requireExactKeys(user, ["userId", "accountStatus"]);
-			if (
-				!capturedText(user.userId) ||
-				(user.accountStatus !== "active" &&
-					user.accountStatus !== "disabled" &&
-					user.accountStatus !== "revoked") ||
-				userIds.has(user.userId)
-			) {
-				invalidInput();
-			}
-			userIds.add(user.userId);
-			users.push({
-				userId: user.userId,
-				accountStatus: user.accountStatus,
-			});
-		}
-		return {
-			schemaVersion: 1,
-			users,
-			organizationIds: stringArray(values.organizationIds),
-		};
-	} catch {
-		throw new AgentManagementError("unavailable");
-	}
-}
-
-function sortedUnique(
-	values: readonly string[],
-): readonly string[] | undefined {
-	if (new Set(values).size !== values.length) return undefined;
-	return [...values].sort();
-}
-
-function uniqueAccessTargets(
-	targets: AgentManagementStateV1["availability"],
-): AgentManagementStateV1["availability"] | undefined {
-	const keys = targets.map(accessTargetKey);
-	if (new Set(keys).size !== keys.length) return undefined;
-	return [...targets];
 }
 
 const systemNow = () => new Date();
@@ -1033,6 +859,20 @@ export function createAgentManagementV1(
 								writePlan: null,
 							};
 						}
+						const advancesWorkload =
+							command.command === "approve_application" || !applicationCommand;
+						if (
+							state.revision === Number.MAX_SAFE_INTEGER ||
+							(advancesWorkload &&
+								(state.workloadRevision === Number.MAX_SAFE_INTEGER ||
+									state.fence === Number.MAX_SAFE_INTEGER))
+						) {
+							return {
+								outcome: "conflict",
+								reason: "counter_overflow",
+								writePlan: null,
+							};
+						}
 						if (command.command === "update_application") {
 							if (
 								state.status !== "pending_approval" &&
@@ -1074,6 +914,7 @@ export function createAgentManagementV1(
 								...state,
 								status: "creating",
 								revision: state.revision + 1,
+								approvalRevision: state.revision + 1,
 								decisionReason: null,
 								desiredState: "running",
 								workloadRevision: state.workloadRevision + 1,
@@ -1241,6 +1082,13 @@ export function createAgentManagementV1(
 								writePlan: null,
 							};
 						}
+						if (state.revision === Number.MAX_SAFE_INTEGER) {
+							return {
+								outcome: "conflict",
+								reason: "counter_overflow",
+								writePlan: null,
+							};
+						}
 						const creationObservation =
 							observation.observation === "creation_succeeded" ||
 							observation.observation === "creation_failed";
@@ -1349,114 +1197,6 @@ export function createAgentManagementV1(
 				serviceAvailability: state.serviceAvailability,
 				serviceReady:
 					state.status === "available" && state.serviceAvailability === "ready",
-			};
-		},
-		decideAccessUpdate(
-			commandInput,
-			stateInput,
-			actorContextInput,
-			authorityContextInput,
-		) {
-			const command = parseAccessUpdateCommand(commandInput);
-			const actorContext = parseActorContext(actorContextInput);
-			const authorityContext = parseAccessAuthorityContext(
-				authorityContextInput,
-			);
-			const state = stateInput && portState(stateInput);
-			if (
-				!state ||
-				state.agentId !== command.agentId ||
-				actorContext.accountStatus !== "active"
-			) {
-				return { outcome: "denied", writePlan: null };
-			}
-			const users = new Map(
-				authorityContext.users.map((user) => [user.userId, user.accountStatus]),
-			);
-			if (state.ownerIds.some((ownerId) => !users.has(ownerId))) {
-				throw new AgentManagementError("unavailable");
-			}
-			const activeCurrentOwner = state.ownerIds.some(
-				(ownerId) => users.get(ownerId) === "active",
-			);
-			const actorOwnsAgent = state.ownerIds.includes(actorContext.userId);
-			const applicantCanEdit =
-				state.applicantId === actorContext.userId &&
-				(state.status === "pending_approval" || state.status === "rejected");
-			const administratorRescue =
-				actorContext.isAdministrator && !activeCurrentOwner;
-			if (!actorOwnsAgent && !applicantCanEdit && !administratorRescue) {
-				return { outcome: "denied", writePlan: null };
-			}
-			if (state.revision !== command.expectedRevision) {
-				return {
-					outcome: "conflict",
-					reason: "stale_revision",
-					writePlan: null,
-				};
-			}
-			const ownerIds = sortedUnique(command.desiredOwnerIds);
-			const availability = uniqueAccessTargets(command.desiredAvailability);
-			if (!ownerIds || !availability) {
-				return {
-					outcome: "conflict",
-					reason: "invalid_access_update",
-					writePlan: null,
-				};
-			}
-			if (
-				ownerIds.some(
-					(ownerId) => !users.has(ownerId) || users.get(ownerId) === "revoked",
-				) ||
-				availability.some((target) =>
-					target.kind === "user"
-						? users.get(target.userId) !== "active"
-						: !authorityContext.organizationIds.includes(target.organizationId),
-				)
-			) {
-				return {
-					outcome: "conflict",
-					reason: "invalid_target",
-					writePlan: null,
-				};
-			}
-			if (!ownerIds.some((ownerId) => users.get(ownerId) === "active")) {
-				return {
-					outcome: "conflict",
-					reason: "last_valid_owner_required",
-					writePlan: null,
-				};
-			}
-			const currentOwnerIds = [...state.ownerIds].sort();
-			const currentAvailability = state.availability
-				.map(accessTargetKey)
-				.sort();
-			const desiredAvailability = availability.map(accessTargetKey).sort();
-			if (
-				JSON.stringify(currentOwnerIds) === JSON.stringify(ownerIds) &&
-				JSON.stringify(currentAvailability) ===
-					JSON.stringify(desiredAvailability)
-			) {
-				return { outcome: "conflict", reason: "no_change", writePlan: null };
-			}
-			return {
-				outcome: "accepted",
-				writePlan: {
-					schemaVersion: 1,
-					operation: "agent.access.updated.v1",
-					agentId: state.agentId,
-					expectedRevision: command.expectedRevision,
-					ownerIds,
-					availability,
-					auditEvent: {
-						action: "agent.access.updated",
-						actorId: actorContext.userId,
-						subjectType: "agent",
-						subjectId: state.agentId,
-						traceId: command.traceId,
-						requestId: command.requestId,
-					},
-				},
 			};
 		},
 	};

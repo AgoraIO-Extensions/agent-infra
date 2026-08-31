@@ -43,6 +43,13 @@ describe("platform-core package surface", () => {
 			"FakePlatformIdempotencyDatabaseV1",
 		]);
 		expect(
+			Object.keys(new testingSurface.FakeAgentManagementV1()).toSorted(),
+		).toEqual([
+			"executeManagementCommand",
+			"recordWorkloadObservation",
+			"resolveAgentAccess",
+		]);
+		expect(
 			Object.keys(
 				surface.createApplicationFoundationUseCaseV1(
 					new testingSurface.FakeApplicationFoundationTransactionV1(),

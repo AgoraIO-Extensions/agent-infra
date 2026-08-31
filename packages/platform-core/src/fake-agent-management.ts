@@ -101,17 +101,4 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 		query,
 		actorContext,
 	) => this.#interface.resolveAgentAccess(query, actorContext);
-
-	decideAccessUpdate: AgentManagementInterfaceV1["decideAccessUpdate"] = (
-		command,
-		state,
-		actorContext,
-		authorityContext,
-	) =>
-		this.#interface.decideAccessUpdate(
-			command,
-			state,
-			actorContext,
-			authorityContext,
-		);
 }
