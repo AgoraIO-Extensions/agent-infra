@@ -11,12 +11,22 @@ import type {
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
+import type { AgentManagementStateV1 } from "./agent-management.ts";
 
 export interface FakeAgentConfigurationSnapshotV1 {
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
 	readonly idempotencyCount: number;
+	readonly managementState: AgentManagementStateV1 | null;
+	readonly authorizationRevision: string;
+	readonly outboxCount: number;
+	readonly auditCount: number;
+}
+
+export interface FakeAgentConfigurationTransactionOptionsV1 {
+	readonly managementState?: AgentManagementStateV1;
+	readonly authorizationRevision?: string;
 }
 
 export class FakeAgentConfigurationTransactionV1
@@ -26,13 +36,25 @@ export class FakeAgentConfigurationTransactionV1
 	#commitCount = 0;
 	#lastPlan: AgentConfigurationWritePlanV1 | null = null;
 	#failCommitAsStale = false;
+	#managementState: AgentManagementStateV1 | null;
+	#authorizationRevision: string;
+	#outboxCount = 0;
+	#auditCount = 0;
 	#idempotency = new Map<
 		string,
 		{ requestDigest: string; result: AgentConfigurationResultV1 }
 	>();
 
-	constructor(configuration: AgentConfigurationRecordV1) {
+	constructor(
+		configuration: AgentConfigurationRecordV1,
+		options: FakeAgentConfigurationTransactionOptionsV1 = {},
+	) {
 		this.#configuration = structuredClone(configuration);
+		this.#managementState = options.managementState
+			? structuredClone(options.managementState)
+			: null;
+		this.#authorizationRevision =
+			options.authorizationRevision ?? "authorization_9";
 	}
 
 	async read(
@@ -77,22 +99,62 @@ export class FakeAgentConfigurationTransactionV1
 		}
 		if (
 			plan.agentId !== this.#configuration.agentId ||
-			plan.baseRevision !== this.#configuration.revision
+			plan.baseRevision !== this.#configuration.revision ||
+			plan.authorizationRevision !== this.#authorizationRevision ||
+			(plan.accessUpdate !== null &&
+				(this.#managementState === null ||
+					this.#managementState.agentId !== plan.agentId ||
+					this.#managementState.revision !==
+						plan.accessUpdate.expectedRevision))
 		) {
 			return { outcome: "stale" };
 		}
-		this.#configuration = structuredClone(plan.configuration);
-		this.#lastPlan = structuredClone(plan);
-		this.#commitCount += 1;
-		this.#idempotency.set(scope, {
+		const configuration = structuredClone(plan.configuration);
+		const lastPlan = structuredClone(plan);
+		const managementState = plan.accessUpdate
+			? {
+					...(this.#managementState as AgentManagementStateV1),
+					revision: plan.accessUpdate.expectedRevision + 1,
+					ownerIds: structuredClone(plan.accessUpdate.ownerIds),
+					availability: structuredClone(plan.accessUpdate.availability),
+				}
+			: this.#managementState;
+		if (
+			managementState !== null &&
+			!Number.isSafeInteger(managementState.revision)
+		) {
+			return { outcome: "stale" };
+		}
+		const idempotency = new Map(this.#idempotency);
+		idempotency.set(scope, {
 			requestDigest: plan.idempotency.requestDigest,
 			result: structuredClone(plan.result),
 		});
+		this.#configuration = configuration;
+		this.#managementState = managementState;
+		this.#lastPlan = lastPlan;
+		this.#idempotency = idempotency;
+		this.#commitCount += 1;
+		this.#outboxCount += 1;
+		this.#auditCount += 1;
 		return { outcome: "committed", result: structuredClone(plan.result) };
 	}
 
 	failNextCommitAsStale(): void {
 		this.#failCommitAsStale = true;
+	}
+
+	advanceAccessRevision(): void {
+		if (!this.#managementState)
+			throw new Error("No management state configured");
+		this.#managementState = {
+			...this.#managementState,
+			revision: this.#managementState.revision + 1,
+		};
+	}
+
+	setAuthorizationRevision(revision: string): void {
+		this.#authorizationRevision = revision;
 	}
 
 	snapshot(): FakeAgentConfigurationSnapshotV1 {
@@ -101,6 +163,10 @@ export class FakeAgentConfigurationTransactionV1
 			commitCount: this.#commitCount,
 			lastPlan: this.#lastPlan,
 			idempotencyCount: this.#idempotency.size,
+			managementState: this.#managementState,
+			authorizationRevision: this.#authorizationRevision,
+			outboxCount: this.#outboxCount,
+			auditCount: this.#auditCount,
 		});
 	}
 
@@ -151,6 +217,14 @@ export interface FakeAgentConfigurationAdmissionsOptionsV1 {
 		>[0]["requested"];
 		readonly source: AgentConfigurationRecordV1["source"];
 	}[];
+	readonly mismatchedAdmission?:
+		| "authorization"
+		| "image"
+		| "model"
+		| "secret"
+		| "action"
+		| "channel";
+	readonly mismatchedAgentId?: string;
 }
 
 export class FakeAgentConfigurationAdmissionsV1
@@ -178,11 +252,16 @@ export class FakeAgentConfigurationAdmissionsV1
 				agentId === input.agentId && actorId === input.actorId,
 		);
 		return admission
-			? { schemaVersion: 1, status: "admitted", ...admission }
+			? {
+					schemaVersion: 1,
+					status: "admitted",
+					...admission,
+					agentId: this.#resultAgentId("authorization", input.agentId),
+				}
 			: {
 					schemaVersion: 1,
 					status: "rejected",
-					agentId: input.agentId,
+					agentId: this.#resultAgentId("authorization", input.agentId),
 					actorId: input.actorId,
 				};
 	}
@@ -198,14 +277,14 @@ export class FakeAgentConfigurationAdmissionsV1
 			? {
 					schemaVersion: 1,
 					status: "admitted",
-					agentId: input.agentId,
+					agentId: this.#resultAgentId("image", input.agentId),
 					requestId: input.requestId,
 					source: structuredClone(admission.source),
 				}
 			: {
 					schemaVersion: 1,
 					status: "rejected",
-					agentId: input.agentId,
+					agentId: this.#resultAgentId("image", input.agentId),
 					requestId: input.requestId,
 				};
 	}
@@ -243,7 +322,7 @@ export class FakeAgentConfigurationAdmissionsV1
 				return {
 					schemaVersion: 1,
 					status: "rejected",
-					agentId: input.agentId,
+					agentId: this.#resultAgentId("model", input.agentId),
 					requestId: input.requestId,
 				};
 			}
@@ -263,7 +342,7 @@ export class FakeAgentConfigurationAdmissionsV1
 		return {
 			schemaVersion: 1,
 			status: "admitted",
-			agentId: input.agentId,
+			agentId: this.#resultAgentId("model", input.agentId),
 			requestId: input.requestId,
 			configuration: {
 				catalogRevision: catalogRevision ?? "",
@@ -289,7 +368,7 @@ export class FakeAgentConfigurationAdmissionsV1
 				return {
 					schemaVersion: 1,
 					status: "rejected",
-					agentId: input.agentId,
+					agentId: this.#resultAgentId("secret", input.agentId),
 					requestId: input.requestId,
 				};
 			}
@@ -303,7 +382,7 @@ export class FakeAgentConfigurationAdmissionsV1
 		return {
 			schemaVersion: 1,
 			status: "admitted",
-			agentId: input.agentId,
+			agentId: this.#resultAgentId("secret", input.agentId),
 			requestId: input.requestId,
 			secrets,
 		};
@@ -329,14 +408,14 @@ export class FakeAgentConfigurationAdmissionsV1
 			return {
 				schemaVersion: 1,
 				status: "rejected",
-				agentId: input.agentId,
+				agentId: this.#resultAgentId("action", input.agentId),
 				requestId: input.requestId,
 			};
 		}
 		return {
 			schemaVersion: 1,
 			status: "admitted",
-			agentId: input.agentId,
+			agentId: this.#resultAgentId("action", input.agentId),
 			requestId: input.requestId,
 			actionSetRevision: this.#options.actionSetRevision ?? "actions_1",
 			actions: structuredClone(input.requested),
@@ -363,7 +442,7 @@ export class FakeAgentConfigurationAdmissionsV1
 					return {
 						schemaVersion: 1,
 						status: "rejected",
-						agentId: input.agentId,
+						agentId: this.#resultAgentId("channel", input.agentId),
 						requestId: input.requestId,
 					};
 				}
@@ -378,10 +457,21 @@ export class FakeAgentConfigurationAdmissionsV1
 		return {
 			schemaVersion: 1,
 			status: "admitted",
-			agentId: input.agentId,
+			agentId: this.#resultAgentId("channel", input.agentId),
 			requestId: input.requestId,
 			channelRevision: this.#options.channelRevision ?? "channels_1",
 			channels: [...channels.values()],
 		};
+	}
+
+	#resultAgentId(
+		kind: NonNullable<
+			FakeAgentConfigurationAdmissionsOptionsV1["mismatchedAdmission"]
+		>,
+		requestedAgentId: string,
+	): string {
+		return this.#options.mismatchedAdmission === kind
+			? (this.#options.mismatchedAgentId ?? "agent_other")
+			: requestedAgentId;
 	}
 }

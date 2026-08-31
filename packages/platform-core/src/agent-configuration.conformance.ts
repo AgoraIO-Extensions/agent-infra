@@ -2,9 +2,11 @@ import { expect, it } from "vitest";
 
 import type {
 	AgentConfigurationRecordV1,
+	AgentConfigurationUseCaseDependenciesV1,
 	AgentConfigurationUseCaseV1,
 	AgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
+import { FakeAgentConfigurationAdmissionsV1 } from "./fake-agent-configuration.ts";
 
 const imageDigest = `sha256:${"a".repeat(64)}`;
 
@@ -100,16 +102,25 @@ export interface AgentConfigurationConformanceSnapshotV1 {
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
 	readonly idempotencyCount: number;
+	readonly outboxCount: number;
+	readonly auditCount: number;
 }
 
 export interface AgentConfigurationConformanceHarnessV1 {
 	readonly useCase: AgentConfigurationUseCaseV1;
+	useCaseWithDependencies(
+		overrides: Partial<AgentConfigurationUseCaseDependenciesV1>,
+	): AgentConfigurationUseCaseV1;
 	snapshot(): Promise<AgentConfigurationConformanceSnapshotV1>;
 	failNextCommitAsStale(): Promise<void> | void;
 	close(): Promise<void>;
 }
 
-const actor = { schemaVersion: 1 as const, actorId: "owner_01" };
+const actor = {
+	schemaVersion: 1 as const,
+	actorId: "owner_01",
+	rawRequestDigest: "0".repeat(64),
+};
 const command = {
 	schemaVersion: 1 as const,
 	agentId: "agent_01",
@@ -321,9 +332,146 @@ export function agentConfigurationUseCaseConformance(
 				harness.useCase.update(idempotent, {
 					schemaVersion: 1,
 					actorId: "other_owner",
+					rawRequestDigest: "0".repeat(64),
 				}),
 			).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
 			expect((await harness.snapshot()).commitCount).toBe(1);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("denies cross-Agent state and rejects mismatched admission envelopes without effects", async () => {
+		const harness = await createHarness();
+		try {
+			await expect(
+				harness.useCase.update(
+					{
+						...command,
+						agentId: "agent_other",
+						changes: {
+							environment: [{ name: "LOG_LEVEL", value: "debug" }],
+						},
+					},
+					actor,
+				),
+			).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
+
+			const model = agentConfigurationConformanceRecordV1.modelConfiguration;
+			if (!model) throw new Error("Conformance model fixture is required");
+			const attacks = [
+				[
+					"authorization",
+					{ environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+					"not_authorized",
+				],
+				[
+					"image",
+					{ source: { kind: "standard", templateId: "template_01" } },
+					"not_admitted",
+				],
+				[
+					"model",
+					{
+						modelConfiguration: {
+							options: model.options.map((option) => ({
+								optionId: option.optionId,
+								endpointId: option.endpointId,
+								modelId: option.modelId,
+								reasoningLevels: option.reasoningLevels,
+								replaceCredential: false,
+							})),
+							defaultOptionId: model.defaultOptionId,
+							defaultReasoningLevel: model.defaultReasoningLevel,
+						},
+					},
+					"not_admitted",
+				],
+				[
+					"secret",
+					{ secrets: [{ name: "BOT_TOKEN", replace: true }] },
+					"not_admitted",
+				],
+				[
+					"action",
+					{ actions: agentConfigurationConformanceAdmissionsV1.actions },
+					"not_admitted",
+				],
+				[
+					"channel",
+					{
+						channels: [
+							{
+								kind: "wecom_bot",
+								enabled: true,
+								bindingReference: "binding_01",
+							},
+						],
+					},
+					"not_admitted",
+				],
+			] as const;
+			for (const [index, [kind, changes, code]] of attacks.entries()) {
+				const admissions = new FakeAgentConfigurationAdmissionsV1({
+					...agentConfigurationConformanceAdmissionsV1,
+					mismatchedAdmission: kind,
+				});
+				const key =
+					kind === "authorization"
+						? "authorizationAdmission"
+						: `${kind}Admission`;
+				const useCase = harness.useCaseWithDependencies({
+					[key]: admissions,
+				} as never);
+				await expect(
+					useCase.update(
+						{
+							...command,
+							idempotencyKey: `wrong-admission-${index}`,
+							changes: changes as never,
+						},
+						actor,
+					),
+				).rejects.toEqual(expect.objectContaining({ code }));
+			}
+
+			let wrongStateCommitted = false;
+			const wrongState = harness.useCaseWithDependencies({
+				transaction: {
+					read: async () => ({
+						outcome: "ready",
+						configuration: {
+							...agentConfigurationConformanceRecordV1,
+							agentId: "agent_other",
+						},
+					}),
+					commit: async () => {
+						wrongStateCommitted = true;
+						return { outcome: "stale" };
+					},
+				},
+			});
+			await expect(
+				wrongState.update(
+					{
+						...command,
+						idempotencyKey: "wrong-state-agent",
+						changes: {
+							environment: [{ name: "LOG_LEVEL", value: "debug" }],
+						},
+					},
+					actor,
+				),
+			).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
+			expect(wrongStateCommitted).toBe(false);
+			const snapshot = await harness.snapshot();
+			expect(snapshot).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
 		} finally {
 			await harness.close();
 		}

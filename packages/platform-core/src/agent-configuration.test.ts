@@ -15,11 +15,16 @@ import type { AgentManagementStateV1 } from "./agent-management.ts";
 import {
 	type FakeAgentConfigurationAdmissionsOptionsV1,
 	FakeAgentConfigurationAdmissionsV1,
+	type FakeAgentConfigurationTransactionOptionsV1,
 	FakeAgentConfigurationTransactionV1,
 } from "./fake-agent-configuration.ts";
 
 const serverInstant = new Date("2026-08-31T04:00:00.000Z");
-const actor = { schemaVersion: 1 as const, actorId: "owner_01" };
+const actor = {
+	schemaVersion: 1 as const,
+	actorId: "owner_01",
+	rawRequestDigest: "0".repeat(64),
+};
 const command = {
 	schemaVersion: 1 as const,
 	agentId: "agent_01",
@@ -69,11 +74,13 @@ interface HarnessOptions {
 	record?: AgentConfigurationRecordV1;
 	admissions?: Partial<FakeAgentConfigurationAdmissionsOptionsV1>;
 	dependencies?: Partial<AgentConfigurationUseCaseDependenciesV1>;
+	transactionState?: FakeAgentConfigurationTransactionOptionsV1;
 }
 
 function createHarness(options: HarnessOptions = {}) {
 	const transaction = new FakeAgentConfigurationTransactionV1(
 		options.record ?? agentConfigurationConformanceRecordV1,
+		options.transactionState,
 	);
 	const admissions = new FakeAgentConfigurationAdmissionsV1({
 		...agentConfigurationConformanceAdmissionsV1,
@@ -95,6 +102,13 @@ function createHarness(options: HarnessOptions = {}) {
 		useCase: createAgentConfigurationUseCaseV1(dependencies, {
 			now: () => new Date(serverInstant),
 		}),
+		useCaseWithDependencies: (
+			overrides: Partial<AgentConfigurationUseCaseDependenciesV1>,
+		) =>
+			createAgentConfigurationUseCaseV1(
+				{ ...dependencies, ...overrides },
+				{ now: () => new Date(serverInstant) },
+			),
 	};
 }
 
@@ -103,6 +117,7 @@ describe("Agent configuration conformance", () => {
 		const harness = createHarness();
 		return {
 			useCase: harness.useCase,
+			useCaseWithDependencies: harness.useCaseWithDependencies,
 			snapshot: async () => harness.transaction.snapshot(),
 			failNextCommitAsStale: () => harness.transaction.failNextCommitAsStale(),
 			close: async () => undefined,
@@ -111,6 +126,358 @@ describe("Agent configuration conformance", () => {
 });
 
 describe("Agent configuration policy", () => {
+	it("fails closed before policy on malformed persisted configuration and transaction envelopes", async () => {
+		for (const read of [
+			async () => ({
+				outcome: "ready" as const,
+				configuration: {
+					...agentConfigurationConformanceRecordV1,
+					secrets: [
+						{
+							name: "BOT_TOKEN",
+							secretId: "secret_bot",
+							version: 1,
+							isSet: true as const,
+							value: "plaintext",
+						},
+					],
+				},
+			}),
+			async () =>
+				new Proxy(
+					{},
+					{
+						getOwnPropertyDescriptor() {
+							throw new Error("proxy trap");
+						},
+					},
+				) as never,
+			async () =>
+				Object.defineProperty({}, "outcome", {
+					enumerable: true,
+					get() {
+						throw new Error("getter escaped");
+					},
+				}) as never,
+		]) {
+			let committed = false;
+			const harness = createHarness({
+				dependencies: {
+					transaction: {
+						read: read as never,
+						async commit() {
+							committed = true;
+							return { outcome: "committed", result: {} } as never;
+						},
+					},
+				},
+			});
+			await expect(
+				harness.useCase.update(
+					{
+						...command,
+						changes: {
+							environment: [{ name: "LOG_LEVEL", value: "debug" }],
+						},
+					},
+					actor,
+				),
+			).rejects.toEqual(
+				expect.objectContaining({
+					name: "AgentConfigurationError",
+					code: "persistence_failed",
+				}),
+			);
+			expect(committed).toBe(false);
+		}
+	});
+
+	it("snapshots every Adapter decision before reading its discriminant", async () => {
+		const malformedEnvelope = () =>
+			Object.defineProperty({}, "status", {
+				enumerable: true,
+				get() {
+					throw new Error("adapter getter escaped");
+				},
+			}) as never;
+		const modelConfiguration = {
+			options: [
+				{
+					optionId: "model_primary",
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["low"],
+					replaceCredential: false,
+				},
+			],
+			defaultOptionId: "model_primary",
+			defaultReasoningLevel: "low",
+		};
+		for (const [dependencies, changes] of [
+			[
+				{
+					authorizationAdmission: {
+						authorize: async () => malformedEnvelope(),
+					},
+				},
+				{ environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			],
+			[
+				{ imageAdmission: { admitImage: async () => malformedEnvelope() } },
+				{ source: { kind: "standard", templateId: "template_01" } },
+			],
+			[
+				{ modelAdmission: { admitModels: async () => malformedEnvelope() } },
+				{ modelConfiguration },
+			],
+			[
+				{ secretAdmission: { admitSecrets: async () => malformedEnvelope() } },
+				{ secrets: [{ name: "BOT_TOKEN", replace: true }] },
+			],
+			[
+				{ actionAdmission: { admitActions: async () => malformedEnvelope() } },
+				{
+					actions: [
+						{
+							providerId: "github",
+							actionId: "issues.read",
+							actionVersion: "v3",
+						},
+					],
+				},
+			],
+			[
+				{
+					channelAdmission: { admitChannels: async () => malformedEnvelope() },
+				},
+				{
+					channels: [
+						{
+							kind: "wecom_bot",
+							enabled: true,
+							bindingReference: "binding_01",
+						},
+					],
+				},
+			],
+		] as const) {
+			const harness = createHarness({ dependencies: dependencies as never });
+			await expect(
+				harness.useCase.update({ ...command, changes } as never, actor),
+			).rejects.toEqual(
+				expect.objectContaining({
+					name: "AgentConfigurationError",
+					code: "dependency_unavailable",
+				}),
+			);
+			expect(harness.transaction.snapshot().commitCount).toBe(0);
+		}
+
+		const transaction = new FakeAgentConfigurationTransactionV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		const commitHarness = createHarness({
+			dependencies: {
+				transaction: {
+					read: transaction.read.bind(transaction),
+					async commit() {
+						return Object.defineProperty({}, "outcome", {
+							enumerable: true,
+							get() {
+								throw new Error("commit getter escaped");
+							},
+						}) as never;
+					},
+				},
+			},
+		});
+		await expect(
+			commitHarness.useCase.update(
+				{
+					...command,
+					changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "persistence_failed" }));
+		expect(transaction.snapshot().commitCount).toBe(0);
+	});
+
+	it("binds write-only Secret identity through the trusted raw-request digest", async () => {
+		const transaction = new FakeAgentConfigurationTransactionV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		const createWithSecretVersion = (version: number) => {
+			const admissions = new FakeAgentConfigurationAdmissionsV1({
+				...agentConfigurationConformanceAdmissionsV1,
+				secretReplacements: [
+					{
+						requestId: "request_01",
+						name: "BOT_TOKEN",
+						secretId: `secret_bot_v${version}`,
+						version,
+					},
+				],
+			});
+			return createAgentConfigurationUseCaseV1({
+				transaction,
+				authorizationAdmission: admissions,
+				imageAdmission: admissions,
+				modelAdmission: admissions,
+				secretAdmission: admissions,
+				actionAdmission: admissions,
+				channelAdmission: admissions,
+			});
+		};
+		const firstUseCase = createWithSecretVersion(3);
+		const secondUseCase = createWithSecretVersion(4);
+		const secretCommand = {
+			...command,
+			idempotencyKey: "secret-replacement-01",
+			changes: { secrets: [{ name: "BOT_TOKEN", replace: true as const }] },
+		};
+		const firstActor = {
+			...actor,
+			rawRequestDigest: "c".repeat(64),
+		};
+		const first = await firstUseCase.update(secretCommand, firstActor as never);
+		await expect(
+			firstUseCase.update(secretCommand, firstActor as never),
+		).resolves.toEqual(first);
+		await expect(
+			secondUseCase.update(secretCommand, {
+				...actor,
+				rawRequestDigest: "d".repeat(64),
+			} as never),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "idempotency_conflict" }),
+		);
+		const snapshot = transaction.snapshot();
+		expect(snapshot).toMatchObject({
+			commitCount: 1,
+			idempotencyCount: 1,
+			configuration: {
+				secrets: [
+					{
+						name: "BOT_TOKEN",
+						secretId: "secret_bot_v3",
+						version: 3,
+					},
+				],
+			},
+		});
+		expect(JSON.stringify(snapshot.lastPlan)).not.toContain("c".repeat(64));
+		expect(JSON.stringify(snapshot.lastPlan)).not.toContain("d".repeat(64));
+	});
+
+	it("Fake commits configuration, access, authorization, audit, and outbox with one CAS", async () => {
+		const createAtomic = () => {
+			const transaction = new FakeAgentConfigurationTransactionV1(
+				agentConfigurationConformanceRecordV1,
+				{
+					managementState: accessState,
+					authorizationRevision: "authorization_9",
+				} as never,
+			);
+			const admissions = new FakeAgentConfigurationAdmissionsV1({
+				...agentConfigurationConformanceAdmissionsV1,
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "owner_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority,
+					},
+				],
+			});
+			return {
+				transaction,
+				useCase: createAgentConfigurationUseCaseV1({
+					transaction,
+					authorizationAdmission: admissions,
+					imageAdmission: admissions,
+					modelAdmission: admissions,
+					secretAdmission: admissions,
+					actionAdmission: admissions,
+					channelAdmission: admissions,
+				}),
+			};
+		};
+		const accepted = createAtomic();
+		await accepted.useCase.update(
+			{
+				...command,
+				idempotencyKey: "atomic-access-01",
+				changes: {
+					ownerIds: ["owner_01", "owner_02"],
+					availability: [
+						{ kind: "organization", organizationId: "org_platform" },
+					],
+				},
+			},
+			actor,
+		);
+		expect(accepted.transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			idempotencyCount: 1,
+			outboxCount: 1,
+			auditCount: 1,
+			authorizationRevision: "authorization_9",
+			configuration: { revision: 8 },
+			managementState: {
+				revision: 12,
+				ownerIds: ["owner_01", "owner_02"],
+				availability: [
+					{ kind: "organization", organizationId: "org_platform" },
+				],
+			},
+		});
+
+		const staleAccess = createAtomic();
+		staleAccess.transaction.advanceAccessRevision();
+		await expect(
+			staleAccess.useCase.update(
+				{
+					...command,
+					idempotencyKey: "atomic-access-stale-01",
+					changes: { ownerIds: ["owner_01", "owner_02"] },
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
+		expect(staleAccess.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+			configuration: { revision: 7 },
+			managementState: { revision: 12, ownerIds: ["owner_01"] },
+		});
+
+		const staleAuthorization = createAtomic();
+		staleAuthorization.transaction.setAuthorizationRevision("authorization_10");
+		await expect(
+			staleAuthorization.useCase.update(
+				{
+					...command,
+					idempotencyKey: "atomic-authorization-stale-01",
+					changes: {
+						environment: [{ name: "LOG_LEVEL", value: "debug" }],
+					},
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
+		expect(staleAuthorization.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+			authorizationRevision: "authorization_10",
+			configuration: { revision: 7 },
+		});
+	});
+
 	it("commits Owner and availability changes as one atomic access fragment", async () => {
 		const authorizations = [
 			{
@@ -120,7 +487,13 @@ describe("Agent configuration policy", () => {
 				accessAuthority,
 			},
 		] as never;
-		const harness = createHarness({ admissions: { authorizations } });
+		const harness = createHarness({
+			admissions: { authorizations },
+			transactionState: {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			},
+		});
 		const accessCommand = {
 			...command,
 			changes: {
@@ -160,7 +533,13 @@ describe("Agent configuration policy", () => {
 		});
 		expect(snapshot.lastPlan?.accessUpdate).not.toHaveProperty("auditEvent");
 
-		const combined = createHarness({ admissions: { authorizations } });
+		const combined = createHarness({
+			admissions: { authorizations },
+			transactionState: {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			},
+		});
 		const combinedCommand = {
 			...command,
 			idempotencyKey: "configuration-access-combined-01",
@@ -188,7 +567,13 @@ describe("Agent configuration policy", () => {
 			},
 		});
 
-		const rejected = createHarness({ admissions: { authorizations } });
+		const rejected = createHarness({
+			admissions: { authorizations },
+			transactionState: {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			},
+		});
 		await expect(
 			rejected.useCase.update(
 				{
@@ -203,6 +588,10 @@ describe("Agent configuration policy", () => {
 		expect(rejected.transaction.snapshot().commitCount).toBe(0);
 
 		const partial = createHarness({
+			transactionState: {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			},
 			admissions: {
 				authorizations: [
 					{
@@ -330,7 +719,9 @@ describe("Agent configuration policy", () => {
 				{ ...command, changes: { modelConfiguration: model } },
 				actor,
 			),
-		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		).rejects.toEqual(
+			expect.objectContaining({ code: "dependency_unavailable" }),
+		);
 		expect(fallback.transaction.snapshot().commitCount).toBe(0);
 	});
 
@@ -546,7 +937,9 @@ describe("Agent configuration policy", () => {
 				},
 				actor,
 			),
-		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		).rejects.toEqual(
+			expect.objectContaining({ code: "dependency_unavailable" }),
+		);
 
 		for (const harness of [unauthorized, action, channel, plaintext]) {
 			expect(harness.transaction.snapshot().commitCount).toBe(0);
