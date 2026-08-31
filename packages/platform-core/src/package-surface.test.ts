@@ -28,13 +28,16 @@ describe("platform-core package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"ApplicationFoundationError",
+			"PlatformIdempotencyError",
 			"createApplicationFoundationUseCaseV1",
+			"platformIdempotencyV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
 		);
 		expect(Object.keys(testingSurface)).toEqual([
 			"FakeApplicationFoundationTransactionV1",
+			"FakePlatformIdempotencyDatabaseV1",
 		]);
 		expect(
 			Object.keys(

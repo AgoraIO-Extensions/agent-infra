@@ -25,7 +25,7 @@ describe("platform-store package surface", () => {
 		expect(result.stderr).toBe("Platform migration failed\n");
 	});
 
-	it("publishes only Store interfaces and packaged migrations", async () => {
+	it("publishes only Store adapters and packaged migrations", async () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.exports).toEqual({
 			".": {
@@ -43,6 +43,7 @@ describe("platform-store package surface", () => {
 			"PostgresApplicationFoundationTransactionV1",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
+			"openPostgresPlatformIdempotencyStore",
 			"platformDatabaseUrlFromEnvironment",
 		]);
 

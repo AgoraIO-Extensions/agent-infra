@@ -3,6 +3,10 @@ export {
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
 export {
+	openPostgresPlatformIdempotencyStore,
+	type PostgresPlatformIdempotencyOptionsV1,
+} from "./idempotency.ts";
+export {
 	migratePlatformDatabase,
 	type PlatformMigrationOptions,
 	platformDatabaseUrlFromEnvironment,
