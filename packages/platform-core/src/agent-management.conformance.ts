@@ -11,6 +11,7 @@ export interface AgentManagementConformanceOptionsV1
 	extends AgentManagementOptionsV1 {
 	readonly states?: readonly AgentManagementStateV1[];
 	readonly failure?: "transaction" | "access_read";
+	readonly faultyStateOnce?: AgentManagementStateV1;
 }
 
 const applicant = {
@@ -306,6 +307,143 @@ export function agentManagementV1Conformance(
 				traceId: "trace_invalid_state_observation",
 			}),
 		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it("binds every valid Port aggregate to the requested application or Agent", async () => {
+		const expectUnavailable = (promise: Promise<unknown>) =>
+			expect(promise).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+			});
+
+		const applicationState = stateFixture({
+			status: "pending_approval",
+			applicationId: "application_identity_target",
+			agentId: "agent_application_identity_target",
+		});
+		const applicationManagement = await createManagement({
+			states: [applicationState],
+			faultyStateOnce: {
+				...applicationState,
+				applicationId: "application_identity_wrong",
+			},
+		});
+		await expectUnavailable(
+			applicationManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "update_application",
+					applicationId: applicationState.applicationId,
+					expectedRevision: applicationState.revision,
+					idempotencyKey: "identity-application-command",
+					requestId: "request_identity_application",
+					traceId: "trace_identity_application",
+				},
+				applicant,
+			),
+		);
+		expect(
+			await applicationManagement.resolveAgentAccess(
+				{
+					schemaVersion: 1,
+					agentId: applicationState.agentId,
+					intent: "manage",
+				},
+				applicant,
+			),
+		).toMatchObject({
+			outcome: "allowed",
+			managementStatus: "pending_approval",
+		});
+
+		const agentState = stateFixture({
+			agentId: "agent_command_identity_target",
+		});
+		const agentManagement = await createManagement({
+			states: [agentState],
+			faultyStateOnce: {
+				...agentState,
+				agentId: "agent_command_identity_wrong",
+			},
+		});
+		await expectUnavailable(
+			agentManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: agentState.agentId,
+					expectedRevision: agentState.revision,
+					idempotencyKey: "identity-agent-command",
+					requestId: "request_identity_agent_command",
+					traceId: "trace_identity_agent_command",
+				},
+				applicant,
+			),
+		);
+		expect(
+			await agentManagement.resolveAgentAccess(
+				{ schemaVersion: 1, agentId: agentState.agentId, intent: "manage" },
+				applicant,
+			),
+		).toMatchObject({ outcome: "allowed", managementStatus: "available" });
+
+		const observationState = stateFixture({
+			status: "creating",
+			agentId: "agent_observation_identity_target",
+		});
+		const observationManagement = await createManagement({
+			states: [observationState],
+			faultyStateOnce: {
+				...observationState,
+				agentId: "agent_observation_identity_wrong",
+			},
+		});
+		await expectUnavailable(
+			observationManagement.recordWorkloadObservation({
+				schemaVersion: 1,
+				observationId: "identity-observation",
+				agentId: observationState.agentId,
+				observation: "creation_succeeded",
+				expectedRevision: observationState.revision,
+				workloadRevision: observationState.workloadRevision,
+				fence: observationState.fence,
+				requestId: "request_identity_observation",
+				traceId: "trace_identity_observation",
+			}),
+		);
+		expect(
+			await observationManagement.resolveAgentAccess(
+				{
+					schemaVersion: 1,
+					agentId: observationState.agentId,
+					intent: "manage",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "allowed", managementStatus: "creating" });
+
+		const accessState = stateFixture({
+			agentId: "agent_access_identity_target",
+		});
+		const accessManagement = await createManagement({
+			states: [accessState],
+			faultyStateOnce: {
+				...accessState,
+				agentId: "agent_access_identity_wrong",
+			},
+		});
+		await expectUnavailable(
+			accessManagement.resolveAgentAccess(
+				{ schemaVersion: 1, agentId: accessState.agentId, intent: "use" },
+				applicant,
+			),
+		);
+		expect(
+			await accessManagement.resolveAgentAccess(
+				{ schemaVersion: 1, agentId: accessState.agentId, intent: "use" },
+				applicant,
+			),
+		).toMatchObject({ outcome: "allowed", managementStatus: "available" });
 	});
 	it("lets the applicant update, resubmit, and withdraw one application history", async () => {
 		const management = await createManagement({

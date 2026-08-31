@@ -557,6 +557,10 @@ async function adapterResult<T>(operation: () => Promise<T>): Promise<T> {
 	}
 }
 
+function requireAggregateIdentity(actual: string, expected: string): void {
+	if (actual !== expected) throw new AgentManagementError("unavailable");
+}
+
 function accepted(
 	state: AgentManagementStateV1,
 	command: AgentManagementCommandV1,
@@ -702,6 +706,12 @@ export function createAgentManagementV1(
 					},
 					(stateInput) => {
 						const state = stateInput && portState(stateInput);
+						if (state) {
+							requireAggregateIdentity(
+								applicationCommand ? state.applicationId : state.agentId,
+								applicationCommand ? command.applicationId : command.agentId,
+							);
+						}
 						if (!state || actorContext.accountStatus !== "active") {
 							return { outcome: "denied", writePlan: null };
 						}
@@ -939,6 +949,8 @@ export function createAgentManagementV1(
 					},
 					(stateInput) => {
 						const state = stateInput && portState(stateInput);
+						if (state)
+							requireAggregateIdentity(state.agentId, observation.agentId);
 						if (
 							!state ||
 							state.revision !== observation.expectedRevision ||
@@ -1044,6 +1056,7 @@ export function createAgentManagementV1(
 				transaction.resolveAgentAccessState(query.agentId),
 			);
 			const state = stateInput && portState(stateInput);
+			if (state) requireAggregateIdentity(state.agentId, query.agentId);
 			if (!state) return { outcome: "denied" };
 			const owner = state.ownerIds.includes(actorContext.userId);
 			const directlyAvailable = state.availability.some(

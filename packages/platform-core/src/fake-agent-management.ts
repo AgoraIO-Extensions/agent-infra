@@ -11,6 +11,7 @@ import {
 export interface FakeAgentManagementOptionsV1 extends AgentManagementOptionsV1 {
 	readonly states?: readonly AgentManagementStateV1[];
 	readonly failure?: "transaction" | "access_read";
+	readonly faultyStateOnce?: AgentManagementStateV1;
 }
 
 interface CompletedCommand {
@@ -35,8 +36,11 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 	readonly #states = new Map<string, AgentManagementStateV1>();
 	readonly #completed = new Map<string, CompletedCommand>();
 	readonly #interface: AgentManagementInterfaceV1;
+	#faultyState: AgentManagementStateV1 | undefined;
 
 	constructor(options: FakeAgentManagementOptionsV1 = {}) {
+		this.#faultyState =
+			options.faultyStateOnce && structuredClone(options.faultyStateOnce);
 		for (const state of options.states ?? []) {
 			this.#states.set(state.agentId, structuredClone(state));
 		}
@@ -60,11 +64,13 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 						writePlan: null,
 					};
 				}
-				const state = [...this.#states.values()].find((candidate) =>
-					request.subjectType === "agent_application"
-						? candidate.applicationId === request.subjectId
-						: candidate.agentId === request.subjectId,
-				);
+				const state =
+					this.#takeFaultyState() ??
+					[...this.#states.values()].find((candidate) =>
+						request.subjectType === "agent_application"
+							? candidate.applicationId === request.subjectId
+							: candidate.agentId === request.subjectId,
+					);
 				const decision = decide(state && structuredClone(state));
 				if (decision.outcome !== "accepted") return decision;
 				this.#states.set(
@@ -80,7 +86,7 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 			resolveAgentAccessState: async (agentId) => {
 				if (options.failure === "access_read")
 					throw new Error("Injected failure");
-				const state = this.#states.get(agentId);
+				const state = this.#takeFaultyState() ?? this.#states.get(agentId);
 				return state && structuredClone(state);
 			},
 		};
@@ -101,4 +107,10 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 		query,
 		actorContext,
 	) => this.#interface.resolveAgentAccess(query, actorContext);
+
+	#takeFaultyState(): AgentManagementStateV1 | undefined {
+		const state = this.#faultyState;
+		this.#faultyState = undefined;
+		return state && structuredClone(state);
+	}
 }
