@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakePlatformIdempotencyDatabaseV1 } from "./fake-idempotency.ts";
 import { platformIdempotencyPortV1Conformance } from "./idempotency.conformance.ts";
 import { platformIdempotencyV1 } from "./idempotency.ts";
@@ -188,20 +188,28 @@ describe("Platform idempotency domain", () => {
 			forwardingTrapCalls += 1;
 		});
 		const oversized = Array.from({ length: 16_385 }, () => 0);
-		for (const invalid of [
-			hole,
-			extraProperty,
-			symbolProperty,
-			ownKeysTrap,
-			descriptorTrap,
-			proxiedArray,
-			oversized,
-		]) {
-			expect(() =>
-				platformIdempotencyV1.canonicalRequestDigest({
-					values: invalid as never,
-				}),
-			).toThrow(expect.objectContaining({ code: "invalid_input" }));
+		const descriptorsSpy = vi.spyOn(Object, "getOwnPropertyDescriptors");
+		try {
+			for (const invalid of [
+				hole,
+				extraProperty,
+				symbolProperty,
+				ownKeysTrap,
+				descriptorTrap,
+				proxiedArray,
+				oversized,
+			]) {
+				expect(() =>
+					platformIdempotencyV1.canonicalRequestDigest({
+						values: invalid as never,
+					}),
+				).toThrow(expect.objectContaining({ code: "invalid_input" }));
+			}
+			expect(
+				descriptorsSpy.mock.calls.some(([value]) => value === oversized),
+			).toBe(false);
+		} finally {
+			descriptorsSpy.mockRestore();
 		}
 		expect(forwardingTrapCalls).toBe(0);
 
@@ -235,6 +243,11 @@ describe("Platform idempotency domain", () => {
 			outcome: "accepted",
 			references,
 		});
+		const revokedReferences = Proxy.revocable([reference], {});
+		revokedReferences.revoke();
+		expect(() =>
+			platformIdempotencyV1.parseResult(result(revokedReferences.proxy)),
+		).toThrow(expect.objectContaining({ code: "invalid_input" }));
 		let referenceTrapCalls = 0;
 		const proxiedReference = forwardingProxy(reference, () => {
 			referenceTrapCalls += 1;

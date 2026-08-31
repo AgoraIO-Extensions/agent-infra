@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { types } from "node:util";
 
 const maxCanonicalBytes = 64 * 1024;
-const maxCanonicalArrayItems = 16_384;
+const maxCanonicalContainerItems = 16_384;
 const maxJsonDepth = 32;
 const maxResultReferences = 8;
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
@@ -113,8 +113,7 @@ function snapshotExactDataValues(
 		if (typeof value !== "object" || value === null || types.isProxy(value)) {
 			return undefined;
 		}
-		const descriptors = Object.getOwnPropertyDescriptors(value);
-		const ownKeys = Reflect.ownKeys(descriptors);
+		const ownKeys = Reflect.ownKeys(value);
 		const expected = new Set(expectedKeys);
 		if (
 			ownKeys.length !== expected.size ||
@@ -124,7 +123,7 @@ function snapshotExactDataValues(
 		}
 		const snapshot: Record<string, unknown> = {};
 		for (const key of expectedKeys) {
-			const descriptor = descriptors[key];
+			const descriptor = Object.getOwnPropertyDescriptor(value, key);
 			if (
 				descriptor?.enumerable !== true ||
 				!Object.hasOwn(descriptor, "value") ||
@@ -153,11 +152,7 @@ function snapshotDenseArray(
 		) {
 			return undefined;
 		}
-		const descriptors = Object.getOwnPropertyDescriptors(
-			value,
-		) as unknown as Record<PropertyKey, PropertyDescriptor>;
-		const ownKeys = Reflect.ownKeys(descriptors);
-		const lengthDescriptor = descriptors.length;
+		const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
 		if (lengthDescriptor?.enumerable !== false) return undefined;
 		if (
 			!Object.hasOwn(lengthDescriptor, "value") ||
@@ -171,14 +166,15 @@ function snapshotDenseArray(
 			typeof length !== "number" ||
 			!Number.isSafeInteger(length) ||
 			length < 0 ||
-			length > maxItems ||
-			ownKeys.length !== length + 1
+			length > maxItems
 		) {
 			return undefined;
 		}
+		const ownKeys = Reflect.ownKeys(value);
+		if (ownKeys.length !== length + 1) return undefined;
 		const snapshot: unknown[] = [];
 		for (let index = 0; index < length; index += 1) {
-			const descriptor = descriptors[String(index)];
+			const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
 			if (
 				descriptor?.enumerable !== true ||
 				!Object.hasOwn(descriptor, "value") ||
@@ -245,8 +241,7 @@ function parseResult(input: unknown): PlatformIdempotencyDomainResultV1 {
 	]);
 	if (
 		values?.schemaVersion !== 1 ||
-		(values.outcome !== "accepted" && values.outcome !== "completed") ||
-		!Array.isArray(values.references)
+		(values.outcome !== "accepted" && values.outcome !== "completed")
 	) {
 		invalidInput();
 	}
@@ -360,6 +355,9 @@ function canonicalJson(
 	budget: CanonicalBudget,
 ): string {
 	if (depth > maxJsonDepth) invalidInput();
+	if (typeof value === "object" && value !== null && types.isProxy(value)) {
+		invalidInput();
+	}
 	if (value === null || typeof value === "boolean") {
 		return consumeCanonicalToken(JSON.stringify(value), budget);
 	}
@@ -373,7 +371,7 @@ function canonicalJson(
 		return consumeCanonicalToken(JSON.stringify(value), budget);
 	}
 	if (Array.isArray(value)) {
-		const snapshot = snapshotDenseArray(value, maxCanonicalArrayItems);
+		const snapshot = snapshotDenseArray(value, maxCanonicalContainerItems);
 		if (!snapshot) invalidInput();
 		consumeCanonicalToken("[", budget);
 		const serialized: string[] = [];
@@ -384,11 +382,16 @@ function canonicalJson(
 		consumeCanonicalToken("]", budget);
 		return `[${Array.prototype.join.call(serialized, ",")}]`;
 	}
-	if (typeof value !== "object" || types.isProxy(value)) invalidInput();
+	if (typeof value !== "object") invalidInput();
 	const prototype = Object.getPrototypeOf(value);
 	if (prototype !== Object.prototype && prototype !== null) invalidInput();
 	const ownKeys = Reflect.ownKeys(value);
-	if (ownKeys.some((key) => typeof key !== "string")) invalidInput();
+	if (
+		ownKeys.length > maxCanonicalContainerItems ||
+		ownKeys.some((key) => typeof key !== "string")
+	) {
+		invalidInput();
+	}
 	const keys = ownKeys as string[];
 	consumeCanonicalToken("{", budget);
 	for (let index = 0; index < keys.length; index += 1) {
@@ -428,6 +431,7 @@ function canonicalRequestDigest(
 	try {
 		if (
 			request === null ||
+			types.isProxy(request) ||
 			Array.isArray(request) ||
 			typeof request !== "object"
 		) {
