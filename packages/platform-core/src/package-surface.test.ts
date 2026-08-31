@@ -27,15 +27,18 @@ describe("platform-core package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
+			"AgentManagementError",
 			"ApplicationFoundationError",
 			"PlatformIdempotencyError",
+			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
 			"platformIdempotencyV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
 		);
-		expect(Object.keys(testingSurface)).toEqual([
+		expect(Object.keys(testingSurface).toSorted()).toEqual([
+			"FakeAgentManagementV1",
 			"FakeApplicationFoundationTransactionV1",
 			"FakePlatformIdempotencyDatabaseV1",
 		]);
