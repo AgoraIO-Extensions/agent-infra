@@ -2,8 +2,11 @@ import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
 import type {
+	AgentFailureCodeV1,
 	AgentManagementActorContextV1,
 	AgentManagementStateV1,
+	AgentManagementStatusV1,
+	AgentServiceAvailabilityV1,
 } from "./agent-management.js";
 
 export class AgentManagementError extends Error {
@@ -193,4 +196,149 @@ export function parseAgentAccessTargets(
 		}
 		return invalidAgentManagementInput();
 	});
+}
+
+const agentFailureCodes: readonly AgentFailureCodeV1[] = [
+	"creation_not_ready",
+	"health_check_failed",
+	"workload_unavailable",
+	"reconciliation_failed",
+];
+
+export function isAgentManagementFailureCode(
+	value: unknown,
+): value is AgentFailureCodeV1 {
+	return agentFailureCodes.includes(value as AgentFailureCodeV1);
+}
+
+export function parseAgentManagementPortState(
+	input: AgentManagementStateV1,
+): AgentManagementStateV1 {
+	try {
+		const values = snapshotAgentManagementDataObject(input);
+		requireAgentManagementExactKeys(values, [
+			"schemaVersion",
+			"applicationId",
+			"agentId",
+			"applicantId",
+			"status",
+			"revision",
+			"approvalRevision",
+			"decisionReason",
+			"serviceAvailability",
+			"desiredState",
+			"workloadRevision",
+			"fence",
+			"ownerIds",
+			"availability",
+			"failureCode",
+		]);
+		const statuses: readonly AgentManagementStatusV1[] = [
+			"pending_approval",
+			"withdrawn",
+			"rejected",
+			"creating",
+			"available",
+			"stopped",
+			"creation_failed",
+			"disabled",
+		];
+		const serviceAvailabilities: readonly AgentServiceAvailabilityV1[] = [
+			"ready",
+			"starting",
+			"updating",
+			"unavailable",
+		];
+		if (
+			values.schemaVersion !== 1 ||
+			!isAgentManagementText(values.applicationId) ||
+			!isAgentManagementText(values.agentId) ||
+			!isAgentManagementText(values.applicantId) ||
+			!statuses.includes(values.status as AgentManagementStatusV1) ||
+			!isAgentManagementNonNegativeInteger(values.revision) ||
+			(values.approvalRevision !== null &&
+				(!Number.isSafeInteger(values.approvalRevision) ||
+					(values.approvalRevision as number) < 1)) ||
+			(values.decisionReason !== null &&
+				!isAgentManagementText(values.decisionReason, 4096)) ||
+			(values.serviceAvailability !== null &&
+				!serviceAvailabilities.includes(
+					values.serviceAvailability as AgentServiceAvailabilityV1,
+				)) ||
+			(values.desiredState !== "running" &&
+				values.desiredState !== "stopped") ||
+			!isAgentManagementNonNegativeInteger(values.workloadRevision) ||
+			!isAgentManagementNonNegativeInteger(values.fence) ||
+			(values.failureCode !== null &&
+				!isAgentManagementFailureCode(values.failureCode))
+		) {
+			invalidAgentManagementInput();
+		}
+		const status = values.status as AgentManagementStatusV1;
+		const serviceAvailability =
+			values.serviceAvailability as AgentServiceAvailabilityV1 | null;
+		const preApproval =
+			status === "pending_approval" ||
+			status === "rejected" ||
+			status === "withdrawn";
+		if (
+			(preApproval &&
+				(values.desiredState !== "stopped" ||
+					serviceAvailability !== null ||
+					values.approvalRevision !== null ||
+					values.workloadRevision !== 0 ||
+					values.fence !== 0 ||
+					values.failureCode !== null)) ||
+			(!preApproval &&
+				(values.approvalRevision === null ||
+					(values.approvalRevision as number) > (values.revision as number) ||
+					(values.workloadRevision as number) < 1 ||
+					(values.fence as number) < 1)) ||
+			((status === "creating" || status === "creation_failed") &&
+				(values.desiredState !== "running" || serviceAvailability !== null)) ||
+			(status === "available" &&
+				(values.desiredState !== "running" || serviceAvailability === null)) ||
+			((status === "stopped" || status === "disabled") &&
+				(values.desiredState !== "stopped" || serviceAvailability !== null)) ||
+			(status === "rejected" && values.decisionReason === null) ||
+			(status !== "rejected" && values.decisionReason !== null) ||
+			(status === "creation_failed" && values.failureCode === null) ||
+			(status === "available" &&
+				serviceAvailability === "unavailable" &&
+				values.failureCode === null) ||
+			(status === "available" &&
+				serviceAvailability === "ready" &&
+				values.failureCode !== null)
+		) {
+			invalidAgentManagementInput();
+		}
+		const ownerIds = parseAgentManagementStringArray(values.ownerIds, true);
+		if (ownerIds.length === 0) invalidAgentManagementInput();
+		const availability = parseAgentAccessTargets(values.availability);
+		if (
+			new Set(availability.map(agentAccessTargetKey)).size !==
+			availability.length
+		) {
+			invalidAgentManagementInput();
+		}
+		return {
+			schemaVersion: 1,
+			applicationId: values.applicationId,
+			agentId: values.agentId,
+			applicantId: values.applicantId,
+			status,
+			revision: values.revision,
+			approvalRevision: values.approvalRevision as number | null,
+			decisionReason: values.decisionReason as string | null,
+			serviceAvailability,
+			desiredState: values.desiredState,
+			workloadRevision: values.workloadRevision,
+			fence: values.fence,
+			ownerIds,
+			availability,
+			failureCode: values.failureCode as AgentFailureCodeV1 | null,
+		};
+	} catch {
+		throw new AgentManagementError("unavailable");
+	}
 }

@@ -1,20 +1,15 @@
 import {
 	AgentManagementError,
-	agentAccessTargetKey,
 	isAgentManagementText as capturedText,
 	invalidAgentManagementInput as invalidInput,
+	isAgentManagementFailureCode,
 	isAgentManagementNonNegativeInteger as nonNegativeInteger,
 	parseAgentManagementActorContext as parseActorContext,
-	parseAgentAccessTargets,
-	parseAgentManagementStringArray,
+	parseAgentManagementPortState,
 	requireAgentManagementExactKeys as requireExactKeys,
 	snapshotAgentManagementDataObject as snapshotDataObject,
 } from "./agent-management-input.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
-
-function stringArray(input: unknown): readonly string[] {
-	return parseAgentManagementStringArray(input, true);
-}
 
 export { AgentManagementError } from "./agent-management-input.js";
 
@@ -39,13 +34,6 @@ export type AgentFailureCodeV1 =
 	| "health_check_failed"
 	| "workload_unavailable"
 	| "reconciliation_failed";
-
-const failureCodes: readonly AgentFailureCodeV1[] = [
-	"creation_not_ready",
-	"health_check_failed",
-	"workload_unavailable",
-	"reconciliation_failed",
-];
 
 export interface AgentManagementActorContextV1 {
 	readonly schemaVersion: 1;
@@ -145,136 +133,6 @@ export interface AgentManagementStateV1 {
 		| { readonly kind: "organization"; readonly organizationId: string }
 	)[];
 	readonly failureCode: AgentFailureCodeV1 | null;
-}
-
-function portState(input: AgentManagementStateV1): AgentManagementStateV1 {
-	try {
-		const values = snapshotDataObject(input);
-		requireExactKeys(values, [
-			"schemaVersion",
-			"applicationId",
-			"agentId",
-			"applicantId",
-			"status",
-			"revision",
-			"approvalRevision",
-			"decisionReason",
-			"serviceAvailability",
-			"desiredState",
-			"workloadRevision",
-			"fence",
-			"ownerIds",
-			"availability",
-			"failureCode",
-		]);
-		const statuses: readonly AgentManagementStatusV1[] = [
-			"pending_approval",
-			"withdrawn",
-			"rejected",
-			"creating",
-			"available",
-			"stopped",
-			"creation_failed",
-			"disabled",
-		];
-		const serviceAvailabilities: readonly AgentServiceAvailabilityV1[] = [
-			"ready",
-			"starting",
-			"updating",
-			"unavailable",
-		];
-		if (
-			values.schemaVersion !== 1 ||
-			!capturedText(values.applicationId) ||
-			!capturedText(values.agentId) ||
-			!capturedText(values.applicantId) ||
-			!statuses.includes(values.status as AgentManagementStatusV1) ||
-			!nonNegativeInteger(values.revision) ||
-			(values.approvalRevision !== null &&
-				(!Number.isSafeInteger(values.approvalRevision) ||
-					(values.approvalRevision as number) < 1)) ||
-			(values.decisionReason !== null &&
-				!capturedText(values.decisionReason, 4096)) ||
-			(values.serviceAvailability !== null &&
-				!serviceAvailabilities.includes(
-					values.serviceAvailability as AgentServiceAvailabilityV1,
-				)) ||
-			(values.desiredState !== "running" &&
-				values.desiredState !== "stopped") ||
-			!nonNegativeInteger(values.workloadRevision) ||
-			!nonNegativeInteger(values.fence) ||
-			(values.failureCode !== null &&
-				!failureCodes.includes(values.failureCode as AgentFailureCodeV1))
-		) {
-			invalidInput();
-		}
-		const status = values.status as AgentManagementStatusV1;
-		const serviceAvailability =
-			values.serviceAvailability as AgentServiceAvailabilityV1 | null;
-		const preApproval =
-			status === "pending_approval" ||
-			status === "rejected" ||
-			status === "withdrawn";
-		if (
-			(preApproval &&
-				(values.desiredState !== "stopped" ||
-					serviceAvailability !== null ||
-					values.approvalRevision !== null ||
-					values.workloadRevision !== 0 ||
-					values.fence !== 0 ||
-					values.failureCode !== null)) ||
-			(!preApproval &&
-				(values.approvalRevision === null ||
-					(values.approvalRevision as number) > (values.revision as number) ||
-					(values.workloadRevision as number) < 1 ||
-					(values.fence as number) < 1)) ||
-			((status === "creating" || status === "creation_failed") &&
-				(values.desiredState !== "running" || serviceAvailability !== null)) ||
-			(status === "available" &&
-				(values.desiredState !== "running" || serviceAvailability === null)) ||
-			((status === "stopped" || status === "disabled") &&
-				(values.desiredState !== "stopped" || serviceAvailability !== null)) ||
-			(status === "rejected" && values.decisionReason === null) ||
-			(status !== "rejected" && values.decisionReason !== null) ||
-			(status === "creation_failed" && values.failureCode === null) ||
-			(status === "available" &&
-				serviceAvailability === "unavailable" &&
-				values.failureCode === null) ||
-			(status === "available" &&
-				serviceAvailability === "ready" &&
-				values.failureCode !== null)
-		) {
-			invalidInput();
-		}
-		const ownerIds = stringArray(values.ownerIds);
-		if (ownerIds.length === 0) invalidInput();
-		const availability = parseAgentAccessTargets(values.availability);
-		if (
-			new Set(availability.map(agentAccessTargetKey)).size !==
-			availability.length
-		) {
-			invalidInput();
-		}
-		return {
-			schemaVersion: 1,
-			applicationId: values.applicationId,
-			agentId: values.agentId,
-			applicantId: values.applicantId,
-			status,
-			revision: values.revision,
-			approvalRevision: values.approvalRevision as number | null,
-			decisionReason: values.decisionReason as string | null,
-			serviceAvailability,
-			desiredState: values.desiredState,
-			workloadRevision: values.workloadRevision,
-			fence: values.fence,
-			ownerIds,
-			availability,
-			failureCode: values.failureCode as AgentFailureCodeV1 | null,
-		};
-	} catch {
-		throw new AgentManagementError("unavailable");
-	}
 }
 
 export interface AgentManagementWritePlanV1 {
@@ -508,8 +366,7 @@ function parseObservation(
 		!nonNegativeInteger(values.fence) ||
 		!capturedText(values.requestId) ||
 		!capturedText(values.traceId) ||
-		(requiresReason &&
-			!failureCodes.includes(values.failureCode as AgentFailureCodeV1))
+		(requiresReason && !isAgentManagementFailureCode(values.failureCode))
 	) {
 		invalidInput();
 	}
@@ -705,7 +562,8 @@ export function createAgentManagementV1(
 						requestDigest,
 					},
 					(stateInput) => {
-						const state = stateInput && portState(stateInput);
+						const state =
+							stateInput && parseAgentManagementPortState(stateInput);
 						if (state) {
 							requireAggregateIdentity(
 								applicationCommand ? state.applicationId : state.agentId,
@@ -948,7 +806,8 @@ export function createAgentManagementV1(
 						requestDigest,
 					},
 					(stateInput) => {
-						const state = stateInput && portState(stateInput);
+						const state =
+							stateInput && parseAgentManagementPortState(stateInput);
 						if (state)
 							requireAggregateIdentity(state.agentId, observation.agentId);
 						if (
@@ -1055,7 +914,7 @@ export function createAgentManagementV1(
 			const stateInput = await adapterResult(() =>
 				transaction.resolveAgentAccessState(query.agentId),
 			);
-			const state = stateInput && portState(stateInput);
+			const state = stateInput && parseAgentManagementPortState(stateInput);
 			if (state) requireAggregateIdentity(state.agentId, query.agentId);
 			if (!state) return { outcome: "denied" };
 			const owner = state.ownerIds.includes(actorContext.userId);

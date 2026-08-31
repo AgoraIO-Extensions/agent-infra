@@ -10,6 +10,7 @@ import {
 	invalidAgentManagementInput as invalidInput,
 	parseAgentManagementActorContext as parseActor,
 	parseAgentAccessTargets,
+	parseAgentManagementPortState,
 	snapshotAgentManagementDataObject as snapshotDataObject,
 	isAgentManagementText as text,
 	parseAgentManagementStringArray as textArray,
@@ -138,45 +139,6 @@ function parseAuthority(input: unknown): AgentAccessAuthorityContextV1 {
 	}
 }
 
-function policyState(input: AgentManagementStateV1): {
-	readonly agentId: string;
-	readonly applicantId: string;
-	readonly status: AgentManagementStateV1["status"];
-	readonly revision: number;
-	readonly ownerIds: readonly string[];
-	readonly availability: readonly AccessTargetV1[];
-} {
-	try {
-		if (
-			!text(input.agentId) ||
-			!text(input.applicantId) ||
-			!Number.isSafeInteger(input.revision) ||
-			input.revision < 0
-		) {
-			invalidInput();
-		}
-		const ownerIds = textArray(input.ownerIds, true);
-		const availability = parseAgentAccessTargets(input.availability);
-		if (
-			ownerIds.length === 0 ||
-			new Set(availability.map(agentAccessTargetKey)).size !==
-				availability.length
-		) {
-			invalidInput();
-		}
-		return {
-			agentId: input.agentId,
-			applicantId: input.applicantId,
-			status: input.status,
-			revision: input.revision,
-			ownerIds,
-			availability,
-		};
-	} catch {
-		throw new AgentManagementError("unavailable");
-	}
-}
-
 function sameTargets(
 	left: readonly AccessTargetV1[],
 	right: readonly AccessTargetV1[],
@@ -196,7 +158,7 @@ export function decideAgentAccessUpdatePolicy(
 	const command = parseCommand(commandInput);
 	const actor = parseActor(actorInput);
 	const authority = parseAuthority(authorityInput);
-	const state = stateInput && policyState(stateInput);
+	const state = stateInput && parseAgentManagementPortState(stateInput);
 	const users = new Map(
 		authority.users.map(({ userId, accountStatus }) => [userId, accountStatus]),
 	);

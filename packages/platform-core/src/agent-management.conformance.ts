@@ -1493,6 +1493,46 @@ export function agentManagementV1Conformance(
 		}
 	});
 
+	it("fails closed on every impossible aggregate at the internal access-policy seam", async () => {
+		const state = stateFixture({ agentId: "agent_invalid_policy_state" });
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: state.agentId,
+			expectedRevision: state.revision,
+			desiredOwnerIds: [applicant.userId, "user_co_owner"],
+			desiredAvailability: [],
+			requestId: "request_invalid_policy_state",
+			traceId: "trace_invalid_policy_state",
+		};
+		const authority = {
+			schemaVersion: 1 as const,
+			users: [
+				{ userId: applicant.userId, accountStatus: "active" as const },
+				{ userId: "user_co_owner", accountStatus: "active" as const },
+			],
+			organizationIds: [],
+		};
+		for (const invalidState of [
+			{ ...state, schemaVersion: 2 },
+			{ ...state, status: "corrupted" },
+			{ ...state, desiredState: "stopped" },
+		]) {
+			await expect(
+				Promise.resolve().then(() =>
+					decideAgentAccessUpdatePolicy(
+						command,
+						invalidState as never,
+						applicant,
+						authority,
+					),
+				),
+			).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+			});
+		}
+	});
+
 	it("enforces ownership, rescue, target, duplicate, stale, and no-op access policy", async () => {
 		const authority = {
 			schemaVersion: 1 as const,
