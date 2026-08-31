@@ -27,18 +27,33 @@ describe("platform-core package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
+			"AgentManagementError",
 			"ApplicationFoundationError",
 			"PlatformIdempotencyError",
+			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
 			"platformIdempotencyV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
 		);
-		expect(Object.keys(testingSurface)).toEqual([
+		expect(Object.keys(testingSurface).toSorted()).toEqual([
+			"FakeAgentManagementV1",
 			"FakeApplicationFoundationTransactionV1",
 			"FakePlatformIdempotencyDatabaseV1",
 		]);
+		expect(
+			Object.keys(new testingSurface.FakeAgentManagementV1()).toSorted(),
+		).toEqual([
+			"executeManagementCommand",
+			"recordWorkloadObservation",
+			"resolveAgentAccess",
+		]);
+		const managementSource = await readFile(
+			new URL("./agent-management.ts", import.meta.url),
+			"utf8",
+		);
+		expect(managementSource).not.toContain("agent-management-access-policy");
 		expect(
 			Object.keys(
 				surface.createApplicationFoundationUseCaseV1(
