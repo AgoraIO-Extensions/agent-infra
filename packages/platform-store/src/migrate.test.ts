@@ -1,78 +1,24 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
-
 import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.ts";
+import {
 	platformInfrastructureTables,
 	platformStatusValues,
 } from "./schema.ts";
 
-const execFile = promisify(execFileCallback);
-const postgresImage =
-	"postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
-const username = "platform_test";
-const password = "platform_test_password";
-const database = "platform_test";
 type PostgresClient = ReturnType<typeof postgres>;
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
 
-let containerName = "";
 let databaseUrl = "";
-
-async function removeContainer(): Promise<void> {
-	if (containerName) {
-		await execFile("docker", ["rm", "--force", containerName]).catch(() => {});
-	}
-}
-
-async function startPostgres(): Promise<string> {
-	containerName = `agent-infra-platform-store-${randomUUID()}`;
-	await execFile("docker", [
-		"run",
-		"--detach",
-		"--rm",
-		"--name",
-		containerName,
-		"--env",
-		`POSTGRES_USER=${username}`,
-		"--env",
-		`POSTGRES_PASSWORD=${password}`,
-		"--env",
-		`POSTGRES_DB=${database}`,
-		"--publish",
-		"127.0.0.1::5432",
-		postgresImage,
-	]);
-	const { stdout } = await execFile("docker", [
-		"port",
-		containerName,
-		"5432/tcp",
-	]);
-	const port = stdout.trim().match(/:(\d+)$/)?.[1];
-	if (!port)
-		throw new Error("PostgreSQL test container did not publish a port");
-	const url = `postgres://${username}:${password}@127.0.0.1:${port}/${database}`;
-
-	for (let attempt = 0; attempt < 80; attempt += 1) {
-		const client = postgres(url, { connect_timeout: 1, max: 1 });
-		try {
-			await client`select 1`;
-			await client.end();
-			return url;
-		} catch {
-			await client.end({ timeout: 0 });
-			await new Promise((resolve) => setTimeout(resolve, 250));
-		}
-	}
-	throw new Error("PostgreSQL test container did not become ready");
-}
+let testDatabase: PostgresTestDatabase | undefined;
 
 async function expectConstraintFailure(
 	operation: PromiseLike<unknown>,
@@ -126,13 +72,11 @@ async function readPlatformCatalog(client: PostgresClient) {
 }
 
 beforeAll(async () => {
-	databaseUrl = await startPostgres().catch(async (error) => {
-		await removeContainer();
-		throw error;
-	});
+	testDatabase = await startPostgresTestDatabase("platform-store-migrations");
+	databaseUrl = testDatabase.databaseUrl;
 }, 120_000);
 
-afterAll(removeContainer);
+afterAll(async () => testDatabase?.stop());
 
 describe("Platform PostgreSQL migration foundation", () => {
 	it("accepts only the dedicated Platform database setting", () => {

@@ -25,7 +25,7 @@ describe("platform-store package surface", () => {
 		expect(result.stderr).toBe("Platform migration failed\n");
 	});
 
-	it("publishes only migration and use-case transaction interfaces", async () => {
+	it("publishes only Store interfaces and packaged migrations", async () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.exports).toEqual({
 			".": {
@@ -39,7 +39,9 @@ describe("platform-store package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
+			"OutboxStoreError",
 			"PostgresApplicationFoundationTransactionV1",
+			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
 			"platformDatabaseUrlFromEnvironment",
 		]);

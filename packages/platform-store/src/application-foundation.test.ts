@@ -1,7 +1,3 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
-
 import type {
 	ApplicationFoundationTransactionPortV1,
 	ApplicationFoundationWritePlanV1,
@@ -13,13 +9,11 @@ import {
 	type ApplicationFoundationFailurePoint,
 	applicationFoundationTransactionConformance,
 } from "../../platform-core/src/application-foundation.conformance.ts";
+import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.ts";
 
-const execFile = promisify(execFileCallback);
-const postgresImage =
-	"postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
-const username = "platform_test";
-const password = "platform_test_password";
-const database = "platform_test";
 const triggerName = "application_foundation_injected_failure";
 const functionName = "platform.application_foundation_injected_failure";
 type PostgresClient = ReturnType<typeof postgres>;
@@ -27,57 +21,9 @@ const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
 
-let containerName = "";
 let databaseUrl = "";
 let adminClient: PostgresClient;
-
-async function removeContainer(): Promise<void> {
-	if (containerName) {
-		await execFile("docker", ["rm", "--force", containerName]).catch(() => {});
-	}
-}
-
-async function startPostgres(): Promise<string> {
-	containerName = `agent-infra-application-foundation-${randomUUID()}`;
-	await execFile("docker", [
-		"run",
-		"--detach",
-		"--rm",
-		"--name",
-		containerName,
-		"--env",
-		`POSTGRES_USER=${username}`,
-		"--env",
-		`POSTGRES_PASSWORD=${password}`,
-		"--env",
-		`POSTGRES_DB=${database}`,
-		"--publish",
-		"127.0.0.1::5432",
-		postgresImage,
-	]);
-	const { stdout } = await execFile("docker", [
-		"port",
-		containerName,
-		"5432/tcp",
-	]);
-	const port = stdout.trim().match(/:(\d+)$/)?.[1];
-	if (!port)
-		throw new Error("PostgreSQL test container did not publish a port");
-	const url = `postgres://${username}:${password}@127.0.0.1:${port}/${database}`;
-
-	for (let attempt = 0; attempt < 80; attempt += 1) {
-		const client = postgres(url, { connect_timeout: 1, max: 1 });
-		try {
-			await client`select 1`;
-			await client.end();
-			return url;
-		} catch {
-			await client.end({ timeout: 0 });
-			await new Promise((resolve) => setTimeout(resolve, 250));
-		}
-	}
-	throw new Error("PostgreSQL test container did not become ready");
-}
+let testDatabase: PostgresTestDatabase | undefined;
 
 const failureTable: Record<
 	Exclude<ApplicationFoundationFailurePoint, "commit">,
@@ -212,17 +158,15 @@ async function snapshot() {
 }
 
 beforeAll(async () => {
-	databaseUrl = await startPostgres().catch(async (error) => {
-		await removeContainer();
-		throw error;
-	});
+	testDatabase = await startPostgresTestDatabase("application-foundation");
+	databaseUrl = testDatabase.databaseUrl;
 	await builtStore.migratePlatformDatabase({ databaseUrl });
 	adminClient = postgres(databaseUrl, { max: 1 });
 }, 120_000);
 
 afterAll(async () => {
 	await adminClient?.end();
-	await removeContainer();
+	await testDatabase?.stop();
 });
 
 describe("PostgreSQL application foundation transaction", () => {

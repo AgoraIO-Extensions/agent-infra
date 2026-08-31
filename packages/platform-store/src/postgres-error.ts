@@ -1,4 +1,7 @@
-export function isPostgresError(error: unknown, code: string): boolean {
+export function matchesPostgresErrorCode(
+	error: unknown,
+	predicate: (code: string) => boolean,
+): boolean {
 	try {
 		let current = error;
 		for (let depth = 0; depth < 4; depth += 1) {
@@ -8,7 +11,8 @@ export function isPostgresError(error: unknown, code: string): boolean {
 			if (
 				codeDescriptor &&
 				Object.hasOwn(codeDescriptor, "value") &&
-				codeDescriptor.value === code
+				typeof codeDescriptor.value === "string" &&
+				predicate(codeDescriptor.value)
 			) {
 				return true;
 			}
@@ -22,4 +26,8 @@ export function isPostgresError(error: unknown, code: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+export function isPostgresError(error: unknown, code: string): boolean {
+	return matchesPostgresErrorCode(error, (candidate) => candidate === code);
 }
