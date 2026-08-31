@@ -10,6 +10,7 @@ import {
 
 export interface FakeAgentManagementOptionsV1 extends AgentManagementOptionsV1 {
 	readonly states?: readonly AgentManagementStateV1[];
+	readonly failure?: "transaction" | "access_read";
 }
 
 interface CompletedCommand {
@@ -41,6 +42,8 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 		}
 		const transaction: AgentManagementTransactionPortV1 = {
 			executeAgentManagementTransaction: async (request, decide) => {
+				if (options.failure === "transaction")
+					throw new Error("Injected failure");
 				const key = transactionKey(request);
 				const completed = this.#completed.get(key);
 				if (completed) {
@@ -75,6 +78,8 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 				return structuredClone(decision);
 			},
 			resolveAgentAccessState: async (agentId) => {
+				if (options.failure === "access_read")
+					throw new Error("Injected failure");
 				const state = this.#states.get(agentId);
 				return state && structuredClone(state);
 			},
@@ -96,4 +101,17 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 		query,
 		actorContext,
 	) => this.#interface.resolveAgentAccess(query, actorContext);
+
+	decideAccessUpdate: AgentManagementInterfaceV1["decideAccessUpdate"] = (
+		command,
+		state,
+		actorContext,
+		authorityContext,
+	) =>
+		this.#interface.decideAccessUpdate(
+			command,
+			state,
+			actorContext,
+			authorityContext,
+		);
 }

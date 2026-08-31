@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 
 import type {
+	AgentManagementCommandV1,
 	AgentManagementInterfaceV1,
 	AgentManagementOptionsV1,
 	AgentManagementStateV1,
@@ -9,6 +10,7 @@ import type {
 export interface AgentManagementConformanceOptionsV1
 	extends AgentManagementOptionsV1 {
 	readonly states?: readonly AgentManagementStateV1[];
+	readonly failure?: "transaction" | "access_read";
 }
 
 const applicant = {
@@ -25,31 +27,283 @@ const administrator = {
 	isAdministrator: true,
 };
 
+function stateFixture(
+	overrides: Partial<AgentManagementStateV1> = {},
+): AgentManagementStateV1 {
+	const status = overrides.status ?? "available";
+	const preApproval =
+		status === "pending_approval" ||
+		status === "rejected" ||
+		status === "withdrawn";
+	const stopped = status === "stopped" || status === "disabled" || preApproval;
+	return {
+		schemaVersion: 1,
+		applicationId: "application_fixture",
+		agentId: "agent_fixture",
+		applicantId: applicant.userId,
+		status,
+		revision: 1,
+		decisionReason: status === "rejected" ? "Capacity is unavailable" : null,
+		serviceAvailability: status === "available" ? "ready" : null,
+		desiredState: stopped ? "stopped" : "running",
+		workloadRevision: preApproval ? 0 : 1,
+		fence: preApproval ? 0 : 1,
+		ownerIds: [applicant.userId],
+		availability: [],
+		failureCode: status === "creation_failed" ? "creation_not_ready" : null,
+		...overrides,
+	};
+}
+
 export function agentManagementV1Conformance(
 	createManagement: (
 		options: AgentManagementConformanceOptionsV1,
 	) => Promise<AgentManagementInterfaceV1>,
 ): void {
+	it("maps transaction, read, and clock failures to one stable unavailable error", async () => {
+		const pendingState = stateFixture({
+			applicationId: "application_failure_boundary",
+			agentId: "agent_failure_boundary",
+			status: "pending_approval",
+		});
+		const creatingState = stateFixture({
+			applicationId: "application_observation_failure_boundary",
+			agentId: "agent_observation_failure_boundary",
+			status: "creating",
+			revision: 2,
+		});
+		const command = {
+			schemaVersion: 1 as const,
+			command: "update_application" as const,
+			applicationId: pendingState.applicationId,
+			expectedRevision: 1,
+			idempotencyKey: "boundary-command",
+			requestId: "request_boundary_command",
+			traceId: "trace_boundary_command",
+		};
+		const observation = {
+			schemaVersion: 1 as const,
+			observationId: "boundary-observation",
+			agentId: creatingState.agentId,
+			observation: "creation_succeeded" as const,
+			expectedRevision: 2,
+			workloadRevision: 1,
+			fence: 1,
+			requestId: "request_boundary_observation",
+			traceId: "trace_boundary_observation",
+		};
+		const expectUnavailable = (promise: Promise<unknown>) =>
+			expect(promise).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+				message: "Agent management is temporarily unavailable",
+			});
+
+		await expectUnavailable(
+			(
+				await createManagement({
+					states: [pendingState],
+					failure: "transaction",
+				})
+			).executeManagementCommand(command, applicant),
+		);
+		await expectUnavailable(
+			(
+				await createManagement({
+					states: [creatingState],
+					failure: "transaction",
+				})
+			).recordWorkloadObservation(observation),
+		);
+		await expectUnavailable(
+			(
+				await createManagement({
+					states: [
+						stateFixture({
+							applicationId: creatingState.applicationId,
+							agentId: creatingState.agentId,
+							status: "available",
+						}),
+					],
+					failure: "access_read",
+				})
+			).resolveAgentAccess(
+				{ schemaVersion: 1, agentId: creatingState.agentId, intent: "use" },
+				applicant,
+			),
+		);
+		for (const invoke of [
+			async () =>
+				(
+					await createManagement({
+						states: [pendingState],
+						now: () => {
+							throw new Error("clock failed");
+						},
+					})
+				).executeManagementCommand(command, applicant),
+			async () =>
+				(
+					await createManagement({
+						states: [creatingState],
+						now: () => new Date(Number.NaN),
+					})
+				).recordWorkloadObservation(observation),
+		]) {
+			await expectUnavailable(invoke());
+		}
+		const accessManagement = await createManagement({ states: [pendingState] });
+		await expectUnavailable(
+			Promise.resolve().then(() =>
+				accessManagement.decideAccessUpdate(
+					{
+						schemaVersion: 1,
+						agentId: pendingState.agentId,
+						expectedRevision: pendingState.revision,
+						desiredOwnerIds: [applicant.userId],
+						desiredAvailability: [],
+						requestId: "request_boundary_access",
+						traceId: "trace_boundary_access",
+					},
+					pendingState,
+					applicant,
+					{} as never,
+				),
+			),
+		);
+	});
+
+	it("fails closed when the Agent-management Port returns an impossible state", async () => {
+		const valid = stateFixture({
+			applicationId: "application_invalid_state",
+			agentId: "agent_invalid_state",
+			status: "available",
+			revision: 4,
+			workloadRevision: 2,
+			fence: 3,
+			availability: [{ kind: "organization", organizationId: "org_platform" }],
+		});
+		const invalidStates: readonly AgentManagementStateV1[] = [
+			{
+				...valid,
+				status: "pending_approval",
+				serviceAvailability: null,
+				desiredState: "running",
+				workloadRevision: 0,
+				fence: 0,
+			},
+			{ ...valid, serviceAvailability: null },
+			{
+				...valid,
+				status: "stopped",
+				serviceAvailability: null,
+				desiredState: "running",
+			},
+			{ ...valid, ownerIds: [] },
+			{ ...valid, ownerIds: [applicant.userId, applicant.userId] },
+			{
+				...valid,
+				availability: [
+					{ kind: "organization", organizationId: "org_platform" },
+					{ kind: "organization", organizationId: "org_platform" },
+				],
+			},
+			{ ...valid, revision: -1 },
+			{ ...valid, fence: -1 },
+			stateFixture({ status: "creation_failed", failureCode: null }),
+			stateFixture({
+				status: "available",
+				serviceAvailability: "unavailable",
+				failureCode: null,
+			}),
+			stateFixture({
+				status: "available",
+				serviceAvailability: "ready",
+				failureCode: "workload_unavailable",
+			}),
+		];
+		for (const [index, invalid] of invalidStates.entries()) {
+			const management = await createManagement({
+				states: [
+					{
+						...invalid,
+						applicationId: `${invalid.applicationId}_${index}`,
+						agentId: `${invalid.agentId}_${index}`,
+					},
+				],
+			});
+			await expect(
+				management.resolveAgentAccess(
+					{
+						schemaVersion: 1,
+						agentId: `${invalid.agentId}_${index}`,
+						intent: "use",
+					},
+					applicant,
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+		}
+
+		const invalidCommandState = {
+			...valid,
+			status: "pending_approval" as const,
+			serviceAvailability: null,
+			desiredState: "running" as const,
+			workloadRevision: 0,
+			fence: 0,
+		};
+		await expect(
+			(
+				await createManagement({ states: [invalidCommandState] })
+			).executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "update_application",
+					applicationId: invalidCommandState.applicationId,
+					expectedRevision: invalidCommandState.revision,
+					idempotencyKey: "invalid-state-command",
+					requestId: "request_invalid_state_command",
+					traceId: "trace_invalid_state_command",
+				},
+				applicant,
+			),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			(
+				await createManagement({
+					states: [
+						{
+							...valid,
+							status: "creating",
+							serviceAvailability: null,
+							ownerIds: [],
+						},
+					],
+				})
+			).recordWorkloadObservation({
+				schemaVersion: 1,
+				observationId: "invalid-state-observation",
+				agentId: valid.agentId,
+				observation: "creation_succeeded",
+				expectedRevision: valid.revision,
+				workloadRevision: valid.workloadRevision,
+				fence: valid.fence,
+				requestId: "request_invalid_state_observation",
+				traceId: "trace_invalid_state_observation",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
 	it("lets the applicant update, resubmit, and withdraw one application history", async () => {
 		const management = await createManagement({
 			now: () => new Date("2026-08-31T08:00:00.000Z"),
 			states: [
-				{
-					schemaVersion: 1,
+				stateFixture({
 					applicationId: "application_1",
 					agentId: "agent_1",
-					applicantId: applicant.userId,
 					status: "rejected",
 					revision: 3,
 					decisionReason: "Resource request needs adjustment",
-					serviceAvailability: null,
-					desiredState: "stopped",
-					workloadRevision: 0,
-					fence: 0,
-					ownerIds: [applicant.userId],
-					availability: [],
-					failureReason: null,
-				},
+				}),
 			],
 		});
 
@@ -134,22 +388,11 @@ export function agentManagementV1Conformance(
 	});
 
 	it("lets only an administrator approve or reject a pending application", async () => {
-		const state = {
-			schemaVersion: 1 as const,
+		const state = stateFixture({
 			applicationId: "application_2",
 			agentId: "agent_2",
-			applicantId: applicant.userId,
-			status: "pending_approval" as const,
-			revision: 1,
-			decisionReason: null,
-			serviceAvailability: null,
-			desiredState: "stopped" as const,
-			workloadRevision: 0,
-			fence: 0,
-			ownerIds: [applicant.userId],
-			availability: [],
-			failureReason: null,
-		};
+			status: "pending_approval",
+		});
 		const denied = await createManagement({ states: [state] });
 		expect(
 			await denied.executeManagementCommand(
@@ -161,7 +404,7 @@ export function agentManagementV1Conformance(
 					idempotencyKey: "approve-denied",
 					requestId: "request_denied",
 					traceId: "trace_denied",
-				} as never,
+				},
 				applicant,
 			),
 		).toEqual({ outcome: "denied", writePlan: null });
@@ -180,7 +423,7 @@ export function agentManagementV1Conformance(
 					idempotencyKey: "approve-1",
 					requestId: "request_approve",
 					traceId: "trace_approve",
-				} as never,
+				},
 				administrator,
 			),
 		).toMatchObject({
@@ -219,7 +462,7 @@ export function agentManagementV1Conformance(
 					idempotencyKey: "reject-1",
 					requestId: "request_reject",
 					traceId: "trace_reject",
-				} as never,
+				},
 				administrator,
 			),
 		).toMatchObject({
@@ -234,22 +477,15 @@ export function agentManagementV1Conformance(
 	});
 
 	it("applies Owner and administrator lifecycle authority", async () => {
-		const availableState = {
-			schemaVersion: 1 as const,
+		const availableState = stateFixture({
 			applicationId: "application_3",
 			agentId: "agent_3",
-			applicantId: applicant.userId,
-			status: "available" as const,
+			status: "available",
 			revision: 7,
-			decisionReason: null,
-			serviceAvailability: "ready" as const,
-			desiredState: "running" as const,
 			workloadRevision: 4,
 			fence: 9,
 			ownerIds: [applicant.userId, "user_co_owner"],
-			availability: [],
-			failureReason: null,
-		};
+		});
 		const management = await createManagement({ states: [availableState] });
 		expect(
 			await management.executeManagementCommand(
@@ -275,7 +511,7 @@ export function agentManagementV1Conformance(
 				idempotencyKey: "stop-1",
 				requestId: "request_stop",
 				traceId: "trace_stop",
-			} as never,
+			},
 			applicant,
 		);
 		expect(stopped).toMatchObject({
@@ -306,7 +542,7 @@ export function agentManagementV1Conformance(
 				idempotencyKey: "restart-1",
 				requestId: "request_restart",
 				traceId: "trace_restart",
-			} as never,
+			},
 			{ ...applicant, userId: "user_co_owner" },
 		);
 		expect(restarted).toMatchObject({
@@ -322,14 +558,15 @@ export function agentManagementV1Conformance(
 			},
 		});
 
-		const failedState = {
-			...availableState,
+		const failedState = stateFixture({
 			agentId: "agent_failed",
 			applicationId: "application_failed",
-			status: "creation_failed" as const,
-			serviceAvailability: null,
-			failureReason: "Agent did not become ready",
-		};
+			status: "creation_failed",
+			revision: 7,
+			workloadRevision: 4,
+			fence: 9,
+			ownerIds: [applicant.userId, "user_co_owner"],
+		});
 		const failed = await createManagement({ states: [failedState] });
 		expect(
 			await failed.executeManagementCommand(
@@ -341,7 +578,7 @@ export function agentManagementV1Conformance(
 					idempotencyKey: "retry-1",
 					requestId: "request_retry",
 					traceId: "trace_retry",
-				} as never,
+				},
 				administrator,
 			),
 		).toMatchObject({
@@ -350,7 +587,7 @@ export function agentManagementV1Conformance(
 			writePlan: {
 				state: {
 					status: "creating",
-					failureReason: "Agent did not become ready",
+					failureCode: "creation_not_ready",
 				},
 				auditEvent: { action: "agent.lifecycle.creation_retried" },
 			},
@@ -367,7 +604,7 @@ export function agentManagementV1Conformance(
 					idempotencyKey: "disable-1",
 					requestId: "request_disable",
 					traceId: "trace_disable",
-				} as never,
+				},
 				administrator,
 			),
 		).toMatchObject({
@@ -384,23 +621,161 @@ export function agentManagementV1Conformance(
 		});
 	});
 
+	it("covers every management command and status pair without rejected side effects", async () => {
+		const statuses = [
+			"pending_approval",
+			"withdrawn",
+			"rejected",
+			"creating",
+			"available",
+			"stopped",
+			"creation_failed",
+			"disabled",
+		] as const;
+		const commands = [
+			"update_application",
+			"withdraw_application",
+			"approve_application",
+			"reject_application",
+			"stop_agent",
+			"restart_agent",
+			"retry_agent_creation",
+			"disable_agent",
+		] as const;
+		const allowed = {
+			update_application: ["pending_approval", "rejected"],
+			withdraw_application: ["pending_approval"],
+			approve_application: ["pending_approval"],
+			reject_application: ["pending_approval"],
+			stop_agent: ["available"],
+			restart_agent: ["available", "stopped"],
+			retry_agent_creation: ["creation_failed"],
+			disable_agent: ["creating", "available", "stopped", "creation_failed"],
+		} as const;
+		const commandFor = (
+			command: (typeof commands)[number],
+			state: AgentManagementStateV1,
+		): AgentManagementCommandV1 => {
+			const correlation = {
+				schemaVersion: 1 as const,
+				expectedRevision: state.revision,
+				idempotencyKey: `matrix-${command}-${state.status}`,
+				requestId: `request_${command}_${state.status}`,
+				traceId: `trace_${command}_${state.status}`,
+			};
+			switch (command) {
+				case "update_application":
+				case "withdraw_application":
+				case "approve_application":
+					return {
+						...correlation,
+						command,
+						applicationId: state.applicationId,
+					};
+				case "reject_application":
+					return {
+						...correlation,
+						command,
+						applicationId: state.applicationId,
+						reason: "Capacity is unavailable",
+					};
+				default:
+					return { ...correlation, command, agentId: state.agentId };
+			}
+		};
+		for (const command of commands) {
+			for (const status of statuses) {
+				const state = stateFixture({
+					status,
+					applicationId: `application_${command}_${status}`,
+					agentId: `agent_${command}_${status}`,
+				});
+				const management = await createManagement({ states: [state] });
+				const actor =
+					command === "approve_application" ||
+					command === "reject_application" ||
+					command === "disable_agent"
+						? administrator
+						: applicant;
+				const decision = await management.executeManagementCommand(
+					commandFor(command, state),
+					actor,
+				);
+				if ((allowed[command] as readonly string[]).includes(status)) {
+					expect(decision).toMatchObject({ outcome: "accepted" });
+				} else {
+					expect(decision).toEqual({
+						outcome: "conflict",
+						reason: "invalid_transition",
+						writePlan: null,
+					});
+					expect(
+						await management.resolveAgentAccess(
+							{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
+							applicant,
+						),
+					).toMatchObject({
+						outcome: "allowed",
+						managementStatus: status,
+					});
+				}
+			}
+		}
+
+		for (const command of commands) {
+			const status = allowed[command][0];
+			const state = stateFixture({
+				status,
+				applicationId: `application_disabled_${command}`,
+				agentId: `agent_disabled_${command}`,
+			});
+			const management = await createManagement({ states: [state] });
+			expect(
+				await management.executeManagementCommand(commandFor(command, state), {
+					...(command === "approve_application" ||
+					command === "reject_application" ||
+					command === "disable_agent"
+						? administrator
+						: applicant),
+					accountStatus: "disabled",
+				}),
+			).toEqual({ outcome: "denied", writePlan: null });
+			expect(
+				await management.resolveAgentAccess(
+					{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
+					applicant,
+				),
+			).toMatchObject({
+				outcome: "allowed",
+				managementStatus: status,
+			});
+		}
+		for (const command of ["stop_agent", "restart_agent"] as const) {
+			const state = stateFixture({
+				status: command === "stop_agent" ? "available" : "stopped",
+				applicationId: `application_admin_prohibited_${command}`,
+				agentId: `agent_admin_prohibited_${command}`,
+			});
+			const management = await createManagement({ states: [state] });
+			expect(
+				await management.executeManagementCommand(commandFor(command, state), {
+					...administrator,
+					organizationIds: [],
+				}),
+			).toEqual({ outcome: "denied", writePlan: null });
+		}
+	});
+
 	it("accepts only current fenced Worker observations and replays duplicates", async () => {
-		const creatingState = {
-			schemaVersion: 1 as const,
+		const creatingState = stateFixture({
 			applicationId: "application_creating",
 			agentId: "agent_creating",
-			applicantId: applicant.userId,
-			status: "creating" as const,
+			status: "creating",
 			revision: 4,
-			decisionReason: null,
-			serviceAvailability: null,
-			desiredState: "running" as const,
 			workloadRevision: 2,
 			fence: 5,
-			ownerIds: [applicant.userId],
-			availability: [],
-			failureReason: "Previous attempt timed out",
-		};
+			failureCode: "reconciliation_failed",
+		});
 		const management = await createManagement({
 			now: () => new Date("2026-08-31T08:10:00.000Z"),
 			states: [creatingState],
@@ -416,6 +791,27 @@ export function agentManagementV1Conformance(
 			requestId: "request_observe",
 			traceId: "trace_observe",
 		};
+		for (const stale of [
+			{
+				observationId: "observation_stale_revision",
+				expectedRevision: 3,
+			},
+			{
+				observationId: "observation_stale_workload_revision",
+				workloadRevision: 1,
+			},
+		]) {
+			expect(
+				await management.recordWorkloadObservation({
+					...observation,
+					...stale,
+				}),
+			).toEqual({
+				outcome: "conflict",
+				reason: "stale_observation",
+				writePlan: null,
+			});
+		}
 		expect(
 			await management.recordWorkloadObservation({
 				...observation,
@@ -429,7 +825,7 @@ export function agentManagementV1Conformance(
 		});
 
 		expect(
-			await management.recordWorkloadObservation(observation as never),
+			await management.recordWorkloadObservation(observation),
 		).toMatchObject({
 			outcome: "accepted",
 			result: { status: "available", revision: 5 },
@@ -438,7 +834,7 @@ export function agentManagementV1Conformance(
 				state: {
 					status: "available",
 					serviceAvailability: "ready",
-					failureReason: null,
+					failureCode: null,
 				},
 				outboxIntent: null,
 				auditEvent: {
@@ -448,7 +844,7 @@ export function agentManagementV1Conformance(
 			},
 		});
 		expect(
-			await management.recordWorkloadObservation(observation as never),
+			await management.recordWorkloadObservation(observation),
 		).toMatchObject({
 			outcome: "replayed",
 			result: { status: "available", revision: 5 },
@@ -460,8 +856,8 @@ export function agentManagementV1Conformance(
 				...observation,
 				observationId: "observation_stale",
 				observation: "creation_failed",
-				reason: "A late failed attempt",
-			} as never),
+				failureCode: "creation_not_ready",
+			}),
 		).toEqual({
 			outcome: "conflict",
 			reason: "stale_observation",
@@ -471,49 +867,40 @@ export function agentManagementV1Conformance(
 
 	it("maps every current Worker result without mixing service and management status", async () => {
 		const base = {
-			schemaVersion: 1 as const,
-			applicantId: applicant.userId,
 			revision: 10,
-			decisionReason: null,
-			desiredState: "running" as const,
 			workloadRevision: 6,
 			fence: 8,
-			ownerIds: [applicant.userId],
-			availability: [],
 		};
 		const states = [
-			{
+			stateFixture({
 				...base,
 				applicationId: "application_failure",
 				agentId: "agent_failure",
-				status: "creating" as const,
-				serviceAvailability: null,
-				failureReason: null,
-			},
+				status: "creating",
+			}),
 			...[
 				"service_starting",
 				"service_ready",
 				"service_updating",
 				"service_unavailable",
-			].map((observation) => ({
-				...base,
-				applicationId: `application_${observation}`,
-				agentId: `agent_${observation}`,
-				status: "available" as const,
-				serviceAvailability: "unavailable" as const,
-				failureReason: "Earlier failure",
-			})),
-			{
+			].map((observation) =>
+				stateFixture({
+					...base,
+					applicationId: `application_${observation}`,
+					agentId: `agent_${observation}`,
+					status: "available",
+					serviceAvailability: "unavailable",
+					failureCode: "workload_unavailable",
+				}),
+			),
+			stateFixture({
 				...base,
 				applicationId: "application_unapproved",
 				agentId: "agent_unapproved",
-				status: "pending_approval" as const,
-				serviceAvailability: null,
-				desiredState: "stopped" as const,
+				status: "pending_approval",
 				workloadRevision: 0,
 				fence: 0,
-				failureReason: null,
-			},
+			}),
 		];
 		const management = await createManagement({ states });
 		const correlation = {
@@ -524,13 +911,23 @@ export function agentManagementV1Conformance(
 			requestId: "request_worker_result",
 			traceId: "trace_worker_result",
 		};
+		await expect(
+			management.recordWorkloadObservation({
+				...correlation,
+				observationId: "observation_free_text_failure",
+				agentId: "agent_failure",
+				observation: "creation_failed",
+				failureCode: "creation_not_ready",
+				reason: "Pod agent-0 exposed a Runtime Secret",
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
 		expect(
 			await management.recordWorkloadObservation({
 				...correlation,
 				observationId: "observation_failure",
 				agentId: "agent_failure",
 				observation: "creation_failed",
-				reason: "Agent did not become ready",
+				failureCode: "creation_not_ready",
 			}),
 		).toMatchObject({
 			outcome: "accepted",
@@ -539,7 +936,7 @@ export function agentManagementV1Conformance(
 				state: {
 					status: "creation_failed",
 					serviceAvailability: null,
-					failureReason: "Agent did not become ready",
+					failureCode: "creation_not_ready",
 				},
 			},
 		});
@@ -548,17 +945,17 @@ export function agentManagementV1Conformance(
 			{
 				observation: "service_starting" as const,
 				availability: "starting",
-				failureReason: "Earlier failure",
+				failureCode: "workload_unavailable",
 			},
 			{
 				observation: "service_ready" as const,
 				availability: "ready",
-				failureReason: null,
+				failureCode: null,
 			},
 			{
 				observation: "service_updating" as const,
 				availability: "updating",
-				failureReason: "Earlier failure",
+				failureCode: "workload_unavailable",
 			},
 		]) {
 			expect(
@@ -575,7 +972,7 @@ export function agentManagementV1Conformance(
 					state: {
 						status: "available",
 						serviceAvailability: expected.availability,
-						failureReason: expected.failureReason,
+						failureCode: expected.failureCode,
 					},
 				},
 			});
@@ -586,7 +983,7 @@ export function agentManagementV1Conformance(
 				observationId: "observation_service_unavailable",
 				agentId: "agent_service_unavailable",
 				observation: "service_unavailable",
-				reason: "Health check failed",
+				failureCode: "health_check_failed",
 			}),
 		).toMatchObject({
 			outcome: "accepted",
@@ -595,7 +992,7 @@ export function agentManagementV1Conformance(
 				state: {
 					status: "available",
 					serviceAvailability: "unavailable",
-					failureReason: "Health check failed",
+					failureCode: "health_check_failed",
 				},
 			},
 		});
@@ -617,25 +1014,20 @@ export function agentManagementV1Conformance(
 	});
 
 	it("resolves current Owner, direct-user, organization, and account availability", async () => {
-		const state = {
-			schemaVersion: 1 as const,
+		const state = stateFixture({
 			applicationId: "application_access",
 			agentId: "agent_access",
-			applicantId: applicant.userId,
-			status: "available" as const,
+			status: "available",
 			revision: 6,
-			decisionReason: null,
-			serviceAvailability: "starting" as const,
-			desiredState: "running" as const,
+			serviceAvailability: "starting",
 			workloadRevision: 3,
 			fence: 4,
 			ownerIds: [applicant.userId, "user_co_owner"],
 			availability: [
-				{ kind: "user" as const, userId: "user_direct" },
-				{ kind: "organization" as const, organizationId: "org_platform" },
+				{ kind: "user", userId: "user_direct" },
+				{ kind: "organization", organizationId: "org_platform" },
 			],
-			failureReason: null,
-		};
+		});
 		const management = await createManagement({ states: [state] });
 		const useQuery = {
 			schemaVersion: 1 as const,
@@ -684,6 +1076,18 @@ export function agentManagementV1Conformance(
 				{ ...useQuery, intent: "manage" },
 				administrator,
 			),
+		).toEqual(denial);
+		expect(
+			await management.resolveAgentAccess(useQuery, {
+				...administrator,
+				organizationIds: [],
+			}),
+		).toEqual(denial);
+		expect(
+			await management.resolveAgentAccess(
+				{ ...useQuery, intent: "manage" },
+				applicant,
+			),
 		).toMatchObject({ outcome: "allowed", serviceReady: false });
 		expect(
 			await management.resolveAgentAccess(
@@ -693,23 +1097,230 @@ export function agentManagementV1Conformance(
 		).toEqual(denial);
 	});
 
-	it("rejects caller authority, malformed input, stale revisions, and changed replays", async () => {
-		const state = {
+	it("produces one pure access-update plan from caller wishes and trusted authority", async () => {
+		const state = stateFixture({
+			applicationId: "application_access_update",
+			agentId: "agent_access_update",
+			status: "available",
+			revision: 12,
+			workloadRevision: 6,
+			fence: 9,
+		});
+		const management = await createManagement({ states: [state] });
+		expect(
+			await management.decideAccessUpdate(
+				{
+					schemaVersion: 1,
+					agentId: state.agentId,
+					expectedRevision: 12,
+					desiredOwnerIds: [applicant.userId, "user_co_owner"],
+					desiredAvailability: [
+						{ kind: "user", userId: "user_direct" },
+						{ kind: "organization", organizationId: "org_platform" },
+					],
+					requestId: "request_access_update",
+					traceId: "trace_access_update",
+				},
+				state,
+				applicant,
+				{
+					schemaVersion: 1,
+					users: [
+						{ userId: applicant.userId, accountStatus: "active" },
+						{ userId: "user_co_owner", accountStatus: "active" },
+						{ userId: "user_direct", accountStatus: "active" },
+					],
+					organizationIds: ["org_platform"],
+				},
+			),
+		).toEqual({
+			outcome: "accepted",
+			writePlan: {
+				schemaVersion: 1,
+				operation: "agent.access.updated.v1",
+				agentId: state.agentId,
+				expectedRevision: 12,
+				ownerIds: [applicant.userId, "user_co_owner"],
+				availability: [
+					{ kind: "user", userId: "user_direct" },
+					{ kind: "organization", organizationId: "org_platform" },
+				],
+				auditEvent: {
+					action: "agent.access.updated",
+					actorId: applicant.userId,
+					subjectType: "agent",
+					subjectId: state.agentId,
+					traceId: "trace_access_update",
+					requestId: "request_access_update",
+				},
+			},
+		});
+	});
+
+	it("enforces ownership, rescue, target, duplicate, stale, and no-op access policy", async () => {
+		const management = await createManagement({});
+		const authority = {
 			schemaVersion: 1 as const,
+			users: [
+				{ userId: applicant.userId, accountStatus: "active" as const },
+				{ userId: "user_co_owner", accountStatus: "active" as const },
+				{ userId: "user_disabled", accountStatus: "disabled" as const },
+				{ userId: "user_revoked", accountStatus: "revoked" as const },
+				{ userId: "user_direct", accountStatus: "active" as const },
+				{ userId: administrator.userId, accountStatus: "active" as const },
+			],
+			organizationIds: ["org_platform"],
+		};
+		const state = stateFixture({
+			applicationId: "application_access_policy",
+			agentId: "agent_access_policy",
+			revision: 5,
+			ownerIds: [applicant.userId, "user_co_owner"],
+		});
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: state.agentId,
+			expectedRevision: 5,
+			desiredOwnerIds: [applicant.userId, "user_co_owner"],
+			desiredAvailability: [{ kind: "user" as const, userId: "user_direct" }],
+			requestId: "request_access_policy",
+			traceId: "trace_access_policy",
+		};
+
+		expect(
+			await management.decideAccessUpdate(
+				command,
+				state,
+				{ ...applicant, userId: "user_co_owner" },
+				authority,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		const pendingForApplicant = stateFixture({
+			status: "pending_approval",
+			agentId: "agent_pending_access_policy",
+			ownerIds: ["user_co_owner"],
+		});
+		expect(
+			await management.decideAccessUpdate(
+				{
+					...command,
+					agentId: pendingForApplicant.agentId,
+					expectedRevision: pendingForApplicant.revision,
+				},
+				pendingForApplicant,
+				applicant,
+				authority,
+			),
+		).toMatchObject({ outcome: "accepted" });
+
+		const disabledOwnerState = stateFixture({
+			agentId: "agent_disabled_owner",
+			ownerIds: ["user_disabled"],
+		});
+		expect(
+			await management.decideAccessUpdate(
+				{
+					...command,
+					agentId: disabledOwnerState.agentId,
+					expectedRevision: disabledOwnerState.revision,
+					desiredOwnerIds: ["user_co_owner"],
+				},
+				disabledOwnerState,
+				administrator,
+				authority,
+			),
+		).toMatchObject({
+			outcome: "accepted",
+			writePlan: { ownerIds: ["user_co_owner"] },
+		});
+
+		const denial = { outcome: "denied", writePlan: null };
+		expect(
+			await management.decideAccessUpdate(
+				command,
+				state,
+				administrator,
+				authority,
+			),
+		).toEqual(denial);
+		expect(
+			await management.decideAccessUpdate(
+				command,
+				state,
+				{ ...applicant, accountStatus: "disabled" },
+				authority,
+			),
+		).toEqual(denial);
+		expect(
+			await management.decideAccessUpdate(
+				{ ...command, agentId: "agent_other" },
+				state,
+				applicant,
+				authority,
+			),
+		).toEqual(denial);
+		expect(
+			await management.decideAccessUpdate(
+				command,
+				undefined,
+				applicant,
+				authority,
+			),
+		).toEqual(denial);
+
+		for (const [input, reason] of [
+			[{ ...command, expectedRevision: 4 }, "stale_revision"],
+			[{ ...command, desiredOwnerIds: [] }, "last_valid_owner_required"],
+			[
+				{ ...command, desiredOwnerIds: [applicant.userId, applicant.userId] },
+				"invalid_access_update",
+			],
+			[
+				{
+					...command,
+					desiredAvailability: [
+						{ kind: "user" as const, userId: "user_direct" },
+						{ kind: "user" as const, userId: "user_direct" },
+					],
+				},
+				"invalid_access_update",
+			],
+			[{ ...command, desiredOwnerIds: ["user_unknown"] }, "invalid_target"],
+			[{ ...command, desiredOwnerIds: ["user_revoked"] }, "invalid_target"],
+			[
+				{
+					...command,
+					desiredAvailability: [
+						{ kind: "organization" as const, organizationId: "org_unknown" },
+					],
+				},
+				"invalid_target",
+			],
+		] as const) {
+			expect(
+				await management.decideAccessUpdate(input, state, applicant, authority),
+			).toEqual({ outcome: "conflict", reason, writePlan: null });
+		}
+		expect(
+			await management.decideAccessUpdate(
+				{
+					...command,
+					desiredAvailability: [],
+				},
+				state,
+				applicant,
+				authority,
+			),
+		).toEqual({ outcome: "conflict", reason: "no_change", writePlan: null });
+	});
+
+	it("rejects caller authority, malformed input, stale revisions, and changed replays", async () => {
+		const state = stateFixture({
 			applicationId: "application_negative",
 			agentId: "agent_negative",
-			applicantId: applicant.userId,
-			status: "pending_approval" as const,
+			status: "pending_approval",
 			revision: 2,
-			decisionReason: null,
-			serviceAvailability: null,
-			desiredState: "stopped" as const,
-			workloadRevision: 0,
-			fence: 0,
-			ownerIds: [applicant.userId],
-			availability: [],
-			failureReason: null,
-		};
+		});
 		const management = await createManagement({ states: [state] });
 		const update = {
 			schemaVersion: 1 as const,
