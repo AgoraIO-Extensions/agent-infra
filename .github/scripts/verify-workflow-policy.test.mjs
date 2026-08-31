@@ -993,6 +993,48 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
 });
 
+test("configures both PR-Agent model timeouts from one Repository Variable", async () => {
+  const timeout = "${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}";
+  const actions = (workflows) => {
+    const workflow = workflows["pr-agent-review.yml"];
+    return [
+      workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent"),
+      workflow.jobs.suggestions.steps.find(
+        (step) => step.id === "pr-agent-suggestions",
+      ),
+    ];
+  };
+
+  const workflows = await actualWorkflows();
+  for (const action of actions(workflows)) {
+    assert.equal(action.env["config.ai_timeout"], timeout);
+  }
+
+  const invalidTimeouts = [
+    (review, _suggestions) => delete review.env["config.ai_timeout"],
+    (_review, suggestions) => delete suggestions.env["config.ai_timeout"],
+    (review, _suggestions) => {
+      review.env["config.ai_timeout"] =
+        "${{ vars.PR_AGENT_TIMEOUT_SECONDS || '120' }}";
+    },
+    (review, _suggestions) => {
+      review.env["config.ai_timeout"] = "240";
+    },
+    (review, _suggestions) => {
+      review.env["config.ai_timeout"] = "${{ secrets.PR_AGENT_AI_TIMEOUT_SECONDS }}";
+    },
+  ];
+  for (const mutate of invalidTimeouts) {
+    const invalid = await actualWorkflows();
+    mutate(...actions(invalid));
+    assert.ok(
+      validateWorkflowDocuments(invalid).some((error) =>
+        error.includes("official inline publishing"),
+      ),
+    );
+  }
+});
+
 test("publishes provider-aware Automated Review Coverage as a required Gate", async () => {
   const workflows = await actualWorkflows();
   const prAgent = workflows["pr-agent-review.yml"];
