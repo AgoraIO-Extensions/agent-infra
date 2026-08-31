@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type {
 	AgentAccessQueryV1,
+	AgentFailureCodeV1,
 	AgentManagementActorContextV1,
 	AgentManagementCommandV1,
 	AgentManagementDecisionV1,
@@ -116,11 +117,7 @@ interface ObservationFixture {
 	readonly fence?: number;
 	readonly requestId?: string;
 	readonly traceId?: string;
-	readonly failureCode?:
-		| "creation_not_ready"
-		| "health_check_failed"
-		| "workload_unavailable"
-		| "reconciliation_failed";
+	readonly failureCode?: AgentFailureCodeV1;
 }
 
 function observationFixture(
@@ -201,6 +198,7 @@ async function expectUnavailable(promise: Promise<unknown>): Promise<void> {
 	await expect(promise).rejects.toMatchObject({
 		name: "AgentManagementError",
 		code: "unavailable",
+		message: "Agent management is temporarily unavailable",
 	});
 }
 
