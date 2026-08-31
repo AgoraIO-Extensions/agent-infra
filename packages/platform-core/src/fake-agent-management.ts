@@ -24,7 +24,6 @@ interface CompletedCommand {
 
 function transactionKey(request: AgentManagementTransactionRequestV1): string {
 	return JSON.stringify([
-		request.operation,
 		request.subjectType,
 		request.subjectId,
 		request.actorId,

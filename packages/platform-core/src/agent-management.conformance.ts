@@ -1831,4 +1831,188 @@ export function agentManagementV1Conformance(
 			),
 		).rejects.toMatchObject({ code: "invalid_input" });
 	});
+
+	it("binds idempotency to subject, actor, and key across operations", async () => {
+		const applicationState = stateFixture({
+			status: "pending_approval",
+			applicationId: "application_cross_command_key",
+			agentId: "agent_cross_command_key",
+		});
+		const applicationManagement = await createManagement({
+			states: [applicationState],
+		});
+		expect(
+			await applicationManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "update_application",
+					applicationId: applicationState.applicationId,
+					expectedRevision: 1,
+					idempotencyKey: "cross-command-key",
+					requestId: "request_cross_command_update",
+					traceId: "trace_cross_command_update",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "accepted", result: { revision: 2 } });
+		expect(
+			await applicationManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "withdraw_application",
+					applicationId: applicationState.applicationId,
+					expectedRevision: 2,
+					idempotencyKey: "cross-command-key",
+					requestId: "request_cross_command_withdraw",
+					traceId: "trace_cross_command_withdraw",
+				},
+				applicant,
+			),
+		).toEqual({
+			outcome: "conflict",
+			reason: "idempotency_conflict",
+			writePlan: null,
+		});
+		expect(
+			await applicationManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "withdraw_application",
+					applicationId: applicationState.applicationId,
+					expectedRevision: 2,
+					idempotencyKey: "fresh-withdraw-key",
+					requestId: "request_fresh_withdraw",
+					traceId: "trace_fresh_withdraw",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "accepted", result: { status: "withdrawn" } });
+
+		const observationState = stateFixture({
+			agentId: "agent_cross_observation_id",
+		});
+		const observationManagement = await createManagement({
+			states: [observationState],
+		});
+		expect(
+			await observationManagement.recordWorkloadObservation({
+				schemaVersion: 1,
+				observationId: "cross-observation-id",
+				agentId: observationState.agentId,
+				observation: "service_starting",
+				expectedRevision: 1,
+				workloadRevision: 1,
+				fence: 1,
+				requestId: "request_service_starting",
+				traceId: "trace_service_starting",
+			}),
+		).toMatchObject({ outcome: "accepted", result: { revision: 2 } });
+		expect(
+			await observationManagement.recordWorkloadObservation({
+				schemaVersion: 1,
+				observationId: "cross-observation-id",
+				agentId: observationState.agentId,
+				observation: "service_ready",
+				expectedRevision: 2,
+				workloadRevision: 1,
+				fence: 1,
+				requestId: "request_service_ready_reused",
+				traceId: "trace_service_ready_reused",
+			}),
+		).toEqual({
+			outcome: "conflict",
+			reason: "idempotency_conflict",
+			writePlan: null,
+		});
+		expect(
+			await observationManagement.recordWorkloadObservation({
+				schemaVersion: 1,
+				observationId: "fresh-observation-id",
+				agentId: observationState.agentId,
+				observation: "service_ready",
+				expectedRevision: 2,
+				workloadRevision: 1,
+				fence: 1,
+				requestId: "request_service_ready_fresh",
+				traceId: "trace_service_ready_fresh",
+			}),
+		).toMatchObject({ outcome: "accepted", result: { revision: 3 } });
+
+		const actorState = stateFixture({
+			agentId: "agent_actor_key_scope",
+			ownerIds: [applicant.userId, "user_co_owner"],
+		});
+		const actorManagement = await createManagement({ states: [actorState] });
+		expect(
+			await actorManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: actorState.agentId,
+					expectedRevision: 1,
+					idempotencyKey: "actor-independent-key",
+					requestId: "request_actor_stop",
+					traceId: "trace_actor_stop",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "accepted", result: { status: "stopped" } });
+		expect(
+			await actorManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "restart_agent",
+					agentId: actorState.agentId,
+					expectedRevision: 2,
+					idempotencyKey: "actor-independent-key",
+					requestId: "request_actor_restart",
+					traceId: "trace_actor_restart",
+				},
+				{ ...applicant, userId: "user_co_owner" },
+			),
+		).toMatchObject({ outcome: "accepted", result: { status: "available" } });
+
+		const sharedSubject = "shared_subject_id";
+		const resourceManagement = await createManagement({
+			states: [
+				stateFixture({
+					status: "pending_approval",
+					applicationId: sharedSubject,
+					agentId: "agent_for_shared_application",
+				}),
+				stateFixture({
+					applicationId: "application_for_shared_agent",
+					agentId: sharedSubject,
+				}),
+			],
+		});
+		expect(
+			await resourceManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "update_application",
+					applicationId: sharedSubject,
+					expectedRevision: 1,
+					idempotencyKey: "resource-independent-key",
+					requestId: "request_resource_application",
+					traceId: "trace_resource_application",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		expect(
+			await resourceManagement.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: sharedSubject,
+					expectedRevision: 1,
+					idempotencyKey: "resource-independent-key",
+					requestId: "request_resource_agent",
+					traceId: "trace_resource_agent",
+				},
+				applicant,
+			),
+		).toMatchObject({ outcome: "accepted" });
+	});
 }
