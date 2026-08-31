@@ -99,6 +99,7 @@ export interface AgentConfigurationConformanceSnapshotV1 {
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
+	readonly idempotencyCount: number;
 }
 
 export interface AgentConfigurationConformanceHarnessV1 {
@@ -112,6 +113,7 @@ const actor = { schemaVersion: 1 as const, actorId: "owner_01" };
 const command = {
 	schemaVersion: 1 as const,
 	agentId: "agent_01",
+	idempotencyKey: "configuration-update-01",
 	requestId: "request_01",
 	traceId: "trace_01",
 };
@@ -242,13 +244,16 @@ export function agentConfigurationUseCaseConformance(
 					actor,
 				),
 			).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
-			expect((await harness.snapshot()).commitCount).toBe(0);
+			const snapshot = await harness.snapshot();
+			expect(snapshot.commitCount).toBe(0);
+			expect(snapshot.idempotencyCount).toBe(0);
+			expect(snapshot.lastPlan).toBeNull();
 		} finally {
 			await harness.close();
 		}
 	});
 
-	it("reports a conditional-commit race as stale without state effects", async () => {
+	it("rejects a stale base revision when conditional commit sees newer state", async () => {
 		const harness = await createHarness();
 		try {
 			await harness.failNextCommitAsStale();
@@ -263,7 +268,62 @@ export function agentConfigurationUseCaseConformance(
 					actor,
 				),
 			).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
-			expect((await harness.snapshot()).commitCount).toBe(0);
+			const snapshot = await harness.snapshot();
+			expect(snapshot.commitCount).toBe(0);
+			expect(snapshot.idempotencyCount).toBe(0);
+			expect(snapshot.lastPlan).toBeNull();
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("replays one Agent-actor-key digest and rejects conflicting reuse", async () => {
+		const harness = await createHarness();
+		try {
+			const idempotent = {
+				...command,
+				idempotencyKey: "configuration-update-01",
+				changes: {
+					environment: [{ name: "LOG_LEVEL", value: "debug" }],
+				},
+			};
+			const first = await harness.useCase.update(idempotent, actor);
+			await expect(harness.useCase.update(idempotent, actor)).resolves.toEqual(
+				first,
+			);
+			let snapshot = await harness.snapshot();
+			expect(snapshot.commitCount).toBe(1);
+			expect(snapshot.idempotencyCount).toBe(1);
+			expect(snapshot.lastPlan).toMatchObject({
+				idempotency: {
+					key: "configuration-update-01",
+					requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+				},
+				result: first,
+			});
+
+			await expect(
+				harness.useCase.update(
+					{
+						...idempotent,
+						changes: {
+							environment: [{ name: "LOG_LEVEL", value: "warn" }],
+						},
+					} as never,
+					actor,
+				),
+			).rejects.toEqual(
+				expect.objectContaining({ code: "idempotency_conflict" }),
+			);
+			snapshot = await harness.snapshot();
+			expect(snapshot.commitCount).toBe(1);
+			await expect(
+				harness.useCase.update(idempotent, {
+					schemaVersion: 1,
+					actorId: "other_owner",
+				}),
+			).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
+			expect((await harness.snapshot()).commitCount).toBe(1);
 		} finally {
 			await harness.close();
 		}

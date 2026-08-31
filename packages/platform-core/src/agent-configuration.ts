@@ -1,4 +1,10 @@
 import { Buffer } from "node:buffer";
+import type {
+	AgentManagementActorContextV1,
+	AgentManagementStateV1,
+} from "./agent-management.js";
+import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.js";
+import { platformIdempotencyV1 } from "./idempotency.js";
 
 export type AgentConfigurationSourceV1 =
 	| {
@@ -118,12 +124,32 @@ export interface AgentConfigurationSecretReplacementInputV1 {
 	readonly replace: true;
 }
 
+export type AgentConfigurationAccessTargetV1 =
+	| { readonly kind: "user"; readonly userId: string }
+	| { readonly kind: "organization"; readonly organizationId: string };
+
+export interface AgentConfigurationAccessAuthorityV1 {
+	readonly state: AgentManagementStateV1;
+	readonly actorContext: AgentManagementActorContextV1;
+	readonly authorityContext: {
+		readonly schemaVersion: 1;
+		readonly users: readonly {
+			readonly userId: string;
+			readonly accountStatus: "active" | "disabled" | "revoked";
+		}[];
+		readonly organizationIds: readonly string[];
+	};
+}
+
 export interface UpdateAgentConfigurationCommandV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
+	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly changes: {
+		readonly ownerIds?: readonly string[];
+		readonly availability?: readonly AgentConfigurationAccessTargetV1[];
 		readonly source?: AgentConfigurationSourceSelectionV1;
 		readonly modelConfiguration?: AgentConfigurationModelInputV1;
 		readonly environment?: readonly {
@@ -147,7 +173,25 @@ export type AgentConfigurationChangedFieldV1 =
 	| "modelConfiguration"
 	| "secrets"
 	| "actions"
-	| "channels";
+	| "channels"
+	| "owners"
+	| "availability";
+
+export interface AgentConfigurationAccessPlanV1 {
+	readonly schemaVersion: 1;
+	readonly fragmentType: "agent_access";
+	readonly agentId: string;
+	readonly expectedRevision: number;
+	readonly ownerIds: readonly string[];
+	readonly availability: readonly AgentConfigurationAccessTargetV1[];
+}
+
+export interface AgentConfigurationResultV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly revision: number;
+	readonly changedFields: readonly AgentConfigurationChangedFieldV1[];
+}
 
 export interface AgentConfigurationWritePlanV1 {
 	readonly schemaVersion: 1;
@@ -156,6 +200,12 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly nextRevision: number;
 	readonly authorizationRevision: string;
 	readonly configuration: AgentConfigurationRecordV1;
+	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
+	readonly result: AgentConfigurationResultV1;
+	readonly idempotency: {
+		readonly key: string;
+		readonly requestDigest: string;
+	};
 	readonly outboxIntent: {
 		readonly operation: "agent.configuration.revised.v1";
 		readonly payload: {
@@ -170,9 +220,11 @@ export interface AgentConfigurationWritePlanV1 {
 		readonly occurredAt: Date;
 	};
 	readonly auditEvent: {
-		readonly action: "agent.configuration.revised";
+		readonly action: "agent.configuration.revised" | "agent.access.updated";
 		readonly actorId: string;
 		readonly agentId: string;
+		readonly subjectType: "agent";
+		readonly subjectId: string;
 		readonly changedFields: readonly AgentConfigurationChangedFieldV1[];
 		readonly traceId: string;
 		readonly requestId: string;
@@ -181,8 +233,36 @@ export interface AgentConfigurationWritePlanV1 {
 }
 
 export interface AgentConfigurationTransactionPortV1 {
-	read(agentId: string): Promise<AgentConfigurationRecordV1 | null>;
-	commit(plan: AgentConfigurationWritePlanV1): Promise<"committed" | "stale">;
+	read(input: {
+		readonly schemaVersion: 1;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly idempotencyKey: string;
+		readonly requestDigest: string;
+	}): Promise<
+		| {
+				readonly outcome: "ready";
+				readonly configuration: AgentConfigurationRecordV1;
+		  }
+		| { readonly outcome: "missing" }
+		| {
+				readonly outcome: "replayed";
+				readonly result: AgentConfigurationResultV1;
+		  }
+		| { readonly outcome: "idempotency_conflict" }
+	>;
+	commit(plan: AgentConfigurationWritePlanV1): Promise<
+		| {
+				readonly outcome: "committed";
+				readonly result: AgentConfigurationResultV1;
+		  }
+		| {
+				readonly outcome: "replayed";
+				readonly result: AgentConfigurationResultV1;
+		  }
+		| { readonly outcome: "stale" }
+		| { readonly outcome: "idempotency_conflict" }
+	>;
 }
 
 export interface AgentConfigurationAuthorizationAdmissionPortV1 {
@@ -199,6 +279,7 @@ export interface AgentConfigurationAuthorizationAdmissionPortV1 {
 				readonly agentId: string;
 				readonly actorId: string;
 				readonly authorizationRevision: string;
+				readonly accessAuthority?: AgentConfigurationAccessAuthorityV1;
 		  }
 		| {
 				readonly schemaVersion: 1;
@@ -338,12 +419,7 @@ export interface AgentConfigurationUseCaseV1 {
 	update(
 		command: UpdateAgentConfigurationCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
-	): Promise<{
-		readonly schemaVersion: 1;
-		readonly agentId: string;
-		readonly revision: number;
-		readonly changedFields: readonly AgentConfigurationChangedFieldV1[];
-	}>;
+	): Promise<AgentConfigurationResultV1>;
 }
 
 export type AgentConfigurationErrorCode =
@@ -352,6 +428,7 @@ export type AgentConfigurationErrorCode =
 	| "not_admitted"
 	| "no_change"
 	| "stale_revision"
+	| "idempotency_conflict"
 	| "dependency_unavailable"
 	| "persistence_failed";
 
@@ -387,6 +464,7 @@ const maxEnvironmentEntries = 128;
 const maxSecretReplacements = 128;
 const maxActions = 256;
 const maxChannelChanges = 2;
+const maxAccessTargets = 256;
 const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
 
@@ -798,10 +876,60 @@ function canonicalChannelBindings(
 		.toSorted((left, right) => left.kind.localeCompare(right.kind));
 }
 
+function parseOwnerIds(input: unknown): string[] {
+	return denseArray(input, maxAccessTargets)
+		.map((ownerId) => {
+			if (!isText(ownerId, idMaxBytes)) invalidCommand();
+			return ownerId;
+		})
+		.toSorted();
+}
+
+function accessTargetKey(target: AgentConfigurationAccessTargetV1): string {
+	return target.kind === "user"
+		? `user:${target.userId}`
+		: `organization:${target.organizationId}`;
+}
+
+function parseAvailability(input: unknown): AgentConfigurationAccessTargetV1[] {
+	return denseArray(input, maxAccessTargets)
+		.map((targetInput) => {
+			const target = exactObject(
+				targetInput,
+				["kind"],
+				["userId", "organizationId"],
+			);
+			if (target.kind === "user") {
+				if (
+					!isText(target.userId, idMaxBytes) ||
+					Object.keys(target).length !== 2
+				) {
+					invalidCommand();
+				}
+				return { kind: "user" as const, userId: target.userId };
+			}
+			if (
+				target.kind !== "organization" ||
+				!isText(target.organizationId, idMaxBytes) ||
+				Object.keys(target).length !== 2
+			) {
+				invalidCommand();
+			}
+			return {
+				kind: "organization" as const,
+				organizationId: target.organizationId,
+			};
+		})
+		.toSorted((left, right) =>
+			accessTargetKey(left).localeCompare(accessTargetKey(right)),
+		);
+}
+
 function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	const values = exactObject(command, [
 		"schemaVersion",
 		"agentId",
+		"idempotencyKey",
 		"requestId",
 		"traceId",
 		"changes",
@@ -809,6 +937,8 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	if (
 		values.schemaVersion !== 1 ||
 		!isText(values.agentId, idMaxBytes) ||
+		!isText(values.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
 		!isText(values.requestId, idMaxBytes) ||
 		!isText(values.traceId, idMaxBytes)
 	) {
@@ -818,6 +948,8 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 		values.changes,
 		[],
 		[
+			"ownerIds",
+			"availability",
 			"source",
 			"modelConfiguration",
 			"environment",
@@ -829,9 +961,16 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	return {
 		schemaVersion: 1,
 		agentId: values.agentId,
+		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
 		changes: {
+			...(Object.hasOwn(changes, "ownerIds")
+				? { ownerIds: parseOwnerIds(changes.ownerIds) }
+				: {}),
+			...(Object.hasOwn(changes, "availability")
+				? { availability: parseAvailability(changes.availability) }
+				: {}),
 			...(Object.hasOwn(changes, "source")
 				? { source: parseSourceSelection(changes.source) }
 				: {}),
@@ -980,6 +1119,56 @@ function sameModelConfiguration(
 	);
 }
 
+function requestDigest(
+	command: UpdateAgentConfigurationCommandV1,
+	actorId: string,
+): string {
+	try {
+		return platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			operation: "agent.configuration.update.v1",
+			agentId: command.agentId,
+			actorId,
+			changes: command.changes as never,
+		});
+	} catch {
+		invalidCommand();
+	}
+}
+
+function parseResult(
+	result: AgentConfigurationResultV1,
+	agentId: string,
+): AgentConfigurationResultV1 {
+	if (
+		result.schemaVersion !== 1 ||
+		result.agentId !== agentId ||
+		!Number.isSafeInteger(result.revision) ||
+		result.revision < 0 ||
+		!Array.isArray(result.changedFields) ||
+		result.changedFields.length === 0 ||
+		new Set(result.changedFields).size !== result.changedFields.length ||
+		result.changedFields.some(
+			(field) =>
+				!(
+					[
+						"source",
+						"environment",
+						"modelConfiguration",
+						"secrets",
+						"actions",
+						"channels",
+						"owners",
+						"availability",
+					] as readonly unknown[]
+				).includes(field),
+		)
+	) {
+		throw new AgentConfigurationError("persistence_failed");
+	}
+	return structuredClone(result);
+}
+
 const systemNow = () => new Date();
 
 export function createAgentConfigurationUseCaseV1(
@@ -991,15 +1180,34 @@ export function createAgentConfigurationUseCaseV1(
 		async update(commandInput, actorContextInput) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
-			let current: AgentConfigurationRecordV1 | null;
+			const digest = requestDigest(command, actorContext.actorId);
+			let readDecision: Awaited<
+				ReturnType<AgentConfigurationTransactionPortV1["read"]>
+			>;
 			try {
-				current = await dependencies.transaction.read(command.agentId);
+				readDecision = await dependencies.transaction.read({
+					schemaVersion: 1,
+					agentId: command.agentId,
+					actorId: actorContext.actorId,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: digest,
+				});
 			} catch {
 				throw new AgentConfigurationError("persistence_failed");
 			}
-			if (!current || current.agentId !== command.agentId) {
+			if (readDecision.outcome === "replayed") {
+				return parseResult(readDecision.result, command.agentId);
+			}
+			if (readDecision.outcome === "idempotency_conflict") {
+				throw new AgentConfigurationError("idempotency_conflict");
+			}
+			if (
+				readDecision.outcome === "missing" ||
+				readDecision.configuration.agentId !== command.agentId
+			) {
 				throw new AgentConfigurationError("not_authorized");
 			}
+			const current = readDecision.configuration;
 			let authorization: Awaited<
 				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
 			>;
@@ -1024,8 +1232,89 @@ export function createAgentConfigurationUseCaseV1(
 				throw new AgentConfigurationError("not_authorized");
 			}
 
-			let source = current.source;
+			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 			const changedFields: AgentConfigurationChangedFieldV1[] = [];
+			if (
+				command.changes.ownerIds !== undefined ||
+				command.changes.availability !== undefined
+			) {
+				const access = authorization.accessAuthority;
+				if (
+					!access ||
+					access.state.agentId !== command.agentId ||
+					access.actorContext.userId !== actorContext.actorId
+				) {
+					throw new AgentConfigurationError("dependency_unavailable");
+				}
+				let decision: ReturnType<typeof decideAgentAccessUpdatePolicy>;
+				try {
+					decision = decideAgentAccessUpdatePolicy(
+						{
+							schemaVersion: 1,
+							agentId: command.agentId,
+							expectedRevision: access.state.revision,
+							desiredOwnerIds:
+								command.changes.ownerIds ?? access.state.ownerIds,
+							desiredAvailability:
+								command.changes.availability ?? access.state.availability,
+							requestId: command.requestId,
+							traceId: command.traceId,
+						},
+						access.state,
+						access.actorContext,
+						access.authorityContext,
+					);
+				} catch {
+					throw new AgentConfigurationError("dependency_unavailable");
+				}
+				if (decision.outcome === "denied") {
+					throw new AgentConfigurationError("not_authorized");
+				}
+				if (decision.outcome === "conflict") {
+					if (decision.reason === "stale_revision") {
+						throw new AgentConfigurationError("stale_revision");
+					}
+					if (decision.reason !== "no_change") {
+						throw new AgentConfigurationError("not_admitted");
+					}
+				} else {
+					const fragment = decision.planFragment;
+					if (
+						fragment.agentId !== command.agentId ||
+						fragment.expectedRevision !== access.state.revision ||
+						fragment.auditEvent.actorId !== actorContext.actorId ||
+						fragment.auditEvent.subjectType !== "agent" ||
+						fragment.auditEvent.subjectId !== command.agentId ||
+						fragment.auditEvent.requestId !== command.requestId ||
+						fragment.auditEvent.traceId !== command.traceId
+					) {
+						throw new AgentConfigurationError("dependency_unavailable");
+					}
+					accessUpdate = {
+						schemaVersion: 1,
+						fragmentType: "agent_access",
+						agentId: fragment.agentId,
+						expectedRevision: fragment.expectedRevision,
+						ownerIds: fragment.ownerIds,
+						availability: fragment.availability,
+					};
+					if (
+						!sameValue(fragment.ownerIds, [...access.state.ownerIds].sort())
+					) {
+						changedFields.push("owners");
+					}
+					if (
+						!sameValue(
+							fragment.availability.map(accessTargetKey).sort(),
+							access.state.availability.map(accessTargetKey).sort(),
+						)
+					) {
+						changedFields.push("availability");
+					}
+				}
+			}
+
+			let source = current.source;
 			if (command.changes.source) {
 				let admission: Awaited<
 					ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>
@@ -1403,6 +1692,12 @@ export function createAgentConfigurationUseCaseV1(
 				channels,
 				channelRevision,
 			};
+			const result: AgentConfigurationResultV1 = {
+				schemaVersion: 1,
+				agentId: command.agentId,
+				revision: nextRevision,
+				changedFields,
+			};
 			const plan: AgentConfigurationWritePlanV1 = {
 				schemaVersion: 1,
 				agentId: command.agentId,
@@ -1410,6 +1705,12 @@ export function createAgentConfigurationUseCaseV1(
 				nextRevision,
 				authorizationRevision: authorization.authorizationRevision,
 				configuration,
+				accessUpdate,
+				result,
+				idempotency: {
+					key: command.idempotencyKey,
+					requestDigest: digest,
+				},
 				outboxIntent: {
 					operation: "agent.configuration.revised.v1",
 					payload: {
@@ -1424,33 +1725,38 @@ export function createAgentConfigurationUseCaseV1(
 					occurredAt,
 				},
 				auditEvent: {
-					action: "agent.configuration.revised",
+					action:
+						accessUpdate !== null &&
+						changedFields.every(
+							(field) => field === "owners" || field === "availability",
+						)
+							? "agent.access.updated"
+							: "agent.configuration.revised",
 					actorId: actorContext.actorId,
 					agentId: command.agentId,
+					subjectType: "agent",
+					subjectId: command.agentId,
 					changedFields,
 					traceId: command.traceId,
 					requestId: command.requestId,
 					occurredAt,
 				},
 			};
-			let decision: "committed" | "stale";
+			let decision: Awaited<
+				ReturnType<AgentConfigurationTransactionPortV1["commit"]>
+			>;
 			try {
 				decision = await dependencies.transaction.commit(plan);
 			} catch {
 				throw new AgentConfigurationError("persistence_failed");
 			}
-			if (decision === "stale") {
+			if (decision.outcome === "stale") {
 				throw new AgentConfigurationError("stale_revision");
 			}
-			if (decision !== "committed") {
-				throw new AgentConfigurationError("persistence_failed");
+			if (decision.outcome === "idempotency_conflict") {
+				throw new AgentConfigurationError("idempotency_conflict");
 			}
-			return {
-				schemaVersion: 1,
-				agentId: command.agentId,
-				revision: nextRevision,
-				changedFields,
-			};
+			return parseResult(decision.result, command.agentId);
 		},
 	};
 }

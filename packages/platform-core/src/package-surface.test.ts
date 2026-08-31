@@ -27,9 +27,11 @@ describe("platform-core package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
+			"AgentConfigurationError",
 			"AgentManagementError",
 			"ApplicationFoundationError",
 			"PlatformIdempotencyError",
+			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
 			"platformIdempotencyV1",
@@ -38,6 +40,8 @@ describe("platform-core package surface", () => {
 			new URL("../dist/testing.mjs", import.meta.url).href
 		);
 		expect(Object.keys(testingSurface).toSorted()).toEqual([
+			"FakeAgentConfigurationAdmissionsV1",
+			"FakeAgentConfigurationTransactionV1",
 			"FakeAgentManagementV1",
 			"FakeApplicationFoundationTransactionV1",
 			"FakePlatformIdempotencyDatabaseV1",
@@ -54,6 +58,7 @@ describe("platform-core package surface", () => {
 			"utf8",
 		);
 		expect(managementSource).not.toContain("agent-management-access-policy");
+		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(
 				surface.createApplicationFoundationUseCaseV1(

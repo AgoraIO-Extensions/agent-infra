@@ -1,10 +1,12 @@
 import type {
+	AgentConfigurationAccessAuthorityV1,
 	AgentConfigurationActionAdmissionPortV1,
 	AgentConfigurationAuthorizationAdmissionPortV1,
 	AgentConfigurationChannelAdmissionPortV1,
 	AgentConfigurationImageAdmissionPortV1,
 	AgentConfigurationModelAdmissionPortV1,
 	AgentConfigurationRecordV1,
+	AgentConfigurationResultV1,
 	AgentConfigurationSecretAdmissionPortV1,
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationWritePlanV1,
@@ -14,6 +16,7 @@ export interface FakeAgentConfigurationSnapshotV1 {
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
+	readonly idempotencyCount: number;
 }
 
 export class FakeAgentConfigurationTransactionV1
@@ -23,34 +26,69 @@ export class FakeAgentConfigurationTransactionV1
 	#commitCount = 0;
 	#lastPlan: AgentConfigurationWritePlanV1 | null = null;
 	#failCommitAsStale = false;
+	#idempotency = new Map<
+		string,
+		{ requestDigest: string; result: AgentConfigurationResultV1 }
+	>();
 
 	constructor(configuration: AgentConfigurationRecordV1) {
 		this.#configuration = structuredClone(configuration);
 	}
 
-	async read(agentId: string): Promise<AgentConfigurationRecordV1 | null> {
-		return this.#configuration.agentId === agentId
-			? structuredClone(this.#configuration)
-			: null;
+	async read(
+		input: Parameters<AgentConfigurationTransactionPortV1["read"]>[0],
+	): ReturnType<AgentConfigurationTransactionPortV1["read"]> {
+		const scope = this.#idempotencyScope(
+			input.agentId,
+			input.actorId,
+			input.idempotencyKey,
+		);
+		const existing = this.#idempotency.get(scope);
+		if (existing) {
+			return existing.requestDigest === input.requestDigest
+				? { outcome: "replayed", result: structuredClone(existing.result) }
+				: { outcome: "idempotency_conflict" };
+		}
+		return this.#configuration.agentId === input.agentId
+			? {
+					outcome: "ready",
+					configuration: structuredClone(this.#configuration),
+				}
+			: { outcome: "missing" };
 	}
 
 	async commit(
 		plan: AgentConfigurationWritePlanV1,
-	): Promise<"committed" | "stale"> {
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		const scope = this.#idempotencyScope(
+			plan.agentId,
+			plan.auditEvent.actorId,
+			plan.idempotency.key,
+		);
+		const existing = this.#idempotency.get(scope);
+		if (existing) {
+			return existing.requestDigest === plan.idempotency.requestDigest
+				? { outcome: "replayed", result: structuredClone(existing.result) }
+				: { outcome: "idempotency_conflict" };
+		}
 		if (this.#failCommitAsStale) {
 			this.#failCommitAsStale = false;
-			return "stale";
+			return { outcome: "stale" };
 		}
 		if (
 			plan.agentId !== this.#configuration.agentId ||
 			plan.baseRevision !== this.#configuration.revision
 		) {
-			return "stale";
+			return { outcome: "stale" };
 		}
 		this.#configuration = structuredClone(plan.configuration);
 		this.#lastPlan = structuredClone(plan);
 		this.#commitCount += 1;
-		return "committed";
+		this.#idempotency.set(scope, {
+			requestDigest: plan.idempotency.requestDigest,
+			result: structuredClone(plan.result),
+		});
+		return { outcome: "committed", result: structuredClone(plan.result) };
 	}
 
 	failNextCommitAsStale(): void {
@@ -62,7 +100,12 @@ export class FakeAgentConfigurationTransactionV1
 			configuration: this.#configuration,
 			commitCount: this.#commitCount,
 			lastPlan: this.#lastPlan,
+			idempotencyCount: this.#idempotency.size,
 		});
+	}
+
+	#idempotencyScope(agentId: string, actorId: string, key: string): string {
+		return `${agentId}\0${actorId}\0${key}`;
 	}
 }
 
@@ -71,6 +114,7 @@ export interface FakeAgentConfigurationAdmissionsOptionsV1 {
 		readonly agentId: string;
 		readonly actorId: string;
 		readonly authorizationRevision: string;
+		readonly accessAuthority?: AgentConfigurationAccessAuthorityV1;
 	}[];
 	readonly models: readonly {
 		readonly endpointId: string;

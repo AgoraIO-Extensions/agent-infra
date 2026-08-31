@@ -11,6 +11,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
 } from "./agent-configuration.ts";
+import type { AgentManagementStateV1 } from "./agent-management.ts";
 import {
 	type FakeAgentConfigurationAdmissionsOptionsV1,
 	FakeAgentConfigurationAdmissionsV1,
@@ -22,8 +23,46 @@ const actor = { schemaVersion: 1 as const, actorId: "owner_01" };
 const command = {
 	schemaVersion: 1 as const,
 	agentId: "agent_01",
+	idempotencyKey: "configuration-update-01",
 	requestId: "request_01",
 	traceId: "trace_01",
+};
+
+const accessState: AgentManagementStateV1 = {
+	schemaVersion: 1,
+	applicationId: "application_01",
+	agentId: "agent_01",
+	applicantId: "owner_01",
+	status: "available",
+	revision: 11,
+	approvalRevision: 1,
+	decisionReason: null,
+	serviceAvailability: "ready",
+	desiredState: "running",
+	workloadRevision: 1,
+	fence: 1,
+	ownerIds: ["owner_01"],
+	availability: [],
+	failureCode: null,
+};
+
+const accessAuthority = {
+	state: accessState,
+	actorContext: {
+		schemaVersion: 1 as const,
+		userId: "owner_01",
+		accountStatus: "active" as const,
+		organizationIds: ["org_platform"],
+		isAdministrator: false,
+	},
+	authorityContext: {
+		schemaVersion: 1 as const,
+		users: [
+			{ userId: "owner_01", accountStatus: "active" as const },
+			{ userId: "owner_02", accountStatus: "active" as const },
+		],
+		organizationIds: ["org_platform"],
+	},
 };
 
 interface HarnessOptions {
@@ -72,6 +111,141 @@ describe("Agent configuration conformance", () => {
 });
 
 describe("Agent configuration policy", () => {
+	it("commits Owner and availability changes as one atomic access fragment", async () => {
+		const authorizations = [
+			{
+				agentId: "agent_01",
+				actorId: "owner_01",
+				authorizationRevision: "authorization_9",
+				accessAuthority,
+			},
+		] as never;
+		const harness = createHarness({ admissions: { authorizations } });
+		const accessCommand = {
+			...command,
+			changes: {
+				ownerIds: ["owner_02", "owner_01"],
+				availability: [
+					{ kind: "organization" as const, organizationId: "org_platform" },
+				],
+			},
+		};
+		const accessResult = await harness.useCase.update(accessCommand, actor);
+		expect(accessResult).toMatchObject({
+			revision: 8,
+			changedFields: ["availability", "owners"],
+		});
+		await expect(harness.useCase.update(accessCommand, actor)).resolves.toEqual(
+			accessResult,
+		);
+		const snapshot = harness.transaction.snapshot();
+		expect(snapshot.commitCount).toBe(1);
+		expect(snapshot.lastPlan).toMatchObject({
+			baseRevision: 7,
+			nextRevision: 8,
+			accessUpdate: {
+				schemaVersion: 1,
+				fragmentType: "agent_access",
+				agentId: "agent_01",
+				expectedRevision: 11,
+				ownerIds: ["owner_01", "owner_02"],
+				availability: [
+					{ kind: "organization", organizationId: "org_platform" },
+				],
+			},
+			auditEvent: { action: "agent.access.updated" },
+			outboxIntent: {
+				payload: { changedFields: ["availability", "owners"] },
+			},
+		});
+		expect(snapshot.lastPlan?.accessUpdate).not.toHaveProperty("auditEvent");
+
+		const combined = createHarness({ admissions: { authorizations } });
+		const combinedCommand = {
+			...command,
+			idempotencyKey: "configuration-access-combined-01",
+			changes: {
+				ownerIds: ["owner_01", "owner_02"],
+				environment: [{ name: "LOG_LEVEL", value: "debug" }],
+			},
+		};
+		const combinedResult = await combined.useCase.update(
+			combinedCommand,
+			actor,
+		);
+		await expect(
+			combined.useCase.update(combinedCommand, actor),
+		).resolves.toEqual(combinedResult);
+		expect(combined.transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			lastPlan: {
+				accessUpdate: { ownerIds: ["owner_01", "owner_02"] },
+				auditEvent: {
+					action: "agent.configuration.revised",
+					changedFields: ["environment", "owners"],
+				},
+				idempotency: { key: "configuration-access-combined-01" },
+			},
+		});
+
+		const rejected = createHarness({ admissions: { authorizations } });
+		await expect(
+			rejected.useCase.update(
+				{
+					...command,
+					changes: { ownerIds: ["owner_01"] },
+					authorityContext: accessAuthority.authorityContext,
+					expectedRevision: 11,
+				} as never,
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
+		expect(rejected.transaction.snapshot().commitCount).toBe(0);
+
+		const partial = createHarness({
+			admissions: {
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "owner_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority: {
+							...accessAuthority,
+							authorityContext: {
+								...accessAuthority.authorityContext,
+								users: [
+									...accessAuthority.authorityContext.users,
+									{
+										userId: "owner_revoked",
+										accountStatus: "revoked",
+									},
+								],
+							},
+						},
+					},
+				] as never,
+			},
+		});
+		await expect(
+			partial.useCase.update(
+				{
+					...command,
+					idempotencyKey: "configuration-access-partial-01",
+					changes: {
+						ownerIds: ["owner_01", "owner_revoked"],
+						environment: [{ name: "LOG_LEVEL", value: "debug" }],
+					},
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		expect(partial.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			idempotencyCount: 0,
+			lastPlan: null,
+		});
+	});
+
 	it("rejects malformed, removed, and unapproved model choices", async () => {
 		const model = {
 			options: [
