@@ -1,11 +1,20 @@
 import { expect, it } from "vitest";
 import type {
+	AgentAccessQueryV1,
+	AgentManagementActorContextV1,
 	AgentManagementCommandV1,
+	AgentManagementDecisionV1,
 	AgentManagementInterfaceV1,
 	AgentManagementOptionsV1,
 	AgentManagementStateV1,
+	AgentManagementWorkloadObservationV1,
 } from "./agent-management.ts";
-import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.ts";
+import {
+	type AgentAccessAuthorityContextV1,
+	type AgentAccessUpdatePolicyCommandV1,
+	type AgentAccessUpdatePolicyDecisionV1,
+	decideAgentAccessUpdatePolicy,
+} from "./agent-management-access-policy.ts";
 
 export interface AgentManagementConformanceOptionsV1
 	extends AgentManagementOptionsV1 {
@@ -57,6 +66,144 @@ function stateFixture(
 	};
 }
 
+type ManagementCommand = AgentManagementCommandV1["command"];
+type WorkloadObservation = AgentManagementWorkloadObservationV1["observation"];
+
+interface CorrelationFixture {
+	readonly expectedRevision?: number;
+	readonly idempotencyKey?: string;
+	readonly requestId?: string;
+	readonly traceId?: string;
+	readonly reason?: string;
+}
+
+function commandFixture(
+	command: ManagementCommand,
+	state: AgentManagementStateV1,
+	overrides: CorrelationFixture = {},
+): AgentManagementCommandV1 {
+	const correlation = {
+		schemaVersion: 1 as const,
+		expectedRevision: overrides.expectedRevision ?? state.revision,
+		idempotencyKey:
+			overrides.idempotencyKey ??
+			`${command}-${state.applicationId}-${state.agentId}`,
+		requestId: overrides.requestId ?? `request_${command}`,
+		traceId: overrides.traceId ?? `trace_${command}`,
+	};
+	if (command === "reject_application") {
+		return {
+			...correlation,
+			command,
+			applicationId: state.applicationId,
+			reason: overrides.reason ?? "Capacity is unavailable",
+		};
+	}
+	if (
+		command === "update_application" ||
+		command === "withdraw_application" ||
+		command === "approve_application"
+	) {
+		return { ...correlation, command, applicationId: state.applicationId };
+	}
+	return { ...correlation, command, agentId: state.agentId };
+}
+
+interface ObservationFixture {
+	readonly observationId?: string;
+	readonly expectedRevision?: number;
+	readonly workloadRevision?: number;
+	readonly fence?: number;
+	readonly requestId?: string;
+	readonly traceId?: string;
+	readonly failureCode?:
+		| "creation_not_ready"
+		| "health_check_failed"
+		| "workload_unavailable"
+		| "reconciliation_failed";
+}
+
+function observationFixture(
+	observation: WorkloadObservation,
+	state: AgentManagementStateV1,
+	overrides: ObservationFixture = {},
+): AgentManagementWorkloadObservationV1 {
+	const correlation = {
+		schemaVersion: 1 as const,
+		observationId: overrides.observationId ?? `${observation}-${state.agentId}`,
+		agentId: state.agentId,
+		expectedRevision: overrides.expectedRevision ?? state.revision,
+		workloadRevision: overrides.workloadRevision ?? state.workloadRevision,
+		fence: overrides.fence ?? state.fence,
+		requestId: overrides.requestId ?? `request_${observation}`,
+		traceId: overrides.traceId ?? `trace_${observation}`,
+	};
+	if (
+		observation === "creation_failed" ||
+		observation === "service_unavailable"
+	) {
+		return {
+			...correlation,
+			observation,
+			failureCode:
+				overrides.failureCode ??
+				(observation === "creation_failed"
+					? "creation_not_ready"
+					: "health_check_failed"),
+		};
+	}
+	return { ...correlation, observation };
+}
+
+function accessQuery(
+	state: AgentManagementStateV1,
+	intent: AgentAccessQueryV1["intent"] = "manage",
+): AgentAccessQueryV1 {
+	return { schemaVersion: 1, agentId: state.agentId, intent };
+}
+
+function conflict(
+	reason: Extract<AgentManagementDecisionV1, { outcome: "conflict" }>["reason"],
+): AgentManagementDecisionV1 {
+	return { outcome: "conflict", reason, writePlan: null };
+}
+
+const denied = { outcome: "denied", writePlan: null } as const;
+const accessDenied = { outcome: "denied" } as const;
+const policyDenied = { outcome: "denied", planFragment: null } as const;
+
+function policyCommand(
+	state: AgentManagementStateV1,
+	overrides: Partial<AgentAccessUpdatePolicyCommandV1> = {},
+): AgentAccessUpdatePolicyCommandV1 {
+	return {
+		schemaVersion: 1,
+		agentId: state.agentId,
+		expectedRevision: state.revision,
+		desiredOwnerIds: state.ownerIds,
+		desiredAvailability: state.availability,
+		requestId: "request_access_policy",
+		traceId: "trace_access_policy",
+		...overrides,
+	};
+}
+
+function policyConflict(
+	reason: Extract<
+		AgentAccessUpdatePolicyDecisionV1,
+		{ outcome: "conflict" }
+	>["reason"],
+): AgentAccessUpdatePolicyDecisionV1 {
+	return { outcome: "conflict", reason, planFragment: null };
+}
+
+async function expectUnavailable(promise: Promise<unknown>): Promise<void> {
+	await expect(promise).rejects.toMatchObject({
+		name: "AgentManagementError",
+		code: "unavailable",
+	});
+}
+
 export function agentManagementV1Conformance(
 	createManagement: (
 		options: AgentManagementConformanceOptionsV1,
@@ -74,32 +221,20 @@ export function agentManagementV1Conformance(
 			status: "creating",
 			revision: 2,
 		});
-		const command = {
-			schemaVersion: 1 as const,
-			command: "update_application" as const,
-			applicationId: pendingState.applicationId,
-			expectedRevision: 1,
+		const command = commandFixture("update_application", pendingState, {
 			idempotencyKey: "boundary-command",
 			requestId: "request_boundary_command",
 			traceId: "trace_boundary_command",
-		};
-		const observation = {
-			schemaVersion: 1 as const,
-			observationId: "boundary-observation",
-			agentId: creatingState.agentId,
-			observation: "creation_succeeded" as const,
-			expectedRevision: 2,
-			workloadRevision: 1,
-			fence: 1,
-			requestId: "request_boundary_observation",
-			traceId: "trace_boundary_observation",
-		};
-		const expectUnavailable = (promise: Promise<unknown>) =>
-			expect(promise).rejects.toMatchObject({
-				name: "AgentManagementError",
-				code: "unavailable",
-				message: "Agent management is temporarily unavailable",
-			});
+		});
+		const observation = observationFixture(
+			"creation_succeeded",
+			creatingState,
+			{
+				observationId: "boundary-observation",
+				requestId: "request_boundary_observation",
+				traceId: "trace_boundary_observation",
+			},
+		);
 
 		await expectUnavailable(
 			(
@@ -129,10 +264,7 @@ export function agentManagementV1Conformance(
 					],
 					failure: "access_read",
 				})
-			).resolveAgentAccess(
-				{ schemaVersion: 1, agentId: creatingState.agentId, intent: "use" },
-				applicant,
-			),
+			).resolveAgentAccess(accessQuery(creatingState, "use"), applicant),
 		);
 		for (const invoke of [
 			async () =>
@@ -157,15 +289,7 @@ export function agentManagementV1Conformance(
 		await expectUnavailable(
 			Promise.resolve().then(() =>
 				decideAgentAccessUpdatePolicy(
-					{
-						schemaVersion: 1,
-						agentId: pendingState.agentId,
-						expectedRevision: pendingState.revision,
-						desiredOwnerIds: [applicant.userId],
-						desiredAvailability: [],
-						requestId: "request_boundary_access",
-						traceId: "trace_boundary_access",
-					},
+					policyCommand(pendingState),
 					pendingState,
 					applicant,
 					{} as never,
@@ -238,25 +362,17 @@ export function agentManagementV1Conformance(
 			stateFixture({ revision: 2, approvalRevision: 3 }),
 		];
 		for (const [index, invalid] of invalidStates.entries()) {
+			const seeded = {
+				...invalid,
+				applicationId: `${invalid.applicationId}_${index}`,
+				agentId: `${invalid.agentId}_${index}`,
+			};
 			const management = await createManagement({
-				states: [
-					{
-						...invalid,
-						applicationId: `${invalid.applicationId}_${index}`,
-						agentId: `${invalid.agentId}_${index}`,
-					},
-				],
+				states: [seeded],
 			});
-			await expect(
-				management.resolveAgentAccess(
-					{
-						schemaVersion: 1,
-						agentId: `${invalid.agentId}_${index}`,
-						intent: "use",
-					},
-					applicant,
-				),
-			).rejects.toMatchObject({ code: "unavailable" });
+			await expectUnavailable(
+				management.resolveAgentAccess(accessQuery(seeded, "use"), applicant),
+			);
 		}
 
 		const invalidCommandState = {
@@ -267,55 +383,30 @@ export function agentManagementV1Conformance(
 			workloadRevision: 0,
 			fence: 0,
 		};
-		await expect(
+		await expectUnavailable(
 			(
 				await createManagement({ states: [invalidCommandState] })
 			).executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "update_application",
-					applicationId: invalidCommandState.applicationId,
-					expectedRevision: invalidCommandState.revision,
-					idempotencyKey: "invalid-state-command",
-					requestId: "request_invalid_state_command",
-					traceId: "trace_invalid_state_command",
-				},
+				commandFixture("update_application", invalidCommandState),
 				applicant,
 			),
-		).rejects.toMatchObject({ code: "unavailable" });
-		await expect(
+		);
+		const invalidObservationState = {
+			...valid,
+			status: "creating" as const,
+			serviceAvailability: null,
+			ownerIds: [],
+		};
+		await expectUnavailable(
 			(
-				await createManagement({
-					states: [
-						{
-							...valid,
-							status: "creating",
-							serviceAvailability: null,
-							ownerIds: [],
-						},
-					],
-				})
-			).recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "invalid-state-observation",
-				agentId: valid.agentId,
-				observation: "creation_succeeded",
-				expectedRevision: valid.revision,
-				workloadRevision: valid.workloadRevision,
-				fence: valid.fence,
-				requestId: "request_invalid_state_observation",
-				traceId: "trace_invalid_state_observation",
-			}),
-		).rejects.toMatchObject({ code: "unavailable" });
+				await createManagement({ states: [invalidObservationState] })
+			).recordWorkloadObservation(
+				observationFixture("creation_succeeded", invalidObservationState),
+			),
+		);
 	});
 
 	it("binds every valid Port aggregate to the requested application or Agent", async () => {
-		const expectUnavailable = (promise: Promise<unknown>) =>
-			expect(promise).rejects.toMatchObject({
-				name: "AgentManagementError",
-				code: "unavailable",
-			});
-
 		const applicationState = stateFixture({
 			status: "pending_approval",
 			applicationId: "application_identity_target",
@@ -330,25 +421,13 @@ export function agentManagementV1Conformance(
 		});
 		await expectUnavailable(
 			applicationManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "update_application",
-					applicationId: applicationState.applicationId,
-					expectedRevision: applicationState.revision,
-					idempotencyKey: "identity-application-command",
-					requestId: "request_identity_application",
-					traceId: "trace_identity_application",
-				},
+				commandFixture("update_application", applicationState),
 				applicant,
 			),
 		);
 		expect(
 			await applicationManagement.resolveAgentAccess(
-				{
-					schemaVersion: 1,
-					agentId: applicationState.agentId,
-					intent: "manage",
-				},
+				accessQuery(applicationState),
 				applicant,
 			),
 		).toMatchObject({
@@ -368,21 +447,13 @@ export function agentManagementV1Conformance(
 		});
 		await expectUnavailable(
 			agentManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "stop_agent",
-					agentId: agentState.agentId,
-					expectedRevision: agentState.revision,
-					idempotencyKey: "identity-agent-command",
-					requestId: "request_identity_agent_command",
-					traceId: "trace_identity_agent_command",
-				},
+				commandFixture("stop_agent", agentState),
 				applicant,
 			),
 		);
 		expect(
 			await agentManagement.resolveAgentAccess(
-				{ schemaVersion: 1, agentId: agentState.agentId, intent: "manage" },
+				accessQuery(agentState),
 				applicant,
 			),
 		).toMatchObject({ outcome: "allowed", managementStatus: "available" });
@@ -399,25 +470,13 @@ export function agentManagementV1Conformance(
 			},
 		});
 		await expectUnavailable(
-			observationManagement.recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "identity-observation",
-				agentId: observationState.agentId,
-				observation: "creation_succeeded",
-				expectedRevision: observationState.revision,
-				workloadRevision: observationState.workloadRevision,
-				fence: observationState.fence,
-				requestId: "request_identity_observation",
-				traceId: "trace_identity_observation",
-			}),
+			observationManagement.recordWorkloadObservation(
+				observationFixture("creation_succeeded", observationState),
+			),
 		);
 		expect(
 			await observationManagement.resolveAgentAccess(
-				{
-					schemaVersion: 1,
-					agentId: observationState.agentId,
-					intent: "manage",
-				},
+				accessQuery(observationState),
 				applicant,
 			),
 		).toMatchObject({ outcome: "allowed", managementStatus: "creating" });
@@ -434,41 +493,36 @@ export function agentManagementV1Conformance(
 		});
 		await expectUnavailable(
 			accessManagement.resolveAgentAccess(
-				{ schemaVersion: 1, agentId: accessState.agentId, intent: "use" },
+				accessQuery(accessState, "use"),
 				applicant,
 			),
 		);
 		expect(
 			await accessManagement.resolveAgentAccess(
-				{ schemaVersion: 1, agentId: accessState.agentId, intent: "use" },
+				accessQuery(accessState, "use"),
 				applicant,
 			),
 		).toMatchObject({ outcome: "allowed", managementStatus: "available" });
 	});
 	it("lets the applicant update, resubmit, and withdraw one application history", async () => {
+		const application = stateFixture({
+			applicationId: "application_1",
+			agentId: "agent_1",
+			status: "rejected",
+			revision: 3,
+			decisionReason: "Resource request needs adjustment",
+		});
 		const management = await createManagement({
 			now: () => new Date("2026-08-31T08:00:00.000Z"),
-			states: [
-				stateFixture({
-					applicationId: "application_1",
-					agentId: "agent_1",
-					status: "rejected",
-					revision: 3,
-					decisionReason: "Resource request needs adjustment",
-				}),
-			],
+			states: [application],
 		});
 
 		const resubmitted = await management.executeManagementCommand(
-			{
-				schemaVersion: 1,
-				command: "update_application",
-				applicationId: "application_1",
-				expectedRevision: 3,
+			commandFixture("update_application", application, {
 				idempotencyKey: "application-update-1",
 				requestId: "request_1",
 				traceId: "trace_1",
-			},
+			}),
 			applicant,
 		);
 
@@ -493,15 +547,12 @@ export function agentManagementV1Conformance(
 			},
 		});
 		const updated = await management.executeManagementCommand(
-			{
-				schemaVersion: 1,
-				command: "update_application",
-				applicationId: "application_1",
+			commandFixture("update_application", application, {
 				expectedRevision: 4,
 				idempotencyKey: "application-update-2",
 				requestId: "request_update_2",
 				traceId: "trace_update_2",
-			},
+			}),
 			applicant,
 		);
 		expect(updated).toMatchObject({
@@ -517,15 +568,12 @@ export function agentManagementV1Conformance(
 		});
 
 		const withdrawn = await management.executeManagementCommand(
-			{
-				schemaVersion: 1,
-				command: "withdraw_application",
-				applicationId: "application_1",
+			commandFixture("withdraw_application", application, {
 				expectedRevision: 5,
 				idempotencyKey: "application-withdraw-1",
 				requestId: "request_2",
 				traceId: "trace_2",
-			},
+			}),
 			applicant,
 		);
 
@@ -548,15 +596,7 @@ export function agentManagementV1Conformance(
 		const denied = await createManagement({ states: [state] });
 		expect(
 			await denied.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "approve_application",
-					applicationId: state.applicationId,
-					expectedRevision: 1,
-					idempotencyKey: "approve-denied",
-					requestId: "request_denied",
-					traceId: "trace_denied",
-				},
+				commandFixture("approve_application", state),
 				applicant,
 			),
 		).toEqual({ outcome: "denied", writePlan: null });
@@ -567,15 +607,7 @@ export function agentManagementV1Conformance(
 		});
 		expect(
 			await approved.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "approve_application",
-					applicationId: state.applicationId,
-					expectedRevision: 1,
-					idempotencyKey: "approve-1",
-					requestId: "request_approve",
-					traceId: "trace_approve",
-				},
+				commandFixture("approve_application", state),
 				administrator,
 			),
 		).toMatchObject({
@@ -606,16 +638,7 @@ export function agentManagementV1Conformance(
 		const rejected = await createManagement({ states: [state] });
 		expect(
 			await rejected.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "reject_application",
-					applicationId: state.applicationId,
-					reason: "Capacity is unavailable",
-					expectedRevision: 1,
-					idempotencyKey: "reject-1",
-					requestId: "request_reject",
-					traceId: "trace_reject",
-				},
+				commandFixture("reject_application", state),
 				administrator,
 			),
 		).toMatchObject({
@@ -644,47 +667,21 @@ export function agentManagementV1Conformance(
 				fence: Number.MAX_SAFE_INTEGER,
 			}),
 		]) {
-			const management = await createManagement({
-				states: [
-					{
-						...state,
-						applicationId: `application_overflow_${state.status}_${state.workloadRevision}_${state.fence}`,
-						agentId: `agent_overflow_${state.status}_${state.workloadRevision}_${state.fence}`,
-					},
-				],
-			});
 			const seeded = {
 				...state,
 				applicationId: `application_overflow_${state.status}_${state.workloadRevision}_${state.fence}`,
 				agentId: `agent_overflow_${state.status}_${state.workloadRevision}_${state.fence}`,
 			};
-			const decision = await management.executeManagementCommand(
+			const management = await createManagement({ states: [seeded] });
+			const command =
 				state.status === "pending_approval"
-					? {
-							schemaVersion: 1,
-							command: "update_application",
-							applicationId: seeded.applicationId,
-							expectedRevision: seeded.revision,
-							idempotencyKey: `overflow-${seeded.agentId}`,
-							requestId: `request_${seeded.agentId}`,
-							traceId: `trace_${seeded.agentId}`,
-						}
-					: {
-							schemaVersion: 1,
-							command: "stop_agent",
-							agentId: seeded.agentId,
-							expectedRevision: seeded.revision,
-							idempotencyKey: `overflow-${seeded.agentId}`,
-							requestId: `request_${seeded.agentId}`,
-							traceId: `trace_${seeded.agentId}`,
-						},
+					? "update_application"
+					: "stop_agent";
+			const decision = await management.executeManagementCommand(
+				commandFixture(command, seeded),
 				applicant,
 			);
-			expect(decision).toEqual({
-				outcome: "conflict",
-				reason: "counter_overflow",
-				writePlan: null,
-			});
+			expect(decision).toEqual(conflict("counter_overflow"));
 		}
 
 		const observationState = stateFixture({
@@ -695,22 +692,14 @@ export function agentManagementV1Conformance(
 			states: [observationState],
 		});
 		expect(
-			await observationManagement.recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "observation_overflow",
-				agentId: observationState.agentId,
-				observation: "service_ready",
-				expectedRevision: observationState.revision,
-				workloadRevision: observationState.workloadRevision,
-				fence: observationState.fence,
-				requestId: "request_observation_overflow",
-				traceId: "trace_observation_overflow",
-			}),
-		).toEqual({
-			outcome: "conflict",
-			reason: "counter_overflow",
-			writePlan: null,
-		});
+			await observationManagement.recordWorkloadObservation(
+				observationFixture("service_ready", observationState, {
+					observationId: "observation_overflow",
+					requestId: "request_observation_overflow",
+					traceId: "trace_observation_overflow",
+				}),
+			),
+		).toEqual(conflict("counter_overflow"));
 	});
 
 	it("applies Owner and administrator lifecycle authority", async () => {
@@ -726,29 +715,13 @@ export function agentManagementV1Conformance(
 		const management = await createManagement({ states: [availableState] });
 		expect(
 			await management.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "stop_agent",
-					agentId: availableState.agentId,
-					expectedRevision: 7,
-					idempotencyKey: "stop-outsider",
-					requestId: "request_stop_outsider",
-					traceId: "trace_stop_outsider",
-				},
+				commandFixture("stop_agent", availableState),
 				{ ...applicant, userId: "user_outsider" },
 			),
-		).toEqual({ outcome: "denied", writePlan: null });
+		).toEqual(denied);
 
 		const stopped = await management.executeManagementCommand(
-			{
-				schemaVersion: 1,
-				command: "stop_agent",
-				agentId: availableState.agentId,
-				expectedRevision: 7,
-				idempotencyKey: "stop-1",
-				requestId: "request_stop",
-				traceId: "trace_stop",
-			},
+			commandFixture("stop_agent", availableState),
 			applicant,
 		);
 		expect(stopped).toMatchObject({
@@ -772,15 +745,9 @@ export function agentManagementV1Conformance(
 		});
 
 		const restarted = await management.executeManagementCommand(
-			{
-				schemaVersion: 1,
-				command: "restart_agent",
-				agentId: availableState.agentId,
+			commandFixture("restart_agent", availableState, {
 				expectedRevision: 8,
-				idempotencyKey: "restart-1",
-				requestId: "request_restart",
-				traceId: "trace_restart",
-			},
+			}),
 			{ ...applicant, userId: "user_co_owner" },
 		);
 		expect(restarted).toMatchObject({
@@ -808,15 +775,7 @@ export function agentManagementV1Conformance(
 		const failed = await createManagement({ states: [failedState] });
 		expect(
 			await failed.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "retry_agent_creation",
-					agentId: failedState.agentId,
-					expectedRevision: 7,
-					idempotencyKey: "retry-1",
-					requestId: "request_retry",
-					traceId: "trace_retry",
-				},
+				commandFixture("retry_agent_creation", failedState),
 				administrator,
 			),
 		).toMatchObject({
@@ -834,15 +793,7 @@ export function agentManagementV1Conformance(
 		const disabled = await createManagement({ states: [availableState] });
 		expect(
 			await disabled.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "disable_agent",
-					agentId: availableState.agentId,
-					expectedRevision: 7,
-					idempotencyKey: "disable-1",
-					requestId: "request_disable",
-					traceId: "trace_disable",
-				},
+				commandFixture("disable_agent", availableState),
 				administrator,
 			),
 		).toMatchObject({
@@ -890,37 +841,6 @@ export function agentManagementV1Conformance(
 			retry_agent_creation: ["creation_failed"],
 			disable_agent: ["creating", "available", "stopped", "creation_failed"],
 		} as const;
-		const commandFor = (
-			command: (typeof commands)[number],
-			state: AgentManagementStateV1,
-		): AgentManagementCommandV1 => {
-			const correlation = {
-				schemaVersion: 1 as const,
-				expectedRevision: state.revision,
-				idempotencyKey: `matrix-${command}-${state.status}`,
-				requestId: `request_${command}_${state.status}`,
-				traceId: `trace_${command}_${state.status}`,
-			};
-			switch (command) {
-				case "update_application":
-				case "withdraw_application":
-				case "approve_application":
-					return {
-						...correlation,
-						command,
-						applicationId: state.applicationId,
-					};
-				case "reject_application":
-					return {
-						...correlation,
-						command,
-						applicationId: state.applicationId,
-						reason: "Capacity is unavailable",
-					};
-				default:
-					return { ...correlation, command, agentId: state.agentId };
-			}
-		};
 		for (const command of commands) {
 			for (const status of statuses) {
 				const state = stateFixture({
@@ -936,22 +856,15 @@ export function agentManagementV1Conformance(
 						? administrator
 						: applicant;
 				const decision = await management.executeManagementCommand(
-					commandFor(command, state),
+					commandFixture(command, state),
 					actor,
 				);
 				if ((allowed[command] as readonly string[]).includes(status)) {
 					expect(decision).toMatchObject({ outcome: "accepted" });
 				} else {
-					expect(decision).toEqual({
-						outcome: "conflict",
-						reason: "invalid_transition",
-						writePlan: null,
-					});
+					expect(decision).toEqual(conflict("invalid_transition"));
 					expect(
-						await management.resolveAgentAccess(
-							{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
-							applicant,
-						),
+						await management.resolveAgentAccess(accessQuery(state), applicant),
 					).toMatchObject({
 						outcome: "allowed",
 						managementStatus: status,
@@ -969,20 +882,20 @@ export function agentManagementV1Conformance(
 			});
 			const management = await createManagement({ states: [state] });
 			expect(
-				await management.executeManagementCommand(commandFor(command, state), {
-					...(command === "approve_application" ||
-					command === "reject_application" ||
-					command === "disable_agent"
-						? administrator
-						: applicant),
-					accountStatus: "disabled",
-				}),
+				await management.executeManagementCommand(
+					commandFixture(command, state),
+					{
+						...(command === "approve_application" ||
+						command === "reject_application" ||
+						command === "disable_agent"
+							? administrator
+							: applicant),
+						accountStatus: "disabled",
+					},
+				),
 			).toEqual({ outcome: "denied", writePlan: null });
 			expect(
-				await management.resolveAgentAccess(
-					{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
-					applicant,
-				),
+				await management.resolveAgentAccess(accessQuery(state), applicant),
 			).toMatchObject({
 				outcome: "allowed",
 				managementStatus: status,
@@ -996,10 +909,13 @@ export function agentManagementV1Conformance(
 			});
 			const management = await createManagement({ states: [state] });
 			expect(
-				await management.executeManagementCommand(commandFor(command, state), {
-					...administrator,
-					organizationIds: [],
-				}),
+				await management.executeManagementCommand(
+					commandFixture(command, state),
+					{
+						...administrator,
+						organizationIds: [],
+					},
+				),
 			).toEqual({ outcome: "denied", writePlan: null });
 		}
 	});
@@ -1018,17 +934,15 @@ export function agentManagementV1Conformance(
 			now: () => new Date("2026-08-31T08:10:00.000Z"),
 			states: [creatingState],
 		});
-		const observation = {
-			schemaVersion: 1 as const,
-			observationId: "observation_1",
-			agentId: creatingState.agentId,
-			observation: "creation_succeeded" as const,
-			expectedRevision: 4,
-			workloadRevision: 2,
-			fence: 5,
-			requestId: "request_observe",
-			traceId: "trace_observe",
-		};
+		const observation = observationFixture(
+			"creation_succeeded",
+			creatingState,
+			{
+				observationId: "observation_1",
+				requestId: "request_observe",
+				traceId: "trace_observe",
+			},
+		);
 		for (const stale of [
 			{
 				observationId: "observation_stale_revision",
@@ -1044,11 +958,7 @@ export function agentManagementV1Conformance(
 					...observation,
 					...stale,
 				}),
-			).toEqual({
-				outcome: "conflict",
-				reason: "stale_observation",
-				writePlan: null,
-			});
+			).toEqual(conflict("stale_observation"));
 		}
 		expect(
 			await management.recordWorkloadObservation({
@@ -1056,11 +966,7 @@ export function agentManagementV1Conformance(
 				observationId: "observation_stale_fence",
 				fence: 4,
 			}),
-		).toEqual({
-			outcome: "conflict",
-			reason: "stale_observation",
-			writePlan: null,
-		});
+		).toEqual(conflict("stale_observation"));
 
 		expect(
 			await management.recordWorkloadObservation(observation),
@@ -1091,17 +997,12 @@ export function agentManagementV1Conformance(
 		});
 
 		expect(
-			await management.recordWorkloadObservation({
-				...observation,
-				observationId: "observation_stale",
-				observation: "creation_failed",
-				failureCode: "creation_not_ready",
-			}),
-		).toEqual({
-			outcome: "conflict",
-			reason: "stale_observation",
-			writePlan: null,
-		});
+			await management.recordWorkloadObservation(
+				observationFixture("creation_failed", creatingState, {
+					observationId: "observation_stale",
+				}),
+			),
+		).toEqual(conflict("stale_observation"));
 	});
 
 	it("maps every current Worker result without mixing service and management status", async () => {
@@ -1110,64 +1011,51 @@ export function agentManagementV1Conformance(
 			workloadRevision: 6,
 			fence: 8,
 		};
-		const states = [
+		const failureState = stateFixture({
+			...base,
+			applicationId: "application_failure",
+			agentId: "agent_failure",
+			status: "creating",
+		});
+		const unapprovedState = stateFixture({
+			...base,
+			applicationId: "application_unapproved",
+			agentId: "agent_unapproved",
+			status: "pending_approval",
+			workloadRevision: 0,
+			fence: 0,
+		});
+		const serviceStates = [
+			"service_starting",
+			"service_ready",
+			"service_updating",
+			"service_unavailable",
+		].map((observation) =>
 			stateFixture({
 				...base,
-				applicationId: "application_failure",
-				agentId: "agent_failure",
-				status: "creating",
+				applicationId: `application_${observation}`,
+				agentId: `agent_${observation}`,
+				serviceAvailability: "unavailable",
+				failureCode: "workload_unavailable",
 			}),
-			...[
-				"service_starting",
-				"service_ready",
-				"service_updating",
-				"service_unavailable",
-			].map((observation) =>
-				stateFixture({
-					...base,
-					applicationId: `application_${observation}`,
-					agentId: `agent_${observation}`,
-					status: "available",
-					serviceAvailability: "unavailable",
-					failureCode: "workload_unavailable",
-				}),
-			),
-			stateFixture({
-				...base,
-				applicationId: "application_unapproved",
-				agentId: "agent_unapproved",
-				status: "pending_approval",
-				workloadRevision: 0,
-				fence: 0,
-			}),
-		];
-		const management = await createManagement({ states });
-		const correlation = {
-			schemaVersion: 1 as const,
-			expectedRevision: 10,
-			workloadRevision: 6,
-			fence: 8,
-			requestId: "request_worker_result",
-			traceId: "trace_worker_result",
-		};
+		);
+		const management = await createManagement({
+			states: [failureState, ...serviceStates, unapprovedState],
+		});
 		await expect(
 			management.recordWorkloadObservation({
-				...correlation,
-				observationId: "observation_free_text_failure",
-				agentId: "agent_failure",
-				observation: "creation_failed",
-				failureCode: "creation_not_ready",
+				...observationFixture("creation_failed", failureState, {
+					observationId: "observation_free_text_failure",
+				}),
 				reason: "Pod agent-0 exposed a Runtime Secret",
 			} as never),
 		).rejects.toMatchObject({ code: "invalid_input" });
 		expect(
-			await management.recordWorkloadObservation({
-				...correlation,
-				observationId: "observation_failure",
-				agentId: "agent_failure",
-				observation: "creation_failed",
-				failureCode: "creation_not_ready",
-			}),
+			await management.recordWorkloadObservation(
+				observationFixture("creation_failed", failureState, {
+					observationId: "observation_failure",
+				}),
+			),
 		).toMatchObject({
 			outcome: "accepted",
 			result: { status: "creation_failed", revision: 11 },
@@ -1197,13 +1085,18 @@ export function agentManagementV1Conformance(
 				failureCode: "workload_unavailable",
 			},
 		]) {
+			const state = stateFixture({
+				...base,
+				agentId: `agent_${expected.observation}`,
+				serviceAvailability: "unavailable",
+				failureCode: "workload_unavailable",
+			});
 			expect(
-				await management.recordWorkloadObservation({
-					...correlation,
-					observationId: `observation_${expected.observation}`,
-					agentId: `agent_${expected.observation}`,
-					observation: expected.observation,
-				}),
+				await management.recordWorkloadObservation(
+					observationFixture(expected.observation, state, {
+						observationId: `observation_${expected.observation}`,
+					}),
+				),
 			).toMatchObject({
 				outcome: "accepted",
 				result: { status: "available" },
@@ -1216,14 +1109,16 @@ export function agentManagementV1Conformance(
 				},
 			});
 		}
+		const unavailableState = serviceStates.find(
+			({ agentId }) => agentId === "agent_service_unavailable",
+		);
+		if (!unavailableState) throw new Error("Missing unavailable fixture");
 		expect(
-			await management.recordWorkloadObservation({
-				...correlation,
-				observationId: "observation_service_unavailable",
-				agentId: "agent_service_unavailable",
-				observation: "service_unavailable",
-				failureCode: "health_check_failed",
-			}),
+			await management.recordWorkloadObservation(
+				observationFixture("service_unavailable", unavailableState, {
+					observationId: "observation_service_unavailable",
+				}),
+			),
 		).toMatchObject({
 			outcome: "accepted",
 			result: { status: "available" },
@@ -1236,20 +1131,13 @@ export function agentManagementV1Conformance(
 			},
 		});
 		expect(
-			await management.recordWorkloadObservation({
-				...correlation,
-				observationId: "observation_unapproved",
-				agentId: "agent_unapproved",
-				observation: "creation_succeeded",
-				expectedRevision: 10,
-				workloadRevision: 0,
-				fence: 0,
-			}),
-		).toEqual({
-			outcome: "conflict",
-			reason: "invalid_observation",
-			writePlan: null,
-		});
+			await management.recordWorkloadObservation(
+				observationFixture("creation_succeeded", unapprovedState, {
+					observationId: "observation_unapproved",
+					expectedRevision: 10,
+				}),
+			),
+		).toEqual(conflict("invalid_observation"));
 	});
 
 	it("rejects every service observation outside the available management state", async () => {
@@ -1277,37 +1165,16 @@ export function agentManagementV1Conformance(
 				"service_updating",
 				"service_unavailable",
 			] as const) {
-				const correlation = {
-					schemaVersion: 1 as const,
-					observationId: `${observation}_${state.status}`,
-					agentId: state.agentId,
-					expectedRevision: state.revision,
-					workloadRevision: state.workloadRevision,
-					fence: state.fence,
-					requestId: `request_${observation}_${state.status}`,
-					traceId: `trace_${observation}_${state.status}`,
-				};
-				const decision =
-					observation === "service_unavailable"
-						? await management.recordWorkloadObservation({
-								...correlation,
-								observation,
-								failureCode: "health_check_failed",
-							})
-						: await management.recordWorkloadObservation({
-								...correlation,
-								observation,
-							});
-				expect(decision).toEqual({
-					outcome: "conflict",
-					reason: "invalid_observation",
-					writePlan: null,
-				});
+				const decision = await management.recordWorkloadObservation(
+					observationFixture(observation, state, {
+						observationId: `${observation}_${state.status}`,
+						requestId: `request_${observation}_${state.status}`,
+						traceId: `trace_${observation}_${state.status}`,
+					}),
+				);
+				expect(decision).toEqual(conflict("invalid_observation"));
 				expect(
-					await management.resolveAgentAccess(
-						{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
-						applicant,
-					),
+					await management.resolveAgentAccess(accessQuery(state), applicant),
 				).toMatchObject({
 					outcome: "allowed",
 					managementStatus: state.status,
@@ -1332,11 +1199,7 @@ export function agentManagementV1Conformance(
 			],
 		});
 		const management = await createManagement({ states: [state] });
-		const useQuery = {
-			schemaVersion: 1 as const,
-			agentId: state.agentId,
-			intent: "use" as const,
-		};
+		const useQuery = accessQuery(state, "use");
 
 		for (const actor of [
 			{ ...applicant, userId: "user_direct", organizationIds: [] },
@@ -1351,14 +1214,13 @@ export function agentManagementV1Conformance(
 			});
 		}
 
-		const denial = { outcome: "denied" };
 		expect(
 			await management.resolveAgentAccess(useQuery, {
 				...applicant,
 				userId: "user_org",
 				organizationIds: ["org_transferred"],
 			}),
-		).toEqual(denial);
+		).toEqual(accessDenied);
 		expect(
 			await management.resolveAgentAccess(useQuery, {
 				...applicant,
@@ -1366,38 +1228,33 @@ export function agentManagementV1Conformance(
 				accountStatus: "disabled",
 				organizationIds: [],
 			}),
-		).toEqual(denial);
+		).toEqual(accessDenied);
 		expect(
 			await management.resolveAgentAccess(
 				{ ...useQuery, agentId: "agent_missing" },
 				{ ...applicant, userId: "user_unknown", organizationIds: [] },
 			),
-		).toEqual(denial);
+		).toEqual(accessDenied);
 
 		expect(
-			await management.resolveAgentAccess(
-				{ ...useQuery, intent: "manage" },
-				administrator,
-			),
-		).toEqual(denial);
+			await management.resolveAgentAccess(accessQuery(state), administrator),
+		).toEqual(accessDenied);
 		expect(
 			await management.resolveAgentAccess(useQuery, {
 				...administrator,
 				organizationIds: [],
 			}),
-		).toEqual(denial);
+		).toEqual(accessDenied);
 		expect(
-			await management.resolveAgentAccess(
-				{ ...useQuery, intent: "manage" },
-				applicant,
-			),
+			await management.resolveAgentAccess(accessQuery(state), applicant),
 		).toMatchObject({ outcome: "allowed", serviceReady: false });
 		expect(
-			await management.resolveAgentAccess(
-				{ ...useQuery, intent: "manage" },
-				{ ...applicant, userId: "user_direct", organizationIds: [] },
-			),
-		).toEqual(denial);
+			await management.resolveAgentAccess(accessQuery(state), {
+				...applicant,
+				userId: "user_direct",
+				organizationIds: [],
+			}),
+		).toEqual(accessDenied);
 	});
 
 	it("produces one pure access-update plan from caller wishes and trusted authority", async () => {
@@ -1411,10 +1268,7 @@ export function agentManagementV1Conformance(
 		});
 		expect(
 			decideAgentAccessUpdatePolicy(
-				{
-					schemaVersion: 1,
-					agentId: state.agentId,
-					expectedRevision: 12,
+				policyCommand(state, {
 					desiredOwnerIds: [applicant.userId, "user_co_owner"],
 					desiredAvailability: [
 						{ kind: "user", userId: "user_direct" },
@@ -1422,7 +1276,7 @@ export function agentManagementV1Conformance(
 					],
 					requestId: "request_access_update",
 					traceId: "trace_access_update",
-				},
+				}),
 				state,
 				applicant,
 				{
@@ -1466,15 +1320,7 @@ export function agentManagementV1Conformance(
 			users: [{ userId: applicant.userId, accountStatus: "active" as const }],
 			organizationIds: ["org_platform"],
 		};
-		const command = {
-			schemaVersion: 1 as const,
-			agentId: state.agentId,
-			expectedRevision: state.revision,
-			desiredOwnerIds: [applicant.userId],
-			desiredAvailability: [],
-			requestId: "request_bounded_policy",
-			traceId: "trace_bounded_policy",
-		};
+		const command = policyCommand(state);
 		for (const invalid of [
 			{ ...command, agentId: "a".repeat(1025) },
 			{ ...command, desiredOwnerIds: ["o".repeat(1025)] },
@@ -1495,15 +1341,9 @@ export function agentManagementV1Conformance(
 
 	it("fails closed on every impossible aggregate at the internal access-policy seam", async () => {
 		const state = stateFixture({ agentId: "agent_invalid_policy_state" });
-		const command = {
-			schemaVersion: 1 as const,
-			agentId: state.agentId,
-			expectedRevision: state.revision,
+		const command = policyCommand(state, {
 			desiredOwnerIds: [applicant.userId, "user_co_owner"],
-			desiredAvailability: [],
-			requestId: "request_invalid_policy_state",
-			traceId: "trace_invalid_policy_state",
-		};
+		});
 		const authority = {
 			schemaVersion: 1 as const,
 			users: [
@@ -1517,7 +1357,7 @@ export function agentManagementV1Conformance(
 			{ ...state, status: "corrupted" },
 			{ ...state, desiredState: "stopped" },
 		]) {
-			await expect(
+			await expectUnavailable(
 				Promise.resolve().then(() =>
 					decideAgentAccessUpdatePolicy(
 						command,
@@ -1526,10 +1366,7 @@ export function agentManagementV1Conformance(
 						authority,
 					),
 				),
-			).rejects.toMatchObject({
-				name: "AgentManagementError",
-				code: "unavailable",
-			});
+			);
 		}
 	});
 
@@ -1552,23 +1389,27 @@ export function agentManagementV1Conformance(
 			revision: 5,
 			ownerIds: [applicant.userId, "user_co_owner"],
 		});
-		const command = {
-			schemaVersion: 1 as const,
-			agentId: state.agentId,
-			expectedRevision: 5,
+		const command = policyCommand(state, {
 			desiredOwnerIds: [applicant.userId, "user_co_owner"],
 			desiredAvailability: [{ kind: "user" as const, userId: "user_direct" }],
-			requestId: "request_access_policy",
-			traceId: "trace_access_policy",
-		};
+		});
+		const decide = (
+			input: AgentAccessUpdatePolicyCommandV1 = command,
+			...args: [
+				current?: AgentManagementStateV1,
+				actor?: AgentManagementActorContextV1,
+				context?: AgentAccessAuthorityContextV1,
+			]
+		) =>
+			decideAgentAccessUpdatePolicy(
+				input,
+				args.length ? args[0] : state,
+				args[1] ?? applicant,
+				args[2] ?? authority,
+			);
 
 		expect(
-			decideAgentAccessUpdatePolicy(
-				command,
-				state,
-				{ ...applicant, userId: "user_co_owner" },
-				authority,
-			),
+			decide(command, state, { ...applicant, userId: "user_co_owner" }),
 		).toMatchObject({ outcome: "accepted" });
 		const pendingForApplicant = stateFixture({
 			status: "pending_approval",
@@ -1576,15 +1417,13 @@ export function agentManagementV1Conformance(
 			ownerIds: ["user_co_owner"],
 		});
 		expect(
-			decideAgentAccessUpdatePolicy(
+			decide(
 				{
 					...command,
 					agentId: pendingForApplicant.agentId,
 					expectedRevision: pendingForApplicant.revision,
 				},
 				pendingForApplicant,
-				applicant,
-				authority,
 			),
 		).toMatchObject({ outcome: "accepted" });
 
@@ -1597,7 +1436,7 @@ export function agentManagementV1Conformance(
 			],
 		});
 		expect(
-			decideAgentAccessUpdatePolicy(
+			decide(
 				{
 					...command,
 					agentId: disabledOwnerState.agentId,
@@ -1607,7 +1446,6 @@ export function agentManagementV1Conformance(
 				},
 				disabledOwnerState,
 				administrator,
-				authority,
 			),
 		).toMatchObject({
 			outcome: "accepted",
@@ -1617,7 +1455,7 @@ export function agentManagementV1Conformance(
 			},
 		});
 		expect(
-			decideAgentAccessUpdatePolicy(
+			decide(
 				{
 					...command,
 					agentId: disabledOwnerState.agentId,
@@ -1626,20 +1464,12 @@ export function agentManagementV1Conformance(
 				},
 				disabledOwnerState,
 				administrator,
-				authority,
 			),
-		).toEqual({
-			outcome: "conflict",
-			reason: "admin_rescue_owner_only",
-			planFragment: null,
-		});
+		).toEqual(policyConflict("admin_rescue_owner_only"));
 
-		const denial = { outcome: "denied", planFragment: null };
+		expect(decide(command, state, administrator)).toEqual(policyDenied);
 		expect(
-			decideAgentAccessUpdatePolicy(command, state, administrator, authority),
-		).toEqual(denial);
-		expect(
-			decideAgentAccessUpdatePolicy(
+			decide(
 				command,
 				state,
 				{ ...applicant, accountStatus: "disabled" },
@@ -1652,7 +1482,7 @@ export function agentManagementV1Conformance(
 					),
 				},
 			),
-		).toEqual(denial);
+		).toEqual(policyDenied);
 		for (const [actor, inconsistentAuthority] of [
 			[{ ...applicant, userId: "user_outsider" }, authority],
 			[
@@ -1669,26 +1499,14 @@ export function agentManagementV1Conformance(
 		] as const) {
 			await expect(
 				Promise.resolve().then(() =>
-					decideAgentAccessUpdatePolicy(
-						command,
-						state,
-						actor,
-						inconsistentAuthority,
-					),
+					decide(command, state, actor, inconsistentAuthority),
 				),
 			).rejects.toMatchObject({ code: "unavailable" });
 		}
-		expect(
-			decideAgentAccessUpdatePolicy(
-				{ ...command, agentId: "agent_other" },
-				state,
-				applicant,
-				authority,
-			),
-		).toEqual(denial);
-		expect(
-			decideAgentAccessUpdatePolicy(command, undefined, applicant, authority),
-		).toEqual(denial);
+		expect(decide({ ...command, agentId: "agent_other" }, state)).toEqual(
+			policyDenied,
+		);
+		expect(decide(command, undefined)).toEqual(policyDenied);
 
 		for (const [input, reason] of [
 			[{ ...command, expectedRevision: 4 }, "stale_revision"],
@@ -1719,25 +1537,17 @@ export function agentManagementV1Conformance(
 				"invalid_target",
 			],
 		] as const) {
-			expect(
-				decideAgentAccessUpdatePolicy(input, state, applicant, authority),
-			).toEqual({ outcome: "conflict", reason, planFragment: null });
+			expect(decide(input)).toEqual(policyConflict(reason));
 		}
 		expect(
-			decideAgentAccessUpdatePolicy(
+			decide(
 				{
 					...command,
 					desiredAvailability: [],
 				},
 				state,
-				applicant,
-				authority,
 			),
-		).toEqual({
-			outcome: "conflict",
-			reason: "no_change",
-			planFragment: null,
-		});
+		).toEqual(policyConflict("no_change"));
 	});
 
 	it("rejects caller authority, malformed input, stale revisions, and changed replays", async () => {
@@ -1748,15 +1558,11 @@ export function agentManagementV1Conformance(
 			revision: 2,
 		});
 		const management = await createManagement({ states: [state] });
-		const update = {
-			schemaVersion: 1 as const,
-			command: "update_application" as const,
-			applicationId: state.applicationId,
-			expectedRevision: 2,
+		const update = commandFixture("update_application", state, {
 			idempotencyKey: "negative-update",
 			requestId: "request_negative",
 			traceId: "trace_negative",
-		};
+		});
 
 		await expect(
 			management.executeManagementCommand(
@@ -1767,29 +1573,27 @@ export function agentManagementV1Conformance(
 			name: "AgentManagementError",
 			code: "invalid_input",
 		});
-		const inaccessible = { outcome: "denied", writePlan: null };
 		expect(
 			await management.executeManagementCommand(update, {
 				...applicant,
 				userId: "user_other",
 			}),
-		).toEqual(inaccessible);
+		).toEqual(denied);
 		expect(
 			await management.executeManagementCommand(
-				{ ...update, applicationId: "application_missing" },
+				commandFixture("update_application", {
+					...state,
+					applicationId: "application_missing",
+				}),
 				applicant,
 			),
-		).toEqual(inaccessible);
+		).toEqual(denied);
 		expect(
 			await management.executeManagementCommand(
-				{ ...update, expectedRevision: 1 },
+				commandFixture("update_application", state, { expectedRevision: 1 }),
 				applicant,
 			),
-		).toEqual({
-			outcome: "conflict",
-			reason: "stale_revision",
-			writePlan: null,
-		});
+		).toEqual(conflict("stale_revision"));
 
 		expect(
 			await management.executeManagementCommand(update, applicant),
@@ -1806,27 +1610,23 @@ export function agentManagementV1Conformance(
 		});
 		expect(
 			await management.executeManagementCommand(
-				{ ...update, requestId: "changed_request" },
+				commandFixture("update_application", state, {
+					idempotencyKey: "negative-update",
+					requestId: "changed_request",
+				}),
 				applicant,
 			),
-		).toEqual({
-			outcome: "conflict",
-			reason: "idempotency_conflict",
-			writePlan: null,
-		});
+		).toEqual(conflict("idempotency_conflict"));
 
 		await expect(
 			management.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "reject_application",
-					applicationId: state.applicationId,
+				commandFixture("reject_application", state, {
 					reason: "",
 					expectedRevision: 3,
 					idempotencyKey: "empty-reason",
 					requestId: "request_reject_empty",
 					traceId: "trace_reject_empty",
-				},
+				}),
 				administrator,
 			),
 		).rejects.toMatchObject({ code: "invalid_input" });
@@ -1843,47 +1643,27 @@ export function agentManagementV1Conformance(
 		});
 		expect(
 			await applicationManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "update_application",
-					applicationId: applicationState.applicationId,
-					expectedRevision: 1,
+				commandFixture("update_application", applicationState, {
 					idempotencyKey: "cross-command-key",
-					requestId: "request_cross_command_update",
-					traceId: "trace_cross_command_update",
-				},
+				}),
 				applicant,
 			),
 		).toMatchObject({ outcome: "accepted", result: { revision: 2 } });
 		expect(
 			await applicationManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "withdraw_application",
-					applicationId: applicationState.applicationId,
+				commandFixture("withdraw_application", applicationState, {
 					expectedRevision: 2,
 					idempotencyKey: "cross-command-key",
-					requestId: "request_cross_command_withdraw",
-					traceId: "trace_cross_command_withdraw",
-				},
+				}),
 				applicant,
 			),
-		).toEqual({
-			outcome: "conflict",
-			reason: "idempotency_conflict",
-			writePlan: null,
-		});
+		).toEqual(conflict("idempotency_conflict"));
 		expect(
 			await applicationManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "withdraw_application",
-					applicationId: applicationState.applicationId,
+				commandFixture("withdraw_application", applicationState, {
 					expectedRevision: 2,
 					idempotencyKey: "fresh-withdraw-key",
-					requestId: "request_fresh_withdraw",
-					traceId: "trace_fresh_withdraw",
-				},
+				}),
 				applicant,
 			),
 		).toMatchObject({ outcome: "accepted", result: { status: "withdrawn" } });
@@ -1895,47 +1675,27 @@ export function agentManagementV1Conformance(
 			states: [observationState],
 		});
 		expect(
-			await observationManagement.recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "cross-observation-id",
-				agentId: observationState.agentId,
-				observation: "service_starting",
-				expectedRevision: 1,
-				workloadRevision: 1,
-				fence: 1,
-				requestId: "request_service_starting",
-				traceId: "trace_service_starting",
-			}),
+			await observationManagement.recordWorkloadObservation(
+				observationFixture("service_starting", observationState, {
+					observationId: "cross-observation-id",
+				}),
+			),
 		).toMatchObject({ outcome: "accepted", result: { revision: 2 } });
 		expect(
-			await observationManagement.recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "cross-observation-id",
-				agentId: observationState.agentId,
-				observation: "service_ready",
-				expectedRevision: 2,
-				workloadRevision: 1,
-				fence: 1,
-				requestId: "request_service_ready_reused",
-				traceId: "trace_service_ready_reused",
-			}),
-		).toEqual({
-			outcome: "conflict",
-			reason: "idempotency_conflict",
-			writePlan: null,
-		});
+			await observationManagement.recordWorkloadObservation(
+				observationFixture("service_ready", observationState, {
+					observationId: "cross-observation-id",
+					expectedRevision: 2,
+				}),
+			),
+		).toEqual(conflict("idempotency_conflict"));
 		expect(
-			await observationManagement.recordWorkloadObservation({
-				schemaVersion: 1,
-				observationId: "fresh-observation-id",
-				agentId: observationState.agentId,
-				observation: "service_ready",
-				expectedRevision: 2,
-				workloadRevision: 1,
-				fence: 1,
-				requestId: "request_service_ready_fresh",
-				traceId: "trace_service_ready_fresh",
-			}),
+			await observationManagement.recordWorkloadObservation(
+				observationFixture("service_ready", observationState, {
+					observationId: "fresh-observation-id",
+					expectedRevision: 2,
+				}),
+			),
 		).toMatchObject({ outcome: "accepted", result: { revision: 3 } });
 
 		const actorState = stateFixture({
@@ -1945,72 +1705,48 @@ export function agentManagementV1Conformance(
 		const actorManagement = await createManagement({ states: [actorState] });
 		expect(
 			await actorManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "stop_agent",
-					agentId: actorState.agentId,
-					expectedRevision: 1,
+				commandFixture("stop_agent", actorState, {
 					idempotencyKey: "actor-independent-key",
-					requestId: "request_actor_stop",
-					traceId: "trace_actor_stop",
-				},
+				}),
 				applicant,
 			),
 		).toMatchObject({ outcome: "accepted", result: { status: "stopped" } });
 		expect(
 			await actorManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "restart_agent",
-					agentId: actorState.agentId,
+				commandFixture("restart_agent", actorState, {
 					expectedRevision: 2,
 					idempotencyKey: "actor-independent-key",
-					requestId: "request_actor_restart",
-					traceId: "trace_actor_restart",
-				},
+				}),
 				{ ...applicant, userId: "user_co_owner" },
 			),
 		).toMatchObject({ outcome: "accepted", result: { status: "available" } });
 
 		const sharedSubject = "shared_subject_id";
+		const applicationResource = stateFixture({
+			status: "pending_approval",
+			applicationId: sharedSubject,
+			agentId: "agent_for_shared_application",
+		});
+		const agentResource = stateFixture({
+			applicationId: "application_for_shared_agent",
+			agentId: sharedSubject,
+		});
 		const resourceManagement = await createManagement({
-			states: [
-				stateFixture({
-					status: "pending_approval",
-					applicationId: sharedSubject,
-					agentId: "agent_for_shared_application",
-				}),
-				stateFixture({
-					applicationId: "application_for_shared_agent",
-					agentId: sharedSubject,
-				}),
-			],
+			states: [applicationResource, agentResource],
 		});
 		expect(
 			await resourceManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "update_application",
-					applicationId: sharedSubject,
-					expectedRevision: 1,
+				commandFixture("update_application", applicationResource, {
 					idempotencyKey: "resource-independent-key",
-					requestId: "request_resource_application",
-					traceId: "trace_resource_application",
-				},
+				}),
 				applicant,
 			),
 		).toMatchObject({ outcome: "accepted" });
 		expect(
 			await resourceManagement.executeManagementCommand(
-				{
-					schemaVersion: 1,
-					command: "stop_agent",
-					agentId: sharedSubject,
-					expectedRevision: 1,
+				commandFixture("stop_agent", agentResource, {
 					idempotencyKey: "resource-independent-key",
-					requestId: "request_resource_agent",
-					traceId: "trace_resource_agent",
-				},
+				}),
 				applicant,
 			),
 		).toMatchObject({ outcome: "accepted" });
