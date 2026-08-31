@@ -3,6 +3,23 @@ import { FakePlatformIdempotencyDatabaseV1 } from "./fake-idempotency.ts";
 import { platformIdempotencyPortV1Conformance } from "./idempotency.conformance.ts";
 import { platformIdempotencyV1 } from "./idempotency.ts";
 
+function forwardingArrayProxy<T>(values: T[], onTrap: () => void): T[] {
+	return new Proxy(values, {
+		getPrototypeOf(target) {
+			onTrap();
+			return Reflect.getPrototypeOf(target);
+		},
+		ownKeys(target) {
+			onTrap();
+			return Reflect.ownKeys(target);
+		},
+		getOwnPropertyDescriptor(target, key) {
+			onTrap();
+			return Reflect.getOwnPropertyDescriptor(target, key);
+		},
+	});
+}
+
 describe("Platform idempotency domain", () => {
 	it("creates a bounded canonical request digest independent of object key order", () => {
 		const first = platformIdempotencyV1.canonicalRequestDigest({
@@ -145,6 +162,10 @@ describe("Platform idempotency domain", () => {
 				throw new Error("untrusted descriptor trap");
 			},
 		});
+		let forwardingTrapCalls = 0;
+		const forwardingProxy = forwardingArrayProxy([0], () => {
+			forwardingTrapCalls += 1;
+		});
 		const oversized = Array.from({ length: 16_385 }, () => 0);
 		for (const invalid of [
 			hole,
@@ -152,6 +173,7 @@ describe("Platform idempotency domain", () => {
 			symbolProperty,
 			ownKeysTrap,
 			descriptorTrap,
+			forwardingProxy,
 			oversized,
 		]) {
 			expect(() =>
@@ -160,6 +182,7 @@ describe("Platform idempotency domain", () => {
 				}),
 			).toThrow(expect.objectContaining({ code: "invalid_input" }));
 		}
+		expect(forwardingTrapCalls).toBe(0);
 
 		expect(
 			platformIdempotencyV1.canonicalRequestDigest({
@@ -218,11 +241,16 @@ describe("Platform idempotency domain", () => {
 		};
 		providerArray.providerPayload = { remoteId: "remote_01" };
 		const providerElement = [{ ...reference, providerPayload: "remote_01" }];
-		for (const invalid of [providerArray, providerElement]) {
+		let forwardingTrapCalls = 0;
+		const forwardingProxy = forwardingArrayProxy([reference], () => {
+			forwardingTrapCalls += 1;
+		});
+		for (const invalid of [providerArray, providerElement, forwardingProxy]) {
 			expect(() => platformIdempotencyV1.parseResult(result(invalid))).toThrow(
 				expect.objectContaining({ code: "invalid_input" }),
 			);
 		}
+		expect(forwardingTrapCalls).toBe(0);
 
 		expect(platformIdempotencyV1.parseResult(result([reference]))).toEqual(
 			result([reference]),

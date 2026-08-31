@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { types } from "node:util";
 
 const maxCanonicalBytes = 64 * 1024;
 const maxCanonicalArrayItems = 16_384;
@@ -144,6 +145,7 @@ function snapshotDenseArray(
 ): unknown[] | undefined {
 	try {
 		if (
+			types.isProxy(value) ||
 			!Array.isArray(value) ||
 			Object.getPrototypeOf(value) !== Array.prototype
 		) {
