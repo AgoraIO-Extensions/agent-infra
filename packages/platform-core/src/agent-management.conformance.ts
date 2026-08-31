@@ -1321,6 +1321,40 @@ export function agentManagementV1Conformance(
 		});
 	});
 
+	it("uses the Core 1024-byte bound for every access-policy domain identifier", async () => {
+		const state = stateFixture({ agentId: "agent_bounded_policy" });
+		const authority = {
+			schemaVersion: 1 as const,
+			users: [{ userId: applicant.userId, accountStatus: "active" as const }],
+			organizationIds: ["org_platform"],
+		};
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: state.agentId,
+			expectedRevision: state.revision,
+			desiredOwnerIds: [applicant.userId],
+			desiredAvailability: [],
+			requestId: "request_bounded_policy",
+			traceId: "trace_bounded_policy",
+		};
+		for (const invalid of [
+			{ ...command, agentId: "a".repeat(1025) },
+			{ ...command, desiredOwnerIds: ["o".repeat(1025)] },
+			{
+				...command,
+				desiredAvailability: [
+					{ kind: "organization" as const, organizationId: "g".repeat(1025) },
+				],
+			},
+		]) {
+			await expect(
+				Promise.resolve().then(() =>
+					decideAgentAccessUpdatePolicy(invalid, state, applicant, authority),
+				),
+			).rejects.toMatchObject({ code: "invalid_input" });
+		}
+	});
+
 	it("enforces ownership, rescue, target, duplicate, stale, and no-op access policy", async () => {
 		const authority = {
 			schemaVersion: 1 as const,
@@ -1379,6 +1413,10 @@ export function agentManagementV1Conformance(
 		const disabledOwnerState = stateFixture({
 			agentId: "agent_disabled_owner",
 			ownerIds: ["user_disabled"],
+			availability: [
+				{ kind: "user", userId: "user_disabled" },
+				{ kind: "organization", organizationId: "org_removed" },
+			],
 		});
 		expect(
 			decideAgentAccessUpdatePolicy(
@@ -1387,7 +1425,7 @@ export function agentManagementV1Conformance(
 					agentId: disabledOwnerState.agentId,
 					expectedRevision: disabledOwnerState.revision,
 					desiredOwnerIds: ["user_co_owner"],
-					desiredAvailability: [],
+					desiredAvailability: disabledOwnerState.availability,
 				},
 				disabledOwnerState,
 				administrator,
@@ -1395,7 +1433,10 @@ export function agentManagementV1Conformance(
 			),
 		).toMatchObject({
 			outcome: "accepted",
-			planFragment: { ownerIds: ["user_co_owner"] },
+			planFragment: {
+				ownerIds: ["user_co_owner"],
+				availability: disabledOwnerState.availability,
+			},
 		});
 		expect(
 			decideAgentAccessUpdatePolicy(

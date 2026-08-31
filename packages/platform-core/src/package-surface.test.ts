@@ -49,6 +49,11 @@ describe("platform-core package surface", () => {
 			"recordWorkloadObservation",
 			"resolveAgentAccess",
 		]);
+		const managementSource = await readFile(
+			new URL("./agent-management.ts", import.meta.url),
+			"utf8",
+		);
+		expect(managementSource).not.toContain("agent-management-access-policy");
 		expect(
 			Object.keys(
 				surface.createApplicationFoundationUseCaseV1(

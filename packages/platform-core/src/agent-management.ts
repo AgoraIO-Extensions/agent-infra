@@ -1,126 +1,22 @@
-import { Buffer } from "node:buffer";
-import { types } from "node:util";
-
 import {
+	AgentManagementError,
 	agentAccessTargetKey,
+	isAgentManagementText as capturedText,
+	invalidAgentManagementInput as invalidInput,
+	isAgentManagementNonNegativeInteger as nonNegativeInteger,
+	parseAgentManagementActorContext as parseActorContext,
 	parseAgentAccessTargets,
-} from "./agent-management-access-policy.js";
+	parseAgentManagementStringArray,
+	requireAgentManagementExactKeys as requireExactKeys,
+	snapshotAgentManagementDataObject as snapshotDataObject,
+} from "./agent-management-input.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
-export class AgentManagementError extends Error {
-	readonly code: "invalid_input" | "unavailable";
-
-	constructor(code: "invalid_input" | "unavailable") {
-		super(
-			code === "invalid_input"
-				? "Invalid Agent management input"
-				: "Agent management is temporarily unavailable",
-		);
-		this.name = "AgentManagementError";
-		this.code = code;
-	}
-}
-
-function invalidInput(): never {
-	throw new AgentManagementError("invalid_input");
-}
-
-function snapshotDataObject(input: unknown): Record<string, unknown> {
-	try {
-		if (
-			typeof input !== "object" ||
-			input === null ||
-			Array.isArray(input) ||
-			types.isProxy(input)
-		) {
-			invalidInput();
-		}
-		const descriptors = Object.getOwnPropertyDescriptors(input);
-		const values: Record<string, unknown> = {};
-		for (const key of Reflect.ownKeys(descriptors)) {
-			if (typeof key !== "string") invalidInput();
-			const descriptor = descriptors[key];
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value") ||
-				Object.hasOwn(descriptor, "get") ||
-				Object.hasOwn(descriptor, "set")
-			) {
-				invalidInput();
-			}
-			values[key] = descriptor.value;
-		}
-		return values;
-	} catch (error) {
-		if (error instanceof AgentManagementError) throw error;
-		invalidInput();
-	}
-}
-
-function requireExactKeys(
-	values: Record<string, unknown>,
-	expectedKeys: readonly string[],
-): void {
-	const keys = Object.keys(values);
-	const expected = new Set(expectedKeys);
-	if (keys.length !== expected.size || keys.some((key) => !expected.has(key))) {
-		invalidInput();
-	}
-}
-
-function capturedText(value: unknown, maxBytes = 1024): value is string {
-	return (
-		typeof value === "string" &&
-		value.length > 0 &&
-		!value.includes("\0") &&
-		String.prototype.isWellFormed.call(value) &&
-		Buffer.byteLength(value, "utf8") <= maxBytes
-	);
-}
-
-function nonNegativeInteger(value: unknown): value is number {
-	return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
 function stringArray(input: unknown): readonly string[] {
-	const entries = dataArray(input, 4096);
-	const values: string[] = [];
-	for (const entry of entries) {
-		if (!capturedText(entry)) invalidInput();
-		values.push(entry);
-	}
-	if (new Set(values).size !== values.length) invalidInput();
-	return values;
+	return parseAgentManagementStringArray(input, true);
 }
 
-function dataArray(input: unknown, maxItems: number): readonly unknown[] {
-	try {
-		if (
-			!Array.isArray(input) ||
-			types.isProxy(input) ||
-			Object.getPrototypeOf(input) !== Array.prototype ||
-			input.length > maxItems ||
-			Reflect.ownKeys(input).length !== input.length + 1
-		) {
-			invalidInput();
-		}
-		const values: unknown[] = [];
-		for (let index = 0; index < input.length; index += 1) {
-			const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value")
-			) {
-				invalidInput();
-			}
-			values.push(descriptor.value);
-		}
-		return values;
-	} catch (error) {
-		if (error instanceof AgentManagementError) throw error;
-		invalidInput();
-	}
-}
+export { AgentManagementError } from "./agent-management-input.js";
 
 export type AgentManagementStatusV1 =
 	| "pending_approval"
@@ -571,33 +467,6 @@ function parseCommand(input: unknown): AgentManagementCommandV1 {
 		invalidInput();
 	}
 	return structuredClone(values) as unknown as AgentManagementCommandV1;
-}
-
-function parseActorContext(input: unknown): AgentManagementActorContextV1 {
-	const values = snapshotDataObject(input);
-	requireExactKeys(values, [
-		"schemaVersion",
-		"userId",
-		"accountStatus",
-		"organizationIds",
-		"isAdministrator",
-	]);
-	if (
-		values.schemaVersion !== 1 ||
-		!capturedText(values.userId) ||
-		(values.accountStatus !== "active" &&
-			values.accountStatus !== "disabled") ||
-		typeof values.isAdministrator !== "boolean"
-	) {
-		invalidInput();
-	}
-	return {
-		schemaVersion: 1,
-		userId: values.userId,
-		accountStatus: values.accountStatus,
-		organizationIds: stringArray(values.organizationIds),
-		isAdministrator: values.isAdministrator,
-	};
 }
 
 function parseObservation(
