@@ -75,6 +75,12 @@ export const agentConfigurationConformanceAdmissionsV1 = {
 			version: 2,
 		},
 	],
+	images: [
+		{
+			selection: { kind: "standard" as const, templateId: "template_01" },
+			source: agentConfigurationConformanceRecordV1.source,
+		},
+	],
 	secretReplacements: [
 		{
 			requestId: "request_01",
@@ -359,6 +365,23 @@ export function agentConfigurationUseCaseConformance(
 
 			const model = agentConfigurationConformanceRecordV1.modelConfiguration;
 			if (!model) throw new Error("Conformance model fixture is required");
+			const admittedImage = new FakeAgentConfigurationAdmissionsV1(
+				agentConfigurationConformanceAdmissionsV1,
+			);
+			await expect(
+				harness
+					.useCaseWithDependencies({ imageAdmission: admittedImage })
+					.update(
+						{
+							...command,
+							idempotencyKey: "admitted-image-correlation-control",
+							changes: {
+								source: { kind: "standard", templateId: "template_01" },
+							},
+						},
+						actor,
+					),
+			).rejects.toEqual(expect.objectContaining({ code: "no_change" }));
 			const attacks = [
 				[
 					"authorization",

@@ -1961,6 +1961,9 @@ export function createAgentConfigurationUseCaseV1(
 					for (const [name, metadata] of replacements) {
 						merged.set(name, metadata);
 					}
+					if (merged.size > maxSecretReplacements) {
+						throw new AgentConfigurationError("not_admitted");
+					}
 					secrets = [...merged.values()].toSorted((left, right) =>
 						left.name.localeCompare(right.name),
 					);

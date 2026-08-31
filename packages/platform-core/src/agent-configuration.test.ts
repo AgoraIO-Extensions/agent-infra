@@ -370,6 +370,61 @@ describe("Agent configuration policy", () => {
 		expect(JSON.stringify(snapshot.lastPlan)).not.toContain("d".repeat(64));
 	});
 
+	it("rejects a 129th aggregate Secret without any effects", async () => {
+		const existingSecrets = Array.from({ length: 128 }, (_, index) => ({
+			name: `CUSTOM_SECRET_${String(index).padStart(3, "0")}`,
+			secretId: `secret_custom_${index}`,
+			version: 1,
+			isSet: true as const,
+		}));
+		const harness = createHarness({
+			record: {
+				...agentConfigurationConformanceRecordV1,
+				source: {
+					kind: "custom",
+					imageDigest: agentConfigurationConformanceRecordV1.source.imageDigest,
+					admissionRevision: "image_policy_7",
+					interactionMode: "platform-adapter",
+					connectionEnabled: true,
+				},
+				modelConfiguration: null,
+				secrets: existingSecrets,
+			},
+			admissions: {
+				secretReplacements: [
+					{
+						requestId: "request_01",
+						name: "CUSTOM_SECRET_128",
+						secretId: "secret_custom_128",
+						version: 1,
+					},
+				],
+			},
+		});
+		await expect(
+			harness.useCase.update(
+				{
+					...command,
+					idempotencyKey: "secret-aggregate-overflow",
+					changes: {
+						secrets: [{ name: "CUSTOM_SECRET_128", replace: true }],
+					},
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		expect(harness.transaction.snapshot()).toMatchObject({
+			configuration: { revision: 7, secrets: existingSecrets },
+			commitCount: 0,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+			managementState: null,
+			authorizationRevision: "authorization_9",
+			lastPlan: null,
+		});
+	});
+
 	it("Fake commits configuration, access, authorization, audit, and outbox with one CAS", async () => {
 		const createAtomic = () => {
 			const transaction = new FakeAgentConfigurationTransactionV1(
@@ -696,20 +751,22 @@ describe("Agent configuration policy", () => {
 								catalogRevision: "catalog_4",
 								options: [
 									{
-										...input.requested.options[0],
+										optionId: input.requested.options[0]?.optionId ?? "",
+										endpointId: input.requested.options[0]?.endpointId ?? "",
 										modelId: "silent-fallback",
+										reasoningLevels:
+											input.requested.options[0]?.reasoningLevels ?? [],
 										credential: {
 											secretId: "secret_model_primary",
 											version: 2,
 											isSet: true,
-											value: "plaintext",
 										},
 									},
 								],
 								defaultOptionId: "model_primary",
 								defaultReasoningLevel: "low",
 							},
-						} as never;
+						};
 					},
 				},
 			},
@@ -719,9 +776,7 @@ describe("Agent configuration policy", () => {
 				{ ...command, changes: { modelConfiguration: model } },
 				actor,
 			),
-		).rejects.toEqual(
-			expect.objectContaining({ code: "dependency_unavailable" }),
-		);
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
 		expect(fallback.transaction.snapshot().commitCount).toBe(0);
 	});
 
