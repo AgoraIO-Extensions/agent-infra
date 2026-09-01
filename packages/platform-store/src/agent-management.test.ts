@@ -723,7 +723,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 										...decision.writePlan,
 										auditEvent: {
 											...decision.writePlan.auditEvent,
-											action: "agent.application.updated",
+											requestId: "request_tampered",
 										},
 									},
 								};

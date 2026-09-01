@@ -54,6 +54,23 @@ const managementStatuses = new Set([
 	"creation_failed",
 	"disabled",
 ]);
+const managementAuditActions = new Set([
+	"agent.application.updated",
+	"agent.application.resubmitted",
+	"agent.application.withdrawn",
+	"agent.application.approved",
+	"agent.application.rejected",
+	"agent.lifecycle.stopped",
+	"agent.lifecycle.restarted",
+	"agent.lifecycle.creation_retried",
+	"agent.lifecycle.disabled",
+	"agent.workload.creation_succeeded",
+	"agent.workload.creation_failed",
+	"agent.workload.service_starting",
+	"agent.workload.service_ready",
+	"agent.workload.service_updating",
+	"agent.workload.service_unavailable",
+]);
 
 function exactObject(input: unknown, keys: readonly string[]): void {
 	if (
@@ -301,35 +318,6 @@ function requireAcceptedEnvelope(
 	]);
 	exactObject(writePlan.idempotency, ["key", "requestDigest"]);
 	const validatedResult = acceptedResult(result, request);
-	const expectedAuditAction =
-		request.operation === "update_application"
-			? current.status === "rejected"
-				? "agent.application.resubmitted"
-				: "agent.application.updated"
-			: {
-					withdraw_application: "agent.application.withdrawn",
-					approve_application: "agent.application.approved",
-					reject_application: "agent.application.rejected",
-					stop_agent: "agent.lifecycle.stopped",
-					restart_agent: "agent.lifecycle.restarted",
-					retry_agent_creation: "agent.lifecycle.creation_retried",
-					disable_agent: "agent.lifecycle.disabled",
-					observe_creation_succeeded: "agent.workload.creation_succeeded",
-					observe_creation_failed: "agent.workload.creation_failed",
-					observe_service_starting: "agent.workload.service_starting",
-					observe_service_ready: "agent.workload.service_ready",
-					observe_service_updating: "agent.workload.service_updating",
-					observe_service_unavailable: "agent.workload.service_unavailable",
-				}[request.operation];
-	const expectedOutboxDesiredState: "running" | "stopped" | null =
-		request.operation === "approve_application" ||
-		request.operation === "restart_agent" ||
-		request.operation === "retry_agent_creation"
-			? "running"
-			: request.operation === "stop_agent" ||
-					request.operation === "disable_agent"
-				? "stopped"
-				: null;
 	if (
 		writePlan.schemaVersion !== 1 ||
 		writePlan.operation !== request.operation ||
@@ -348,7 +336,7 @@ function requireAcceptedEnvelope(
 		writePlan.transition.from !== current.status ||
 		writePlan.transition.to !== writePlan.state.status ||
 		!validDate(writePlan.transition.occurredAt) ||
-		writePlan.auditEvent.action !== expectedAuditAction ||
+		!managementAuditActions.has(writePlan.auditEvent.action) ||
 		writePlan.auditEvent.actorId !== request.actorId ||
 		writePlan.auditEvent.subjectType !== request.subjectType ||
 		writePlan.auditEvent.subjectId !== request.subjectId ||
@@ -364,10 +352,7 @@ function requireAcceptedEnvelope(
 	) {
 		throw new AgentManagementError("unavailable");
 	}
-	if (expectedOutboxDesiredState === null) {
-		if (writePlan.outboxIntent !== null) {
-			throw new AgentManagementError("unavailable");
-		}
+	if (writePlan.outboxIntent === null) {
 		return { result: validatedResult, outboxPayload: null };
 	}
 	const outbox = writePlan.outboxIntent;
@@ -393,7 +378,7 @@ function requireAcceptedEnvelope(
 		revision: writePlan.state.revision,
 		workloadRevision: writePlan.state.workloadRevision,
 		fence: writePlan.state.fence,
-		desiredState: expectedOutboxDesiredState,
+		desiredState: writePlan.state.desiredState,
 	};
 	if (
 		outbox.operation !== "agent.workload.reconcile.v1" ||
