@@ -105,6 +105,7 @@ export const agentConfigurationConformanceAdmissionsV1 = {
 
 export interface AgentConfigurationConformanceSnapshotV1 {
 	readonly configuration: AgentConfigurationRecordV1;
+	readonly authorizationRevision: string;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
 	readonly idempotencyCount: number;
@@ -202,7 +203,8 @@ export function agentConfigurationUseCaseConformance(
 			expect(snapshot.lastPlan).toMatchObject({
 				baseRevision: 7,
 				nextRevision: 8,
-				authorizationRevision: "authorization_9",
+				expectedAuthorizationRevision: "authorization_9",
+				nextAuthorizationRevision: "authorization_9",
 				outboxIntent: {
 					payload: {
 						agentId: "agent_01",
@@ -216,6 +218,90 @@ export function agentConfigurationUseCaseConformance(
 			});
 			expect(snapshot.lastPlan?.outboxIntent).not.toHaveProperty("secrets");
 			expect(snapshot.lastPlan?.auditEvent).not.toHaveProperty("secrets");
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("advances authorization with fresh writes and preserves earlier replays", async () => {
+		const harness = await createHarness();
+		try {
+			const authorizationAt = (authorizationRevision: string) =>
+				new FakeAgentConfigurationAdmissionsV1({
+					...agentConfigurationConformanceAdmissionsV1,
+					authorizations: [
+						{
+							agentId: "agent_01",
+							actorId: "owner_01",
+							authorizationRevision,
+						},
+					],
+				});
+			const firstCommand = {
+				...command,
+				idempotencyKey: "authorization-advance-10",
+				changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			};
+			const firstUseCase = harness.useCaseWithDependencies({
+				authorizationAdmission: authorizationAt("authorization_10"),
+			});
+			const first = await firstUseCase.update(firstCommand, actor);
+			expect(await harness.snapshot()).toMatchObject({
+				authorizationRevision: "authorization_10",
+				commitCount: 1,
+				lastPlan: {
+					expectedAuthorizationRevision: "authorization_9",
+					nextAuthorizationRevision: "authorization_10",
+				},
+			});
+
+			const currentAuthorization = authorizationAt("authorization_11");
+			await harness
+				.useCaseWithDependencies({
+					authorizationAdmission: currentAuthorization,
+				})
+				.update(
+					{
+						...command,
+						idempotencyKey: "authorization-advance-11",
+						changes: { environment: [{ name: "LOG_LEVEL", value: "warn" }] },
+					},
+					actor,
+				);
+			const later = await harness.snapshot();
+			expect(later).toMatchObject({
+				authorizationRevision: "authorization_11",
+				commitCount: 2,
+				idempotencyCount: 2,
+				outboxCount: 2,
+				auditCount: 2,
+			});
+			await expect(
+				harness
+					.useCaseWithDependencies({
+						authorizationAdmission: currentAuthorization,
+					})
+					.update(firstCommand, actor),
+			).resolves.toEqual(first);
+			expect(await harness.snapshot()).toEqual(later);
+
+			await expect(
+				harness
+					.useCaseWithDependencies({
+						authorizationAdmission: {
+							async authorize(input) {
+								return {
+									schemaVersion: 1,
+									status: "rejected",
+									agentId: input.agentId,
+									actorId: input.actorId,
+								};
+							},
+						},
+					})
+					.update(firstCommand, actor),
+			).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
+			expect(await harness.snapshot()).toEqual(later);
 		} finally {
 			await harness.close();
 		}
@@ -258,6 +344,16 @@ export function agentConfigurationUseCaseConformance(
 			await expect(
 				harness.useCase.update(
 					{ ...command, changes: {}, baseRevision: 7 } as never,
+					actor,
+				),
+			).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
+			await expect(
+				harness.useCase.update(
+					{
+						...command,
+						authorizationRevision: "caller_revision",
+						changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+					} as never,
 					actor,
 				),
 			).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
@@ -463,9 +559,13 @@ export function agentConfigurationUseCaseConformance(
 				transaction: {
 					read: async () => ({
 						outcome: "ready",
-						configuration: {
-							...agentConfigurationConformanceRecordV1,
-							agentId: "agent_other",
+						record: {
+							schemaVersion: 1,
+							authorizationRevision: "authorization_9",
+							configuration: {
+								...agentConfigurationConformanceRecordV1,
+								agentId: "agent_other",
+							},
 						},
 					}),
 					commit: async () => {

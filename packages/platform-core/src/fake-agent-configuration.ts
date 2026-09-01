@@ -74,7 +74,11 @@ export class FakeAgentConfigurationTransactionV1
 		return this.#configuration.agentId === input.agentId
 			? {
 					outcome: "ready",
-					configuration: structuredClone(this.#configuration),
+					record: {
+						schemaVersion: 1,
+						configuration: structuredClone(this.#configuration),
+						authorizationRevision: this.#authorizationRevision,
+					},
 				}
 			: { outcome: "missing" };
 	}
@@ -100,7 +104,7 @@ export class FakeAgentConfigurationTransactionV1
 		if (
 			plan.agentId !== this.#configuration.agentId ||
 			plan.baseRevision !== this.#configuration.revision ||
-			plan.authorizationRevision !== this.#authorizationRevision ||
+			plan.expectedAuthorizationRevision !== this.#authorizationRevision ||
 			(plan.accessUpdate !== null &&
 				(this.#managementState === null ||
 					this.#managementState.agentId !== plan.agentId ||
@@ -132,6 +136,7 @@ export class FakeAgentConfigurationTransactionV1
 		});
 		this.#configuration = configuration;
 		this.#managementState = managementState;
+		this.#authorizationRevision = plan.nextAuthorizationRevision;
 		this.#lastPlan = lastPlan;
 		this.#idempotency = idempotency;
 		this.#commitCount += 1;

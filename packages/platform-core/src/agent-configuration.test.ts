@@ -130,17 +130,29 @@ describe("Agent configuration policy", () => {
 		for (const read of [
 			async () => ({
 				outcome: "ready" as const,
-				configuration: {
-					...agentConfigurationConformanceRecordV1,
-					secrets: [
-						{
-							name: "BOT_TOKEN",
-							secretId: "secret_bot",
-							version: 1,
-							isSet: true as const,
-							value: "plaintext",
-						},
-					],
+				record: {
+					schemaVersion: 1 as const,
+					authorizationRevision: "authorization_9",
+					configuration: {
+						...agentConfigurationConformanceRecordV1,
+						secrets: [
+							{
+								name: "BOT_TOKEN",
+								secretId: "secret_bot",
+								version: 1,
+								isSet: true as const,
+								value: "plaintext",
+							},
+						],
+					},
+				},
+			}),
+			async () => ({
+				outcome: "ready" as const,
+				record: {
+					schemaVersion: 1 as const,
+					authorizationRevision: "",
+					configuration: agentConfigurationConformanceRecordV1,
 				},
 			}),
 			async () =>
@@ -370,18 +382,25 @@ describe("Agent configuration policy", () => {
 		expect(JSON.stringify(snapshot.lastPlan)).not.toContain("d".repeat(64));
 	});
 
-	it("re-authorizes identical replays before reading persisted idempotency", async () => {
+	it("re-authorizes identical replays before returning persisted idempotency", async () => {
 		const transaction = new FakeAgentConfigurationTransactionV1(
 			agentConfigurationConformanceRecordV1,
 		);
 		const admissions = new FakeAgentConfigurationAdmissionsV1(
 			agentConfigurationConformanceAdmissionsV1,
 		);
+		let readCalls = 0;
 		const createUseCase = (
 			authorizationAdmission: AgentConfigurationUseCaseDependenciesV1["authorizationAdmission"],
 		) =>
 			createAgentConfigurationUseCaseV1({
-				transaction,
+				transaction: {
+					async read(input) {
+						readCalls += 1;
+						return transaction.read(input);
+					},
+					commit: transaction.commit.bind(transaction),
+				},
 				authorizationAdmission,
 				imageAdmission: admissions,
 				modelAdmission: admissions,
@@ -396,6 +415,7 @@ describe("Agent configuration policy", () => {
 		};
 		await createUseCase(admissions).update(replayCommand, actor);
 		const committed = transaction.snapshot();
+		readCalls = 0;
 
 		let revokedCalls = 0;
 		await expect(
@@ -412,6 +432,7 @@ describe("Agent configuration policy", () => {
 			}).update(replayCommand, actor),
 		).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
 		expect(revokedCalls).toBe(1);
+		expect(readCalls).toBe(0);
 		expect(transaction.snapshot()).toEqual(committed);
 
 		let unavailableCalls = 0;
@@ -426,7 +447,69 @@ describe("Agent configuration policy", () => {
 			expect.objectContaining({ code: "dependency_unavailable" }),
 		);
 		expect(unavailableCalls).toBe(1);
+		expect(readCalls).toBe(0);
 		expect(transaction.snapshot()).toEqual(committed);
+	});
+
+	it("binds current authorization after the persisted read and rejects commit-time drift", async () => {
+		const transaction = new FakeAgentConfigurationTransactionV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		const admissions = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			authorizations: [
+				{
+					agentId: "agent_01",
+					actorId: "owner_01",
+					authorizationRevision: "authorization_10",
+				},
+			],
+		});
+		const order: string[] = [];
+		const useCase = createAgentConfigurationUseCaseV1({
+			transaction: {
+				async read(input) {
+					order.push("read");
+					return transaction.read(input);
+				},
+				async commit(plan) {
+					order.push("commit");
+					transaction.setAuthorizationRevision("authorization_11");
+					return transaction.commit(plan);
+				},
+			},
+			authorizationAdmission: {
+				async authorize(input) {
+					order.push("authorize");
+					return admissions.authorize(input);
+				},
+			},
+			imageAdmission: admissions,
+			modelAdmission: admissions,
+			secretAdmission: admissions,
+			actionAdmission: admissions,
+			channelAdmission: admissions,
+		});
+		await expect(
+			useCase.update(
+				{
+					...command,
+					idempotencyKey: "authorization-commit-drift",
+					changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
+		expect(order).toEqual(["authorize", "read", "authorize", "commit"]);
+		expect(transaction.snapshot()).toMatchObject({
+			authorizationRevision: "authorization_11",
+			configuration: { revision: 7 },
+			commitCount: 0,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+			lastPlan: null,
+		});
 	});
 
 	it("fails closed when commit or commit-time replay lies about the persisted result", async () => {
@@ -556,7 +639,9 @@ describe("Agent configuration policy", () => {
 	});
 
 	it("Fake commits configuration, access, authorization, audit, and outbox with one CAS", async () => {
-		const createAtomic = () => {
+		const createAtomic = (
+			admittedAuthorizationRevision = "authorization_9",
+		) => {
 			const transaction = new FakeAgentConfigurationTransactionV1(
 				agentConfigurationConformanceRecordV1,
 				{
@@ -570,7 +655,7 @@ describe("Agent configuration policy", () => {
 					{
 						agentId: "agent_01",
 						actorId: "owner_01",
-						authorizationRevision: "authorization_9",
+						authorizationRevision: admittedAuthorizationRevision,
 						accessAuthority,
 					},
 				],
@@ -639,27 +724,30 @@ describe("Agent configuration policy", () => {
 			managementState: { revision: 12, ownerIds: ["owner_01"] },
 		});
 
-		const staleAuthorization = createAtomic();
-		staleAuthorization.transaction.setAuthorizationRevision("authorization_10");
+		const advancedAuthorization = createAtomic("authorization_10");
 		await expect(
-			staleAuthorization.useCase.update(
+			advancedAuthorization.useCase.update(
 				{
 					...command,
-					idempotencyKey: "atomic-authorization-stale-01",
+					idempotencyKey: "atomic-authorization-advance-01",
 					changes: {
 						environment: [{ name: "LOG_LEVEL", value: "debug" }],
 					},
 				},
 				actor,
 			),
-		).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
-		expect(staleAuthorization.transaction.snapshot()).toMatchObject({
-			commitCount: 0,
-			idempotencyCount: 0,
-			outboxCount: 0,
-			auditCount: 0,
+		).resolves.toMatchObject({ revision: 8 });
+		expect(advancedAuthorization.transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			idempotencyCount: 1,
+			outboxCount: 1,
+			auditCount: 1,
 			authorizationRevision: "authorization_10",
-			configuration: { revision: 7 },
+			configuration: { revision: 8 },
+			lastPlan: {
+				expectedAuthorizationRevision: "authorization_9",
+				nextAuthorizationRevision: "authorization_10",
+			},
 		});
 	});
 

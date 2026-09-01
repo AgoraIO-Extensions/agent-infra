@@ -208,7 +208,8 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly agentId: string;
 	readonly baseRevision: number;
 	readonly nextRevision: number;
-	readonly authorizationRevision: string;
+	readonly expectedAuthorizationRevision: string;
+	readonly nextAuthorizationRevision: string;
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
 	readonly result: AgentConfigurationResultV1;
@@ -252,7 +253,11 @@ export interface AgentConfigurationTransactionPortV1 {
 	}): Promise<
 		| {
 				readonly outcome: "ready";
-				readonly configuration: AgentConfigurationRecordV1;
+				readonly record: {
+					readonly schemaVersion: 1;
+					readonly configuration: AgentConfigurationRecordV1;
+					readonly authorizationRevision: string;
+				};
 		  }
 		| { readonly outcome: "missing" }
 		| {
@@ -1593,12 +1598,27 @@ function parseTransactionReadDecision(
 	agentId: string,
 ): Awaited<ReturnType<AgentConfigurationTransactionPortV1["read"]>> {
 	return persistenceValue(() => {
-		const base = exactObject(input, ["outcome"], ["configuration", "result"]);
+		const base = exactObject(input, ["outcome"], ["record", "result"]);
 		if (base.outcome === "ready") {
-			requireAgentManagementExactKeys(base, ["outcome", "configuration"]);
+			requireAgentManagementExactKeys(base, ["outcome", "record"]);
+			const record = exactObject(base.record, [
+				"schemaVersion",
+				"configuration",
+				"authorizationRevision",
+			]);
+			if (
+				record.schemaVersion !== 1 ||
+				!isText(record.authorizationRevision, idMaxBytes)
+			) {
+				invalidCommand();
+			}
 			return {
 				outcome: "ready",
-				configuration: parsePersistedConfiguration(base.configuration),
+				record: {
+					schemaVersion: 1,
+					configuration: parsePersistedConfiguration(record.configuration),
+					authorizationRevision: record.authorizationRevision,
+				},
 			};
 		}
 		if (base.outcome === "replayed") {
@@ -1636,6 +1656,46 @@ function parseTransactionCommitDecision(
 
 const systemNow = () => new Date();
 
+async function admitCurrentAuthorization(
+	admission: AgentConfigurationAuthorizationAdmissionPortV1,
+	command: UpdateAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+): Promise<
+	Extract<
+		Awaited<
+			ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+		>,
+		{ readonly status: "admitted" }
+	>
+> {
+	let authorization: Awaited<
+		ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+	>;
+	try {
+		authorization = parseAuthorizationDecision(
+			await admission.authorize({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				actorId: actorContext.actorId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	if (
+		authorization.status !== "admitted" ||
+		authorization.schemaVersion !== 1 ||
+		authorization.agentId !== command.agentId ||
+		authorization.actorId !== actorContext.actorId ||
+		!isText(authorization.authorizationRevision, idMaxBytes)
+	) {
+		throw new AgentConfigurationError("not_authorized");
+	}
+	return authorization;
+}
+
 export function createAgentConfigurationUseCaseV1(
 	dependencies: AgentConfigurationUseCaseDependenciesV1,
 	options: AgentConfigurationUseCaseOptionsV1 = {},
@@ -1646,31 +1706,11 @@ export function createAgentConfigurationUseCaseV1(
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			const digest = requestDigest(command, actorContext);
-			let authorization: Awaited<
-				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
-			>;
-			try {
-				authorization = parseAuthorizationDecision(
-					await dependencies.authorizationAdmission.authorize({
-						schemaVersion: 1,
-						agentId: command.agentId,
-						actorId: actorContext.actorId,
-						requestId: command.requestId,
-						traceId: command.traceId,
-					}),
-				);
-			} catch {
-				throw new AgentConfigurationError("dependency_unavailable");
-			}
-			if (
-				authorization.status !== "admitted" ||
-				authorization.schemaVersion !== 1 ||
-				authorization.agentId !== command.agentId ||
-				authorization.actorId !== actorContext.actorId ||
-				!isText(authorization.authorizationRevision, idMaxBytes)
-			) {
-				throw new AgentConfigurationError("not_authorized");
-			}
+			await admitCurrentAuthorization(
+				dependencies.authorizationAdmission,
+				command,
+				actorContext,
+			);
 			let readDecision: Awaited<
 				ReturnType<AgentConfigurationTransactionPortV1["read"]>
 			>;
@@ -1696,11 +1736,16 @@ export function createAgentConfigurationUseCaseV1(
 			}
 			if (
 				readDecision.outcome === "missing" ||
-				readDecision.configuration.agentId !== command.agentId
+				readDecision.record.configuration.agentId !== command.agentId
 			) {
 				throw new AgentConfigurationError("not_authorized");
 			}
-			const current = readDecision.configuration;
+			const current = readDecision.record.configuration;
+			const authorization = await admitCurrentAuthorization(
+				dependencies.authorizationAdmission,
+				command,
+				actorContext,
+			);
 
 			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 			const changedFields: AgentConfigurationChangedFieldV1[] = [];
@@ -2154,7 +2199,9 @@ export function createAgentConfigurationUseCaseV1(
 				agentId: command.agentId,
 				baseRevision: current.revision,
 				nextRevision,
-				authorizationRevision: authorization.authorizationRevision,
+				expectedAuthorizationRevision:
+					readDecision.record.authorizationRevision,
+				nextAuthorizationRevision: authorization.authorizationRevision,
 				configuration,
 				accessUpdate,
 				result,
