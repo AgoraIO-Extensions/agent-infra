@@ -350,6 +350,13 @@ function requireAcceptedEnvelope(
 	) {
 		throw new AgentManagementError("unavailable");
 	}
+	const workloadChanged =
+		writePlan.state.desiredState !== current.desiredState ||
+		writePlan.state.workloadRevision !== current.workloadRevision ||
+		writePlan.state.fence !== current.fence;
+	if (workloadChanged !== (writePlan.outboxIntent !== null)) {
+		throw new AgentManagementError("unavailable");
+	}
 	if (writePlan.outboxIntent === null) {
 		return { result: validatedResult, outboxPayload: null };
 	}

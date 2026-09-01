@@ -704,7 +704,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			applicationId: "application_malformed_plan",
 			agentId: "agent_malformed_plan",
 		});
-		for (const tamper of ["outbox", "audit"] as const) {
+		for (const tamper of ["outbox", "audit", "missing-outbox"] as const) {
 			await seedStates([state]);
 			const before = await databaseSnapshot();
 			const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
@@ -726,6 +726,12 @@ describe("PostgreSQL Agent-management Adapter", () => {
 											requestId: "request_tampered",
 										},
 									},
+								};
+							}
+							if (tamper === "missing-outbox") {
+								return {
+									...decision,
+									writePlan: { ...decision.writePlan, outboxIntent: null },
 								};
 							}
 							if (!decision.writePlan.outboxIntent) {
