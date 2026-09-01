@@ -26,6 +26,13 @@ describe("platform-core package surface", () => {
 		const surface = await import(
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
+		const declarations = await readFile(
+			new URL("../dist/index.d.mts", import.meta.url),
+			"utf8",
+		);
+		expect(declarations).not.toMatch(
+			/beginInitialAgentConfigurationAdmissionV1|decodeAgentConfigurationRecordV1|InitialAgentConfigurationAdmissionHandleV1/,
+		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
 			"AgentManagementError",

@@ -234,6 +234,56 @@ function replayDecision(
 	return { outcome: "replayed" as const, result };
 }
 
+async function requirePersistedReplayIntegrity(
+	database: Pick<ReturnType<typeof drizzle>, "select">,
+	result: CommitApplicationFoundationResultV1,
+): Promise<void> {
+	const [persisted] = await database
+		.select({
+			agentId: agents.id,
+			currentConfigurationRevision: agents.currentConfigurationRevision,
+			applicationAgentId: agentApplications.agentId,
+			configuration: agentConfigurationRevisions.configuration,
+			sourceReference: agentConfigurationRevisions.sourceReference,
+		})
+		.from(agents)
+		.innerJoin(
+			agentApplications,
+			and(
+				eq(agentApplications.agentId, agents.id),
+				eq(agentApplications.id, result.applicationId),
+			),
+		)
+		.innerJoin(
+			agentConfigurationRevisions,
+			and(
+				eq(agentConfigurationRevisions.agentId, agents.id),
+				eq(
+					agentConfigurationRevisions.revision,
+					agents.currentConfigurationRevision,
+				),
+			),
+		)
+		.where(eq(agents.id, result.agentId))
+		.limit(1);
+	if (!persisted?.configuration) {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+	const replayedConfiguration = decodeAgentConfigurationRecord(
+		persisted.configuration,
+	);
+	if (
+		persisted.applicationAgentId !== result.agentId ||
+		persisted.currentConfigurationRevision !== result.configurationRevision ||
+		replayedConfiguration.agentId !== result.agentId ||
+		replayedConfiguration.revision !== result.configurationRevision ||
+		persisted.sourceReference !==
+			canonicalSourceReference(replayedConfiguration)
+	) {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+}
+
 export class PostgresApplicationFoundationTransactionV1
 	implements ApplicationFoundationTransactionPortV1
 {
@@ -277,52 +327,7 @@ export class PostgresApplicationFoundationTransactionV1
 			if (replay.outcome === "conflict") {
 				return { outcome: "idempotency_conflict" };
 			}
-			const [persisted] = await this.#database
-				.select({
-					agentId: agents.id,
-					currentConfigurationRevision: agents.currentConfigurationRevision,
-					applicationAgentId: agentApplications.agentId,
-					configuration: agentConfigurationRevisions.configuration,
-					sourceReference: agentConfigurationRevisions.sourceReference,
-				})
-				.from(agents)
-				.innerJoin(
-					agentApplications,
-					and(
-						eq(agentApplications.agentId, agents.id),
-						eq(agentApplications.id, replay.result.applicationId),
-					),
-				)
-				.innerJoin(
-					agentConfigurationRevisions,
-					and(
-						eq(agentConfigurationRevisions.agentId, agents.id),
-						eq(
-							agentConfigurationRevisions.revision,
-							agents.currentConfigurationRevision,
-						),
-					),
-				)
-				.where(eq(agents.id, replay.result.agentId))
-				.limit(1);
-			if (!persisted?.configuration) {
-				throw new ApplicationFoundationError("persistence_failed");
-			}
-			const replayedConfiguration = decodeAgentConfigurationRecord(
-				persisted.configuration,
-			);
-			if (
-				persisted.applicationAgentId !== replay.result.agentId ||
-				persisted.currentConfigurationRevision !==
-					replay.result.configurationRevision ||
-				replayedConfiguration.agentId !== replay.result.agentId ||
-				replayedConfiguration.revision !==
-					replay.result.configurationRevision ||
-				persisted.sourceReference !==
-					canonicalSourceReference(replayedConfiguration)
-			) {
-				throw new ApplicationFoundationError("persistence_failed");
-			}
+			await requirePersistedReplayIntegrity(this.#database, replay.result);
 			return replay;
 		} catch (error) {
 			if (error instanceof ApplicationFoundationError) throw error;
@@ -376,53 +381,7 @@ export class PostgresApplicationFoundationTransactionV1
 						requestDigest: plan.idempotency.requestDigest,
 					});
 					if (replay.outcome === "replayed") {
-						const [persisted] = await transaction
-							.select({
-								agentId: agents.id,
-								currentConfigurationRevision:
-									agents.currentConfigurationRevision,
-								applicationAgentId: agentApplications.agentId,
-								configuration: agentConfigurationRevisions.configuration,
-								sourceReference: agentConfigurationRevisions.sourceReference,
-							})
-							.from(agents)
-							.innerJoin(
-								agentApplications,
-								and(
-									eq(agentApplications.agentId, agents.id),
-									eq(agentApplications.id, replay.result.applicationId),
-								),
-							)
-							.innerJoin(
-								agentConfigurationRevisions,
-								and(
-									eq(agentConfigurationRevisions.agentId, agents.id),
-									eq(
-										agentConfigurationRevisions.revision,
-										agents.currentConfigurationRevision,
-									),
-								),
-							)
-							.where(eq(agents.id, replay.result.agentId))
-							.limit(1);
-						if (!persisted?.configuration) {
-							throw new ApplicationFoundationError("persistence_failed");
-						}
-						const replayedConfiguration = decodeAgentConfigurationRecord(
-							persisted.configuration,
-						);
-						if (
-							persisted.applicationAgentId !== replay.result.agentId ||
-							persisted.currentConfigurationRevision !==
-								replay.result.configurationRevision ||
-							replayedConfiguration.agentId !== replay.result.agentId ||
-							replayedConfiguration.revision !==
-								replay.result.configurationRevision ||
-							persisted.sourceReference !==
-								canonicalSourceReference(replayedConfiguration)
-						) {
-							throw new ApplicationFoundationError("persistence_failed");
-						}
+						await requirePersistedReplayIntegrity(transaction, replay.result);
 					}
 					return replay;
 				}
