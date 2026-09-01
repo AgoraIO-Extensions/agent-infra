@@ -478,6 +478,10 @@ const maxAccessTargets = 256;
 const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
 
+function compareText(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function invalidCommand(): never {
 	throw new AgentConfigurationError("invalid_command");
 }
@@ -597,7 +601,7 @@ function parseModelConfiguration(
 	}
 	return {
 		options: options.toSorted((left, right) =>
-			left.optionId.localeCompare(right.optionId),
+			compareText(left.optionId, right.optionId),
 		),
 		defaultOptionId: values.defaultOptionId,
 		defaultReasoningLevel: values.defaultReasoningLevel,
@@ -765,7 +769,7 @@ function parseEnvironment(input: unknown): { name: string; value: string }[] {
 		names.add(values.name);
 		return { name: values.name, value: values.value };
 	});
-	return parsed.toSorted((left, right) => left.name.localeCompare(right.name));
+	return parsed.toSorted((left, right) => compareText(left.name, right.name));
 }
 
 function parseSecretReplacements(
@@ -788,7 +792,7 @@ function parseSecretReplacements(
 			names.add(values.name);
 			return { name: values.name, replace: true as const };
 		})
-		.toSorted((left, right) => left.name.localeCompare(right.name));
+		.toSorted((left, right) => compareText(left.name, right.name));
 }
 
 function canonicalActions(input: unknown): AgentConfigurationActionV1[] {
@@ -818,7 +822,8 @@ function canonicalActions(input: unknown): AgentConfigurationActionV1[] {
 			};
 		})
 		.toSorted((left, right) =>
-			`${left.providerId}\0${left.actionId}\0${left.actionVersion}`.localeCompare(
+			compareText(
+				`${left.providerId}\0${left.actionId}\0${left.actionVersion}`,
 				`${right.providerId}\0${right.actionId}\0${right.actionVersion}`,
 			),
 		);
@@ -856,7 +861,7 @@ function parseChannelChanges(
 			if (Object.hasOwn(base, "bindingReference")) invalidCommand();
 			return { kind, enabled: false as const };
 		})
-		.toSorted((left, right) => left.kind.localeCompare(right.kind));
+		.toSorted((left, right) => compareText(left.kind, right.kind));
 }
 
 function canonicalChannelBindings(
@@ -881,7 +886,7 @@ function canonicalChannelBindings(
 				bindingReference: values.bindingReference,
 			};
 		})
-		.toSorted((left, right) => left.kind.localeCompare(right.kind));
+		.toSorted((left, right) => compareText(left.kind, right.kind));
 }
 
 function parseOwnerIds(input: unknown): string[] {
@@ -929,7 +934,7 @@ function parseAvailability(input: unknown): AgentConfigurationAccessTargetV1[] {
 			};
 		})
 		.toSorted((left, right) =>
-			accessTargetKey(left).localeCompare(accessTargetKey(right)),
+			compareText(accessTargetKey(left), accessTargetKey(right)),
 		);
 }
 
@@ -1107,7 +1112,7 @@ function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 	return {
 		catalogRevision: values.catalogRevision,
 		options: options.toSorted((left, right) =>
-			left.optionId.localeCompare(right.optionId),
+			compareText(left.optionId, right.optionId),
 		),
 		defaultOptionId: values.defaultOptionId,
 		defaultReasoningLevel: values.defaultReasoningLevel,
@@ -1147,7 +1152,7 @@ function parseStoredSecrets(
 				isSet: true as const,
 			};
 		})
-		.toSorted((left, right) => left.name.localeCompare(right.name));
+		.toSorted((left, right) => compareText(left.name, right.name));
 }
 
 function parsePersistedConfiguration(
@@ -1973,7 +1978,7 @@ export function createAgentConfigurationUseCaseV1(
 						throw new AgentConfigurationError("not_admitted");
 					}
 					secrets = [...merged.values()].toSorted((left, right) =>
-						left.name.localeCompare(right.name),
+						compareText(left.name, right.name),
 					);
 					if (!sameValue(secrets, current.secrets)) {
 						changedFields.push("secrets");
@@ -1985,40 +1990,45 @@ export function createAgentConfigurationUseCaseV1(
 			let actionSetRevision = current.actionSetRevision;
 			if (command.changes.actions) {
 				if (!source.connectionEnabled) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				let admission: Awaited<
-					ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
-				>;
-				try {
-					admission = parseActionDecision(
-						await dependencies.actionAdmission.admitActions({
-							schemaVersion: 1,
-							agentId: command.agentId,
-							requestId: command.requestId,
-							traceId: command.traceId,
-							requested: command.changes.actions,
-						}),
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				const admittedActions =
-					admission.status === "admitted" ? admission.actions : [];
-				if (
-					admission.status !== "admitted" ||
-					admission.schemaVersion !== 1 ||
-					admission.agentId !== command.agentId ||
-					admission.requestId !== command.requestId ||
-					!isText(admission.actionSetRevision, idMaxBytes) ||
-					!sameValue(admittedActions, command.changes.actions)
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				actions = admittedActions;
-				if (!sameValue(actions, current.actions)) {
-					actionSetRevision = admission.actionSetRevision;
-					changedFields.push("actions");
+					if (command.changes.actions.length > 0) {
+						throw new AgentConfigurationError("not_admitted");
+					}
+					actions = [];
+					if (current.actions.length > 0) changedFields.push("actions");
+				} else {
+					let admission: Awaited<
+						ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
+					>;
+					try {
+						admission = parseActionDecision(
+							await dependencies.actionAdmission.admitActions({
+								schemaVersion: 1,
+								agentId: command.agentId,
+								requestId: command.requestId,
+								traceId: command.traceId,
+								requested: command.changes.actions,
+							}),
+						);
+					} catch {
+						throw new AgentConfigurationError("dependency_unavailable");
+					}
+					const admittedActions =
+						admission.status === "admitted" ? admission.actions : [];
+					if (
+						admission.status !== "admitted" ||
+						admission.schemaVersion !== 1 ||
+						admission.agentId !== command.agentId ||
+						admission.requestId !== command.requestId ||
+						!isText(admission.actionSetRevision, idMaxBytes) ||
+						!sameValue(admittedActions, command.changes.actions)
+					) {
+						throw new AgentConfigurationError("not_admitted");
+					}
+					actions = admittedActions;
+					if (!sameValue(actions, current.actions)) {
+						actionSetRevision = admission.actionSetRevision;
+						changedFields.push("actions");
+					}
 				}
 			}
 
@@ -2064,7 +2074,7 @@ export function createAgentConfigurationUseCaseV1(
 					}
 				}
 				const expectedChannels = [...expected.values()].toSorted(
-					(left, right) => left.kind.localeCompare(right.kind),
+					(left, right) => compareText(left.kind, right.kind),
 				);
 				if (
 					admission.status !== "admitted" ||

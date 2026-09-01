@@ -1284,4 +1284,342 @@ describe("Agent configuration policy", () => {
 		});
 		expect(error).not.toHaveProperty("cause");
 	});
+
+	it("keeps canonical command and plan ordering independent of localeCompare", async () => {
+		const scenario = () => {
+			const storedSource = agentConfigurationConformanceRecordV1.source;
+			if (storedSource.kind !== "standard") {
+				throw new Error("Standard conformance source is required");
+			}
+			const firstOption = {
+				optionId: "!model-a",
+				endpointId: "endpoint-a",
+				modelId: "model-a",
+				reasoningLevels: ["high", "low"],
+				credential: {
+					secretId: "secret_model_a",
+					version: 1,
+					isSet: true as const,
+				},
+			};
+			const secondOption = {
+				optionId: "模型-z",
+				endpointId: "endpoint-z",
+				modelId: "model-z",
+				reasoningLevels: ["low", "high"],
+				credential: {
+					secretId: "secret_model_z",
+					version: 1,
+					isSet: true as const,
+				},
+			};
+			const record: AgentConfigurationRecordV1 = {
+				...agentConfigurationConformanceRecordV1,
+				source: {
+					...storedSource,
+					allowedEnvironmentKeys: ["Z_KEY", "A_KEY"],
+					allowedSecretKeys: [
+						"Z_SECRET",
+						"A_SECRET",
+						"NEW_Z_SECRET",
+						"NEW_A_SECRET",
+					],
+					platformManagedKeys: [],
+				},
+				modelConfiguration: {
+					catalogRevision: "catalog_3",
+					options: [secondOption, firstOption],
+					defaultOptionId: firstOption.optionId,
+					defaultReasoningLevel: "low",
+				},
+				actions: [
+					{ providerId: "提供方-z", actionId: "!read", actionVersion: "v2" },
+					{ providerId: "!provider-a", actionId: "写", actionVersion: "v1" },
+				],
+				environment: [
+					{ name: "Z_KEY", value: "old-z" },
+					{ name: "A_KEY", value: "old-a" },
+				],
+				secrets: [
+					{
+						name: "Z_SECRET",
+						secretId: "secret-z",
+						version: 1,
+						isSet: true,
+					},
+					{
+						name: "A_SECRET",
+						secretId: "secret-a",
+						version: 1,
+						isSet: true,
+					},
+				],
+				channels: [
+					{ kind: "wecom_app", bindingReference: "binding-old-app" },
+					{ kind: "wecom_bot", bindingReference: "binding-old-bot" },
+				],
+			};
+			const actions = [...record.actions].reverse();
+			const admissions = new FakeAgentConfigurationAdmissionsV1({
+				...agentConfigurationConformanceAdmissionsV1,
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "owner_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority,
+					},
+				],
+				models: [
+					{
+						endpointId: firstOption.endpointId,
+						modelId: firstOption.modelId,
+						reasoningLevels: ["low", "high"],
+						catalogRevision: "catalog_4",
+					},
+					{
+						endpointId: secondOption.endpointId,
+						modelId: secondOption.modelId,
+						reasoningLevels: ["high", "low"],
+						catalogRevision: "catalog_4",
+					},
+				],
+				secretReplacements: [
+					{
+						requestId: "request_01",
+						name: "NEW_Z_SECRET",
+						secretId: "secret-new-z",
+						version: 1,
+					},
+					{
+						requestId: "request_01",
+						name: "NEW_A_SECRET",
+						secretId: "secret-new-a",
+						version: 1,
+					},
+				],
+				actions,
+				channelBindings: [
+					{ kind: "wecom_app", bindingReference: "binding-new-app" },
+					{ kind: "wecom_bot", bindingReference: "binding-new-bot" },
+				],
+			});
+			const transaction = new FakeAgentConfigurationTransactionV1(record, {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			});
+			const useCase = createAgentConfigurationUseCaseV1(
+				{
+					transaction,
+					authorizationAdmission: admissions,
+					imageAdmission: admissions,
+					modelAdmission: admissions,
+					secretAdmission: admissions,
+					actionAdmission: admissions,
+					channelAdmission: admissions,
+				},
+				{ now: () => new Date(serverInstant) },
+			);
+			return {
+				transaction,
+				useCase,
+				command: {
+					...command,
+					idempotencyKey: "locale-independent-canonicalization",
+					changes: {
+						ownerIds: ["owner_02", "owner_01"],
+						availability: [
+							{ kind: "user" as const, userId: "owner_02" },
+							{ kind: "organization" as const, organizationId: "org_platform" },
+						],
+						modelConfiguration: {
+							options: [secondOption, firstOption].map((option) => ({
+								optionId: option.optionId,
+								endpointId: option.endpointId,
+								modelId: option.modelId,
+								reasoningLevels: [...option.reasoningLevels].reverse(),
+								replaceCredential: false,
+							})),
+							defaultOptionId: firstOption.optionId,
+							defaultReasoningLevel: "high",
+						},
+						environment: [
+							{ name: "Z_KEY", value: "new-z" },
+							{ name: "A_KEY", value: "new-a" },
+						],
+						secrets: [
+							{ name: "NEW_Z_SECRET", replace: true as const },
+							{ name: "NEW_A_SECRET", replace: true as const },
+						],
+						actions,
+						channels: [
+							{
+								kind: "wecom_app" as const,
+								enabled: true as const,
+								bindingReference: "binding-new-app",
+							},
+							{
+								kind: "wecom_bot" as const,
+								enabled: true as const,
+								bindingReference: "binding-new-bot",
+							},
+						],
+					},
+				},
+			};
+		};
+
+		const baseline = scenario();
+		const baselineResult = await baseline.useCase.update(
+			baseline.command,
+			actor,
+		);
+		const baselinePlan = baseline.transaction.snapshot().lastPlan;
+		const patched = scenario();
+		const descriptor = Object.getOwnPropertyDescriptor(
+			String.prototype,
+			"localeCompare",
+		);
+		let patchedResult: typeof baselineResult;
+		try {
+			String.prototype.localeCompare = () => {
+				throw new Error("localeCompare must not be used");
+			};
+			patchedResult = await patched.useCase.update(patched.command, actor);
+		} finally {
+			if (descriptor) {
+				Object.defineProperty(String.prototype, "localeCompare", descriptor);
+			}
+		}
+		expect(patchedResult).toEqual(baselineResult);
+		expect(patched.transaction.snapshot().lastPlan).toEqual(baselinePlan);
+	});
+
+	it("clears Actions atomically when an admitted image removes Connection capability", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: "registry.example/agent:no-connection",
+			interactionMode: "platform-adapter" as const,
+		};
+		const disabledSource = {
+			kind: "custom" as const,
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			admissionRevision: "image_policy_no_connection",
+			interactionMode: "platform-adapter" as const,
+			connectionEnabled: false,
+		};
+		const currentAction = {
+			providerId: "github",
+			actionId: "issues.read",
+			actionVersion: "v3",
+		};
+		const currentRecord = (
+			actions: AgentConfigurationRecordV1["actions"],
+			connectionEnabled = true,
+		): AgentConfigurationRecordV1 => ({
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom",
+				imageDigest: connectionEnabled
+					? agentConfigurationConformanceRecordV1.source.imageDigest
+					: disabledSource.imageDigest,
+				admissionRevision: connectionEnabled
+					? "image_policy_connection"
+					: "image_policy_no_connection_old",
+				interactionMode: "platform-adapter",
+				connectionEnabled,
+			},
+			modelConfiguration: null,
+			actions,
+			channels: [],
+		});
+		const createConnectionHarness = (record: AgentConfigurationRecordV1) => {
+			let actionAdmissionCalls = 0;
+			const harness = createHarness({
+				record,
+				admissions: {
+					images: [{ selection, source: disabledSource }],
+				},
+				dependencies: {
+					actionAdmission: {
+						async admitActions() {
+							actionAdmissionCalls += 1;
+							throw new Error("Action admission must not run");
+						},
+					},
+				},
+			});
+			return { ...harness, actionAdmissionCalls: () => actionAdmissionCalls };
+		};
+
+		const cleared = createConnectionHarness(currentRecord([currentAction]));
+		await expect(
+			cleared.useCase.update(
+				{
+					...command,
+					idempotencyKey: "disable-connection-clear-actions",
+					changes: { source: selection, actions: [] },
+				},
+				actor,
+			),
+		).resolves.toMatchObject({ changedFields: ["actions", "source"] });
+		expect(cleared.actionAdmissionCalls()).toBe(0);
+		expect(cleared.transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			configuration: { source: disabledSource, actions: [] },
+		});
+
+		for (const [idempotencyKey, actions] of [
+			["disable-connection-source-only", undefined],
+			["disable-connection-non-empty-actions", [currentAction]],
+		] as const) {
+			const rejected = createConnectionHarness(currentRecord([currentAction]));
+			await expect(
+				rejected.useCase.update(
+					{
+						...command,
+						idempotencyKey,
+						changes: {
+							source: selection,
+							...(actions === undefined ? {} : { actions }),
+						},
+					},
+					actor,
+				),
+			).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+			expect(rejected.actionAdmissionCalls()).toBe(0);
+			expect(rejected.transaction.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+			});
+		}
+
+		const alreadyEmpty = createConnectionHarness(currentRecord([]));
+		await expect(
+			alreadyEmpty.useCase.update(
+				{
+					...command,
+					idempotencyKey: "disable-connection-empty-actions",
+					changes: { source: selection, actions: [] },
+				},
+				actor,
+			),
+		).resolves.toMatchObject({ changedFields: ["source"] });
+		expect(alreadyEmpty.actionAdmissionCalls()).toBe(0);
+
+		const noChange = createConnectionHarness(currentRecord([], false));
+		await expect(
+			noChange.useCase.update(
+				{
+					...command,
+					idempotencyKey: "disable-connection-no-change",
+					changes: { source: selection, actions: [] },
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "no_change" }));
+		expect(noChange.actionAdmissionCalls()).toBe(0);
+	});
 });
