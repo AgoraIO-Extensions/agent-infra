@@ -1622,4 +1622,299 @@ describe("Agent configuration policy", () => {
 		).rejects.toEqual(expect.objectContaining({ code: "no_change" }));
 		expect(noChange.actionAdmissionCalls()).toBe(0);
 	});
+
+	it("isolates nested Adapter inputs and the transaction plan from mutation", async () => {
+		const expectNoEffects = (
+			transaction: FakeAgentConfigurationTransactionV1,
+		) => {
+			expect(transaction.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		};
+
+		const imageCommand = {
+			...command,
+			idempotencyKey: "mutating-image-adapter",
+			changes: {
+				source: {
+					kind: "custom" as const,
+					imageReference: "registry.example/original:v1",
+					interactionMode: "platform-adapter" as const,
+				},
+			},
+		};
+		const imageRecord: AgentConfigurationRecordV1 = {
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom",
+				imageDigest: agentConfigurationConformanceRecordV1.source.imageDigest,
+				admissionRevision: "image_policy_1",
+				interactionMode: "platform-adapter",
+				connectionEnabled: true,
+			},
+			modelConfiguration: null,
+		};
+		const image = createHarness({
+			record: imageRecord,
+			dependencies: {
+				imageAdmission: {
+					async admitImage(input) {
+						(input.requested as { imageReference: string }).imageReference =
+							"registry.example/mutated:v2";
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: "agent_other",
+							requestId: input.requestId,
+							source: {
+								...imageRecord.source,
+								imageDigest: `sha256:${"b".repeat(64)}`,
+							},
+						} as never;
+					},
+				},
+			},
+		});
+		await expect(image.useCase.update(imageCommand, actor)).rejects.toEqual(
+			expect.objectContaining({ code: "not_admitted" }),
+		);
+		expect(imageCommand.changes.source.imageReference).toBe(
+			"registry.example/original:v1",
+		);
+		expectNoEffects(image.transaction);
+
+		const substitutedCredential = {
+			secretId: "secret_model_mutated",
+			version: 2,
+			isSet: true as const,
+		};
+		const modelCommand = {
+			...command,
+			idempotencyKey: "mutating-model-adapter",
+			changes: {
+				modelConfiguration: {
+					options: [
+						{
+							optionId: "model_primary",
+							endpointId: "endpoint_01",
+							modelId: "gpt-5",
+							reasoningLevels: ["low"],
+							replaceCredential: false,
+						},
+					],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "low",
+				},
+			},
+		};
+		const model = createHarness({
+			dependencies: {
+				modelAdmission: {
+					async admitModels(input) {
+						(
+							input.requested.options[0] as { replaceCredential: boolean }
+						).replaceCredential = true;
+						(
+							input.current?.options[0] as {
+								credential: typeof substitutedCredential;
+							}
+						).credential = substitutedCredential;
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							configuration: {
+								catalogRevision: "catalog_4",
+								options: [
+									{
+										optionId: "model_primary",
+										endpointId: "endpoint_01",
+										modelId: "gpt-5",
+										reasoningLevels: ["low"],
+										credential: substitutedCredential,
+									},
+								],
+								defaultOptionId: "model_primary",
+								defaultReasoningLevel: "low",
+							},
+						};
+					},
+				},
+			},
+		});
+		await expect(model.useCase.update(modelCommand, actor)).rejects.toEqual(
+			expect.objectContaining({ code: "not_admitted" }),
+		);
+		expect(
+			modelCommand.changes.modelConfiguration.options[0]?.replaceCredential,
+		).toBe(false);
+		expectNoEffects(model.transaction);
+
+		const secretCommand = {
+			...command,
+			idempotencyKey: "mutating-secret-adapter",
+			changes: { secrets: [{ name: "BOT_TOKEN", replace: true as const }] },
+		};
+		const secret = createHarness({
+			record: {
+				...agentConfigurationConformanceRecordV1,
+				source: {
+					...agentConfigurationConformanceRecordV1.source,
+					allowedSecretKeys: ["BOT_TOKEN", "OTHER_TOKEN", "MODEL_API_KEY"],
+				},
+				secrets: [
+					{
+						name: "BOT_TOKEN",
+						secretId: "secret_bot_old",
+						version: 1,
+						isSet: true,
+					},
+				],
+			} as AgentConfigurationRecordV1,
+			dependencies: {
+				secretAdmission: {
+					async admitSecrets(input) {
+						(input.requested[0] as { name: string }).name = "OTHER_TOKEN";
+						(input.current[0] as { name: string }).name = "OTHER_TOKEN";
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							secrets: [
+								{
+									name: "OTHER_TOKEN",
+									secretId: "secret_other",
+									version: 2,
+									isSet: true,
+								},
+							],
+						};
+					},
+				},
+			},
+		});
+		await expect(secret.useCase.update(secretCommand, actor)).rejects.toEqual(
+			expect.objectContaining({ code: "not_admitted" }),
+		);
+		expect(secretCommand.changes.secrets[0]?.name).toBe("BOT_TOKEN");
+		expectNoEffects(secret.transaction);
+
+		const actionCommand = {
+			...command,
+			idempotencyKey: "mutating-action-adapter",
+			changes: {
+				actions: [
+					{
+						providerId: "github",
+						actionId: "issues.read",
+						actionVersion: "v3",
+					},
+				],
+			},
+		};
+		const action = createHarness({
+			dependencies: {
+				actionAdmission: {
+					async admitActions(input) {
+						(input.requested[0] as { actionId: string }).actionId =
+							"issues.mutated";
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							actionSetRevision: "actions_mutated",
+							actions: input.requested,
+						};
+					},
+				},
+			},
+		});
+		await expect(action.useCase.update(actionCommand, actor)).rejects.toEqual(
+			expect.objectContaining({ code: "not_admitted" }),
+		);
+		expect(actionCommand.changes.actions[0]?.actionId).toBe("issues.read");
+		expectNoEffects(action.transaction);
+
+		const channelCommand = {
+			...command,
+			idempotencyKey: "mutating-channel-adapter",
+			changes: {
+				channels: [
+					{
+						kind: "wecom_bot" as const,
+						enabled: true as const,
+						bindingReference: "binding-new",
+					},
+				],
+			},
+		};
+		const channel = createHarness({
+			record: {
+				...agentConfigurationConformanceRecordV1,
+				channels: [{ kind: "wecom_bot", bindingReference: "binding-old" }],
+			},
+			dependencies: {
+				channelAdmission: {
+					async admitChannels(input) {
+						(
+							input.requested[0] as { bindingReference: string }
+						).bindingReference = "binding-mutated";
+						(
+							input.current[0] as { bindingReference: string }
+						).bindingReference = "binding-current-mutated";
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							channelRevision: "channels_mutated",
+							channels: [
+								{ kind: "wecom_bot", bindingReference: "binding-mutated" },
+							],
+						};
+					},
+				},
+			},
+		});
+		await expect(channel.useCase.update(channelCommand, actor)).rejects.toEqual(
+			expect.objectContaining({ code: "not_admitted" }),
+		);
+		expect(channelCommand.changes.channels[0]?.bindingReference).toBe(
+			"binding-new",
+		);
+		expectNoEffects(channel.transaction);
+
+		const transaction = new FakeAgentConfigurationTransactionV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		const transactionMutation = createHarness({
+			dependencies: {
+				transaction: {
+					read: transaction.read.bind(transaction),
+					async commit(plan) {
+						(plan.result as { revision: number }).revision += 1;
+						return { outcome: "committed", result: plan.result };
+					},
+				},
+			},
+		});
+		await expect(
+			transactionMutation.useCase.update(
+				{
+					...command,
+					idempotencyKey: "mutating-transaction-adapter",
+					changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "persistence_failed" }));
+		expectNoEffects(transaction);
+	});
 });

@@ -1796,7 +1796,7 @@ export function createAgentConfigurationUseCaseV1(
 							agentId: command.agentId,
 							requestId: command.requestId,
 							traceId: command.traceId,
-							requested: command.changes.source,
+							requested: structuredClone(command.changes.source),
 						}),
 					);
 				} catch {
@@ -1857,8 +1857,8 @@ export function createAgentConfigurationUseCaseV1(
 							agentId: command.agentId,
 							requestId: command.requestId,
 							traceId: command.traceId,
-							requested: command.changes.modelConfiguration,
-							current: current.modelConfiguration,
+							requested: structuredClone(command.changes.modelConfiguration),
+							current: structuredClone(current.modelConfiguration),
 						}),
 					);
 				} catch {
@@ -1931,8 +1931,8 @@ export function createAgentConfigurationUseCaseV1(
 								agentId: command.agentId,
 								requestId: command.requestId,
 								traceId: command.traceId,
-								requested: command.changes.secrets,
-								current: current.secrets,
+								requested: structuredClone(command.changes.secrets),
+								current: structuredClone(current.secrets),
 							}),
 						);
 					} catch {
@@ -2006,7 +2006,7 @@ export function createAgentConfigurationUseCaseV1(
 								agentId: command.agentId,
 								requestId: command.requestId,
 								traceId: command.traceId,
-								requested: command.changes.actions,
+								requested: structuredClone(command.changes.actions),
 							}),
 						);
 					} catch {
@@ -2051,8 +2051,8 @@ export function createAgentConfigurationUseCaseV1(
 							agentId: command.agentId,
 							requestId: command.requestId,
 							traceId: command.traceId,
-							requested: command.changes.channels,
-							current: current.channels,
+							requested: structuredClone(command.changes.channels),
+							current: structuredClone(current.channels),
 						}),
 					);
 				} catch {
@@ -2198,7 +2198,7 @@ export function createAgentConfigurationUseCaseV1(
 			>;
 			try {
 				decision = parseTransactionCommitDecision(
-					await dependencies.transaction.commit(plan),
+					await dependencies.transaction.commit(structuredClone(plan)),
 					command.agentId,
 				);
 			} catch {
