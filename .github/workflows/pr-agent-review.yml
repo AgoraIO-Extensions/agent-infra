@@ -37,9 +37,10 @@ jobs:
       - name: Review pull request
         id: pr-agent
         # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
+        uses: The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6 # v0.44.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
           OPENAI__KEY: ${{ secrets.PR_AGENT_API_KEY }}
           OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
           config.model: ${{ secrets.PR_AGENT_MODEL }}
@@ -53,6 +54,9 @@ jobs:
           config.ai_timeout: ${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}
           config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
           config.max_model_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          litellm.custom_llm_provider: openai
+          litellm.force_streaming_custom_llm_provider: openai
+          litellm.force_streaming_api_base_substrings: '["https://"]'
           pr_code_suggestions.commitable_code_suggestions: "true"
           pr_reviewer.enable_review_labels_effort: "false"
           pr_reviewer.enable_review_labels_security: "false"
@@ -89,9 +93,10 @@ jobs:
         id: pr-agent-suggestions
         continue-on-error: true
         # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
+        uses: The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6 # v0.44.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
           OPENAI__KEY: ${{ secrets.PR_AGENT_API_KEY }}
           OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
           config.model: ${{ secrets.PR_AGENT_MODEL }}
@@ -105,6 +110,9 @@ jobs:
           config.ai_timeout: ${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}
           config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
           config.max_model_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          litellm.custom_llm_provider: openai
+          litellm.force_streaming_custom_llm_provider: openai
+          litellm.force_streaming_api_base_substrings: '["https://"]'
           pr_code_suggestions.commitable_code_suggestions: "true"
           github_action_config.auto_review: "false"
           github_action_config.auto_describe: "false"
