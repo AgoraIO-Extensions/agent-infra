@@ -3,7 +3,8 @@
 	"compilerOptions": {
 		"allowImportingTsExtensions": true,
 		"paths": {
-			"@agent-infra/platform-core": ["../platform-core/src/index.ts"]
+			"@agent-infra/platform-core": ["../platform-core/src/index.ts"],
+			"@agent-infra/platform-core/testing": ["../platform-core/src/testing.ts"]
 		}
 	}
 }
