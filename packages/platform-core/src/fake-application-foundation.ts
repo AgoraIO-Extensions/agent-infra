@@ -10,6 +10,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	snapshotApplicationFoundationWritePlanV1,
 } from "./application-foundation.js";
 
 type FailurePoint =
@@ -320,8 +321,9 @@ export class FakeApplicationFoundationTransactionV1
 	}
 
 	async commit(
-		plan: ApplicationFoundationWritePlanV1,
+		input: ApplicationFoundationWritePlanV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
+		const plan = snapshotApplicationFoundationWritePlanV1(input);
 		validatePlan(plan);
 		const existingIdempotency = this.#state.idempotencyResults.find(
 			(record) =>
@@ -330,13 +332,22 @@ export class FakeApplicationFoundationTransactionV1
 				record.key === plan.idempotency.key,
 		);
 		if (existingIdempotency) {
-			return existingIdempotency.requestDigest ===
-				plan.idempotency.requestDigest
-				? {
-						outcome: "replayed",
-						result: structuredClone(existingIdempotency.result),
-					}
-				: { outcome: "conflict", reason: "idempotency_conflict" };
+			if (
+				existingIdempotency.requestDigest !== plan.idempotency.requestDigest
+			) {
+				return { outcome: "conflict", reason: "idempotency_conflict" };
+			}
+			if (
+				existingIdempotency.result.agentId !== plan.agent.agentId ||
+				existingIdempotency.result.applicationId !==
+					plan.application.applicationId
+			) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			return {
+				outcome: "replayed",
+				result: structuredClone(existingIdempotency.result),
+			};
 		}
 		if (
 			this.#state.agents.some(
