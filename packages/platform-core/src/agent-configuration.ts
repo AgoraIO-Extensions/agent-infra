@@ -137,17 +137,52 @@ export type AgentConfigurationAccessTargetV1 =
 	| { readonly kind: "user"; readonly userId: string }
 	| { readonly kind: "organization"; readonly organizationId: string };
 
+export interface AgentConfigurationAuthorityContextV1 {
+	readonly schemaVersion: 1;
+	readonly users: readonly {
+		readonly userId: string;
+		readonly accountStatus: "active" | "disabled" | "revoked";
+	}[];
+	readonly organizationIds: readonly string[];
+}
+
 export interface AgentConfigurationAccessAuthorityV1 {
 	readonly state: AgentManagementStateV1;
 	readonly actorContext: AgentManagementActorContextV1;
-	readonly authorityContext: {
-		readonly schemaVersion: 1;
-		readonly users: readonly {
-			readonly userId: string;
-			readonly accountStatus: "active" | "disabled" | "revoked";
-		}[];
-		readonly organizationIds: readonly string[];
-	};
+	readonly authorityContext: AgentConfigurationAuthorityContextV1;
+}
+
+export interface InitialAgentConfigurationCommandV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly requestId: string;
+	readonly traceId: string;
+	readonly coOwnerIds: readonly string[];
+	readonly availability: readonly AgentConfigurationAccessTargetV1[];
+	readonly source: AgentConfigurationSourceSelectionV1;
+	readonly modelConfiguration?: AgentConfigurationModelInputV1;
+	readonly environment: readonly {
+		readonly name: string;
+		readonly value: string;
+	}[];
+	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
+	readonly actions: readonly AgentConfigurationActionV1[];
+	readonly channels: readonly AgentConfigurationChannelChangeV1[];
+}
+
+export interface AdmittedInitialAgentConfigurationV1 {
+	readonly schemaVersion: 1;
+	readonly authorizationRevision: string;
+	readonly configuration: AgentConfigurationRecordV1;
+	readonly ownerIds: readonly string[];
+	readonly availability: readonly AgentConfigurationAccessTargetV1[];
+}
+
+export interface InitialAgentConfigurationAdmissionHandleV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly actorId: string;
+	complete(): Promise<AdmittedInitialAgentConfigurationV1>;
 }
 
 export interface UpdateAgentConfigurationCommandV1 {
@@ -295,6 +330,7 @@ export interface AgentConfigurationAuthorizationAdmissionPortV1 {
 				readonly actorId: string;
 				readonly authorizationRevision: string;
 				readonly accessAuthority?: AgentConfigurationAccessAuthorityV1;
+				readonly authorityContext?: AgentConfigurationAuthorityContextV1;
 		  }
 		| {
 				readonly schemaVersion: 1;
@@ -466,6 +502,11 @@ export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly actionAdmission: AgentConfigurationActionAdmissionPortV1;
 	readonly channelAdmission: AgentConfigurationChannelAdmissionPortV1;
 }
+
+export type InitialAgentConfigurationAdmissionDependenciesV1 = Omit<
+	AgentConfigurationUseCaseDependenciesV1,
+	"transaction"
+>;
 
 export interface AgentConfigurationUseCaseOptionsV1 {
 	readonly now?: () => Date;
@@ -1015,6 +1056,64 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	};
 }
 
+function parseInitialCommand(
+	command: unknown,
+): InitialAgentConfigurationCommandV1 {
+	const values = exactObject(
+		command,
+		[
+			"schemaVersion",
+			"agentId",
+			"requestId",
+			"traceId",
+			"coOwnerIds",
+			"availability",
+			"source",
+			"environment",
+			"secrets",
+			"actions",
+			"channels",
+		],
+		["modelConfiguration"],
+	);
+	if (
+		values.schemaVersion !== 1 ||
+		!isText(values.agentId, idMaxBytes) ||
+		!isText(values.requestId, idMaxBytes) ||
+		!isText(values.traceId, idMaxBytes)
+	) {
+		invalidCommand();
+	}
+	const coOwnerIds = parseOwnerIds(values.coOwnerIds);
+	const availability = parseAvailability(values.availability);
+	if (
+		new Set(coOwnerIds).size !== coOwnerIds.length ||
+		new Set(availability.map(accessTargetKey)).size !== availability.length
+	) {
+		invalidCommand();
+	}
+	return {
+		schemaVersion: 1,
+		agentId: values.agentId,
+		requestId: values.requestId,
+		traceId: values.traceId,
+		coOwnerIds,
+		availability,
+		source: parseSourceSelection(values.source),
+		...(Object.hasOwn(values, "modelConfiguration")
+			? {
+					modelConfiguration: parseModelConfiguration(
+						values.modelConfiguration,
+					),
+				}
+			: {}),
+		environment: parseEnvironment(values.environment),
+		secrets: parseSecretReplacements(values.secrets),
+		actions: canonicalActions(values.actions),
+		channels: parseChannelChanges(values.channels),
+	};
+}
+
 function parseActorContext(
 	actorContext: unknown,
 ): AgentConfigurationActorContextV1 {
@@ -1160,7 +1259,7 @@ function parseStoredSecrets(
 		.toSorted((left, right) => compareText(left.name, right.name));
 }
 
-function parsePersistedConfiguration(
+export function decodeAgentConfigurationRecordV1(
 	input: unknown,
 ): AgentConfigurationRecordV1 {
 	const values = exactObject(input, [
@@ -1196,27 +1295,14 @@ function parsePersistedConfiguration(
 	const environment = parseEnvironment(values.environment);
 	const secrets = parseStoredSecrets(values.secrets);
 	const channels = canonicalChannelBindings(values.channels);
-	if (
-		(source.kind === "standard" &&
-			(modelConfiguration === null ||
-				environment.some(
-					({ name }) =>
-						!source.allowedEnvironmentKeys.includes(name) ||
-						source.platformManagedKeys.includes(name),
-				) ||
-				secrets.some(
-					({ name }) =>
-						!source.allowedSecretKeys.includes(name) ||
-						source.platformManagedKeys.includes(name),
-				))) ||
-		(source.kind === "custom" && modelConfiguration !== null) ||
-		(!source.connectionEnabled && actions.length > 0) ||
-		(source.kind === "custom" &&
-			source.interactionMode === "self-managed" &&
-			channels.length > 0)
-	) {
-		invalidCommand();
-	}
+	requireAdmittedConfigurationPolicy({
+		source,
+		modelConfiguration,
+		environment,
+		secrets,
+		actions,
+		channels,
+	});
 	return {
 		schemaVersion: 1,
 		agentId: values.agentId,
@@ -1232,15 +1318,10 @@ function parsePersistedConfiguration(
 	};
 }
 
-function parseAccessAuthority(
+function parseAuthorityContext(
 	input: unknown,
-): AgentConfigurationAccessAuthorityV1 {
-	const access = exactObject(input, [
-		"state",
-		"actorContext",
-		"authorityContext",
-	]);
-	const authority = exactObject(access.authorityContext, [
+): AgentConfigurationAuthorityContextV1 {
+	const authority = exactObject(input, [
 		"schemaVersion",
 		"users",
 		"organizationIds",
@@ -1268,15 +1349,26 @@ function parseAccessAuthority(
 		invalidCommand();
 	}
 	return {
+		schemaVersion: 1,
+		users,
+		organizationIds: [
+			...parseAgentManagementStringArray(authority.organizationIds, true),
+		],
+	};
+}
+
+function parseAccessAuthority(
+	input: unknown,
+): AgentConfigurationAccessAuthorityV1 {
+	const access = exactObject(input, [
+		"state",
+		"actorContext",
+		"authorityContext",
+	]);
+	return {
 		state: parseAgentManagementPortState(access.state as never),
 		actorContext: parseAgentManagementActorContext(access.actorContext),
-		authorityContext: {
-			schemaVersion: 1,
-			users,
-			organizationIds: [
-				...parseAgentManagementStringArray(authority.organizationIds, true),
-			],
-		},
+		authorityContext: parseAuthorityContext(access.authorityContext),
 	};
 }
 
@@ -1289,7 +1381,7 @@ function parseAuthorizationDecision(
 		const base = exactObject(
 			input,
 			["schemaVersion", "status", "agentId", "actorId"],
-			["authorizationRevision", "accessAuthority"],
+			["authorizationRevision", "accessAuthority", "authorityContext"],
 		);
 		if (
 			base.schemaVersion !== 1 ||
@@ -1326,6 +1418,9 @@ function parseAuthorizationDecision(
 			authorizationRevision: base.authorizationRevision,
 			...(Object.hasOwn(base, "accessAuthority")
 				? { accessAuthority: parseAccessAuthority(base.accessAuthority) }
+				: {}),
+			...(Object.hasOwn(base, "authorityContext")
+				? { authorityContext: parseAuthorityContext(base.authorityContext) }
 				: {}),
 		};
 	});
@@ -1507,6 +1602,48 @@ function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function requireAdmittedConfigurationPolicy(
+	configuration: Pick<
+		AgentConfigurationRecordV1,
+		| "source"
+		| "modelConfiguration"
+		| "environment"
+		| "secrets"
+		| "actions"
+		| "channels"
+	>,
+): void {
+	const {
+		source,
+		modelConfiguration,
+		environment,
+		secrets,
+		actions,
+		channels,
+	} = configuration;
+	if (
+		(source.kind === "standard" &&
+			(modelConfiguration === null ||
+				environment.some(
+					({ name }) =>
+						!source.allowedEnvironmentKeys.includes(name) ||
+						source.platformManagedKeys.includes(name),
+				) ||
+				secrets.some(
+					({ name }) =>
+						!source.allowedSecretKeys.includes(name) ||
+						source.platformManagedKeys.includes(name),
+				))) ||
+		(source.kind === "custom" && modelConfiguration !== null) ||
+		(!source.connectionEnabled && actions.length > 0) ||
+		(source.kind === "custom" &&
+			source.interactionMode === "self-managed" &&
+			channels.length > 0)
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+}
+
 function sameSourceConfiguration(
 	left: AgentConfigurationSourceV1,
 	right: AgentConfigurationSourceV1,
@@ -1616,7 +1753,7 @@ function parseTransactionReadDecision(
 				outcome: "ready",
 				record: {
 					schemaVersion: 1,
-					configuration: parsePersistedConfiguration(record.configuration),
+					configuration: decodeAgentConfigurationRecordV1(record.configuration),
 					authorizationRevision: record.authorizationRevision,
 				},
 			};
@@ -1658,7 +1795,10 @@ const systemNow = () => new Date();
 
 async function admitCurrentAuthorization(
 	admission: AgentConfigurationAuthorizationAdmissionPortV1,
-	command: UpdateAgentConfigurationCommandV1,
+	command: Pick<
+		UpdateAgentConfigurationCommandV1,
+		"agentId" | "requestId" | "traceId"
+	>,
 	actorContext: AgentConfigurationActorContextV1,
 ): Promise<
 	Extract<
@@ -1694,6 +1834,315 @@ async function admitCurrentAuthorization(
 		throw new AgentConfigurationError("not_authorized");
 	}
 	return authorization;
+}
+
+function admittedInitialAccess(
+	command: InitialAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+	authorization: Extract<
+		Awaited<
+			ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+		>,
+		{ readonly status: "admitted" }
+	>,
+): Pick<AdmittedInitialAgentConfigurationV1, "ownerIds" | "availability"> {
+	const authority = authorization.authorityContext;
+	if (!authority) {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	const activeUserIds = new Set(
+		authority.users
+			.filter(({ accountStatus }) => accountStatus === "active")
+			.map(({ userId }) => userId),
+	);
+	const organizationIds = new Set(authority.organizationIds);
+	if (
+		!activeUserIds.has(actorContext.actorId) ||
+		command.coOwnerIds.some((ownerId) => !activeUserIds.has(ownerId)) ||
+		command.availability.some((target) =>
+			target.kind === "user"
+				? !activeUserIds.has(target.userId)
+				: !organizationIds.has(target.organizationId),
+		)
+	) {
+		throw new AgentConfigurationError("not_authorized");
+	}
+	return {
+		ownerIds: [
+			...new Set([actorContext.actorId, ...command.coOwnerIds]),
+		].toSorted(compareText),
+		availability: structuredClone(command.availability),
+	};
+}
+
+async function completeInitialAgentConfigurationAdmissionV1(
+	command: InitialAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+	firstAuthorization: Extract<
+		Awaited<
+			ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+		>,
+		{ readonly status: "admitted" }
+	>,
+	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+): Promise<AdmittedInitialAgentConfigurationV1> {
+	admittedInitialAccess(command, actorContext, firstAuthorization);
+
+	let imageAdmission: Awaited<
+		ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>
+	>;
+	try {
+		imageAdmission = parseImageDecision(
+			await dependencies.imageAdmission.admitImage({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				requested: structuredClone(command.source),
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	const source =
+		imageAdmission.status === "admitted" ? imageAdmission.source : undefined;
+	const selectionMatches =
+		source !== undefined &&
+		command.source.kind === source.kind &&
+		(command.source.kind === "standard"
+			? source.kind === "standard" &&
+				command.source.templateId === source.templateId
+			: source.kind === "custom" &&
+				source.interactionMode === command.source.interactionMode &&
+				(command.source.interactionMode === "platform-adapter" ||
+					(source.interactionMode === "self-managed" &&
+						source.identityResponsibility ===
+							command.source.identityResponsibility)));
+	if (
+		imageAdmission.status !== "admitted" ||
+		imageAdmission.agentId !== command.agentId ||
+		imageAdmission.requestId !== command.requestId ||
+		!source ||
+		!selectionMatches
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+
+	if (
+		(source.kind === "standard" && command.modelConfiguration === undefined) ||
+		(source.kind === "custom" && command.modelConfiguration !== undefined) ||
+		(source.kind === "standard" &&
+			(command.environment.some(
+				({ name }) =>
+					!source.allowedEnvironmentKeys.includes(name) ||
+					source.platformManagedKeys.includes(name),
+			) ||
+				command.secrets.some(
+					({ name }) =>
+						!source.allowedSecretKeys.includes(name) ||
+						source.platformManagedKeys.includes(name),
+				))) ||
+		(!source.connectionEnabled && command.actions.length > 0) ||
+		(source.kind === "custom" &&
+			source.interactionMode === "self-managed" &&
+			command.channels.some(({ enabled }) => enabled))
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+
+	let modelConfiguration: AgentConfigurationModelV1 | null = null;
+	if (command.modelConfiguration) {
+		let admission: Awaited<
+			ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>
+		>;
+		try {
+			admission = parseModelDecision(
+				await dependencies.modelAdmission.admitModels({
+					schemaVersion: 1,
+					agentId: command.agentId,
+					requestId: command.requestId,
+					traceId: command.traceId,
+					requested: structuredClone(command.modelConfiguration),
+					current: null,
+				}),
+			);
+		} catch {
+			throw new AgentConfigurationError("dependency_unavailable");
+		}
+		if (
+			admission.status !== "admitted" ||
+			admission.agentId !== command.agentId ||
+			admission.requestId !== command.requestId
+		) {
+			throw new AgentConfigurationError("not_admitted");
+		}
+		try {
+			modelConfiguration = parseAdmittedModel(
+				admission.configuration,
+				command.modelConfiguration,
+				null,
+			);
+		} catch {
+			throw new AgentConfigurationError("not_admitted");
+		}
+	}
+
+	let secretAdmission: Awaited<
+		ReturnType<AgentConfigurationSecretAdmissionPortV1["admitSecrets"]>
+	>;
+	try {
+		secretAdmission = parseSecretDecision(
+			await dependencies.secretAdmission.admitSecrets({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				requested: structuredClone(command.secrets),
+				current: [],
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	const requestedSecretNames = new Set(command.secrets.map(({ name }) => name));
+	if (
+		secretAdmission.status !== "admitted" ||
+		secretAdmission.agentId !== command.agentId ||
+		secretAdmission.requestId !== command.requestId ||
+		secretAdmission.secrets.length !== requestedSecretNames.size ||
+		secretAdmission.secrets.some(({ name }) => !requestedSecretNames.has(name))
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+
+	let actionAdmission: Awaited<
+		ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
+	>;
+	try {
+		actionAdmission = parseActionDecision(
+			await dependencies.actionAdmission.admitActions({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				requested: structuredClone(command.actions),
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	if (
+		actionAdmission.status !== "admitted" ||
+		actionAdmission.agentId !== command.agentId ||
+		actionAdmission.requestId !== command.requestId ||
+		!sameValue(actionAdmission.actions, command.actions)
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+
+	let channelAdmission: Awaited<
+		ReturnType<AgentConfigurationChannelAdmissionPortV1["admitChannels"]>
+	>;
+	try {
+		channelAdmission = parseChannelDecision(
+			await dependencies.channelAdmission.admitChannels({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				requested: structuredClone(command.channels),
+				current: [],
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	const expectedChannels = command.channels
+		.filter((change) => change.enabled)
+		.map((change) => ({
+			kind: change.kind,
+			bindingReference: change.enabled ? change.bindingReference : "",
+		}))
+		.toSorted((left, right) => compareText(left.kind, right.kind));
+	if (
+		channelAdmission.status !== "admitted" ||
+		channelAdmission.agentId !== command.agentId ||
+		channelAdmission.requestId !== command.requestId ||
+		!sameValue(channelAdmission.channels, expectedChannels)
+	) {
+		throw new AgentConfigurationError("not_admitted");
+	}
+
+	const configuration: AgentConfigurationRecordV1 = {
+		schemaVersion: 1,
+		agentId: command.agentId,
+		revision: 1,
+		source,
+		modelConfiguration,
+		actions: actionAdmission.actions,
+		actionSetRevision: actionAdmission.actionSetRevision,
+		environment: command.environment,
+		secrets: secretAdmission.secrets,
+		channels: channelAdmission.channels,
+		channelRevision: channelAdmission.channelRevision,
+	};
+	requireAdmittedConfigurationPolicy(configuration);
+
+	const currentAuthorization = await admitCurrentAuthorization(
+		dependencies.authorizationAdmission,
+		command,
+		actorContext,
+	);
+	const access = admittedInitialAccess(
+		command,
+		actorContext,
+		currentAuthorization,
+	);
+	return {
+		schemaVersion: 1,
+		authorizationRevision: currentAuthorization.authorizationRevision,
+		configuration: structuredClone(configuration),
+		ownerIds: access.ownerIds,
+		availability: access.availability,
+	};
+}
+
+export async function beginInitialAgentConfigurationAdmissionV1(
+	commandInput: InitialAgentConfigurationCommandV1,
+	actorContextInput: AgentConfigurationActorContextV1,
+	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+): Promise<InitialAgentConfigurationAdmissionHandleV1> {
+	const command = parseInitialCommand(commandInput);
+	const actorContext = parseActorContext(actorContextInput);
+	const capturedDependencies: InitialAgentConfigurationAdmissionDependenciesV1 =
+		{
+			authorizationAdmission: dependencies.authorizationAdmission,
+			imageAdmission: dependencies.imageAdmission,
+			modelAdmission: dependencies.modelAdmission,
+			secretAdmission: dependencies.secretAdmission,
+			actionAdmission: dependencies.actionAdmission,
+			channelAdmission: dependencies.channelAdmission,
+		};
+	const firstAuthorization = await admitCurrentAuthorization(
+		capturedDependencies.authorizationAdmission,
+		command,
+		actorContext,
+	);
+	let completion: Promise<AdmittedInitialAgentConfigurationV1> | undefined;
+	return Object.freeze({
+		schemaVersion: 1 as const,
+		agentId: command.agentId,
+		actorId: actorContext.actorId,
+		complete() {
+			completion ??= completeInitialAgentConfigurationAdmissionV1(
+				command,
+				actorContext,
+				firstAuthorization,
+				capturedDependencies,
+			);
+			return completion;
+		},
+	});
 }
 
 export function createAgentConfigurationUseCaseV1(
@@ -2138,27 +2587,14 @@ export function createAgentConfigurationUseCaseV1(
 				}
 			}
 
-			if (
-				(source.kind === "standard" &&
-					(modelConfiguration === null ||
-						environment.some(
-							({ name }) =>
-								!source.allowedEnvironmentKeys.includes(name) ||
-								source.platformManagedKeys.includes(name),
-						) ||
-						secrets.some(
-							({ name }) =>
-								!source.allowedSecretKeys.includes(name) ||
-								source.platformManagedKeys.includes(name),
-						))) ||
-				(source.kind === "custom" && modelConfiguration !== null) ||
-				(!source.connectionEnabled && actions.length > 0) ||
-				(source.kind === "custom" &&
-					source.interactionMode === "self-managed" &&
-					channels.length > 0)
-			) {
-				throw new AgentConfigurationError("not_admitted");
-			}
+			requireAdmittedConfigurationPolicy({
+				source,
+				modelConfiguration,
+				environment,
+				secrets,
+				actions,
+				channels,
+			});
 
 			changedFields.sort();
 			if (changedFields.length === 0) {

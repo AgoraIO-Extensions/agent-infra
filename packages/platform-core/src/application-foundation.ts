@@ -1,19 +1,28 @@
 import { Buffer } from "node:buffer";
 
-export interface CommitApplicationFoundationCommandV1 {
-	readonly schemaVersion: 1;
+import {
+	type AdmittedInitialAgentConfigurationV1,
+	type AgentConfigurationAccessTargetV1,
+	type AgentConfigurationActorContextV1,
+	AgentConfigurationError,
+	type AgentConfigurationRecordV1,
+	beginInitialAgentConfigurationAdmissionV1,
+	type InitialAgentConfigurationAdmissionDependenciesV1,
+	type InitialAgentConfigurationCommandV1,
+} from "./agent-configuration.js";
+
+export interface CommitApplicationFoundationCommandV1
+	extends InitialAgentConfigurationCommandV1 {
 	readonly applicationId: string;
-	readonly agentId: string;
-	readonly requestId: string;
+	readonly idempotencyKey: string;
 	readonly name: string;
 	readonly description: string;
-	readonly sourceReference: string;
-	readonly traceId: string;
 }
 
 export interface ApplicationFoundationActorContextV1 {
 	readonly schemaVersion: 1;
 	readonly userId: string;
+	readonly rawRequestDigest: string;
 }
 
 export interface CommitApplicationFoundationResultV1 {
@@ -29,6 +38,7 @@ export interface ApplicationFoundationWritePlanV1 {
 	readonly agent: {
 		readonly agentId: string;
 		readonly currentConfigurationRevision: 1;
+		readonly authorizationRevision: string;
 		readonly createdAt: Date;
 	};
 	readonly application: {
@@ -45,13 +55,19 @@ export interface ApplicationFoundationWritePlanV1 {
 	readonly configurationRevision: {
 		readonly agentId: string;
 		readonly revision: 1;
-		readonly sourceReference: string;
+		readonly configuration: AgentConfigurationRecordV1;
 		readonly createdAt: Date;
 	};
-	readonly owner: {
+	readonly access: {
 		readonly agentId: string;
-		readonly ownerId: string;
+		readonly ownerIds: readonly string[];
+		readonly availability: readonly AgentConfigurationAccessTargetV1[];
 		readonly createdAt: Date;
+	};
+	readonly result: CommitApplicationFoundationResultV1;
+	readonly idempotency: {
+		readonly key: string;
+		readonly requestDigest: string;
 	};
 	readonly outboxIntent: {
 		readonly scopeType: "agent";
@@ -81,8 +97,36 @@ export interface ApplicationFoundationWritePlanV1 {
 	};
 }
 
+export type ApplicationFoundationCommitDecisionV1 =
+	| {
+			readonly outcome: "committed" | "replayed";
+			readonly result: CommitApplicationFoundationResultV1;
+	  }
+	| {
+			readonly outcome: "conflict";
+			readonly reason: "duplicate" | "idempotency_conflict";
+	  };
+
+export type ApplicationFoundationReadDecisionV1 =
+	| { readonly outcome: "ready" }
+	| {
+			readonly outcome: "replayed";
+			readonly result: CommitApplicationFoundationResultV1;
+	  }
+	| { readonly outcome: "idempotency_conflict" };
+
 export interface ApplicationFoundationTransactionPortV1 {
-	commit(plan: ApplicationFoundationWritePlanV1): Promise<void>;
+	read(input: {
+		readonly schemaVersion: 1;
+		readonly applicationId: string;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly idempotencyKey: string;
+		readonly requestDigest: string;
+	}): Promise<ApplicationFoundationReadDecisionV1>;
+	commit(
+		plan: ApplicationFoundationWritePlanV1,
+	): Promise<ApplicationFoundationCommitDecisionV1>;
 }
 
 export interface ApplicationFoundationUseCaseV1 {
@@ -96,9 +140,18 @@ export interface ApplicationFoundationUseCaseOptionsV1 {
 	readonly now?: () => Date;
 }
 
+export interface ApplicationFoundationUseCaseDependenciesV1
+	extends InitialAgentConfigurationAdmissionDependenciesV1 {
+	readonly transaction: ApplicationFoundationTransactionPortV1;
+}
+
 export type ApplicationFoundationErrorCode =
 	| "invalid_command"
+	| "not_authorized"
+	| "not_admitted"
+	| "dependency_unavailable"
 	| "conflict"
+	| "idempotency_conflict"
 	| "persistence_failed";
 
 const applicationFoundationErrorBrand = Symbol.for(
@@ -129,7 +182,11 @@ function isApplicationFoundationErrorCode(
 ): value is ApplicationFoundationErrorCode {
 	return (
 		value === "invalid_command" ||
+		value === "not_authorized" ||
+		value === "not_admitted" ||
+		value === "dependency_unavailable" ||
 		value === "conflict" ||
+		value === "idempotency_conflict" ||
 		value === "persistence_failed"
 	);
 }
@@ -165,36 +222,53 @@ function recognizedApplicationFoundationErrorCode(
 	}
 }
 
-const requiredStrings = [
+const commandRequiredKeys = [
+	"schemaVersion",
 	"applicationId",
 	"agentId",
+	"idempotencyKey",
 	"requestId",
 	"name",
 	"description",
-	"sourceReference",
+	"coOwnerIds",
+	"availability",
+	"source",
+	"environment",
+	"secrets",
+	"actions",
+	"channels",
 	"traceId",
 ] as const;
-const commandKeys = ["schemaVersion", ...requiredStrings] as const;
-const actorContextKeys = ["schemaVersion", "userId"] as const;
+const commandOptionalKeys = ["modelConfiguration"] as const;
+const actorContextKeys = [
+	"schemaVersion",
+	"userId",
+	"rawRequestDigest",
+] as const;
 
 function snapshotExactDataValues(
 	value: unknown,
 	expectedKeys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ): Record<string, unknown> | undefined {
 	try {
 		if (typeof value !== "object" || value === null) return undefined;
 		const descriptors = Object.getOwnPropertyDescriptors(value);
 		const ownKeys = Reflect.ownKeys(descriptors);
 		const expected = new Set(expectedKeys);
+		const allowed = new Set([...expectedKeys, ...optionalKeys]);
 		if (
-			ownKeys.length !== expected.size ||
-			ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
+			ownKeys.length < expected.size ||
+			ownKeys.length > allowed.size ||
+			ownKeys.some((key) => typeof key !== "string" || !allowed.has(key)) ||
+			expectedKeys.some((key) => !Object.hasOwn(descriptors, key))
 		) {
 			return undefined;
 		}
 		const normalized: Record<string, unknown> = {};
-		for (const key of expectedKeys) {
+		for (const key of [...expectedKeys, ...optionalKeys]) {
 			const descriptor = descriptors[key];
+			if (!descriptor && optionalKeys.includes(key)) continue;
 			if (
 				descriptor?.enumerable !== true ||
 				!Object.hasOwn(descriptor, "value") ||
@@ -215,43 +289,46 @@ function invalidApplicationFoundationInput(): never {
 	throw new ApplicationFoundationError("invalid_command");
 }
 
-function isCapturedText(value: unknown, maxBytes?: number): value is string {
-	if (
-		typeof value !== "string" ||
-		value.length === 0 ||
-		value.includes("\0") ||
-		!String.prototype.isWellFormed.call(value)
-	) {
-		return false;
-	}
-	return maxBytes === undefined || Buffer.byteLength(value, "utf8") <= maxBytes;
+function isCapturedText(value: unknown, maxBytes = 1024): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		!value.includes("\0") &&
+		String.prototype.isWellFormed.call(value) &&
+		Buffer.byteLength(value, "utf8") <= maxBytes
+	);
 }
 
 function parseApplicationFoundationCommandV1(
 	command: unknown,
 ): CommitApplicationFoundationCommandV1 {
 	try {
-		const values = snapshotExactDataValues(command, commandKeys);
+		const values = snapshotExactDataValues(
+			command,
+			commandRequiredKeys,
+			commandOptionalKeys,
+		);
 		if (!values) invalidApplicationFoundationInput();
 		const {
 			schemaVersion,
 			applicationId,
 			agentId,
+			idempotencyKey,
 			requestId,
 			name,
 			description,
-			sourceReference,
 			traceId,
 		} = values;
 		if (
 			schemaVersion !== 1 ||
-			!isCapturedText(applicationId, 1024) ||
-			!isCapturedText(agentId, 1024) ||
-			!isCapturedText(requestId, 1024) ||
-			!isCapturedText(name) ||
+			!isCapturedText(applicationId) ||
+			!isCapturedText(agentId) ||
+			!isCapturedText(idempotencyKey, 128) ||
+			!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotencyKey) ||
+			!isCapturedText(requestId) ||
+			!isCapturedText(name, 800) ||
 			!isCapturedText(description, 65_536) ||
-			!isCapturedText(sourceReference, 4096) ||
-			!isCapturedText(traceId, 1024)
+			!isCapturedText(traceId)
 		) {
 			invalidApplicationFoundationInput();
 		}
@@ -263,13 +340,29 @@ function parseApplicationFoundationCommandV1(
 		}
 		return {
 			schemaVersion,
-			applicationId: applicationId as string,
-			agentId: agentId as string,
-			requestId: requestId as string,
+			applicationId,
+			agentId,
+			idempotencyKey,
+			requestId,
 			name,
-			description: description as string,
-			sourceReference: sourceReference as string,
-			traceId: traceId as string,
+			description,
+			coOwnerIds: values.coOwnerIds as readonly string[],
+			availability:
+				values.availability as readonly AgentConfigurationAccessTargetV1[],
+			source: values.source as InitialAgentConfigurationCommandV1["source"],
+			...(Object.hasOwn(values, "modelConfiguration")
+				? {
+						modelConfiguration:
+							values.modelConfiguration as InitialAgentConfigurationCommandV1["modelConfiguration"],
+					}
+				: {}),
+			environment:
+				values.environment as InitialAgentConfigurationCommandV1["environment"],
+			secrets: values.secrets as InitialAgentConfigurationCommandV1["secrets"],
+			actions: values.actions as InitialAgentConfigurationCommandV1["actions"],
+			channels:
+				values.channels as InitialAgentConfigurationCommandV1["channels"],
+			traceId,
 		};
 	} catch {
 		invalidApplicationFoundationInput();
@@ -281,26 +374,203 @@ function parseApplicationFoundationActorContextV1(
 ): ApplicationFoundationActorContextV1 {
 	const values = snapshotExactDataValues(actorContext, actorContextKeys);
 	if (!values) invalidApplicationFoundationInput();
-	const { schemaVersion, userId } = values;
-	if (schemaVersion !== 1 || !isCapturedText(userId, 1024)) {
+	const { schemaVersion, userId, rawRequestDigest } = values;
+	if (
+		schemaVersion !== 1 ||
+		!isCapturedText(userId) ||
+		typeof rawRequestDigest !== "string" ||
+		!/^[a-f0-9]{64}$/.test(rawRequestDigest)
+	) {
 		invalidApplicationFoundationInput();
 	}
-	return { schemaVersion, userId };
+	return { schemaVersion, userId, rawRequestDigest };
+}
+
+function parseCommitDecision(
+	input: unknown,
+	expected: CommitApplicationFoundationResultV1,
+): ApplicationFoundationCommitDecisionV1 {
+	try {
+		if (typeof input !== "object" || input === null) throw new Error();
+		const decision = input as Record<string, unknown>;
+		if (decision.outcome === "conflict") {
+			if (
+				Object.keys(decision).length !== 2 ||
+				(decision.reason !== "duplicate" &&
+					decision.reason !== "idempotency_conflict")
+			) {
+				throw new Error();
+			}
+			return { outcome: "conflict", reason: decision.reason };
+		}
+		if (
+			(decision.outcome !== "committed" && decision.outcome !== "replayed") ||
+			Object.keys(decision).length !== 2
+		) {
+			throw new Error();
+		}
+		return {
+			outcome: decision.outcome,
+			result: parseExpectedResult(decision.result, expected),
+		};
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+}
+
+function parseExpectedResult(
+	input: unknown,
+	expected: CommitApplicationFoundationResultV1,
+): CommitApplicationFoundationResultV1 {
+	const result = snapshotExactDataValues(input, [
+		"schemaVersion",
+		"applicationId",
+		"agentId",
+		"configurationRevision",
+		"status",
+	]);
+	if (
+		!result ||
+		result.schemaVersion !== expected.schemaVersion ||
+		result.applicationId !== expected.applicationId ||
+		result.agentId !== expected.agentId ||
+		result.configurationRevision !== expected.configurationRevision ||
+		result.status !== expected.status
+	) {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+	return structuredClone(expected);
+}
+
+function parseReadDecision(
+	input: unknown,
+	expected: CommitApplicationFoundationResultV1,
+): ApplicationFoundationReadDecisionV1 {
+	try {
+		if (typeof input !== "object" || input === null) throw new Error();
+		const outcomeDescriptor = Object.getOwnPropertyDescriptor(input, "outcome");
+		if (
+			outcomeDescriptor?.enumerable !== true ||
+			!Object.hasOwn(outcomeDescriptor, "value") ||
+			Object.hasOwn(outcomeDescriptor, "get") ||
+			Object.hasOwn(outcomeDescriptor, "set")
+		) {
+			throw new Error();
+		}
+		if (
+			outcomeDescriptor.value === "ready" ||
+			outcomeDescriptor.value === "idempotency_conflict"
+		) {
+			const decision = snapshotExactDataValues(input, ["outcome"]);
+			if (!decision || decision.outcome !== outcomeDescriptor.value) {
+				throw new Error();
+			}
+			return { outcome: outcomeDescriptor.value };
+		}
+		if (outcomeDescriptor.value !== "replayed") throw new Error();
+		const decision = snapshotExactDataValues(input, ["outcome", "result"]);
+		if (decision?.outcome !== "replayed") throw new Error();
+		return {
+			outcome: "replayed",
+			result: parseExpectedResult(decision.result, expected),
+		};
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
 }
 
 const initialConfigurationRevision = 1 as const;
 const systemNow = (): Date => new Date();
 
+function normalizeInitialAdmissionError(
+	error: unknown,
+): ApplicationFoundationError {
+	if (error instanceof AgentConfigurationError) {
+		switch (error.code) {
+			case "invalid_command":
+			case "not_authorized":
+			case "not_admitted":
+			case "dependency_unavailable":
+				return new ApplicationFoundationError(error.code);
+		}
+	}
+	return new ApplicationFoundationError("dependency_unavailable");
+}
+
 export function createApplicationFoundationUseCaseV1(
-	transaction: ApplicationFoundationTransactionPortV1,
+	dependencies: ApplicationFoundationUseCaseDependenciesV1,
 	options: ApplicationFoundationUseCaseOptionsV1 = {},
 ): ApplicationFoundationUseCaseV1 {
 	const now = options.now ?? systemNow;
 	return {
-		async submit(command, actorContext) {
-			const normalizedCommand = parseApplicationFoundationCommandV1(command);
-			const normalizedActorContext =
-				parseApplicationFoundationActorContextV1(actorContext);
+		async submit(commandInput, actorContextInput) {
+			const actorContext =
+				parseApplicationFoundationActorContextV1(actorContextInput);
+			const command = parseApplicationFoundationCommandV1(commandInput);
+			let admission: Awaited<
+				ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
+			>;
+			try {
+				admission = await beginInitialAgentConfigurationAdmissionV1(
+					{
+						schemaVersion: 1,
+						agentId: command.agentId,
+						requestId: command.requestId,
+						traceId: command.traceId,
+						coOwnerIds: command.coOwnerIds,
+						availability: command.availability,
+						source: command.source,
+						...(command.modelConfiguration === undefined
+							? {}
+							: { modelConfiguration: command.modelConfiguration }),
+						environment: command.environment,
+						secrets: command.secrets,
+						actions: command.actions,
+						channels: command.channels,
+					},
+					{
+						schemaVersion: 1,
+						actorId: actorContext.userId,
+						rawRequestDigest: actorContext.rawRequestDigest,
+					} satisfies AgentConfigurationActorContextV1,
+					dependencies,
+				);
+			} catch (error) {
+				throw normalizeInitialAdmissionError(error);
+			}
+			const result: CommitApplicationFoundationResultV1 = {
+				schemaVersion: 1,
+				applicationId: command.applicationId,
+				agentId: command.agentId,
+				configurationRevision: initialConfigurationRevision,
+				status: "pending_approval",
+			};
+			let readDecision: ApplicationFoundationReadDecisionV1;
+			try {
+				readDecision = parseReadDecision(
+					await dependencies.transaction.read({
+						schemaVersion: 1,
+						applicationId: command.applicationId,
+						agentId: command.agentId,
+						actorId: actorContext.userId,
+						idempotencyKey: command.idempotencyKey,
+						requestDigest: actorContext.rawRequestDigest,
+					}),
+					result,
+				);
+			} catch {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			if (readDecision.outcome === "replayed") return readDecision.result;
+			if (readDecision.outcome === "idempotency_conflict") {
+				throw new ApplicationFoundationError("idempotency_conflict");
+			}
+			let admitted: AdmittedInitialAgentConfigurationV1;
+			try {
+				admitted = await admission.complete();
+			} catch (error) {
+				throw normalizeInitialAdmissionError(error);
+			}
 			let submittedAt: Date;
 			try {
 				const milliseconds = Date.prototype.getTime.call(now());
@@ -312,75 +582,88 @@ export function createApplicationFoundationUseCaseV1(
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {
-					agentId: normalizedCommand.agentId,
+					agentId: command.agentId,
 					currentConfigurationRevision: initialConfigurationRevision,
+					authorizationRevision: admitted.authorizationRevision,
 					createdAt: submittedAt,
 				},
 				application: {
-					applicationId: normalizedCommand.applicationId,
-					agentId: normalizedCommand.agentId,
-					applicantId: normalizedActorContext.userId,
-					name: normalizedCommand.name,
-					description: normalizedCommand.description,
+					applicationId: command.applicationId,
+					agentId: command.agentId,
+					applicantId: actorContext.userId,
+					name: command.name,
+					description: command.description,
 					status: "pending_approval",
-					traceId: normalizedCommand.traceId,
-					requestId: normalizedCommand.requestId,
+					traceId: command.traceId,
+					requestId: command.requestId,
 					submittedAt,
 				},
 				configurationRevision: {
-					agentId: normalizedCommand.agentId,
+					agentId: command.agentId,
 					revision: initialConfigurationRevision,
-					sourceReference: normalizedCommand.sourceReference,
+					configuration: admitted.configuration,
 					createdAt: submittedAt,
 				},
-				owner: {
-					agentId: normalizedCommand.agentId,
-					ownerId: normalizedActorContext.userId,
+				access: {
+					agentId: command.agentId,
+					ownerIds: admitted.ownerIds,
+					availability: admitted.availability,
 					createdAt: submittedAt,
+				},
+				result,
+				idempotency: {
+					key: command.idempotencyKey,
+					requestDigest: actorContext.rawRequestDigest,
 				},
 				outboxIntent: {
 					scopeType: "agent",
-					scopeId: normalizedCommand.agentId,
+					scopeId: command.agentId,
 					operation: "agent.application.submitted.v1",
 					payload: {
 						schemaVersion: 1,
-						applicationId: normalizedCommand.applicationId,
-						agentId: normalizedCommand.agentId,
+						applicationId: command.applicationId,
+						agentId: command.agentId,
 						configurationRevision: initialConfigurationRevision,
 					},
-					traceId: normalizedCommand.traceId,
-					requestId: normalizedCommand.requestId,
+					traceId: command.traceId,
+					requestId: command.requestId,
 					occurredAt: submittedAt,
 				},
 				auditEvent: {
-					traceId: normalizedCommand.traceId,
-					requestId: normalizedCommand.requestId,
-					agentId: normalizedCommand.agentId,
+					traceId: command.traceId,
+					requestId: command.requestId,
+					agentId: command.agentId,
 					actorType: "user",
-					actorId: normalizedActorContext.userId,
+					actorId: actorContext.userId,
 					action: "agent.application.submitted",
 					targetType: "agent_application",
-					targetId: normalizedCommand.applicationId,
+					targetId: command.applicationId,
 					outcome: "succeeded",
 					occurredAt: submittedAt,
 				},
 			};
+			let decision: ApplicationFoundationCommitDecisionV1;
 			try {
-				await transaction.commit(plan);
+				decision = parseCommitDecision(
+					await dependencies.transaction.commit(plan),
+					result,
+				);
 			} catch (error) {
+				const code = recognizedApplicationFoundationErrorCode(error);
 				throw new ApplicationFoundationError(
-					recognizedApplicationFoundationErrorCode(error) === "conflict"
-						? "conflict"
+					code === "conflict" || code === "idempotency_conflict"
+						? code
 						: "persistence_failed",
 				);
 			}
-			return {
-				schemaVersion: 1,
-				applicationId: plan.application.applicationId,
-				agentId: plan.agent.agentId,
-				configurationRevision: plan.configurationRevision.revision,
-				status: plan.application.status,
-			};
+			if (decision.outcome === "conflict") {
+				throw new ApplicationFoundationError(
+					decision.reason === "idempotency_conflict"
+						? "idempotency_conflict"
+						: "conflict",
+				);
+			}
+			return decision.result;
 		},
 	};
 }
