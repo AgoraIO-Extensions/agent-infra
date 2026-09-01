@@ -247,6 +247,17 @@ const actorContextKeys = [
 	"rawRequestDigest",
 ] as const;
 
+function isEnumerableDataDescriptor(
+	descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & { value: unknown } {
+	return (
+		descriptor?.enumerable === true &&
+		Object.hasOwn(descriptor, "value") &&
+		!Object.hasOwn(descriptor, "get") &&
+		!Object.hasOwn(descriptor, "set")
+	);
+}
+
 function snapshotExactDataValues(
 	value: unknown,
 	expectedKeys: readonly string[],
@@ -270,12 +281,7 @@ function snapshotExactDataValues(
 		for (const key of [...expectedKeys, ...optionalKeys]) {
 			const descriptor = descriptors[key];
 			if (!descriptor && optionalKeys.includes(key)) continue;
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value") ||
-				Object.hasOwn(descriptor, "get") ||
-				Object.hasOwn(descriptor, "set")
-			) {
+			if (!isEnumerableDataDescriptor(descriptor)) {
 				return undefined;
 			}
 			normalized[key] = descriptor.value;
@@ -405,12 +411,7 @@ function snapshotPlanArray(input: unknown, maximum: number): unknown[] {
 		}
 		return Array.from({ length: input.length }, (_, index) => {
 			const descriptor = descriptors[String(index)];
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value") ||
-				Object.hasOwn(descriptor, "get") ||
-				Object.hasOwn(descriptor, "set")
-			) {
+			if (!isEnumerableDataDescriptor(descriptor)) {
 				throw new Error();
 			}
 			return descriptor.value;
