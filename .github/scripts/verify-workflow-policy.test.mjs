@@ -86,7 +86,7 @@ test("starts review, recovery, and outcome handling from the CI workflow", async
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 9);
+  assert.equal(Object.keys(workflows).length, 10);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>

@@ -2,11 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 状态 | Proposed for Design Review |
-| 版本 | v2.0 |
-| 日期 | 2026-08-13 |
+| 状态 | Supervised HCI Pilot Approved；完整 Design Review 仍开放 |
+| 版本 | v2.1-pilot |
+| 日期 | 2026-09-01 |
 | 适用范围 | 独立 Connection M1 服务 |
 | Primary Issue | [#140](https://github.com/AgoraIO-Extensions/agent-infra/issues/140) |
+| Pilot Issue | [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) |
 | 产品依据 | [Connection M1 产品需求](../prd/PRD-connection-M1.md) |
 | 工程依据 | [agent-infra M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) |
 | 交付流程依据 | [AI 主导开发工作流 Spec](SPEC-ai-native-development-workflow.md) |
@@ -163,14 +164,44 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
-| G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | Confluence/Jira 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 除 4.3 节明确批准的受监督 HCI pilot 外，身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
+| G-02 | Confluence/Jira 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
-| G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | Credential 和 Provider 执行业务路由不启动，缺少正式 Adapter 时启动失败 | Security/SRE |
+| G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 除 4.3 节已接受风险的具名 pilot 外，Credential 和 Provider 执行业务路由不启动；缺少正式 Adapter 时始终启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
 | G-06 | Effect Ledger acknowledged commit 的生产 RPO | 写 Action 保持关闭 | SRE/DBA |
 | G-07 | Provider 完整审计能否覆盖数据恢复风险窗口 | 不能以抽样解冻写能力 | SRE/Provider Owner |
 | G-08 | 现网是否存在 legacy Connection/Credential/Grant | 禁止假设 greenfield cutover | Data Owner |
+
+### 4.3 受监督 HCI pilot 决定
+
+Connection Owner 于 2026-09-01 在 [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301)
+接受当前残余风险，并批准以下唯一例外：
+
+- 环境固定为 HCI context `guoxianzhe-agora-hci-losangeles3s`、namespace
+  `la3-agent-connector-prod`、Helm release `connection-local` 和公网 origin
+  `https://agent-connector.la3.agoralab.co`。
+- 初始 Direct Client 固定为本机 `codex-cli 0.149.0-alpha.4.1`。生产入口与本机 conformance
+  必须调用同一个 `createConnectionRuntimeApp`；不得增加另一套 profile、fixture、Runtime store
+  或环境开关。
+- HCI API 可以注册 LDAP browser session、Connection OAuth/PAT、Direct MCP、Provider、Consent、
+  Grant 和管理路由。所有 Principal、Connection、Credential、Grant、Call、Effect 和审计仍以
+  Connection PostgreSQL 为唯一权威；Consumer 不能获得 Provider credential。
+- 当前固定的 GitHub、Bitbucket、Jira 和 Confluence ProviderRelease 可以在该 pilot 数据库内标记
+  `PUBLISHED`，仅用于受监督验收；没有真实 tenant、scope、错误、限流和幂等证据的 Provider 或
+  WRITE Action 不得被描述为广泛生产可用。
+- 已明确接受当前 Agora `ldap://` direct bind、缺少 LDAP active attribute、进程注入的单一
+  Credential key，以及尚未完成 KMS、唯一 egress、outbox/PITR、HA/SLO 和完整 Provider
+  发布评审的风险。这些接受只允许受监督 pilot，不关闭 G-01 至 G-08 或 OC-01 至 OC-13 的广泛
+  生产验收。
+- WRITE Action 只允许在用户显式 Consent、服务端 Grant、持久 Call/Effect/Dispatch 和既有幂等
+  约束全部通过后执行；真实写入仅作为受监督 canary，不据此声明 mutating production support。
+- 缺少必需 Secret、migration/catalog 不一致、身份或授权异常、credential 泄漏迹象、无法确认的
+  Provider Effect，或跨 Principal/Provider 负向验证失败时，必须 fail closed，并立即回滚到
+  `ghcr.io/agoraio-extensions/agent-infra/connection-api:v0.0.1` 的健康检查专用入口。
+
+该决定是对 G-01 未关闭行为的具名、限环境 pilot 批准，不是通用例外机制。其他环境、客户端版本、
+delegated workload 或支持声明仍须按原门禁取得 Owner 结论和 conformance 证据。
 
 ## 5. 方案比较与选型
 
@@ -2566,7 +2597,7 @@ flowchart LR
 
 | 优先级 | Gate | 必须关闭时间 | 关闭证据 |
 | --- | --- | --- | --- |
-| P0 | G-01 Identity/session/workload 契约 | WP2 实现前 | Identity 与 Security 批准的协议和 test tenant |
+| P0 | G-01 Identity/session/workload 契约 | 广泛生产支持前；4.3 节只批准具名 pilot | Identity 与 Security 批准的协议和 test tenant |
 | P0 | G-02 初期 Provider deployment、auth、Action/scope、测试账号与 Outlook 状态 | 对应 WP3 真实 Adapter 前 | 各 Provider onboarding 表和 Product/Provider 签字 |
 | P0 | G-05 Shared disable 语义 | Shared 管理实现前 | PRD 结论或 M1 明确禁用该操作 |
 | P0 | G-08 legacy inventory | migration 设计前 | Data Owner 的系统/数据/格式清单 |

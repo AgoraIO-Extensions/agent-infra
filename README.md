@@ -32,24 +32,25 @@ Platform Web；`connection-api` 不再拼接管理页面 HTML。
 | Connection Web | `apps/connection-web` | 独立简体中文 React 控制台、生成 Browser Client 与同源 Nginx 入口 |
 | Platform API | `apps/platform-api` | Hono 进程与健康检查 |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
-| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub/Bitbucket/Jira/Confluence Server Adapter、多 Provider Grant 与 MCP；G-01 未关闭时生产镜像仍只提供健康检查 |
+| Connection API | `apps/connection-api` | 正式 runtime 已装配 LDAP、OAuth/PAT、PostgreSQL、GitHub/Bitbucket/Jira/Confluence Server Adapter、多 Provider Grant 与 MCP；#301 批准具名 HCI supervised pilot，广泛生产门禁仍开放 |
 | OpenConnector Kernel | `packages/openconnector-kernel` | 仅由 `openconnector-adapter` 使用的受控 Provider execution closure |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
 工程架构 Spec 保持独立部署、运行身份和数据边界。
 
-## 生产骨架
+## 生产部署
 
-`docker-compose.production.yml` 定义门禁期生产骨架。由部署 Secret Manager 向进程环境注入
-`DATABASE_URL` 并准备 PostgreSQL，然后运行：
+`docker-compose.production.yml` 定义正式 Connection 部署边界。由部署 Secret Manager 向进程环境
+注入 `.env.conformance.example` 列出的必需值并准备 PostgreSQL，然后运行：
 
 ```bash
 pnpm connection:production:bootstrap
 pnpm connection:production:up
 ```
 
-bootstrap 只执行正式 migration。G-01 未关闭时，生产 API 只提供容器内部健康检查，不发布 LDAP、
-OAuth、MCP、Provider、Credential 或 Action 路由。详见
+bootstrap 只执行正式 migration；API 在完整配置、migration 和 catalog 校验通过后启动同一个正式
+Runtime factory。当前公开地址 `https://agent-connector.la3.agoralab.co` 仅按 #301 作为受监督 HCI
+pilot，不代表其他环境或客户端已经通过生产门禁。详见
 [Connection 生产部署](docs/architecture/connection-production.md)。
 
 ## 本地验证
@@ -69,8 +70,8 @@ pnpm docker:build
 真实账号 conformance 使用本机忽略的 `.env.conformance.local`，或由 Secret Manager 注入
 `.env.conformance.example` 中列出的参数后运行 `pnpm connection:conformance`。该命令启动
 `runtime-app.ts` 定义的正式 Connection runtime 并采集验收证据；conformance 是测试过程，不是第二套
-部署 profile 或业务实现。门禁关闭前该启动器与正式 runtime factory 都不进入生产镜像，测试结果也
-不能替代 G-01/G-02 的审批与验收记录。
+部署 profile 或业务实现。生产入口复用同一 factory，但 conformance 启动器不进入生产镜像；pilot
+结果只形成具名环境证据，不能替代 G-01/G-02 的广泛支持审批。
 
 本机开发也使用 PostgreSQL 和同一账号模型，不启动 OpenConnector Runtime 或本机 Credential store。
 本机由 Connection Web 占用 public origin `http://127.0.0.1:3002`，完整 Connection API 作为内部进程

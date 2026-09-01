@@ -2,15 +2,16 @@
 
 `connection-api` 是唯一 Connection control plane，`connection-web` 是独立的无状态中文 React
 入口。PostgreSQL 是唯一权威存储；OpenConnector
-Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。G-01 未关闭期间，生产入口只提供
-容器内部健康检查，不发布身份或 MCP 业务路由。
+Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301)
+批准 `https://agent-connector.la3.agoralab.co` 的受监督 HCI pilot 使用完整 Connection runtime；
+该批准不关闭 HLD 中面向其他环境、客户端或广泛生产支持的门禁。
 
 ## 前置条件
 
 - PostgreSQL 可通过 `DATABASE_URL` 访问。
 - Bootstrap 只接收 Secret Manager 注入进程环境的 `DATABASE_URL`。
-- 公司 LDAP、Connection identity key、Credential KMS 和 Provider Secret 在对应门禁关闭前不注入
-  生产 API。
+- 公司 LDAP、Connection identity key、Credential key 和 Provider Secret 由 Secret Manager 注入
+  pilot API；缺少任一必需值时进程必须在监听端口前失败。
 
 不得创建或持久化已填写的 `.env.production` 文件。部署 orchestrator 必须从 Secret Manager 直接向
 进程环境或 Secret Service reference 注入值。
@@ -25,8 +26,8 @@ pnpm connection:production:up
 
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
 Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection/*`、`/connection/v1/*`、
-`/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。G-01 未关闭时，即使 Web
-已部署，API 仍只提供健康检查，前端不能绕过该门禁。
+`/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。API 直接启动
+`runtime-app.ts` 的正式装配；Compose 只传递显式 allowlist 中的环境变量，不读取已填写的 env 文件。
 
 ## 首个 Connection 管理员
 
@@ -42,15 +43,16 @@ pnpm connection:admin:bootstrap -- --ldap-subject '<stable-ldap-uid>'
 Credential。命令幂等，但系统已有其他管理员或目标 role 已撤销后 fail closed。后续管理员变更只能从
 `/connection/admin/administrators` 执行，且不能撤销最后一个 active 管理员。
 
-## 门禁期 Runtime 契约
+## 受监督 HCI pilot Runtime 契约
 
-- 当前 `connection-api` 生产镜像只启动 `/` 与 `/healthz`，且 Compose 不向主机发布 API 端口。LDAP、OAuth metadata、DCR、
-  PAT 签发、token、MCP、Provider、Consent、管理与 Action 路由全部不注册，不能通过环境变量启用。
+- `connection-api` 生产入口与 conformance 入口调用同一个 `createConnectionRuntimeApp`。LDAP、OAuth
+  metadata、受限 DCR、PAT、token、MCP、Provider、Consent、管理与 Action 路由只在完整配置、migration
+  和不可变 catalog 校验通过后注册；不存在健康检查专用回退或环境开关。
 - `apps/connection-api/src/runtime-app.ts` 是正式 Connection runtime 的唯一完整装配点，包含 LDAP、
   OAuth/PAT、PostgreSQL 账号与业务仓储、GitHub/Bitbucket/Jira/Confluence Server Adapter、Grant 和 Direct MCP。
   `apps/connection-api/src/conformance.ts` 只负责迁移数据库、启动该 runtime 并执行真实账号验收；
-  conformance 是测试和证据过程，不是独立部署 profile 或另一套业务实现。两者在门禁关闭前均不进入
-  生产镜像，只在受控 HTTPS 入口或精确 loopback 本机验收中运行。当前
+  conformance 是测试和证据过程，不是独立部署 profile 或另一套业务实现；该 conformance 启动器不进入
+  生产镜像。当前
   Agora profile 是公司私网 `ldap://` direct bind，不允许自动 downgrade 或 fallback；DCR 仅接受
   已实测 Codex native-client metadata 与受限 loopback redirect，注册在首次 code exchange 后失效。
   `apps/connection-web` 提供简体中文登录、Connection、访问令牌、管理员和共享 Connection 页面；
@@ -59,8 +61,12 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
   有效期与撤销状态。管理员使用同一 LDAP 登录；服务端 PostgreSQL RBAC 控制管理员和共享 Connection
   API。SharedScope 当前只支持显式 Principal membership；管理员本身不会
   自动获得共享 Connection 使用资格。
-- Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。正式 runtime 的本机
-  通过只能形成实现证据，不能代替尚未关闭的生产身份、KMS、egress、Consent 和恢复门禁。
+- Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。HCI pilot 的通过只能
+  形成具名环境和客户端证据，不能代替尚未关闭的广泛生产身份、KMS、egress、Consent 和恢复门禁。
+
+当前不可变回滚点是 `connection-api:v0.0.1` 和 `connection-web:v0.0.1`。身份、Credential、授权、
+Provider Effect 或 secret 暴露检查失败时，Helm 必须把 API/Web 镜像恢复为该版本；v0.0.1 只开放
+健康检查，因此回滚会立即关闭 OAuth、MCP 和 Provider 业务路由，但不删除 PostgreSQL 权威数据。
 
 Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务端，用于按需签发短期应用级
 `accessToken`；它不进入用户 credential envelope。用户的 Jira 用户名/密码仍按 Connection
@@ -69,7 +75,7 @@ credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发�
 
 ## 验收边界
 
-本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。生产验收
+本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收
 仍需要真实公司 LDAP、已登记的 Codex client、真实 Bitbucket/Jira/Confluence credential 在至少两个客户端的
 Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、PostgreSQL 备份/恢复、受控 egress，
 以及最小只读与写入 Provider canary。参数清单见

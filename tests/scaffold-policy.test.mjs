@@ -92,6 +92,7 @@ test("the production Connection builder excludes development fixture source", as
 	assert.doesNotMatch(dockerfile, /^COPY . .$/m);
 	assert.doesNotMatch(dockerfile, /fixture|stub/i);
 	assert.doesNotMatch(dockerfile, /src\/conformance(?:-app)?\.ts/);
+	assert.match(dockerfile, /src\/runtime-app\.ts/);
 	assert.doesNotMatch(dockerfile, /Dockerfile.development/);
 	assert.ok(
 		dockerfile.includes("COPY migrations/connection migrations/connection"),

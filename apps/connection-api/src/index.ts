@@ -7,7 +7,7 @@ import {
 } from "./production-app";
 
 interface StartOptions {
-	app?: { fetch(request: Request): Response | Promise<Response> };
+	app: { fetch(request: Request): Response | Promise<Response> };
 	hostname?: string;
 	log?: (message: string) => void;
 	port?: number;
@@ -21,13 +21,12 @@ function runtimePort(value: string | undefined, fallback: number) {
 	return port;
 }
 
-export function startConnectionApi(options: StartOptions = {}) {
+export function startConnectionApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3002);
 	const log = options.log ?? console.info;
-	const app = options.app ?? createProductionConnectionApp();
 	return serve(
 		{
-			fetch: app.fetch,
+			fetch: options.app.fetch,
 			hostname: options.hostname,
 			port,
 		},
@@ -43,7 +42,7 @@ export function startConnectionApi(options: StartOptions = {}) {
 }
 
 async function startConfiguredConnectionApi() {
-	return startConnectionApi();
+	return startConnectionApi({ app: await createProductionConnectionApp() });
 }
 
 const entrypoint = process.argv[1];

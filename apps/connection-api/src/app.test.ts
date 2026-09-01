@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { createConnectionApp } from "./app";
 import { createConnectionOAuthApp } from "./oauth-routes";
 import { createProductionConnectionApp } from "./production-app";
+import { createConnectionRuntimeApp } from "./runtime-app";
 
 const actions: ActionDefinition[] = [
 	{
@@ -1532,14 +1533,11 @@ describe("Connection API", () => {
 		expect(redirect.searchParams.get("state")).toBe("authorization-state");
 	});
 
-	it("keeps production identity and MCP routes closed while G-01 is open", async () => {
-		const app = createProductionConnectionApp();
-		expect((await app.request("/healthz")).status).toBe(200);
-		expect((await app.request("/")).status).toBe(200);
-		expect((await app.request("/mcp", { method: "POST" })).status).toBe(404);
-		expect(
-			(await app.request("/.well-known/oauth-authorization-server")).status,
-		).toBe(404);
+	it("uses the formal runtime factory in production and fails closed without configuration", async () => {
+		expect(createProductionConnectionApp).toBe(createConnectionRuntimeApp);
+		await expect(createProductionConnectionApp({})).rejects.toThrow(
+			"CONNECTION_PUBLIC_BASE_URL is required",
+		);
 	});
 
 	it("reports health without requiring a configured database", async () => {

@@ -49,7 +49,7 @@ test("production code reaches PostgreSQL only through connection-store", async (
 	);
 });
 
-test("production startup cannot opt into fixture invocation or provider routes", async () => {
+test("production startup uses the formal runtime without fixture invocation", async () => {
 	const entrypoint = await read("apps/connection-api/src/index.ts");
 	const productionApp = await read("apps/connection-api/src/production-app.ts");
 	const runtimeApp = await read("apps/connection-api/src/runtime-app.ts");
@@ -60,7 +60,10 @@ test("production startup cannot opt into fixture invocation or provider routes",
 	const productionDockerfile = await read("apps/connection-api/Dockerfile");
 
 	assert.match(entrypoint, /from "\.\/production-app"/);
-	assert.match(productionApp, /createConnectionApp/);
+	assert.match(
+		productionApp,
+		/createConnectionRuntimeApp as createProductionConnectionApp/,
+	);
 	assert.doesNotMatch(entrypoint, /ConnectionApplicationService/);
 	assert.doesNotMatch(entrypoint, /RemoteOidcIdentityVerifier/);
 	assert.doesNotMatch(entrypoint, /OpenConnectorGitHubAdapter/);
@@ -78,7 +81,7 @@ test("production startup cannot opt into fixture invocation or provider routes",
 	assert.doesNotMatch(productionBootstrap, /INSERT INTO connection_/);
 	assert.doesNotMatch(productionDockerfile, /src\/development\.ts/);
 	assert.doesNotMatch(productionDockerfile, /src\/conformance(?:-app)?\.ts/);
-	assert.doesNotMatch(productionDockerfile, /src\/runtime-app\.ts/);
+	assert.match(productionDockerfile, /src\/runtime-app\.ts/);
 	assert.doesNotMatch(productionDockerfile, /src\/migrate\.ts/);
 	assert.doesNotMatch(entrypoint, /@agent-infra\/connection-store/);
 	assert.deepEqual(Object.keys(productionCompose.services), [
@@ -86,9 +89,38 @@ test("production startup cannot opt into fixture invocation or provider routes",
 		"connection-api",
 		"connection-web",
 	]);
-	assert.equal(
-		productionCompose.services["connection-api"].environment,
-		undefined,
+	assert.deepEqual(
+		new Set(productionCompose.services["connection-api"].environment),
+		new Set([
+			"DATABASE_URL",
+			"CONNECTION_PUBLIC_BASE_URL",
+			"CONNECTION_IDENTITY_KEY",
+			"CONNECTION_CREDENTIAL_KEY",
+			"CONNECTION_DIRECT_CONSUMER_ID",
+			"CONNECTION_DIRECT_CONSUMER_NAME",
+			"GITHUB_OAUTH_CLIENT_ID",
+			"GITHUB_OAUTH_CLIENT_SECRET",
+			"GITHUB_OAUTH_AUTHORIZATION_URL",
+			"GITHUB_OAUTH_TOKEN_URL",
+			"JIRA_TOKEN_SERVER_URL",
+			"JIRA_TOKEN_CLIENT_ID",
+			"JIRA_TOKEN_CLIENT_SECRET",
+			"JIRA_TOKEN_USERNAME",
+			"JIRA_TOKEN_PASSWORD",
+			"LDAP_URL",
+			"LDAP_ISSUER",
+			"LDAP_USERS_BASE_DN",
+			"LDAP_SERVICE_BIND_DN",
+			"LDAP_SERVICE_BIND_PASSWORD",
+			"LDAP_USERNAME_ATTRIBUTE",
+			"LDAP_UID_ATTRIBUTE",
+			"LDAP_EMAIL_ATTRIBUTE",
+			"LDAP_DISPLAY_NAME_ATTRIBUTE",
+			"LDAP_ACTIVE_ATTRIBUTE",
+			"LDAP_ACTIVE_VALUE",
+			"LDAP_CONNECT_TIMEOUT_MS",
+			"LDAP_OPERATION_TIMEOUT_MS",
+		]),
 	);
 	assert.equal(productionCompose.services["connection-api"].secrets, undefined);
 	assert.equal(productionCompose.services["connection-api"].ports, undefined);
