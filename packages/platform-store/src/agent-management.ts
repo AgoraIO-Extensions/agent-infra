@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -54,6 +55,40 @@ const managementStatuses = new Set([
 	"disabled",
 ]);
 
+function exactObject(input: unknown, keys: readonly string[]): void {
+	if (
+		typeof input !== "object" ||
+		input === null ||
+		Array.isArray(input) ||
+		Object.keys(input).length !== keys.length ||
+		keys.some((key) => !Object.hasOwn(input, key))
+	) {
+		throw new AgentManagementError("unavailable");
+	}
+}
+
+function validText(input: unknown, maximum = 1024): input is string {
+	return (
+		typeof input === "string" &&
+		input.length > 0 &&
+		!input.includes("\0") &&
+		String.prototype.isWellFormed.call(input) &&
+		Buffer.byteLength(input, "utf8") <= maximum
+	);
+}
+
+function validDate(input: unknown): input is Date {
+	try {
+		return Number.isFinite(Date.prototype.getTime.call(input));
+	} catch {
+		return false;
+	}
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function acceptedResult(
 	input: unknown,
 	request: AgentManagementTransactionRequestV1,
@@ -65,10 +100,8 @@ function acceptedResult(
 	if (
 		Object.keys(result).length !== 5 ||
 		result.schemaVersion !== 1 ||
-		typeof result.applicationId !== "string" ||
-		result.applicationId.length === 0 ||
-		typeof result.agentId !== "string" ||
-		result.agentId.length === 0 ||
+		!validText(result.applicationId) ||
+		!validText(result.agentId) ||
 		!managementStatuses.has(result.status as string) ||
 		!Number.isSafeInteger(result.revision) ||
 		(result.revision as number) < 1 ||
@@ -81,10 +114,11 @@ function acceptedResult(
 	return structuredClone(result) as unknown as AgentManagementAcceptedResultV1;
 }
 
-function replay(
+async function replay(
+	transaction: Transaction,
 	row: IdempotencyRow | undefined,
 	request: AgentManagementTransactionRequestV1,
-): AgentManagementDecisionV1 | undefined {
+): Promise<AgentManagementDecisionV1 | undefined> {
 	if (!row) return undefined;
 	if (row.requestDigest !== request.requestDigest) {
 		return {
@@ -96,9 +130,20 @@ function replay(
 	if (row.status !== "completed") {
 		throw new AgentManagementError("unavailable");
 	}
+	const result = acceptedResult(row.result, request);
+	if (request.subjectType === "agent_application") {
+		const [identity] = await transaction
+			.select({ agentId: agentApplications.agentId })
+			.from(agentApplications)
+			.where(eq(agentApplications.id, request.subjectId))
+			.limit(1);
+		if (identity?.agentId !== result.agentId) {
+			throw new AgentManagementError("unavailable");
+		}
+	}
 	return {
 		outcome: "replayed",
-		result: acceptedResult(row.result, request),
+		result,
 		writePlan: null,
 	};
 }
@@ -203,9 +248,90 @@ function requireAcceptedEnvelope(
 	request: AgentManagementTransactionRequestV1,
 	current: AgentManagementStateV1,
 	decision: AcceptedDecision,
-): void {
+): {
+	readonly result: AgentManagementAcceptedResultV1;
+	readonly outboxPayload: null | {
+		readonly schemaVersion: 1;
+		readonly agentId: string;
+		readonly revision: number;
+		readonly workloadRevision: number;
+		readonly fence: number;
+		readonly desiredState: "running" | "stopped";
+	};
+} {
 	const { result, writePlan } = decision;
+	exactObject(writePlan, [
+		"schemaVersion",
+		"operation",
+		"subjectType",
+		"subjectId",
+		"expectedRevision",
+		"state",
+		"transition",
+		"outboxIntent",
+		"auditEvent",
+		"idempotency",
+	]);
+	exactObject(writePlan.state, [
+		"schemaVersion",
+		"applicationId",
+		"agentId",
+		"applicantId",
+		"status",
+		"revision",
+		"approvalRevision",
+		"decisionReason",
+		"serviceAvailability",
+		"desiredState",
+		"workloadRevision",
+		"fence",
+		"ownerIds",
+		"availability",
+		"failureCode",
+	]);
+	exactObject(writePlan.transition, ["from", "to", "occurredAt"]);
+	exactObject(writePlan.auditEvent, [
+		"action",
+		"actorId",
+		"subjectType",
+		"subjectId",
+		"traceId",
+		"requestId",
+		"occurredAt",
+	]);
+	exactObject(writePlan.idempotency, ["key", "requestDigest"]);
+	const validatedResult = acceptedResult(result, request);
+	const expectedAuditAction =
+		request.operation === "update_application"
+			? current.status === "rejected"
+				? "agent.application.resubmitted"
+				: "agent.application.updated"
+			: {
+					withdraw_application: "agent.application.withdrawn",
+					approve_application: "agent.application.approved",
+					reject_application: "agent.application.rejected",
+					stop_agent: "agent.lifecycle.stopped",
+					restart_agent: "agent.lifecycle.restarted",
+					retry_agent_creation: "agent.lifecycle.creation_retried",
+					disable_agent: "agent.lifecycle.disabled",
+					observe_creation_succeeded: "agent.workload.creation_succeeded",
+					observe_creation_failed: "agent.workload.creation_failed",
+					observe_service_starting: "agent.workload.service_starting",
+					observe_service_ready: "agent.workload.service_ready",
+					observe_service_updating: "agent.workload.service_updating",
+					observe_service_unavailable: "agent.workload.service_unavailable",
+				}[request.operation];
+	const expectedOutboxDesiredState: "running" | "stopped" | null =
+		request.operation === "approve_application" ||
+		request.operation === "restart_agent" ||
+		request.operation === "retry_agent_creation"
+			? "running"
+			: request.operation === "stop_agent" ||
+					request.operation === "disable_agent"
+				? "stopped"
+				: null;
 	if (
+		writePlan.schemaVersion !== 1 ||
 		writePlan.operation !== request.operation ||
 		writePlan.subjectType !== request.subjectType ||
 		writePlan.subjectId !== request.subjectId ||
@@ -215,19 +341,73 @@ function requireAcceptedEnvelope(
 		writePlan.state.applicationId !== current.applicationId ||
 		writePlan.state.agentId !== current.agentId ||
 		writePlan.state.applicantId !== current.applicantId ||
+		writePlan.state.schemaVersion !== 1 ||
 		writePlan.state.revision !== current.revision + 1 ||
+		!sameValue(writePlan.state.ownerIds, current.ownerIds) ||
+		!sameValue(writePlan.state.availability, current.availability) ||
 		writePlan.transition.from !== current.status ||
 		writePlan.transition.to !== writePlan.state.status ||
+		!validDate(writePlan.transition.occurredAt) ||
+		writePlan.auditEvent.action !== expectedAuditAction ||
 		writePlan.auditEvent.actorId !== request.actorId ||
 		writePlan.auditEvent.subjectType !== request.subjectType ||
 		writePlan.auditEvent.subjectId !== request.subjectId ||
-		result.applicationId !== writePlan.state.applicationId ||
-		result.agentId !== writePlan.state.agentId ||
-		result.status !== writePlan.state.status ||
-		result.revision !== writePlan.state.revision
+		!validText(writePlan.auditEvent.traceId) ||
+		!validText(writePlan.auditEvent.requestId) ||
+		!validDate(writePlan.auditEvent.occurredAt) ||
+		writePlan.auditEvent.occurredAt.getTime() !==
+			writePlan.transition.occurredAt.getTime() ||
+		validatedResult.applicationId !== writePlan.state.applicationId ||
+		validatedResult.agentId !== writePlan.state.agentId ||
+		validatedResult.status !== writePlan.state.status ||
+		validatedResult.revision !== writePlan.state.revision
 	) {
 		throw new AgentManagementError("unavailable");
 	}
+	if (expectedOutboxDesiredState === null) {
+		if (writePlan.outboxIntent !== null) {
+			throw new AgentManagementError("unavailable");
+		}
+		return { result: validatedResult, outboxPayload: null };
+	}
+	const outbox = writePlan.outboxIntent;
+	if (!outbox) throw new AgentManagementError("unavailable");
+	exactObject(outbox, [
+		"operation",
+		"payload",
+		"traceId",
+		"requestId",
+		"occurredAt",
+	]);
+	exactObject(outbox.payload, [
+		"schemaVersion",
+		"agentId",
+		"revision",
+		"workloadRevision",
+		"fence",
+		"desiredState",
+	]);
+	const outboxPayload = {
+		schemaVersion: 1 as const,
+		agentId: writePlan.state.agentId,
+		revision: writePlan.state.revision,
+		workloadRevision: writePlan.state.workloadRevision,
+		fence: writePlan.state.fence,
+		desiredState: expectedOutboxDesiredState,
+	};
+	if (
+		outbox.operation !== "agent.workload.reconcile.v1" ||
+		!sameValue(outbox.payload, outboxPayload) ||
+		!validText(outbox.traceId) ||
+		!validText(outbox.requestId) ||
+		outbox.traceId !== writePlan.auditEvent.traceId ||
+		outbox.requestId !== writePlan.auditEvent.requestId ||
+		!validDate(outbox.occurredAt) ||
+		outbox.occurredAt.getTime() !== writePlan.transition.occurredAt.getTime()
+	) {
+		throw new AgentManagementError("unavailable");
+	}
+	return { result: validatedResult, outboxPayload };
 }
 
 async function persistAccepted(
@@ -236,8 +416,9 @@ async function persistAccepted(
 	current: AgentManagementStateV1,
 	decision: AcceptedDecision,
 ): Promise<AgentManagementDecisionV1> {
-	requireAcceptedEnvelope(request, current, decision);
-	const { result, writePlan } = decision;
+	const validated = requireAcceptedEnvelope(request, current, decision);
+	const { writePlan } = decision;
+	const { result, outboxPayload } = validated;
 	const next = writePlan.state;
 	const observation = request.operation.startsWith("observe_");
 	const [updated] = await transaction
@@ -285,13 +466,13 @@ async function persistAccepted(
 		toStatus: writePlan.transition.to,
 		occurredAt: writePlan.transition.occurredAt,
 	});
-	if (writePlan.outboxIntent) {
+	if (writePlan.outboxIntent && outboxPayload) {
 		await transaction.insert(outboxItems).values({
 			id: randomUUID(),
 			scopeType: "agent",
 			scopeId: next.agentId,
 			operation: writePlan.outboxIntent.operation,
-			payload: { ...writePlan.outboxIntent.payload },
+			payload: outboxPayload,
 			traceId: writePlan.outboxIntent.traceId,
 			requestId: writePlan.outboxIntent.requestId,
 			availableAt: writePlan.outboxIntent.occurredAt,
@@ -347,13 +528,15 @@ export class PostgresAgentManagementTransactionV1
 	): Promise<AgentManagementDecisionV1> {
 		try {
 			return await this.#database.transaction(async (transaction) => {
-				const firstReplay = replay(
+				const firstReplay = await replay(
+					transaction,
 					await readIdempotency(transaction, request),
 					request,
 				);
 				if (firstReplay) return firstReplay;
 				const state = await lockState(transaction, request);
-				const secondReplay = replay(
+				const secondReplay = await replay(
+					transaction,
 					await readIdempotency(transaction, request),
 					request,
 				);

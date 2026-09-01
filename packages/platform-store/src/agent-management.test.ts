@@ -699,6 +699,70 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		).toEqual({ outcome: "denied", writePlan: null });
 	});
 
+	it("rejects non-canonical outbox and audit plans before writes", async () => {
+		const state = stateFixture({
+			applicationId: "application_malformed_plan",
+			agentId: "agent_malformed_plan",
+		});
+		for (const tamper of ["outbox", "audit"] as const) {
+			await seedStates([state]);
+			const before = await databaseSnapshot();
+			const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+			adapters.push(adapter);
+			const transaction: AgentManagementTransactionPortV1 = {
+				async executeAgentManagementTransaction(request, decide) {
+					return adapter.executeAgentManagementTransaction(
+						request,
+						(current) => {
+							const decision = decide(current);
+							if (decision.outcome !== "accepted") return decision;
+							if (tamper === "audit") {
+								return {
+									...decision,
+									writePlan: {
+										...decision.writePlan,
+										auditEvent: {
+											...decision.writePlan.auditEvent,
+											action: "agent.application.updated",
+										},
+									},
+								};
+							}
+							if (!decision.writePlan.outboxIntent) {
+								throw new Error("Expected a workload outbox plan");
+							}
+							return {
+								...decision,
+								writePlan: {
+									...decision.writePlan,
+									outboxIntent: {
+										...decision.writePlan.outboxIntent,
+										payload: {
+											...decision.writePlan.outboxIntent.payload,
+											plaintext: "database-secret",
+										},
+									},
+								},
+							};
+						},
+					);
+				},
+				resolveAgentAccessState: adapter.resolveAgentAccessState.bind(adapter),
+			};
+			const management = createAgentManagementV1(transaction);
+			await expect(
+				management.executeManagementCommand(
+					command("stop_agent", state, `malformed-${tamper}`),
+					applicant,
+				),
+			).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+			});
+			expect(await databaseSnapshot()).toEqual(before);
+		}
+	});
+
 	it("fails closed on cross-Agent and impossible idempotency results", async () => {
 		const state = stateFixture({
 			applicationId: "application_malicious_replay",
@@ -750,6 +814,43 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				code: "unavailable",
 			});
 		}
+
+		const pending = stateFixture({
+			applicationId: "application_cross_agent_replay",
+			agentId: "agent_cross_agent_replay",
+			status: "pending_approval",
+		});
+		const applicationCommand = command(
+			"approve_application",
+			pending,
+			"cross-agent-application-replay",
+		);
+		const applicationDigest = platformIdempotencyV1.canonicalRequestDigest({
+			...applicationCommand,
+		});
+		await seedStates([pending]);
+		await adminClient`
+			insert into platform.idempotency_records
+				(id, scope_type, scope_id, actor_id, command_type,
+				 idempotency_key, request_digest, status, result,
+				 created_at, updated_at)
+			values ('cross-agent-application', 'agent_application',
+				${pending.applicationId}, ${administrator.userId}, 'agent.management.v1',
+				${applicationCommand.idempotencyKey}, ${applicationDigest}, 'completed',
+				${adminClient.json({
+					schemaVersion: 1,
+					applicationId: pending.applicationId,
+					agentId: "agent_other",
+					status: "creating",
+					revision: 2,
+				})}, now(), now())
+		`;
+		await expect(
+			management.executeManagementCommand(applicationCommand, administrator),
+		).rejects.toMatchObject({
+			name: "AgentManagementError",
+			code: "unavailable",
+		});
 	});
 
 	it("returns only applicant, administrator, Owner, and visible-user scoped projections", async () => {
