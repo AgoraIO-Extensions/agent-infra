@@ -370,6 +370,136 @@ describe("Agent configuration policy", () => {
 		expect(JSON.stringify(snapshot.lastPlan)).not.toContain("d".repeat(64));
 	});
 
+	it("re-authorizes identical replays before reading persisted idempotency", async () => {
+		const transaction = new FakeAgentConfigurationTransactionV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		const admissions = new FakeAgentConfigurationAdmissionsV1(
+			agentConfigurationConformanceAdmissionsV1,
+		);
+		const createUseCase = (
+			authorizationAdmission: AgentConfigurationUseCaseDependenciesV1["authorizationAdmission"],
+		) =>
+			createAgentConfigurationUseCaseV1({
+				transaction,
+				authorizationAdmission,
+				imageAdmission: admissions,
+				modelAdmission: admissions,
+				secretAdmission: admissions,
+				actionAdmission: admissions,
+				channelAdmission: admissions,
+			});
+		const replayCommand = {
+			...command,
+			idempotencyKey: "authorization-before-replay",
+			changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+		};
+		await createUseCase(admissions).update(replayCommand, actor);
+		const committed = transaction.snapshot();
+
+		let revokedCalls = 0;
+		await expect(
+			createUseCase({
+				async authorize(input) {
+					revokedCalls += 1;
+					return {
+						schemaVersion: 1,
+						status: "rejected",
+						agentId: input.agentId,
+						actorId: input.actorId,
+					};
+				},
+			}).update(replayCommand, actor),
+		).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
+		expect(revokedCalls).toBe(1);
+		expect(transaction.snapshot()).toEqual(committed);
+
+		let unavailableCalls = 0;
+		await expect(
+			createUseCase({
+				async authorize() {
+					unavailableCalls += 1;
+					throw new Error("authorization unavailable");
+				},
+			}).update(replayCommand, actor),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "dependency_unavailable" }),
+		);
+		expect(unavailableCalls).toBe(1);
+		expect(transaction.snapshot()).toEqual(committed);
+	});
+
+	it("fails closed when commit or commit-time replay lies about the persisted result", async () => {
+		for (const outcome of ["committed", "replayed"] as const) {
+			const transaction = new FakeAgentConfigurationTransactionV1(
+				agentConfigurationConformanceRecordV1,
+			);
+			const admissions = new FakeAgentConfigurationAdmissionsV1(
+				agentConfigurationConformanceAdmissionsV1,
+			);
+			const lyingTransaction: AgentConfigurationUseCaseDependenciesV1["transaction"] =
+				{
+					read: transaction.read.bind(transaction),
+					async commit(plan) {
+						await transaction.commit(plan);
+						return {
+							outcome,
+							result: {
+								...plan.result,
+								...(outcome === "committed"
+									? { revision: plan.result.revision + 1 }
+									: { changedFields: ["actions" as const] }),
+							},
+						};
+					},
+				};
+			const dependencies = {
+				transaction: lyingTransaction,
+				authorizationAdmission: admissions,
+				imageAdmission: admissions,
+				modelAdmission: admissions,
+				secretAdmission: admissions,
+				actionAdmission: admissions,
+				channelAdmission: admissions,
+			};
+			const resultCommand = {
+				...command,
+				idempotencyKey: `lying-${outcome}-result`,
+				changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			};
+			await expect(
+				createAgentConfigurationUseCaseV1(dependencies).update(
+					resultCommand,
+					actor,
+				),
+			).rejects.toEqual(
+				expect.objectContaining({ code: "persistence_failed" }),
+			);
+			const committed = transaction.snapshot();
+			expect(committed).toMatchObject({
+				commitCount: 1,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				auditCount: 1,
+				configuration: { revision: 8 },
+				lastPlan: {
+					result: {
+						revision: 8,
+						changedFields: ["environment"],
+					},
+				},
+			});
+
+			await expect(
+				createAgentConfigurationUseCaseV1({
+					...dependencies,
+					transaction,
+				}).update(resultCommand, actor),
+			).resolves.toEqual(committed.lastPlan?.result);
+			expect(transaction.snapshot()).toEqual(committed);
+		}
+	});
+
 	it("rejects a 129th aggregate Secret without any effects", async () => {
 		const existingSecrets = Array.from({ length: 128 }, (_, index) => ({
 			name: `CUSTOM_SECRET_${String(index).padStart(3, "0")}`,
@@ -778,6 +908,150 @@ describe("Agent configuration policy", () => {
 			),
 		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
 		expect(fallback.transaction.snapshot().commitCount).toBe(0);
+	});
+
+	it("requires current credential identity unless replacement is explicit", async () => {
+		const modelAdmission = (
+			credentialFor: (optionId: string) => {
+				secretId: string;
+				version: number;
+				isSet: true;
+			},
+		) => ({
+			async admitModels(
+				input: Parameters<
+					AgentConfigurationUseCaseDependenciesV1["modelAdmission"]["admitModels"]
+				>[0],
+			) {
+				return {
+					schemaVersion: 1 as const,
+					status: "admitted" as const,
+					agentId: input.agentId,
+					requestId: input.requestId,
+					configuration: {
+						catalogRevision: "catalog_4",
+						options: input.requested.options.map((option) => ({
+							optionId: option.optionId,
+							endpointId: option.endpointId,
+							modelId: option.modelId,
+							reasoningLevels: option.reasoningLevels,
+							credential: credentialFor(option.optionId),
+						})),
+						defaultOptionId: input.requested.defaultOptionId,
+						defaultReasoningLevel: input.requested.defaultReasoningLevel,
+					},
+				};
+			},
+		});
+		const currentCredential = {
+			secretId: "secret_model_primary",
+			version: 1,
+			isSet: true as const,
+		};
+		const substitutedCredential = {
+			secretId: "secret_model_substituted",
+			version: 2,
+			isSet: true as const,
+		};
+		const primary = {
+			optionId: "model_primary",
+			endpointId: "endpoint_01",
+			modelId: "gpt-5",
+			reasoningLevels: ["low"],
+		};
+
+		const substituted = createHarness({
+			dependencies: {
+				modelAdmission: modelAdmission(() => substitutedCredential),
+			},
+		});
+		await expect(
+			substituted.useCase.update(
+				{
+					...command,
+					idempotencyKey: "model-credential-substitution",
+					changes: {
+						modelConfiguration: {
+							options: [{ ...primary, replaceCredential: false }],
+							defaultOptionId: primary.optionId,
+							defaultReasoningLevel: "low",
+						},
+					},
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		expect(substituted.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+			configuration: { revision: 7 },
+		});
+
+		const injected = createHarness({
+			dependencies: {
+				modelAdmission: modelAdmission((optionId) =>
+					optionId === primary.optionId
+						? currentCredential
+						: substitutedCredential,
+				),
+			},
+		});
+		await expect(
+			injected.useCase.update(
+				{
+					...command,
+					idempotencyKey: "model-credential-injection",
+					changes: {
+						modelConfiguration: {
+							options: [
+								{ ...primary, replaceCredential: false },
+								{
+									...primary,
+									optionId: "model_new",
+									replaceCredential: false,
+								},
+							],
+							defaultOptionId: primary.optionId,
+							defaultReasoningLevel: "low",
+						},
+					},
+				},
+				actor,
+			),
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+		expect(injected.transaction.snapshot().commitCount).toBe(0);
+
+		const replaced = createHarness({
+			dependencies: {
+				modelAdmission: modelAdmission(() => substitutedCredential),
+			},
+		});
+		await expect(
+			replaced.useCase.update(
+				{
+					...command,
+					idempotencyKey: "model-credential-replacement",
+					changes: {
+						modelConfiguration: {
+							options: [{ ...primary, replaceCredential: true }],
+							defaultOptionId: primary.optionId,
+							defaultReasoningLevel: "low",
+						},
+					},
+				},
+				actor,
+			),
+		).resolves.toMatchObject({ changedFields: ["modelConfiguration"] });
+		expect(replaced.transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			configuration: {
+				modelConfiguration: {
+					options: [{ credential: substitutedCredential }],
+				},
+			},
+		});
 	});
 
 	it("enforces standard-template keys and permits custom non-reserved K/V", async () => {

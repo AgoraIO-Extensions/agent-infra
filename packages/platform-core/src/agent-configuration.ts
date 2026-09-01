@@ -1463,6 +1463,7 @@ function parseChannelDecision(
 function parseAdmittedModel(
 	input: unknown,
 	requested: AgentConfigurationModelInputV1,
+	current: AgentConfigurationModelV1 | null,
 ): AgentConfigurationModelV1 {
 	const model = parseStoredModel(input);
 	if (
@@ -1473,11 +1474,17 @@ function parseAdmittedModel(
 			const expected = requested.options.find(
 				({ optionId }) => optionId === option.optionId,
 			);
+			const currentOption = current?.options.find(
+				({ optionId }) => optionId === option.optionId,
+			);
 			return (
 				!expected ||
 				expected.endpointId !== option.endpointId ||
 				expected.modelId !== option.modelId ||
-				!sameValue(expected.reasoningLevels, option.reasoningLevels)
+				!sameValue(expected.reasoningLevels, option.reasoningLevels) ||
+				(!expected.replaceCredential &&
+					(!currentOption ||
+						!sameValue(currentOption.credential, option.credential)))
 			);
 		})
 	) {
@@ -1634,6 +1641,31 @@ export function createAgentConfigurationUseCaseV1(
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			const digest = requestDigest(command, actorContext);
+			let authorization: Awaited<
+				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+			>;
+			try {
+				authorization = parseAuthorizationDecision(
+					await dependencies.authorizationAdmission.authorize({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						actorId: actorContext.actorId,
+						requestId: command.requestId,
+						traceId: command.traceId,
+					}),
+				);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			if (
+				authorization.status !== "admitted" ||
+				authorization.schemaVersion !== 1 ||
+				authorization.agentId !== command.agentId ||
+				authorization.actorId !== actorContext.actorId ||
+				!isText(authorization.authorizationRevision, idMaxBytes)
+			) {
+				throw new AgentConfigurationError("not_authorized");
+			}
 			let readDecision: Awaited<
 				ReturnType<AgentConfigurationTransactionPortV1["read"]>
 			>;
@@ -1664,31 +1696,6 @@ export function createAgentConfigurationUseCaseV1(
 				throw new AgentConfigurationError("not_authorized");
 			}
 			const current = readDecision.configuration;
-			let authorization: Awaited<
-				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
-			>;
-			try {
-				authorization = parseAuthorizationDecision(
-					await dependencies.authorizationAdmission.authorize({
-						schemaVersion: 1,
-						agentId: command.agentId,
-						actorId: actorContext.actorId,
-						requestId: command.requestId,
-						traceId: command.traceId,
-					}),
-				);
-			} catch {
-				throw new AgentConfigurationError("dependency_unavailable");
-			}
-			if (
-				authorization.status !== "admitted" ||
-				authorization.schemaVersion !== 1 ||
-				authorization.agentId !== command.agentId ||
-				authorization.actorId !== actorContext.actorId ||
-				!isText(authorization.authorizationRevision, idMaxBytes)
-			) {
-				throw new AgentConfigurationError("not_authorized");
-			}
 
 			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 			const changedFields: AgentConfigurationChangedFieldV1[] = [];
@@ -1864,6 +1871,7 @@ export function createAgentConfigurationUseCaseV1(
 					modelConfiguration = parseAdmittedModel(
 						admission.configuration,
 						command.changes.modelConfiguration,
+						current.modelConfiguration,
 					);
 				} catch {
 					throw new AgentConfigurationError("not_admitted");
@@ -2192,7 +2200,10 @@ export function createAgentConfigurationUseCaseV1(
 			if (decision.outcome === "idempotency_conflict") {
 				throw new AgentConfigurationError("idempotency_conflict");
 			}
-			return parseResult(decision.result, command.agentId);
+			if (!sameValue(decision.result, plan.result)) {
+				throw new AgentConfigurationError("persistence_failed");
+			}
+			return decision.result;
 		},
 	};
 }
