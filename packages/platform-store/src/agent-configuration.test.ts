@@ -5,7 +5,10 @@ import type {
 	AgentConfigurationWritePlanV1,
 	AgentManagementStateV1,
 } from "@agent-infra/platform-core";
-import { createAgentConfigurationUseCaseV1 } from "@agent-infra/platform-core";
+import {
+	createAgentConfigurationUseCaseV1,
+	createAgentManagementV1,
+} from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import {
@@ -29,6 +32,7 @@ import {
 	PostgresAgentConfigurationTransactionV1,
 } from "./agent-configuration.ts";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.ts";
+import { PostgresAgentManagementTransactionV1 } from "./agent-management.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -165,6 +169,26 @@ async function seed(agentId = "agent_01") {
 		insert into platform.agent_owners (agent_id, owner_id, created_at)
 		values (${agentId}, 'owner_01', ${occurredAt})
 	`;
+}
+
+async function waitForBlockedQuery(includes: readonly string[]): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		const rows = await adminClient<{ query: string }[]>`
+			select query from pg_stat_activity
+			where datname = current_database() and wait_event_type = 'Lock'
+		`;
+		if (
+			rows.some(({ query }) =>
+				includes.every((fragment) => query.toLowerCase().includes(fragment)),
+			)
+		) {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(
+		`Timed out waiting for blocked query: ${includes.join(", ")}`,
+	);
 }
 
 async function snapshot() {
@@ -490,6 +514,92 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			outboxCount: 1,
 			auditCount: 1,
 		});
+	});
+
+	it("uses one lock order for management and access-configuration commits", async () => {
+		await clearDatabase();
+		await seed();
+		const plan = await captureAccessPlan();
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let releaseBlocker: (() => void) | undefined;
+		const blockerReleased = new Promise<void>((resolve) => {
+			releaseBlocker = resolve;
+		});
+		let markBlockerLocked: (() => void) | undefined;
+		const blockerLocked = new Promise<void>((resolve) => {
+			markBlockerLocked = resolve;
+		});
+		const blockerTask = Promise.resolve(
+			blocker.begin(async (transaction) => {
+				await transaction`select pg_advisory_lock(287)`;
+				markBlockerLocked?.();
+				await blockerReleased;
+				await transaction`select pg_advisory_unlock(287)`;
+			}),
+		);
+		await blockerLocked;
+		await adminClient.unsafe(`
+			create function platform.pause_agent_management_update()
+			returns trigger language plpgsql as $$
+			begin
+				perform pg_advisory_xact_lock(287);
+				return new;
+			end
+			$$
+		`);
+		await adminClient.unsafe(`
+			create trigger pause_agent_management_update
+			before update on platform.agent_applications
+			for each row execute function platform.pause_agent_management_update()
+		`);
+		const managementAdapter = new PostgresAgentManagementTransactionV1({
+			databaseUrl,
+		});
+		const configurationAdapter = openTransaction();
+		adapters.push(managementAdapter);
+		const management = createAgentManagementV1(managementAdapter);
+		let managementCommit: Promise<unknown> | undefined;
+		let configurationCommit: Promise<unknown> | undefined;
+		try {
+			managementCommit = management.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: "agent_01",
+					expectedRevision: 11,
+					idempotencyKey: "management-lock-order",
+					requestId: "request_management_lock_order",
+					traceId: "trace_management_lock_order",
+				},
+				accessAuthority.actorContext,
+			);
+			await waitForBlockedQuery(["update", "agent_applications"]);
+			configurationCommit = configurationAdapter.commit(plan);
+			await waitForBlockedQuery(["select"]);
+			releaseBlocker?.();
+			const [managementResult, configurationResult] = await Promise.all([
+				managementCommit,
+				configurationCommit,
+			]);
+			expect([
+				(managementResult as { outcome: string }).outcome,
+				(configurationResult as { outcome: string }).outcome,
+			]).toEqual(expect.arrayContaining(["accepted", "stale"]));
+		} finally {
+			releaseBlocker?.();
+			await Promise.allSettled([
+				blockerTask,
+				...(managementCommit ? [managementCommit] : []),
+				...(configurationCommit ? [configurationCommit] : []),
+			]);
+			await adminClient.unsafe(
+				"drop trigger if exists pause_agent_management_update on platform.agent_applications",
+			);
+			await adminClient.unsafe(
+				"drop function if exists platform.pause_agent_management_update()",
+			);
+			await blocker.end();
+		}
 	});
 
 	it("returns the same result for concurrent same-key commits", async () => {

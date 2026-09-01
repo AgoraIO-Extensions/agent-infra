@@ -246,17 +246,34 @@ async function lockState(
 	transaction: Transaction,
 	request: AgentManagementTransactionRequestV1,
 ): Promise<AgentManagementStateV1 | undefined> {
-	const condition =
+	let agentId = request.subjectId;
+	if (request.subjectType === "agent_application") {
+		const [application] = await transaction
+			.select({ agentId: agentApplications.agentId })
+			.from(agentApplications)
+			.where(eq(agentApplications.id, request.subjectId))
+			.limit(1);
+		if (!application) return undefined;
+		agentId = application.agentId;
+	}
+	const [lockedAgent] = await transaction
+		.select({ id: agents.id })
+		.from(agents)
+		.where(eq(agents.id, agentId))
+		.for("update")
+		.limit(1);
+	if (!lockedAgent) return undefined;
+	const subjectCondition =
 		request.subjectType === "agent_application"
 			? eq(agentApplications.id, request.subjectId)
 			: eq(agentApplications.agentId, request.subjectId);
-	const [locked] = await transaction
+	const [lockedApplication] = await transaction
 		.select({ agentId: agentApplications.agentId })
 		.from(agentApplications)
-		.where(condition)
+		.where(and(subjectCondition, eq(agentApplications.agentId, agentId)))
 		.for("update")
 		.limit(1);
-	return locked && readState(transaction, locked.agentId);
+	return lockedApplication && readState(transaction, lockedApplication.agentId);
 }
 
 function requireAcceptedEnvelope(
