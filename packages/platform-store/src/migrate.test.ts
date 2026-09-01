@@ -112,7 +112,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					from platform_migrations.history
 					order by id
 				`;
-			expect(migrationHistory).toHaveLength(2);
+			expect(migrationHistory).toHaveLength(3);
 
 			const migratedColumns = await client`
 					select table_name, array_agg(column_name order by ordinal_position) as columns
@@ -170,6 +170,25 @@ describe("Platform PostgreSQL migration foundation", () => {
 				authoredIndexes,
 			);
 
+			const authoredForeignKeys = platformInfrastructureTables
+				.flatMap((table) =>
+					getTableConfig(table).foreignKeys.map((foreignKey) =>
+						foreignKey.getName(),
+					),
+				)
+				.toSorted();
+			const migratedForeignKeys = await client`
+					select c.conname as constraint_name
+					from pg_constraint c
+					join pg_class t on t.oid = c.conrelid
+					join pg_namespace n on n.oid = t.relnamespace
+					where n.nspname = 'platform' and c.contype = 'f'
+					order by c.conname
+				`;
+			expect(migratedForeignKeys.map((row) => row.constraint_name)).toEqual(
+				authoredForeignKeys,
+			);
+
 			const migratedEnumValues = await client`
 					select t.typname, array_agg(e.enumlabel order by e.enumsortorder) as values
 					from pg_type t
@@ -184,6 +203,23 @@ describe("Platform PostgreSQL migration foundation", () => {
 					migratedEnumValues.map((row) => [row.typname, row.values]),
 				),
 			).toEqual({
+				agent_availability_target_type: [
+					...platformStatusValues.agentAvailabilityTargetType,
+				],
+				agent_desired_state: [...platformStatusValues.agentDesiredState],
+				agent_failure_code: [...platformStatusValues.agentFailureCode],
+				agent_management_operation: [
+					...platformStatusValues.agentManagementOperation,
+				],
+				agent_management_status: [
+					...platformStatusValues.agentManagementStatus,
+				],
+				agent_management_subject_type: [
+					...platformStatusValues.agentManagementSubjectType,
+				],
+				agent_service_availability: [
+					...platformStatusValues.agentServiceAvailability,
+				],
 				audit_outcome: [...platformStatusValues.auditOutcome],
 				idempotency_status: [...platformStatusValues.idempotencyStatus],
 				outbox_status: [...platformStatusValues.outboxStatus],
@@ -220,7 +256,21 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"occurred_at",
 				"request_id",
 				"agent_id",
+				"details",
 			]);
+
+			const forbiddenObjects = await client`
+					select table_name as object_name
+					from information_schema.tables
+					where table_schema = 'platform'
+						and table_name ~ '(connection|conversation|kubernetes|credential|message)'
+					union all
+				select table_name || '.' || column_name
+				from information_schema.columns
+				where table_schema = 'platform'
+					and column_name ~ '(connection|conversation|kubernetes|credential|message_body)'
+				`;
+			expect(forbiddenObjects).toEqual([]);
 
 			await expectConstraintFailure(
 				client`
@@ -307,7 +357,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 						values
 							('agent revision constraints', 0, 'source opaque', now())
 					`,
-				"agent_configuration_revision_number_positive",
+				"agent_configuration_revision_number_safe",
 			);
 			await client`
 					insert into platform.agent_configuration_revisions
@@ -324,6 +374,95 @@ describe("Platform PostgreSQL migration foundation", () => {
 					`,
 				"agent_configuration_revisions_agent_id_revision_pk",
 			);
+			await expectConstraintFailure(
+				client`
+						insert into platform.agent_applications
+							(id, agent_id, applicant_id, name, description, status,
+								trace_id, request_id, submitted_at)
+						values
+							('application invalid state', 'agent revision constraints',
+								'user_01', 'Agent', 'Description', 'available',
+								'trace_01', 'request_01', now())
+				`,
+				"agent_application_management_state_valid",
+			);
+			await expectConstraintFailure(
+				client`
+						insert into platform.agent_configuration_revisions
+							(agent_id, revision, source_reference, configuration, created_at)
+						values
+							('agent revision constraints', 2, 'source canonical',
+								${client.json({
+									schemaVersion: 1,
+									agentId: "other_agent",
+									revision: 2,
+								})}, now())
+				`,
+				"agent_configuration_identity_matches",
+			);
+
+			const maximumRevision = Number.MAX_SAFE_INTEGER;
+			await client`
+					insert into platform.agents
+						(id, current_configuration_revision, authorization_revision)
+					values ('agent maximum revision', ${maximumRevision}, 'authorization_1')
+			`;
+			await client`
+					insert into platform.agent_applications
+						(id, agent_id, applicant_id, name, description, status,
+							management_revision, approval_revision, service_availability,
+							desired_state, workload_revision, fence, trace_id, request_id,
+							submitted_at)
+					values
+						('application maximum revision', 'agent maximum revision',
+							'user_01', 'Agent', 'Description', 'available',
+							${maximumRevision}, ${maximumRevision}, 'ready', 'running',
+							${maximumRevision}, ${maximumRevision}, 'trace_01', 'request_01',
+							now())
+			`;
+			await client`
+					insert into platform.agent_configuration_revisions
+						(agent_id, revision, source_reference, configuration, created_at)
+					values
+						('agent maximum revision', ${maximumRevision}, 'source canonical',
+							${client.json({
+								schemaVersion: 1,
+								agentId: "agent maximum revision",
+								revision: maximumRevision,
+							})}, now())
+			`;
+			for (const [statement, constraint] of [
+				[
+					"update platform.agents set current_configuration_revision = 9007199254740992 where id = 'agent maximum revision'",
+					"agent_configuration_revision_safe",
+				],
+				[
+					"update platform.agent_applications set management_revision = 9007199254740992 where id = 'application maximum revision'",
+					"agent_application_management_revision_safe",
+				],
+				[
+					"update platform.agent_applications set approval_revision = 9007199254740992 where id = 'application maximum revision'",
+					"agent_application_approval_revision_safe",
+				],
+				[
+					"update platform.agent_applications set workload_revision = 9007199254740992 where id = 'application maximum revision'",
+					"agent_application_workload_revision_safe",
+				],
+				[
+					"update platform.agent_applications set fence = 9007199254740992 where id = 'application maximum revision'",
+					"agent_application_fence_safe",
+				],
+				[
+					"insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at) values ('agent maximum revision', 9007199254740992, 'source overflow', now())",
+					"agent_configuration_revision_number_safe",
+				],
+				[
+					"insert into platform.agent_management_history (agent_id, revision, application_id, subject_type, subject_id, operation, from_status, to_status, occurred_at) values ('agent maximum revision', 9007199254740992, 'application maximum revision', 'agent', 'agent maximum revision', 'stop_agent', 'available', 'stopped', now())",
+					"agent_management_history_revision_safe",
+				],
+			] as const) {
+				await expectConstraintFailure(client.unsafe(statement), constraint);
+			}
 
 			await client`
 					insert into platform.persisted_events

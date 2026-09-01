@@ -1,0 +1,103 @@
+import { getTableConfig } from "drizzle-orm/pg-core";
+import { describe, expect, it } from "vitest";
+
+import {
+	agentApplications,
+	agentAvailability,
+	agentConfigurationRevisions,
+	agentManagementHistory,
+	agents,
+	auditEvents,
+	platformInfrastructureTables,
+	platformStatusValues,
+} from "./schema.ts";
+
+function columnNames(table: Parameters<typeof getTableConfig>[0]): string[] {
+	return getTableConfig(table).columns.map((column) => column.name);
+}
+
+describe("Agent persistence schema contract", () => {
+	it("exports the bounded management values", () => {
+		expect(platformStatusValues).toMatchObject({
+			agentManagementStatus: [
+				"pending_approval",
+				"withdrawn",
+				"rejected",
+				"creating",
+				"available",
+				"stopped",
+				"creation_failed",
+				"disabled",
+			],
+			agentServiceAvailability: [
+				"ready",
+				"starting",
+				"updating",
+				"unavailable",
+			],
+			agentDesiredState: ["running", "stopped"],
+			agentFailureCode: [
+				"creation_not_ready",
+				"health_check_failed",
+				"workload_unavailable",
+				"reconciliation_failed",
+			],
+			agentAvailabilityTargetType: ["user", "organization"],
+			agentManagementSubjectType: ["agent_application", "agent"],
+		});
+	});
+
+	it("exposes one management aggregate and canonical configuration revisions", () => {
+		expect(columnNames(agents)).toEqual([
+			"id",
+			"current_configuration_revision",
+			"created_at",
+			"authorization_revision",
+		]);
+		expect(columnNames(agentApplications)).toEqual([
+			"id",
+			"agent_id",
+			"applicant_id",
+			"name",
+			"description",
+			"status",
+			"trace_id",
+			"request_id",
+			"submitted_at",
+			"management_revision",
+			"approval_revision",
+			"decision_reason",
+			"service_availability",
+			"desired_state",
+			"workload_revision",
+			"fence",
+			"failure_code",
+		]);
+		expect(columnNames(agentConfigurationRevisions)).toEqual([
+			"agent_id",
+			"revision",
+			"source_reference",
+			"created_at",
+			"configuration",
+		]);
+		expect(columnNames(agentAvailability)).toEqual([
+			"agent_id",
+			"target_type",
+			"target_id",
+		]);
+		expect(columnNames(agentManagementHistory)).toEqual([
+			"agent_id",
+			"revision",
+			"application_id",
+			"subject_type",
+			"subject_id",
+			"operation",
+			"from_status",
+			"to_status",
+			"occurred_at",
+		]);
+		expect(columnNames(auditEvents)).toContain("details");
+		expect(platformInfrastructureTables).toContain(agentAvailability);
+		expect(platformInfrastructureTables).toContain(agentManagementHistory);
+	});
+});
