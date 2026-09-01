@@ -389,11 +389,18 @@ describe("Agent configuration policy", () => {
 		const admissions = new FakeAgentConfigurationAdmissionsV1(
 			agentConfigurationConformanceAdmissionsV1,
 		);
+		let readCalls = 0;
 		const createUseCase = (
 			authorizationAdmission: AgentConfigurationUseCaseDependenciesV1["authorizationAdmission"],
 		) =>
 			createAgentConfigurationUseCaseV1({
-				transaction,
+				transaction: {
+					async read(input) {
+						readCalls += 1;
+						return transaction.read(input);
+					},
+					commit: transaction.commit.bind(transaction),
+				},
 				authorizationAdmission,
 				imageAdmission: admissions,
 				modelAdmission: admissions,
@@ -408,6 +415,7 @@ describe("Agent configuration policy", () => {
 		};
 		await createUseCase(admissions).update(replayCommand, actor);
 		const committed = transaction.snapshot();
+		readCalls = 0;
 
 		let revokedCalls = 0;
 		await expect(
@@ -424,6 +432,7 @@ describe("Agent configuration policy", () => {
 			}).update(replayCommand, actor),
 		).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
 		expect(revokedCalls).toBe(1);
+		expect(readCalls).toBe(0);
 		expect(transaction.snapshot()).toEqual(committed);
 
 		let unavailableCalls = 0;
@@ -438,6 +447,7 @@ describe("Agent configuration policy", () => {
 			expect.objectContaining({ code: "dependency_unavailable" }),
 		);
 		expect(unavailableCalls).toBe(1);
+		expect(readCalls).toBe(0);
 		expect(transaction.snapshot()).toEqual(committed);
 	});
 
@@ -490,7 +500,7 @@ describe("Agent configuration policy", () => {
 				actor,
 			),
 		).rejects.toEqual(expect.objectContaining({ code: "stale_revision" }));
-		expect(order).toEqual(["read", "authorize", "commit"]);
+		expect(order).toEqual(["authorize", "read", "authorize", "commit"]);
 		expect(transaction.snapshot()).toMatchObject({
 			authorizationRevision: "authorization_11",
 			configuration: { revision: 7 },

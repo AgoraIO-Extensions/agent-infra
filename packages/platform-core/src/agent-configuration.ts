@@ -1656,6 +1656,46 @@ function parseTransactionCommitDecision(
 
 const systemNow = () => new Date();
 
+async function admitCurrentAuthorization(
+	admission: AgentConfigurationAuthorizationAdmissionPortV1,
+	command: UpdateAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+): Promise<
+	Extract<
+		Awaited<
+			ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+		>,
+		{ readonly status: "admitted" }
+	>
+> {
+	let authorization: Awaited<
+		ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+	>;
+	try {
+		authorization = parseAuthorizationDecision(
+			await admission.authorize({
+				schemaVersion: 1,
+				agentId: command.agentId,
+				actorId: actorContext.actorId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+			}),
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	if (
+		authorization.status !== "admitted" ||
+		authorization.schemaVersion !== 1 ||
+		authorization.agentId !== command.agentId ||
+		authorization.actorId !== actorContext.actorId ||
+		!isText(authorization.authorizationRevision, idMaxBytes)
+	) {
+		throw new AgentConfigurationError("not_authorized");
+	}
+	return authorization;
+}
+
 export function createAgentConfigurationUseCaseV1(
 	dependencies: AgentConfigurationUseCaseDependenciesV1,
 	options: AgentConfigurationUseCaseOptionsV1 = {},
@@ -1666,6 +1706,11 @@ export function createAgentConfigurationUseCaseV1(
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			const digest = requestDigest(command, actorContext);
+			await admitCurrentAuthorization(
+				dependencies.authorizationAdmission,
+				command,
+				actorContext,
+			);
 			let readDecision: Awaited<
 				ReturnType<AgentConfigurationTransactionPortV1["read"]>
 			>;
@@ -1683,31 +1728,6 @@ export function createAgentConfigurationUseCaseV1(
 			} catch {
 				throw new AgentConfigurationError("persistence_failed");
 			}
-			let authorization: Awaited<
-				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
-			>;
-			try {
-				authorization = parseAuthorizationDecision(
-					await dependencies.authorizationAdmission.authorize({
-						schemaVersion: 1,
-						agentId: command.agentId,
-						actorId: actorContext.actorId,
-						requestId: command.requestId,
-						traceId: command.traceId,
-					}),
-				);
-			} catch {
-				throw new AgentConfigurationError("dependency_unavailable");
-			}
-			if (
-				authorization.status !== "admitted" ||
-				authorization.schemaVersion !== 1 ||
-				authorization.agentId !== command.agentId ||
-				authorization.actorId !== actorContext.actorId ||
-				!isText(authorization.authorizationRevision, idMaxBytes)
-			) {
-				throw new AgentConfigurationError("not_authorized");
-			}
 			if (readDecision.outcome === "replayed") {
 				return parseResult(readDecision.result, command.agentId);
 			}
@@ -1721,6 +1741,11 @@ export function createAgentConfigurationUseCaseV1(
 				throw new AgentConfigurationError("not_authorized");
 			}
 			const current = readDecision.record.configuration;
+			const authorization = await admitCurrentAuthorization(
+				dependencies.authorizationAdmission,
+				command,
+				actorContext,
+			);
 
 			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 			const changedFields: AgentConfigurationChangedFieldV1[] = [];
