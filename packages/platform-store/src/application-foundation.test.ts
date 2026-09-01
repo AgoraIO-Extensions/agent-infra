@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	type ApplicationFoundationFailurePoint,
+	applicationFoundationCommandV1,
+	applicationFoundationConfigurationV1,
 	applicationFoundationTransactionConformance,
 	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
@@ -139,7 +141,7 @@ async function snapshot() {
 		})),
 		configurationRevisions: configurationRevisions.map((row) => ({
 			agentId: String(row.agent_id),
-			revision: 1 as const,
+			revision: Number(row.revision),
 			configuration:
 				row.configuration as ApplicationFoundationWritePlanV1["configurationRevision"]["configuration"],
 			createdAt: row.created_at as Date,
@@ -238,6 +240,27 @@ describe("PostgreSQL application foundation transaction", () => {
 			async failNextBefore(point) {
 				armedPoint = point;
 				await armFailure(point);
+			},
+			async advanceConfiguration() {
+				const configuration = {
+					...structuredClone(applicationFoundationConfigurationV1),
+					revision: 2,
+				};
+				await adminClient.begin(async (sql) => {
+					await sql`
+						insert into platform.agent_configuration_revisions
+							(agent_id, revision, source_reference, configuration, created_at)
+						values (${applicationFoundationCommandV1.agentId}, 2, 'template_01',
+							${sql.json(configuration as never)},
+							${new Date("2026-08-30T12:00:00.001Z")})
+					`;
+					const updated = await sql`
+						update platform.agents set current_configuration_revision = 2
+						where id = ${applicationFoundationCommandV1.agentId}
+					`;
+					if (updated.count !== 1)
+						throw new Error("Expected one advanced Agent");
+				});
 			},
 			snapshot,
 			async close() {

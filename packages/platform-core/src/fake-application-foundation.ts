@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import {
 	type AgentConfigurationAccessTargetV1,
+	type AgentConfigurationRecordV1,
 	decodeAgentConfigurationRecordV1,
 } from "./agent-configuration.js";
 import {
@@ -40,7 +41,12 @@ export interface ApplicationFoundationSnapshot {
 		requestId: string;
 		submittedAt: Date;
 	}[];
-	configurationRevisions: ApplicationFoundationWritePlanV1["configurationRevision"][];
+	configurationRevisions: {
+		agentId: string;
+		revision: number;
+		configuration: AgentConfigurationRecordV1;
+		createdAt: Date;
+	}[];
 	owners: { agentId: string; ownerId: string; createdAt: Date }[];
 	availability: {
 		agentId: string;
@@ -236,6 +242,33 @@ export class FakeApplicationFoundationTransactionV1
 		return cloneSnapshot(this.#state);
 	}
 
+	advanceConfigurationForTest(agentId: string): void {
+		const draft = cloneSnapshot(this.#state);
+		const agent = draft.agents.find((entry) => entry.agentId === agentId);
+		const current = draft.configurationRevisions.find(
+			(entry) =>
+				entry.agentId === agentId &&
+				entry.revision === agent?.currentConfigurationRevision,
+		);
+		const nextRevision =
+			(agent?.currentConfigurationRevision ?? Number.NaN) + 1;
+		if (!agent || !current || !Number.isSafeInteger(nextRevision)) {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		const configuration = decodeAgentConfigurationRecordV1({
+			...current.configuration,
+			revision: nextRevision,
+		});
+		draft.configurationRevisions.push({
+			agentId,
+			revision: nextRevision,
+			configuration,
+			createdAt: new Date(Date.prototype.getTime.call(current.createdAt) + 1),
+		});
+		agent.currentConfigurationRevision = nextRevision;
+		this.#state = draft;
+	}
+
 	async read(
 		input: Parameters<ApplicationFoundationTransactionPortV1["read"]>[0],
 	): ReturnType<ApplicationFoundationTransactionPortV1["read"]> {
@@ -265,10 +298,7 @@ export class FakeApplicationFoundationTransactionV1
 			existing.result.agentId !== input.agentId ||
 			existing.result.applicationId !== input.applicationId ||
 			!this.#state.agents.some(
-				(agent) =>
-					agent.agentId === existing.result.agentId &&
-					agent.currentConfigurationRevision ===
-						existing.result.configurationRevision,
+				(agent) => agent.agentId === existing.result.agentId,
 			) ||
 			!this.#state.applications.some(
 				(application) =>

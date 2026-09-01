@@ -465,6 +465,10 @@ describe("Fake application foundation transaction", () => {
 		return {
 			transaction,
 			failNextBefore: (point) => transaction.failNextBefore(point),
+			advanceConfiguration: () =>
+				transaction.advanceConfigurationForTest(
+					applicationFoundationCommandV1.agentId,
+				),
 			snapshot: () => Promise.resolve(transaction.snapshot()),
 			close: () => Promise.resolve(),
 		};

@@ -36,6 +36,7 @@ export interface ApplicationFoundationConformanceHarness {
 	failNextBefore(
 		point: ApplicationFoundationFailurePoint,
 	): Promise<void> | void;
+	advanceConfiguration(): Promise<void> | void;
 	snapshot(): Promise<ApplicationFoundationSnapshot>;
 	close(): Promise<void>;
 }
@@ -803,6 +804,7 @@ export function applicationFoundationTransactionConformance(
 				applicationFoundationCommandV1,
 				applicationFoundationActorContextV1,
 			);
+			await harness.advanceConfiguration();
 			const beforeReplay = await harness.snapshot();
 			const admissions = applicationFoundationAdmissionDependenciesV1();
 			const revokedUseCase = createUseCase(harness.transaction, {

@@ -241,7 +241,6 @@ async function requirePersistedReplayIntegrity(
 	const [persisted] = await database
 		.select({
 			agentId: agents.id,
-			currentConfigurationRevision: agents.currentConfigurationRevision,
 			applicationAgentId: agentApplications.agentId,
 			configuration: agentConfigurationRevisions.configuration,
 			sourceReference: agentConfigurationRevisions.sourceReference,
@@ -258,10 +257,7 @@ async function requirePersistedReplayIntegrity(
 			agentConfigurationRevisions,
 			and(
 				eq(agentConfigurationRevisions.agentId, agents.id),
-				eq(
-					agentConfigurationRevisions.revision,
-					agents.currentConfigurationRevision,
-				),
+				eq(agentConfigurationRevisions.revision, result.configurationRevision),
 			),
 		)
 		.where(eq(agents.id, result.agentId))
@@ -274,7 +270,6 @@ async function requirePersistedReplayIntegrity(
 	);
 	if (
 		persisted.applicationAgentId !== result.agentId ||
-		persisted.currentConfigurationRevision !== result.configurationRevision ||
 		replayedConfiguration.agentId !== result.agentId ||
 		replayedConfiguration.revision !== result.configurationRevision ||
 		persisted.sourceReference !==
