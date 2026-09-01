@@ -31,6 +31,7 @@ describe("platform-core package surface", () => {
 			"AgentManagementError",
 			"ApplicationFoundationError",
 			"PlatformIdempotencyError",
+			"admitInitialAgentConfigurationV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
@@ -60,11 +61,7 @@ describe("platform-core package surface", () => {
 		expect(managementSource).not.toContain("agent-management-access-policy");
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
-			Object.keys(
-				surface.createApplicationFoundationUseCaseV1(
-					new testingSurface.FakeApplicationFoundationTransactionV1(),
-				),
-			),
+			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
 		).toEqual(["submit"]);
 
 		const pack = JSON.parse(

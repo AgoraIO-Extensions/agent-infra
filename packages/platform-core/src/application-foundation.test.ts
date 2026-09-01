@@ -1,92 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { applicationFoundationTransactionConformance } from "./application-foundation.conformance.ts";
 import {
-	type ApplicationFoundationActorContextV1,
+	applicationFoundationActorContextV1,
+	applicationFoundationAdmissionDependenciesV1,
+	applicationFoundationCommandV1,
+	applicationFoundationTransactionConformance,
+} from "./application-foundation.conformance.ts";
+import {
 	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
-	type CommitApplicationFoundationCommandV1,
 	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 
-const validCommand = () =>
-	Object.freeze({
-		schemaVersion: 1 as const,
-		applicationId: "application core errors",
-		agentId: "agent core errors",
-		requestId: "request core errors",
-		name: "Core Error Agent",
-		description: "Verifies Core error normalization",
-		sourceReference: "source core errors",
-		traceId: "trace core errors",
-	});
-const fixedServerInstant = "2026-08-30T12:00:00.000Z";
-const fixedNow = () => new Date(fixedServerInstant);
-const actorContext = () =>
-	Object.freeze({
-		schemaVersion: 1 as const,
-		userId: "user core errors",
-	});
+const serverInstant = "2026-08-30T12:00:00.000Z";
 const errorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
 );
 
-function createUseCase(
-	transaction: ApplicationFoundationTransactionPortV1,
-	now: () => Date = fixedNow,
-) {
-	return createApplicationFoundationUseCaseV1(transaction, { now });
-}
-
-async function normalizedPortFailure(failure: unknown): Promise<unknown> {
-	const useCase = createUseCase({
-		async commit() {
-			throw failure;
-		},
-	});
-	return useCase.submit(validCommand(), actorContext()).then(
-		() => expect.fail("Expected the transaction Port to fail"),
-		(reason: unknown) => reason,
+function createUseCase(transaction: ApplicationFoundationTransactionPortV1) {
+	return createApplicationFoundationUseCaseV1(
+		{ transaction, ...applicationFoundationAdmissionDependenciesV1() },
+		{ now: () => new Date(serverInstant) },
 	);
-}
-
-async function rejectedBeforePort(
-	command: unknown,
-	context: unknown,
-): Promise<{ error: unknown; nowCalls: number; portCalls: number }> {
-	let nowCalls = 0;
-	let portCalls = 0;
-	const useCase = createUseCase(
-		{
-			async commit() {
-				portCalls += 1;
-			},
-		},
-		() => {
-			nowCalls += 1;
-			return fixedNow();
-		},
-	);
-	const error = await useCase
-		.submit(
-			command as CommitApplicationFoundationCommandV1,
-			context as ApplicationFoundationActorContextV1,
-		)
-		.then(
-			() => expect.fail("Expected input parsing to fail before the Port"),
-			(reason: unknown) => reason,
-		);
-	return { error, nowCalls, portCalls };
-}
-
-function expectInvalidCommand(error: unknown): void {
-	expect(error).toMatchObject({
-		name: "ApplicationFoundationError",
-		code: "invalid_command",
-		message: "Application foundation invalid command",
-	});
 }
 
 function immutableBrandedError(
@@ -94,37 +31,67 @@ function immutableBrandedError(
 	code = "conflict",
 	name = "ApplicationFoundationError",
 ): Error & { code: string } {
-	const error = Object.assign(new Error(message), {
-		name,
-		code,
-	});
+	const error = Object.assign(new Error(message), { name, code });
 	Object.defineProperty(error, errorBrand, { value: true });
 	return error;
 }
 
-describe("Application foundation use case", () => {
-	it("rejects a staged actor getter before it can split persisted identity", async () => {
-		let getterReads = 0;
-		const context = Object.defineProperty({ schemaVersion: 1 }, "userId", {
-			enumerable: true,
-			get() {
-				getterReads += 1;
-				return `staged-user-${getterReads}`;
+async function rejectedBeforePersistence(
+	command: unknown,
+	context: unknown,
+): Promise<{ error: unknown; clockCalls: number; commitCalls: number }> {
+	let clockCalls = 0;
+	let commitCalls = 0;
+	const useCase = createApplicationFoundationUseCaseV1(
+		{
+			...applicationFoundationAdmissionDependenciesV1(),
+			transaction: {
+				async commit(plan) {
+					commitCalls += 1;
+					return { outcome: "committed", result: plan.result };
+				},
 			},
-		});
-		const { error, portCalls } = await rejectedBeforePort(
-			validCommand(),
+		},
+		{
+			now: () => {
+				clockCalls += 1;
+				return new Date(serverInstant);
+			},
+		},
+	);
+	const error = await useCase.submit(command as never, context as never).then(
+		() => expect.fail("Expected rejection before persistence"),
+		(reason: unknown) => reason,
+	);
+	return { error, clockCalls, commitCalls };
+}
+
+describe("Application foundation use case", () => {
+	it("rejects a staged actor getter without reading it", async () => {
+		let getterReads = 0;
+		const context = Object.defineProperty(
+			{ ...applicationFoundationActorContextV1 },
+			"userId",
+			{
+				enumerable: true,
+				get() {
+					getterReads += 1;
+					return `staged-user-${getterReads}`;
+				},
+			},
+		);
+		const { error, commitCalls } = await rejectedBeforePersistence(
+			applicationFoundationCommandV1,
 			context,
 		);
-
-		expectInvalidCommand(error);
+		expect(error).toMatchObject({ code: "invalid_command" });
 		expect(getterReads).toBe(0);
-		expect(portCalls).toBe(0);
+		expect(commitCalls).toBe(0);
 	});
 
-	it("rejects staged command correlation getters before persistence", async () => {
+	it("rejects staged command correlation getters without reading them", async () => {
 		let getterReads = 0;
-		const command = { ...validCommand() };
+		const command = { ...applicationFoundationCommandV1 };
 		for (const field of ["requestId", "traceId"] as const) {
 			Object.defineProperty(command, field, {
 				enumerable: true,
@@ -134,19 +101,18 @@ describe("Application foundation use case", () => {
 				},
 			});
 		}
-		const { error, portCalls } = await rejectedBeforePort(
+		const { error, commitCalls } = await rejectedBeforePersistence(
 			command,
-			actorContext(),
+			applicationFoundationActorContextV1,
 		);
-
-		expectInvalidCommand(error);
+		expect(error).toMatchObject({ code: "invalid_command" });
 		expect(getterReads).toBe(0);
-		expect(portCalls).toBe(0);
+		expect(commitCalls).toBe(0);
 	});
 
-	it("does not reread an accessor that throws after old validation", async () => {
+	it("does not reread an accessor after validation", async () => {
 		let getterReads = 0;
-		const command = { ...validCommand() };
+		const command = { ...applicationFoundationCommandV1 };
 		Object.defineProperty(command, "requestId", {
 			enumerable: true,
 			get() {
@@ -155,40 +121,59 @@ describe("Application foundation use case", () => {
 				throw new Error("sensitive post-validation failure");
 			},
 		});
-		const { error, portCalls } = await rejectedBeforePort(
+		const { error, commitCalls } = await rejectedBeforePersistence(
 			command,
-			actorContext(),
+			applicationFoundationActorContextV1,
 		);
-
-		expectInvalidCommand(error);
+		expect(error).toMatchObject({ code: "invalid_command" });
 		expect(String(error)).not.toContain("sensitive");
 		expect(getterReads).toBe(0);
-		expect(portCalls).toBe(0);
+		expect(commitCalls).toBe(0);
+	});
+
+	it("rejects a staged availability getter without reading it", async () => {
+		let getterReads = 0;
+		const availability = [
+			Object.defineProperty({ userId: "staged availability user" }, "kind", {
+				enumerable: true,
+				get() {
+					getterReads += 1;
+					return "user";
+				},
+			}),
+		];
+		const { error, commitCalls } = await rejectedBeforePersistence(
+			{ ...applicationFoundationCommandV1, availability },
+			applicationFoundationActorContextV1,
+		);
+		expect(error).toMatchObject({ code: "invalid_command" });
+		expect(getterReads).toBe(0);
+		expect(commitCalls).toBe(0);
 	});
 
 	it.each([
 		[
 			"command ownKeys",
-			new Proxy(validCommand(), {
+			new Proxy(applicationFoundationCommandV1, {
 				ownKeys() {
 					throw new Error("sensitive command ownKeys trap");
 				},
 			}),
-			actorContext(),
+			applicationFoundationActorContextV1,
 		],
 		[
 			"command descriptor",
-			new Proxy(validCommand(), {
+			new Proxy(applicationFoundationCommandV1, {
 				getOwnPropertyDescriptor() {
 					throw new Error("sensitive command descriptor trap");
 				},
 			}),
-			actorContext(),
+			applicationFoundationActorContextV1,
 		],
 		[
 			"context ownKeys",
-			validCommand(),
-			new Proxy(actorContext(), {
+			applicationFoundationCommandV1,
+			new Proxy(applicationFoundationActorContextV1, {
 				ownKeys() {
 					throw new Error("sensitive context ownKeys trap");
 				},
@@ -196,76 +181,227 @@ describe("Application foundation use case", () => {
 		],
 		[
 			"context descriptor",
-			validCommand(),
-			new Proxy(actorContext(), {
+			applicationFoundationCommandV1,
+			new Proxy(applicationFoundationActorContextV1, {
 				getOwnPropertyDescriptor() {
 					throw new Error("sensitive context descriptor trap");
 				},
 			}),
 		],
-	])("sanitizes a %s trap before the Port", async (_name, command, context) => {
-		const { error, nowCalls, portCalls } = await rejectedBeforePort(
+	])("sanitizes a %s before the Port", async (_name, command, context) => {
+		const { error, clockCalls, commitCalls } = await rejectedBeforePersistence(
 			command,
 			context,
 		);
-
-		expectInvalidCommand(error);
+		expect(error).toMatchObject({ code: "invalid_command" });
 		expect(String(error)).not.toContain("sensitive");
-		expect(nowCalls).toBe(0);
-		expect(portCalls).toBe(0);
+		expect(clockCalls).toBe(0);
+		expect(commitCalls).toBe(0);
 	});
 
-	it("rejects caller-submitted time before reading the server clock", async () => {
-		const { error, nowCalls, portCalls } = await rejectedBeforePort(
-			{
-				...validCommand(),
-				submittedAt: new Date("2099-01-01T00:00:00.000Z"),
-			},
-			actorContext(),
+	it("rejects caller-supplied time before reading the server clock", async () => {
+		const { error, clockCalls, commitCalls } = await rejectedBeforePersistence(
+			{ ...applicationFoundationCommandV1, submittedAt: new Date() },
+			applicationFoundationActorContextV1,
 		);
-
-		expectInvalidCommand(error);
-		expect(nowCalls).toBe(0);
-		expect(portCalls).toBe(0);
+		expect(error).toMatchObject({ code: "invalid_command" });
+		expect(clockCalls).toBe(0);
+		expect(commitCalls).toBe(0);
 	});
 
-	it("owns one server-clock instant for every foundation timestamp", async () => {
-		const originalInstant = "2042-03-04T05:06:07.000Z";
-		const clockDate = new Date(originalInstant);
-		let clockCalls = 0;
-		let observedPlan: ApplicationFoundationWritePlanV1 | undefined;
-		const useCase = createUseCase(
+	it("accepts ordinary frozen command and actor objects", async () => {
+		let commits = 0;
+		const useCase = createUseCase({
+			async commit(plan) {
+				commits += 1;
+				return { outcome: "committed", result: plan.result };
+			},
+		});
+		await expect(
+			useCase.submit(
+				Object.freeze({ ...applicationFoundationCommandV1 }),
+				Object.freeze({ ...applicationFoundationActorContextV1 }),
+			),
+		).resolves.toMatchObject({
+			applicationId: applicationFoundationCommandV1.applicationId,
+			agentId: applicationFoundationCommandV1.agentId,
+		});
+		expect(commits).toBe(1);
+	});
+
+	it("produces one immutable-time canonical write plan", async () => {
+		let captured: ApplicationFoundationWritePlanV1 | undefined;
+		const clockDate = new Date(serverInstant);
+		const useCase = createApplicationFoundationUseCaseV1(
 			{
-				async commit(plan) {
-					clockDate.setTime(new Date("2099-01-01T00:00:00.000Z").valueOf());
-					observedPlan = plan;
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: {
+					async commit(plan) {
+						captured = plan;
+						clockDate.setUTCFullYear(2099);
+						return { outcome: "committed", result: plan.result };
+					},
 				},
 			},
-			() => {
-				clockCalls += 1;
-				return clockDate;
-			},
+			{ now: () => clockDate },
 		);
 
 		await expect(
-			useCase.submit(validCommand(), actorContext()),
-		).resolves.toMatchObject({
-			applicationId: "application core errors",
-			agentId: "agent core errors",
+			useCase.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+			),
+		).resolves.toMatchObject({ configurationRevision: 1 });
+		if (!captured) throw new Error("Expected a captured write plan");
+		expect(captured.agent.authorizationRevision).toBe("authorization_9");
+		expect(captured.access.ownerIds).toEqual([
+			"owner_01",
+			"user co-owner beta",
+		]);
+		expect(captured.access.availability).toEqual([
+			{ kind: "organization", organizationId: "organization alpha" },
+			{ kind: "user", userId: "user available beta" },
+		]);
+		expect(captured.idempotency).toEqual({
+			key: "application-submit-alpha",
+			requestDigest: "b".repeat(64),
 		});
-		expect(clockCalls).toBe(1);
-		const plan = observedPlan;
-		if (!plan) throw new Error("Persistence did not observe the write plan");
 		for (const timestamp of [
-			plan.agent.createdAt,
-			plan.application.submittedAt,
-			plan.configurationRevision.createdAt,
-			plan.owner.createdAt,
-			plan.outboxIntent.occurredAt,
-			plan.auditEvent.occurredAt,
+			captured.agent.createdAt,
+			captured.application.submittedAt,
+			captured.configurationRevision.createdAt,
+			captured.access.createdAt,
+			captured.outboxIntent.occurredAt,
+			captured.auditEvent.occurredAt,
 		]) {
-			expect(timestamp.toISOString()).toBe(originalInstant);
+			expect(timestamp.toISOString()).toBe(serverInstant);
 		}
+	});
+
+	it.each([
+		Object.assign(new ApplicationFoundationError("invalid_command"), {
+			cause: new Error("sensitive invalid command cause"),
+		}),
+		Object.assign(
+			immutableBrandedError(
+				"Application foundation invalid command",
+				"invalid_command",
+			),
+			{ sensitive: "sensitive cross-bundle invalid command detail" },
+		),
+		new Error("sensitive infrastructure detail"),
+		{ code: "23505", detail: "sensitive SQL detail" },
+		{ outcome: "replayed", result: { plaintext: "sensitive" } },
+		{ outcome: "unknown" },
+	])("sanitizes malformed or failed transaction output", async (failure) => {
+		const transaction: ApplicationFoundationTransactionPortV1 = {
+			async commit() {
+				if (failure instanceof Error || !("outcome" in failure)) throw failure;
+				return failure as never;
+			},
+		};
+		const error = await createUseCase(transaction)
+			.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+			)
+			.then(
+				() => expect.fail("Expected transaction failure"),
+				(reason: unknown) => reason,
+			);
+
+		expect(error).toEqual(expect.any(ApplicationFoundationError));
+		expect(error).toMatchObject({
+			code: "persistence_failed",
+			message: "Application foundation persistence failed",
+		});
+		expect(error).not.toHaveProperty("cause");
+		expect(String(error)).not.toContain("sensitive");
+	});
+
+	it("maps only bounded transaction conflicts", async () => {
+		for (const [reason, code] of [
+			["duplicate", "conflict"],
+			["idempotency_conflict", "idempotency_conflict"],
+		] as const) {
+			const transaction: ApplicationFoundationTransactionPortV1 = {
+				async commit() {
+					return { outcome: "conflict", reason };
+				},
+			};
+			await expect(
+				createUseCase(transaction).submit(
+					applicationFoundationCommandV1,
+					applicationFoundationActorContextV1,
+				),
+			).rejects.toMatchObject({ code });
+		}
+	});
+
+	it.each([
+		[
+			"same-bundle conflict",
+			Object.assign(new ApplicationFoundationError("conflict"), {
+				cause: new Error("sensitive conflict cause"),
+				sensitive: "sensitive conflict detail",
+			}),
+			"conflict",
+		],
+		[
+			"cross-bundle idempotency conflict",
+			Object.assign(
+				immutableBrandedError(
+					"Application foundation idempotency conflict",
+					"idempotency_conflict",
+				),
+				{ sensitive: "sensitive conflict detail" },
+			),
+			"idempotency_conflict",
+		],
+	])("preserves only a canonical %s", async (_name, failure, code) => {
+		const error = await createUseCase({
+			async commit() {
+				throw failure;
+			},
+		})
+			.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+			)
+			.then(
+				() => expect.fail("Expected a canonical conflict"),
+				(reason: unknown) => reason,
+			);
+		expect(error).not.toBe(failure);
+		expect(error).toMatchObject({ code });
+		expect(error).not.toHaveProperty("cause");
+		expect(error).not.toHaveProperty("sensitive");
+	});
+
+	it.each([
+		immutableBrandedError("sensitive noncanonical message"),
+		immutableBrandedError(
+			"Application foundation conflict",
+			"conflict",
+			"ForgedApplicationFoundationError",
+		),
+		immutableBrandedError("Application foundation forged", "forged"),
+		Object.assign(new Error("Application foundation conflict"), {
+			name: "ApplicationFoundationError",
+			code: "conflict",
+			[errorBrand]: true,
+		}),
+	])("rejects a forged transaction error brand", async (failure) => {
+		await expect(
+			createUseCase({
+				async commit() {
+					throw failure;
+				},
+			}).submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+			),
+		).rejects.toMatchObject({ code: "persistence_failed" });
 	});
 
 	it.each([
@@ -275,151 +411,30 @@ describe("Application foundation use case", () => {
 				throw new Error("sensitive clock failure");
 			},
 		],
-		["proxied Date", () => new Proxy(new Date("2026-08-30T12:00:00.000Z"), {})],
+		["invalid clock", () => new Date(Number.NaN)],
+		["proxied clock", () => new Proxy(new Date(serverInstant), {})],
 		["invalid Date internal slot", () => Object.create(Date.prototype)],
-		["nonfinite Date", () => new Date(Number.NaN)],
-	])("sanitizes a %s before the Port", async (_name, clock) => {
-		let portCalls = 0;
-		const useCase = createUseCase(
+	])("rejects a %s without crossing persistence", async (_name, now) => {
+		let commits = 0;
+		const useCase = createApplicationFoundationUseCaseV1(
 			{
-				async commit() {
-					portCalls += 1;
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: {
+					async commit(plan) {
+						commits += 1;
+						return { outcome: "committed", result: plan.result };
+					},
 				},
 			},
-			clock as () => Date,
+			{ now },
 		);
-		const error = await useCase.submit(validCommand(), actorContext()).then(
-			() => expect.fail("Expected the server clock to fail"),
-			(reason: unknown) => reason,
-		);
-
-		expect(error).toBeInstanceOf(ApplicationFoundationError);
-		expect(error).toMatchObject({
-			name: "ApplicationFoundationError",
-			code: "persistence_failed",
-			message: "Application foundation persistence failed",
-		});
-		expect(error).not.toHaveProperty("cause");
-		expect(error).not.toHaveProperty("sensitive");
-		expect(String(error)).not.toContain("sensitive");
-		expect(portCalls).toBe(0);
-	});
-
-	it("accepts ordinary frozen command and actor objects", async () => {
-		let portCalls = 0;
-		const useCase = createUseCase({
-			async commit() {
-				portCalls += 1;
-			},
-		});
-
 		await expect(
-			useCase.submit(validCommand(), actorContext()),
-		).resolves.toMatchObject({
-			applicationId: "application core errors",
-			agentId: "agent core errors",
-		});
-		expect(portCalls).toBe(1);
-	});
-
-	it.each([
-		[
-			"same-bundle canonical invalid command",
-			Object.assign(new ApplicationFoundationError("invalid_command"), {
-				cause: new Error("sensitive invalid command cause"),
-				sensitive: "sensitive invalid command detail",
-			}),
-		],
-		[
-			"cross-bundle canonical invalid command",
-			Object.assign(
-				immutableBrandedError(
-					"Application foundation invalid command",
-					"invalid_command",
-				),
-				{
-					cause: new Error("sensitive cross-bundle invalid command cause"),
-					sensitive: "sensitive cross-bundle invalid command detail",
-				},
+			useCase.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
 			),
-		],
-		["raw Error", new Error("sensitive infrastructure detail")],
-		["SQL-like object", { code: "XX000", detail: "sensitive SQL detail" }],
-		[
-			"plain forged brand",
-			{
-				name: "ApplicationFoundationError",
-				message: "Application foundation conflict",
-				code: "conflict",
-				[errorBrand]: true,
-			},
-		],
-		[
-			"mutable Error brand",
-			Object.assign(new Error("Application foundation conflict"), {
-				name: "ApplicationFoundationError",
-				code: "conflict",
-				[errorBrand]: true,
-			}),
-		],
-		[
-			"noncanonical-message branded Error",
-			immutableBrandedError("sensitive noncanonical message"),
-		],
-		[
-			"noncanonical-name branded Error",
-			immutableBrandedError(
-				"Application foundation conflict",
-				"conflict",
-				"ForgedApplicationFoundationError",
-			),
-		],
-		[
-			"unsupported-code branded Error",
-			immutableBrandedError("Application foundation forged", "forged"),
-		],
-	])("sanitizes a %s from the transaction Port", async (_name, failure) => {
-		const error = await normalizedPortFailure(failure);
-
-		expect(error).toBeInstanceOf(ApplicationFoundationError);
-		expect(error).not.toBe(failure);
-		expect(error).toMatchObject({
-			name: "ApplicationFoundationError",
-			code: "persistence_failed",
-			message: "Application foundation persistence failed",
-		});
-		expect(error).not.toHaveProperty("cause");
-		expect(error).not.toHaveProperty("sensitive");
-		expect(String(error)).not.toContain("sensitive");
-	});
-
-	it.each([
-		[
-			"same-bundle",
-			Object.assign(new ApplicationFoundationError("conflict"), {
-				cause: new Error("sensitive conflict cause"),
-				sensitive: "sensitive conflict detail",
-			}),
-		],
-		[
-			"cross-bundle",
-			Object.assign(immutableBrandedError("Application foundation conflict"), {
-				cause: new Error("sensitive cross-bundle conflict cause"),
-				sensitive: "sensitive cross-bundle conflict detail",
-			}),
-		],
-	])("preserves only a canonical %s conflict", async (_name, conflict) => {
-		const error = await normalizedPortFailure(conflict);
-
-		expect(error).toBeInstanceOf(ApplicationFoundationError);
-		expect(error).not.toBe(conflict);
-		expect(error).toMatchObject({
-			name: "ApplicationFoundationError",
-			code: "conflict",
-			message: "Application foundation conflict",
-		});
-		expect(error).not.toHaveProperty("cause");
-		expect(error).not.toHaveProperty("sensitive");
+		).rejects.toMatchObject({ code: "persistence_failed" });
+		expect(commits).toBe(0);
 	});
 });
 
