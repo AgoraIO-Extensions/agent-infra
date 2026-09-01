@@ -828,6 +828,60 @@ describe("PostgreSQL Agent configuration query", () => {
 		).rejects.toMatchObject({ name: "AgentConfigurationStoreError" });
 	});
 
+	it("binds decoded configuration identity to the selected Agent row", async () => {
+		await clearDatabase();
+		await seed();
+		const transaction = openTransaction();
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		await adminClient`
+			alter table platform.agent_configuration_revisions
+			drop constraint agent_configuration_identity_matches
+		`;
+		try {
+			await adminClient`
+				update platform.agent_configuration_revisions
+				set configuration = jsonb_set(
+					configuration, '{agentId}', '"agent_other"'::jsonb
+				)
+				where agent_id = 'agent_01' and revision = 7
+			`;
+			await expect(
+				transaction.read({
+					schemaVersion: 1,
+					agentId: "agent_01",
+					actorId: "owner_01",
+					idempotencyKey: "mismatched-identity",
+					requestDigest: "0".repeat(64),
+				}),
+			).rejects.toMatchObject({ name: "AgentConfigurationStoreError" });
+			await expect(
+				query.read({
+					agentId: "agent_01",
+					actorId: "owner_01",
+					organizationIds: [],
+					isAdministrator: true,
+					intent: "manage",
+				}),
+			).rejects.toMatchObject({ name: "AgentConfigurationStoreError" });
+		} finally {
+			await clearDatabase();
+			await adminClient.unsafe(`
+				alter table platform.agent_configuration_revisions
+				add constraint agent_configuration_identity_matches check (
+					configuration is null or (
+						jsonb_typeof(configuration) = 'object'
+						and configuration @> jsonb_build_object(
+							'schemaVersion', 1,
+							'agentId', agent_id,
+							'revision', revision
+						)
+					)
+				)
+			`);
+		}
+	});
+
 	it("sanitizes PostgreSQL failures", async () => {
 		const transaction = new PostgresAgentConfigurationTransactionV1({
 			databaseUrl:

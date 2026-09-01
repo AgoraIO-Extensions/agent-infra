@@ -262,6 +262,7 @@ export class PostgresAgentConfigurationTransactionV1
 
 					const [current] = await transaction
 						.select({
+							currentConfigurationRevision: agents.currentConfigurationRevision,
 							configuration: agentConfigurationRevisions.configuration,
 							sourceReference: agentConfigurationRevisions.sourceReference,
 						})
@@ -283,6 +284,8 @@ export class PostgresAgentConfigurationTransactionV1
 						current.configuration,
 					);
 					if (
+						configuration.agentId !== input.agentId ||
+						configuration.revision !== current.currentConfigurationRevision ||
 						current.sourceReference !== canonicalSourceReference(configuration)
 					) {
 						throw new AgentConfigurationStoreError();
@@ -574,6 +577,7 @@ export class PostgresAgentConfigurationQueryV1 {
 				async (transaction) => {
 					const [current] = await transaction
 						.select({
+							currentConfigurationRevision: agents.currentConfigurationRevision,
 							configuration: agentConfigurationRevisions.configuration,
 							sourceReference: agentConfigurationRevisions.sourceReference,
 						})
@@ -656,6 +660,8 @@ export class PostgresAgentConfigurationQueryV1 {
 						current.configuration,
 					);
 					if (
+						configuration.agentId !== input.agentId ||
+						configuration.revision !== current.currentConfigurationRevision ||
 						current.sourceReference !== canonicalSourceReference(configuration)
 					) {
 						throw new AgentConfigurationStoreError();

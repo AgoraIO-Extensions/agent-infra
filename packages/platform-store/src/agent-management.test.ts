@@ -768,6 +768,12 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			applicationId: "application_malicious_replay",
 			agentId: "agent_malicious_replay",
 		});
+		const other = stateFixture({
+			applicationId: "application_other",
+			agentId: "agent_other",
+			applicantId: "user_other",
+			ownerIds: ["user_other"],
+		});
 		const original = command("stop_agent", state, "malicious-replay");
 		const requestDigest = platformIdempotencyV1.canonicalRequestDigest({
 			...original,
@@ -796,8 +802,18 @@ describe("PostgreSQL Agent-management Adapter", () => {
 					revision: 0,
 				},
 			],
+			[
+				"cross-application",
+				{
+					schemaVersion: 1,
+					applicationId: other.applicationId,
+					agentId: state.agentId,
+					status: "stopped",
+					revision: 2,
+				},
+			],
 		] as const) {
-			await seedStates([state]);
+			await seedStates([state, other]);
 			await adminClient`
 				insert into platform.idempotency_records
 					(id, scope_type, scope_id, actor_id, command_type,

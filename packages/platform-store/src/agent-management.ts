@@ -148,15 +148,13 @@ async function replay(
 		throw new AgentManagementError("unavailable");
 	}
 	const result = acceptedResult(row.result, request);
-	if (request.subjectType === "agent_application") {
-		const [identity] = await transaction
-			.select({ agentId: agentApplications.agentId })
-			.from(agentApplications)
-			.where(eq(agentApplications.id, request.subjectId))
-			.limit(1);
-		if (identity?.agentId !== result.agentId) {
-			throw new AgentManagementError("unavailable");
-		}
+	const [identity] = await transaction
+		.select({ agentId: agentApplications.agentId })
+		.from(agentApplications)
+		.where(eq(agentApplications.id, result.applicationId))
+		.limit(1);
+	if (identity?.agentId !== result.agentId) {
+		throw new AgentManagementError("unavailable");
 	}
 	return {
 		outcome: "replayed",
