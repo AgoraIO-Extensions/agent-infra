@@ -88,29 +88,29 @@ let databaseUrl = "";
 let testDatabase: PostgresTestDatabase | undefined;
 const adapters: { close(): Promise<void> }[] = [];
 
-function admissions(withAccess = false) {
+function admissions(
+	withAccess = false,
+	authorizationRevision = "authorization_9",
+) {
 	return new FakeAgentConfigurationAdmissionsV1({
 		...agentConfigurationConformanceAdmissionsV1,
-		...(withAccess
-			? {
-					authorizations: [
-						{
-							agentId: "agent_01",
-							actorId: "owner_01",
-							authorizationRevision: "authorization_9",
-							accessAuthority,
-						},
-					],
-				}
-			: {}),
+		authorizations: [
+			{
+				agentId: "agent_01",
+				actorId: "owner_01",
+				authorizationRevision,
+				...(withAccess ? { accessAuthority } : {}),
+			},
+		],
 	});
 }
 
 function dependencies(
 	transaction: AgentConfigurationTransactionPortV1,
 	withAccess = false,
+	authorizationRevision = "authorization_9",
 ): AgentConfigurationUseCaseDependenciesV1 {
-	const admission = admissions(withAccess);
+	const admission = admissions(withAccess, authorizationRevision);
 	return {
 		transaction,
 		authorizationAdmission: admission,
@@ -125,9 +125,10 @@ function dependencies(
 function useCase(
 	transaction: AgentConfigurationTransactionPortV1,
 	withAccess = false,
+	authorizationRevision = "authorization_9",
 ) {
 	return createAgentConfigurationUseCaseV1(
-		dependencies(transaction, withAccess),
+		dependencies(transaction, withAccess, authorizationRevision),
 		{ now: () => new Date(occurredAt) },
 	);
 }
@@ -253,9 +254,18 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await seed();
 		const adapter = openTransaction();
 		let lastPlan: AgentConfigurationWritePlanV1 | null = null;
+		let failNextCommitAsStale = false;
 		const transaction: AgentConfigurationTransactionPortV1 = {
 			read: adapter.read.bind(adapter),
 			async commit(plan) {
+				if (failNextCommitAsStale) {
+					failNextCommitAsStale = false;
+					await adminClient`
+						update platform.agents
+						set authorization_revision = 'authorization_concurrent'
+						where id = 'agent_01'
+					`;
+				}
 				const decision = await adapter.commit(plan);
 				if (decision.outcome === "committed") lastPlan = structuredClone(plan);
 				return decision;
@@ -276,6 +286,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				const stored = await snapshot();
 				return {
 					configuration: stored.configuration,
+					authorizationRevision: stored.authorizationRevision,
 					commitCount: stored.configurationCount - 1,
 					lastPlan,
 					idempotencyCount: stored.idempotencyCount,
@@ -284,17 +295,36 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				};
 			},
 			async failNextCommitAsStale() {
-				await adminClient`
-					update platform.agents set authorization_revision = 'authorization_10'
-					where id = 'agent_01'
-				`;
+				failNextCommitAsStale = true;
 			},
 			async close() {},
 		};
 	});
 
+	it("reads one bounded configuration record with its persisted authorization revision", async () => {
+		await clearDatabase();
+		await seed();
+		const adapter = openTransaction();
+		await expect(
+			adapter.read({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				actorId: "owner_01",
+				idempotencyKey: "read-current-record",
+				requestDigest: "0".repeat(64),
+			}),
+		).resolves.toEqual({
+			outcome: "ready",
+			record: {
+				schemaVersion: 1,
+				configuration: agentConfigurationConformanceRecordV1,
+				authorizationRevision: "authorization_9",
+			},
+		});
+	});
+
 	it("rolls back every write and the deferred commit boundary", async () => {
-		const plan = await captureAccessPlan();
+		const plan = await captureAccessPlan("authorization_10");
 		const points = [
 			[
 				"configuration",
@@ -340,6 +370,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			const stored = await snapshot();
 			expect(stored).toMatchObject({
 				currentRevision: 7,
+				authorizationRevision: "authorization_9",
 				managementRevision: 11,
 				configurationCount: 1,
 				idempotencyCount: 0,
@@ -375,6 +406,8 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				...plan,
 				auditEvent: { ...plan.auditEvent, actorId: "a".repeat(1025) },
 			},
+			{ ...plan, expectedAuthorizationRevision: "" },
+			{ ...plan, nextAuthorizationRevision: "" },
 		] as readonly AgentConfigurationWritePlanV1[];
 		const adapter = openTransaction();
 		for (const malformed of malformedPlans) {
@@ -449,7 +482,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		});
 	});
 
-	it("serializes competing configuration and Owner updates without duplicate effects", async () => {
+	it("serializes competing authorization, configuration, and Owner updates", async () => {
 		await clearDatabase();
 		await seed();
 		const first = openTransaction();
@@ -471,7 +504,11 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			},
 			commit: adapter.commit.bind(adapter),
 		});
-		const configurationUpdate = useCase(barrier(first)).update(
+		const configurationUpdate = useCase(
+			barrier(first),
+			false,
+			"authorization_10",
+		).update(
 			{
 				schemaVersion: 1,
 				agentId: "agent_01",
@@ -482,7 +519,11 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			},
 			actor,
 		);
-		const ownerUpdate = useCase(barrier(second), true).update(
+		const ownerUpdate = useCase(
+			barrier(second),
+			true,
+			"authorization_11",
+		).update(
 			{
 				schemaVersion: 1,
 				agentId: "agent_01",
@@ -509,6 +550,10 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		const stored = await snapshot();
 		expect(stored).toMatchObject({
 			currentRevision: 8,
+			authorizationRevision:
+				outcomes[0]?.status === "fulfilled"
+					? "authorization_10"
+					: "authorization_11",
 			configurationCount: 2,
 			idempotencyCount: 1,
 			outboxCount: 1,
@@ -797,7 +842,7 @@ describe("PostgreSQL Agent configuration query", () => {
 		expect(missing).toEqual(forbidden);
 	});
 
-	it("fails closed on legacy NULL and malicious configuration or replay records", async () => {
+	it("fails closed on legacy NULL and malicious configuration, authorization, or replay records", async () => {
 		await clearDatabase();
 		await seed();
 		const transaction = openTransaction();
@@ -814,6 +859,22 @@ describe("PostgreSQL Agent configuration query", () => {
 				requestDigest: "0".repeat(64),
 			}),
 		).resolves.toEqual({ outcome: "missing" });
+
+		await clearDatabase();
+		await seed();
+		await adminClient`
+			update platform.agents set authorization_revision = null
+			where id = 'agent_01'
+		`;
+		await expect(
+			transaction.read({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				actorId: "owner_01",
+				idempotencyKey: "legacy-authorization-key",
+				requestDigest: "0".repeat(64),
+			}),
+		).rejects.toEqual(expect.any(AgentConfigurationStoreError));
 
 		await clearDatabase();
 		await seed();
@@ -1021,13 +1082,19 @@ describe("PostgreSQL Agent configuration query", () => {
 	});
 });
 
-async function captureAccessPlan(): Promise<AgentConfigurationWritePlanV1> {
+async function captureAccessPlan(
+	nextAuthorizationRevision = "authorization_9",
+): Promise<AgentConfigurationWritePlanV1> {
 	let captured: AgentConfigurationWritePlanV1 | undefined;
 	const transaction: AgentConfigurationTransactionPortV1 = {
 		async read() {
 			return {
 				outcome: "ready",
-				configuration: structuredClone(agentConfigurationConformanceRecordV1),
+				record: {
+					schemaVersion: 1,
+					configuration: structuredClone(agentConfigurationConformanceRecordV1),
+					authorizationRevision: "authorization_9",
+				},
 			};
 		},
 		async commit(plan) {
@@ -1036,7 +1103,7 @@ async function captureAccessPlan(): Promise<AgentConfigurationWritePlanV1> {
 		},
 	};
 	await expect(
-		useCase(transaction, true).update(
+		useCase(transaction, true, nextAuthorizationRevision).update(
 			{
 				schemaVersion: 1,
 				agentId: "agent_01",

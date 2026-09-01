@@ -142,7 +142,8 @@ function validatedPlan(plan: AgentConfigurationWritePlanV1) {
 		plan.baseRevision < 1 ||
 		plan.nextRevision !== plan.baseRevision + 1 ||
 		!Number.isSafeInteger(plan.nextRevision) ||
-		!validateText(plan.authorizationRevision) ||
+		!validateText(plan.expectedAuthorizationRevision) ||
+		!validateText(plan.nextAuthorizationRevision) ||
 		configuration.agentId !== plan.agentId ||
 		configuration.revision !== plan.nextRevision ||
 		result.agentId !== plan.agentId ||
@@ -263,6 +264,7 @@ export class PostgresAgentConfigurationTransactionV1
 					const [current] = await transaction
 						.select({
 							currentConfigurationRevision: agents.currentConfigurationRevision,
+							authorizationRevision: agents.authorizationRevision,
 							configuration: agentConfigurationRevisions.configuration,
 							sourceReference: agentConfigurationRevisions.sourceReference,
 						})
@@ -280,6 +282,9 @@ export class PostgresAgentConfigurationTransactionV1
 						.where(eq(agents.id, input.agentId))
 						.limit(1);
 					if (!current?.configuration) return { outcome: "missing" };
+					if (!validateText(current.authorizationRevision)) {
+						throw new AgentConfigurationStoreError();
+					}
 					const configuration = decodeAgentConfigurationRecord(
 						current.configuration,
 					);
@@ -292,7 +297,11 @@ export class PostgresAgentConfigurationTransactionV1
 					}
 					return {
 						outcome: "ready",
-						configuration,
+						record: {
+							schemaVersion: 1,
+							configuration,
+							authorizationRevision: current.authorizationRevision,
+						},
 					};
 				},
 				{ isolationLevel: "repeatable read", accessMode: "read only" },
@@ -346,7 +355,7 @@ export class PostgresAgentConfigurationTransactionV1
 
 				if (
 					agent.currentConfigurationRevision !== plan.baseRevision ||
-					agent.authorizationRevision !== plan.authorizationRevision
+					agent.authorizationRevision !== plan.expectedAuthorizationRevision
 				) {
 					return { outcome: "stale" as const };
 				}
@@ -382,12 +391,18 @@ export class PostgresAgentConfigurationTransactionV1
 				});
 				const advanced = await transaction
 					.update(agents)
-					.set({ currentConfigurationRevision: plan.nextRevision })
+					.set({
+						currentConfigurationRevision: plan.nextRevision,
+						authorizationRevision: plan.nextAuthorizationRevision,
+					})
 					.where(
 						and(
 							eq(agents.id, plan.agentId),
 							eq(agents.currentConfigurationRevision, plan.baseRevision),
-							eq(agents.authorizationRevision, plan.authorizationRevision),
+							eq(
+								agents.authorizationRevision,
+								plan.expectedAuthorizationRevision,
+							),
 						),
 					)
 					.returning({ id: agents.id });

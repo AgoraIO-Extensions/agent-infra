@@ -208,7 +208,8 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly agentId: string;
 	readonly baseRevision: number;
 	readonly nextRevision: number;
-	readonly authorizationRevision: string;
+	readonly expectedAuthorizationRevision: string;
+	readonly nextAuthorizationRevision: string;
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
 	readonly result: AgentConfigurationResultV1;
@@ -252,7 +253,11 @@ export interface AgentConfigurationTransactionPortV1 {
 	}): Promise<
 		| {
 				readonly outcome: "ready";
-				readonly configuration: AgentConfigurationRecordV1;
+				readonly record: {
+					readonly schemaVersion: 1;
+					readonly configuration: AgentConfigurationRecordV1;
+					readonly authorizationRevision: string;
+				};
 		  }
 		| { readonly outcome: "missing" }
 		| {
@@ -1593,12 +1598,27 @@ function parseTransactionReadDecision(
 	agentId: string,
 ): Awaited<ReturnType<AgentConfigurationTransactionPortV1["read"]>> {
 	return persistenceValue(() => {
-		const base = exactObject(input, ["outcome"], ["configuration", "result"]);
+		const base = exactObject(input, ["outcome"], ["record", "result"]);
 		if (base.outcome === "ready") {
-			requireAgentManagementExactKeys(base, ["outcome", "configuration"]);
+			requireAgentManagementExactKeys(base, ["outcome", "record"]);
+			const record = exactObject(base.record, [
+				"schemaVersion",
+				"configuration",
+				"authorizationRevision",
+			]);
+			if (
+				record.schemaVersion !== 1 ||
+				!isText(record.authorizationRevision, idMaxBytes)
+			) {
+				invalidCommand();
+			}
 			return {
 				outcome: "ready",
-				configuration: parsePersistedConfiguration(base.configuration),
+				record: {
+					schemaVersion: 1,
+					configuration: parsePersistedConfiguration(record.configuration),
+					authorizationRevision: record.authorizationRevision,
+				},
 			};
 		}
 		if (base.outcome === "replayed") {
@@ -1646,6 +1666,23 @@ export function createAgentConfigurationUseCaseV1(
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			const digest = requestDigest(command, actorContext);
+			let readDecision: Awaited<
+				ReturnType<AgentConfigurationTransactionPortV1["read"]>
+			>;
+			try {
+				readDecision = parseTransactionReadDecision(
+					await dependencies.transaction.read({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						actorId: actorContext.actorId,
+						idempotencyKey: command.idempotencyKey,
+						requestDigest: digest,
+					}),
+					command.agentId,
+				);
+			} catch {
+				throw new AgentConfigurationError("persistence_failed");
+			}
 			let authorization: Awaited<
 				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
 			>;
@@ -1671,23 +1708,6 @@ export function createAgentConfigurationUseCaseV1(
 			) {
 				throw new AgentConfigurationError("not_authorized");
 			}
-			let readDecision: Awaited<
-				ReturnType<AgentConfigurationTransactionPortV1["read"]>
-			>;
-			try {
-				readDecision = parseTransactionReadDecision(
-					await dependencies.transaction.read({
-						schemaVersion: 1,
-						agentId: command.agentId,
-						actorId: actorContext.actorId,
-						idempotencyKey: command.idempotencyKey,
-						requestDigest: digest,
-					}),
-					command.agentId,
-				);
-			} catch {
-				throw new AgentConfigurationError("persistence_failed");
-			}
 			if (readDecision.outcome === "replayed") {
 				return parseResult(readDecision.result, command.agentId);
 			}
@@ -1696,11 +1716,11 @@ export function createAgentConfigurationUseCaseV1(
 			}
 			if (
 				readDecision.outcome === "missing" ||
-				readDecision.configuration.agentId !== command.agentId
+				readDecision.record.configuration.agentId !== command.agentId
 			) {
 				throw new AgentConfigurationError("not_authorized");
 			}
-			const current = readDecision.configuration;
+			const current = readDecision.record.configuration;
 
 			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 			const changedFields: AgentConfigurationChangedFieldV1[] = [];
@@ -2154,7 +2174,9 @@ export function createAgentConfigurationUseCaseV1(
 				agentId: command.agentId,
 				baseRevision: current.revision,
 				nextRevision,
-				authorizationRevision: authorization.authorizationRevision,
+				expectedAuthorizationRevision:
+					readDecision.record.authorizationRevision,
+				nextAuthorizationRevision: authorization.authorizationRevision,
 				configuration,
 				accessUpdate,
 				result,
