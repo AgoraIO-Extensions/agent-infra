@@ -1,7 +1,9 @@
+import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -25,6 +27,42 @@ export const platformStatusValues = {
 	],
 	auditOutcome: ["succeeded", "rejected", "failed"],
 	idempotencyStatus: ["reserved", "completed"],
+	agentManagementStatus: [
+		"pending_approval",
+		"withdrawn",
+		"rejected",
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+		"disabled",
+	],
+	agentServiceAvailability: ["ready", "starting", "updating", "unavailable"],
+	agentDesiredState: ["running", "stopped"],
+	agentFailureCode: [
+		"creation_not_ready",
+		"health_check_failed",
+		"workload_unavailable",
+		"reconciliation_failed",
+	],
+	agentAvailabilityTargetType: ["user", "organization"],
+	agentManagementSubjectType: ["agent_application", "agent"],
+	agentManagementOperation: [
+		"update_application",
+		"withdraw_application",
+		"approve_application",
+		"reject_application",
+		"stop_agent",
+		"restart_agent",
+		"retry_agent_creation",
+		"disable_agent",
+		"observe_creation_succeeded",
+		"observe_creation_failed",
+		"observe_service_starting",
+		"observe_service_ready",
+		"observe_service_updating",
+		"observe_service_unavailable",
+	],
 } as const;
 
 export const outboxStatus = platformSchema.enum("outbox_status", [
@@ -36,23 +74,56 @@ export const auditOutcome = platformSchema.enum("audit_outcome", [
 export const idempotencyStatus = platformSchema.enum("idempotency_status", [
 	...platformStatusValues.idempotencyStatus,
 ]);
+export const agentManagementStatus = platformSchema.enum(
+	"agent_management_status",
+	[...platformStatusValues.agentManagementStatus],
+);
+export const agentServiceAvailability = platformSchema.enum(
+	"agent_service_availability",
+	[...platformStatusValues.agentServiceAvailability],
+);
+export const agentDesiredState = platformSchema.enum("agent_desired_state", [
+	...platformStatusValues.agentDesiredState,
+]);
+export const agentFailureCode = platformSchema.enum("agent_failure_code", [
+	...platformStatusValues.agentFailureCode,
+]);
+export const agentAvailabilityTargetType = platformSchema.enum(
+	"agent_availability_target_type",
+	[...platformStatusValues.agentAvailabilityTargetType],
+);
+export const agentManagementSubjectType = platformSchema.enum(
+	"agent_management_subject_type",
+	[...platformStatusValues.agentManagementSubjectType],
+);
+export const agentManagementOperation = platformSchema.enum(
+	"agent_management_operation",
+	[...platformStatusValues.agentManagementOperation],
+);
 
 export const agents = platformSchema.table(
 	"agents",
 	{
 		id: text("id").primaryKey(),
-		currentConfigurationRevision: integer("current_configuration_revision")
+		currentConfigurationRevision: bigint("current_configuration_revision", {
+			mode: "number",
+		})
 			.default(1)
 			.notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		authorizationRevision: text("authorization_revision"),
 	},
 	(table) => [
 		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
-			"agent_configuration_revision_positive",
-			sql`${table.currentConfigurationRevision} > 0`,
+			"agent_configuration_revision_safe",
+			sql`${table.currentConfigurationRevision} between 1 and 9007199254740991`,
+		),
+		check(
+			"agent_authorization_revision_non_empty",
+			sql`${table.authorizationRevision} IS NULL OR char_length(${table.authorizationRevision}) > 0`,
 		),
 	],
 );
@@ -67,12 +138,26 @@ export const agentApplications = platformSchema.table(
 		applicantId: text("applicant_id").notNull(),
 		name: varchar("name", { length: 200 }).notNull(),
 		description: text("description").notNull(),
-		status: varchar("status", { length: 32 })
+		status: agentManagementStatus("status")
 			.default("pending_approval")
 			.notNull(),
 		traceId: text("trace_id").notNull(),
 		requestId: text("request_id").notNull(),
 		submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull(),
+		managementRevision: bigint("management_revision", { mode: "number" })
+			.default(0)
+			.notNull(),
+		approvalRevision: bigint("approval_revision", { mode: "number" }),
+		decisionReason: text("decision_reason"),
+		serviceAvailability: agentServiceAvailability("service_availability"),
+		desiredState: agentDesiredState("desired_state")
+			.default("stopped")
+			.notNull(),
+		workloadRevision: bigint("workload_revision", { mode: "number" })
+			.default(0)
+			.notNull(),
+		fence: bigint("fence", { mode: "number" }).default(0).notNull(),
+		failureCode: agentFailureCode("failure_code"),
 	},
 	(table) => [
 		check("agent_application_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -96,7 +181,64 @@ export const agentApplications = platformSchema.table(
 			"agent_application_request_id_non_empty",
 			sql`char_length(${table.requestId}) > 0`,
 		),
+		check(
+			"agent_application_management_revision_safe",
+			sql`${table.managementRevision} between 0 and 9007199254740991`,
+		),
+		check(
+			"agent_application_approval_revision_safe",
+			sql`${table.approvalRevision} IS NULL OR ${table.approvalRevision} between 1 and least(${table.managementRevision}, 9007199254740991)`,
+		),
+		check(
+			"agent_application_workload_revision_safe",
+			sql`${table.workloadRevision} between 0 and 9007199254740991`,
+		),
+		check(
+			"agent_application_fence_safe",
+			sql`${table.fence} between 0 and 9007199254740991`,
+		),
+		check(
+			"agent_application_decision_reason_bounded",
+			sql`${table.decisionReason} IS NULL OR (char_length(${table.decisionReason}) > 0 AND octet_length(${table.decisionReason}) <= 4096)`,
+		),
+		check(
+			"agent_application_management_state_valid",
+			sql`(
+				${table.status} in ('pending_approval', 'withdrawn', 'rejected')
+				and ${table.approvalRevision} is null
+				and ${table.desiredState} = 'stopped'
+				and ${table.serviceAvailability} is null
+				and ${table.workloadRevision} = 0
+				and ${table.fence} = 0
+				and ${table.failureCode} is null
+			) or (
+				${table.status} not in ('pending_approval', 'withdrawn', 'rejected')
+				and ${table.approvalRevision} is not null
+				and ${table.workloadRevision} >= 1
+				and ${table.fence} >= 1
+				and (
+					(${table.status} in ('creating', 'creation_failed') and ${table.desiredState} = 'running' and ${table.serviceAvailability} is null)
+					or (${table.status} = 'available' and ${table.desiredState} = 'running' and ${table.serviceAvailability} is not null)
+					or (${table.status} in ('stopped', 'disabled') and ${table.desiredState} = 'stopped' and ${table.serviceAvailability} is null)
+				)
+			)`,
+		),
+		check(
+			"agent_application_decision_reason_state",
+			sql`(${table.status} = 'rejected') = (${table.decisionReason} IS NOT NULL)`,
+		),
+		check(
+			"agent_application_failure_code_state",
+			sql`(${table.status} <> 'creation_failed' OR ${table.failureCode} IS NOT NULL)
+				AND (${table.status} <> 'available' OR ${table.serviceAvailability} <> 'unavailable' OR ${table.failureCode} IS NOT NULL)
+				AND (${table.status} <> 'available' OR ${table.serviceAvailability} <> 'ready' OR ${table.failureCode} IS NULL)`,
+		),
 		uniqueIndex("agent_application_agent_unique").on(table.agentId),
+		index("agent_application_applicant_status_idx").on(
+			table.applicantId,
+			table.status,
+		),
+		index("agent_application_agent_status_idx").on(table.agentId, table.status),
 	],
 );
 
@@ -106,19 +248,31 @@ export const agentConfigurationRevisions = platformSchema.table(
 		agentId: text("agent_id")
 			.notNull()
 			.references(() => agents.id),
-		revision: integer("revision").notNull(),
+		revision: bigint("revision", { mode: "number" }).notNull(),
 		sourceReference: text("source_reference").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		configuration: jsonb("configuration").$type<AgentConfigurationRecordV1>(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.agentId, table.revision] }),
 		check(
-			"agent_configuration_revision_number_positive",
-			sql`${table.revision} > 0`,
+			"agent_configuration_revision_number_safe",
+			sql`${table.revision} between 1 and 9007199254740991`,
 		),
 		check(
 			"agent_configuration_source_reference_non_empty",
 			sql`char_length(${table.sourceReference}) > 0`,
+		),
+		check(
+			"agent_configuration_identity_matches",
+			sql`${table.configuration} IS NULL OR (
+				jsonb_typeof(${table.configuration}) = 'object'
+				and ${table.configuration} @> jsonb_build_object(
+					'schemaVersion', 1,
+					'agentId', ${table.agentId},
+					'revision', ${table.revision}
+				)
+			)`,
 		),
 	],
 );
@@ -135,6 +289,67 @@ export const agentOwners = platformSchema.table(
 	(table) => [
 		primaryKey({ columns: [table.agentId, table.ownerId] }),
 		check("agent_owner_id_non_empty", sql`char_length(${table.ownerId}) > 0`),
+		index("agent_owner_lookup_idx").on(table.ownerId, table.agentId),
+	],
+);
+
+export const agentAvailability = platformSchema.table(
+	"agent_availability",
+	{
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		targetType: agentAvailabilityTargetType("target_type").notNull(),
+		targetId: text("target_id").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.agentId, table.targetType, table.targetId] }),
+		check(
+			"agent_availability_target_id_non_empty",
+			sql`char_length(${table.targetId}) > 0`,
+		),
+		index("agent_availability_target_lookup_idx").on(
+			table.targetType,
+			table.targetId,
+			table.agentId,
+		),
+	],
+);
+
+export const agentManagementHistory = platformSchema.table(
+	"agent_management_history",
+	{
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		applicationId: text("application_id").notNull(),
+		subjectType: agentManagementSubjectType("subject_type").notNull(),
+		subjectId: text("subject_id").notNull(),
+		operation: agentManagementOperation("operation").notNull(),
+		fromStatus: agentManagementStatus("from_status").notNull(),
+		toStatus: agentManagementStatus("to_status").notNull(),
+		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.agentId, table.revision] }),
+		foreignKey({
+			columns: [table.applicationId],
+			foreignColumns: [agentApplications.id],
+			name: "agent_management_history_application_fk",
+		}),
+		check(
+			"agent_management_history_revision_safe",
+			sql`${table.revision} between 1 and 9007199254740991`,
+		),
+		check(
+			"agent_management_history_subject_id_non_empty",
+			sql`char_length(${table.subjectId}) > 0`,
+		),
+		index("agent_management_history_application_idx").on(
+			table.applicationId,
+			table.revision,
+		),
 	],
 );
 
@@ -218,6 +433,7 @@ export const auditEvents = platformSchema.table(
 			.notNull(),
 		requestId: text("request_id"),
 		agentId: text("agent_id"),
+		details: jsonb("details").$type<Record<string, unknown>>(),
 	},
 	(table) => [
 		check("audit_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -356,6 +572,8 @@ export const platformInfrastructureTables = [
 	agentApplications,
 	agentConfigurationRevisions,
 	agentOwners,
+	agentAvailability,
+	agentManagementHistory,
 	outboxItems,
 	auditEvents,
 	idempotencyRecords,

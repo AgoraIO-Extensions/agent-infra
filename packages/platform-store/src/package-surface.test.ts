@@ -39,7 +39,12 @@ describe("platform-store package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
+			"AgentConfigurationStoreError",
 			"OutboxStoreError",
+			"PostgresAgentConfigurationQueryV1",
+			"PostgresAgentConfigurationTransactionV1",
+			"PostgresAgentManagementQueryV1",
+			"PostgresAgentManagementTransactionV1",
 			"PostgresApplicationFoundationTransactionV1",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
@@ -60,8 +65,10 @@ describe("platform-store package surface", () => {
 				"dist/index.mjs",
 				"dist/migrations/0000_platform_infrastructure.sql",
 				"dist/migrations/0001_application_foundation.sql",
+				"dist/migrations/0002_agent_persistence.sql",
 				"dist/migrations/meta/0000_snapshot.json",
 				"dist/migrations/meta/0001_snapshot.json",
+				"dist/migrations/meta/0002_snapshot.json",
 				"dist/migrations/meta/_journal.json",
 			]),
 		);
