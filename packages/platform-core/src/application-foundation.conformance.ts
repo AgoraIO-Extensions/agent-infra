@@ -282,6 +282,9 @@ function createUseCase(
 export async function captureApplicationFoundationWritePlan(): Promise<ApplicationFoundationWritePlanV1> {
 	let captured: ApplicationFoundationWritePlanV1 | undefined;
 	await createUseCase({
+		async read() {
+			return { outcome: "ready" };
+		},
 		async commit(plan) {
 			captured = plan;
 			return { outcome: "committed", result: plan.result };
@@ -608,6 +611,16 @@ export function applicationFoundationTransactionConformance(
 		const invalidPlans = [
 			{
 				...structuredClone(plan),
+				configurationRevision: {
+					...structuredClone(plan.configurationRevision),
+					configuration: {
+						...structuredClone(plan.configurationRevision.configuration),
+						plaintext: "database-secret",
+					},
+				},
+			},
+			{
+				...structuredClone(plan),
 				agent: {
 					...structuredClone(plan.agent),
 					authorizationRevision: "",
@@ -791,12 +804,44 @@ export function applicationFoundationTransactionConformance(
 				applicationFoundationActorContextV1,
 			);
 			const beforeReplay = await harness.snapshot();
+			const admissions = applicationFoundationAdmissionDependenciesV1();
+			const revokedUseCase = createUseCase(harness.transaction, {
+				...admissions,
+				authorizationAdmission: {
+					async authorize(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							actorId: input.actorId,
+						} as const;
+					},
+				},
+			});
 			await expect(
-				useCase.submit(
+				revokedUseCase.submit(
+					applicationFoundationCommandV1,
+					applicationFoundationActorContextV1,
+				),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			await expect(harness.snapshot()).resolves.toEqual(beforeReplay);
+			let mutableAdmissionCalls = 0;
+			const replayUseCase = createUseCase(harness.transaction, {
+				...admissions,
+				imageAdmission: {
+					async admitImage() {
+						mutableAdmissionCalls += 1;
+						throw new Error("mutable image admission drifted");
+					},
+				},
+			});
+			await expect(
+				replayUseCase.submit(
 					applicationFoundationCommandV1,
 					applicationFoundationActorContextV1,
 				),
 			).resolves.toEqual(first);
+			expect(mutableAdmissionCalls).toBe(0);
 			await expect(harness.snapshot()).resolves.toEqual(beforeReplay);
 		} finally {
 			await harness.close();

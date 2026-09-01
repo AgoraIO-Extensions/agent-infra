@@ -31,7 +31,6 @@ describe("platform-core package surface", () => {
 			"AgentManagementError",
 			"ApplicationFoundationError",
 			"PlatformIdempotencyError",
-			"admitInitialAgentConfigurationV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",

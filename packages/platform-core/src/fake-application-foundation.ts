@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 
-import type { AgentConfigurationAccessTargetV1 } from "./agent-configuration.js";
+import {
+	type AgentConfigurationAccessTargetV1,
+	decodeAgentConfigurationRecordV1,
+} from "./agent-configuration.js";
 import {
 	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
@@ -125,6 +128,14 @@ function sameValue(left: unknown, right: unknown): boolean {
 }
 
 function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
+	let configuration: ReturnType<typeof decodeAgentConfigurationRecordV1>;
+	try {
+		configuration = decodeAgentConfigurationRecordV1(
+			plan.configurationRevision.configuration,
+		);
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
 	const timestamp = plan.agent.createdAt;
 	const expectedResult = {
 		schemaVersion: 1,
@@ -150,9 +161,9 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		plan.application.status !== "pending_approval" ||
 		plan.configurationRevision.agentId !== plan.agent.agentId ||
 		plan.configurationRevision.revision !== 1 ||
-		plan.configurationRevision.configuration.schemaVersion !== 1 ||
-		plan.configurationRevision.configuration.agentId !== plan.agent.agentId ||
-		plan.configurationRevision.configuration.revision !== 1 ||
+		configuration.agentId !== plan.agent.agentId ||
+		configuration.revision !== 1 ||
+		!sameValue(configuration, plan.configurationRevision.configuration) ||
 		plan.access.agentId !== plan.agent.agentId ||
 		ownerIds.length === 0 ||
 		ownerIds.length > 256 ||
@@ -223,6 +234,59 @@ export class FakeApplicationFoundationTransactionV1
 
 	snapshot(): ApplicationFoundationSnapshot {
 		return cloneSnapshot(this.#state);
+	}
+
+	async read(
+		input: Parameters<ApplicationFoundationTransactionPortV1["read"]>[0],
+	): ReturnType<ApplicationFoundationTransactionPortV1["read"]> {
+		if (
+			Object.keys(input).length !== 6 ||
+			input.schemaVersion !== 1 ||
+			!validText(input.applicationId) ||
+			!validText(input.agentId) ||
+			!validText(input.actorId) ||
+			!validText(input.idempotencyKey, 128) ||
+			!/^[A-Za-z0-9._~-]{1,128}$/.test(input.idempotencyKey) ||
+			!/^[a-f0-9]{64}$/.test(input.requestDigest)
+		) {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		const existing = this.#state.idempotencyResults.find(
+			(record) =>
+				record.agentId === input.agentId &&
+				record.actorId === input.actorId &&
+				record.key === input.idempotencyKey,
+		);
+		if (!existing) return { outcome: "ready" };
+		if (existing.requestDigest !== input.requestDigest) {
+			return { outcome: "idempotency_conflict" };
+		}
+		if (
+			existing.result.agentId !== input.agentId ||
+			existing.result.applicationId !== input.applicationId ||
+			!this.#state.agents.some(
+				(agent) =>
+					agent.agentId === existing.result.agentId &&
+					agent.currentConfigurationRevision ===
+						existing.result.configurationRevision,
+			) ||
+			!this.#state.applications.some(
+				(application) =>
+					application.applicationId === existing.result.applicationId &&
+					application.agentId === existing.result.agentId,
+			) ||
+			!this.#state.configurationRevisions.some(
+				(revision) =>
+					revision.agentId === existing.result.agentId &&
+					revision.revision === existing.result.configurationRevision,
+			)
+		) {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		return {
+			outcome: "replayed",
+			result: structuredClone(existing.result),
+		};
 	}
 
 	async commit(

@@ -6,7 +6,7 @@ import {
 	type AgentConfigurationActorContextV1,
 	AgentConfigurationError,
 	type AgentConfigurationRecordV1,
-	admitInitialAgentConfigurationV1,
+	beginInitialAgentConfigurationAdmissionV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV1,
 } from "./agent-configuration.js";
@@ -107,7 +107,23 @@ export type ApplicationFoundationCommitDecisionV1 =
 			readonly reason: "duplicate" | "idempotency_conflict";
 	  };
 
+export type ApplicationFoundationReadDecisionV1 =
+	| { readonly outcome: "ready" }
+	| {
+			readonly outcome: "replayed";
+			readonly result: CommitApplicationFoundationResultV1;
+	  }
+	| { readonly outcome: "idempotency_conflict" };
+
 export interface ApplicationFoundationTransactionPortV1 {
+	read(input: {
+		readonly schemaVersion: 1;
+		readonly applicationId: string;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly idempotencyKey: string;
+		readonly requestDigest: string;
+	}): Promise<ApplicationFoundationReadDecisionV1>;
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
 	): Promise<ApplicationFoundationCommitDecisionV1>;
@@ -389,27 +405,74 @@ function parseCommitDecision(
 		}
 		if (
 			(decision.outcome !== "committed" && decision.outcome !== "replayed") ||
-			Object.keys(decision).length !== 2 ||
-			typeof decision.result !== "object" ||
-			decision.result === null ||
-			Array.isArray(decision.result)
-		) {
-			throw new Error();
-		}
-		const result = decision.result as Record<string, unknown>;
-		if (
-			Object.keys(result).length !== 5 ||
-			result.schemaVersion !== expected.schemaVersion ||
-			result.applicationId !== expected.applicationId ||
-			result.agentId !== expected.agentId ||
-			result.configurationRevision !== expected.configurationRevision ||
-			result.status !== expected.status
+			Object.keys(decision).length !== 2
 		) {
 			throw new Error();
 		}
 		return {
 			outcome: decision.outcome,
-			result: structuredClone(expected),
+			result: parseExpectedResult(decision.result, expected),
+		};
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+}
+
+function parseExpectedResult(
+	input: unknown,
+	expected: CommitApplicationFoundationResultV1,
+): CommitApplicationFoundationResultV1 {
+	const result = snapshotExactDataValues(input, [
+		"schemaVersion",
+		"applicationId",
+		"agentId",
+		"configurationRevision",
+		"status",
+	]);
+	if (
+		!result ||
+		result.schemaVersion !== expected.schemaVersion ||
+		result.applicationId !== expected.applicationId ||
+		result.agentId !== expected.agentId ||
+		result.configurationRevision !== expected.configurationRevision ||
+		result.status !== expected.status
+	) {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+	return structuredClone(expected);
+}
+
+function parseReadDecision(
+	input: unknown,
+	expected: CommitApplicationFoundationResultV1,
+): ApplicationFoundationReadDecisionV1 {
+	try {
+		if (typeof input !== "object" || input === null) throw new Error();
+		const outcomeDescriptor = Object.getOwnPropertyDescriptor(input, "outcome");
+		if (
+			outcomeDescriptor?.enumerable !== true ||
+			!Object.hasOwn(outcomeDescriptor, "value") ||
+			Object.hasOwn(outcomeDescriptor, "get") ||
+			Object.hasOwn(outcomeDescriptor, "set")
+		) {
+			throw new Error();
+		}
+		if (
+			outcomeDescriptor.value === "ready" ||
+			outcomeDescriptor.value === "idempotency_conflict"
+		) {
+			const decision = snapshotExactDataValues(input, ["outcome"]);
+			if (!decision || decision.outcome !== outcomeDescriptor.value) {
+				throw new Error();
+			}
+			return { outcome: outcomeDescriptor.value };
+		}
+		if (outcomeDescriptor.value !== "replayed") throw new Error();
+		const decision = snapshotExactDataValues(input, ["outcome", "result"]);
+		if (decision?.outcome !== "replayed") throw new Error();
+		return {
+			outcome: "replayed",
+			result: parseExpectedResult(decision.result, expected),
 		};
 	} catch {
 		throw new ApplicationFoundationError("persistence_failed");
@@ -444,9 +507,11 @@ export function createApplicationFoundationUseCaseV1(
 			const actorContext =
 				parseApplicationFoundationActorContextV1(actorContextInput);
 			const command = parseApplicationFoundationCommandV1(commandInput);
-			let admitted: AdmittedInitialAgentConfigurationV1;
+			let admission: Awaited<
+				ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
+			>;
 			try {
-				admitted = await admitInitialAgentConfigurationV1(
+				admission = await beginInitialAgentConfigurationAdmissionV1(
 					{
 						schemaVersion: 1,
 						agentId: command.agentId,
@@ -473,6 +538,39 @@ export function createApplicationFoundationUseCaseV1(
 			} catch (error) {
 				throw normalizeInitialAdmissionError(error);
 			}
+			const result: CommitApplicationFoundationResultV1 = {
+				schemaVersion: 1,
+				applicationId: command.applicationId,
+				agentId: command.agentId,
+				configurationRevision: initialConfigurationRevision,
+				status: "pending_approval",
+			};
+			let readDecision: ApplicationFoundationReadDecisionV1;
+			try {
+				readDecision = parseReadDecision(
+					await dependencies.transaction.read({
+						schemaVersion: 1,
+						applicationId: command.applicationId,
+						agentId: command.agentId,
+						actorId: actorContext.userId,
+						idempotencyKey: command.idempotencyKey,
+						requestDigest: actorContext.rawRequestDigest,
+					}),
+					result,
+				);
+			} catch {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			if (readDecision.outcome === "replayed") return readDecision.result;
+			if (readDecision.outcome === "idempotency_conflict") {
+				throw new ApplicationFoundationError("idempotency_conflict");
+			}
+			let admitted: AdmittedInitialAgentConfigurationV1;
+			try {
+				admitted = await admission.complete();
+			} catch (error) {
+				throw normalizeInitialAdmissionError(error);
+			}
 			let submittedAt: Date;
 			try {
 				const milliseconds = Date.prototype.getTime.call(now());
@@ -481,13 +579,6 @@ export function createApplicationFoundationUseCaseV1(
 			} catch {
 				throw new ApplicationFoundationError("persistence_failed");
 			}
-			const result: CommitApplicationFoundationResultV1 = {
-				schemaVersion: 1,
-				applicationId: command.applicationId,
-				agentId: command.agentId,
-				configurationRevision: initialConfigurationRevision,
-				status: "pending_approval",
-			};
 			const plan: ApplicationFoundationWritePlanV1 = {
 				schemaVersion: 1,
 				agent: {

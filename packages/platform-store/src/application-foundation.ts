@@ -193,21 +193,29 @@ function validatedPlan(plan: ApplicationFoundationWritePlanV1) {
 	return { configuration, result };
 }
 
-function idempotencyWhere(plan: ApplicationFoundationWritePlanV1) {
+function idempotencyWhere(
+	agentId: string,
+	actorId: string,
+	idempotencyKey: string,
+) {
 	return and(
 		eq(idempotencyRecords.scopeType, scopeType),
-		eq(idempotencyRecords.scopeId, plan.agent.agentId),
-		eq(idempotencyRecords.actorId, plan.auditEvent.actorId),
+		eq(idempotencyRecords.scopeId, agentId),
+		eq(idempotencyRecords.actorId, actorId),
 		eq(idempotencyRecords.commandType, commandType),
-		eq(idempotencyRecords.idempotencyKey, plan.idempotency.key),
+		eq(idempotencyRecords.idempotencyKey, idempotencyKey),
 	);
 }
 
 function replayDecision(
 	row: IdempotencyRow,
-	plan: ApplicationFoundationWritePlanV1,
+	input: {
+		readonly applicationId: string;
+		readonly agentId: string;
+		readonly requestDigest: string;
+	},
 ) {
-	if (row.requestDigest !== plan.idempotency.requestDigest) {
+	if (row.requestDigest !== input.requestDigest) {
 		return {
 			outcome: "conflict" as const,
 			reason: "idempotency_conflict" as const,
@@ -218,8 +226,8 @@ function replayDecision(
 	}
 	const result = parseResult(row.result);
 	if (
-		result.agentId !== plan.agent.agentId ||
-		result.applicationId !== plan.application.applicationId
+		result.agentId !== input.agentId ||
+		result.applicationId !== input.applicationId
 	) {
 		throw new ApplicationFoundationError("persistence_failed");
 	}
@@ -235,6 +243,91 @@ export class PostgresApplicationFoundationTransactionV1
 	constructor(options: PostgresApplicationFoundationOptions) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
+	}
+
+	async read(
+		input: Parameters<ApplicationFoundationTransactionPortV1["read"]>[0],
+	): ReturnType<ApplicationFoundationTransactionPortV1["read"]> {
+		try {
+			if (
+				Object.keys(input).length !== 6 ||
+				input.schemaVersion !== 1 ||
+				!validText(input.applicationId) ||
+				!validText(input.agentId) ||
+				!validText(input.actorId) ||
+				!validText(input.idempotencyKey, 128) ||
+				!/^[A-Za-z0-9._~-]{1,128}$/.test(input.idempotencyKey) ||
+				!/^[a-f0-9]{64}$/.test(input.requestDigest)
+			) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			const [existing] = await this.#database
+				.select({
+					requestDigest: idempotencyRecords.requestDigest,
+					status: idempotencyRecords.status,
+					result: idempotencyRecords.result,
+				})
+				.from(idempotencyRecords)
+				.where(
+					idempotencyWhere(input.agentId, input.actorId, input.idempotencyKey),
+				)
+				.limit(1);
+			if (!existing) return { outcome: "ready" };
+			const replay = replayDecision(existing, input);
+			if (replay.outcome === "conflict") {
+				return { outcome: "idempotency_conflict" };
+			}
+			const [persisted] = await this.#database
+				.select({
+					agentId: agents.id,
+					currentConfigurationRevision: agents.currentConfigurationRevision,
+					applicationAgentId: agentApplications.agentId,
+					configuration: agentConfigurationRevisions.configuration,
+					sourceReference: agentConfigurationRevisions.sourceReference,
+				})
+				.from(agents)
+				.innerJoin(
+					agentApplications,
+					and(
+						eq(agentApplications.agentId, agents.id),
+						eq(agentApplications.id, replay.result.applicationId),
+					),
+				)
+				.innerJoin(
+					agentConfigurationRevisions,
+					and(
+						eq(agentConfigurationRevisions.agentId, agents.id),
+						eq(
+							agentConfigurationRevisions.revision,
+							agents.currentConfigurationRevision,
+						),
+					),
+				)
+				.where(eq(agents.id, replay.result.agentId))
+				.limit(1);
+			if (!persisted?.configuration) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			const replayedConfiguration = decodeAgentConfigurationRecord(
+				persisted.configuration,
+			);
+			if (
+				persisted.applicationAgentId !== replay.result.agentId ||
+				persisted.currentConfigurationRevision !==
+					replay.result.configurationRevision ||
+				replayedConfiguration.agentId !== replay.result.agentId ||
+				replayedConfiguration.revision !==
+					replay.result.configurationRevision ||
+				persisted.sourceReference !==
+					canonicalSourceReference(replayedConfiguration)
+			) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			return replay;
+		} catch (error) {
+			if (error instanceof ApplicationFoundationError) throw error;
+			throw new ApplicationFoundationError("persistence_failed");
+		}
 	}
 
 	async commit(
@@ -266,12 +359,22 @@ export class PostgresApplicationFoundationTransactionV1
 							result: idempotencyRecords.result,
 						})
 						.from(idempotencyRecords)
-						.where(idempotencyWhere(plan))
+						.where(
+							idempotencyWhere(
+								plan.agent.agentId,
+								plan.auditEvent.actorId,
+								plan.idempotency.key,
+							),
+						)
 						.limit(1);
 					if (!existing) {
 						throw new ApplicationFoundationError("persistence_failed");
 					}
-					const replay = replayDecision(existing, plan);
+					const replay = replayDecision(existing, {
+						applicationId: plan.application.applicationId,
+						agentId: plan.agent.agentId,
+						requestDigest: plan.idempotency.requestDigest,
+					});
 					if (replay.outcome === "replayed") {
 						const [persisted] = await transaction
 							.select({

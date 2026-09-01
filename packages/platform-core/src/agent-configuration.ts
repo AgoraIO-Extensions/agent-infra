@@ -178,6 +178,13 @@ export interface AdmittedInitialAgentConfigurationV1 {
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 }
 
+export interface InitialAgentConfigurationAdmissionHandleV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly actorId: string;
+	complete(): Promise<AdmittedInitialAgentConfigurationV1>;
+}
+
 export interface UpdateAgentConfigurationCommandV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
@@ -1252,7 +1259,7 @@ function parseStoredSecrets(
 		.toSorted((left, right) => compareText(left.name, right.name));
 }
 
-function parsePersistedConfiguration(
+export function decodeAgentConfigurationRecordV1(
 	input: unknown,
 ): AgentConfigurationRecordV1 {
 	const values = exactObject(input, [
@@ -1746,7 +1753,7 @@ function parseTransactionReadDecision(
 				outcome: "ready",
 				record: {
 					schemaVersion: 1,
-					configuration: parsePersistedConfiguration(record.configuration),
+					configuration: decodeAgentConfigurationRecordV1(record.configuration),
 					authorizationRevision: record.authorizationRevision,
 				},
 			};
@@ -1868,18 +1875,17 @@ function admittedInitialAccess(
 	};
 }
 
-export async function admitInitialAgentConfigurationV1(
-	commandInput: InitialAgentConfigurationCommandV1,
-	actorContextInput: AgentConfigurationActorContextV1,
+async function completeInitialAgentConfigurationAdmissionV1(
+	command: InitialAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+	firstAuthorization: Extract<
+		Awaited<
+			ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+		>,
+		{ readonly status: "admitted" }
+	>,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
 ): Promise<AdmittedInitialAgentConfigurationV1> {
-	const command = parseInitialCommand(commandInput);
-	const actorContext = parseActorContext(actorContextInput);
-	const firstAuthorization = await admitCurrentAuthorization(
-		dependencies.authorizationAdmission,
-		command,
-		actorContext,
-	);
 	admittedInitialAccess(command, actorContext, firstAuthorization);
 
 	let imageAdmission: Awaited<
@@ -2099,6 +2105,44 @@ export async function admitInitialAgentConfigurationV1(
 		ownerIds: access.ownerIds,
 		availability: access.availability,
 	};
+}
+
+export async function beginInitialAgentConfigurationAdmissionV1(
+	commandInput: InitialAgentConfigurationCommandV1,
+	actorContextInput: AgentConfigurationActorContextV1,
+	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+): Promise<InitialAgentConfigurationAdmissionHandleV1> {
+	const command = parseInitialCommand(commandInput);
+	const actorContext = parseActorContext(actorContextInput);
+	const capturedDependencies: InitialAgentConfigurationAdmissionDependenciesV1 =
+		{
+			authorizationAdmission: dependencies.authorizationAdmission,
+			imageAdmission: dependencies.imageAdmission,
+			modelAdmission: dependencies.modelAdmission,
+			secretAdmission: dependencies.secretAdmission,
+			actionAdmission: dependencies.actionAdmission,
+			channelAdmission: dependencies.channelAdmission,
+		};
+	const firstAuthorization = await admitCurrentAuthorization(
+		capturedDependencies.authorizationAdmission,
+		command,
+		actorContext,
+	);
+	let completion: Promise<AdmittedInitialAgentConfigurationV1> | undefined;
+	return Object.freeze({
+		schemaVersion: 1 as const,
+		agentId: command.agentId,
+		actorId: actorContext.actorId,
+		complete() {
+			completion ??= completeInitialAgentConfigurationAdmissionV1(
+				command,
+				actorContext,
+				firstAuthorization,
+				capturedDependencies,
+			);
+			return completion;
+		},
+	});
 }
 
 export function createAgentConfigurationUseCaseV1(

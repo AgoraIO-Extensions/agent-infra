@@ -223,6 +223,7 @@ describe("PostgreSQL application foundation transaction", () => {
 		});
 		let armedPoint: ApplicationFoundationFailurePoint | undefined;
 		const transaction: ApplicationFoundationTransactionPortV1 = {
+			read: (input) => adapter.read(input),
 			async commit(plan: ApplicationFoundationWritePlanV1) {
 				try {
 					return await adapter.commit(plan);
@@ -253,16 +254,6 @@ describe("PostgreSQL application foundation transaction", () => {
 		});
 		const plan = await captureApplicationFoundationWritePlan();
 		const malicious = [
-			{
-				...structuredClone(plan),
-				configurationRevision: {
-					...structuredClone(plan.configurationRevision),
-					configuration: {
-						...structuredClone(plan.configurationRevision.configuration),
-						plaintext: "database-secret",
-					},
-				},
-			},
 			{
 				...structuredClone(plan),
 				access: {

@@ -11,8 +11,9 @@ import {
 	AgentConfigurationError,
 	type AgentConfigurationRecordV1,
 	type AgentConfigurationUseCaseDependenciesV1,
-	admitInitialAgentConfigurationV1,
+	beginInitialAgentConfigurationAdmissionV1,
 	createAgentConfigurationUseCaseV1,
+	decodeAgentConfigurationRecordV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV1,
 } from "./agent-configuration.ts";
@@ -159,6 +160,20 @@ function createInitialAdmissionDependencies(): {
 	};
 }
 
+async function completeInitialAgentConfiguration(
+	commandInput: InitialAgentConfigurationCommandV1,
+	actorContext: AgentConfigurationActorContextV1,
+	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+) {
+	return (
+		await beginInitialAgentConfigurationAdmissionV1(
+			commandInput,
+			actorContext,
+			dependencies,
+		)
+	).complete();
+}
+
 interface HarnessOptions {
 	record?: AgentConfigurationRecordV1;
 	admissions?: Partial<FakeAgentConfigurationAdmissionsOptionsV1>;
@@ -257,9 +272,26 @@ describe("Initial Agent configuration admission", () => {
 			},
 		};
 
-		await expect(
-			admitInitialAgentConfigurationV1(initialCommand, initialActor, tracked),
-		).resolves.toEqual({
+		const admission = await beginInitialAgentConfigurationAdmissionV1(
+			initialCommand,
+			initialActor,
+			tracked,
+		);
+		expect(Object.keys(admission).toSorted()).toEqual([
+			"actorId",
+			"agentId",
+			"complete",
+			"schemaVersion",
+		]);
+		expect(admission).toMatchObject({
+			schemaVersion: 1,
+			agentId: "agent_01",
+			actorId: "owner_01",
+		});
+		expect(calls).toEqual(["authorization"]);
+		const completion = admission.complete();
+		expect(admission.complete()).toBe(completion);
+		await expect(completion).resolves.toEqual({
 			schemaVersion: 1,
 			authorizationRevision: "authorization_9",
 			ownerIds: ["owner_01", "owner_02"],
@@ -316,6 +348,55 @@ describe("Initial Agent configuration admission", () => {
 		]);
 	});
 
+	it("does not run mutable admissions when completion is skipped", async () => {
+		const { dependencies } = createInitialAdmissionDependencies();
+		const calls: string[] = [];
+		await beginInitialAgentConfigurationAdmissionV1(
+			initialCommand,
+			initialActor,
+			{
+				...dependencies,
+				authorizationAdmission: {
+					async authorize(input) {
+						calls.push("authorization");
+						return dependencies.authorizationAdmission.authorize(input);
+					},
+				},
+				imageAdmission: {
+					async admitImage(input) {
+						calls.push("image");
+						return dependencies.imageAdmission.admitImage(input);
+					},
+				},
+				modelAdmission: {
+					async admitModels(input) {
+						calls.push("model");
+						return dependencies.modelAdmission.admitModels(input);
+					},
+				},
+				secretAdmission: {
+					async admitSecrets(input) {
+						calls.push("secret");
+						return dependencies.secretAdmission.admitSecrets(input);
+					},
+				},
+				actionAdmission: {
+					async admitActions(input) {
+						calls.push("action");
+						return dependencies.actionAdmission.admitActions(input);
+					},
+				},
+				channelAdmission: {
+					async admitChannels(input) {
+						calls.push("channel");
+						return dependencies.channelAdmission.admitChannels(input);
+					},
+				},
+			},
+		);
+		expect(calls).toEqual(["authorization"]);
+	});
+
 	it("rejects canonical authority fields in raw input before any dependency", async () => {
 		let authorizationCalls = 0;
 		const { dependencies } = createInitialAdmissionDependencies();
@@ -369,7 +450,7 @@ describe("Initial Agent configuration admission", () => {
 			],
 		] as const) {
 			await expect(
-				admitInitialAgentConfigurationV1(
+				beginInitialAgentConfigurationAdmissionV1(
 					input as never,
 					context as never,
 					guarded,
@@ -399,16 +480,20 @@ describe("Initial Agent configuration admission", () => {
 		]) {
 			let imageCalls = 0;
 			await expect(
-				admitInitialAgentConfigurationV1(initialCommand, initialActor, {
-					...dependencies,
-					authorizationAdmission: { authorize },
-					imageAdmission: {
-						async admitImage(input) {
-							imageCalls += 1;
-							return dependencies.imageAdmission.admitImage(input);
+				beginInitialAgentConfigurationAdmissionV1(
+					initialCommand,
+					initialActor,
+					{
+						...dependencies,
+						authorizationAdmission: { authorize },
+						imageAdmission: {
+							async admitImage(input) {
+								imageCalls += 1;
+								return dependencies.imageAdmission.admitImage(input);
+							},
 						},
 					},
-				}),
+				),
 			).rejects.toMatchObject({ code: "not_authorized" });
 			expect(imageCalls).toBe(0);
 		}
@@ -417,7 +502,7 @@ describe("Initial Agent configuration admission", () => {
 	it("advances to the second authorization revision without stale access", async () => {
 		const { dependencies } = createInitialAdmissionDependencies();
 		let authorizationCalls = 0;
-		const result = await admitInitialAgentConfigurationV1(
+		const admission = await beginInitialAgentConfigurationAdmissionV1(
 			initialCommand,
 			initialActor,
 			{
@@ -440,6 +525,8 @@ describe("Initial Agent configuration admission", () => {
 				},
 			},
 		);
+		expect(authorizationCalls).toBe(1);
+		const result = await admission.complete();
 		expect(authorizationCalls).toBe(2);
 		expect(result.authorizationRevision).toBe("authorization_10");
 	});
@@ -478,8 +565,10 @@ describe("Initial Agent configuration admission", () => {
 			},
 		]) {
 			let authorizationCalls = 0;
-			await expect(
-				admitInitialAgentConfigurationV1(initialCommand, initialActor, {
+			const admission = await beginInitialAgentConfigurationAdmissionV1(
+				initialCommand,
+				initialActor,
+				{
 					...dependencies,
 					authorizationAdmission: {
 						async authorize() {
@@ -496,14 +585,20 @@ describe("Initial Agent configuration admission", () => {
 								: second;
 						},
 					},
-				}),
-			).rejects.toMatchObject({ code: "not_authorized" });
+				},
+			);
+			expect(authorizationCalls).toBe(1);
+			await expect(admission.complete()).rejects.toMatchObject({
+				code: "not_authorized",
+			});
 			expect(authorizationCalls).toBe(2);
 		}
 
 		let malformedCalls = 0;
-		await expect(
-			admitInitialAgentConfigurationV1(initialCommand, initialActor, {
+		const malformedAdmission = await beginInitialAgentConfigurationAdmissionV1(
+			initialCommand,
+			initialActor,
+			{
 				...dependencies,
 				authorizationAdmission: {
 					async authorize() {
@@ -520,15 +615,21 @@ describe("Initial Agent configuration admission", () => {
 							: ({ status: "admitted", plaintext: "sensitive" } as never);
 					},
 				},
-			}),
-		).rejects.toMatchObject({ code: "dependency_unavailable" });
+			},
+		);
+		expect(malformedCalls).toBe(1);
+		await expect(malformedAdmission.complete()).rejects.toMatchObject({
+			code: "dependency_unavailable",
+		});
 		expect(malformedCalls).toBe(2);
 	});
 
 	it("fails closed on missing authority and malformed or mismatched dependency output", async () => {
 		const { dependencies } = createInitialAdmissionDependencies();
-		await expect(
-			admitInitialAgentConfigurationV1(initialCommand, initialActor, {
+		const missingAuthority = await beginInitialAgentConfigurationAdmissionV1(
+			initialCommand,
+			initialActor,
+			{
 				...dependencies,
 				authorizationAdmission: {
 					async authorize() {
@@ -541,11 +642,14 @@ describe("Initial Agent configuration admission", () => {
 						};
 					},
 				},
-			}),
-		).rejects.toMatchObject({ code: "dependency_unavailable" });
+			},
+		);
+		await expect(missingAuthority.complete()).rejects.toMatchObject({
+			code: "dependency_unavailable",
+		});
 
 		await expect(
-			admitInitialAgentConfigurationV1(initialCommand, initialActor, {
+			completeInitialAgentConfiguration(initialCommand, initialActor, {
 				...dependencies,
 				imageAdmission: {
 					async admitImage() {
@@ -556,7 +660,7 @@ describe("Initial Agent configuration admission", () => {
 		).rejects.toMatchObject({ code: "dependency_unavailable" });
 
 		await expect(
-			admitInitialAgentConfigurationV1(initialCommand, initialActor, {
+			completeInitialAgentConfiguration(initialCommand, initialActor, {
 				...dependencies,
 				imageAdmission: {
 					async admitImage(input) {
@@ -567,6 +671,20 @@ describe("Initial Agent configuration admission", () => {
 				},
 			}),
 		).rejects.toMatchObject({ code: "not_admitted" });
+	});
+
+	it("exports the same strict canonical decoder used by persisted reads", () => {
+		const decoded = decodeAgentConfigurationRecordV1(
+			agentConfigurationConformanceRecordV1,
+		);
+		expect(decoded).toEqual(agentConfigurationConformanceRecordV1);
+		expect(decoded).not.toBe(agentConfigurationConformanceRecordV1);
+		expect(() =>
+			decodeAgentConfigurationRecordV1({
+				...agentConfigurationConformanceRecordV1,
+				plaintext: "sensitive",
+			}),
+		).toThrow(AgentConfigurationError);
 	});
 });
 

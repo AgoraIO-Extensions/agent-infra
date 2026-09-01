@@ -19,9 +19,25 @@ const errorBrand = Symbol.for(
 	"@agent-infra/platform-core/ApplicationFoundationErrorV1",
 );
 
-function createUseCase(transaction: ApplicationFoundationTransactionPortV1) {
+function readyTransaction(
+	transaction: Pick<ApplicationFoundationTransactionPortV1, "commit">,
+): ApplicationFoundationTransactionPortV1 {
+	return {
+		async read() {
+			return { outcome: "ready" };
+		},
+		commit: (plan) => transaction.commit(plan),
+	};
+}
+
+function createUseCase(
+	transaction: Pick<ApplicationFoundationTransactionPortV1, "commit">,
+) {
 	return createApplicationFoundationUseCaseV1(
-		{ transaction, ...applicationFoundationAdmissionDependenciesV1() },
+		{
+			transaction: readyTransaction(transaction),
+			...applicationFoundationAdmissionDependenciesV1(),
+		},
 		{ now: () => new Date(serverInstant) },
 	);
 }
@@ -45,12 +61,12 @@ async function rejectedBeforePersistence(
 	const useCase = createApplicationFoundationUseCaseV1(
 		{
 			...applicationFoundationAdmissionDependenciesV1(),
-			transaction: {
+			transaction: readyTransaction({
 				async commit(plan) {
 					commitCalls += 1;
 					return { outcome: "committed", result: plan.result };
 				},
-			},
+			}),
 		},
 		{
 			now: () => {
@@ -235,13 +251,13 @@ describe("Application foundation use case", () => {
 		const useCase = createApplicationFoundationUseCaseV1(
 			{
 				...applicationFoundationAdmissionDependenciesV1(),
-				transaction: {
+				transaction: readyTransaction({
 					async commit(plan) {
 						captured = plan;
 						clockDate.setUTCFullYear(2099);
 						return { outcome: "committed", result: plan.result };
 					},
-				},
+				}),
 			},
 			{ now: () => clockDate },
 		);
@@ -294,12 +310,14 @@ describe("Application foundation use case", () => {
 		{ outcome: "replayed", result: { plaintext: "sensitive" } },
 		{ outcome: "unknown" },
 	])("sanitizes malformed or failed transaction output", async (failure) => {
-		const transaction: ApplicationFoundationTransactionPortV1 = {
-			async commit() {
-				if (failure instanceof Error || !("outcome" in failure)) throw failure;
-				return failure as never;
-			},
-		};
+		const transaction: Pick<ApplicationFoundationTransactionPortV1, "commit"> =
+			{
+				async commit() {
+					if (failure instanceof Error || !("outcome" in failure))
+						throw failure;
+					return failure as never;
+				},
+			};
 		const error = await createUseCase(transaction)
 			.submit(
 				applicationFoundationCommandV1,
@@ -324,7 +342,10 @@ describe("Application foundation use case", () => {
 			["duplicate", "conflict"],
 			["idempotency_conflict", "idempotency_conflict"],
 		] as const) {
-			const transaction: ApplicationFoundationTransactionPortV1 = {
+			const transaction: Pick<
+				ApplicationFoundationTransactionPortV1,
+				"commit"
+			> = {
 				async commit() {
 					return { outcome: "conflict", reason };
 				},
@@ -419,12 +440,12 @@ describe("Application foundation use case", () => {
 		const useCase = createApplicationFoundationUseCaseV1(
 			{
 				...applicationFoundationAdmissionDependenciesV1(),
-				transaction: {
+				transaction: readyTransaction({
 					async commit(plan) {
 						commits += 1;
 						return { outcome: "committed", result: plan.result };
 					},
-				},
+				}),
 			},
 			{ now },
 		);
