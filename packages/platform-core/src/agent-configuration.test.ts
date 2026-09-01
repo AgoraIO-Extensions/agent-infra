@@ -1643,7 +1643,8 @@ describe("Agent configuration policy", () => {
 				source: {
 					kind: "custom" as const,
 					imageReference: "registry.example/original:v1",
-					interactionMode: "platform-adapter" as const,
+					interactionMode: "self-managed" as const,
+					identityResponsibility: "self-managed" as const,
 				},
 			},
 		};
@@ -1653,8 +1654,9 @@ describe("Agent configuration policy", () => {
 				kind: "custom",
 				imageDigest: agentConfigurationConformanceRecordV1.source.imageDigest,
 				admissionRevision: "image_policy_1",
-				interactionMode: "platform-adapter",
-				connectionEnabled: true,
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				connectionEnabled: false,
 			},
 			modelConfiguration: null,
 		};
@@ -1663,18 +1665,25 @@ describe("Agent configuration policy", () => {
 			dependencies: {
 				imageAdmission: {
 					async admitImage(input) {
-						(input.requested as { imageReference: string }).imageReference =
-							"registry.example/mutated:v2";
+						const retainedRequested = input.requested as {
+							identityResponsibility: "self-managed" | "platform-managed";
+						};
+						await Promise.resolve();
+						retainedRequested.identityResponsibility = "platform-managed";
 						return {
 							schemaVersion: 1,
 							status: "admitted",
-							agentId: "agent_other",
+							agentId: input.agentId,
 							requestId: input.requestId,
 							source: {
-								...imageRecord.source,
+								kind: "custom",
 								imageDigest: `sha256:${"b".repeat(64)}`,
+								admissionRevision: "image_policy_2",
+								interactionMode: "self-managed",
+								identityResponsibility: "platform-managed",
+								connectionEnabled: false,
 							},
-						} as never;
+						};
 					},
 				},
 			},
@@ -1682,8 +1691,8 @@ describe("Agent configuration policy", () => {
 		await expect(image.useCase.update(imageCommand, actor)).rejects.toEqual(
 			expect.objectContaining({ code: "not_admitted" }),
 		);
-		expect(imageCommand.changes.source.imageReference).toBe(
-			"registry.example/original:v1",
+		expect(imageCommand.changes.source.identityResponsibility).toBe(
+			"self-managed",
 		);
 		expectNoEffects(image.transaction);
 
