@@ -172,7 +172,7 @@ const UPLOAD_ARTIFACT_ACTION =
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const PR_AGENT_ACTION =
-  "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa";
+  "The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6";
 const PR_AGENT_SECRETS = [
   "PR_AGENT_API_KEY",
   "PR_AGENT_API_BASE",
@@ -1555,6 +1555,7 @@ export function validateWorkflowDocuments(workflows) {
   };
   const prAgentCommonEnv = {
     GITHUB_TOKEN: "${{ github.token }}",
+    LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true",
     OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
     OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
     "config.model": "${{ secrets.PR_AGENT_MODEL }}",
@@ -1571,6 +1572,9 @@ export function validateWorkflowDocuments(workflows) {
       "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
     "config.max_model_tokens":
       "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
+    "litellm.custom_llm_provider": "openai",
+    "litellm.force_streaming_custom_llm_provider": "openai",
+    "litellm.force_streaming_api_base_substrings": '["https://"]',
     "github_action_config.auto_describe": "false",
     "github_action_config.pr_actions":
       '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',

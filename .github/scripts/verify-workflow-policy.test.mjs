@@ -906,7 +906,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(suggestionsAction["continue-on-error"], true);
   assert.equal(
     reviewAction.uses,
-    "The-PR-Agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa",
+    "The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6",
   );
   assert.equal(suggestionsAction.uses, reviewAction.uses);
   assert.equal(reviewAction.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
@@ -988,6 +988,51 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   suggestionsAction.env["github_action_config.auto_review"] = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("official inline publishing"),
+    ),
+  );
+});
+
+test("forces HTTPS PR-Agent calls through streaming Responses", async () => {
+  const actions = (workflows) => {
+    const workflow = workflows["pr-agent-review.yml"];
+    return [
+      workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent"),
+      workflow.jobs.suggestions.steps.find(
+        (step) => step.id === "pr-agent-suggestions",
+      ),
+    ];
+  };
+  const expected = {
+    LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true",
+    "litellm.custom_llm_provider": "openai",
+    "litellm.force_streaming_custom_llm_provider": "openai",
+    "litellm.force_streaming_api_base_substrings": '["https://"]',
+  };
+
+  const workflows = await actualWorkflows();
+  for (const action of actions(workflows)) {
+    for (const [name, value] of Object.entries(expected)) {
+      assert.equal(action.env[name], value);
+    }
+  }
+
+  for (const name of Object.keys(expected)) {
+    for (const actionIndex of [0, 1]) {
+      const invalid = await actualWorkflows();
+      delete actions(invalid)[actionIndex].env[name];
+      assert.ok(
+        validateWorkflowDocuments(invalid).some((error) =>
+          error.includes("official inline publishing"),
+        ),
+      );
+    }
+  }
+
+  const wildcard = await actualWorkflows();
+  actions(wildcard)[0].env["litellm.force_streaming_api_base_substrings"] = '["*"]';
+  assert.ok(
+    validateWorkflowDocuments(wildcard).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
