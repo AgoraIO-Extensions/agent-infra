@@ -58,6 +58,12 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/events",
 		);
+		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
+			"/api/v2/admin/audit",
+		]);
+		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
+			"PlatformAuditProjectionV2",
+		);
 		expect(artifacts.pilotSseJsonSchema.$defs).toHaveProperty(
 			"ConversationSseMessageV1",
 		);
@@ -297,6 +303,7 @@ describe("standard contract artifacts", () => {
 			expect(result.stderr).toContain("Generated contract artifacts are stale");
 			expect(result.stderr).toContain("pilot-delegated.v1.schema.json");
 			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
+			expect(result.stderr).toContain("pilot-browser.v2.openapi.json");
 			expect(result.stderr).toContain("registry-manifest.v1.schema.json");
 		} finally {
 			await rm(root, { recursive: true });
