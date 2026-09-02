@@ -980,6 +980,166 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		).toBeUndefined();
 	});
 
+	it("returns bounded Agent projections to an administrator with stable pagination", async () => {
+		const first = stateFixture({
+			applicationId: "application_admin_first",
+			agentId: "agent_admin_first",
+			revision: 4,
+			ownerIds: ["user_first_owner"],
+		});
+		const second = stateFixture({
+			applicationId: "application_admin_second",
+			agentId: "agent_admin_second",
+			revision: 7,
+			ownerIds: ["user_second_owner"],
+			availability: [{ kind: "organization", organizationId: "org_visible" }],
+		});
+		await seedStates([second, first]);
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(query);
+
+		const firstPage = await query.listAgents(
+			{ kind: "administrator" },
+			{ limit: 1 },
+		);
+		expect(firstPage.items.map(({ agentId }) => agentId)).toEqual([
+			first.agentId,
+		]);
+		expect(firstPage.items[0]?.management.revision).toBe(4);
+		expect(firstPage.nextAfterId).toBe(first.agentId);
+
+		const secondPage = await query.listAgents(
+			{ kind: "administrator" },
+			{ limit: 1, afterId: firstPage.nextAfterId ?? undefined },
+		);
+		expect(secondPage.items.map(({ agentId }) => agentId)).toEqual([
+			second.agentId,
+		]);
+		expect(secondPage.nextAfterId).toBeNull();
+		expect(
+			await query.getAgent({ kind: "administrator" }, second.agentId),
+		).toMatchObject({
+			agentId: second.agentId,
+			management: { revision: 7, ownerIds: ["user_second_owner"] },
+		});
+		expect(
+			await query.getAgent(
+				{ kind: "owner", ownerId: "user_first_owner" },
+				second.agentId,
+			),
+		).toBeUndefined();
+		expect(
+			(
+				await query.listAgents(
+					{
+						kind: "user",
+						userId: "user_unrelated",
+						organizationIds: ["org_unrelated"],
+					},
+					{ limit: 10 },
+				)
+			).items,
+		).toEqual([]);
+
+		let customMapCalls = 0;
+		const customOrganizations = ["org_visible"];
+		Object.setPrototypeOf(customOrganizations, {
+			...Array.prototype,
+			map() {
+				customMapCalls += 1;
+				return ["org_unrelated"];
+			},
+		});
+		expect(
+			(
+				await query.listAgents(
+					{
+						kind: "user",
+						userId: "user_visible",
+						organizationIds: customOrganizations,
+					},
+					{ limit: 10 },
+				)
+			).items.map(({ agentId }) => agentId),
+		).toEqual([second.agentId]);
+		expect(customMapCalls).toBe(0);
+	});
+
+	it("fails closed on malformed or forged Agent scopes", async () => {
+		const state = stateFixture({
+			applicationId: "application_admin_scope_attack",
+			agentId: "agent_admin_scope_attack",
+			ownerIds: ["user_scope_owner"],
+		});
+		await seedStates([state]);
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(query);
+		let getterReads = 0;
+		const accessorScope = {};
+		Object.defineProperty(accessorScope, "kind", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return "administrator";
+			},
+		});
+		const accessorOrganizations: string[] = [];
+		Object.defineProperty(accessorOrganizations, 0, {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return "org_trap";
+			},
+		});
+		accessorOrganizations.length = 1;
+		for (const malformed of [
+			{ kind: "administrator", ownerId: "user_scope_owner" },
+			{
+				kind: "owner",
+				ownerId: "user_scope_owner",
+				isAdministrator: true,
+			},
+			{
+				kind: "user",
+				userId: "user_scope_owner",
+				organizationIds: [],
+				administrator: true,
+			},
+			{ kind: "user", userId: "user_scope_owner", organizationIds: [""] },
+			{ kind: "root" },
+			accessorScope,
+			{
+				kind: "user",
+				userId: "user_scope_owner",
+				organizationIds: accessorOrganizations,
+			},
+			new Proxy(
+				{ kind: "administrator" },
+				{
+					ownKeys() {
+						throw new Error("must not inspect proxy traps");
+					},
+				},
+			),
+		] as const) {
+			await expect(
+				query.getAgent(malformed as never, state.agentId),
+			).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+				message: "Agent management is temporarily unavailable",
+			});
+			await expect(
+				query.listAgents(malformed as never, { limit: 10 }),
+			).rejects.toMatchObject({
+				name: "AgentManagementError",
+				code: "unavailable",
+				message: "Agent management is temporarily unavailable",
+			});
+		}
+		expect(getterReads).toBe(0);
+	});
+
 	it("sanitizes PostgreSQL and Drizzle failures at the Store boundary", async () => {
 		const adapter = new PostgresAgentManagementTransactionV1({
 			databaseUrl:

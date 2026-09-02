@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { types } from "node:util";
 import {
 	type AgentManagementAcceptedResultV1,
 	type AgentManagementDecisionV1,
@@ -436,6 +437,7 @@ export type AgentManagementApplicationScopeV1 =
 
 export type AgentManagementAgentScopeV1 =
 	| { readonly kind: "owner"; readonly ownerId: string }
+	| { readonly kind: "administrator" }
 	| {
 			readonly kind: "user";
 			readonly userId: string;
@@ -463,6 +465,88 @@ function requirePage(input: AgentManagementPageInputV1): void {
 	}
 }
 
+function snapshotScopeTextArray(input: unknown): readonly string[] | undefined {
+	if (!Array.isArray(input) || types.isProxy(input)) return undefined;
+	const descriptors = Object.getOwnPropertyDescriptors(input);
+	const keys = Reflect.ownKeys(descriptors);
+	const length = Object.getOwnPropertyDescriptor(input, "length")?.value;
+	if (keys.length !== input.length + 1 || length !== input.length) {
+		return undefined;
+	}
+	const values: string[] = [];
+	for (let index = 0; index < input.length; index += 1) {
+		const descriptor = descriptors[String(index)];
+		if (
+			descriptor?.enumerable !== true ||
+			!Object.hasOwn(descriptor, "value") ||
+			Object.hasOwn(descriptor, "get") ||
+			Object.hasOwn(descriptor, "set") ||
+			!validText(descriptor.value)
+		) {
+			return undefined;
+		}
+		values.push(descriptor.value);
+	}
+	return new Set(values).size === values.length ? values : undefined;
+}
+
+function requireAgentScope(
+	scope: AgentManagementAgentScopeV1,
+): AgentManagementAgentScopeV1 {
+	try {
+		if (
+			typeof scope !== "object" ||
+			scope === null ||
+			Array.isArray(scope) ||
+			types.isProxy(scope)
+		) {
+			throw new Error();
+		}
+		const descriptors = Object.getOwnPropertyDescriptors(scope);
+		const keys = Reflect.ownKeys(descriptors);
+		if (
+			keys.some((key) => typeof key !== "string") ||
+			keys.some((key) => {
+				const descriptor = descriptors[key as string];
+				return (
+					descriptor?.enumerable !== true ||
+					!Object.hasOwn(descriptor, "value") ||
+					Object.hasOwn(descriptor, "get") ||
+					Object.hasOwn(descriptor, "set")
+				);
+			})
+		) {
+			throw new Error();
+		}
+		const values = Object.fromEntries(
+			keys.map((key) => [key, descriptors[key as string]?.value]),
+		);
+		const exact = (expected: readonly string[]) =>
+			keys.length === expected.length &&
+			expected.every((key) => Object.hasOwn(values, key));
+		if (values.kind === "administrator" && exact(["kind"])) {
+			return { kind: "administrator" };
+		}
+		if (
+			values.kind === "owner" &&
+			exact(["kind", "ownerId"]) &&
+			validText(values.ownerId)
+		) {
+			return { kind: "owner", ownerId: values.ownerId };
+		}
+		const organizationIds = snapshotScopeTextArray(values.organizationIds);
+		if (
+			values.kind === "user" &&
+			exact(["kind", "userId", "organizationIds"]) &&
+			validText(values.userId) &&
+			organizationIds
+		) {
+			return { kind: "user", userId: values.userId, organizationIds };
+		}
+	} catch {}
+	throw new AgentManagementError("unavailable");
+}
+
 function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 	return scope.kind === "administrator"
 		? undefined
@@ -470,6 +554,7 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 }
 
 function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
+	if (scope.kind === "administrator") return undefined;
 	const owner = sql<boolean>`exists (
 		select 1 from ${agentOwners}
 		where ${agentOwners.agentId} = ${agentApplications.agentId}
@@ -732,6 +817,7 @@ export class PostgresAgentManagementQueryV1 {
 		page: AgentManagementPageInputV1,
 	): Promise<AgentManagementPageV1<AgentManagementAgentProjectionV1>> {
 		try {
+			const normalizedScope = requireAgentScope(scope);
 			requirePage(page);
 			const rows = await this.#database
 				.select(agentSelection)
@@ -749,7 +835,7 @@ export class PostgresAgentManagementQueryV1 {
 				)
 				.where(
 					and(
-						agentScopeCondition(scope),
+						agentScopeCondition(normalizedScope),
 						inArray(agentApplications.status, [
 							"creating",
 							"available",
@@ -788,6 +874,7 @@ export class PostgresAgentManagementQueryV1 {
 		agentId: string,
 	): Promise<AgentManagementAgentProjectionV1 | undefined> {
 		try {
+			const normalizedScope = requireAgentScope(scope);
 			const [row] = await this.#database
 				.select(agentSelection)
 				.from(agentApplications)
@@ -805,7 +892,7 @@ export class PostgresAgentManagementQueryV1 {
 				.where(
 					and(
 						eq(agentApplications.agentId, agentId),
-						agentScopeCondition(scope),
+						agentScopeCondition(normalizedScope),
 						inArray(agentApplications.status, [
 							"creating",
 							"available",
