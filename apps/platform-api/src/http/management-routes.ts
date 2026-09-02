@@ -193,14 +193,6 @@ async function boundary(
 	}
 }
 
-async function identityFor(
-	dependencies: ManagementRouteDependencies,
-	request: Request,
-	traceId: string,
-): Promise<IdentityContext> {
-	return resolveIdentity(dependencies.identity, request, traceId);
-}
-
 function requireAdministrator(
 	identity: IdentityContext,
 	traceId: string,
@@ -442,8 +434,8 @@ export function registerManagementRoutes(
 ): void {
 	app.post("/api/v1/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -495,8 +487,8 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -522,8 +514,8 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agent-applications/:applicationId", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -541,8 +533,8 @@ export function registerManagementRoutes(
 
 	app.put("/api/v1/agent-applications/:applicationId", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -602,8 +594,8 @@ export function registerManagementRoutes(
 
 	app.post("/api/v1/agent-applications/:applicationId/withdraw", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -647,8 +639,8 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/admin/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -677,8 +669,8 @@ export function registerManagementRoutes(
 		"/api/v1/admin/agent-applications/:applicationId/decision",
 		(context) =>
 			boundary(context, async (metadata) => {
-				const identity = await identityFor(
-					dependencies,
+				const identity = await resolveIdentity(
+					dependencies.identity,
 					context.req.raw,
 					metadata.traceId,
 				);
@@ -749,8 +741,8 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -772,8 +764,8 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
@@ -791,8 +783,8 @@ export function registerManagementRoutes(
 
 	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await identityFor(
-				dependencies,
+			const identity = await resolveIdentity(
+				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
