@@ -309,6 +309,14 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		let lastPlan: AgentConfigurationWritePlanV1 | null = null;
 		let commitFailureArmed = false;
 		let failNextCommitAsStale = false;
+		async function disarmCommitFailure() {
+			if (!commitFailureArmed) return;
+			await disarmFailure(
+				"custom_image_upgrade",
+				"platform.agent_configuration_revisions",
+			);
+			commitFailureArmed = false;
+		}
 		const transaction: AgentConfigurationTransactionPortV1 = {
 			read: adapter.read.bind(adapter),
 			async commit(plan) {
@@ -326,13 +334,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 						lastPlan = structuredClone(plan);
 					return decision;
 				} finally {
-					if (commitFailureArmed) {
-						commitFailureArmed = false;
-						await disarmFailure(
-							"custom_image_upgrade",
-							"platform.agent_configuration_revisions",
-						);
-					}
+					await disarmCommitFailure();
 				}
 			},
 		};
@@ -378,7 +380,9 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			async failNextCommitAsStale() {
 				failNextCommitAsStale = true;
 			},
-			async close() {},
+			async close() {
+				await disarmCommitFailure();
+			},
 		};
 	});
 
