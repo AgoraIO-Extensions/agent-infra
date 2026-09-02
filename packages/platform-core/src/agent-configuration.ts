@@ -984,6 +984,55 @@ function parseAvailability(input: unknown): AgentConfigurationAccessTargetV1[] {
 		);
 }
 
+export function parseAgentConfigurationChangesV1(
+	input: unknown,
+): UpdateAgentConfigurationCommandV1["changes"] {
+	const changes = exactObject(
+		input,
+		[],
+		[
+			"ownerIds",
+			"availability",
+			"source",
+			"modelConfiguration",
+			"environment",
+			"secrets",
+			"actions",
+			"channels",
+		],
+	);
+	return {
+		...(Object.hasOwn(changes, "ownerIds")
+			? { ownerIds: parseOwnerIds(changes.ownerIds) }
+			: {}),
+		...(Object.hasOwn(changes, "availability")
+			? { availability: parseAvailability(changes.availability) }
+			: {}),
+		...(Object.hasOwn(changes, "source")
+			? { source: parseSourceSelection(changes.source) }
+			: {}),
+		...(Object.hasOwn(changes, "modelConfiguration")
+			? {
+					modelConfiguration: parseModelConfiguration(
+						changes.modelConfiguration,
+					),
+				}
+			: {}),
+		...(Object.hasOwn(changes, "environment")
+			? { environment: parseEnvironment(changes.environment) }
+			: {}),
+		...(Object.hasOwn(changes, "secrets")
+			? { secrets: parseSecretReplacements(changes.secrets) }
+			: {}),
+		...(Object.hasOwn(changes, "actions")
+			? { actions: canonicalActions(changes.actions) }
+			: {}),
+		...(Object.hasOwn(changes, "channels")
+			? { channels: parseChannelChanges(changes.channels) }
+			: {}),
+	};
+}
+
 function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	const values = exactObject(command, [
 		"schemaVersion",
@@ -1003,56 +1052,13 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 	) {
 		invalidCommand();
 	}
-	const changes = exactObject(
-		values.changes,
-		[],
-		[
-			"ownerIds",
-			"availability",
-			"source",
-			"modelConfiguration",
-			"environment",
-			"secrets",
-			"actions",
-			"channels",
-		],
-	);
 	return {
 		schemaVersion: 1,
 		agentId: values.agentId,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
-		changes: {
-			...(Object.hasOwn(changes, "ownerIds")
-				? { ownerIds: parseOwnerIds(changes.ownerIds) }
-				: {}),
-			...(Object.hasOwn(changes, "availability")
-				? { availability: parseAvailability(changes.availability) }
-				: {}),
-			...(Object.hasOwn(changes, "source")
-				? { source: parseSourceSelection(changes.source) }
-				: {}),
-			...(Object.hasOwn(changes, "modelConfiguration")
-				? {
-						modelConfiguration: parseModelConfiguration(
-							changes.modelConfiguration,
-						),
-					}
-				: {}),
-			...(Object.hasOwn(changes, "environment")
-				? { environment: parseEnvironment(changes.environment) }
-				: {}),
-			...(Object.hasOwn(changes, "secrets")
-				? { secrets: parseSecretReplacements(changes.secrets) }
-				: {}),
-			...(Object.hasOwn(changes, "actions")
-				? { actions: canonicalActions(changes.actions) }
-				: {}),
-			...(Object.hasOwn(changes, "channels")
-				? { channels: parseChannelChanges(changes.channels) }
-				: {}),
-		},
+		changes: parseAgentConfigurationChangesV1(values.changes),
 	};
 }
 

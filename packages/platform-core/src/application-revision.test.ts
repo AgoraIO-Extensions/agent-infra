@@ -112,6 +112,36 @@ describe("Application revision input and plan boundary", () => {
 		expect(reads).toBe(0);
 	});
 
+	it("snapshots nested command data before the first async boundary", async () => {
+		const transaction = new FakeApplicationRevisionTransactionV1(
+			applicationRevisionStateV1,
+		);
+		const command = structuredClone(applicationRevisionCommandV1);
+		const originalEnvironment = structuredClone(command.environment);
+		const revision = createUseCase({
+			async read(input) {
+				const decision = await transaction.read(input);
+				const [environment] = command.environment as {
+					name: string;
+					value: string;
+				}[];
+				if (!environment) throw new Error("Expected environment fixture");
+				environment.value = "mutated_after_read";
+				return decision;
+			},
+			async commit(plan) {
+				return transaction.commit(plan);
+			},
+		});
+
+		await revision.revise(command, applicationRevisionActorContextV1);
+
+		expect(command.environment[0]?.value).toBe("mutated_after_read");
+		expect(
+			transaction.snapshot().lastPlan?.configuration?.configuration.environment,
+		).toEqual(originalEnvironment);
+	});
+
 	it("rejects malicious Store state without calling admissions or commit", async () => {
 		let getterReads = 0;
 		let commits = 0;
@@ -192,6 +222,24 @@ describe("Application revision input and plan boundary", () => {
 			snapshotApplicationRevisionWritePlanV1({ ...valid, application }),
 		).toThrow(ApplicationRevisionError);
 		expect(getterReads).toBe(0);
+
+		const ownerIds = ["owner_02"];
+		expect(() =>
+			snapshotApplicationRevisionWritePlanV1({
+				...valid,
+				management: {
+					...valid.management,
+					state: { ...valid.management.state, ownerIds },
+				},
+				configuration: valid.configuration && {
+					...valid.configuration,
+					accessUpdate: valid.configuration.accessUpdate && {
+						...valid.configuration.accessUpdate,
+						ownerIds,
+					},
+				},
+			}),
+		).toThrow(ApplicationRevisionError);
 
 		let trapCalls = 0;
 		const proxy = new Proxy(valid, {

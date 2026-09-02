@@ -12,7 +12,9 @@ import {
 	type AgentConfigurationWritePlanV1,
 	createAgentConfigurationUseCaseV1,
 	decodeAgentConfigurationRecordV1,
+	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
+	type UpdateAgentConfigurationCommandV1,
 } from "./agent-configuration.js";
 import {
 	type AgentManagementActorContextV1,
@@ -250,6 +252,34 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 	} catch {
 		invalidCommand();
 	}
+	let changes: UpdateAgentConfigurationCommandV1["changes"];
+	try {
+		changes = parseAgentConfigurationChangesV1({
+			ownerIds: coOwnerIds,
+			availability: values.availability,
+			source: values.source,
+			...(Object.hasOwn(values, "modelConfiguration")
+				? { modelConfiguration: values.modelConfiguration }
+				: {}),
+			environment: values.environment,
+			secrets: values.secrets,
+			actions: values.actions,
+			channels: values.channels,
+		});
+	} catch {
+		invalidCommand();
+	}
+	if (
+		!changes.ownerIds ||
+		!changes.availability ||
+		!changes.source ||
+		!changes.environment ||
+		!changes.secrets ||
+		!changes.actions ||
+		!changes.channels
+	) {
+		invalidCommand();
+	}
 	return {
 		schemaVersion: 1,
 		idempotencyKey: values.idempotencyKey,
@@ -257,21 +287,16 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 		traceId: values.traceId,
 		name: values.name,
 		description: values.description,
-		coOwnerIds,
-		availability:
-			values.availability as readonly AgentConfigurationAccessTargetV1[],
-		source: values.source as AgentConfigurationSourceSelectionV1,
-		...(Object.hasOwn(values, "modelConfiguration")
-			? {
-					modelConfiguration:
-						values.modelConfiguration as AgentConfigurationModelInputV1,
-				}
+		coOwnerIds: changes.ownerIds,
+		availability: changes.availability,
+		source: changes.source,
+		...(Object.hasOwn(changes, "modelConfiguration")
+			? { modelConfiguration: changes.modelConfiguration }
 			: {}),
-		environment:
-			values.environment as ReviseApplicationCommandV1["environment"],
-		secrets: values.secrets as ReviseApplicationCommandV1["secrets"],
-		actions: values.actions as ReviseApplicationCommandV1["actions"],
-		channels: values.channels as ReviseApplicationCommandV1["channels"],
+		environment: changes.environment,
+		secrets: changes.secrets,
+		actions: changes.actions,
+		channels: changes.channels,
 	};
 }
 
@@ -639,6 +664,7 @@ export function snapshotApplicationRevisionWritePlanV1(
 			management.state.applicationId !== application.applicationId ||
 			management.state.agentId !== application.agentId ||
 			management.state.applicantId !== application.applicantId ||
+			!management.state.ownerIds.includes(application.applicantId) ||
 			management.state.status !== "pending_approval" ||
 			management.auditEvent.actorId !== application.applicantId ||
 			management.auditEvent.traceId !== application.traceId ||
