@@ -136,6 +136,50 @@ export interface JsonSchema<T> {
 	): { success: true; data: T } | { success: false; error: unknown };
 }
 
+const maximumJsonBytes = 1_048_576;
+
+async function readBoundedBody(request: Request): Promise<Uint8Array> {
+	const declaredLength = request.headers.get("content-length");
+	if (declaredLength !== null) {
+		const length = Number(declaredLength);
+		if (
+			!Number.isSafeInteger(length) ||
+			length < 0 ||
+			length > maximumJsonBytes
+		) {
+			await request.body?.cancel().catch(() => {});
+			throw new Error();
+		}
+	}
+
+	const reader = request.body?.getReader();
+	if (!reader) return new Uint8Array();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > maximumJsonBytes) {
+				await reader.cancel().catch(() => {});
+				throw new Error();
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
+}
+
 export async function parseJson<T>(
 	request: Request,
 	schema: JsonSchema<T>,
@@ -150,10 +194,10 @@ export async function parseJson<T>(
 	) {
 		throw new HttpProtocolError("INVALID_REQUEST", traceId);
 	}
-	let bytes: ArrayBuffer;
+	let bytes: Uint8Array;
 	let value: unknown;
 	try {
-		bytes = await request.arrayBuffer();
+		bytes = await readBoundedBody(request);
 		value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	} catch {
 		throw new HttpProtocolError("INVALID_REQUEST", traceId);
@@ -162,8 +206,6 @@ export async function parseJson<T>(
 	if (!parsed.success) throw new HttpProtocolError("INVALID_REQUEST", traceId);
 	return {
 		value: parsed.data,
-		rawRequestDigest: createHash("sha256")
-			.update(new Uint8Array(bytes))
-			.digest("hex"),
+		rawRequestDigest: createHash("sha256").update(bytes).digest("hex"),
 	};
 }

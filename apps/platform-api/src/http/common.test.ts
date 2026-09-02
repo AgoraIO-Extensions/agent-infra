@@ -112,6 +112,35 @@ describe("HTTP common boundary", () => {
 		).rejects.toThrow(HttpProtocolError);
 	});
 
+	it("rejects and cancels a streamed JSON body over one MiB", async () => {
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array(1_048_577).fill(0x20));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+		const request = new Request(
+			"https://platform.example.test/api/v1/agents/a/lifecycle",
+			{
+				method: "POST",
+				headers: {
+					"content-length": "1",
+					"content-type": "application/json",
+				},
+				body,
+				duplex: "half",
+			} as RequestInit & { duplex: "half" },
+		);
+
+		await expect(
+			parseJson(request, AgentLifecycleCommandRequestV1Schema, traceId),
+		).rejects.toMatchObject({ status: 400 });
+		expect(cancelled).toBe(true);
+	});
+
 	it("returns a stable redacted protocol error", () => {
 		let error: HttpProtocolError | undefined;
 		try {
