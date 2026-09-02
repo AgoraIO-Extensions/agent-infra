@@ -147,6 +147,10 @@ async function seed(
 	record = agentConfigurationConformanceRecordV1,
 ) {
 	const configuration = { ...structuredClone(record), agentId };
+	const sourceReference =
+		configuration.source.kind === "standard"
+			? configuration.source.templateId
+			: configuration.source.imageDigest;
 	await adminClient`
 		insert into platform.agents
 			(id, current_configuration_revision, created_at, authorization_revision)
@@ -164,7 +168,7 @@ async function seed(
 	await adminClient`
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
-		values (${agentId}, 7, 'template_01', ${occurredAt},
+		values (${agentId}, 7, ${sourceReference}, ${occurredAt},
 			${adminClient.json(configuration as never)})
 	`;
 	await adminClient`
