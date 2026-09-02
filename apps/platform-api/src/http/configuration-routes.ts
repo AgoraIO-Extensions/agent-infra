@@ -67,9 +67,10 @@ function configurationChanges(
 	prepared: Awaited<
 		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 	>,
+	ownerIds: readonly string[] | undefined,
 ) {
 	return {
-		...(input.coOwnerIds === undefined ? {} : { ownerIds: input.coOwnerIds }),
+		...(ownerIds === undefined ? {} : { ownerIds }),
 		...(input.availability === undefined
 			? {}
 			: { availability: input.availability }),
@@ -148,8 +149,12 @@ export function registerConfigurationRoutes(
 			({ optionId, credentialValue }) =>
 				credentialValue === undefined ? [] : [{ optionId, credentialValue }],
 		);
-		if ((body.secrets?.length ?? 0) > 0 || modelCredentials.length > 0) {
-			let authorization: AgentConfigurationQueryResultV1;
+		let authorization: AgentConfigurationQueryResultV1 | undefined;
+		if (
+			body.coOwnerIds !== undefined ||
+			(body.secrets?.length ?? 0) > 0 ||
+			modelCredentials.length > 0
+		) {
 			try {
 				authorization = await dependencies.configurationQuery.read({
 					agentId: context.req.param("agentId"),
@@ -163,6 +168,17 @@ export function registerConfigurationRoutes(
 			}
 			if (authorization.outcome !== "found") {
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+			}
+		}
+		const ownerIds =
+			body.coOwnerIds === undefined
+				? undefined
+				: identity.roles.includes("system_admin")
+					? body.coOwnerIds
+					: [...new Set([identity.userId, ...body.coOwnerIds])].toSorted();
+		if ((body.secrets?.length ?? 0) > 0 || modelCredentials.length > 0) {
+			if (authorization?.outcome !== "found") {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			try {
 				prepared = await dependencies.prepareSecretReplacements({
@@ -189,7 +205,7 @@ export function registerConfigurationRoutes(
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
-					changes: configurationChanges(body, prepared),
+					changes: configurationChanges(body, prepared, ownerIds),
 				},
 				{
 					schemaVersion: 1,

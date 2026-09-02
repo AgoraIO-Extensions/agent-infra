@@ -515,6 +515,87 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			),
 		).toBe(true);
 
+		const applicationBeforeAttack = await app.request(
+			"/api/v1/agent-applications/application-run",
+			{ headers: requestHeaders("owner") },
+		);
+		const agentBeforeAttack = await app.request("/api/v1/agents/agent-run", {
+			headers: requestHeaders("owner"),
+		});
+		const applicationSnapshot = await applicationBeforeAttack.json();
+		const agentSnapshot = await agentBeforeAttack.json();
+		const deniedWrites = [
+			await app.request("/api/v1/agent-applications/application-run", {
+				method: "PUT",
+				headers: {
+					...requestHeaders("attacker", "attack-update"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ ...updatedBody, name: "Attacker update" }),
+			}),
+			await app.request("/api/v1/agent-applications/application-run/withdraw", {
+				method: "POST",
+				headers: requestHeaders("attacker", "attack-withdraw"),
+			}),
+			await app.request("/api/v1/agents/agent-run/configuration", {
+				method: "PUT",
+				headers: {
+					...requestHeaders("attacker", "attack-configuration"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					environment: [{ name: "ATTACKED", value: "true" }],
+				}),
+			}),
+			await app.request("/api/v1/agents/agent-run/lifecycle", {
+				method: "POST",
+				headers: {
+					...requestHeaders("attacker", "attack-lifecycle"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+			}),
+			await app.request(
+				"/api/v1/admin/agent-applications/application-run/decision",
+				{
+					method: "POST",
+					headers: {
+						...requestHeaders("attacker", "attack-decision"),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						schemaVersion: 1,
+						decision: "reject",
+						reason: "attacker decision",
+					}),
+				},
+			),
+		];
+		expect(deniedWrites.map(({ status }) => status)).toEqual([
+			404, 404, 404, 404, 403,
+		]);
+		expect(
+			await (
+				await app.request("/api/v1/agent-applications/application-run", {
+					headers: requestHeaders("owner"),
+				})
+			).json(),
+		).toEqual(applicationSnapshot);
+		expect(
+			await (
+				await app.request("/api/v1/agents/agent-run", {
+					headers: requestHeaders("owner"),
+				})
+			).json(),
+		).toEqual(agentSnapshot);
+		const auditAfterAttacks = await app.request("/api/v1/admin/audit", {
+			headers: requestHeaders("admin"),
+		});
+		expect(
+			((await auditAfterAttacks.json()) as { items: unknown[] }).items,
+		).toEqual(auditItems);
+
 		for (const response of [
 			await app.request("/api/v1/agent-applications/application-run", {
 				headers: requestHeaders("attacker"),

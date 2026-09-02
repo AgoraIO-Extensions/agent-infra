@@ -54,7 +54,7 @@ function createApp(overrides: Record<string, unknown> = {}) {
 	});
 	const readConfiguration = vi.fn().mockResolvedValue({
 		outcome: "found",
-		configuration: { revision: 1 },
+		configuration: { revision: 1, ownerIds: ["user-1"] },
 	});
 	const readAgentProjection = vi.fn().mockResolvedValue(agentProjection);
 	const prepareSecretReplacements = vi
@@ -212,6 +212,65 @@ describe("configuration routes", () => {
 				([input]) => input.identity.organizationIds,
 			),
 		).toEqual([["org-old"], ["org-new"]]);
+	});
+
+	it("builds the complete Owner set from trusted identity", async () => {
+		const { app, update, readConfiguration } = createApp();
+		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+			method: "PUT",
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "configuration-owners",
+			},
+			body: JSON.stringify({
+				schemaVersion: 1,
+				coOwnerIds: ["user-2"],
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(readConfiguration).toHaveBeenCalledWith({
+			agentId: "agent-1",
+			actorId: "user-1",
+			organizationIds: ["org-1"],
+			isAdministrator: false,
+			intent: "manage",
+		});
+		expect(update.mock.calls[0]?.[0]).toMatchObject({
+			changes: { ownerIds: ["user-1", "user-2"] },
+		});
+	});
+
+	it("lets administrators replace the complete Owner set", async () => {
+		const identity = {
+			resolve: vi.fn().mockResolvedValue({
+				schemaVersion: 1,
+				userId: "admin-1",
+				displayName: "Administrator",
+				accountStatus: "active",
+				organizationIds: [],
+				roles: ["employee", "system_admin"],
+				authorizationRevision: "authorization-1",
+			}),
+			hydrateUsers: vi.fn().mockResolvedValue([]),
+		};
+		const { app, update } = createApp({ identity });
+		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+			method: "PUT",
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "configuration-owner-handoff",
+			},
+			body: JSON.stringify({
+				schemaVersion: 1,
+				coOwnerIds: ["user-2"],
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(update.mock.calls[0]?.[0]).toMatchObject({
+			changes: { ownerIds: ["user-2"] },
+		});
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {
