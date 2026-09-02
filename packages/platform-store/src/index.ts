@@ -24,6 +24,11 @@ export {
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
 export {
+	ApplicationRevisionStoreError,
+	type PostgresApplicationRevisionOptionsV1,
+	PostgresApplicationRevisionTransactionV1,
+} from "./application-revision.ts";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
