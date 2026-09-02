@@ -118,10 +118,15 @@ export function assemblePlatformApi(
 	return {
 		dependencies,
 		async close() {
-			const results = await Promise.allSettled(
-				adapters.toReversed().map((adapter) => adapter.close()),
-			);
-			if (results.some(({ status }) => status === "rejected")) {
+			let failed = false;
+			for (const adapter of adapters.toReversed()) {
+				try {
+					await adapter.close();
+				} catch {
+					failed = true;
+				}
+			}
+			if (failed) {
 				throw new Error("Platform API dependencies did not close cleanly");
 			}
 		},

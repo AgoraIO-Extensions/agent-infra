@@ -8,6 +8,7 @@ import {
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
+import { HttpProtocolError } from "./common.js";
 import { registerManagementRoutes } from "./management-routes.js";
 
 const identity = {
@@ -591,5 +592,27 @@ describe("management routes", () => {
 
 		expect(malformedResponse.status).toBe(503);
 		expect(malformed.submit).not.toHaveBeenCalled();
+
+		const allocator = createApp();
+		allocator.allocateApplicationIds.mockRejectedValue(
+			new HttpProtocolError("FORBIDDEN", "allocator-trace"),
+		);
+		const allocatorResponse = await allocator.app.request(
+			"/api/v1/agent-applications",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(applicationBody),
+			},
+		);
+
+		expect(allocatorResponse.status).toBe(503);
+		const allocatorBody = await allocatorResponse.json();
+		expect(allocatorBody).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(JSON.stringify(allocatorBody)).not.toContain("allocator-trace");
+		expect(allocator.submit).not.toHaveBeenCalled();
 	});
 });

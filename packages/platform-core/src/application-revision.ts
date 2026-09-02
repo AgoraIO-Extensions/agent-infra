@@ -853,7 +853,9 @@ async function captureConfigurationPlan(
 				requestId: command.requestId,
 				traceId: command.traceId,
 				changes: {
-					coOwnerIds: command.coOwnerIds,
+					coOwnerIds: [
+						...new Set([state.application.applicantId, ...command.coOwnerIds]),
+					].toSorted(),
 					availability: command.availability,
 					source: command.source,
 					...(command.modelConfiguration === undefined

@@ -449,10 +449,17 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const ids = await dependencies.allocateApplicationIds({
-				identity,
-				idempotencyKey,
-			});
+			let ids: Awaited<
+				ReturnType<ManagementRouteDependencies["allocateApplicationIds"]>
+			>;
+			try {
+				ids = await dependencies.allocateApplicationIds({
+					identity,
+					idempotencyKey,
+				});
+			} catch {
+				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
 			const prepared = await prepareApplicationInput(
 				dependencies,
 				body,
