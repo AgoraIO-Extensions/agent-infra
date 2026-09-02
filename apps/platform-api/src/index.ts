@@ -88,14 +88,35 @@ export async function startPlatformApiFromDeployment(
 	options: DeploymentStartOptions = {},
 ) {
 	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
+	let server: ReturnType<typeof startPlatformApi> | undefined;
 	try {
-		const server = startPlatformApi({
+		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			log: options.log,
 			port: options.port,
 		});
+		await new Promise<void>((resolve, reject) => {
+			const cleanup = () => {
+				server?.off("listening", onListening);
+				server?.off("error", onError);
+			};
+			const onListening = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = (error: Error) => {
+				cleanup();
+				reject(error);
+			};
+			server?.once("listening", onListening);
+			server?.once("error", onError);
+			if (server?.listening) onListening();
+		});
 		return { assembly, server };
 	} catch (error) {
+		if (server?.listening) {
+			await new Promise<void>((resolve) => server?.close(() => resolve()));
+		}
 		await assembly.close();
 		throw error;
 	}

@@ -33,7 +33,6 @@ async function verifyPlatformApi() {
 		).href,
 		port: 0,
 	});
-	await once(server, "listening");
 	const address = server.address();
 	assert(address && typeof address === "object");
 

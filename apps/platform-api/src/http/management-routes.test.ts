@@ -170,7 +170,13 @@ function createApp(
 		.mockResolvedValue(applicationProjection);
 	const readAgentProjection = vi.fn().mockResolvedValue(agentProjection);
 	const prepareSecretReplacements = vi.fn().mockResolvedValue({
-		secrets: [{ name: "MODEL_API_KEY", replace: true as const }],
+		secrets: [
+			{
+				name: "MODEL_API_KEY",
+				replace: true as const,
+				value: "never-return-this",
+			},
+		],
 		modelConfiguration: undefined,
 	});
 	const allocateApplicationIds = vi
@@ -282,6 +288,9 @@ describe("management routes", () => {
 		);
 		expect(submit.mock.calls[0]?.[0]).not.toEqual(
 			expect.objectContaining({ requestId: headers["x-request-id"] }),
+		);
+		expect(JSON.stringify(submit.mock.calls[0])).not.toContain(
+			"never-return-this",
 		);
 		expect(readApplicationProjection.mock.calls[0]?.[0]).not.toEqual(
 			expect.objectContaining({ traceId: headers["x-trace-id"] }),

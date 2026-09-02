@@ -373,7 +373,36 @@ async function prepareApplicationInput(
 				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 		}
-		return prepared;
+		return {
+			secrets: prepared.secrets.map(({ name, replace }) => ({
+				name,
+				replace,
+			})),
+			...(prepared.modelConfiguration === undefined
+				? {}
+				: {
+						modelConfiguration: {
+							options: prepared.modelConfiguration.options.map(
+								({
+									optionId,
+									endpointId,
+									modelId,
+									reasoningLevels,
+									replaceCredential,
+								}) => ({
+									optionId,
+									endpointId,
+									modelId,
+									reasoningLevels: [...reasoningLevels],
+									replaceCredential,
+								}),
+							),
+							defaultOptionId: prepared.modelConfiguration.defaultOptionId,
+							defaultReasoningLevel:
+								prepared.modelConfiguration.defaultReasoningLevel,
+						},
+					}),
+		};
 	} catch {
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}

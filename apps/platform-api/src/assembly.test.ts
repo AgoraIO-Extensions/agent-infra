@@ -1,7 +1,14 @@
+import { once } from "node:events";
+import { createServer } from "node:net";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assemblePlatformApi } from "./assembly.js";
-import { loadPlatformApiAssembly, startPlatformApi } from "./index.js";
+import {
+	loadPlatformApiAssembly,
+	startPlatformApi,
+	startPlatformApiFromDeployment,
+} from "./index.js";
 
 const servers: { close(callback?: (error?: Error) => void): void }[] = [];
 
@@ -84,6 +91,32 @@ describe("Platform API production assembly", () => {
 			});
 		} finally {
 			await assembly.close();
+		}
+	});
+
+	it("closes deployment assembly when the Node server cannot bind", async () => {
+		const blocker = createServer();
+		blocker.listen(0);
+		await once(blocker, "listening");
+		const address = blocker.address();
+		if (!address || typeof address === "string") {
+			throw new Error("Port blocker did not bind");
+		}
+
+		try {
+			await expect(
+				startPlatformApiFromDeployment({
+					log: () => {},
+					moduleSpecifier: new URL(
+						"../../../tests/fixtures/platform-api-deployment.mjs",
+						import.meta.url,
+					).href,
+					port: address.port,
+				}),
+			).rejects.toMatchObject({ code: "EADDRINUSE" });
+		} finally {
+			blocker.close();
+			await once(blocker, "close");
 		}
 	});
 });
