@@ -241,6 +241,40 @@ export function agentConfigurationCustomImageUpgradeConformance(
 		});
 	}
 
+	it("returns one result and one effect set for concurrent same-key upgrades", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source: {
+				...agentConfigurationCustomImageSourceV1,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			},
+		});
+		try {
+			const results = await Promise.all([
+				harness.useCase.upgradeCustomImage(upgrade, actor),
+				harness.useCase.upgradeCustomImage(upgrade, actor),
+			]);
+			expect(results[0]).toEqual(results[1]);
+			expect(await harness.snapshot()).toMatchObject({
+				configuration: { revision: 8 },
+				commitCount: 1,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				auditCount: 1,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("rejects standard Agents, unchanged images, and stale commits without effects", async () => {
 		for (const scenario of ["standard", "unchanged", "stale"] as const) {
 			const currentSource =
