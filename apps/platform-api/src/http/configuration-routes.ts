@@ -2,10 +2,11 @@ import {
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import {
-	AgentConfigurationError,
-	type AgentConfigurationUseCaseV1,
-} from "@agent-infra/platform-core";
+import type { AgentConfigurationUseCaseV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationQueryInputV1,
+	AgentConfigurationQueryResultV1,
+} from "@agent-infra/platform-store";
 import type { Hono } from "hono";
 
 import {
@@ -14,6 +15,7 @@ import {
 	parseJson,
 	requestMetadata,
 } from "./common.js";
+import { mapCoreError } from "./core-errors.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -25,6 +27,11 @@ type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
 export interface ConfigurationRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly configuration: AgentConfigurationUseCaseV1;
+	readonly configurationQuery: {
+		read(
+			input: AgentConfigurationQueryInputV1,
+		): Promise<AgentConfigurationQueryResultV1>;
+	};
 	readonly readAgentProjection: (input: {
 		readonly agentId: string;
 		readonly identity: IdentityContext;
@@ -33,6 +40,8 @@ export interface ConfigurationRoutesDependencies {
 	}) => Promise<AgentProjection | null>;
 	readonly prepareSecretReplacements: (input: {
 		readonly agentId: string;
+		readonly configurationRevision: number;
+		readonly identityAuthorizationRevision: string;
 		readonly identity: IdentityContext;
 		readonly secrets: readonly {
 			readonly name: string;
@@ -114,24 +123,6 @@ function validatePreparedSecrets(
 	}
 }
 
-function mapConfigurationError(error: unknown, traceId: string): never {
-	if (!(error instanceof AgentConfigurationError)) throw error;
-	switch (error.code) {
-		case "invalid_command":
-			throw new HttpProtocolError("INVALID_REQUEST", traceId);
-		case "not_authorized":
-			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
-		case "not_admitted":
-		case "no_change":
-		case "stale_revision":
-		case "idempotency_conflict":
-			throw new HttpProtocolError("CONFLICT", traceId);
-		case "dependency_unavailable":
-		case "persistence_failed":
-			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
-	}
-}
-
 export function registerConfigurationRoutes(
 	app: Hono,
 	dependencies: ConfigurationRoutesDependencies,
@@ -158,9 +149,26 @@ export function registerConfigurationRoutes(
 				credentialValue === undefined ? [] : [{ optionId, credentialValue }],
 		);
 		if ((body.secrets?.length ?? 0) > 0 || modelCredentials.length > 0) {
+			let authorization: AgentConfigurationQueryResultV1;
+			try {
+				authorization = await dependencies.configurationQuery.read({
+					agentId: context.req.param("agentId"),
+					actorId: identity.userId,
+					organizationIds: identity.organizationIds,
+					isAdministrator: identity.roles.includes("system_admin"),
+					intent: "manage",
+				});
+			} catch {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
+			if (authorization.outcome !== "found") {
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+			}
 			try {
 				prepared = await dependencies.prepareSecretReplacements({
 					agentId: context.req.param("agentId"),
+					configurationRevision: authorization.configuration.revision,
+					identityAuthorizationRevision: identity.authorizationRevision,
 					identity,
 					secrets: body.secrets ?? [],
 					modelCredentials,
@@ -190,7 +198,7 @@ export function registerConfigurationRoutes(
 				},
 			);
 		} catch (error) {
-			mapConfigurationError(error, metadata.traceId);
+			throw mapCoreError(error, metadata.traceId);
 		}
 		let projection: AgentProjection | null;
 		try {

@@ -1,5 +1,4 @@
 import {
-	AgentProjectionV1Schema,
 	BrowserSessionProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -27,11 +26,8 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { createPlatformApp } from "./app.js";
-import {
-	hydrateBrowserUsers,
-	type IdentityAdapter,
-	type IdentityContext,
-} from "./http/identity.js";
+import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
+import { createPlatformProjectionReaders } from "./projection.js";
 
 const source = {
 	kind: "standard" as const,
@@ -259,161 +255,53 @@ beforeAll(async () => {
 			});
 		},
 	};
-	const browserConfiguration = async (
-		agentId: string,
-		identity: IdentityContext,
-		intent: "discover" | "manage",
-		traceId: string,
-	) => {
-		const result = await configurationQuery.read({
-			agentId,
-			actorId: identity.userId,
-			organizationIds: identity.organizationIds,
-			isAdministrator: identity.roles.includes("system_admin"),
-			intent,
-		});
-		if (result.outcome !== "found")
-			throw new Error("configuration unavailable");
-		const current = result.configuration;
-		return {
-			current,
-			projection: {
-				owners: await hydrateBrowserUsers(
-					identityAdapter,
-					current.ownerIds,
-					traceId,
-				),
-				availability: current.availability,
-				modelOptions: current.modelOptions.map((option) => ({
-					...option,
-					displayName: option.modelId,
-				})),
-				defaultModelOptionId: current.defaultModelOptionId,
-				defaultReasoningLevel: current.defaultReasoningLevel,
-				actions: current.actions,
-				environment: current.environment,
-				channels: [
-					{ kind: "web" as const, status: "available" as const },
-					...current.channelKinds.map((kind) => ({
-						kind,
-						status: "bound" as const,
-					})),
-				],
-				secrets: current.secrets,
-			},
-		};
-	};
-	const applicationProjection = async ({
-		application,
-		identity,
-		traceId,
-	}: {
-		application?: Awaited<ReturnType<typeof managementQuery.getApplication>>;
-		identity: IdentityContext;
-		traceId: string;
-	}) => {
-		if (!application) throw new Error("application unavailable");
-		const { current, projection } = await browserConfiguration(
-			application.agentId,
-			identity,
-			"discover",
-			traceId,
-		);
-		if (current.source.kind !== "standard")
-			throw new Error("unexpected source");
-		return {
-			schemaVersion: 1 as const,
-			applicationId: application.applicationId,
-			agentId: application.agentId,
-			name: application.name,
-			description: application.description,
-			source: {
-				kind: "standard" as const,
-				templateId: current.source.templateId,
-			},
-			status: application.management.status,
-			resourceProfile: {
-				profileId: "standard-medium",
-				displayName: "Standard medium",
-				estimatedResources: {
-					cpuMillicores: 2000,
-					memoryMiB: 4096,
-					storageGiB: 20,
-				},
-			},
-			configuration: projection,
-			submittedAt: application.submittedAt.toISOString(),
-			decision: application.decision
-				? {
-						decidedAt: application.decision.decidedAt.toISOString(),
-						reason: application.decision.reason,
-					}
-				: null,
-		};
-	};
-	const agentProjection = async ({
-		agent,
-		identity,
-		traceId,
-	}: {
-		agent?: Awaited<ReturnType<typeof managementQuery.getAgent>>;
-		identity: IdentityContext;
-		traceId: string;
-	}) => {
-		if (!agent) throw new Error("agent unavailable");
-		const { current, projection } = await browserConfiguration(
-			agent.agentId,
-			identity,
-			"discover",
-			traceId,
-		);
-		if (current.source.kind !== "standard")
-			throw new Error("unexpected source");
-		return {
-			schemaVersion: 1 as const,
-			agentId: agent.agentId,
-			name: agent.name,
-			description: agent.description,
-			source: {
-				kind: "standard" as const,
-				templateId: current.source.templateId,
-			},
-			managementStatus: agent.management.status,
-			serviceAvailability: agent.management.serviceAvailability,
-			configuration: projection,
-			capabilities: {
-				modelSelection: false,
-				attachments: false,
-				resultFiles: false,
-				connection: false,
-				supplementaryInstruction: false,
-			},
-			interactionUrl: null,
-		};
-	};
-	const readAgentProjection = async ({
-		agentId,
-		identity,
-		traceId,
-	}: {
-		agentId: string;
-		identity: IdentityContext;
-		traceId: string;
-	}) =>
-		AgentProjectionV1Schema.parse(
-			await agentProjection({
-				agent: await managementQuery.getAgent(
-					{
-						kind: "user",
-						userId: identity.userId,
-						organizationIds: identity.organizationIds,
+	const projectionReaders = createPlatformProjectionReaders({
+		identity: identityAdapter,
+		managementQuery,
+		configurationQuery,
+		presentation: {
+			async present({ configuration }) {
+				if (configuration.source.kind !== "standard") {
+					throw new Error("unexpected test source");
+				}
+				return {
+					source: {
+						kind: "standard",
+						templateId: configuration.source.templateId,
 					},
-					agentId,
-				),
-				identity,
-				traceId,
-			}),
-		);
+					resourceProfile: {
+						profileId: "standard-medium",
+						displayName: "Standard medium",
+						estimatedResources: {
+							cpuMillicores: 2000,
+							memoryMiB: 4096,
+							storageGiB: 20,
+						},
+					},
+					modelOptions: configuration.modelOptions.map((option) => ({
+						...option,
+						reasoningLevels: [...option.reasoningLevels],
+						displayName: option.modelId,
+					})),
+					channels: [
+						{ kind: "web", status: "available" },
+						...configuration.channelKinds.map((kind) => ({
+							kind,
+							status: "bound" as const,
+						})),
+					],
+					capabilities: {
+						modelSelection: false,
+						attachments: false,
+						resultFiles: false,
+						connection: false,
+						supplementaryInstruction: false,
+					},
+					interactionUrl: null,
+				};
+			},
+		},
+	});
 
 	app = createPlatformApp({
 		management: {
@@ -429,13 +317,14 @@ beforeAll(async () => {
 					? { applicationId: "application-withdraw", agentId: "agent-withdraw" }
 					: { applicationId: "application-run", agentId: "agent-run" },
 			prepareSecretReplacements: async () => ({ secrets: [] }),
-			readApplicationProjection: applicationProjection,
-			readAgentProjection: agentProjection,
+			readApplicationProjection: projectionReaders.readApplicationProjection,
+			readAgentProjection: projectionReaders.readManagementAgentProjection,
 		},
 		configuration: {
 			identity: identityAdapter,
 			configuration: configurationUseCase,
-			readAgentProjection,
+			configurationQuery,
+			readAgentProjection: projectionReaders.readConfigurationAgentProjection,
 			prepareSecretReplacements: async () => ({
 				secrets: [],
 				modelCredentialOptionIds: [],

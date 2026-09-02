@@ -1,11 +1,11 @@
 import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
-import { createPlatformApp } from "./app";
+import { createPlatformHealthApp } from "./app";
 
 describe("platform API health", () => {
 	it("reports the service as ready", async () => {
-		const response = await createPlatformApp().request("/healthz");
+		const response = await createPlatformHealthApp().request("/healthz");
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
@@ -14,33 +14,20 @@ describe("platform API health", () => {
 		});
 	});
 
-	it("registers injected routes and serializes protocol failures", async () => {
-		const app = createPlatformApp({
-			sessionAudit: {
-				identity: {
-					async resolve() {
-						throw new Error("private identity failure");
-					},
-					async hydrateUsers() {
-						return [];
-					},
-				},
-				audit: {
-					async listAudit() {
-						return { items: [], nextCursor: null };
-					},
-				},
-			},
+	it("serializes unexpected failures without private details", async () => {
+		const app = createPlatformHealthApp();
+		app.get("/failure", () => {
+			throw new Error("private failure");
 		});
 
-		const response = await app.request("/api/v1/session");
+		const response = await app.request("/failure");
 
-		expect(response.status).toBe(503);
+		expect(response.status).toBe(500);
 		const body = await response.json();
 		expect(PilotProtocolErrorV1Schema.parse(body)).toMatchObject({
-			code: "DEPENDENCY_UNAVAILABLE",
+			code: "INTERNAL_ERROR",
 			retryable: true,
 		});
-		expect(JSON.stringify(body)).not.toContain("private identity failure");
+		expect(JSON.stringify(body)).not.toContain("private failure");
 	});
 });

@@ -52,6 +52,10 @@ function createApp(overrides: Record<string, unknown> = {}) {
 		revision: 2,
 		changedFields: ["secrets"],
 	});
+	const readConfiguration = vi.fn().mockResolvedValue({
+		outcome: "found",
+		configuration: { revision: 1 },
+	});
 	const readAgentProjection = vi.fn().mockResolvedValue(agentProjection);
 	const prepareSecretReplacements = vi
 		.fn()
@@ -78,11 +82,18 @@ function createApp(overrides: Record<string, unknown> = {}) {
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 		},
 		configuration: { update },
+		configurationQuery: { read: readConfiguration },
 		readAgentProjection,
 		prepareSecretReplacements,
 		...overrides,
 	});
-	return { app, update, readAgentProjection, prepareSecretReplacements };
+	return {
+		app,
+		update,
+		readConfiguration,
+		readAgentProjection,
+		prepareSecretReplacements,
+	};
 }
 
 describe("configuration routes", () => {
@@ -134,6 +145,8 @@ describe("configuration routes", () => {
 		});
 		expect(prepareSecretReplacements).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			configurationRevision: 1,
+			identityAuthorizationRevision: "authorization-1",
 			identity: expect.objectContaining({ userId: "user-1" }),
 			secrets: [{ name: "MODEL_API_KEY", value: "plaintext-never-returned" }],
 			modelCredentials: [],
@@ -249,5 +262,30 @@ describe("configuration routes", () => {
 			"plaintext-never-returned",
 		);
 		expect(preparation.update).not.toHaveBeenCalled();
+
+		const unauthorized = createApp({
+			configurationQuery: {
+				read: vi.fn().mockResolvedValue({ outcome: "unavailable" }),
+			},
+		});
+		const attackResponse = await unauthorized.app.request(
+			"/api/v1/agents/other-agent/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-secret-attack",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					secrets: [
+						{ name: "MODEL_API_KEY", value: "plaintext-never-returned" },
+					],
+				}),
+			},
+		);
+		expect(attackResponse.status).toBe(404);
+		expect(unauthorized.prepareSecretReplacements).not.toHaveBeenCalled();
+		expect(unauthorized.update).not.toHaveBeenCalled();
 	});
 });

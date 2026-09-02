@@ -68,16 +68,35 @@ function record(
 	return Object.fromEntries(keys.map((key) => [key, descriptors[key]?.value]));
 }
 
-function stringArray(value: unknown): readonly string[] {
+function denseArray(value: unknown, maximum: number): unknown[] {
+	if (!Array.isArray(value) || types.isProxy(value) || value.length > maximum) {
+		throw new Error();
+	}
+	const descriptors = Object.getOwnPropertyDescriptors(value);
 	if (
-		!Array.isArray(value) ||
-		types.isProxy(value) ||
-		value.length > 256 ||
-		Reflect.ownKeys(value).length !== value.length + 1
+		Reflect.ownKeys(descriptors).length !== value.length + 1 ||
+		Object.getOwnPropertyDescriptor(value, "length")?.value !== value.length
 	) {
 		throw new Error();
 	}
-	const values = value.map((item) => {
+	const values: unknown[] = [];
+	for (let index = 0; index < value.length; index += 1) {
+		const descriptor = descriptors[String(index)];
+		if (
+			descriptor?.enumerable !== true ||
+			!Object.hasOwn(descriptor, "value") ||
+			Object.hasOwn(descriptor, "get") ||
+			Object.hasOwn(descriptor, "set")
+		) {
+			throw new Error();
+		}
+		values.push(descriptor.value);
+	}
+	return values;
+}
+
+function stringArray(value: unknown): readonly string[] {
+	const values = denseArray(value, 256).map((item) => {
 		if (!text(item)) throw new Error();
 		return item;
 	});
@@ -169,18 +188,19 @@ export async function hydrateBrowserUsers(
 	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
-	if (
-		!Array.isArray(value) ||
-		types.isProxy(value) ||
-		Reflect.ownKeys(value).length !== value.length + 1
-	) {
+	let items: unknown[];
+	try {
+		items = denseArray(value, 256);
+	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
-	const parsed = value.map((item) => {
+	const parsed = items.map((item) => {
 		try {
-			return BrowserUserProjectionV1Schema.safeParse(
-				record(item, ["userId", "displayName", "roles"]),
-			);
+			const user = record(item, ["userId", "displayName", "roles"]);
+			return BrowserUserProjectionV1Schema.safeParse({
+				...user,
+				roles: stringArray(user.roles),
+			});
 		} catch {
 			return { success: false as const };
 		}

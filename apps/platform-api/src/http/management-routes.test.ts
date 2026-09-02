@@ -304,6 +304,8 @@ describe("management routes", () => {
 			expect.objectContaining({ traceId: headers["x-trace-id"] }),
 		);
 		expect(prepareSecretReplacements).toHaveBeenCalledWith({
+			applicationId: "application-1",
+			agentId: "agent-1",
 			secrets: applicationBody.secrets,
 			modelConfiguration: undefined,
 			identity,
@@ -456,6 +458,16 @@ describe("management routes", () => {
 		expect(
 			PilotProtocolErrorV1Schema.safeParse(await forbidden.json()).success,
 		).toBe(true);
+		const secretAttack = await missing.app.request(
+			"/api/v1/agent-applications/application-1",
+			{
+				method: "PUT",
+				headers,
+				body: JSON.stringify(applicationBody),
+			},
+		);
+		expect(secretAttack.status).toBe(404);
+		expect(missing.prepareSecretReplacements).not.toHaveBeenCalled();
 		expect((await missing.app.request("/api/v1/agents/unknown")).status).toBe(
 			(await missing.app.request("/api/v1/agents/not-owned")).status,
 		);

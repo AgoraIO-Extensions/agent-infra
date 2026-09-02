@@ -188,6 +188,9 @@ function testApp() {
 		configuration: {
 			identity: identityAdapter,
 			configuration: { update: updateConfiguration },
+			configurationQuery: {
+				read: vi.fn().mockResolvedValue({ outcome: "unavailable" }),
+			},
 			readAgentProjection: vi.fn().mockResolvedValue(agentProjection),
 			prepareSecretReplacements: vi.fn().mockResolvedValue({
 				secrets: [],

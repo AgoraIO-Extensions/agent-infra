@@ -51,6 +51,37 @@ describe("trusted identity boundary", () => {
 		expect(identityAdapter.resolve).toHaveBeenCalledWith(request);
 	});
 
+	it("snapshots identity arrays without invoking custom prototypes", async () => {
+		let customMapCalls = 0;
+		const organizations = ["organization-01"];
+		const roles = ["employee"];
+		for (const values of [organizations, roles]) {
+			Object.setPrototypeOf(values, {
+				...Array.prototype,
+				map() {
+					customMapCalls += 1;
+					return ["system_admin"];
+				},
+			});
+		}
+
+		await expect(
+			resolveIdentity(
+				adapter({
+					...activeIdentity,
+					organizationIds: organizations,
+					roles,
+				}),
+				new Request("https://platform.example.test/api/v1/session"),
+				traceId,
+			),
+		).resolves.toMatchObject({
+			organizationIds: ["organization-01"],
+			roles: ["employee"],
+		});
+		expect(customMapCalls).toBe(0);
+	});
+
 	it("fails closed for missing, disabled, unavailable, or invalid identity", async () => {
 		const unavailable = adapter(activeIdentity);
 		vi.mocked(unavailable.resolve).mockRejectedValue(
@@ -112,6 +143,39 @@ describe("trusted identity boundary", () => {
 			"user-02",
 			"user-01",
 		]);
+	});
+
+	it("snapshots hydrated users and roles without invoking custom prototypes", async () => {
+		let customMapCalls = 0;
+		const roles = ["employee"];
+		Object.setPrototypeOf(roles, {
+			...Array.prototype,
+			map() {
+				customMapCalls += 1;
+				return ["system_admin"];
+			},
+		});
+		const users = [{ userId: "user-01", displayName: "One", roles }];
+		Object.setPrototypeOf(users, {
+			...Array.prototype,
+			map() {
+				customMapCalls += 1;
+				return [
+					{
+						userId: "user-01",
+						displayName: "Forged",
+						roles: ["system_admin"],
+					},
+				];
+			},
+		});
+
+		await expect(
+			hydrateBrowserUsers(adapter(activeIdentity, users), ["user-01"], traceId),
+		).resolves.toEqual([
+			{ userId: "user-01", displayName: "One", roles: ["employee"] },
+		]);
+		expect(customMapCalls).toBe(0);
 	});
 
 	it("rejects incomplete or extra hydration results", async () => {

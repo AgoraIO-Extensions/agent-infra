@@ -16,12 +16,6 @@ import type {
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
 } from "@agent-infra/platform-core";
-import {
-	AgentConfigurationError,
-	AgentManagementError,
-	ApplicationFoundationError,
-	ApplicationRevisionError,
-} from "@agent-infra/platform-core";
 import type {
 	AgentConfigurationQueryInputV1,
 	AgentConfigurationQueryResultV1,
@@ -42,6 +36,7 @@ import {
 	type RequestMetadata,
 	requestMetadata,
 } from "./common.js";
+import { mapCoreError } from "./core-errors.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -85,6 +80,8 @@ interface ProjectionInput<T> extends RequestMetadata {
 }
 
 export interface SecretPreparationInput extends RequestMetadata {
+	readonly applicationId: string;
+	readonly agentId: string;
 	readonly identity: IdentityContext;
 	readonly secrets: readonly {
 		readonly name: string;
@@ -177,65 +174,6 @@ function fail(
 	throw new HttpProtocolError(code, traceId);
 }
 
-function coreError(error: unknown, traceId: string): HttpProtocolError {
-	if (error instanceof HttpProtocolError) return error;
-	if (error instanceof ApplicationFoundationError) {
-		if (error.code === "invalid_command")
-			return new HttpProtocolError("INVALID_REQUEST", traceId);
-		if (error.code === "not_authorized")
-			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
-		if (
-			error.code === "not_admitted" ||
-			error.code === "conflict" ||
-			error.code === "idempotency_conflict"
-		) {
-			return new HttpProtocolError("CONFLICT", traceId);
-		}
-		return new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
-	}
-	if (error instanceof ApplicationRevisionError) {
-		if (error.code === "invalid_command")
-			return new HttpProtocolError("INVALID_REQUEST", traceId);
-		if (error.code === "not_authorized")
-			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
-		if (
-			error.code === "not_admitted" ||
-			error.code === "no_change" ||
-			error.code === "stale_revision" ||
-			error.code === "idempotency_conflict"
-		) {
-			return new HttpProtocolError("CONFLICT", traceId);
-		}
-		return new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
-	}
-	if (error instanceof AgentConfigurationError) {
-		if (error.code === "invalid_command") {
-			return new HttpProtocolError("INVALID_REQUEST", traceId);
-		}
-		if (error.code === "not_authorized") {
-			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
-		}
-		if (
-			error.code === "not_admitted" ||
-			error.code === "no_change" ||
-			error.code === "stale_revision" ||
-			error.code === "idempotency_conflict"
-		) {
-			return new HttpProtocolError("CONFLICT", traceId);
-		}
-		return new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
-	}
-	if (error instanceof AgentManagementError) {
-		return new HttpProtocolError(
-			error.code === "invalid_input"
-				? "INVALID_REQUEST"
-				: "DEPENDENCY_UNAVAILABLE",
-			traceId,
-		);
-	}
-	return new HttpProtocolError("INTERNAL_ERROR", traceId);
-}
-
 async function boundary(
 	context: Context,
 	task: (metadata: RequestMetadata) => Promise<Response>,
@@ -244,7 +182,7 @@ async function boundary(
 	try {
 		return await task(metadata);
 	} catch (error) {
-		const protocol = coreError(error, metadata.traceId);
+		const protocol = mapCoreError(error, metadata.traceId);
 		return context.json(protocol.body, protocol.status);
 	}
 }
@@ -356,6 +294,7 @@ async function prepareApplicationInput(
 	body: ApplicationCreateInput | ApplicationUpdateInput,
 	identity: IdentityContext,
 	metadata: RequestMetadata,
+	resource: { readonly applicationId: string; readonly agentId: string },
 ): Promise<SecretPreparationResult> {
 	const hasModelCredential = body.modelConfiguration?.options.some(
 		({ credentialValue }) => credentialValue !== undefined,
@@ -380,6 +319,7 @@ async function prepareApplicationInput(
 	}
 	try {
 		const prepared = await dependencies.prepareSecretReplacements({
+			...resource,
 			identity,
 			secrets: body.secrets ?? [],
 			modelConfiguration: body.modelConfiguration,
@@ -478,10 +418,17 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const [ids, prepared] = await Promise.all([
-				dependencies.allocateApplicationIds({ identity, idempotencyKey }),
-				prepareApplicationInput(dependencies, body, identity, metadata),
-			]);
+			const ids = await dependencies.allocateApplicationIds({
+				identity,
+				idempotencyKey,
+			});
+			const prepared = await prepareApplicationInput(
+				dependencies,
+				body,
+				identity,
+				metadata,
+				ids,
+			);
 			await dependencies.foundation.submit(
 				{
 					schemaVersion: 1,
@@ -565,13 +512,20 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
+			const applicationId = context.req.param("applicationId");
+			const current = await applicationOrUnavailable(
+				dependencies,
+				applicantScope(identity),
+				applicationId,
+				metadata.traceId,
+			);
 			const prepared = await prepareApplicationInput(
 				dependencies,
 				body,
 				identity,
 				metadata,
+				{ applicationId, agentId: current.agentId },
 			);
-			const applicationId = context.req.param("applicationId");
 			await dependencies.revision.revise(
 				{
 					schemaVersion: 1,

@@ -17,12 +17,12 @@ import {
 export const platformApiService = "platform-api";
 
 export interface PlatformAppDependencies {
-	readonly configuration?: ConfigurationRoutesDependencies;
-	readonly management?: ManagementRouteDependencies;
-	readonly sessionAudit?: SessionAuditRoutesDependencies;
+	readonly configuration: ConfigurationRoutesDependencies;
+	readonly management: ManagementRouteDependencies;
+	readonly sessionAudit: SessionAuditRoutesDependencies;
 }
 
-export function createPlatformApp(dependencies: PlatformAppDependencies = {}) {
+export function createPlatformHealthApp() {
 	const app = new Hono();
 	app.onError((error, context) => {
 		const protocol =
@@ -41,15 +41,13 @@ export function createPlatformApp(dependencies: PlatformAppDependencies = {}) {
 			status: "ok",
 		}),
 	);
-	if (dependencies.management) {
-		registerManagementRoutes(app, dependencies.management);
-	}
-	if (dependencies.configuration) {
-		registerConfigurationRoutes(app, dependencies.configuration);
-	}
-	if (dependencies.sessionAudit) {
-		registerSessionAuditRoutes(app, dependencies.sessionAudit);
-	}
+	return app;
+}
 
+export function createPlatformApp(dependencies: PlatformAppDependencies) {
+	const app = createPlatformHealthApp();
+	registerManagementRoutes(app, dependencies.management);
+	registerConfigurationRoutes(app, dependencies.configuration);
+	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	return app;
 }

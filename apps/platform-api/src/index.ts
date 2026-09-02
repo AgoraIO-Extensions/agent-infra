@@ -6,11 +6,28 @@ import {
 	type PlatformAppDependencies,
 	platformApiService,
 } from "./app";
+import {
+	assemblePlatformApi,
+	type PlatformApiAssembly,
+	type PlatformApiAssemblyInput,
+} from "./assembly.js";
 
 interface StartOptions {
-	dependencies?: PlatformAppDependencies;
+	dependencies: PlatformAppDependencies;
 	log?: (message: string) => void;
 	port?: number;
+}
+
+interface DeploymentStartOptions {
+	log?: (message: string) => void;
+	moduleSpecifier?: string;
+	port?: number;
+}
+
+interface PlatformApiDeploymentModule {
+	createPlatformApiAssemblyInput():
+		| PlatformApiAssemblyInput
+		| Promise<PlatformApiAssemblyInput>;
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -21,7 +38,7 @@ function runtimePort(value: string | undefined, fallback: number) {
 	return port;
 }
 
-export function startPlatformApi(options: StartOptions = {}) {
+export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
 	return serve(
@@ -40,7 +57,60 @@ export function startPlatformApi(options: StartOptions = {}) {
 	);
 }
 
+export async function loadPlatformApiAssembly(
+	moduleSpecifier = process.env.PLATFORM_API_DEPLOYMENT_MODULE,
+): Promise<PlatformApiAssembly> {
+	if (!moduleSpecifier) {
+		throw new Error("PLATFORM_API_DEPLOYMENT_MODULE is required");
+	}
+	let deployment: PlatformApiDeploymentModule;
+	try {
+		const imported = (await import(
+			moduleSpecifier
+		)) as Partial<PlatformApiDeploymentModule>;
+		if (typeof imported.createPlatformApiAssemblyInput !== "function") {
+			throw new Error();
+		}
+		deployment = imported as PlatformApiDeploymentModule;
+	} catch {
+		throw new Error("Platform API deployment module is invalid");
+	}
+	let input: PlatformApiAssemblyInput;
+	try {
+		input = await deployment.createPlatformApiAssemblyInput();
+	} catch {
+		throw new Error("Platform API deployment dependencies are unavailable");
+	}
+	return assemblePlatformApi(input);
+}
+
+export async function startPlatformApiFromDeployment(
+	options: DeploymentStartOptions = {},
+) {
+	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
+	try {
+		const server = startPlatformApi({
+			dependencies: assembly.dependencies,
+			log: options.log,
+			port: options.port,
+		});
+		return { assembly, server };
+	} catch (error) {
+		await assembly.close();
+		throw error;
+	}
+}
+
+export {
+	assemblePlatformApi,
+	type PlatformApiAssembly,
+	type PlatformApiAssemblyInput,
+};
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	startPlatformApi();
+	void startPlatformApiFromDeployment().catch(() => {
+		console.error("Platform API failed to start");
+		process.exitCode = 1;
+	});
 }
