@@ -97,6 +97,27 @@ function publicAuditFields(item: PlatformAuditPageV1["items"][number]) {
 	};
 }
 
+async function hydrateAuditUsers(
+	dependencies: SessionAuditRoutesDependencies,
+	items: PlatformAuditPageV1["items"],
+	traceId: string,
+) {
+	const actorIds = [
+		...new Set(
+			items
+				.filter(({ actor }) => actor.kind === "user")
+				.map(({ actor }) => actor.actorId),
+		),
+	];
+	if (actorIds.length === 0) return new Map();
+	const actors = await hydrateBrowserUsers(
+		dependencies.identity,
+		actorIds,
+		traceId,
+	);
+	return new Map(actors.map((actor) => [actor.userId, actor]));
+}
+
 export function registerSessionAuditRoutes(
 	app: Hono,
 	dependencies: SessionAuditRoutesDependencies,
@@ -134,15 +155,11 @@ export function registerSessionAuditRoutes(
 			if (auditPage.items.some(({ actor }) => actor.kind !== "user")) {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
-			const actorIds = [
-				...new Set(auditPage.items.map(({ actor }) => actor.actorId)),
-			];
-			const actors = await hydrateBrowserUsers(
-				dependencies.identity,
-				actorIds,
+			const actorById = await hydrateAuditUsers(
+				dependencies,
+				auditPage.items,
 				metadata.traceId,
 			);
-			const actorById = new Map(actors.map((actor) => [actor.userId, actor]));
 			const items = auditPage.items.map((item) =>
 				PlatformAuditProjectionV1Schema.parse({
 					schemaVersion: 1,
@@ -166,22 +183,11 @@ export function registerSessionAuditRoutes(
 		);
 
 		try {
-			const actorIds = [
-				...new Set(
-					auditPage.items
-						.filter(({ actor }) => actor.kind === "user")
-						.map(({ actor }) => actor.actorId),
-				),
-			];
-			const actors =
-				actorIds.length === 0
-					? []
-					: await hydrateBrowserUsers(
-							dependencies.identity,
-							actorIds,
-							metadata.traceId,
-						);
-			const actorById = new Map(actors.map((actor) => [actor.userId, actor]));
+			const actorById = await hydrateAuditUsers(
+				dependencies,
+				auditPage.items,
+				metadata.traceId,
+			);
 			const items = auditPage.items.map((item) =>
 				PlatformAuditProjectionV2Schema.parse({
 					schemaVersion: 2,

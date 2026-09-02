@@ -497,6 +497,28 @@ describe("management routes", () => {
 		expect(upgraded.updateConfiguration).not.toHaveBeenCalled();
 	});
 
+	it("maps management query failures to dependency unavailable", async () => {
+		for (const [method, path] of [
+			["listApplications", "/api/v1/agent-applications"],
+			["getApplication", "/api/v1/agent-applications/application-1"],
+			["listAgents", "/api/v1/agents"],
+			["getAgent", "/api/v1/agents/agent-1"],
+		] as const) {
+			const failed = createApp();
+			failed[method].mockRejectedValue(new Error("private database failure"));
+
+			const response = await failed.app.request(path);
+			const body = await response.json();
+
+			expect(response.status).toBe(503);
+			expect(PilotProtocolErrorV1Schema.parse(body)).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+				retryable: true,
+			});
+			expect(JSON.stringify(body)).not.toContain("private database failure");
+		}
+	});
+
 	it("fails closed when an authoritative projection is malformed", async () => {
 		const closed = createApp();
 		closed.readAgentProjection.mockResolvedValue({ agentId: "agent-1" });

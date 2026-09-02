@@ -23,26 +23,24 @@ type ApplicationProjection = ReturnType<
 >;
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
 
-export interface PlatformPresentationAdapter {
-	present(input: {
-		readonly agentId: string;
-		readonly configuration: AgentConfigurationProjectionV1;
-		readonly management: AgentManagementStateV1;
-	}): Promise<{
-		readonly source: AgentProjection["source"];
-		readonly resourceProfile: ApplicationProjection["resourceProfile"];
-		readonly modelOptions: AgentProjection["configuration"]["modelOptions"];
-		readonly channels: AgentProjection["configuration"]["channels"];
-		readonly capabilities: AgentProjection["capabilities"];
-		readonly interactionUrl: AgentProjection["interactionUrl"];
-	}>;
-}
+export type PresentPlatformAgent = (input: {
+	readonly agentId: string;
+	readonly configuration: AgentConfigurationProjectionV1;
+	readonly management: AgentManagementStateV1;
+}) => Promise<{
+	readonly source: AgentProjection["source"];
+	readonly resourceProfile: ApplicationProjection["resourceProfile"];
+	readonly modelOptions: AgentProjection["configuration"]["modelOptions"];
+	readonly channels: AgentProjection["configuration"]["channels"];
+	readonly capabilities: AgentProjection["capabilities"];
+	readonly interactionUrl: AgentProjection["interactionUrl"];
+}>;
 
 interface ProjectionReaderDependencies {
 	readonly identity: IdentityAdapter;
 	readonly managementQuery: Pick<PostgresAgentManagementQueryV1, "getAgent">;
 	readonly configurationQuery: Pick<PostgresAgentConfigurationQueryV1, "read">;
-	readonly presentation: PlatformPresentationAdapter;
+	readonly presentAgent: PresentPlatformAgent;
 }
 
 interface ProjectionMetadata {
@@ -96,7 +94,7 @@ export function createPlatformProjectionReaders(
 				configuration.ownerIds,
 				metadata.traceId,
 			),
-			dependencies.presentation.present({ agentId, configuration, management }),
+			dependencies.presentAgent({ agentId, configuration, management }),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);

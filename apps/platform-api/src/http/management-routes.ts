@@ -169,6 +169,17 @@ function fail(
 	throw new HttpProtocolError(code, traceId);
 }
 
+async function queryOrUnavailable<T>(
+	task: () => Promise<T>,
+	traceId: string,
+): Promise<T> {
+	try {
+		return await task();
+	} catch {
+		fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+}
+
 async function boundary(
 	context: Context,
 	task: (metadata: RequestMetadata) => Promise<Response>,
@@ -245,9 +256,9 @@ async function applicationOrUnavailable(
 	applicationId: string,
 	traceId: string,
 ): Promise<AgentManagementApplicationProjectionV1> {
-	const application = await dependencies.query.getApplication(
-		scope,
-		applicationId,
+	const application = await queryOrUnavailable(
+		() => dependencies.query.getApplication(scope, applicationId),
+		traceId,
 	);
 	if (!application) fail("RESOURCE_UNAVAILABLE", traceId);
 	return application;
@@ -259,7 +270,10 @@ async function agentOrUnavailable(
 	agentId: string,
 	traceId: string,
 ): Promise<AgentManagementAgentProjectionV1> {
-	const agent = await dependencies.query.getAgent(scope, agentId);
+	const agent = await queryOrUnavailable(
+		() => dependencies.query.getAgent(scope, agentId),
+		traceId,
+	);
 	if (!agent) fail("RESOURCE_UNAVAILABLE", traceId);
 	return agent;
 }
@@ -457,9 +471,14 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const page = await dependencies.query.listApplications(
-				applicantScope(identity),
-				pageInput(context.req.raw, metadata.traceId),
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const page = await queryOrUnavailable(
+				() =>
+					dependencies.query.listApplications(
+						applicantScope(identity),
+						queryPage,
+					),
+				metadata.traceId,
 			);
 			return context.json({
 				items: await Promise.all(
@@ -605,9 +624,14 @@ export function registerManagementRoutes(
 				metadata.traceId,
 			);
 			requireAdministrator(identity, metadata.traceId);
-			const page = await dependencies.query.listApplications(
-				{ kind: "administrator" },
-				pageInput(context.req.raw, metadata.traceId),
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const page = await queryOrUnavailable(
+				() =>
+					dependencies.query.listApplications(
+						{ kind: "administrator" },
+						queryPage,
+					),
+				metadata.traceId,
 			);
 			return context.json({
 				items: await Promise.all(
@@ -701,9 +725,10 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const page = await dependencies.query.listAgents(
-				userScope(identity),
-				pageInput(context.req.raw, metadata.traceId),
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const page = await queryOrUnavailable(
+				() => dependencies.query.listAgents(userScope(identity), queryPage),
+				metadata.traceId,
 			);
 			return context.json({
 				items: await Promise.all(

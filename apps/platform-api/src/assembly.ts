@@ -21,7 +21,7 @@ import type { IdentityAdapter } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 import {
 	createPlatformProjectionReaders,
-	type PlatformPresentationAdapter,
+	type PresentPlatformAgent,
 } from "./projection.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
@@ -33,7 +33,7 @@ export interface PlatformApiAssemblyInput {
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
-	readonly presentation: PlatformPresentationAdapter;
+	readonly presentAgent: PresentPlatformAgent;
 }
 
 export interface PlatformApiAssembly {
@@ -82,7 +82,7 @@ export function assemblePlatformApi(
 		identity: input.identity,
 		managementQuery,
 		configurationQuery,
-		presentation: input.presentation,
+		presentAgent: input.presentAgent,
 	});
 	const dependencies: PlatformAppDependencies = {
 		management: {

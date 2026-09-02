@@ -60,7 +60,7 @@ describe("Platform API production assembly", () => {
 			allocateApplicationIds: unavailable,
 			prepareApplicationSecrets: unavailable,
 			prepareConfigurationSecrets: unavailable,
-			presentation: { present: unavailable },
+			presentAgent: unavailable,
 		});
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,

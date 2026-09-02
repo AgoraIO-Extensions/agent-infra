@@ -1,4 +1,6 @@
 import {
+	AgentApplicationProjectionV1Schema,
+	AgentProjectionV1Schema,
 	BrowserSessionProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
@@ -260,47 +262,45 @@ beforeAll(async () => {
 		identity: identityAdapter,
 		managementQuery,
 		configurationQuery,
-		presentation: {
-			async present({ configuration }) {
-				if (configuration.source.kind !== "standard") {
-					throw new Error("unexpected test source");
-				}
-				return {
-					source: {
-						kind: "standard",
-						templateId: configuration.source.templateId,
+		presentAgent: async ({ configuration }) => {
+			if (configuration.source.kind !== "standard") {
+				throw new Error("unexpected test source");
+			}
+			return {
+				source: {
+					kind: "standard",
+					templateId: configuration.source.templateId,
+				},
+				resourceProfile: {
+					profileId: "standard-medium",
+					displayName: "Standard medium",
+					estimatedResources: {
+						cpuMillicores: 2000,
+						memoryMiB: 4096,
+						storageGiB: 20,
 					},
-					resourceProfile: {
-						profileId: "standard-medium",
-						displayName: "Standard medium",
-						estimatedResources: {
-							cpuMillicores: 2000,
-							memoryMiB: 4096,
-							storageGiB: 20,
-						},
-					},
-					modelOptions: configuration.modelOptions.map((option) => ({
-						...option,
-						reasoningLevels: [...option.reasoningLevels],
-						displayName: option.modelId,
+				},
+				modelOptions: configuration.modelOptions.map((option) => ({
+					...option,
+					reasoningLevels: [...option.reasoningLevels],
+					displayName: option.modelId,
+				})),
+				channels: [
+					{ kind: "web", status: "available" },
+					...configuration.channelKinds.map((kind) => ({
+						kind,
+						status: "bound" as const,
 					})),
-					channels: [
-						{ kind: "web", status: "available" },
-						...configuration.channelKinds.map((kind) => ({
-							kind,
-							status: "bound" as const,
-						})),
-					],
-					capabilities: {
-						modelSelection: false,
-						attachments: false,
-						resultFiles: false,
-						connection: false,
-						supplementaryInstruction: false,
-					},
-					interactionUrl: null,
-				};
-			},
+				],
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+				},
+				interactionUrl: null,
+			};
 		},
 	});
 
@@ -403,6 +403,16 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(
 			((await applications.json()) as { items: unknown[] }).items,
 		).toHaveLength(2);
+		const applicationDetail = await app.request(
+			"/api/v1/agent-applications/application-run",
+			{ headers: requestHeaders("owner") },
+		);
+		expect(applicationDetail.status).toBe(200);
+		expect(
+			AgentApplicationProjectionV1Schema.safeParse(
+				await applicationDetail.json(),
+			).success,
+		).toBe(true);
 
 		const adminHeaders = requestHeaders("admin", "approve-run");
 		const pending = await app.request("/api/v1/admin/agent-applications", {
@@ -431,6 +441,13 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(((await agents.json()) as { items: unknown[] }).items).toHaveLength(
 			1,
 		);
+		const agentDetail = await app.request("/api/v1/agents/agent-run", {
+			headers: requestHeaders("owner"),
+		});
+		expect(agentDetail.status).toBe(200);
+		expect(
+			AgentProjectionV1Schema.safeParse(await agentDetail.json()).success,
+		).toBe(true);
 		expect(
 			(
 				await app.request("/api/v1/agents/agent-run/configuration", {
