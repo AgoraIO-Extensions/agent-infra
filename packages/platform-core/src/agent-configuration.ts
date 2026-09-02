@@ -2451,6 +2451,7 @@ export function createAgentConfigurationUseCaseV1(
 		changesFromCurrent: (
 			current: AgentConfigurationRecordV1,
 		) => UpdateAgentConfigurationCommandV1["changes"],
+		preserveConnectionEnabled = false,
 	): Promise<AgentConfigurationResultV1> => {
 		await admitCurrentAuthorization(
 			dependencies.authorizationAdmission,
@@ -2614,7 +2615,9 @@ export function createAgentConfigurationUseCaseV1(
 				admission.agentId !== command.agentId ||
 				admission.requestId !== command.requestId ||
 				!selectionMatches ||
-				!preservesSourceKind
+				!preservesSourceKind ||
+				(preserveConnectionEnabled &&
+					admittedSource.connectionEnabled !== current.source.connectionEnabled)
 			) {
 				throw new AgentConfigurationError("not_admitted");
 			}
@@ -3031,6 +3034,7 @@ export function createAgentConfigurationUseCaseV1(
 						},
 					};
 				},
+				true,
 			);
 		},
 	};

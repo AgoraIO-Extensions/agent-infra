@@ -363,6 +363,52 @@ export function agentConfigurationCustomImageUpgradeConformance(
 		}
 	});
 
+	it("rejects image admissions that change non-image source policy", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const source = {
+			...agentConfigurationCustomImageSourceV1,
+			imageDigest: upgradedImageDigest,
+			admissionRevision: "image_policy_custom_2",
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source,
+		});
+		const useCase = harness.useCaseWithDependencies({
+			imageAdmission: {
+				async admitImage(input) {
+					return {
+						schemaVersion: 1 as const,
+						status: "admitted" as const,
+						agentId: input.agentId,
+						requestId: input.requestId,
+						source: { ...source, connectionEnabled: true },
+					};
+				},
+			},
+		});
+		try {
+			await expect(useCase.upgradeCustomImage(upgrade, actor)).rejects.toMatchObject(
+				{ code: "not_admitted" },
+			);
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("hides missing and unauthorized Agents and rolls back dependency failures", async () => {
 		const selection = {
 			kind: "custom" as const,
