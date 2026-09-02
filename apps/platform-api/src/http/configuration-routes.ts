@@ -1,3 +1,5 @@
+import { types } from "node:util";
+
 import {
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentProjectionV1Schema,
@@ -103,11 +105,27 @@ function configurationChanges(
 }
 
 function snapshotArray(input: unknown): unknown[] {
-	if (!Array.isArray(input)) throw new Error();
+	if (
+		!Array.isArray(input) ||
+		types.isProxy(input) ||
+		Object.getPrototypeOf(input) !== Array.prototype ||
+		input.length > 4096 ||
+		Reflect.ownKeys(input).length !== input.length + 1
+	) {
+		throw new Error();
+	}
 	const snapshot: unknown[] = [];
 	for (let index = 0; index < input.length; index += 1) {
-		if (!Object.hasOwn(input, index)) throw new Error();
-		snapshot.push(input[index]);
+		const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+		if (
+			descriptor?.enumerable !== true ||
+			!Object.hasOwn(descriptor, "value") ||
+			Object.hasOwn(descriptor, "get") ||
+			Object.hasOwn(descriptor, "set")
+		) {
+			throw new Error();
+		}
+		snapshot.push(descriptor.value);
 	}
 	return snapshot;
 }

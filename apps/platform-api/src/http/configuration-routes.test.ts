@@ -316,6 +316,49 @@ describe("configuration routes", () => {
 		expect(malformedShapeResponse.status).toBe(503);
 		expect(malformedShape.update).not.toHaveBeenCalled();
 
+		const modelCredentialBody = {
+			schemaVersion: 1,
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "model-primary",
+						endpointId: "endpoint-approved",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+						credentialValue: "request-value",
+					},
+				],
+				defaultOptionId: "model-primary",
+				defaultReasoningLevel: "medium",
+			},
+		};
+		const validModels = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [],
+				modelCredentialOptionIds: ["model-primary"],
+			}),
+		});
+		const validModelsResponse = await validModels.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-model-credential-set",
+				},
+				body: JSON.stringify(modelCredentialBody),
+			},
+		);
+
+		expect(validModelsResponse.status).toBe(200);
+		expect(validModels.update.mock.calls[0]?.[0]).toMatchObject({
+			changes: {
+				modelConfiguration: {
+					options: [{ optionId: "model-primary", replaceCredential: true }],
+				},
+			},
+		});
+
 		const poisonedIds = ["model-primary"];
 		Object.defineProperty(poisonedIds, "includes", {
 			value: () => {
@@ -339,35 +382,35 @@ describe("configuration routes", () => {
 				method: "PUT",
 				headers: {
 					"content-type": "application/json",
-					"Idempotency-Key": "configuration-model-credential-set",
+					"Idempotency-Key": "configuration-model-credential-poisoned",
 				},
-				body: JSON.stringify({
-					schemaVersion: 1,
-					modelConfiguration: {
-						options: [
-							{
-								optionId: "model-primary",
-								endpointId: "endpoint-approved",
-								modelId: "gpt-5",
-								reasoningLevels: ["medium"],
-								credentialValue: "request-value",
-							},
-						],
-						defaultOptionId: "model-primary",
-						defaultReasoningLevel: "medium",
-					},
-				}),
+				body: JSON.stringify(modelCredentialBody),
 			},
 		);
 
-		expect(poisonedResponse.status).toBe(200);
-		expect(poisoned.update.mock.calls[0]?.[0]).toMatchObject({
-			changes: {
-				modelConfiguration: {
-					options: [{ optionId: "model-primary", replaceCredential: true }],
-				},
-			},
+		expect(poisonedResponse.status).toBe(503);
+		expect(poisoned.update).not.toHaveBeenCalled();
+
+		const proxied = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [],
+				modelCredentialOptionIds: new Proxy(["model-primary"], {}),
+			}),
 		});
+		const proxiedResponse = await proxied.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-model-credential-proxy",
+				},
+				body: JSON.stringify(modelCredentialBody),
+			},
+		);
+
+		expect(proxiedResponse.status).toBe(503);
+		expect(proxied.update).not.toHaveBeenCalled();
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {
