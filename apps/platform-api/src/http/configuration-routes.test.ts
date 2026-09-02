@@ -322,6 +322,11 @@ describe("configuration routes", () => {
 				throw new Error("adapter method must not be called");
 			},
 		});
+		Object.defineProperty(poisonedIds, Symbol.iterator, {
+			value: () => {
+				throw new Error("adapter iterator must not be called");
+			},
+		});
 		const poisoned = createApp({
 			prepareSecretReplacements: vi.fn().mockResolvedValue({
 				secrets: [],
