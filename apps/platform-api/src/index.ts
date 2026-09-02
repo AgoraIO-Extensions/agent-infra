@@ -122,6 +122,18 @@ export async function startPlatformApiFromDeployment(
 	}
 }
 
+export function createPlatformApiShutdown(
+	running: Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+) {
+	let shutdown: Promise<void> | undefined;
+	return () => {
+		shutdown ??= new Promise<void>((resolve, reject) =>
+			running.server.close((error) => (error ? reject(error) : resolve())),
+		).finally(() => running.assembly.close());
+		return shutdown;
+	};
+}
+
 export {
 	assemblePlatformApi,
 	type PlatformApiAssembly,
@@ -130,8 +142,20 @@ export {
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	void startPlatformApiFromDeployment().catch(() => {
-		console.error("Platform API failed to start");
-		process.exitCode = 1;
-	});
+	void startPlatformApiFromDeployment()
+		.then((running) => {
+			const shutdown = createPlatformApiShutdown(running);
+			const handleShutdown = () => {
+				void shutdown().catch(() => {
+					console.error("Platform API failed to stop");
+					process.exitCode = 1;
+				});
+			};
+			process.once("SIGTERM", handleShutdown);
+			process.once("SIGINT", handleShutdown);
+		})
+		.catch(() => {
+			console.error("Platform API failed to start");
+			process.exitCode = 1;
+		});
 }

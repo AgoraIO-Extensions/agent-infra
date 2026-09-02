@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assemblePlatformApi } from "./assembly.js";
 import {
+	createPlatformApiShutdown,
 	loadPlatformApiAssembly,
 	startPlatformApi,
 	startPlatformApiFromDeployment,
@@ -118,5 +119,28 @@ describe("Platform API production assembly", () => {
 			blocker.close();
 			await once(blocker, "close");
 		}
+	});
+
+	it("closes deployment resources once in server-first order", async () => {
+		const calls: string[] = [];
+		const assembly = {
+			close: vi.fn(async () => {
+				calls.push("assembly");
+			}),
+		} as unknown as Awaited<
+			ReturnType<typeof startPlatformApiFromDeployment>
+		>["assembly"];
+		const server = {
+			close(callback: (error?: Error) => void) {
+				calls.push("server");
+				callback();
+			},
+		} as ReturnType<typeof startPlatformApi>;
+		const shutdown = createPlatformApiShutdown({ assembly, server });
+
+		await Promise.all([shutdown(), shutdown()]);
+
+		expect(calls).toEqual(["server", "assembly"]);
+		expect(assembly.close).toHaveBeenCalledOnce();
 	});
 });
