@@ -8,7 +8,15 @@ const generatedClient = await import(
 const generatedSdk = await import(
 	new URL("../../web/src/pilot/generated/index.ts", import.meta.url).href
 );
+const generatedClientV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/client/index.ts", import.meta.url)
+		.href
+);
+const generatedSdkV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url).href
+);
 const { createClient } = generatedClient;
+const { createClient: createClientV2 } = generatedClientV2;
 const {
 	commandAgentLifecycle,
 	createAgentApplication,
@@ -24,6 +32,7 @@ const {
 	updateAgentConfiguration,
 	withdrawAgentApplication,
 } = generatedSdk;
+const { listPlatformAuditV2 } = generatedSdkV2;
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -148,6 +157,12 @@ function testApp() {
 		revision: 4,
 		changedFields: ["environment"],
 	});
+	const upgradeCustomImage = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		agentId: "agent-1",
+		revision: 4,
+		changedFields: ["source"],
+	});
 	const query = {
 		listApplications: vi
 			.fn()
@@ -170,10 +185,7 @@ function testApp() {
 					writePlan: {},
 				}),
 			},
-			configuration: { update: updateConfiguration },
-			configurationQuery: {
-				read: vi.fn().mockResolvedValue({ outcome: "unavailable" }),
-			},
+			configuration: { upgradeCustomImage },
 			query,
 			allocateApplicationIds: vi.fn().mockResolvedValue({
 				applicationId: "application-1",
@@ -211,6 +223,11 @@ describe("generated Pilot browser client", () => {
 	it("consumes every #288 management operation through the Hono Adapter", async () => {
 		const { app, resolve } = testApp();
 		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const clientV2 = createClientV2({
 			baseUrl: "https://platform.example.test",
 			fetch: async (input: string | URL | Request, init?: RequestInit) =>
 				app.fetch(input instanceof Request ? input : new Request(input, init)),
@@ -261,10 +278,11 @@ describe("generated Pilot browser client", () => {
 				headers: idempotency,
 			}),
 			listPlatformAudit({ client }),
+			listPlatformAuditV2({ client: clientV2 }),
 		]);
 
 		expect(results.map(({ response }) => response?.status)).toEqual([
-			200, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 202, 200,
+			200, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 202, 200, 200,
 		]);
 		expect(results.every(({ error }) => error === undefined)).toBe(true);
 		expect(resolve).toHaveBeenCalledTimes(results.length);

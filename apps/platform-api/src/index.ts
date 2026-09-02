@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 
 import {
 	createPlatformApp,
+	createPlatformHealthApp,
 	type PlatformAppDependencies,
 	platformApiService,
 } from "./app";
@@ -103,6 +104,7 @@ export async function startPlatformApiFromDeployment(
 
 export {
 	assemblePlatformApi,
+	createPlatformHealthApp,
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 };

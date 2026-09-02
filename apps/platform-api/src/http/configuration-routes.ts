@@ -26,7 +26,7 @@ type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
 
 export interface ConfigurationRoutesDependencies {
 	readonly identity: IdentityAdapter;
-	readonly configuration: AgentConfigurationUseCaseV1;
+	readonly configuration: Pick<AgentConfigurationUseCaseV1, "update">;
 	readonly configurationQuery: {
 		read(
 			input: AgentConfigurationQueryInputV1,

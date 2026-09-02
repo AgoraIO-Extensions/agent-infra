@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 
 import { startConnectionApi } from "../apps/connection-api/dist/index.mjs";
-import { startPlatformApi } from "../apps/platform-api/dist/index.mjs";
+import { createPlatformHealthApp } from "../apps/platform-api/dist/index.mjs";
 import { startPlatformWorker } from "../apps/platform-worker/dist/index.mjs";
 
 async function verifyApi(start, expectedService) {
@@ -24,7 +24,16 @@ async function verifyApi(start, expectedService) {
 	}
 }
 
-await verifyApi(startPlatformApi, "platform-api");
+async function verifyApp(app, expectedService) {
+	const response = await app.request("/healthz");
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), {
+		service: expectedService,
+		status: "ok",
+	});
+}
+
+await verifyApp(createPlatformHealthApp(), "platform-api");
 await verifyApi(startConnectionApi, "connection-api");
 
 const workerMessages = [];

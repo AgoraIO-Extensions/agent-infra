@@ -9,7 +9,6 @@ import {
 import type {
 	AgentConfigurationModelInputV1,
 	AgentConfigurationSecretReplacementInputV1,
-	AgentConfigurationSourceSelectionV1,
 	AgentConfigurationUseCaseV1,
 	AgentManagementActorContextV1,
 	AgentManagementInterfaceV1,
@@ -17,8 +16,6 @@ import type {
 	ApplicationRevisionUseCaseV1,
 } from "@agent-infra/platform-core";
 import type {
-	AgentConfigurationQueryInputV1,
-	AgentConfigurationQueryResultV1,
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
 	AgentManagementApplicationProjectionV1,
@@ -103,12 +100,10 @@ export interface ManagementRouteDependencies {
 		AgentManagementInterfaceV1,
 		"executeManagementCommand"
 	>;
-	readonly configuration: Pick<AgentConfigurationUseCaseV1, "update">;
-	readonly configurationQuery: {
-		read(
-			input: AgentConfigurationQueryInputV1,
-		): Promise<AgentConfigurationQueryResultV1>;
-	};
+	readonly configuration: Pick<
+		AgentConfigurationUseCaseV1,
+		"upgradeCustomImage"
+	>;
 	readonly query: ManagementQuery;
 	readonly allocateApplicationIds: (input: {
 		readonly identity: IdentityContext;
@@ -758,52 +753,14 @@ export function registerManagementRoutes(
 				metadata.traceId,
 			);
 			if (body.command === "upgrade_custom_image") {
-				let current: AgentConfigurationQueryResultV1;
-				try {
-					current = await dependencies.configurationQuery.read({
-						agentId,
-						actorId: identity.userId,
-						organizationIds: identity.organizationIds,
-						isAdministrator: false,
-						intent: "manage",
-					});
-				} catch {
-					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-				}
-				if (current.outcome !== "found") {
-					fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-				}
-				const currentSource = current.configuration.source;
-				if (currentSource.kind !== "custom") {
-					fail("CONFLICT", metadata.traceId);
-				}
-				let source: AgentConfigurationSourceSelectionV1;
-				if (currentSource.interactionMode === "self-managed") {
-					const identityResponsibility = currentSource.identityResponsibility;
-					if (identityResponsibility === undefined) {
-						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-					}
-					source = {
-						kind: "custom",
-						imageReference: body.imageReference,
-						interactionMode: "self-managed",
-						identityResponsibility,
-					};
-				} else {
-					source = {
-						kind: "custom",
-						imageReference: body.imageReference,
-						interactionMode: "platform-adapter",
-					};
-				}
-				await dependencies.configuration.update(
+				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
 						agentId,
+						imageReference: body.imageReference,
 						idempotencyKey,
 						requestId: metadata.requestId,
 						traceId: metadata.traceId,
-						changes: { source },
 					},
 					{
 						schemaVersion: 1,

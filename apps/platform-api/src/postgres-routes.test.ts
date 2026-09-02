@@ -1,6 +1,7 @@
 import {
 	BrowserSessionProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
+	PlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	createAgentConfigurationUseCaseV1,
@@ -310,7 +311,6 @@ beforeAll(async () => {
 			revision,
 			management: managementUseCase,
 			configuration: configurationUseCase,
-			configurationQuery,
 			query: managementQuery,
 			allocateApplicationIds: async ({ idempotencyKey }) =>
 				idempotencyKey === "create-withdraw"
@@ -476,6 +476,15 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				(item) => PlatformAuditProjectionV1Schema.safeParse(item).success,
 			),
 		).toBe(true);
+		const auditV2 = await app.request("/api/v2/admin/audit", {
+			headers: requestHeaders("admin"),
+		});
+		expect(auditV2.status).toBe(200);
+		expect(
+			((await auditV2.json()) as { items: unknown[] }).items.every(
+				(item) => PlatformAuditProjectionV2Schema.safeParse(item).success,
+			),
+		).toBe(true);
 
 		for (const response of [
 			await app.request("/api/v1/agent-applications/application-run", {
@@ -485,6 +494,9 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				headers: requestHeaders("attacker"),
 			}),
 			await app.request("/api/v1/admin/audit", {
+				headers: requestHeaders("attacker"),
+			}),
+			await app.request("/api/v2/admin/audit", {
 				headers: requestHeaders("attacker"),
 			}),
 		]) {

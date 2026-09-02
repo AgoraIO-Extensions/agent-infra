@@ -91,7 +91,6 @@ export function assemblePlatformApi(
 			revision,
 			management,
 			configuration,
-			configurationQuery,
 			query: managementQuery,
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,

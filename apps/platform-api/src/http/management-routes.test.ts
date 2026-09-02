@@ -146,27 +146,11 @@ function createApp(
 		revision: 4,
 		changedFields: ["source"],
 	});
-	const readConfiguration = vi.fn().mockResolvedValue({
-		outcome: "found",
-		configuration: {
-			agentId: "agent-1",
-			revision: 3,
-			source: {
-				kind: "custom",
-				interactionMode: "self-managed",
-				identityResponsibility: "platform-managed",
-				connectionEnabled: false,
-			},
-			ownerIds: ["user-1"],
-			availability: management.availability,
-			modelOptions: [],
-			defaultModelOptionId: null,
-			defaultReasoningLevel: null,
-			actions: [],
-			environment: [],
-			channelKinds: [],
-			secrets: [],
-		},
+	const upgradeCustomImage = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		agentId: "agent-1",
+		revision: 4,
+		changedFields: ["source"],
 	});
 	const listApplications = vi.fn().mockResolvedValue({
 		items: [applicationRecord],
@@ -206,8 +190,7 @@ function createApp(
 		foundation: { submit },
 		revision: { revise },
 		management: { executeManagementCommand },
-		configuration: { update: updateConfiguration },
-		configurationQuery: { read: readConfiguration },
+		configuration: { upgradeCustomImage },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements,
@@ -220,7 +203,7 @@ function createApp(
 		revise,
 		executeManagementCommand,
 		updateConfiguration,
-		readConfiguration,
+		upgradeCustomImage,
 		listApplications,
 		getApplication,
 		listAgents,
@@ -496,32 +479,22 @@ describe("management routes", () => {
 		);
 
 		expect(response.status).toBe(202);
-		expect(upgraded.readConfiguration).toHaveBeenCalledWith({
-			agentId: "agent-1",
-			actorId: "user-1",
-			organizationIds: ["org-1"],
-			isAdministrator: false,
-			intent: "manage",
-		});
-		expect(upgraded.updateConfiguration).toHaveBeenCalledWith(
-			expect.objectContaining({
+		expect(upgraded.upgradeCustomImage).toHaveBeenCalledWith(
+			{
+				schemaVersion: 1,
 				agentId: "agent-1",
+				imageReference: "registry.example/agent:v2",
 				idempotencyKey: "Command.Aa-01",
-				changes: {
-					source: {
-						kind: "custom",
-						imageReference: "registry.example/agent:v2",
-						interactionMode: "self-managed",
-						identityResponsibility: "platform-managed",
-					},
-				},
-			}),
+				requestId: expect.any(String),
+				traceId: expect.any(String),
+			},
 			{
 				schemaVersion: 1,
 				actorId: "user-1",
 				rawRequestDigest: createHash("sha256").update(rawBody).digest("hex"),
 			},
 		);
+		expect(upgraded.updateConfiguration).not.toHaveBeenCalled();
 	});
 
 	it("fails closed when an authoritative projection is malformed", async () => {
