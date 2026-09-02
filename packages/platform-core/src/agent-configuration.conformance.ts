@@ -125,7 +125,9 @@ export interface AgentConfigurationConformanceHarnessV1 {
 }
 
 export interface AgentConfigurationCustomImageUpgradeHarnessV1
-	extends AgentConfigurationConformanceHarnessV1 {}
+	extends AgentConfigurationConformanceHarnessV1 {
+	failNextCommit(): Promise<void> | void;
+}
 
 type CustomImageSourceV1 = Extract<
 	AgentConfigurationRecordV1["source"],
@@ -298,6 +300,69 @@ export function agentConfigurationCustomImageUpgradeConformance(
 		}
 	});
 
+	it("reauthorizes before interpreting the current source", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const harness = await createHarness({
+			record: agentConfigurationConformanceRecordV1,
+			selection,
+			source: {
+				...agentConfigurationCustomImageSourceV1,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			},
+		});
+		let authorizationCalls = 0;
+		let imageAdmissionCalls = 0;
+		const useCase = harness.useCaseWithDependencies({
+			authorizationAdmission: {
+				async authorize(input) {
+					authorizationCalls += 1;
+					return authorizationCalls === 1
+						? {
+								schemaVersion: 1 as const,
+								status: "admitted" as const,
+								agentId: input.agentId,
+								actorId: input.actorId,
+								authorizationRevision: "authorization_10",
+							}
+						: {
+								schemaVersion: 1 as const,
+								status: "rejected" as const,
+								agentId: input.agentId,
+								actorId: input.actorId,
+							};
+				},
+			},
+			imageAdmission: {
+				async admitImage() {
+					imageAdmissionCalls += 1;
+					throw new Error("must not admit after revocation");
+				},
+			},
+		});
+		try {
+			await expect(
+				useCase.upgradeCustomImage(upgrade, actor),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			expect(authorizationCalls).toBe(2);
+			expect(imageAdmissionCalls).toBe(0);
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("hides missing and unauthorized Agents and rolls back dependency failures", async () => {
 		const selection = {
 			kind: "custom" as const,
@@ -344,26 +409,9 @@ export function agentConfigurationCustomImageUpgradeConformance(
 				).rejects.toMatchObject({ code: "not_authorized" });
 			}
 
-			const rollback = harness.useCaseWithDependencies({
-				transaction: {
-					async read() {
-						const snapshot = await harness.snapshot();
-						return {
-							outcome: "ready" as const,
-							record: {
-								schemaVersion: 1 as const,
-								configuration: snapshot.configuration,
-								authorizationRevision: snapshot.authorizationRevision,
-							},
-						};
-					},
-					async commit() {
-						throw new Error("injected commit failure");
-					},
-				},
-			});
+			await harness.failNextCommit();
 			await expect(
-				rollback.upgradeCustomImage(
+				harness.useCase.upgradeCustomImage(
 					{ ...upgrade, idempotencyKey: "custom-image-rollback" },
 					actor,
 				),

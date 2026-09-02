@@ -307,6 +307,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await seed("agent_01", input.record);
 		const adapter = openTransaction();
 		let lastPlan: AgentConfigurationWritePlanV1 | null = null;
+		let commitFailureArmed = false;
 		let failNextCommitAsStale = false;
 		const transaction: AgentConfigurationTransactionPortV1 = {
 			read: adapter.read.bind(adapter),
@@ -319,9 +320,20 @@ describe("PostgreSQL Agent configuration transaction", () => {
 						where id = 'agent_01'
 					`;
 				}
-				const decision = await adapter.commit(plan);
-				if (decision.outcome === "committed") lastPlan = structuredClone(plan);
-				return decision;
+				try {
+					const decision = await adapter.commit(plan);
+					if (decision.outcome === "committed")
+						lastPlan = structuredClone(plan);
+					return decision;
+				} finally {
+					if (commitFailureArmed) {
+						commitFailureArmed = false;
+						await disarmFailure(
+							"custom_image_upgrade",
+							"platform.agent_configuration_revisions",
+						);
+					}
+				}
 			},
 		};
 		const admission = new FakeAgentConfigurationAdmissionsV1({
@@ -333,6 +345,15 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			imageAdmission: admission,
 		};
 		return {
+			async failNextCommit() {
+				await armFailure(
+					"custom_image_upgrade",
+					"platform.agent_configuration_revisions",
+					"insert",
+					false,
+				);
+				commitFailureArmed = true;
+			},
 			useCase: createAgentConfigurationUseCaseV1(baseDependencies, {
 				now: () => new Date(occurredAt),
 			}),

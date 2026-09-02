@@ -36,6 +36,7 @@ export class FakeAgentConfigurationTransactionV1
 	#configuration: AgentConfigurationRecordV1;
 	#commitCount = 0;
 	#lastPlan: AgentConfigurationWritePlanV1 | null = null;
+	#failCommit = false;
 	#failCommitAsStale = false;
 	#managementState: AgentManagementStateV1 | null;
 	#authorizationRevision: string;
@@ -87,6 +88,10 @@ export class FakeAgentConfigurationTransactionV1
 	async commit(
 		input: AgentConfigurationWritePlanV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		if (this.#failCommit) {
+			this.#failCommit = false;
+			throw new Error("Injected Agent configuration commit failure");
+		}
 		const plan = snapshotAgentConfigurationWritePlanV1(input);
 		const scope = this.#idempotencyScope(
 			plan.agentId,
@@ -149,6 +154,10 @@ export class FakeAgentConfigurationTransactionV1
 
 	failNextCommitAsStale(): void {
 		this.#failCommitAsStale = true;
+	}
+
+	failNextCommit(): void {
+		this.#failCommit = true;
 	}
 
 	advanceAccessRevision(): void {

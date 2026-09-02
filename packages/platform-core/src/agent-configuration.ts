@@ -2487,12 +2487,12 @@ export function createAgentConfigurationUseCaseV1(
 			throw new AgentConfigurationError("not_authorized");
 		}
 		const current = readDecision.record.configuration;
-		const changes = changesFromCurrent(current);
 		const authorization = await admitCurrentAuthorization(
 			dependencies.authorizationAdmission,
 			command,
 			actorContext,
 		);
+		const changes = changesFromCurrent(current);
 
 		let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 		const changedFields: AgentConfigurationChangedFieldV1[] = [];

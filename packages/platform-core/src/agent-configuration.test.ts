@@ -243,6 +243,7 @@ describe("Custom Agent image upgrade conformance", () => {
 			useCase: harness.useCase,
 			useCaseWithDependencies: harness.useCaseWithDependencies,
 			snapshot: async () => harness.transaction.snapshot(),
+			failNextCommit: () => harness.transaction.failNextCommit(),
 			failNextCommitAsStale: () => harness.transaction.failNextCommitAsStale(),
 			close: async () => undefined,
 		};
