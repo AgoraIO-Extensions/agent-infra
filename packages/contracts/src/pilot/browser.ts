@@ -436,6 +436,18 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 	traceId: TraceIdV1Schema,
 });
 
+export const PlatformAuditProjectionV2Schema =
+	PlatformAuditProjectionV1Schema.extend({
+		schemaVersion: z.literal(2),
+		actor: z.union([
+			BrowserUserProjectionV1Schema,
+			z.strictObject({
+				kind: z.literal("system"),
+				actorId: OpaqueIdV1Schema,
+			}),
+		]),
+	});
+
 const applicationPage = z.strictObject({
 	items: z.array(AgentApplicationProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
@@ -450,6 +462,10 @@ const conversationPage = z.strictObject({
 });
 const auditPage = z.strictObject({
 	items: z.array(PlatformAuditProjectionV1Schema),
+	nextCursor: OpaqueCursorV1Schema.nullable(),
+});
+const auditPageV2 = z.strictObject({
+	items: z.array(PlatformAuditProjectionV2Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
 const applicationPath = z.strictObject({ applicationId: pathId() });
@@ -728,6 +744,21 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
+export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/admin/audit": {
+		get: {
+			operationId: "listPlatformAuditV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Platform audit", auditPageV2),
+				...errorResponses,
+			},
+		},
+	},
+} as const;
+
+export const pilotBrowserOpenApiPathsV2 = pilotBrowserHttpOpenApiPathsV2;
+
 export const pilotBrowserSchemasV1 = {
 	ActionSelectionV1: ActionSelectionV1Schema,
 	AgentApplicationCreateRequestV1: AgentApplicationCreateRequestV1Schema,
@@ -755,4 +786,10 @@ export const pilotBrowserSchemasV1 = {
 	PlatformAuditProjectionV1: PlatformAuditProjectionV1Schema,
 	RegenerateCommandRequestV1: RegenerateCommandRequestV1Schema,
 	StopCommandRequestV1: StopCommandRequestV1Schema,
+};
+
+export const pilotBrowserSchemasV2 = {
+	PilotInternalErrorV1: PilotInternalErrorV1Schema,
+	PilotProtocolErrorV1: PilotProtocolErrorV1Schema,
+	PlatformAuditProjectionV2: PlatformAuditProjectionV2Schema,
 };

@@ -5,7 +5,9 @@ import { createDocument } from "zod-openapi";
 
 import {
 	pilotBrowserOpenApiPathsV1,
+	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
+	pilotBrowserSchemasV2,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
 	pilotSseSchemasV1,
@@ -53,6 +55,26 @@ describe("Pilot standard artifacts", () => {
 		).toHaveProperty(
 			"properties.secrets.items.properties.value.writeOnly",
 			true,
+		);
+	});
+
+	it("generates the independent browser v2 audit OpenAPI", () => {
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Agent Infra Pilot Browser Audit API",
+				version: "2.0.0",
+			},
+			paths: pilotBrowserOpenApiPathsV2,
+			components: { schemas: pilotBrowserSchemasV2 },
+		});
+
+		expect(Object.keys(document.paths ?? {})).toEqual(["/api/v2/admin/audit"]);
+		expect(document.paths?.["/api/v2/admin/audit"]?.get).toMatchObject({
+			operationId: "listPlatformAuditV2",
+		});
+		expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual(
+			Object.keys(pilotBrowserSchemasV2).sort(),
 		);
 	});
 
