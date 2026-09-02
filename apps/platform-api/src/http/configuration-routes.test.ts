@@ -315,6 +315,54 @@ describe("configuration routes", () => {
 
 		expect(malformedShapeResponse.status).toBe(503);
 		expect(malformedShape.update).not.toHaveBeenCalled();
+
+		const poisonedIds = ["model-primary"];
+		Object.defineProperty(poisonedIds, "includes", {
+			value: () => {
+				throw new Error("adapter method must not be called");
+			},
+		});
+		const poisoned = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [],
+				modelCredentialOptionIds: poisonedIds,
+			}),
+		});
+		const poisonedResponse = await poisoned.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-model-credential-set",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					modelConfiguration: {
+						options: [
+							{
+								optionId: "model-primary",
+								endpointId: "endpoint-approved",
+								modelId: "gpt-5",
+								reasoningLevels: ["medium"],
+								credentialValue: "request-value",
+							},
+						],
+						defaultOptionId: "model-primary",
+						defaultReasoningLevel: "medium",
+					},
+				}),
+			},
+		);
+
+		expect(poisonedResponse.status).toBe(200);
+		expect(poisoned.update.mock.calls[0]?.[0]).toMatchObject({
+			changes: {
+				modelConfiguration: {
+					options: [{ optionId: "model-primary", replaceCredential: true }],
+				},
+			},
+		});
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {

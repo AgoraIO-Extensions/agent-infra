@@ -64,9 +64,7 @@ export interface ConfigurationRoutesDependencies {
 
 function configurationChanges(
 	input: ReturnType<typeof AgentConfigurationUpdateRequestV1Schema.parse>,
-	prepared: Awaited<
-		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
-	>,
+	preparedModelCredentialOptionIds: ReadonlySet<string>,
 ) {
 	return {
 		...(input.coOwnerIds === undefined ? {} : { coOwnerIds: input.coOwnerIds }),
@@ -81,7 +79,7 @@ function configurationChanges(
 						options: input.modelConfiguration.options.map(
 							({ credentialValue: _credentialValue, ...option }) => ({
 								...option,
-								replaceCredential: prepared.modelCredentialOptionIds.includes(
+								replaceCredential: preparedModelCredentialOptionIds.has(
 									option.optionId,
 								),
 							}),
@@ -110,7 +108,7 @@ function validatePreparedSecrets(
 		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 	>,
 	traceId: string,
-): void {
+): ReadonlySet<string> {
 	try {
 		if (
 			!Array.isArray(prepared.secrets) ||
@@ -137,6 +135,7 @@ function validatePreparedSecrets(
 		) {
 			throw new Error();
 		}
+		return new Set(preparedModels);
 	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
@@ -205,7 +204,11 @@ export function registerConfigurationRoutes(
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 		}
-		validatePreparedSecrets(body, prepared, metadata.traceId);
+		const preparedModelCredentialOptionIds = validatePreparedSecrets(
+			body,
+			prepared,
+			metadata.traceId,
+		);
 		try {
 			await dependencies.configuration.update(
 				{
@@ -214,7 +217,7 @@ export function registerConfigurationRoutes(
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
-					changes: configurationChanges(body, prepared),
+					changes: configurationChanges(body, preparedModelCredentialOptionIds),
 				},
 				{
 					schemaVersion: 1,
