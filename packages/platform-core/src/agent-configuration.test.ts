@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentConfigurationConformanceAdmissionsV1,
 	agentConfigurationConformanceRecordV1,
+	agentConfigurationCustomImageUpgradeConformance,
 	agentConfigurationUseCaseConformance,
 } from "./agent-configuration.conformance.ts";
 import {
@@ -228,6 +229,87 @@ describe("Agent configuration conformance", () => {
 			close: async () => undefined,
 		};
 	});
+});
+
+describe("Custom Agent image upgrade conformance", () => {
+	agentConfigurationCustomImageUpgradeConformance(async (input) => {
+		const harness = createHarness({
+			record: input.record,
+			admissions: {
+				images: [{ selection: input.selection, source: input.source }],
+			},
+		});
+		return {
+			useCase: harness.useCase,
+			useCaseWithDependencies: harness.useCaseWithDependencies,
+			snapshot: async () => harness.transaction.snapshot(),
+			failNextCommit: () => harness.transaction.failNextCommit(),
+			failNextCommitAsStale: () => harness.transaction.failNextCommitAsStale(),
+			close: async () => undefined,
+		};
+	});
+});
+
+it("snapshots custom image upgrade commands and rejects hostile accessors", async () => {
+	const record: AgentConfigurationRecordV1 = {
+		...agentConfigurationConformanceRecordV1,
+		source: {
+			kind: "custom",
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			admissionRevision: "image_policy_custom_1",
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+			connectionEnabled: false,
+		},
+		modelConfiguration: null,
+	};
+	const selection = {
+		kind: "custom" as const,
+		imageReference: "registry.example/agent:v2",
+		interactionMode: "self-managed" as const,
+		identityResponsibility: "self-managed" as const,
+	};
+	const harness = createHarness({
+		record,
+		admissions: {
+			images: [
+				{
+					selection,
+					source: {
+						...record.source,
+						imageDigest: `sha256:${"c".repeat(64)}`,
+						admissionRevision: "image_policy_custom_2",
+					},
+				},
+			],
+		},
+	});
+	const mutable = {
+		schemaVersion: 1 as const,
+		agentId: "agent_01",
+		imageReference: selection.imageReference,
+		idempotencyKey: "snapshot-custom-image-upgrade",
+		requestId: "request_snapshot_upgrade",
+		traceId: "trace_snapshot_upgrade",
+	};
+	const result = harness.useCase.upgradeCustomImage(mutable, actor);
+	mutable.imageReference = "registry.example/agent:mutated";
+	await expect(result).resolves.toMatchObject({ changedFields: ["source"] });
+
+	const hostile = {
+		schemaVersion: 1,
+		agentId: "agent_01",
+		get imageReference() {
+			throw new Error("hostile accessor");
+		},
+		idempotencyKey: "hostile-custom-image-upgrade",
+		requestId: "request_hostile_upgrade",
+		traceId: "trace_hostile_upgrade",
+	};
+	await expect(
+		harness.useCase.upgradeCustomImage(hostile as never, actor),
+	).rejects.toMatchObject({ code: "invalid_command" });
+	expect(harness.transaction.snapshot()).toMatchObject({ commitCount: 1 });
 });
 
 it("snapshots configuration plans without reading hostile accessors or Proxy traps", async () => {

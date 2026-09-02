@@ -24,6 +24,7 @@ import {
 import {
 	agentConfigurationConformanceAdmissionsV1,
 	agentConfigurationConformanceRecordV1,
+	agentConfigurationCustomImageUpgradeConformance,
 	agentConfigurationUseCaseConformance,
 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import {
@@ -141,11 +142,15 @@ async function clearDatabase() {
 		platform.agents cascade`;
 }
 
-async function seed(agentId = "agent_01") {
-	const configuration = {
-		...structuredClone(agentConfigurationConformanceRecordV1),
-		agentId,
-	};
+async function seed(
+	agentId = "agent_01",
+	record = agentConfigurationConformanceRecordV1,
+) {
+	const configuration = { ...structuredClone(record), agentId };
+	const sourceReference =
+		configuration.source.kind === "standard"
+			? configuration.source.templateId
+			: configuration.source.imageDigest;
 	await adminClient`
 		insert into platform.agents
 			(id, current_configuration_revision, created_at, authorization_revision)
@@ -163,7 +168,7 @@ async function seed(agentId = "agent_01") {
 	await adminClient`
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
-		values (${agentId}, 7, 'template_01', ${occurredAt},
+		values (${agentId}, 7, ${sourceReference}, ${occurredAt},
 			${adminClient.json(configuration as never)})
 	`;
 	await adminClient`
@@ -298,6 +303,90 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				failNextCommitAsStale = true;
 			},
 			async close() {},
+		};
+	});
+
+	agentConfigurationCustomImageUpgradeConformance(async (input) => {
+		await clearDatabase();
+		await seed("agent_01", input.record);
+		const adapter = openTransaction();
+		let lastPlan: AgentConfigurationWritePlanV1 | null = null;
+		let commitFailureArmed = false;
+		let failNextCommitAsStale = false;
+		async function disarmCommitFailure() {
+			if (!commitFailureArmed) return;
+			await disarmFailure(
+				"custom_image_upgrade",
+				"platform.agent_configuration_revisions",
+			);
+			commitFailureArmed = false;
+		}
+		const transaction: AgentConfigurationTransactionPortV1 = {
+			read: adapter.read.bind(adapter),
+			async commit(plan) {
+				if (failNextCommitAsStale) {
+					failNextCommitAsStale = false;
+					await adminClient`
+						update platform.agents
+						set authorization_revision = 'authorization_concurrent'
+						where id = 'agent_01'
+					`;
+				}
+				try {
+					const decision = await adapter.commit(plan);
+					if (decision.outcome === "committed")
+						lastPlan = structuredClone(plan);
+					return decision;
+				} finally {
+					await disarmCommitFailure();
+				}
+			},
+		};
+		const admission = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			images: [{ selection: input.selection, source: input.source }],
+		});
+		const baseDependencies = {
+			...dependencies(transaction),
+			imageAdmission: admission,
+		};
+		return {
+			async failNextCommit() {
+				await armFailure(
+					"custom_image_upgrade",
+					"platform.agent_configuration_revisions",
+					"insert",
+					false,
+				);
+				commitFailureArmed = true;
+			},
+			useCase: createAgentConfigurationUseCaseV1(baseDependencies, {
+				now: () => new Date(occurredAt),
+			}),
+			useCaseWithDependencies(overrides) {
+				return createAgentConfigurationUseCaseV1(
+					{ ...baseDependencies, ...overrides },
+					{ now: () => new Date(occurredAt) },
+				);
+			},
+			async snapshot() {
+				const stored = await snapshot();
+				return {
+					configuration: stored.configuration,
+					authorizationRevision: stored.authorizationRevision,
+					commitCount: stored.configurationCount - 1,
+					lastPlan,
+					idempotencyCount: stored.idempotencyCount,
+					outboxCount: stored.outboxCount,
+					auditCount: stored.auditCount,
+				};
+			},
+			async failNextCommitAsStale() {
+				failNextCommitAsStale = true;
+			},
+			async close() {
+				await disarmCommitFailure();
+			},
 		};
 	});
 
