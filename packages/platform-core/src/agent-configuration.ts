@@ -206,6 +206,15 @@ export interface UpdateAgentConfigurationCommandV1 {
 	};
 }
 
+export interface UpgradeCustomAgentImageCommandV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly imageReference: string;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
 export interface AgentConfigurationActorContextV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;
@@ -469,6 +478,10 @@ export interface AgentConfigurationChannelAdmissionPortV1 {
 export interface AgentConfigurationUseCaseV1 {
 	update(
 		command: UpdateAgentConfigurationCommandV1,
+		actorContext: AgentConfigurationActorContextV1,
+	): Promise<AgentConfigurationResultV1>;
+	upgradeCustomImage(
+		command: UpgradeCustomAgentImageCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
 	): Promise<AgentConfigurationResultV1>;
 }
@@ -1059,6 +1072,38 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 		requestId: values.requestId,
 		traceId: values.traceId,
 		changes: parseAgentConfigurationChangesV1(values.changes),
+	};
+}
+
+function parseUpgradeCustomImageCommand(
+	command: unknown,
+): UpgradeCustomAgentImageCommandV1 {
+	const values = exactObject(command, [
+		"schemaVersion",
+		"agentId",
+		"imageReference",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		!isText(values.agentId, idMaxBytes) ||
+		!isText(values.imageReference, 4096) ||
+		!isText(values.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
+		!isText(values.requestId, idMaxBytes) ||
+		!isText(values.traceId, idMaxBytes)
+	) {
+		invalidCommand();
+	}
+	return {
+		schemaVersion: 1,
+		agentId: values.agentId,
+		imageReference: values.imageReference,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
 	};
 }
 
@@ -1682,6 +1727,24 @@ function requestDigest(
 			actorId: actor.actorId,
 			rawRequestDigest: actor.rawRequestDigest,
 			changes: command.changes as never,
+		});
+	} catch {
+		invalidCommand();
+	}
+}
+
+function customImageUpgradeRequestDigest(
+	command: UpgradeCustomAgentImageCommandV1,
+	actor: AgentConfigurationActorContextV1,
+): string {
+	try {
+		return platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			operation: "agent.configuration.custom-image.upgrade.v1",
+			agentId: command.agentId,
+			actorId: actor.actorId,
+			rawRequestDigest: actor.rawRequestDigest,
+			imageReference: command.imageReference,
 		});
 	} catch {
 		invalidCommand();
@@ -2377,554 +2440,598 @@ export function createAgentConfigurationUseCaseV1(
 	options: AgentConfigurationUseCaseOptionsV1 = {},
 ): AgentConfigurationUseCaseV1 {
 	const now = options.now ?? systemNow;
+	type ExecutionCommand = Pick<
+		UpdateAgentConfigurationCommandV1,
+		"schemaVersion" | "agentId" | "idempotencyKey" | "requestId" | "traceId"
+	>;
+	const execute = async (
+		command: ExecutionCommand,
+		actorContext: AgentConfigurationActorContextV1,
+		digest: string,
+		changesFromCurrent: (
+			current: AgentConfigurationRecordV1,
+		) => UpdateAgentConfigurationCommandV1["changes"],
+	): Promise<AgentConfigurationResultV1> => {
+		await admitCurrentAuthorization(
+			dependencies.authorizationAdmission,
+			command,
+			actorContext,
+		);
+		let readDecision: Awaited<
+			ReturnType<AgentConfigurationTransactionPortV1["read"]>
+		>;
+		try {
+			readDecision = parseTransactionReadDecision(
+				await dependencies.transaction.read({
+					schemaVersion: 1,
+					agentId: command.agentId,
+					actorId: actorContext.actorId,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: digest,
+				}),
+				command.agentId,
+			);
+		} catch {
+			throw new AgentConfigurationError("persistence_failed");
+		}
+		if (readDecision.outcome === "replayed") {
+			return parseResult(readDecision.result, command.agentId);
+		}
+		if (readDecision.outcome === "idempotency_conflict") {
+			throw new AgentConfigurationError("idempotency_conflict");
+		}
+		if (
+			readDecision.outcome === "missing" ||
+			readDecision.record.configuration.agentId !== command.agentId
+		) {
+			throw new AgentConfigurationError("not_authorized");
+		}
+		const current = readDecision.record.configuration;
+		const changes = changesFromCurrent(current);
+		const authorization = await admitCurrentAuthorization(
+			dependencies.authorizationAdmission,
+			command,
+			actorContext,
+		);
+
+		let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
+		const changedFields: AgentConfigurationChangedFieldV1[] = [];
+		if (changes.ownerIds !== undefined || changes.availability !== undefined) {
+			const access = authorization.accessAuthority;
+			if (
+				!access ||
+				access.state.agentId !== command.agentId ||
+				access.actorContext.userId !== actorContext.actorId
+			) {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			let decision: ReturnType<typeof decideAgentAccessUpdatePolicy>;
+			try {
+				decision = decideAgentAccessUpdatePolicy(
+					{
+						schemaVersion: 1,
+						agentId: command.agentId,
+						expectedRevision: access.state.revision,
+						desiredOwnerIds: changes.ownerIds ?? access.state.ownerIds,
+						desiredAvailability:
+							changes.availability ?? access.state.availability,
+						requestId: command.requestId,
+						traceId: command.traceId,
+					},
+					access.state,
+					access.actorContext,
+					access.authorityContext,
+				);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			if (decision.outcome === "denied") {
+				throw new AgentConfigurationError("not_authorized");
+			}
+			if (decision.outcome === "conflict") {
+				if (decision.reason === "stale_revision") {
+					throw new AgentConfigurationError("stale_revision");
+				}
+				if (decision.reason !== "no_change") {
+					throw new AgentConfigurationError("not_admitted");
+				}
+			} else {
+				const fragment = decision.planFragment;
+				if (
+					fragment.agentId !== command.agentId ||
+					fragment.expectedRevision !== access.state.revision ||
+					fragment.auditEvent.actorId !== actorContext.actorId ||
+					fragment.auditEvent.subjectType !== "agent" ||
+					fragment.auditEvent.subjectId !== command.agentId ||
+					fragment.auditEvent.requestId !== command.requestId ||
+					fragment.auditEvent.traceId !== command.traceId
+				) {
+					throw new AgentConfigurationError("dependency_unavailable");
+				}
+				accessUpdate = {
+					schemaVersion: 1,
+					fragmentType: "agent_access",
+					agentId: fragment.agentId,
+					expectedRevision: fragment.expectedRevision,
+					ownerIds: fragment.ownerIds,
+					availability: fragment.availability,
+				};
+				if (!sameValue(fragment.ownerIds, [...access.state.ownerIds].sort())) {
+					changedFields.push("owners");
+				}
+				if (
+					!sameValue(
+						fragment.availability.map(accessTargetKey).sort(),
+						access.state.availability.map(accessTargetKey).sort(),
+					)
+				) {
+					changedFields.push("availability");
+				}
+			}
+		}
+
+		let source = current.source;
+		if (changes.source) {
+			let admission: Awaited<
+				ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>
+			>;
+			try {
+				admission = parseImageDecision(
+					await dependencies.imageAdmission.admitImage({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						requestId: command.requestId,
+						traceId: command.traceId,
+						requested: structuredClone(changes.source),
+					}),
+				);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			const admittedSource =
+				admission.status === "admitted" ? admission.source : current.source;
+			const selectionMatches =
+				changes.source.kind === admittedSource.kind &&
+				(changes.source.kind === "standard"
+					? admittedSource.kind === "standard" &&
+						admittedSource.templateId === changes.source.templateId
+					: admittedSource.kind === "custom" &&
+						admittedSource.interactionMode === changes.source.interactionMode &&
+						(changes.source.interactionMode === "platform-adapter" ||
+							(admittedSource.interactionMode === "self-managed" &&
+								admittedSource.identityResponsibility ===
+									changes.source.identityResponsibility)));
+			const preservesSourceKind =
+				current.source.kind === admittedSource.kind &&
+				(current.source.kind === "standard"
+					? admittedSource.kind === "standard" &&
+						current.source.templateId === admittedSource.templateId
+					: admittedSource.kind === "custom" &&
+						current.source.interactionMode === admittedSource.interactionMode);
+			if (
+				admission.status !== "admitted" ||
+				admission.schemaVersion !== 1 ||
+				admission.agentId !== command.agentId ||
+				admission.requestId !== command.requestId ||
+				!selectionMatches ||
+				!preservesSourceKind
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			if (sameSourceConfiguration(admittedSource, current.source)) {
+				source = current.source;
+			} else {
+				source = admittedSource;
+				changedFields.push("source");
+			}
+		}
+
+		let modelConfiguration = current.modelConfiguration;
+		if (changes.modelConfiguration) {
+			if (source.kind !== "standard") {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			let admission: Awaited<
+				ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>
+			>;
+			try {
+				admission = parseModelDecision(
+					await dependencies.modelAdmission.admitModels({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						requestId: command.requestId,
+						traceId: command.traceId,
+						requested: structuredClone(changes.modelConfiguration),
+						current: structuredClone(current.modelConfiguration),
+					}),
+				);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			if (
+				admission.status !== "admitted" ||
+				admission.schemaVersion !== 1 ||
+				admission.agentId !== command.agentId ||
+				admission.requestId !== command.requestId
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			try {
+				modelConfiguration = parseAdmittedModel(
+					admission.configuration,
+					changes.modelConfiguration,
+					current.modelConfiguration,
+				);
+			} catch {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			if (
+				sameModelConfiguration(modelConfiguration, current.modelConfiguration)
+			) {
+				modelConfiguration = current.modelConfiguration;
+			} else {
+				changedFields.push("modelConfiguration");
+			}
+		}
+
+		let environment = current.environment;
+		if (changes.environment) {
+			if (
+				source.kind === "standard" &&
+				changes.environment.some(
+					({ name }) =>
+						!source.allowedEnvironmentKeys.includes(name) ||
+						source.platformManagedKeys.includes(name),
+				)
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			environment = changes.environment;
+			if (!sameValue(environment, current.environment)) {
+				changedFields.push("environment");
+			}
+		}
+
+		let secrets = current.secrets;
+		if (changes.secrets) {
+			if (
+				source.kind === "standard" &&
+				changes.secrets.some(
+					({ name }) =>
+						!source.allowedSecretKeys.includes(name) ||
+						source.platformManagedKeys.includes(name),
+				)
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			if (changes.secrets.length > 0) {
+				let admission: Awaited<
+					ReturnType<AgentConfigurationSecretAdmissionPortV1["admitSecrets"]>
+				>;
+				try {
+					admission = parseSecretDecision(
+						await dependencies.secretAdmission.admitSecrets({
+							schemaVersion: 1,
+							agentId: command.agentId,
+							requestId: command.requestId,
+							traceId: command.traceId,
+							requested: structuredClone(changes.secrets),
+							current: structuredClone(current.secrets),
+						}),
+					);
+				} catch {
+					throw new AgentConfigurationError("dependency_unavailable");
+				}
+				if (
+					admission.status !== "admitted" ||
+					admission.schemaVersion !== 1 ||
+					admission.agentId !== command.agentId ||
+					admission.requestId !== command.requestId ||
+					admission.secrets.length !== changes.secrets.length
+				) {
+					throw new AgentConfigurationError("not_admitted");
+				}
+				const requestedNames = new Set(changes.secrets.map(({ name }) => name));
+				const replacements = new Map<
+					string,
+					AgentConfigurationRecordV1["secrets"][number]
+				>();
+				for (const metadata of admission.secrets) {
+					if (
+						!requestedNames.has(metadata.name) ||
+						replacements.has(metadata.name)
+					) {
+						throw new AgentConfigurationError("not_admitted");
+					}
+					replacements.set(metadata.name, {
+						name: metadata.name,
+						secretId: metadata.secretId,
+						version: metadata.version,
+						isSet: metadata.isSet,
+					});
+				}
+				const merged = new Map(
+					current.secrets.map((metadata) => [metadata.name, metadata]),
+				);
+				for (const [name, metadata] of replacements) {
+					merged.set(name, metadata);
+				}
+				if (merged.size > maxSecretReplacements) {
+					throw new AgentConfigurationError("not_admitted");
+				}
+				secrets = [...merged.values()].toSorted((left, right) =>
+					compareText(left.name, right.name),
+				);
+				if (!sameValue(secrets, current.secrets)) {
+					changedFields.push("secrets");
+				}
+			}
+		}
+
+		let actions = current.actions;
+		let actionSetRevision = current.actionSetRevision;
+		if (changes.actions) {
+			if (!source.connectionEnabled) {
+				if (changes.actions.length > 0) {
+					throw new AgentConfigurationError("not_admitted");
+				}
+				actions = [];
+				if (current.actions.length > 0) changedFields.push("actions");
+			} else {
+				let admission: Awaited<
+					ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
+				>;
+				try {
+					admission = parseActionDecision(
+						await dependencies.actionAdmission.admitActions({
+							schemaVersion: 1,
+							agentId: command.agentId,
+							requestId: command.requestId,
+							traceId: command.traceId,
+							requested: structuredClone(changes.actions),
+						}),
+					);
+				} catch {
+					throw new AgentConfigurationError("dependency_unavailable");
+				}
+				const admittedActions =
+					admission.status === "admitted" ? admission.actions : [];
+				if (
+					admission.status !== "admitted" ||
+					admission.schemaVersion !== 1 ||
+					admission.agentId !== command.agentId ||
+					admission.requestId !== command.requestId ||
+					!isText(admission.actionSetRevision, idMaxBytes) ||
+					!sameValue(admittedActions, changes.actions)
+				) {
+					throw new AgentConfigurationError("not_admitted");
+				}
+				actions = admittedActions;
+				if (!sameValue(actions, current.actions)) {
+					actionSetRevision = admission.actionSetRevision;
+					changedFields.push("actions");
+				}
+			}
+		}
+
+		let channels = current.channels;
+		let channelRevision = current.channelRevision;
+		if (changes.channels) {
+			if (
+				source.kind === "custom" &&
+				source.interactionMode === "self-managed"
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			let admission: Awaited<
+				ReturnType<AgentConfigurationChannelAdmissionPortV1["admitChannels"]>
+			>;
+			try {
+				admission = parseChannelDecision(
+					await dependencies.channelAdmission.admitChannels({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						requestId: command.requestId,
+						traceId: command.traceId,
+						requested: structuredClone(changes.channels),
+						current: structuredClone(current.channels),
+					}),
+				);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			const admittedChannels =
+				admission.status === "admitted" ? admission.channels : [];
+			const expected = new Map(
+				current.channels.map((binding) => [binding.kind, binding]),
+			);
+			for (const change of changes.channels) {
+				if (change.enabled) {
+					expected.set(change.kind, {
+						kind: change.kind,
+						bindingReference: change.bindingReference,
+					});
+				} else {
+					expected.delete(change.kind);
+				}
+			}
+			const expectedChannels = [...expected.values()].toSorted((left, right) =>
+				compareText(left.kind, right.kind),
+			);
+			if (
+				admission.status !== "admitted" ||
+				admission.schemaVersion !== 1 ||
+				admission.agentId !== command.agentId ||
+				admission.requestId !== command.requestId ||
+				!isText(admission.channelRevision, idMaxBytes) ||
+				!sameValue(admittedChannels, expectedChannels)
+			) {
+				throw new AgentConfigurationError("not_admitted");
+			}
+			channels = admittedChannels;
+			if (!sameValue(channels, current.channels)) {
+				channelRevision = admission.channelRevision;
+				changedFields.push("channels");
+			}
+		}
+
+		requireAdmittedConfigurationPolicy({
+			source,
+			modelConfiguration,
+			environment,
+			secrets,
+			actions,
+			channels,
+		});
+
+		changedFields.sort();
+		if (changedFields.length === 0) {
+			throw new AgentConfigurationError("no_change");
+		}
+		let occurredAt: Date;
+		try {
+			const milliseconds = Date.prototype.getTime.call(now());
+			if (!Number.isFinite(milliseconds)) throw new Error();
+			occurredAt = new Date(milliseconds);
+		} catch {
+			throw new AgentConfigurationError("persistence_failed");
+		}
+		const nextRevision = current.revision + 1;
+		if (!Number.isSafeInteger(nextRevision)) {
+			throw new AgentConfigurationError("persistence_failed");
+		}
+		const configuration: AgentConfigurationRecordV1 = {
+			...current,
+			revision: nextRevision,
+			source,
+			modelConfiguration,
+			environment,
+			secrets,
+			actions,
+			actionSetRevision,
+			channels,
+			channelRevision,
+		};
+		const result: AgentConfigurationResultV1 = {
+			schemaVersion: 1,
+			agentId: command.agentId,
+			revision: nextRevision,
+			changedFields,
+		};
+		const plan: AgentConfigurationWritePlanV1 = {
+			schemaVersion: 1,
+			agentId: command.agentId,
+			baseRevision: current.revision,
+			nextRevision,
+			expectedAuthorizationRevision: readDecision.record.authorizationRevision,
+			nextAuthorizationRevision: authorization.authorizationRevision,
+			configuration,
+			accessUpdate,
+			result,
+			idempotency: {
+				key: command.idempotencyKey,
+				requestDigest: digest,
+			},
+			outboxIntent: {
+				operation: "agent.configuration.revised.v1",
+				payload: {
+					schemaVersion: 1,
+					agentId: command.agentId,
+					baseRevision: current.revision,
+					configurationRevision: nextRevision,
+					changedFields,
+				},
+				traceId: command.traceId,
+				requestId: command.requestId,
+				occurredAt,
+			},
+			auditEvent: {
+				action:
+					accessUpdate !== null &&
+					changedFields.every(
+						(field) => field === "owners" || field === "availability",
+					)
+						? "agent.access.updated"
+						: "agent.configuration.revised",
+				actorId: actorContext.actorId,
+				agentId: command.agentId,
+				subjectType: "agent",
+				subjectId: command.agentId,
+				changedFields,
+				traceId: command.traceId,
+				requestId: command.requestId,
+				occurredAt,
+			},
+		};
+		let decision: Awaited<
+			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
+		>;
+		try {
+			const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
+			decision = parseTransactionCommitDecision(
+				await dependencies.transaction.commit(capturedPlan),
+				command.agentId,
+			);
+		} catch {
+			throw new AgentConfigurationError("persistence_failed");
+		}
+		if (decision.outcome === "stale") {
+			throw new AgentConfigurationError("stale_revision");
+		}
+		if (decision.outcome === "idempotency_conflict") {
+			throw new AgentConfigurationError("idempotency_conflict");
+		}
+		if (!sameValue(decision.result, plan.result)) {
+			throw new AgentConfigurationError("persistence_failed");
+		}
+		return decision.result;
+	};
 	return {
 		async update(commandInput, actorContextInput) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
-			const digest = requestDigest(command, actorContext);
-			await admitCurrentAuthorization(
-				dependencies.authorizationAdmission,
+			return await execute(
 				command,
 				actorContext,
+				requestDigest(command, actorContext),
+				() => command.changes,
 			);
-			let readDecision: Awaited<
-				ReturnType<AgentConfigurationTransactionPortV1["read"]>
-			>;
-			try {
-				readDecision = parseTransactionReadDecision(
-					await dependencies.transaction.read({
-						schemaVersion: 1,
-						agentId: command.agentId,
-						actorId: actorContext.actorId,
-						idempotencyKey: command.idempotencyKey,
-						requestDigest: digest,
-					}),
-					command.agentId,
-				);
-			} catch {
-				throw new AgentConfigurationError("persistence_failed");
-			}
-			if (readDecision.outcome === "replayed") {
-				return parseResult(readDecision.result, command.agentId);
-			}
-			if (readDecision.outcome === "idempotency_conflict") {
-				throw new AgentConfigurationError("idempotency_conflict");
-			}
-			if (
-				readDecision.outcome === "missing" ||
-				readDecision.record.configuration.agentId !== command.agentId
-			) {
-				throw new AgentConfigurationError("not_authorized");
-			}
-			const current = readDecision.record.configuration;
-			const authorization = await admitCurrentAuthorization(
-				dependencies.authorizationAdmission,
+		},
+		async upgradeCustomImage(commandInput, actorContextInput) {
+			const command = parseUpgradeCustomImageCommand(commandInput);
+			const actorContext = parseActorContext(actorContextInput);
+			return await execute(
 				command,
 				actorContext,
-			);
-
-			let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
-			const changedFields: AgentConfigurationChangedFieldV1[] = [];
-			if (
-				command.changes.ownerIds !== undefined ||
-				command.changes.availability !== undefined
-			) {
-				const access = authorization.accessAuthority;
-				if (
-					!access ||
-					access.state.agentId !== command.agentId ||
-					access.actorContext.userId !== actorContext.actorId
-				) {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				let decision: ReturnType<typeof decideAgentAccessUpdatePolicy>;
-				try {
-					decision = decideAgentAccessUpdatePolicy(
-						{
-							schemaVersion: 1,
-							agentId: command.agentId,
-							expectedRevision: access.state.revision,
-							desiredOwnerIds:
-								command.changes.ownerIds ?? access.state.ownerIds,
-							desiredAvailability:
-								command.changes.availability ?? access.state.availability,
-							requestId: command.requestId,
-							traceId: command.traceId,
-						},
-						access.state,
-						access.actorContext,
-						access.authorityContext,
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				if (decision.outcome === "denied") {
-					throw new AgentConfigurationError("not_authorized");
-				}
-				if (decision.outcome === "conflict") {
-					if (decision.reason === "stale_revision") {
-						throw new AgentConfigurationError("stale_revision");
-					}
-					if (decision.reason !== "no_change") {
+				customImageUpgradeRequestDigest(command, actorContext),
+				(current) => {
+					if (current.source.kind !== "custom") {
 						throw new AgentConfigurationError("not_admitted");
 					}
-				} else {
-					const fragment = decision.planFragment;
-					if (
-						fragment.agentId !== command.agentId ||
-						fragment.expectedRevision !== access.state.revision ||
-						fragment.auditEvent.actorId !== actorContext.actorId ||
-						fragment.auditEvent.subjectType !== "agent" ||
-						fragment.auditEvent.subjectId !== command.agentId ||
-						fragment.auditEvent.requestId !== command.requestId ||
-						fragment.auditEvent.traceId !== command.traceId
-					) {
-						throw new AgentConfigurationError("dependency_unavailable");
-					}
-					accessUpdate = {
-						schemaVersion: 1,
-						fragmentType: "agent_access",
-						agentId: fragment.agentId,
-						expectedRevision: fragment.expectedRevision,
-						ownerIds: fragment.ownerIds,
-						availability: fragment.availability,
-					};
-					if (
-						!sameValue(fragment.ownerIds, [...access.state.ownerIds].sort())
-					) {
-						changedFields.push("owners");
-					}
-					if (
-						!sameValue(
-							fragment.availability.map(accessTargetKey).sort(),
-							access.state.availability.map(accessTargetKey).sort(),
-						)
-					) {
-						changedFields.push("availability");
-					}
-				}
-			}
-
-			let source = current.source;
-			if (command.changes.source) {
-				let admission: Awaited<
-					ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>
-				>;
-				try {
-					admission = parseImageDecision(
-						await dependencies.imageAdmission.admitImage({
-							schemaVersion: 1,
-							agentId: command.agentId,
-							requestId: command.requestId,
-							traceId: command.traceId,
-							requested: structuredClone(command.changes.source),
-						}),
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				const admittedSource =
-					admission.status === "admitted" ? admission.source : current.source;
-				const selectionMatches =
-					command.changes.source.kind === admittedSource.kind &&
-					(command.changes.source.kind === "standard"
-						? admittedSource.kind === "standard" &&
-							admittedSource.templateId === command.changes.source.templateId
-						: admittedSource.kind === "custom" &&
-							admittedSource.interactionMode ===
-								command.changes.source.interactionMode &&
-							(command.changes.source.interactionMode === "platform-adapter" ||
-								(admittedSource.interactionMode === "self-managed" &&
-									admittedSource.identityResponsibility ===
-										command.changes.source.identityResponsibility)));
-				const preservesSourceKind =
-					current.source.kind === admittedSource.kind &&
-					(current.source.kind === "standard"
-						? admittedSource.kind === "standard" &&
-							current.source.templateId === admittedSource.templateId
-						: admittedSource.kind === "custom" &&
-							current.source.interactionMode ===
-								admittedSource.interactionMode);
-				if (
-					admission.status !== "admitted" ||
-					admission.schemaVersion !== 1 ||
-					admission.agentId !== command.agentId ||
-					admission.requestId !== command.requestId ||
-					!selectionMatches ||
-					!preservesSourceKind
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				if (sameSourceConfiguration(admittedSource, current.source)) {
-					source = current.source;
-				} else {
-					source = admittedSource;
-					changedFields.push("source");
-				}
-			}
-
-			let modelConfiguration = current.modelConfiguration;
-			if (command.changes.modelConfiguration) {
-				if (source.kind !== "standard") {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				let admission: Awaited<
-					ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>
-				>;
-				try {
-					admission = parseModelDecision(
-						await dependencies.modelAdmission.admitModels({
-							schemaVersion: 1,
-							agentId: command.agentId,
-							requestId: command.requestId,
-							traceId: command.traceId,
-							requested: structuredClone(command.changes.modelConfiguration),
-							current: structuredClone(current.modelConfiguration),
-						}),
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				if (
-					admission.status !== "admitted" ||
-					admission.schemaVersion !== 1 ||
-					admission.agentId !== command.agentId ||
-					admission.requestId !== command.requestId
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				try {
-					modelConfiguration = parseAdmittedModel(
-						admission.configuration,
-						command.changes.modelConfiguration,
-						current.modelConfiguration,
-					);
-				} catch {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				if (
-					sameModelConfiguration(modelConfiguration, current.modelConfiguration)
-				) {
-					modelConfiguration = current.modelConfiguration;
-				} else {
-					changedFields.push("modelConfiguration");
-				}
-			}
-
-			let environment = current.environment;
-			if (command.changes.environment) {
-				if (
-					source.kind === "standard" &&
-					command.changes.environment.some(
-						({ name }) =>
-							!source.allowedEnvironmentKeys.includes(name) ||
-							source.platformManagedKeys.includes(name),
-					)
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				environment = command.changes.environment;
-				if (!sameValue(environment, current.environment)) {
-					changedFields.push("environment");
-				}
-			}
-
-			let secrets = current.secrets;
-			if (command.changes.secrets) {
-				if (
-					source.kind === "standard" &&
-					command.changes.secrets.some(
-						({ name }) =>
-							!source.allowedSecretKeys.includes(name) ||
-							source.platformManagedKeys.includes(name),
-					)
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				if (command.changes.secrets.length > 0) {
-					let admission: Awaited<
-						ReturnType<AgentConfigurationSecretAdmissionPortV1["admitSecrets"]>
-					>;
-					try {
-						admission = parseSecretDecision(
-							await dependencies.secretAdmission.admitSecrets({
-								schemaVersion: 1,
-								agentId: command.agentId,
-								requestId: command.requestId,
-								traceId: command.traceId,
-								requested: structuredClone(command.changes.secrets),
-								current: structuredClone(current.secrets),
-							}),
-						);
-					} catch {
-						throw new AgentConfigurationError("dependency_unavailable");
-					}
-					if (
-						admission.status !== "admitted" ||
-						admission.schemaVersion !== 1 ||
-						admission.agentId !== command.agentId ||
-						admission.requestId !== command.requestId ||
-						admission.secrets.length !== command.changes.secrets.length
-					) {
-						throw new AgentConfigurationError("not_admitted");
-					}
-					const requestedNames = new Set(
-						command.changes.secrets.map(({ name }) => name),
-					);
-					const replacements = new Map<
-						string,
-						AgentConfigurationRecordV1["secrets"][number]
-					>();
-					for (const metadata of admission.secrets) {
-						if (
-							!requestedNames.has(metadata.name) ||
-							replacements.has(metadata.name)
-						) {
-							throw new AgentConfigurationError("not_admitted");
+					if (current.source.interactionMode === "self-managed") {
+						const identityResponsibility =
+							current.source.identityResponsibility;
+						if (identityResponsibility === undefined) {
+							throw new AgentConfigurationError("persistence_failed");
 						}
-						replacements.set(metadata.name, {
-							name: metadata.name,
-							secretId: metadata.secretId,
-							version: metadata.version,
-							isSet: metadata.isSet,
-						});
+						return {
+							source: {
+								kind: "custom",
+								imageReference: command.imageReference,
+								interactionMode: "self-managed",
+								identityResponsibility,
+							},
+						};
 					}
-					const merged = new Map(
-						current.secrets.map((metadata) => [metadata.name, metadata]),
-					);
-					for (const [name, metadata] of replacements) {
-						merged.set(name, metadata);
-					}
-					if (merged.size > maxSecretReplacements) {
-						throw new AgentConfigurationError("not_admitted");
-					}
-					secrets = [...merged.values()].toSorted((left, right) =>
-						compareText(left.name, right.name),
-					);
-					if (!sameValue(secrets, current.secrets)) {
-						changedFields.push("secrets");
-					}
-				}
-			}
-
-			let actions = current.actions;
-			let actionSetRevision = current.actionSetRevision;
-			if (command.changes.actions) {
-				if (!source.connectionEnabled) {
-					if (command.changes.actions.length > 0) {
-						throw new AgentConfigurationError("not_admitted");
-					}
-					actions = [];
-					if (current.actions.length > 0) changedFields.push("actions");
-				} else {
-					let admission: Awaited<
-						ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
-					>;
-					try {
-						admission = parseActionDecision(
-							await dependencies.actionAdmission.admitActions({
-								schemaVersion: 1,
-								agentId: command.agentId,
-								requestId: command.requestId,
-								traceId: command.traceId,
-								requested: structuredClone(command.changes.actions),
-							}),
-						);
-					} catch {
-						throw new AgentConfigurationError("dependency_unavailable");
-					}
-					const admittedActions =
-						admission.status === "admitted" ? admission.actions : [];
-					if (
-						admission.status !== "admitted" ||
-						admission.schemaVersion !== 1 ||
-						admission.agentId !== command.agentId ||
-						admission.requestId !== command.requestId ||
-						!isText(admission.actionSetRevision, idMaxBytes) ||
-						!sameValue(admittedActions, command.changes.actions)
-					) {
-						throw new AgentConfigurationError("not_admitted");
-					}
-					actions = admittedActions;
-					if (!sameValue(actions, current.actions)) {
-						actionSetRevision = admission.actionSetRevision;
-						changedFields.push("actions");
-					}
-				}
-			}
-
-			let channels = current.channels;
-			let channelRevision = current.channelRevision;
-			if (command.changes.channels) {
-				if (
-					source.kind === "custom" &&
-					source.interactionMode === "self-managed"
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				let admission: Awaited<
-					ReturnType<AgentConfigurationChannelAdmissionPortV1["admitChannels"]>
-				>;
-				try {
-					admission = parseChannelDecision(
-						await dependencies.channelAdmission.admitChannels({
-							schemaVersion: 1,
-							agentId: command.agentId,
-							requestId: command.requestId,
-							traceId: command.traceId,
-							requested: structuredClone(command.changes.channels),
-							current: structuredClone(current.channels),
-						}),
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				const admittedChannels =
-					admission.status === "admitted" ? admission.channels : [];
-				const expected = new Map(
-					current.channels.map((binding) => [binding.kind, binding]),
-				);
-				for (const change of command.changes.channels) {
-					if (change.enabled) {
-						expected.set(change.kind, {
-							kind: change.kind,
-							bindingReference: change.bindingReference,
-						});
-					} else {
-						expected.delete(change.kind);
-					}
-				}
-				const expectedChannels = [...expected.values()].toSorted(
-					(left, right) => compareText(left.kind, right.kind),
-				);
-				if (
-					admission.status !== "admitted" ||
-					admission.schemaVersion !== 1 ||
-					admission.agentId !== command.agentId ||
-					admission.requestId !== command.requestId ||
-					!isText(admission.channelRevision, idMaxBytes) ||
-					!sameValue(admittedChannels, expectedChannels)
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				channels = admittedChannels;
-				if (!sameValue(channels, current.channels)) {
-					channelRevision = admission.channelRevision;
-					changedFields.push("channels");
-				}
-			}
-
-			requireAdmittedConfigurationPolicy({
-				source,
-				modelConfiguration,
-				environment,
-				secrets,
-				actions,
-				channels,
-			});
-
-			changedFields.sort();
-			if (changedFields.length === 0) {
-				throw new AgentConfigurationError("no_change");
-			}
-			let occurredAt: Date;
-			try {
-				const milliseconds = Date.prototype.getTime.call(now());
-				if (!Number.isFinite(milliseconds)) throw new Error();
-				occurredAt = new Date(milliseconds);
-			} catch {
-				throw new AgentConfigurationError("persistence_failed");
-			}
-			const nextRevision = current.revision + 1;
-			if (!Number.isSafeInteger(nextRevision)) {
-				throw new AgentConfigurationError("persistence_failed");
-			}
-			const configuration: AgentConfigurationRecordV1 = {
-				...current,
-				revision: nextRevision,
-				source,
-				modelConfiguration,
-				environment,
-				secrets,
-				actions,
-				actionSetRevision,
-				channels,
-				channelRevision,
-			};
-			const result: AgentConfigurationResultV1 = {
-				schemaVersion: 1,
-				agentId: command.agentId,
-				revision: nextRevision,
-				changedFields,
-			};
-			const plan: AgentConfigurationWritePlanV1 = {
-				schemaVersion: 1,
-				agentId: command.agentId,
-				baseRevision: current.revision,
-				nextRevision,
-				expectedAuthorizationRevision:
-					readDecision.record.authorizationRevision,
-				nextAuthorizationRevision: authorization.authorizationRevision,
-				configuration,
-				accessUpdate,
-				result,
-				idempotency: {
-					key: command.idempotencyKey,
-					requestDigest: digest,
+					return {
+						source: {
+							kind: "custom",
+							imageReference: command.imageReference,
+							interactionMode: "platform-adapter",
+						},
+					};
 				},
-				outboxIntent: {
-					operation: "agent.configuration.revised.v1",
-					payload: {
-						schemaVersion: 1,
-						agentId: command.agentId,
-						baseRevision: current.revision,
-						configurationRevision: nextRevision,
-						changedFields,
-					},
-					traceId: command.traceId,
-					requestId: command.requestId,
-					occurredAt,
-				},
-				auditEvent: {
-					action:
-						accessUpdate !== null &&
-						changedFields.every(
-							(field) => field === "owners" || field === "availability",
-						)
-							? "agent.access.updated"
-							: "agent.configuration.revised",
-					actorId: actorContext.actorId,
-					agentId: command.agentId,
-					subjectType: "agent",
-					subjectId: command.agentId,
-					changedFields,
-					traceId: command.traceId,
-					requestId: command.requestId,
-					occurredAt,
-				},
-			};
-			let decision: Awaited<
-				ReturnType<AgentConfigurationTransactionPortV1["commit"]>
-			>;
-			try {
-				const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
-				decision = parseTransactionCommitDecision(
-					await dependencies.transaction.commit(capturedPlan),
-					command.agentId,
-				);
-			} catch {
-				throw new AgentConfigurationError("persistence_failed");
-			}
-			if (decision.outcome === "stale") {
-				throw new AgentConfigurationError("stale_revision");
-			}
-			if (decision.outcome === "idempotency_conflict") {
-				throw new AgentConfigurationError("idempotency_conflict");
-			}
-			if (!sameValue(decision.result, plan.result)) {
-				throw new AgentConfigurationError("persistence_failed");
-			}
-			return decision.result;
+			);
 		},
 	};
 }
