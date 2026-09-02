@@ -18,7 +18,9 @@ import {
 } from "./index.ts";
 import {
 	pilotBrowserOpenApiPathsV1,
+	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
+	pilotBrowserSchemasV2,
 	pilotBrowserSseOpenApiPathsV1,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
@@ -63,6 +65,10 @@ const artifactPaths = {
 	pilotBrowserOpenapi: resolve(
 		artifactRoot,
 		"openapi/pilot-browser.v1.openapi.json",
+	),
+	pilotBrowserOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/pilot-browser.v2.openapi.json",
 	),
 	pilotDelegatedJsonSchema: resolve(
 		artifactRoot,
@@ -327,6 +333,15 @@ function buildArtifacts() {
 			schemas: { ...pilotBrowserSchemasV1, ...pilotSseSchemasV1 },
 		},
 	});
+	const pilotBrowserOpenapiV2 = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Browser Audit API",
+			version: "2.0.0",
+		},
+		paths: pilotBrowserOpenApiPathsV2,
+		components: { schemas: pilotBrowserSchemasV2 },
+	});
 	const pilotSseJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v1.schema.json",
 		title: "Agent Infra Pilot SSE Contracts V1",
@@ -374,6 +389,7 @@ function buildArtifacts() {
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,
+		pilotBrowserOpenapiV2,
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,

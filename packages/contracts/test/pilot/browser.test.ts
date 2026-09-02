@@ -14,7 +14,9 @@ import {
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
+	PlatformAuditProjectionV2Schema,
 	pilotBrowserOpenApiPathsV1,
+	pilotBrowserOpenApiPathsV2,
 } from "../../src/pilot/browser.js";
 
 const requiredOperations = [
@@ -483,5 +485,62 @@ describe("Pilot browser contracts", () => {
 				traceId: "trace-audit-1",
 			}),
 		).toMatchObject({ action: "agent.configuration.updated" });
+	});
+
+	it("accepts exact system audit actors and rejects invalid variants", () => {
+		const audit = {
+			schemaVersion: 2,
+			auditId: "audit-system-1",
+			action: "agent.workload.observed",
+			actor: { kind: "system", actorId: "platform-worker" },
+			subjectType: "agent",
+			subjectId: "agent-1",
+			result: "succeeded",
+			summary: "Agent workload observed",
+			occurredAt: "2026-08-28T10:02:00Z",
+			traceId: "trace-audit-system-1",
+		};
+
+		expect(PlatformAuditProjectionV2Schema.parse(audit).actor).toEqual({
+			kind: "system",
+			actorId: "platform-worker",
+		});
+		expect(PlatformAuditProjectionV1Schema.safeParse(audit).success).toBe(
+			false,
+		);
+		expect(
+			PlatformAuditProjectionV2Schema.parse({
+				...audit,
+				actor: {
+					userId: "user-1",
+					displayName: "Ada",
+					roles: ["system_admin"],
+				},
+			}).actor,
+		).toEqual({
+			userId: "user-1",
+			displayName: "Ada",
+			roles: ["system_admin"],
+		});
+		for (const actor of [
+			{ kind: "unknown", actorId: "platform-worker" },
+			{ kind: "system" },
+			{
+				kind: "system",
+				actorId: "platform-worker",
+				userId: "user-1",
+				displayName: "Ada",
+				roles: ["system_admin"],
+			},
+			{ kind: "system", actorId: "platform-worker", displayName: "Worker" },
+		]) {
+			expect(
+				PlatformAuditProjectionV2Schema.safeParse({ ...audit, actor }).success,
+			).toBe(false);
+		}
+		expect(pilotBrowserOpenApiPathsV1).not.toHaveProperty(
+			"/api/v2/admin/audit",
+		);
+		expect(pilotBrowserOpenApiPathsV2).toHaveProperty("/api/v2/admin/audit");
 	});
 });

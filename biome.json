@@ -17,6 +17,7 @@
 			"!**/.turbo",
 			"!**/routeTree.gen.ts",
 			"!apps/web/src/pilot/generated",
+			"!apps/web/src/pilot/generated-v2",
 			"!packages/contracts/artifacts",
 			"!bts.jsonc",
 			"!pnpm-lock.yaml",

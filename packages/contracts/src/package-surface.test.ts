@@ -52,6 +52,9 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/pilot-browser.v1"]).toBe(
 			"./artifacts/openapi/pilot-browser.v1.openapi.json",
 		);
+		expect(manifest.exports["./openapi/pilot-browser.v2"]).toBe(
+			"./artifacts/openapi/pilot-browser.v2.openapi.json",
+		);
 		expect(manifest.exports["./openapi/pilot-delegated.v1"]).toBe(
 			"./artifacts/openapi/pilot-delegated.v1.openapi.json",
 		);
@@ -96,6 +99,9 @@ describe("contracts package surface", () => {
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-browser.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/openapi/pilot-browser.v2.openapi.json",
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-delegated.v1.openapi.json",

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 
 import type {
 	AgentConfigurationRecordV1,
+	AgentConfigurationSourceSelectionV1,
 	AgentConfigurationUseCaseDependenciesV1,
 	AgentConfigurationUseCaseV1,
 	AgentConfigurationWritePlanV1,
@@ -121,6 +122,426 @@ export interface AgentConfigurationConformanceHarnessV1 {
 	snapshot(): Promise<AgentConfigurationConformanceSnapshotV1>;
 	failNextCommitAsStale(): Promise<void> | void;
 	close(): Promise<void>;
+}
+
+export interface AgentConfigurationCustomImageUpgradeHarnessV1
+	extends AgentConfigurationConformanceHarnessV1 {
+	failNextCommit(): Promise<void> | void;
+}
+
+type CustomImageSourceV1 = Extract<
+	AgentConfigurationRecordV1["source"],
+	{ kind: "custom" }
+>;
+type CustomImageSelectionV1 = Extract<
+	AgentConfigurationSourceSelectionV1,
+	{ kind: "custom" }
+>;
+
+const agentConfigurationCustomImageSourceV1: CustomImageSourceV1 = {
+	kind: "custom",
+	imageDigest: `sha256:${"b".repeat(64)}`,
+	admissionRevision: "image_policy_custom_1",
+	interactionMode: "self-managed",
+	identityResponsibility: "platform-managed",
+	connectionEnabled: false,
+};
+
+export const agentConfigurationCustomImageRecordV1: AgentConfigurationRecordV1 =
+	{
+		...agentConfigurationConformanceRecordV1,
+		source: agentConfigurationCustomImageSourceV1,
+		modelConfiguration: null,
+	};
+
+const upgradedImageDigest = `sha256:${"c".repeat(64)}`;
+
+export function agentConfigurationCustomImageUpgradeConformance(
+	createHarness: (input: {
+		record: AgentConfigurationRecordV1;
+		selection: CustomImageSelectionV1;
+		source: CustomImageSourceV1;
+	}) => Promise<AgentConfigurationCustomImageUpgradeHarnessV1>,
+): void {
+	const upgrade = {
+		schemaVersion: 1 as const,
+		agentId: "agent_01",
+		imageReference: "registry.example/agent:v2",
+		idempotencyKey: "custom-image-upgrade-01",
+		requestId: "request_image_upgrade_01",
+		traceId: "trace_image_upgrade_01",
+	};
+
+	const customSource = agentConfigurationCustomImageSourceV1;
+	for (const currentSource of [
+		customSource,
+		{
+			kind: "custom" as const,
+			imageDigest: customSource.imageDigest,
+			admissionRevision: customSource.admissionRevision,
+			interactionMode: "platform-adapter" as const,
+			connectionEnabled: customSource.connectionEnabled,
+		},
+	]) {
+		it(`upgrades only the admitted image and preserves ${currentSource.interactionMode} mode`, async () => {
+			const selection: CustomImageSelectionV1 =
+				currentSource.interactionMode === "self-managed"
+					? {
+							kind: "custom",
+							imageReference: upgrade.imageReference,
+							interactionMode: "self-managed",
+							identityResponsibility:
+								currentSource.identityResponsibility ?? "self-managed",
+						}
+					: {
+							kind: "custom",
+							imageReference: upgrade.imageReference,
+							interactionMode: "platform-adapter",
+						};
+			const source = {
+				...currentSource,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			};
+			const harness = await createHarness({
+				record: {
+					...agentConfigurationCustomImageRecordV1,
+					source: currentSource,
+				},
+				selection,
+				source,
+			});
+			try {
+				const first = await harness.useCase.upgradeCustomImage(upgrade, actor);
+				expect(first).toEqual({
+					schemaVersion: 1,
+					agentId: "agent_01",
+					revision: 8,
+					changedFields: ["source"],
+				});
+				expect(await harness.snapshot()).toMatchObject({
+					configuration: { revision: 8, source },
+					commitCount: 1,
+					idempotencyCount: 1,
+					outboxCount: 1,
+					auditCount: 1,
+					lastPlan: {
+						baseRevision: 7,
+						nextRevision: 8,
+						result: first,
+					},
+				});
+				await expect(
+					harness.useCase.upgradeCustomImage(upgrade, actor),
+				).resolves.toEqual(first);
+				expect(await harness.snapshot()).toMatchObject({ commitCount: 1 });
+			} finally {
+				await harness.close();
+			}
+		});
+	}
+
+	it("returns one result and one effect set for concurrent same-key upgrades", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source: {
+				...agentConfigurationCustomImageSourceV1,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			},
+		});
+		try {
+			const results = await Promise.all([
+				harness.useCase.upgradeCustomImage(upgrade, actor),
+				harness.useCase.upgradeCustomImage(upgrade, actor),
+			]);
+			expect(results[0]).toEqual(results[1]);
+			expect(await harness.snapshot()).toMatchObject({
+				configuration: { revision: 8 },
+				commitCount: 1,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				auditCount: 1,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("rejects standard Agents, unchanged images, and stale commits without effects", async () => {
+		for (const scenario of ["standard", "unchanged", "stale"] as const) {
+			const currentSource =
+				scenario === "standard"
+					? agentConfigurationConformanceRecordV1.source
+					: agentConfigurationCustomImageSourceV1;
+			const selection = {
+				kind: "custom" as const,
+				imageReference: upgrade.imageReference,
+				interactionMode: "self-managed" as const,
+				identityResponsibility: "platform-managed" as const,
+			};
+			const source = {
+				...agentConfigurationCustomImageSourceV1,
+				...(scenario === "unchanged"
+					? {}
+					: {
+							imageDigest: upgradedImageDigest,
+							admissionRevision: "image_policy_custom_2",
+						}),
+			};
+			const harness = await createHarness({
+				record: {
+					...(scenario === "standard"
+						? agentConfigurationConformanceRecordV1
+						: agentConfigurationCustomImageRecordV1),
+					source: currentSource,
+				},
+				selection,
+				source,
+			});
+			try {
+				if (scenario === "stale") await harness.failNextCommitAsStale();
+				await expect(
+					harness.useCase.upgradeCustomImage(
+						{ ...upgrade, idempotencyKey: `custom-image-${scenario}` },
+						actor,
+					),
+				).rejects.toMatchObject({
+					code:
+						scenario === "standard"
+							? "not_admitted"
+							: scenario === "unchanged"
+								? "no_change"
+								: "stale_revision",
+				});
+				expect(await harness.snapshot()).toMatchObject({
+					commitCount: 0,
+					idempotencyCount: 0,
+					outboxCount: 0,
+					auditCount: 0,
+					lastPlan: null,
+				});
+			} finally {
+				await harness.close();
+			}
+		}
+	});
+
+	it("reauthorizes before interpreting the current source", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const harness = await createHarness({
+			record: agentConfigurationConformanceRecordV1,
+			selection,
+			source: {
+				...agentConfigurationCustomImageSourceV1,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			},
+		});
+		let authorizationCalls = 0;
+		let imageAdmissionCalls = 0;
+		const useCase = harness.useCaseWithDependencies({
+			authorizationAdmission: {
+				async authorize(input) {
+					authorizationCalls += 1;
+					return authorizationCalls === 1
+						? {
+								schemaVersion: 1 as const,
+								status: "admitted" as const,
+								agentId: input.agentId,
+								actorId: input.actorId,
+								authorizationRevision: "authorization_10",
+							}
+						: {
+								schemaVersion: 1 as const,
+								status: "rejected" as const,
+								agentId: input.agentId,
+								actorId: input.actorId,
+							};
+				},
+			},
+			imageAdmission: {
+				async admitImage() {
+					imageAdmissionCalls += 1;
+					throw new Error("must not admit after revocation");
+				},
+			},
+		});
+		try {
+			await expect(
+				useCase.upgradeCustomImage(upgrade, actor),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			expect(authorizationCalls).toBe(2);
+			expect(imageAdmissionCalls).toBe(0);
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("rejects image admissions that change non-image source policy", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const source = {
+			...agentConfigurationCustomImageSourceV1,
+			imageDigest: upgradedImageDigest,
+			admissionRevision: "image_policy_custom_2",
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source,
+		});
+		const useCase = harness.useCaseWithDependencies({
+			imageAdmission: {
+				async admitImage(input) {
+					return {
+						schemaVersion: 1 as const,
+						status: "admitted" as const,
+						agentId: input.agentId,
+						requestId: input.requestId,
+						source: { ...source, connectionEnabled: true },
+					};
+				},
+			},
+		});
+		try {
+			await expect(
+				useCase.upgradeCustomImage(upgrade, actor),
+			).rejects.toMatchObject({ code: "not_admitted" });
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("hides missing and unauthorized Agents and rolls back dependency failures", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const source = {
+			...agentConfigurationCustomImageSourceV1,
+			imageDigest: upgradedImageDigest,
+			admissionRevision: "image_policy_custom_2",
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source,
+		});
+		try {
+			const missing = harness.useCaseWithDependencies({
+				transaction: {
+					async read() {
+						return { outcome: "missing" };
+					},
+					async commit() {
+						throw new Error("must not commit");
+					},
+				},
+			});
+			const unauthorized = harness.useCaseWithDependencies({
+				authorizationAdmission: {
+					async authorize(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							actorId: input.actorId,
+						};
+					},
+				},
+			});
+			for (const useCase of [missing, unauthorized]) {
+				await expect(
+					useCase.upgradeCustomImage(upgrade, actor),
+				).rejects.toMatchObject({ code: "not_authorized" });
+			}
+
+			await harness.failNextCommit();
+			await expect(
+				harness.useCase.upgradeCustomImage(
+					{ ...upgrade, idempotencyKey: "custom-image-rollback" },
+					actor,
+				),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 0,
+				idempotencyCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				lastPlan: null,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("conflicts when one image-upgrade key is reused for another request", async () => {
+		const selection = {
+			kind: "custom" as const,
+			imageReference: upgrade.imageReference,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		const harness = await createHarness({
+			record: agentConfigurationCustomImageRecordV1,
+			selection,
+			source: {
+				...agentConfigurationCustomImageSourceV1,
+				imageDigest: upgradedImageDigest,
+				admissionRevision: "image_policy_custom_2",
+			},
+		});
+		try {
+			await harness.useCase.upgradeCustomImage(upgrade, actor);
+			await expect(
+				harness.useCase.upgradeCustomImage(
+					{ ...upgrade, imageReference: "registry.example/agent:v3" },
+					actor,
+				),
+			).rejects.toMatchObject({ code: "idempotency_conflict" });
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 1,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				auditCount: 1,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
 }
 
 const actor = {
