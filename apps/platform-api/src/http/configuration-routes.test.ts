@@ -411,6 +411,39 @@ describe("configuration routes", () => {
 
 		expect(proxiedResponse.status).toBe(503);
 		expect(proxied.update).not.toHaveBeenCalled();
+
+		const accessor = ["model-primary"];
+		Object.defineProperty(accessor, "0", {
+			enumerable: true,
+			get: () => "model-primary",
+		});
+		for (const [variant, modelCredentialOptionIds] of [
+			["custom-prototype", Object.setPrototypeOf(["model-primary"], {})],
+			["index-accessor", accessor],
+			["sparse", new Array<string>(1)],
+			["oversized", new Array<string>(4097)],
+		] as const) {
+			const malformed = createApp({
+				prepareSecretReplacements: vi.fn().mockResolvedValue({
+					secrets: [],
+					modelCredentialOptionIds,
+				} as never),
+			});
+			const response = await malformed.app.request(
+				"/api/v1/agents/agent-1/configuration",
+				{
+					method: "PUT",
+					headers: {
+						"content-type": "application/json",
+						"Idempotency-Key": `configuration-model-${variant}`,
+					},
+					body: JSON.stringify(modelCredentialBody),
+				},
+			);
+
+			expect(response.status).toBe(503);
+			expect(malformed.update).not.toHaveBeenCalled();
+		}
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {
