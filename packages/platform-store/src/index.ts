@@ -29,6 +29,17 @@ export {
 	PostgresApplicationRevisionTransactionV1,
 } from "./application-revision.ts";
 export {
+	type PlatformAuditActionV1,
+	type PlatformAuditAdministratorScopeV1,
+	type PlatformAuditChangedFieldV1,
+	type PlatformAuditPageInputV1,
+	type PlatformAuditPageV1,
+	type PlatformAuditProjectionV1,
+	PlatformAuditQueryError,
+	type PostgresPlatformAuditOptionsV1,
+	PostgresPlatformAuditQueryV1,
+} from "./audit.ts";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
