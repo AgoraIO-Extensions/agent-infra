@@ -1,3 +1,21 @@
 {
-	"extends": "@agent-infra/config/tsconfig.base.json"
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/contracts": ["../../packages/contracts/src/index.ts"],
+			"@agent-infra/contracts/pilot": [
+				"../../packages/contracts/src/pilot/index.ts"
+			],
+			"@agent-infra/platform-core": [
+				"../../packages/platform-core/src/index.ts"
+			],
+			"@agent-infra/platform-core/testing": [
+				"../../packages/platform-core/src/testing.ts"
+			],
+			"@agent-infra/platform-store": [
+				"../../packages/platform-store/src/index.ts"
+			]
+		}
+	}
 }
