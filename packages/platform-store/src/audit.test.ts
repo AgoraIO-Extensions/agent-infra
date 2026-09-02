@@ -66,7 +66,7 @@ describe("PostgreSQL Platform audit query", () => {
 
 	interface AuditFixture {
 		readonly auditId: string;
-		readonly occurredAt: Date;
+		readonly occurredAt: Date | string;
 		readonly traceId?: string;
 		readonly actorType?: string;
 		readonly actorId?: string;
@@ -98,7 +98,7 @@ describe("PostgreSQL Platform audit query", () => {
 				(id, trace_id, actor_type, actor_id, action, target_type,
 				 target_id, outcome, occurred_at, details)
 			values (${auditId}, ${traceId}, ${actorType}, ${actorId}, ${action},
-				${targetType}, ${targetId}, ${outcome}, ${occurredAt},
+				${targetType}, ${targetId}, ${outcome}, ${occurredAt}::timestamptz,
 				${details === null ? null : adminClient.json(details as never)})
 		`;
 	}
@@ -192,6 +192,39 @@ describe("PostgreSQL Platform audit query", () => {
 			"audit_older",
 		]);
 		expect(second.nextCursor).toBeNull();
+	});
+
+	it("preserves PostgreSQL microseconds while traversing one millisecond", async () => {
+		await seedAudit({
+			auditId: "audit_microsecond_900",
+			occurredAt: "2026-09-02T02:30:00.000900Z",
+		});
+		await seedAudit({
+			auditId: "audit_microsecond_500",
+			occurredAt: "2026-09-02T02:30:00.000500Z",
+		});
+		await seedAudit({
+			auditId: "audit_microsecond_100",
+			occurredAt: "2026-09-02T02:30:00.000100Z",
+		});
+		const adapter = openAdapter();
+		const auditIds: string[] = [];
+		let cursor: string | undefined;
+		for (let pageNumber = 0; pageNumber < 3; pageNumber += 1) {
+			const page = await adapter.listAudit(administrator, {
+				schemaVersion: 1,
+				limit: 1,
+				...(cursor ? { cursor } : {}),
+			});
+			auditIds.push(...page.items.map(({ auditId }) => auditId));
+			cursor = page.nextCursor ?? undefined;
+		}
+		expect(auditIds).toEqual([
+			"audit_microsecond_900",
+			"audit_microsecond_500",
+			"audit_microsecond_100",
+		]);
+		expect(cursor).toBeUndefined();
 	});
 
 	it("does not pull concurrent later events into an existing traversal", async () => {

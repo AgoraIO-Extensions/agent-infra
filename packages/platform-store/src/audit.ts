@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
-import { and, desc, eq, lt, or } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -284,6 +285,7 @@ const auditSelection = {
 	occurredAt: auditEvents.occurredAt,
 	details: auditEvents.details,
 };
+const cursorAuditEvent = alias(auditEvents, "cursor_audit_event");
 
 export class PostgresPlatformAuditQueryV1 implements PlatformAuditQueryV1 {
 	readonly #client;
@@ -306,29 +308,26 @@ export class PostgresPlatformAuditQueryV1 implements PlatformAuditQueryV1 {
 		try {
 			const [anchor] = page.cursor
 				? await this.#database
-						.select({
-							auditId: auditEvents.id,
-							occurredAt: auditEvents.occurredAt,
-						})
+						.select({ auditId: auditEvents.id })
 						.from(auditEvents)
 						.where(eq(auditEvents.id, page.cursor))
 						.limit(1)
 				: [];
-			if (page.cursor && (!anchor || !validDate(anchor.occurredAt))) {
+			if (page.cursor && !anchor) {
 				throw new PlatformAuditQueryError("invalid_request");
 			}
 			const rows = await this.#database
 				.select(auditSelection)
 				.from(auditEvents)
 				.where(
-					anchor
-						? or(
-								lt(auditEvents.occurredAt, anchor.occurredAt),
-								and(
-									eq(auditEvents.occurredAt, anchor.occurredAt),
-									lt(auditEvents.id, anchor.auditId),
-								),
+					page.cursor
+						? sql<boolean>`
+							(${auditEvents.occurredAt}, ${auditEvents.id}) < (
+								select ${cursorAuditEvent.occurredAt}, ${cursorAuditEvent.id}
+								from ${cursorAuditEvent}
+								where ${cursorAuditEvent.id} = ${page.cursor}
 							)
+						`
 						: undefined,
 				)
 				.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
