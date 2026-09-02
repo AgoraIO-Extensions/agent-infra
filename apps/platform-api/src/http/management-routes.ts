@@ -793,9 +793,12 @@ export function registerManagementRoutes(
 						rawRequestDigest,
 					},
 				);
+				const projectionScope = identity.roles.includes("system_admin")
+					? ({ kind: "administrator" } as const)
+					: ownerScope(identity);
 				const agent = await agentOrUnavailable(
 					dependencies,
-					ownerScope(identity),
+					projectionScope,
 					agentId,
 					metadata.traceId,
 				);

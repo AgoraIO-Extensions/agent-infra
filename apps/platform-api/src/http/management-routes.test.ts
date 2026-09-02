@@ -497,6 +497,28 @@ describe("management routes", () => {
 		expect(upgraded.updateConfiguration).not.toHaveBeenCalled();
 	});
 
+	it("uses administrator scope after an administrator image upgrade", async () => {
+		const upgraded = createApp({ administrator: true });
+		const response = await upgraded.app.request(
+			"/api/v1/agents/agent-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command: "upgrade_custom_image",
+					imageReference: "registry.example/agent:v2",
+				}),
+			},
+		);
+
+		expect(response.status).toBe(202);
+		expect(upgraded.getAgent).toHaveBeenCalledWith(
+			{ kind: "administrator" },
+			"agent-1",
+		);
+	});
+
 	it("maps management query failures to dependency unavailable", async () => {
 		for (const [method, path] of [
 			["listApplications", "/api/v1/agent-applications"],
