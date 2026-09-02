@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -22,6 +23,16 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
+	it("tracks every published browser OpenAPI version", async () => {
+		const source = await readFile(cliPath, "utf8");
+		expect(source).toContain(
+			'"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json"',
+		);
+		expect(source).toContain(
+			'"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json"',
+		);
+	});
+
 	it("accepts additive schemas and disjoint oneOf literals", () => {
 		const result = compare("additive");
 		expect(result.status).toBe(0);
