@@ -350,37 +350,58 @@ export class PostgresPlatformAuditQueryV1 {
 		requireScope(scope);
 		requirePage(page);
 		try {
-			const rows = await this.#database.transaction(
-				async (transaction) => {
-					const [anchor] = page.cursor
-						? await transaction
-								.select({ auditId: auditEvents.id })
-								.from(auditEvents)
-								.where(eq(auditEvents.id, page.cursor))
-								.limit(1)
-						: [];
-					if (page.cursor && !anchor) {
-						throw new PlatformAuditQueryError("invalid_request");
-					}
-					return transaction
+			let rows: AuditRow[];
+			if (page.cursor) {
+				const cursor = this.#database.$with("audit_cursor").as(
+					this.#database
+						.select({
+							auditId: auditEvents.id,
+							occurredAt: auditEvents.occurredAt,
+						})
+						.from(auditEvents)
+						.where(eq(auditEvents.id, page.cursor)),
+				);
+				const auditPage = this.#database.$with("audit_page").as(
+					this.#database
 						.select(auditSelection)
 						.from(auditEvents)
+						.innerJoin(cursor, sql`true`)
 						.where(
-							page.cursor
-								? sql<boolean>`
-									(${auditEvents.occurredAt}, ${auditEvents.id}) < (
-										select ${auditEvents.occurredAt}, ${auditEvents.id}
-										from ${auditEvents}
-										where ${auditEvents.id} = ${page.cursor}
-									)
-								`
-								: undefined,
+							sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId})`,
 						)
 						.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
-						.limit(page.limit + 1);
-				},
-				{ isolationLevel: "repeatable read", accessMode: "read only" },
-			);
+						.limit(page.limit + 1),
+				);
+				const result = await this.#database
+					.with(cursor, auditPage)
+					.select({
+						cursorId: cursor.auditId,
+						auditId: auditPage.auditId,
+						traceId: auditPage.traceId,
+						actorType: auditPage.actorType,
+						actorId: auditPage.actorId,
+						action: auditPage.action,
+						targetType: auditPage.targetType,
+						targetId: auditPage.targetId,
+						outcome: auditPage.outcome,
+						occurredAt: auditPage.occurredAt,
+						details: auditPage.details,
+					})
+					.from(cursor)
+					.leftJoin(auditPage, sql`true`);
+				if (result.length === 0) {
+					throw new PlatformAuditQueryError("invalid_request");
+				}
+				rows = result.flatMap(({ cursorId: _cursorId, ...row }) =>
+					row.auditId === null ? [] : [row as unknown as AuditRow],
+				);
+			} else {
+				rows = await this.#database
+					.select(auditSelection)
+					.from(auditEvents)
+					.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
+					.limit(page.limit + 1);
+			}
 			const hasNext = rows.length > page.limit;
 			const items = rows.slice(0, page.limit).map(decodeRow);
 			return {
