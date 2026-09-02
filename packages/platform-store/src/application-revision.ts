@@ -3,9 +3,6 @@ import { randomUUID } from "node:crypto";
 
 import type {
 	AgentConfigurationAccessTargetV1,
-	AgentConfigurationWritePlanV1,
-	AgentManagementStateV1,
-	AgentManagementWritePlanV1,
 	ApplicationRevisionResultV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
@@ -15,10 +12,15 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
+import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
-	decodeAgentConfigurationRecord,
-	decodeAgentConfigurationResult,
-} from "./agent-configuration-record.js";
+	advanceAgentConfigurationRevision,
+	agentManagementStateUpdate,
+	insertAgentConfigurationEffects,
+	insertAgentManagementEffects,
+	insertAgentManagementHistory,
+	replaceAgentAccess,
+} from "./plan-writes.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -26,7 +28,6 @@ import {
 	agentManagementHistory,
 	agentOwners,
 	agents,
-	auditEvents,
 	idempotencyRecords,
 	outboxItems,
 } from "./schema.js";
@@ -66,14 +67,6 @@ function validText(input: unknown, maximum = 1024): input is string {
 		String.prototype.isWellFormed.call(input) &&
 		Buffer.byteLength(input, "utf8") <= maximum
 	);
-}
-
-function validDate(input: unknown): input is Date {
-	try {
-		return Number.isFinite(Date.prototype.getTime.call(input));
-	} catch {
-		return false;
-	}
 }
 
 function safeInteger(input: unknown, minimum = 0): input is number {
@@ -168,333 +161,13 @@ function validateAccess(
 	}
 }
 
-function validateManagementState(
-	state: AgentManagementStateV1,
-	plan: ApplicationRevisionWritePlanV1,
-): void {
-	exact(state, [
-		"schemaVersion",
-		"applicationId",
-		"agentId",
-		"applicantId",
-		"status",
-		"revision",
-		"approvalRevision",
-		"decisionReason",
-		"serviceAvailability",
-		"desiredState",
-		"workloadRevision",
-		"fence",
-		"ownerIds",
-		"availability",
-		"failureCode",
-	]);
-	if (
-		state.schemaVersion !== 1 ||
-		state.applicationId !== plan.application.applicationId ||
-		state.agentId !== plan.application.agentId ||
-		state.applicantId !== plan.application.applicantId ||
-		state.status !== "pending_approval" ||
-		state.revision !== plan.expected.managementRevision + 1 ||
-		state.approvalRevision !== null ||
-		state.decisionReason !== null ||
-		state.serviceAvailability !== null ||
-		state.desiredState !== "stopped" ||
-		state.workloadRevision !== 0 ||
-		state.fence !== 0 ||
-		state.failureCode !== null
-	) {
-		unavailable();
-	}
-	validateAccess(state.ownerIds, state.availability);
-}
-
-function validateManagement(
-	management: AgentManagementWritePlanV1,
-	plan: ApplicationRevisionWritePlanV1,
-): void {
-	exact(management, [
-		"schemaVersion",
-		"operation",
-		"subjectType",
-		"subjectId",
-		"expectedRevision",
-		"state",
-		"transition",
-		"outboxIntent",
-		"auditEvent",
-		"idempotency",
-	]);
-	exact(management.transition, ["from", "to", "occurredAt"]);
-	exact(management.auditEvent, [
-		"action",
-		"actorId",
-		"subjectType",
-		"subjectId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	exact(management.idempotency, ["key", "requestDigest"]);
-	validateManagementState(management.state, plan);
-	const resubmission = management.transition.from === "rejected";
-	if (
-		management.schemaVersion !== 1 ||
-		management.operation !== "update_application" ||
-		management.subjectType !== "agent_application" ||
-		management.subjectId !== plan.application.applicationId ||
-		management.expectedRevision !== plan.expected.managementRevision ||
-		(management.transition.from !== "pending_approval" && !resubmission) ||
-		management.transition.to !== "pending_approval" ||
-		!validDate(management.transition.occurredAt) ||
-		management.outboxIntent !== null ||
-		management.auditEvent.action !==
-			(resubmission
-				? "agent.application.resubmitted"
-				: "agent.application.updated") ||
-		management.auditEvent.actorId !== plan.application.applicantId ||
-		management.auditEvent.subjectType !== "agent_application" ||
-		management.auditEvent.subjectId !== plan.application.applicationId ||
-		management.auditEvent.traceId !== plan.application.traceId ||
-		management.auditEvent.requestId !== plan.application.requestId ||
-		!validDate(management.auditEvent.occurredAt) ||
-		Date.prototype.getTime.call(management.transition.occurredAt) !==
-			Date.prototype.getTime.call(management.auditEvent.occurredAt) ||
-		management.idempotency.key !== plan.idempotency.key ||
-		!/^[A-Za-z0-9._~-]{1,128}$/.test(management.idempotency.key) ||
-		!/^[a-f0-9]{64}$/.test(management.idempotency.requestDigest)
-	) {
-		unavailable();
-	}
-}
-
-function validateConfiguration(
-	configurationPlan: AgentConfigurationWritePlanV1,
-	plan: ApplicationRevisionWritePlanV1,
-): ReturnType<typeof decodeAgentConfigurationRecord> {
-	exact(configurationPlan, [
-		"schemaVersion",
-		"agentId",
-		"baseRevision",
-		"nextRevision",
-		"expectedAuthorizationRevision",
-		"nextAuthorizationRevision",
-		"configuration",
-		"accessUpdate",
-		"result",
-		"idempotency",
-		"outboxIntent",
-		"auditEvent",
-	]);
-	exact(configurationPlan.idempotency, ["key", "requestDigest"]);
-	exact(configurationPlan.outboxIntent, [
-		"operation",
-		"payload",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	exact(configurationPlan.outboxIntent.payload, [
-		"schemaVersion",
-		"agentId",
-		"baseRevision",
-		"configurationRevision",
-		"changedFields",
-	]);
-	exact(configurationPlan.auditEvent, [
-		"action",
-		"actorId",
-		"agentId",
-		"subjectType",
-		"subjectId",
-		"changedFields",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	let configuration: ReturnType<typeof decodeAgentConfigurationRecord>;
-	let result: ReturnType<typeof decodeAgentConfigurationResult>;
-	try {
-		configuration = decodeAgentConfigurationRecord(
-			configurationPlan.configuration,
-		);
-		result = decodeAgentConfigurationResult(configurationPlan.result);
-	} catch {
-		unavailable();
-	}
-	const payload = {
-		schemaVersion: 1 as const,
-		agentId: plan.application.agentId,
-		baseRevision: plan.expected.configurationRevision,
-		configurationRevision: configurationPlan.nextRevision,
-		changedFields: [...result.changedFields],
-	};
-	if (
-		configurationPlan.schemaVersion !== 1 ||
-		configurationPlan.agentId !== plan.application.agentId ||
-		configurationPlan.baseRevision !== plan.expected.configurationRevision ||
-		configurationPlan.nextRevision !==
-			plan.expected.configurationRevision + 1 ||
-		configurationPlan.expectedAuthorizationRevision !==
-			plan.expected.authorizationRevision ||
-		configurationPlan.nextAuthorizationRevision !==
-			plan.nextAuthorizationRevision ||
-		configuration.agentId !== plan.application.agentId ||
-		configuration.revision !== configurationPlan.nextRevision ||
-		result.agentId !== plan.application.agentId ||
-		result.revision !== configurationPlan.nextRevision ||
-		configurationPlan.idempotency.key !== plan.idempotency.key ||
-		!/^[A-Za-z0-9._~-]{1,128}$/.test(configurationPlan.idempotency.key) ||
-		!/^[a-f0-9]{64}$/.test(configurationPlan.idempotency.requestDigest) ||
-		configurationPlan.outboxIntent.operation !==
-			"agent.configuration.revised.v1" ||
-		!sameValue(configurationPlan.outboxIntent.payload, payload) ||
-		configurationPlan.outboxIntent.traceId !== plan.application.traceId ||
-		configurationPlan.outboxIntent.requestId !== plan.application.requestId ||
-		!validDate(configurationPlan.outboxIntent.occurredAt) ||
-		(configurationPlan.auditEvent.action !== "agent.configuration.revised" &&
-			configurationPlan.auditEvent.action !== "agent.access.updated") ||
-		configurationPlan.auditEvent.actorId !== plan.application.applicantId ||
-		configurationPlan.auditEvent.agentId !== plan.application.agentId ||
-		configurationPlan.auditEvent.subjectType !== "agent" ||
-		configurationPlan.auditEvent.subjectId !== plan.application.agentId ||
-		!sameValue(
-			configurationPlan.auditEvent.changedFields,
-			result.changedFields,
-		) ||
-		configurationPlan.auditEvent.traceId !== plan.application.traceId ||
-		configurationPlan.auditEvent.requestId !== plan.application.requestId ||
-		!validDate(configurationPlan.auditEvent.occurredAt) ||
-		Date.prototype.getTime.call(configurationPlan.auditEvent.occurredAt) !==
-			Date.prototype.getTime.call(configurationPlan.outboxIntent.occurredAt)
-	) {
-		unavailable();
-	}
-	if (configurationPlan.accessUpdate) {
-		exact(configurationPlan.accessUpdate, [
-			"schemaVersion",
-			"fragmentType",
-			"agentId",
-			"expectedRevision",
-			"ownerIds",
-			"availability",
-		]);
-		if (
-			configurationPlan.accessUpdate.schemaVersion !== 1 ||
-			configurationPlan.accessUpdate.fragmentType !== "agent_access" ||
-			configurationPlan.accessUpdate.agentId !== plan.application.agentId ||
-			configurationPlan.accessUpdate.expectedRevision !==
-				plan.expected.managementRevision
-		) {
-			unavailable();
-		}
-		validateAccess(
-			configurationPlan.accessUpdate.ownerIds,
-			configurationPlan.accessUpdate.availability,
-		);
-		if (
-			!sameValue(
-				configurationPlan.accessUpdate.ownerIds,
-				plan.management.state.ownerIds,
-			) ||
-			!sameValue(
-				configurationPlan.accessUpdate.availability,
-				plan.management.state.availability,
-			)
-		) {
-			unavailable();
-		}
-	}
-	const accessFields = result.changedFields.filter(
-		(field) => field === "owners" || field === "availability",
-	);
-	const accessOnly = accessFields.length === result.changedFields.length;
-	if (
-		accessFields.length > 0 !== (configurationPlan.accessUpdate !== null) ||
-		configurationPlan.auditEvent.action !==
-			(accessOnly ? "agent.access.updated" : "agent.configuration.revised")
-	) {
-		unavailable();
-	}
-	return configuration;
-}
-
 function validatedPlan(input: ApplicationRevisionWritePlanV1) {
 	const plan = snapshotPlan(input);
-	exact(plan, [
-		"schemaVersion",
-		"application",
-		"expected",
-		"nextAuthorizationRevision",
-		"management",
-		"configuration",
-		"result",
-		"idempotency",
-		"outboxIntent",
-		"auditEvent",
-	]);
-	exact(plan.application, [
-		"applicationId",
-		"agentId",
-		"applicantId",
-		"name",
-		"description",
-		"traceId",
-		"requestId",
-	]);
-	exact(plan.expected, [
-		"managementRevision",
-		"configurationRevision",
-		"authorizationRevision",
-	]);
-	exact(plan.idempotency, ["key", "requestDigest"]);
-	exact(plan.outboxIntent, [
-		"operation",
-		"payload",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	const result = resultValue(plan.result);
-	const payload = resultValue(plan.outboxIntent.payload);
-	validateManagement(plan.management, plan);
-	const configuration = plan.configuration
-		? validateConfiguration(plan.configuration, plan)
-		: null;
-	if (
-		plan.schemaVersion !== 1 ||
-		!validText(plan.application.applicationId) ||
-		!validText(plan.application.agentId) ||
-		!validText(plan.application.applicantId) ||
-		!validText(plan.application.name, 800) ||
-		Array.from(plan.application.name).length > 200 ||
-		!validText(plan.application.description, 65_536) ||
-		!validText(plan.application.traceId) ||
-		!validText(plan.application.requestId) ||
-		!safeInteger(plan.expected.managementRevision) ||
-		!safeInteger(plan.expected.configurationRevision, 1) ||
-		!validText(plan.expected.authorizationRevision) ||
-		!validText(plan.nextAuthorizationRevision) ||
-		result.applicationId !== plan.application.applicationId ||
-		result.agentId !== plan.application.agentId ||
-		result.managementRevision !== plan.management.state.revision ||
-		result.configurationRevision !==
-			(plan.configuration?.nextRevision ??
-				plan.expected.configurationRevision) ||
-		!sameValue(payload, result) ||
-		!/^[A-Za-z0-9._~-]{1,128}$/.test(plan.idempotency.key) ||
-		!/^[a-f0-9]{64}$/.test(plan.idempotency.requestDigest) ||
-		plan.outboxIntent.operation !== "agent.application.revised.v1" ||
-		plan.outboxIntent.traceId !== plan.application.traceId ||
-		plan.outboxIntent.requestId !== plan.application.requestId ||
-		!validDate(plan.outboxIntent.occurredAt) ||
-		!sameValue(plan.auditEvent, plan.management.auditEvent) ||
-		Date.prototype.getTime.call(plan.outboxIntent.occurredAt) !==
-			Date.prototype.getTime.call(plan.auditEvent.occurredAt)
-	) {
-		unavailable();
-	}
-	return { plan, result, configuration };
+	return {
+		plan,
+		result: plan.result,
+		configuration: plan.configuration?.configuration ?? null,
+	};
 }
 
 function replayValue(
@@ -795,52 +468,47 @@ export class PostgresApplicationRevisionTransactionV1
 				await this.#requireCurrentIntegrity(transaction, plan);
 
 				if (configuration && plan.configuration) {
-					await transaction.insert(agentConfigurationRevisions).values({
-						agentId: plan.application.agentId,
-						revision: plan.configuration.nextRevision,
-						sourceReference: sourceReference(configuration),
-						configuration,
-						createdAt: plan.outboxIntent.occurredAt,
-					});
+					if (
+						!(await advanceAgentConfigurationRevision(
+							transaction,
+							plan.configuration,
+							configuration,
+						))
+					) {
+						unavailable();
+					}
+				} else {
+					const advancedAgent = await transaction
+						.update(agents)
+						.set({
+							currentConfigurationRevision: result.configurationRevision,
+							authorizationRevision: plan.nextAuthorizationRevision,
+						})
+						.where(
+							and(
+								eq(agents.id, plan.application.agentId),
+								eq(
+									agents.currentConfigurationRevision,
+									plan.expected.configurationRevision,
+								),
+								eq(
+									agents.authorizationRevision,
+									plan.expected.authorizationRevision,
+								),
+							),
+						)
+						.returning({ id: agents.id });
+					if (advancedAgent.length !== 1) unavailable();
 				}
-				const advancedAgent = await transaction
-					.update(agents)
-					.set({
-						currentConfigurationRevision: result.configurationRevision,
-						authorizationRevision: plan.nextAuthorizationRevision,
-					})
-					.where(
-						and(
-							eq(agents.id, plan.application.agentId),
-							eq(
-								agents.currentConfigurationRevision,
-								plan.expected.configurationRevision,
-							),
-							eq(
-								agents.authorizationRevision,
-								plan.expected.authorizationRevision,
-							),
-						),
-					)
-					.returning({ id: agents.id });
-				if (advancedAgent.length !== 1) unavailable();
 
 				const advancedApplication = await transaction
 					.update(agentApplications)
 					.set({
+						...agentManagementStateUpdate(plan.management),
 						name: plan.application.name,
 						description: plan.application.description,
 						traceId: plan.application.traceId,
 						requestId: plan.application.requestId,
-						status: plan.management.state.status,
-						managementRevision: plan.management.state.revision,
-						approvalRevision: plan.management.state.approvalRevision,
-						decisionReason: plan.management.state.decisionReason,
-						serviceAvailability: plan.management.state.serviceAvailability,
-						desiredState: plan.management.state.desiredState,
-						workloadRevision: plan.management.state.workloadRevision,
-						fence: plan.management.state.fence,
-						failureCode: plan.management.state.failureCode,
 					})
 					.where(
 						and(
@@ -858,44 +526,14 @@ export class PostgresApplicationRevisionTransactionV1
 				if (advancedApplication.length !== 1) unavailable();
 
 				if (plan.configuration?.accessUpdate) {
-					await transaction
-						.delete(agentOwners)
-						.where(eq(agentOwners.agentId, plan.application.agentId));
-					await transaction.insert(agentOwners).values(
-						plan.configuration.accessUpdate.ownerIds.map((ownerId) => ({
-							agentId: plan.application.agentId,
-							ownerId,
-							createdAt: plan.outboxIntent.occurredAt,
-						})),
+					await replaceAgentAccess(
+						transaction,
+						plan.configuration.accessUpdate,
+						plan.outboxIntent.occurredAt,
 					);
-					await transaction
-						.delete(agentAvailability)
-						.where(eq(agentAvailability.agentId, plan.application.agentId));
-					if (plan.configuration.accessUpdate.availability.length > 0) {
-						await transaction.insert(agentAvailability).values(
-							plan.configuration.accessUpdate.availability.map((target) => ({
-								agentId: plan.application.agentId,
-								targetType: target.kind,
-								targetId:
-									target.kind === "user"
-										? target.userId
-										: target.organizationId,
-							})),
-						);
-					}
 				}
 
-				await transaction.insert(agentManagementHistory).values({
-					agentId: plan.application.agentId,
-					revision: plan.management.state.revision,
-					applicationId: plan.application.applicationId,
-					subjectType: plan.management.subjectType,
-					subjectId: plan.management.subjectId,
-					operation: plan.management.operation,
-					fromStatus: plan.management.transition.from,
-					toStatus: plan.management.transition.to,
-					occurredAt: plan.management.transition.occurredAt,
-				});
+				await insertAgentManagementHistory(transaction, plan.management);
 				await transaction.insert(idempotencyRecords).values({
 					id: randomUUID(),
 					scopeType,
@@ -910,34 +548,10 @@ export class PostgresApplicationRevisionTransactionV1
 					updatedAt: plan.outboxIntent.occurredAt,
 				});
 				if (plan.configuration) {
-					await transaction.insert(outboxItems).values({
-						id: randomUUID(),
-						scopeType: "agent",
-						scopeId: plan.application.agentId,
-						operation: plan.configuration.outboxIntent.operation,
-						payload: { ...plan.configuration.outboxIntent.payload },
-						traceId: plan.configuration.outboxIntent.traceId,
-						requestId: plan.configuration.outboxIntent.requestId,
-						availableAt: plan.configuration.outboxIntent.occurredAt,
-						createdAt: plan.configuration.outboxIntent.occurredAt,
-						updatedAt: plan.configuration.outboxIntent.occurredAt,
-					});
-					await transaction.insert(auditEvents).values({
-						id: randomUUID(),
-						traceId: plan.configuration.auditEvent.traceId,
-						requestId: plan.configuration.auditEvent.requestId,
-						agentId: plan.application.agentId,
-						actorType: "user",
-						actorId: plan.configuration.auditEvent.actorId,
-						action: plan.configuration.auditEvent.action,
-						targetType: plan.configuration.auditEvent.subjectType,
-						targetId: plan.configuration.auditEvent.subjectId,
-						outcome: "succeeded",
-						details: {
-							changedFields: plan.configuration.auditEvent.changedFields,
-						},
-						occurredAt: plan.configuration.auditEvent.occurredAt,
-					});
+					await insertAgentConfigurationEffects(
+						transaction,
+						plan.configuration,
+					);
 				}
 				await transaction.insert(outboxItems).values({
 					id: randomUUID(),
@@ -951,19 +565,7 @@ export class PostgresApplicationRevisionTransactionV1
 					createdAt: plan.outboxIntent.occurredAt,
 					updatedAt: plan.outboxIntent.occurredAt,
 				});
-				await transaction.insert(auditEvents).values({
-					id: randomUUID(),
-					traceId: plan.auditEvent.traceId,
-					requestId: plan.auditEvent.requestId,
-					agentId: plan.application.agentId,
-					actorType: "user",
-					actorId: plan.auditEvent.actorId,
-					action: plan.auditEvent.action,
-					targetType: plan.auditEvent.subjectType,
-					targetId: plan.auditEvent.subjectId,
-					outcome: "succeeded",
-					occurredAt: plan.auditEvent.occurredAt,
-				});
+				await insertAgentManagementEffects(transaction, plan.management);
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

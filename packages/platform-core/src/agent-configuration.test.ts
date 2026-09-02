@@ -16,6 +16,7 @@ import {
 	decodeAgentConfigurationRecordV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV1,
+	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 import {
@@ -227,6 +228,45 @@ describe("Agent configuration conformance", () => {
 			close: async () => undefined,
 		};
 	});
+});
+
+it("snapshots configuration plans without reading hostile accessors or Proxy traps", async () => {
+	const harness = createHarness();
+	await harness.useCase.update(
+		{
+			...command,
+			changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+		},
+		actor,
+	);
+	const plan = harness.transaction.snapshot().lastPlan;
+	if (!plan) throw new Error("Expected configuration write plan");
+
+	let getterReads = 0;
+	const auditEvent = Object.defineProperty({ ...plan.auditEvent }, "action", {
+		enumerable: true,
+		get() {
+			getterReads += 1;
+			return "agent.configuration.revised";
+		},
+	});
+	expect(() =>
+		snapshotAgentConfigurationWritePlanV1({ ...plan, auditEvent }),
+	).toThrow(AgentConfigurationError);
+	expect(getterReads).toBe(0);
+
+	let trapCalls = 0;
+	expect(() =>
+		snapshotAgentConfigurationWritePlanV1(
+			new Proxy(plan, {
+				ownKeys() {
+					trapCalls += 1;
+					throw new Error("sensitive trap");
+				},
+			}),
+		),
+	).toThrow(AgentConfigurationError);
+	expect(trapCalls).toBe(0);
 });
 
 describe("Initial Agent configuration admission", () => {

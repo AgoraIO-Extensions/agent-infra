@@ -6,6 +6,7 @@ import {
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
 	createAgentManagementV1,
+	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.js";
 
 export interface FakeAgentManagementOptionsV1 extends AgentManagementOptionsV1 {
@@ -72,15 +73,18 @@ export class FakeAgentManagementV1 implements AgentManagementInterfaceV1 {
 					);
 				const decision = decide(state && structuredClone(state));
 				if (decision.outcome !== "accepted") return decision;
+				const writePlan = snapshotAgentManagementWritePlanV1(
+					decision.writePlan,
+				);
 				this.#states.set(
-					decision.writePlan.state.agentId,
-					structuredClone(decision.writePlan.state),
+					writePlan.state.agentId,
+					structuredClone(writePlan.state),
 				);
 				this.#completed.set(key, {
 					digest: request.requestDigest,
 					result: structuredClone(decision.result),
 				});
-				return structuredClone(decision);
+				return structuredClone({ ...decision, writePlan });
 			},
 			resolveAgentAccessState: async (agentId) => {
 				if (options.failure === "access_read")

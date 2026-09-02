@@ -1730,6 +1730,227 @@ function parseResult(
 	});
 }
 
+function configurationPlanObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> {
+	return persistenceValue(() => {
+		const values = snapshotAgentManagementDataObject(input);
+		requireAgentManagementExactKeys(values, keys);
+		return values;
+	});
+}
+
+function configurationPlanDate(input: unknown): Date {
+	return persistenceValue(() => {
+		const milliseconds = Date.prototype.getTime.call(input);
+		if (!Number.isFinite(milliseconds)) throw new Error();
+		return new Date(milliseconds);
+	});
+}
+
+function snapshotConfigurationAccessPlanV1(
+	input: unknown,
+	agentId: string,
+): AgentConfigurationAccessPlanV1 | null {
+	if (input === null) return null;
+	return persistenceValue(() => {
+		const values = configurationPlanObject(input, [
+			"schemaVersion",
+			"fragmentType",
+			"agentId",
+			"expectedRevision",
+			"ownerIds",
+			"availability",
+		]);
+		const ownerInputs = snapshotAgentManagementDenseArray(
+			values.ownerIds,
+			maxAccessTargets,
+		);
+		const ownerIds = parseOwnerIds(ownerInputs);
+		const availabilityInputs = snapshotAgentManagementDenseArray(
+			values.availability,
+			maxAccessTargets,
+		);
+		const availability = parseAvailability(availabilityInputs);
+		if (
+			values.schemaVersion !== 1 ||
+			values.fragmentType !== "agent_access" ||
+			values.agentId !== agentId ||
+			!Number.isSafeInteger(values.expectedRevision) ||
+			(values.expectedRevision as number) < 0 ||
+			ownerIds.length === 0 ||
+			new Set(ownerIds).size !== ownerIds.length ||
+			new Set(availability.map(accessTargetKey)).size !== availability.length ||
+			!sameValue(ownerInputs, ownerIds) ||
+			!sameValue(availabilityInputs, availability)
+		) {
+			throw new Error();
+		}
+		return {
+			schemaVersion: 1,
+			fragmentType: "agent_access",
+			agentId,
+			expectedRevision: values.expectedRevision as number,
+			ownerIds,
+			availability,
+		};
+	});
+}
+
+export function snapshotAgentConfigurationWritePlanV1(
+	input: unknown,
+): AgentConfigurationWritePlanV1 {
+	return persistenceValue(() => {
+		const values = configurationPlanObject(input, [
+			"schemaVersion",
+			"agentId",
+			"baseRevision",
+			"nextRevision",
+			"expectedAuthorizationRevision",
+			"nextAuthorizationRevision",
+			"configuration",
+			"accessUpdate",
+			"result",
+			"idempotency",
+			"outboxIntent",
+			"auditEvent",
+		]);
+		if (!isText(values.agentId, idMaxBytes)) throw new Error();
+		const agentId = values.agentId;
+		const configuration = decodeAgentConfigurationRecordV1(
+			values.configuration,
+		);
+		requireAdmittedConfigurationPolicy(configuration);
+		const result = parseResult(values.result, agentId);
+		const accessUpdate = snapshotConfigurationAccessPlanV1(
+			values.accessUpdate,
+			agentId,
+		);
+		const idempotency = configurationPlanObject(values.idempotency, [
+			"key",
+			"requestDigest",
+		]);
+		const outbox = configurationPlanObject(values.outboxIntent, [
+			"operation",
+			"payload",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		]);
+		const payload = configurationPlanObject(outbox.payload, [
+			"schemaVersion",
+			"agentId",
+			"baseRevision",
+			"configurationRevision",
+			"changedFields",
+		]);
+		const payloadChangedFields = snapshotAgentManagementDenseArray(
+			payload.changedFields,
+			8,
+		);
+		const audit = configurationPlanObject(values.auditEvent, [
+			"action",
+			"actorId",
+			"agentId",
+			"subjectType",
+			"subjectId",
+			"changedFields",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		]);
+		const auditChangedFields = snapshotAgentManagementDenseArray(
+			audit.changedFields,
+			8,
+		);
+		const outboxOccurredAt = configurationPlanDate(outbox.occurredAt);
+		const auditOccurredAt = configurationPlanDate(audit.occurredAt);
+		const accessFields = result.changedFields.filter(
+			(field) => field === "owners" || field === "availability",
+		);
+		const accessOnly = accessFields.length === result.changedFields.length;
+		const expectedAction = accessOnly
+			? "agent.access.updated"
+			: "agent.configuration.revised";
+		if (
+			values.schemaVersion !== 1 ||
+			!Number.isSafeInteger(values.baseRevision) ||
+			(values.baseRevision as number) < 1 ||
+			values.baseRevision === Number.MAX_SAFE_INTEGER ||
+			values.nextRevision !== (values.baseRevision as number) + 1 ||
+			!isText(values.expectedAuthorizationRevision, idMaxBytes) ||
+			!isText(values.nextAuthorizationRevision, idMaxBytes) ||
+			configuration.agentId !== agentId ||
+			configuration.revision !== values.nextRevision ||
+			result.revision !== values.nextRevision ||
+			!isText(idempotency.key, 128) ||
+			!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotency.key) ||
+			typeof idempotency.requestDigest !== "string" ||
+			!/^[a-f0-9]{64}$/.test(idempotency.requestDigest) ||
+			outbox.operation !== "agent.configuration.revised.v1" ||
+			payload.schemaVersion !== 1 ||
+			payload.agentId !== agentId ||
+			payload.baseRevision !== values.baseRevision ||
+			payload.configurationRevision !== values.nextRevision ||
+			!sameValue(payloadChangedFields, result.changedFields) ||
+			!isText(outbox.traceId, idMaxBytes) ||
+			!isText(outbox.requestId, idMaxBytes) ||
+			audit.action !== expectedAction ||
+			!isText(audit.actorId, idMaxBytes) ||
+			audit.agentId !== agentId ||
+			audit.subjectType !== "agent" ||
+			audit.subjectId !== agentId ||
+			!sameValue(auditChangedFields, result.changedFields) ||
+			audit.traceId !== outbox.traceId ||
+			audit.requestId !== outbox.requestId ||
+			auditOccurredAt.getTime() !== outboxOccurredAt.getTime() ||
+			accessFields.length > 0 !== (accessUpdate !== null)
+		) {
+			throw new Error();
+		}
+		return {
+			schemaVersion: 1,
+			agentId,
+			baseRevision: values.baseRevision as number,
+			nextRevision: values.nextRevision as number,
+			expectedAuthorizationRevision: values.expectedAuthorizationRevision,
+			nextAuthorizationRevision: values.nextAuthorizationRevision,
+			configuration,
+			accessUpdate,
+			result,
+			idempotency: {
+				key: idempotency.key,
+				requestDigest: idempotency.requestDigest,
+			},
+			outboxIntent: {
+				operation: "agent.configuration.revised.v1",
+				payload: {
+					schemaVersion: 1,
+					agentId,
+					baseRevision: values.baseRevision as number,
+					configurationRevision: values.nextRevision as number,
+					changedFields: result.changedFields,
+				},
+				traceId: outbox.traceId,
+				requestId: outbox.requestId,
+				occurredAt: outboxOccurredAt,
+			},
+			auditEvent: {
+				action: expectedAction,
+				actorId: audit.actorId,
+				agentId,
+				subjectType: "agent",
+				subjectId: agentId,
+				changedFields: result.changedFields,
+				traceId: outbox.traceId,
+				requestId: outbox.requestId,
+				occurredAt: auditOccurredAt,
+			},
+		};
+	});
+}
+
 function parseTransactionReadDecision(
 	input: unknown,
 	agentId: string,
@@ -2680,8 +2901,9 @@ export function createAgentConfigurationUseCaseV1(
 				ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 			>;
 			try {
+				const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
 				decision = parseTransactionCommitDecision(
-					await dependencies.transaction.commit(structuredClone(plan)),
+					await dependencies.transaction.commit(capturedPlan),
 					command.agentId,
 				);
 			} catch {

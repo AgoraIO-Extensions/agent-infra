@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-
 import {
 	type AgentManagementAcceptedResultV1,
 	type AgentManagementDecisionV1,
@@ -8,11 +7,16 @@ import {
 	type AgentManagementStateV1,
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
+	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-
+import {
+	agentManagementStateUpdate,
+	insertAgentManagementEffects,
+	insertAgentManagementHistory,
+} from "./plan-writes.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -20,9 +24,7 @@ import {
 	agentManagementHistory,
 	agentOwners,
 	agents,
-	auditEvents,
 	idempotencyRecords,
-	outboxItems,
 } from "./schema.js";
 
 export interface PostgresAgentManagementOptionsV1 {
@@ -54,36 +56,6 @@ const managementStatuses = new Set([
 	"creation_failed",
 	"disabled",
 ]);
-const managementAuditActions = new Set([
-	"agent.application.updated",
-	"agent.application.resubmitted",
-	"agent.application.withdrawn",
-	"agent.application.approved",
-	"agent.application.rejected",
-	"agent.lifecycle.stopped",
-	"agent.lifecycle.restarted",
-	"agent.lifecycle.creation_retried",
-	"agent.lifecycle.disabled",
-	"agent.workload.creation_succeeded",
-	"agent.workload.creation_failed",
-	"agent.workload.service_starting",
-	"agent.workload.service_ready",
-	"agent.workload.service_updating",
-	"agent.workload.service_unavailable",
-]);
-
-function exactObject(input: unknown, keys: readonly string[]): void {
-	if (
-		typeof input !== "object" ||
-		input === null ||
-		Array.isArray(input) ||
-		Object.keys(input).length !== keys.length ||
-		keys.some((key) => !Object.hasOwn(input, key))
-	) {
-		throw new AgentManagementError("unavailable");
-	}
-}
-
 function validText(input: unknown, maximum = 1024): input is string {
 	return (
 		typeof input === "string" &&
@@ -92,14 +64,6 @@ function validText(input: unknown, maximum = 1024): input is string {
 		String.prototype.isWellFormed.call(input) &&
 		Buffer.byteLength(input, "utf8") <= maximum
 	);
-}
-
-function validDate(input: unknown): input is Date {
-	try {
-		return Number.isFinite(Date.prototype.getTime.call(input));
-	} catch {
-		return false;
-	}
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -282,59 +246,16 @@ function requireAcceptedEnvelope(
 	decision: AcceptedDecision,
 ): {
 	readonly result: AgentManagementAcceptedResultV1;
-	readonly outboxPayload: null | {
-		readonly schemaVersion: 1;
-		readonly agentId: string;
-		readonly revision: number;
-		readonly workloadRevision: number;
-		readonly fence: number;
-		readonly desiredState: "running" | "stopped";
-	};
+	readonly writePlan: AcceptedDecision["writePlan"];
 } {
-	const { result, writePlan } = decision;
-	exactObject(writePlan, [
-		"schemaVersion",
-		"operation",
-		"subjectType",
-		"subjectId",
-		"expectedRevision",
-		"state",
-		"transition",
-		"outboxIntent",
-		"auditEvent",
-		"idempotency",
-	]);
-	exactObject(writePlan.state, [
-		"schemaVersion",
-		"applicationId",
-		"agentId",
-		"applicantId",
-		"status",
-		"revision",
-		"approvalRevision",
-		"decisionReason",
-		"serviceAvailability",
-		"desiredState",
-		"workloadRevision",
-		"fence",
-		"ownerIds",
-		"availability",
-		"failureCode",
-	]);
-	exactObject(writePlan.transition, ["from", "to", "occurredAt"]);
-	exactObject(writePlan.auditEvent, [
-		"action",
-		"actorId",
-		"subjectType",
-		"subjectId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	exactObject(writePlan.idempotency, ["key", "requestDigest"]);
-	const validatedResult = acceptedResult(result, request);
+	let writePlan: AcceptedDecision["writePlan"];
+	try {
+		writePlan = snapshotAgentManagementWritePlanV1(decision.writePlan);
+	} catch {
+		throw new AgentManagementError("unavailable");
+	}
+	const result = acceptedResult(decision.result, request);
 	if (
-		writePlan.schemaVersion !== 1 ||
 		writePlan.operation !== request.operation ||
 		writePlan.subjectType !== request.subjectType ||
 		writePlan.subjectId !== request.subjectId ||
@@ -344,26 +265,14 @@ function requireAcceptedEnvelope(
 		writePlan.state.applicationId !== current.applicationId ||
 		writePlan.state.agentId !== current.agentId ||
 		writePlan.state.applicantId !== current.applicantId ||
-		writePlan.state.schemaVersion !== 1 ||
-		writePlan.state.revision !== current.revision + 1 ||
 		!sameValue(writePlan.state.ownerIds, current.ownerIds) ||
 		!sameValue(writePlan.state.availability, current.availability) ||
 		writePlan.transition.from !== current.status ||
-		writePlan.transition.to !== writePlan.state.status ||
-		!validDate(writePlan.transition.occurredAt) ||
-		!managementAuditActions.has(writePlan.auditEvent.action) ||
 		writePlan.auditEvent.actorId !== request.actorId ||
-		writePlan.auditEvent.subjectType !== request.subjectType ||
-		writePlan.auditEvent.subjectId !== request.subjectId ||
-		!validText(writePlan.auditEvent.traceId) ||
-		!validText(writePlan.auditEvent.requestId) ||
-		!validDate(writePlan.auditEvent.occurredAt) ||
-		writePlan.auditEvent.occurredAt.getTime() !==
-			writePlan.transition.occurredAt.getTime() ||
-		validatedResult.applicationId !== writePlan.state.applicationId ||
-		validatedResult.agentId !== writePlan.state.agentId ||
-		validatedResult.status !== writePlan.state.status ||
-		validatedResult.revision !== writePlan.state.revision
+		result.applicationId !== writePlan.state.applicationId ||
+		result.agentId !== writePlan.state.agentId ||
+		result.status !== writePlan.state.status ||
+		result.revision !== writePlan.state.revision
 	) {
 		throw new AgentManagementError("unavailable");
 	}
@@ -374,47 +283,7 @@ function requireAcceptedEnvelope(
 	if (workloadChanged !== (writePlan.outboxIntent !== null)) {
 		throw new AgentManagementError("unavailable");
 	}
-	if (writePlan.outboxIntent === null) {
-		return { result: validatedResult, outboxPayload: null };
-	}
-	const outbox = writePlan.outboxIntent;
-	if (!outbox) throw new AgentManagementError("unavailable");
-	exactObject(outbox, [
-		"operation",
-		"payload",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	exactObject(outbox.payload, [
-		"schemaVersion",
-		"agentId",
-		"revision",
-		"workloadRevision",
-		"fence",
-		"desiredState",
-	]);
-	const outboxPayload = {
-		schemaVersion: 1 as const,
-		agentId: writePlan.state.agentId,
-		revision: writePlan.state.revision,
-		workloadRevision: writePlan.state.workloadRevision,
-		fence: writePlan.state.fence,
-		desiredState: writePlan.state.desiredState,
-	};
-	if (
-		outbox.operation !== "agent.workload.reconcile.v1" ||
-		!sameValue(outbox.payload, outboxPayload) ||
-		!validText(outbox.traceId) ||
-		!validText(outbox.requestId) ||
-		outbox.traceId !== writePlan.auditEvent.traceId ||
-		outbox.requestId !== writePlan.auditEvent.requestId ||
-		!validDate(outbox.occurredAt) ||
-		outbox.occurredAt.getTime() !== writePlan.transition.occurredAt.getTime()
-	) {
-		throw new AgentManagementError("unavailable");
-	}
-	return { result: validatedResult, outboxPayload };
+	return { result, writePlan };
 }
 
 async function persistAccepted(
@@ -424,23 +293,11 @@ async function persistAccepted(
 	decision: AcceptedDecision,
 ): Promise<AgentManagementDecisionV1> {
 	const validated = requireAcceptedEnvelope(request, current, decision);
-	const { writePlan } = decision;
-	const { result, outboxPayload } = validated;
-	const next = writePlan.state;
+	const { result, writePlan } = validated;
 	const observation = request.operation.startsWith("observe_");
 	const [updated] = await transaction
 		.update(agentApplications)
-		.set({
-			status: next.status,
-			managementRevision: next.revision,
-			approvalRevision: next.approvalRevision,
-			decisionReason: next.decisionReason,
-			serviceAvailability: next.serviceAvailability,
-			desiredState: next.desiredState,
-			workloadRevision: next.workloadRevision,
-			fence: next.fence,
-			failureCode: next.failureCode,
-		})
+		.set(agentManagementStateUpdate(writePlan))
 		.where(
 			and(
 				eq(agentApplications.id, current.applicationId),
@@ -462,44 +319,8 @@ async function persistAccepted(
 		};
 	}
 
-	await transaction.insert(agentManagementHistory).values({
-		agentId: next.agentId,
-		revision: next.revision,
-		applicationId: next.applicationId,
-		subjectType: writePlan.subjectType,
-		subjectId: writePlan.subjectId,
-		operation: writePlan.operation,
-		fromStatus: writePlan.transition.from,
-		toStatus: writePlan.transition.to,
-		occurredAt: writePlan.transition.occurredAt,
-	});
-	if (writePlan.outboxIntent && outboxPayload) {
-		await transaction.insert(outboxItems).values({
-			id: randomUUID(),
-			scopeType: "agent",
-			scopeId: next.agentId,
-			operation: writePlan.outboxIntent.operation,
-			payload: outboxPayload,
-			traceId: writePlan.outboxIntent.traceId,
-			requestId: writePlan.outboxIntent.requestId,
-			availableAt: writePlan.outboxIntent.occurredAt,
-			createdAt: writePlan.outboxIntent.occurredAt,
-			updatedAt: writePlan.outboxIntent.occurredAt,
-		});
-	}
-	await transaction.insert(auditEvents).values({
-		id: randomUUID(),
-		traceId: writePlan.auditEvent.traceId,
-		requestId: writePlan.auditEvent.requestId,
-		agentId: next.agentId,
-		actorType: observation ? "system" : "user",
-		actorId: writePlan.auditEvent.actorId,
-		action: writePlan.auditEvent.action,
-		targetType: writePlan.auditEvent.subjectType,
-		targetId: writePlan.auditEvent.subjectId,
-		outcome: "succeeded",
-		occurredAt: writePlan.auditEvent.occurredAt,
-	});
+	await insertAgentManagementHistory(transaction, writePlan);
+	await insertAgentManagementEffects(transaction, writePlan);
 	await transaction.insert(idempotencyRecords).values({
 		id: randomUUID(),
 		scopeType: request.subjectType,
@@ -513,7 +334,7 @@ async function persistAccepted(
 		createdAt: writePlan.transition.occurredAt,
 		updatedAt: writePlan.transition.occurredAt,
 	});
-	return decision;
+	return { outcome: "accepted", result, writePlan };
 }
 
 export class PostgresAgentManagementTransactionV1

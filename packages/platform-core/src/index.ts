@@ -35,6 +35,7 @@ export type {
 export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
+	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
 export * from "./application-foundation.js";

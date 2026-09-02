@@ -12,12 +12,14 @@ import {
 	type AgentConfigurationWritePlanV1,
 	createAgentConfigurationUseCaseV1,
 	decodeAgentConfigurationRecordV1,
+	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 import {
 	type AgentManagementActorContextV1,
 	type AgentManagementStateV1,
 	type AgentManagementWritePlanV1,
 	createAgentManagementV1,
+	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.js";
 import {
 	isAgentManagementText,
@@ -26,7 +28,6 @@ import {
 	parseAgentManagementStringArray,
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
-	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
 
 export interface ReviseApplicationCommandV1 {
@@ -528,51 +529,30 @@ function cachedClock(now: () => Date): () => Date {
 	};
 }
 
-function snapshotData(
-	input: unknown,
-	depth = 0,
-	budget = { remaining: 16_384 },
-): unknown {
-	if (depth > 32 || budget.remaining-- < 1) {
-		throw new ApplicationRevisionError("persistence_failed");
-	}
-	if (typeof input !== "object" || input === null) return input;
-	try {
-		const milliseconds = Date.prototype.getTime.call(input);
-		if (Number.isFinite(milliseconds) && Reflect.ownKeys(input).length === 0) {
-			return new Date(milliseconds);
-		}
-	} catch {
-		// Ordinary records and arrays are handled below.
-	}
-	try {
-		if (Array.isArray(input)) {
-			return snapshotAgentManagementDenseArray(input, 4096).map((value) =>
-				snapshotData(value, depth + 1, budget),
-			);
-		}
-		const values = snapshotAgentManagementDataObject(input);
-		if (Object.keys(values).length > 128) throw new Error();
-		return Object.fromEntries(
-			Object.entries(values).map(([key, value]) => [
-				key,
-				snapshotData(value, depth + 1, budget),
-			]),
-		);
-	} catch {
-		throw new ApplicationRevisionError("persistence_failed");
-	}
-}
-
 function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function validDate(input: unknown): input is Date {
+function revisionPlanObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> {
 	try {
-		return Number.isFinite(Date.prototype.getTime.call(input));
+		const values = snapshotAgentManagementDataObject(input);
+		requireAgentManagementExactKeys(values, keys);
+		return values;
 	} catch {
-		return false;
+		throw new ApplicationRevisionError("persistence_failed");
+	}
+}
+
+function revisionPlanDate(input: unknown): Date {
+	try {
+		const milliseconds = Date.prototype.getTime.call(input);
+		if (!Number.isFinite(milliseconds)) throw new Error();
+		return new Date(milliseconds);
+	} catch {
+		throw new ApplicationRevisionError("persistence_failed");
 	}
 }
 
@@ -580,9 +560,7 @@ export function snapshotApplicationRevisionWritePlanV1(
 	input: unknown,
 ): ApplicationRevisionWritePlanV1 {
 	try {
-		const plan = snapshotData(input) as ApplicationRevisionWritePlanV1;
-		const top = snapshotAgentManagementDataObject(plan);
-		requireAgentManagementExactKeys(top, [
+		const top = revisionPlanObject(input, [
 			"schemaVersion",
 			"application",
 			"expected",
@@ -594,8 +572,7 @@ export function snapshotApplicationRevisionWritePlanV1(
 			"outboxIntent",
 			"auditEvent",
 		]);
-		const application = snapshotAgentManagementDataObject(plan.application);
-		requireAgentManagementExactKeys(application, [
+		const application = revisionPlanObject(top.application, [
 			"applicationId",
 			"agentId",
 			"applicantId",
@@ -604,36 +581,31 @@ export function snapshotApplicationRevisionWritePlanV1(
 			"traceId",
 			"requestId",
 		]);
-		const expected = snapshotAgentManagementDataObject(plan.expected);
-		requireAgentManagementExactKeys(expected, [
+		const expected = revisionPlanObject(top.expected, [
 			"managementRevision",
 			"configurationRevision",
 			"authorizationRevision",
 		]);
-		const managementValues = snapshotAgentManagementDataObject(plan.management);
-		requireAgentManagementExactKeys(managementValues, [
-			"schemaVersion",
-			"operation",
-			"subjectType",
-			"subjectId",
-			"expectedRevision",
-			"state",
-			"transition",
-			"outboxIntent",
-			"auditEvent",
-			"idempotency",
+		const management = snapshotAgentManagementWritePlanV1(top.management);
+		const configuration =
+			top.configuration === null
+				? null
+				: snapshotAgentConfigurationWritePlanV1(top.configuration);
+		const result = parseResult(top.result);
+		const idempotency = revisionPlanObject(top.idempotency, [
+			"key",
+			"requestDigest",
 		]);
-		const managementState = parseAgentManagementPortState(
-			plan.management.state,
-		);
-		const transition = snapshotAgentManagementDataObject(
-			plan.management.transition,
-		);
-		requireAgentManagementExactKeys(transition, ["from", "to", "occurredAt"]);
-		const managementAudit = snapshotAgentManagementDataObject(
-			plan.management.auditEvent,
-		);
-		requireAgentManagementExactKeys(managementAudit, [
+		const outbox = revisionPlanObject(top.outboxIntent, [
+			"operation",
+			"payload",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		]);
+		const outboxPayload = parseResult(outbox.payload);
+		const outboxOccurredAt = revisionPlanDate(outbox.occurredAt);
+		const outerAudit = revisionPlanObject(top.auditEvent, [
 			"action",
 			"actorId",
 			"subjectType",
@@ -642,27 +614,9 @@ export function snapshotApplicationRevisionWritePlanV1(
 			"requestId",
 			"occurredAt",
 		]);
-		const managementIdempotency = snapshotAgentManagementDataObject(
-			plan.management.idempotency,
-		);
-		requireAgentManagementExactKeys(managementIdempotency, [
-			"key",
-			"requestDigest",
-		]);
-		const result = parseResult(plan.result);
-		const idempotency = snapshotAgentManagementDataObject(plan.idempotency);
-		requireAgentManagementExactKeys(idempotency, ["key", "requestDigest"]);
-		const outbox = snapshotAgentManagementDataObject(plan.outboxIntent);
-		requireAgentManagementExactKeys(outbox, [
-			"operation",
-			"payload",
-			"traceId",
-			"requestId",
-			"occurredAt",
-		]);
-		const outerAudit = snapshotAgentManagementDataObject(plan.auditEvent);
+		const outerAuditOccurredAt = revisionPlanDate(outerAudit.occurredAt);
 		if (
-			plan.schemaVersion !== 1 ||
+			top.schemaVersion !== 1 ||
 			!isAgentManagementText(application.applicationId) ||
 			!isAgentManagementText(application.agentId) ||
 			!isAgentManagementText(application.applicantId) ||
@@ -676,245 +630,114 @@ export function snapshotApplicationRevisionWritePlanV1(
 			!Number.isSafeInteger(expected.configurationRevision) ||
 			(expected.configurationRevision as number) < 1 ||
 			!isAgentManagementText(expected.authorizationRevision) ||
-			!isAgentManagementText(plan.nextAuthorizationRevision) ||
-			plan.management.schemaVersion !== 1 ||
-			plan.management.operation !== "update_application" ||
-			plan.management.subjectType !== "agent_application" ||
-			plan.management.subjectId !== application.applicationId ||
-			plan.management.expectedRevision !== expected.managementRevision ||
-			plan.management.outboxIntent !== null ||
-			managementState.applicationId !== application.applicationId ||
-			managementState.agentId !== application.agentId ||
-			managementState.applicantId !== application.applicantId ||
-			managementState.status !== "pending_approval" ||
-			managementState.revision !== expected.managementRevision + 1 ||
-			(transition.from !== "pending_approval" &&
-				transition.from !== "rejected") ||
-			transition.to !== "pending_approval" ||
-			!validDate(transition.occurredAt) ||
-			managementAudit.action !==
-				(transition.from === "rejected"
-					? "agent.application.resubmitted"
-					: "agent.application.updated") ||
-			managementAudit.actorId !== application.applicantId ||
-			managementAudit.subjectType !== "agent_application" ||
-			managementAudit.subjectId !== application.applicationId ||
-			managementAudit.traceId !== application.traceId ||
-			managementAudit.requestId !== application.requestId ||
-			!validDate(managementAudit.occurredAt) ||
-			Date.prototype.getTime.call(managementAudit.occurredAt) !==
-				Date.prototype.getTime.call(transition.occurredAt) ||
-			managementIdempotency.key !== idempotency.key ||
-			typeof managementIdempotency.requestDigest !== "string" ||
-			!/^[a-f0-9]{64}$/.test(managementIdempotency.requestDigest) ||
+			!isAgentManagementText(top.nextAuthorizationRevision) ||
+			management.operation !== "update_application" ||
+			management.subjectType !== "agent_application" ||
+			management.subjectId !== application.applicationId ||
+			management.expectedRevision !== expected.managementRevision ||
+			management.outboxIntent !== null ||
+			management.state.applicationId !== application.applicationId ||
+			management.state.agentId !== application.agentId ||
+			management.state.applicantId !== application.applicantId ||
+			management.state.status !== "pending_approval" ||
+			management.auditEvent.actorId !== application.applicantId ||
+			management.auditEvent.traceId !== application.traceId ||
+			management.auditEvent.requestId !== application.requestId ||
+			management.idempotency.key !== idempotency.key ||
 			!isAgentManagementText(idempotency.key, 128) ||
 			!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotency.key as string) ||
 			typeof idempotency.requestDigest !== "string" ||
 			!/^[a-f0-9]{64}$/.test(idempotency.requestDigest) ||
 			result.applicationId !== application.applicationId ||
 			result.agentId !== application.agentId ||
-			result.managementRevision !== managementState.revision ||
-			plan.outboxIntent.operation !== "agent.application.revised.v1" ||
-			!sameValue(outbox.payload, result) ||
+			result.managementRevision !== management.state.revision ||
+			outbox.operation !== "agent.application.revised.v1" ||
+			!sameValue(outboxPayload, result) ||
 			outbox.traceId !== application.traceId ||
 			outbox.requestId !== application.requestId ||
-			!validDate(outbox.occurredAt) ||
-			Date.prototype.getTime.call(outbox.occurredAt) !==
-				Date.prototype.getTime.call(transition.occurredAt) ||
-			!sameValue(outerAudit, managementAudit)
+			outboxOccurredAt.getTime() !==
+				management.transition.occurredAt.getTime() ||
+			outerAuditOccurredAt.getTime() !==
+				management.auditEvent.occurredAt.getTime() ||
+			!sameValue(
+				{ ...outerAudit, occurredAt: outerAuditOccurredAt },
+				management.auditEvent,
+			)
 		) {
 			throw new Error();
 		}
-		if (plan.configuration === null) {
+		if (configuration === null) {
 			if (result.configurationRevision !== expected.configurationRevision) {
 				throw new Error();
 			}
 		} else {
-			const configurationValues = snapshotAgentManagementDataObject(
-				plan.configuration,
-			);
-			requireAgentManagementExactKeys(configurationValues, [
-				"schemaVersion",
-				"agentId",
-				"baseRevision",
-				"nextRevision",
-				"expectedAuthorizationRevision",
-				"nextAuthorizationRevision",
-				"configuration",
-				"accessUpdate",
-				"result",
-				"idempotency",
-				"outboxIntent",
-				"auditEvent",
-			]);
-			const configuration = decodeAgentConfigurationRecordV1(
-				plan.configuration.configuration,
-			);
-			const configurationResult = snapshotAgentManagementDataObject(
-				plan.configuration.result,
-			);
-			requireAgentManagementExactKeys(configurationResult, [
-				"schemaVersion",
-				"agentId",
-				"revision",
-				"changedFields",
-			]);
-			const changedFields = snapshotAgentManagementDenseArray(
-				configurationResult.changedFields,
-				8,
-			);
-			const allowedChangedFields = new Set([
-				"source",
-				"environment",
-				"modelConfiguration",
-				"secrets",
-				"actions",
-				"channels",
-				"owners",
-				"availability",
-			]);
-			const configurationIdempotency = snapshotAgentManagementDataObject(
-				plan.configuration.idempotency,
-			);
-			requireAgentManagementExactKeys(configurationIdempotency, [
-				"key",
-				"requestDigest",
-			]);
-			const configurationOutbox = snapshotAgentManagementDataObject(
-				plan.configuration.outboxIntent,
-			);
-			requireAgentManagementExactKeys(configurationOutbox, [
-				"operation",
-				"payload",
-				"traceId",
-				"requestId",
-				"occurredAt",
-			]);
-			const configurationPayload = snapshotAgentManagementDataObject(
-				configurationOutbox.payload,
-			);
-			requireAgentManagementExactKeys(configurationPayload, [
-				"schemaVersion",
-				"agentId",
-				"baseRevision",
-				"configurationRevision",
-				"changedFields",
-			]);
-			const configurationAudit = snapshotAgentManagementDataObject(
-				plan.configuration.auditEvent,
-			);
-			requireAgentManagementExactKeys(configurationAudit, [
-				"action",
-				"actorId",
-				"agentId",
-				"subjectType",
-				"subjectId",
-				"changedFields",
-				"traceId",
-				"requestId",
-				"occurredAt",
-			]);
-			let accessUpdate:
-				| {
-						agentId: unknown;
-						expectedRevision: unknown;
-						ownerIds: unknown;
-						availability: unknown;
-				  }
-				| undefined;
-			if (plan.configuration.accessUpdate !== null) {
-				const values = snapshotAgentManagementDataObject(
-					plan.configuration.accessUpdate,
-				);
-				requireAgentManagementExactKeys(values, [
-					"schemaVersion",
-					"fragmentType",
-					"agentId",
-					"expectedRevision",
-					"ownerIds",
-					"availability",
-				]);
-				if (
-					values.schemaVersion !== 1 ||
-					values.fragmentType !== "agent_access"
-				) {
-					throw new Error();
-				}
-				accessUpdate = {
-					agentId: values.agentId,
-					expectedRevision: values.expectedRevision,
-					ownerIds: values.ownerIds,
-					availability: values.availability,
-				};
-			}
-			const expectedConfigurationAction =
-				accessUpdate !== undefined &&
-				changedFields.every(
-					(field) => field === "owners" || field === "availability",
-				)
-					? "agent.access.updated"
-					: "agent.configuration.revised";
 			if (
-				plan.configuration.schemaVersion !== 1 ||
-				plan.configuration.agentId !== application.agentId ||
-				plan.configuration.baseRevision !== expected.configurationRevision ||
-				plan.configuration.nextRevision !==
-					expected.configurationRevision + 1 ||
-				plan.configuration.expectedAuthorizationRevision !==
-					expected.authorizationRevision ||
-				plan.configuration.nextAuthorizationRevision !==
-					plan.nextAuthorizationRevision ||
 				configuration.agentId !== application.agentId ||
-				configuration.revision !== plan.configuration.nextRevision ||
-				result.configurationRevision !== plan.configuration.nextRevision ||
-				configurationResult.schemaVersion !== 1 ||
-				configurationResult.agentId !== application.agentId ||
-				configurationResult.revision !== plan.configuration.nextRevision ||
-				changedFields.length === 0 ||
-				new Set(changedFields).size !== changedFields.length ||
-				changedFields.some(
-					(field) => !allowedChangedFields.has(field as string),
-				) ||
-				configurationIdempotency.key !== idempotency.key ||
-				typeof configurationIdempotency.requestDigest !== "string" ||
-				!/^[a-f0-9]{64}$/.test(configurationIdempotency.requestDigest) ||
-				configurationOutbox.operation !== "agent.configuration.revised.v1" ||
-				configurationOutbox.traceId !== application.traceId ||
-				configurationOutbox.requestId !== application.requestId ||
-				!validDate(configurationOutbox.occurredAt) ||
-				Date.prototype.getTime.call(configurationOutbox.occurredAt) !==
-					Date.prototype.getTime.call(transition.occurredAt) ||
-				configurationPayload.schemaVersion !== 1 ||
-				configurationPayload.agentId !== application.agentId ||
-				configurationPayload.baseRevision !== expected.configurationRevision ||
-				configurationPayload.configurationRevision !==
-					plan.configuration.nextRevision ||
-				!sameValue(configurationPayload.changedFields, changedFields) ||
-				configurationAudit.action !== expectedConfigurationAction ||
-				configurationAudit.actorId !== application.applicantId ||
-				configurationAudit.agentId !== application.agentId ||
-				configurationAudit.subjectType !== "agent" ||
-				configurationAudit.subjectId !== application.agentId ||
-				!sameValue(configurationAudit.changedFields, changedFields) ||
-				configurationAudit.traceId !== application.traceId ||
-				configurationAudit.requestId !== application.requestId ||
-				!validDate(configurationAudit.occurredAt) ||
-				Date.prototype.getTime.call(configurationAudit.occurredAt) !==
-					Date.prototype.getTime.call(transition.occurredAt)
+				configuration.baseRevision !== expected.configurationRevision ||
+				configuration.nextRevision !== expected.configurationRevision + 1 ||
+				configuration.expectedAuthorizationRevision !==
+					expected.authorizationRevision ||
+				configuration.nextAuthorizationRevision !==
+					top.nextAuthorizationRevision ||
+				result.configurationRevision !== configuration.nextRevision ||
+				configuration.idempotency.key !== idempotency.key ||
+				configuration.outboxIntent.traceId !== application.traceId ||
+				configuration.outboxIntent.requestId !== application.requestId ||
+				configuration.outboxIntent.occurredAt.getTime() !==
+					management.transition.occurredAt.getTime() ||
+				configuration.auditEvent.actorId !== application.applicantId
 			) {
 				throw new Error();
 			}
 			if (
-				accessUpdate &&
-				(accessUpdate.agentId !== application.agentId ||
-					accessUpdate.expectedRevision !== expected.managementRevision ||
-					!sameValue(accessUpdate.ownerIds, managementState.ownerIds) ||
-					!sameValue(accessUpdate.availability, managementState.availability))
+				configuration.accessUpdate &&
+				(configuration.accessUpdate.expectedRevision !==
+					expected.managementRevision ||
+					!sameValue(
+						configuration.accessUpdate.ownerIds,
+						management.state.ownerIds,
+					) ||
+					!sameValue(
+						configuration.accessUpdate.availability,
+						management.state.availability,
+					))
 			) {
 				throw new Error();
 			}
 		}
-		return plan;
+		return {
+			schemaVersion: 1,
+			application: {
+				applicationId: application.applicationId,
+				agentId: application.agentId,
+				applicantId: application.applicantId,
+				name: application.name,
+				description: application.description,
+				traceId: application.traceId,
+				requestId: application.requestId,
+			},
+			expected: {
+				managementRevision: expected.managementRevision as number,
+				configurationRevision: expected.configurationRevision as number,
+				authorizationRevision: expected.authorizationRevision,
+			},
+			nextAuthorizationRevision: top.nextAuthorizationRevision,
+			management,
+			configuration,
+			result,
+			idempotency: {
+				key: idempotency.key,
+				requestDigest: idempotency.requestDigest,
+			},
+			outboxIntent: {
+				operation: "agent.application.revised.v1",
+				payload: result,
+				traceId: application.traceId,
+				requestId: application.requestId,
+				occurredAt: outboxOccurredAt,
+			},
+			auditEvent: management.auditEvent,
+		};
 	} catch {
 		throw new ApplicationRevisionError("persistence_failed");
 	}

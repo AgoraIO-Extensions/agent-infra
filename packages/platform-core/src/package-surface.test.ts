@@ -44,6 +44,8 @@ describe("platform-core package surface", () => {
 			"createApplicationFoundationUseCaseV1",
 			"createApplicationRevisionUseCaseV1",
 			"platformIdempotencyV1",
+			"snapshotAgentConfigurationWritePlanV1",
+			"snapshotAgentManagementWritePlanV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
 		]);
