@@ -41,11 +41,13 @@ describe("platform-store package surface", () => {
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationStoreError",
 			"OutboxStoreError",
+			"PlatformAuditQueryError",
 			"PostgresAgentConfigurationQueryV1",
 			"PostgresAgentConfigurationTransactionV1",
 			"PostgresAgentManagementQueryV1",
 			"PostgresAgentManagementTransactionV1",
 			"PostgresApplicationFoundationTransactionV1",
+			"PostgresPlatformAuditQueryV1",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
 			"openPostgresPlatformIdempotencyStore",
