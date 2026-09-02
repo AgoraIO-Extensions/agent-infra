@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 
 import { desc, eq, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -285,7 +284,6 @@ const auditSelection = {
 	occurredAt: auditEvents.occurredAt,
 	details: auditEvents.details,
 };
-const cursorAuditEvent = alias(auditEvents, "cursor_audit_event");
 
 export class PostgresPlatformAuditQueryV1 implements PlatformAuditQueryV1 {
 	readonly #client;
@@ -323,9 +321,9 @@ export class PostgresPlatformAuditQueryV1 implements PlatformAuditQueryV1 {
 					page.cursor
 						? sql<boolean>`
 							(${auditEvents.occurredAt}, ${auditEvents.id}) < (
-								select ${cursorAuditEvent.occurredAt}, ${cursorAuditEvent.id}
-								from ${cursorAuditEvent}
-								where ${cursorAuditEvent.id} = ${page.cursor}
+								select ${auditEvents.occurredAt}, ${auditEvents.id}
+								from ${auditEvents}
+								where ${auditEvents.id} = ${page.cursor}
 							)
 						`
 						: undefined,
