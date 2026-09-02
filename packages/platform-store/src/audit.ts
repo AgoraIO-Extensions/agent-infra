@@ -388,7 +388,8 @@ export class PostgresPlatformAuditQueryV1 {
 						details: auditPage.details,
 					})
 					.from(cursor)
-					.leftJoin(auditPage, sql`true`);
+					.leftJoin(auditPage, sql`true`)
+					.orderBy(desc(auditPage.occurredAt), desc(auditPage.auditId));
 				if (result.length === 0) {
 					throw new PlatformAuditQueryError("invalid_request");
 				}
