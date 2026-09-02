@@ -33,13 +33,10 @@ import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { createPlatformProjectionReaders } from "./projection.js";
 
 const source = {
-	kind: "standard" as const,
-	templateId: "template-1",
+	kind: "custom" as const,
 	imageDigest: `sha256:${"a".repeat(64)}`,
 	admissionRevision: "image-admission-1",
-	allowedEnvironmentKeys: ["LOG_LEVEL"],
-	allowedSecretKeys: [],
-	platformManagedKeys: [],
+	interactionMode: "platform-adapter" as const,
 	connectionEnabled: false,
 };
 const identities = {
@@ -76,7 +73,11 @@ const applicationBody = {
 	schemaVersion: 1 as const,
 	name: "Release assistant",
 	description: "Helps the release team",
-	source: { kind: "standard" as const, templateId: "template-1" },
+	source: {
+		kind: "custom" as const,
+		imageReference: "registry.example/agent:v1",
+		interactionMode: "platform-adapter" as const,
+	},
 	coOwnerIds: [],
 	availability: [{ kind: "organization" as const, organizationId: "org-1" }],
 	actions: [],
@@ -137,6 +138,16 @@ beforeAll(async () => {
 			agentId,
 			actorId: identities.owner.userId,
 			authorizationRevision: "authorization-1",
+			authorityContext: {
+				schemaVersion: 1 as const,
+				users: [
+					{
+						userId: identities.owner.userId,
+						accountStatus: "active" as const,
+					},
+				],
+				organizationIds: ["org-1"],
+			},
 		})),
 		images: [{ selection: applicationBody.source, source }],
 		models: [],
@@ -263,13 +274,14 @@ beforeAll(async () => {
 		managementQuery,
 		configurationQuery,
 		presentAgent: async ({ configuration }) => {
-			if (configuration.source.kind !== "standard") {
+			if (configuration.source.kind !== "custom") {
 				throw new Error("unexpected test source");
 			}
 			return {
 				source: {
-					kind: "standard",
-					templateId: configuration.source.templateId,
+					kind: "custom",
+					imageReference: applicationBody.source.imageReference,
+					interactionMode: "platform-adapter",
 				},
 				resourceProfile: {
 					profileId: "standard-medium",
