@@ -291,6 +291,30 @@ describe("configuration routes", () => {
 
 		expect(malformedResponse.status).toBe(503);
 		expect(malformed.update).not.toHaveBeenCalled();
+
+		const malformedShape = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: null,
+				modelCredentialOptionIds: [],
+			} as never),
+		});
+		const malformedShapeResponse = await malformedShape.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-secret-malformed-shape",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
+				}),
+			},
+		);
+
+		expect(malformedShapeResponse.status).toBe(503);
+		expect(malformedShape.update).not.toHaveBeenCalled();
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {

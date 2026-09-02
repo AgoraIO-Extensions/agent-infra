@@ -111,22 +111,33 @@ function validatePreparedSecrets(
 	>,
 	traceId: string,
 ): void {
-	const requestedSecrets = (input.secrets ?? [])
-		.map(({ name }) => name)
-		.toSorted();
-	const preparedSecrets = prepared.secrets.map(({ name }) => name).toSorted();
-	const requestedModels = (input.modelConfiguration?.options ?? [])
-		.filter(({ credentialValue }) => credentialValue !== undefined)
-		.map(({ optionId }) => optionId)
-		.toSorted();
-	const preparedModels = [...prepared.modelCredentialOptionIds].toSorted();
-	if (
-		new Set(preparedSecrets).size !== preparedSecrets.length ||
-		prepared.secrets.some(({ replace }) => replace !== true) ||
-		new Set(preparedModels).size !== preparedModels.length ||
-		JSON.stringify(requestedSecrets) !== JSON.stringify(preparedSecrets) ||
-		JSON.stringify(requestedModels) !== JSON.stringify(preparedModels)
-	) {
+	try {
+		if (
+			!Array.isArray(prepared.secrets) ||
+			!Array.isArray(prepared.modelCredentialOptionIds)
+		) {
+			throw new Error();
+		}
+		const requestedSecrets = (input.secrets ?? [])
+			.map(({ name }) => name)
+			.toSorted();
+		const preparedSecrets = prepared.secrets.map(({ name }) => name).toSorted();
+		const requestedModels = (input.modelConfiguration?.options ?? [])
+			.filter(({ credentialValue }) => credentialValue !== undefined)
+			.map(({ optionId }) => optionId)
+			.toSorted();
+		const preparedModels = [...prepared.modelCredentialOptionIds].toSorted();
+		if (
+			new Set(preparedSecrets).size !== preparedSecrets.length ||
+			prepared.secrets.some(({ replace }) => replace !== true) ||
+			new Set(preparedModels).size !== preparedModels.length ||
+			preparedModels.some((optionId) => typeof optionId !== "string") ||
+			JSON.stringify(requestedSecrets) !== JSON.stringify(preparedSecrets) ||
+			JSON.stringify(requestedModels) !== JSON.stringify(preparedModels)
+		) {
+			throw new Error();
+		}
+	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 }
