@@ -189,8 +189,7 @@ export function registerConfigurationRoutes(
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
 				});
-			} catch (error) {
-				if (error instanceof HttpProtocolError) throw error;
+			} catch {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 		}

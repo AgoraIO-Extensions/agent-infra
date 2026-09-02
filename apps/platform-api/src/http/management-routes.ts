@@ -332,6 +332,7 @@ async function prepareApplicationInput(
 		const preparedSecrets = prepared.secrets.map(({ name }) => name).toSorted();
 		if (
 			new Set(preparedSecrets).size !== preparedSecrets.length ||
+			prepared.secrets.some(({ replace }) => replace !== true) ||
 			JSON.stringify(requestedSecrets) !== JSON.stringify(preparedSecrets)
 		) {
 			fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
@@ -366,9 +367,9 @@ async function prepareApplicationInput(
 			}
 		}
 		return {
-			secrets: prepared.secrets.map(({ name, replace }) => ({
+			secrets: prepared.secrets.map(({ name }) => ({
 				name,
-				replace,
+				replace: true as const,
 			})),
 			...(prepared.modelConfiguration === undefined
 				? {}

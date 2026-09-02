@@ -575,5 +575,21 @@ describe("management routes", () => {
 			"never-return-this",
 		);
 		expect(failed.submit).not.toHaveBeenCalled();
+
+		const malformed = createApp();
+		malformed.prepareSecretReplacements.mockResolvedValue({
+			secrets: [{ name: "MODEL_API_KEY", replace: false }],
+		} as never);
+		const malformedResponse = await malformed.app.request(
+			"/api/v1/agent-applications",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(applicationBody),
+			},
+		);
+
+		expect(malformedResponse.status).toBe(503);
+		expect(malformed.submit).not.toHaveBeenCalled();
 	});
 });

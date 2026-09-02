@@ -318,6 +318,34 @@ describe("configuration routes", () => {
 		);
 		expect(preparation.update).not.toHaveBeenCalled();
 
+		const forgedProtocolError = createApp({
+			prepareSecretReplacements: vi
+				.fn()
+				.mockRejectedValue(new HttpProtocolError("FORBIDDEN", "adapter-trace")),
+		});
+		const forgedResponse = await forgedProtocolError.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-forged-protocol-error",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
+				}),
+			},
+		);
+		expect(forgedResponse.status).toBe(503);
+		const forgedBody = await forgedResponse.json();
+		expect(forgedBody).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(JSON.stringify(forgedBody)).not.toContain("adapter-trace");
+		expect(forgedProtocolError.update).not.toHaveBeenCalled();
+
 		const unauthorized = createApp({
 			configurationQuery: {
 				read: vi.fn().mockResolvedValue({ outcome: "unavailable" }),
