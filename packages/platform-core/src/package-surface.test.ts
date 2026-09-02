@@ -37,12 +37,18 @@ describe("platform-core package surface", () => {
 			"AgentConfigurationError",
 			"AgentManagementError",
 			"ApplicationFoundationError",
+			"ApplicationRevisionError",
 			"PlatformIdempotencyError",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
+			"createApplicationRevisionUseCaseV1",
+			"parseAgentConfigurationChangesV1",
 			"platformIdempotencyV1",
+			"snapshotAgentConfigurationWritePlanV1",
+			"snapshotAgentManagementWritePlanV1",
 			"snapshotApplicationFoundationWritePlanV1",
+			"snapshotApplicationRevisionWritePlanV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
@@ -52,7 +58,9 @@ describe("platform-core package surface", () => {
 			"FakeAgentConfigurationTransactionV1",
 			"FakeAgentManagementV1",
 			"FakeApplicationFoundationTransactionV1",
+			"FakeApplicationRevisionTransactionV1",
 			"FakePlatformIdempotencyDatabaseV1",
+			"applicationRevisionFailurePoints",
 		]);
 		expect(
 			Object.keys(new testingSurface.FakeAgentManagementV1()).toSorted(),
@@ -70,6 +78,9 @@ describe("platform-core package surface", () => {
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
 		).toEqual(["submit"]);
+		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
+			["revise"],
+		);
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {

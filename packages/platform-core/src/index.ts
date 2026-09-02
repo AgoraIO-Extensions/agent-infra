@@ -35,7 +35,10 @@ export type {
 export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
+	parseAgentConfigurationChangesV1,
+	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
 export * from "./application-foundation.js";
+export * from "./application-revision.js";
 export * from "./idempotency.js";

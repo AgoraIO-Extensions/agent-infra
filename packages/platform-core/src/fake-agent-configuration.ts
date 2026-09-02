@@ -1,15 +1,16 @@
-import type {
-	AgentConfigurationAccessAuthorityV1,
-	AgentConfigurationActionAdmissionPortV1,
-	AgentConfigurationAuthorizationAdmissionPortV1,
-	AgentConfigurationChannelAdmissionPortV1,
-	AgentConfigurationImageAdmissionPortV1,
-	AgentConfigurationModelAdmissionPortV1,
-	AgentConfigurationRecordV1,
-	AgentConfigurationResultV1,
-	AgentConfigurationSecretAdmissionPortV1,
-	AgentConfigurationTransactionPortV1,
-	AgentConfigurationWritePlanV1,
+import {
+	type AgentConfigurationAccessAuthorityV1,
+	type AgentConfigurationActionAdmissionPortV1,
+	type AgentConfigurationAuthorizationAdmissionPortV1,
+	type AgentConfigurationChannelAdmissionPortV1,
+	type AgentConfigurationImageAdmissionPortV1,
+	type AgentConfigurationModelAdmissionPortV1,
+	type AgentConfigurationRecordV1,
+	type AgentConfigurationResultV1,
+	type AgentConfigurationSecretAdmissionPortV1,
+	type AgentConfigurationTransactionPortV1,
+	type AgentConfigurationWritePlanV1,
+	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 
@@ -84,8 +85,9 @@ export class FakeAgentConfigurationTransactionV1
 	}
 
 	async commit(
-		plan: AgentConfigurationWritePlanV1,
+		input: AgentConfigurationWritePlanV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		const plan = snapshotAgentConfigurationWritePlanV1(input);
 		const scope = this.#idempotencyScope(
 			plan.agentId,
 			plan.auditEvent.actorId,

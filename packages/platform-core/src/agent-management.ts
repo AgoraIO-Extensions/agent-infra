@@ -274,6 +274,252 @@ export interface AgentManagementOptionsV1 {
 	readonly now?: () => Date;
 }
 
+const managementActionByOperation = {
+	update_application: "agent.application.updated",
+	withdraw_application: "agent.application.withdrawn",
+	approve_application: "agent.application.approved",
+	reject_application: "agent.application.rejected",
+	stop_agent: "agent.lifecycle.stopped",
+	restart_agent: "agent.lifecycle.restarted",
+	retry_agent_creation: "agent.lifecycle.creation_retried",
+	disable_agent: "agent.lifecycle.disabled",
+	observe_creation_succeeded: "agent.workload.creation_succeeded",
+	observe_creation_failed: "agent.workload.creation_failed",
+	observe_service_starting: "agent.workload.service_starting",
+	observe_service_ready: "agent.workload.service_ready",
+	observe_service_updating: "agent.workload.service_updating",
+	observe_service_unavailable: "agent.workload.service_unavailable",
+} as const satisfies Record<
+	AgentManagementOperationV1,
+	AgentManagementWritePlanV1["auditEvent"]["action"]
+>;
+
+const managementTransitions: Record<
+	AgentManagementOperationV1,
+	readonly (readonly [AgentManagementStatusV1, AgentManagementStatusV1])[]
+> = {
+	update_application: [
+		["pending_approval", "pending_approval"],
+		["rejected", "pending_approval"],
+	],
+	withdraw_application: [["pending_approval", "withdrawn"]],
+	approve_application: [["pending_approval", "creating"]],
+	reject_application: [["pending_approval", "rejected"]],
+	stop_agent: [["available", "stopped"]],
+	restart_agent: [
+		["stopped", "available"],
+		["available", "available"],
+	],
+	retry_agent_creation: [["creation_failed", "creating"]],
+	disable_agent: [
+		["creating", "disabled"],
+		["available", "disabled"],
+		["stopped", "disabled"],
+		["creation_failed", "disabled"],
+	],
+	observe_creation_succeeded: [["creating", "available"]],
+	observe_creation_failed: [["creating", "creation_failed"]],
+	observe_service_starting: [["available", "available"]],
+	observe_service_ready: [["available", "available"]],
+	observe_service_updating: [["available", "available"]],
+	observe_service_unavailable: [["available", "available"]],
+};
+
+function unavailablePlan(): never {
+	throw new AgentManagementError("unavailable");
+}
+
+function planObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> {
+	try {
+		const values = snapshotDataObject(input);
+		requireExactKeys(values, keys);
+		return values;
+	} catch {
+		unavailablePlan();
+	}
+}
+
+function planDate(input: unknown): Date {
+	try {
+		const milliseconds = Date.prototype.getTime.call(input);
+		if (!Number.isFinite(milliseconds)) throw new Error();
+		return new Date(milliseconds);
+	} catch {
+		unavailablePlan();
+	}
+}
+
+export function snapshotAgentManagementWritePlanV1(
+	input: unknown,
+): AgentManagementWritePlanV1 {
+	const values = planObject(input, [
+		"schemaVersion",
+		"operation",
+		"subjectType",
+		"subjectId",
+		"expectedRevision",
+		"state",
+		"transition",
+		"outboxIntent",
+		"auditEvent",
+		"idempotency",
+	]);
+	const state = (() => {
+		try {
+			return parseAgentManagementPortState(
+				values.state as AgentManagementStateV1,
+			);
+		} catch {
+			unavailablePlan();
+		}
+	})();
+	const transition = planObject(values.transition, [
+		"from",
+		"to",
+		"occurredAt",
+	]);
+	const audit = planObject(values.auditEvent, [
+		"action",
+		"actorId",
+		"subjectType",
+		"subjectId",
+		"traceId",
+		"requestId",
+		"occurredAt",
+	]);
+	const idempotency = planObject(values.idempotency, ["key", "requestDigest"]);
+	const operation = values.operation as AgentManagementOperationV1;
+	const expectedSubjectType =
+		operation === "update_application" ||
+		operation === "withdraw_application" ||
+		operation === "approve_application" ||
+		operation === "reject_application"
+			? "agent_application"
+			: "agent";
+	const subjectId =
+		expectedSubjectType === "agent_application"
+			? state.applicationId
+			: state.agentId;
+	const occurredAt = planDate(transition.occurredAt);
+	const auditOccurredAt = planDate(audit.occurredAt);
+	const transitions = managementTransitions[operation];
+	const expectedAction =
+		operation === "update_application" && transition.from === "rejected"
+			? "agent.application.resubmitted"
+			: managementActionByOperation[operation];
+	if (
+		values.schemaVersion !== 1 ||
+		!Object.hasOwn(managementActionByOperation, operation) ||
+		!nonNegativeInteger(values.expectedRevision) ||
+		values.expectedRevision === Number.MAX_SAFE_INTEGER ||
+		state.revision !== values.expectedRevision + 1 ||
+		values.subjectType !== expectedSubjectType ||
+		values.subjectId !== subjectId ||
+		!transitions?.some(
+			([from, to]) => transition.from === from && transition.to === to,
+		) ||
+		transition.to !== state.status ||
+		audit.action !== expectedAction ||
+		!capturedText(audit.actorId) ||
+		audit.subjectType !== expectedSubjectType ||
+		audit.subjectId !== subjectId ||
+		!capturedText(audit.traceId) ||
+		!capturedText(audit.requestId) ||
+		auditOccurredAt.getTime() !== occurredAt.getTime() ||
+		!capturedText(idempotency.key, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotency.key) ||
+		typeof idempotency.requestDigest !== "string" ||
+		!/^[a-f0-9]{64}$/.test(idempotency.requestDigest)
+	) {
+		unavailablePlan();
+	}
+	const expectsOutbox =
+		operation === "approve_application" ||
+		operation === "stop_agent" ||
+		operation === "restart_agent" ||
+		operation === "retry_agent_creation" ||
+		operation === "disable_agent";
+	let outbox: AgentManagementWritePlanV1["outboxIntent"] = null;
+	if (values.outboxIntent !== null) {
+		const envelope = planObject(values.outboxIntent, [
+			"operation",
+			"payload",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		]);
+		const payload = planObject(envelope.payload, [
+			"schemaVersion",
+			"agentId",
+			"revision",
+			"workloadRevision",
+			"fence",
+			"desiredState",
+		]);
+		const outboxOccurredAt = planDate(envelope.occurredAt);
+		if (
+			envelope.operation !== "agent.workload.reconcile.v1" ||
+			payload.schemaVersion !== 1 ||
+			payload.agentId !== state.agentId ||
+			payload.revision !== state.revision ||
+			payload.workloadRevision !== state.workloadRevision ||
+			payload.fence !== state.fence ||
+			payload.desiredState !== state.desiredState ||
+			envelope.traceId !== audit.traceId ||
+			envelope.requestId !== audit.requestId ||
+			outboxOccurredAt.getTime() !== occurredAt.getTime()
+		) {
+			unavailablePlan();
+		}
+		outbox = {
+			operation: "agent.workload.reconcile.v1",
+			payload: {
+				schemaVersion: 1,
+				agentId: state.agentId,
+				revision: state.revision,
+				workloadRevision: state.workloadRevision,
+				fence: state.fence,
+				desiredState: state.desiredState,
+			},
+			traceId: audit.traceId as string,
+			requestId: audit.requestId as string,
+			occurredAt: outboxOccurredAt,
+		};
+	}
+	if (expectsOutbox !== (outbox !== null)) unavailablePlan();
+	return {
+		schemaVersion: 1,
+		operation,
+		subjectType: expectedSubjectType,
+		subjectId,
+		expectedRevision: values.expectedRevision as number,
+		state,
+		transition: {
+			from: transition.from as AgentManagementStatusV1,
+			to: state.status,
+			occurredAt,
+		},
+		outboxIntent: outbox,
+		auditEvent: {
+			action:
+				audit.action as AgentManagementWritePlanV1["auditEvent"]["action"],
+			actorId: audit.actorId as string,
+			subjectType: expectedSubjectType,
+			subjectId,
+			traceId: audit.traceId as string,
+			requestId: audit.requestId as string,
+			occurredAt: auditOccurredAt,
+		},
+		idempotency: {
+			key: idempotency.key as string,
+			requestDigest: idempotency.requestDigest as string,
+		},
+	};
+}
+
 const commandBaseKeys = [
 	"schemaVersion",
 	"command",
