@@ -278,6 +278,35 @@ describe("PostgreSQL Platform audit query", () => {
 		}
 	});
 
+	it("sanitizes real PostgreSQL query failures", async () => {
+		const adapter = openAdapter();
+		let renamed = false;
+		try {
+			await adminClient.unsafe(
+				"alter table platform.audit_events rename to audit_events_unavailable_test",
+			);
+			renamed = true;
+			const failure = await adapter
+				.listAudit(administrator, { schemaVersion: 1, limit: 10 })
+				.catch((error: unknown) => error);
+			expect(failure).toMatchObject({
+				name: "PlatformAuditQueryError",
+				code: "unavailable",
+				message: "Platform audit persistence is unavailable",
+			});
+			expect(String(failure)).not.toMatch(
+				/audit_events|does not exist|select\s|postgres|drizzle/i,
+			);
+			expect(failure).not.toHaveProperty("cause");
+		} finally {
+			if (renamed) {
+				await adminClient.unsafe(
+					"alter table platform.audit_events_unavailable_test rename to audit_events",
+				);
+			}
+		}
+	});
+
 	it("decodes only current Platform writer shapes and rejects raw details", async () => {
 		const adapter = openAdapter();
 		const malformed: readonly Omit<AuditFixture, "auditId" | "occurredAt">[] = [
