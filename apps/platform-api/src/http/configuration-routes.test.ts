@@ -267,6 +267,30 @@ describe("configuration routes", () => {
 		expect(JSON.stringify(update.mock.calls)).not.toContain(
 			"adapter-private-value",
 		);
+
+		const malformed = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [{ name: "MODEL_API_KEY", replace: false }],
+				modelCredentialOptionIds: [],
+			} as never),
+		});
+		const malformedResponse = await malformed.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-secret-replace-false",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
+				}),
+			},
+		);
+
+		expect(malformedResponse.status).toBe(503);
+		expect(malformed.update).not.toHaveBeenCalled();
 	});
 
 	it("fails closed for denied authorization and secret preparation errors", async () => {

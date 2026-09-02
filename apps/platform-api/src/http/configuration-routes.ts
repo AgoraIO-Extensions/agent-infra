@@ -122,6 +122,7 @@ function validatePreparedSecrets(
 	const preparedModels = [...prepared.modelCredentialOptionIds].toSorted();
 	if (
 		new Set(preparedSecrets).size !== preparedSecrets.length ||
+		prepared.secrets.some(({ replace }) => replace !== true) ||
 		new Set(preparedModels).size !== preparedModels.length ||
 		JSON.stringify(requestedSecrets) !== JSON.stringify(preparedSecrets) ||
 		JSON.stringify(requestedModels) !== JSON.stringify(preparedModels)
