@@ -170,6 +170,7 @@ export class PlatformAuditQueryError extends Error {
 }
 
 const changedFieldSet = new Set<string>(configurationChangedFields);
+const accessChangedFieldSet = new Set<string>(["availability", "owners"]);
 
 function validText(input: unknown): input is string {
 	return (
@@ -249,11 +250,13 @@ function changedFields(
 		throw new PlatformAuditQueryError("unavailable");
 	}
 	const fields = (details as { readonly changedFields: unknown }).changedFields;
+	const allowedFields =
+		action === "agent.access.updated" ? accessChangedFieldSet : changedFieldSet;
 	if (
 		!Array.isArray(fields) ||
 		fields.length === 0 ||
 		fields.some(
-			(field) => typeof field !== "string" || !changedFieldSet.has(field),
+			(field) => typeof field !== "string" || !allowedFields.has(field),
 		) ||
 		fields.some(
 			(field, index) => index > 0 && (fields[index - 1] as string) >= field,
@@ -347,32 +350,37 @@ export class PostgresPlatformAuditQueryV1 {
 		requireScope(scope);
 		requirePage(page);
 		try {
-			const [anchor] = page.cursor
-				? await this.#database
-						.select({ auditId: auditEvents.id })
+			const rows = await this.#database.transaction(
+				async (transaction) => {
+					const [anchor] = page.cursor
+						? await transaction
+								.select({ auditId: auditEvents.id })
+								.from(auditEvents)
+								.where(eq(auditEvents.id, page.cursor))
+								.limit(1)
+						: [];
+					if (page.cursor && !anchor) {
+						throw new PlatformAuditQueryError("invalid_request");
+					}
+					return transaction
+						.select(auditSelection)
 						.from(auditEvents)
-						.where(eq(auditEvents.id, page.cursor))
-						.limit(1)
-				: [];
-			if (page.cursor && !anchor) {
-				throw new PlatformAuditQueryError("invalid_request");
-			}
-			const rows = await this.#database
-				.select(auditSelection)
-				.from(auditEvents)
-				.where(
-					page.cursor
-						? sql<boolean>`
-							(${auditEvents.occurredAt}, ${auditEvents.id}) < (
-								select ${auditEvents.occurredAt}, ${auditEvents.id}
-								from ${auditEvents}
-								where ${auditEvents.id} = ${page.cursor}
-							)
-						`
-						: undefined,
-				)
-				.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
-				.limit(page.limit + 1);
+						.where(
+							page.cursor
+								? sql<boolean>`
+									(${auditEvents.occurredAt}, ${auditEvents.id}) < (
+										select ${auditEvents.occurredAt}, ${auditEvents.id}
+										from ${auditEvents}
+										where ${auditEvents.id} = ${page.cursor}
+									)
+								`
+								: undefined,
+						)
+						.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
+						.limit(page.limit + 1);
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
 			const hasNext = rows.length > page.limit;
 			const items = rows.slice(0, page.limit).map(decodeRow);
 			return {

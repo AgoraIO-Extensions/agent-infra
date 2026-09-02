@@ -337,6 +337,11 @@ describe("PostgreSQL Platform audit query", () => {
 				targetType: "agent",
 				details: { changedFields: ["secrets", "secrets"] },
 			},
+			{
+				action: "agent.access.updated",
+				targetType: "agent",
+				details: { changedFields: ["secrets"] },
+			},
 		];
 		for (const [index, fixture] of malformed.entries()) {
 			await clearDatabase();
