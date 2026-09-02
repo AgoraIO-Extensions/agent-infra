@@ -47,9 +47,9 @@ export interface ReviseApplicationCommandV1 {
 		readonly name: string;
 		readonly value: string;
 	}[];
-	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
+	readonly secrets?: readonly AgentConfigurationSecretReplacementInputV1[];
 	readonly actions: readonly AgentConfigurationActionV1[];
-	readonly channels: readonly AgentConfigurationChannelChangeV1[];
+	readonly channels?: readonly AgentConfigurationChannelChangeV1[];
 }
 
 export interface ApplicationRevisionActorContextV1
@@ -228,11 +228,9 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 			"availability",
 			"source",
 			"environment",
-			"secrets",
 			"actions",
-			"channels",
 		],
-		["modelConfiguration"],
+		["modelConfiguration", "secrets", "channels"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -262,9 +260,11 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 				? { modelConfiguration: values.modelConfiguration }
 				: {}),
 			environment: values.environment,
-			secrets: values.secrets,
+			...(Object.hasOwn(values, "secrets") ? { secrets: values.secrets } : {}),
 			actions: values.actions,
-			channels: values.channels,
+			...(Object.hasOwn(values, "channels")
+				? { channels: values.channels }
+				: {}),
 		});
 	} catch {
 		invalidCommand();
@@ -274,9 +274,7 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 		!changes.availability ||
 		!changes.source ||
 		!changes.environment ||
-		!changes.secrets ||
-		!changes.actions ||
-		!changes.channels
+		!changes.actions
 	) {
 		invalidCommand();
 	}
@@ -294,9 +292,11 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 			? { modelConfiguration: changes.modelConfiguration }
 			: {}),
 		environment: changes.environment,
-		secrets: changes.secrets,
+		...(Object.hasOwn(changes, "secrets") ? { secrets: changes.secrets } : {}),
 		actions: changes.actions,
-		channels: changes.channels,
+		...(Object.hasOwn(changes, "channels")
+			? { channels: changes.channels }
+			: {}),
 	};
 }
 
@@ -863,9 +863,13 @@ async function captureConfigurationPlan(
 						? {}
 						: { modelConfiguration: command.modelConfiguration }),
 					environment: command.environment,
-					secrets: command.secrets,
+					...(Object.hasOwn(command, "secrets")
+						? { secrets: command.secrets }
+						: {}),
 					actions: command.actions,
-					channels: command.channels,
+					...(Object.hasOwn(command, "channels")
+						? { channels: command.channels }
+						: {}),
 				},
 			},
 			{

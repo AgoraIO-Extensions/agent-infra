@@ -183,11 +183,121 @@ function useCase(
 	);
 }
 
+function stateWithExistingSecretAndChannel(): ApplicationRevisionReadStateV1 {
+	return {
+		...applicationRevisionStateV1,
+		configuration: {
+			...applicationRevisionStateV1.configuration,
+			secrets: [
+				{
+					name: "BOT_TOKEN",
+					secretId: "secret_existing",
+					isSet: true,
+					version: 2,
+				},
+			],
+			channels: [
+				{
+					kind: "wecom_bot",
+					bindingReference: "binding_existing",
+				},
+			],
+			channelRevision: "channels_existing",
+		},
+	};
+}
+
+function commandWithoutSecretOrChannel(): ReviseApplicationCommandV1 {
+	const {
+		secrets: _secrets,
+		channels: _channels,
+		...command
+	} = applicationRevisionCommandV1;
+	return command;
+}
+
 export function applicationRevisionTransactionConformance(
 	createHarness: (
 		state?: ApplicationRevisionReadStateV1,
 	) => Promise<ApplicationRevisionConformanceHarnessV1>,
 ): void {
+	it("preserves secret metadata and channel bindings when revision fields are omitted", async () => {
+		const state = stateWithExistingSecretAndChannel();
+		const command = commandWithoutSecretOrChannel();
+		const harness = await createHarness(state);
+		try {
+			await expect(
+				useCase(harness.transaction, state).revise(
+					command,
+					applicationRevisionActorContextV1,
+				),
+			).resolves.toMatchObject({ configurationRevision: 8 });
+			expect((await harness.snapshot()).state.configuration).toMatchObject({
+				secrets: [
+					{
+						name: "BOT_TOKEN",
+						secretId: "secret_existing",
+						isSet: true,
+						version: 2,
+					},
+				],
+				channels: [
+					{
+						kind: "wecom_bot",
+						bindingReference: "binding_existing",
+					},
+				],
+				channelRevision: "channels_existing",
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("does not invent a configuration revision for omitted revision fields", async () => {
+		const state = stateWithExistingSecretAndChannel();
+		const command: ReviseApplicationCommandV1 = {
+			...commandWithoutSecretOrChannel(),
+			environment: state.configuration.environment,
+		};
+		const harness = await createHarness(state);
+		try {
+			await expect(
+				useCase(harness.transaction, state).revise(
+					command,
+					applicationRevisionActorContextV1,
+				),
+			).resolves.toMatchObject({ configurationRevision: 7 });
+			expect(await harness.snapshot()).toMatchObject({
+				outboxCount: 1,
+				auditCount: 1,
+				lastPlan: { configuration: null },
+				state: {
+					configuration: {
+						revision: 7,
+						secrets: [
+							{
+								name: "BOT_TOKEN",
+								secretId: "secret_existing",
+								isSet: true,
+								version: 2,
+							},
+						],
+						channels: [
+							{
+								kind: "wecom_bot",
+								bindingReference: "binding_existing",
+							},
+						],
+						channelRevision: "channels_existing",
+					},
+				},
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("atomically revises application content, configuration and management", async () => {
 		const harness = await createHarness();
 		try {

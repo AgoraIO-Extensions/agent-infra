@@ -112,11 +112,37 @@ describe("Application revision input and plan boundary", () => {
 		expect(reads).toBe(0);
 	});
 
+	it("rejects present undefined optional revision fields before reading Store", async () => {
+		for (const field of ["secrets", "channels"] as const) {
+			let reads = 0;
+			await expect(
+				createUseCase({
+					async read() {
+						reads += 1;
+						return { outcome: "unavailable" };
+					},
+					async commit() {
+						throw new Error("must not commit");
+					},
+				}).revise(
+					{ ...applicationRevisionCommandV1, [field]: undefined } as never,
+					applicationRevisionActorContextV1,
+				),
+			).rejects.toMatchObject({ code: "invalid_command" });
+			expect(reads).toBe(0);
+		}
+	});
+
 	it("snapshots nested command data before the first async boundary", async () => {
 		const transaction = new FakeApplicationRevisionTransactionV1(
 			applicationRevisionStateV1,
 		);
-		const command = structuredClone(applicationRevisionCommandV1);
+		const channels = [{ kind: "wecom_bot" as const, enabled: false as const }];
+		const command = {
+			...structuredClone(applicationRevisionCommandV1),
+			secrets: [{ name: "BOT_TOKEN", replace: true as const }],
+			channels,
+		};
 		const originalEnvironment = structuredClone(command.environment);
 		const revision = createUseCase({
 			async read(input) {
@@ -127,6 +153,16 @@ describe("Application revision input and plan boundary", () => {
 				}[];
 				if (!environment) throw new Error("Expected environment fixture");
 				environment.value = "mutated_after_read";
+				const [secret] = command.secrets;
+				if (!secret) throw new Error("Expected Secret fixture");
+				secret.name = "MUTATED_TOKEN";
+				const [channel] = command.channels;
+				if (!channel) throw new Error("Expected channel fixture");
+				(
+					channel as unknown as {
+						bindingReference?: string;
+					}
+				).bindingReference = "mutated_binding";
 				return decision;
 			},
 			async commit(plan) {
@@ -140,6 +176,19 @@ describe("Application revision input and plan boundary", () => {
 		expect(
 			transaction.snapshot().lastPlan?.configuration?.configuration.environment,
 		).toEqual(originalEnvironment);
+		expect(
+			transaction.snapshot().lastPlan?.configuration?.configuration.secrets,
+		).toEqual([
+			{
+				name: "BOT_TOKEN",
+				secretId: "secret_bot_token",
+				version: 2,
+				isSet: true,
+			},
+		]);
+		expect(
+			transaction.snapshot().lastPlan?.configuration?.configuration.channels,
+		).toEqual([]);
 	});
 
 	it("rejects malicious Store state without calling admissions or commit", async () => {
