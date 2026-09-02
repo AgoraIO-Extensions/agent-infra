@@ -1,9 +1,14 @@
 import { pathToFileURL } from "node:url";
 import { serve } from "@hono/node-server";
 
-import { createPlatformApp, platformApiService } from "./app";
+import {
+	createPlatformApp,
+	type PlatformAppDependencies,
+	platformApiService,
+} from "./app";
 
 interface StartOptions {
+	dependencies?: PlatformAppDependencies;
 	log?: (message: string) => void;
 	port?: number;
 }
@@ -21,7 +26,7 @@ export function startPlatformApi(options: StartOptions = {}) {
 	const log = options.log ?? console.info;
 	return serve(
 		{
-			fetch: createPlatformApp().fetch,
+			fetch: createPlatformApp(options.dependencies).fetch,
 			port,
 		},
 		(info) =>

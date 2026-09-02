@@ -145,6 +145,15 @@ importers:
 
   apps/platform-api:
     dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@agent-infra/platform-core':
+        specifier: workspace:*
+        version: link:../../packages/platform-core
+      '@agent-infra/platform-store':
+        specifier: workspace:*
+        version: link:../../packages/platform-store
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.0)
