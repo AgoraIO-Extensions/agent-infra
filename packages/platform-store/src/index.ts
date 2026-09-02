@@ -31,7 +31,6 @@ export {
 	type PlatformAuditPageV1,
 	type PlatformAuditProjectionV1,
 	PlatformAuditQueryError,
-	type PlatformAuditQueryV1,
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";

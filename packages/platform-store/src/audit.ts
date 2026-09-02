@@ -6,26 +6,98 @@ import postgres from "postgres";
 
 import { auditEvents } from "./schema.js";
 
-const platformAuditActions = [
-	"agent.application.submitted",
-	"agent.application.updated",
-	"agent.application.resubmitted",
-	"agent.application.withdrawn",
-	"agent.application.approved",
-	"agent.application.rejected",
-	"agent.lifecycle.stopped",
-	"agent.lifecycle.restarted",
-	"agent.lifecycle.creation_retried",
-	"agent.lifecycle.disabled",
-	"agent.workload.creation_succeeded",
-	"agent.workload.creation_failed",
-	"agent.workload.service_starting",
-	"agent.workload.service_ready",
-	"agent.workload.service_updating",
-	"agent.workload.service_unavailable",
-	"agent.configuration.revised",
-	"agent.access.updated",
-] as const;
+const platformAuditActionMetadata = {
+	"agent.application.submitted": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.application.updated": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.application.resubmitted": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.application.withdrawn": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.application.approved": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.application.rejected": {
+		actorKind: "user",
+		subjectKind: "agent_application",
+		details: false,
+	},
+	"agent.lifecycle.stopped": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.lifecycle.restarted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.lifecycle.creation_retried": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.lifecycle.disabled": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.creation_succeeded": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.creation_failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.service_starting": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.service_ready": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.service_updating": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.workload.service_unavailable": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"agent.configuration.revised": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: true,
+	},
+	"agent.access.updated": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: true,
+	},
+} as const;
 
 const configurationChangedFields = [
 	"source",
@@ -38,7 +110,7 @@ const configurationChangedFields = [
 	"availability",
 ] as const;
 
-export type PlatformAuditActionV1 = (typeof platformAuditActions)[number];
+export type PlatformAuditActionV1 = keyof typeof platformAuditActionMetadata;
 export type PlatformAuditChangedFieldV1 =
 	(typeof configurationChangedFields)[number];
 
@@ -77,13 +149,6 @@ export interface PlatformAuditPageV1 {
 	readonly nextCursor: string | null;
 }
 
-export interface PlatformAuditQueryV1 {
-	listAudit(
-		scope: PlatformAuditAdministratorScopeV1,
-		page: PlatformAuditPageInputV1,
-	): Promise<PlatformAuditPageV1>;
-}
-
 export interface PostgresPlatformAuditOptionsV1 {
 	readonly databaseUrl: string;
 }
@@ -104,28 +169,7 @@ export class PlatformAuditQueryError extends Error {
 	}
 }
 
-const actionSet = new Set<string>(platformAuditActions);
 const changedFieldSet = new Set<string>(configurationChangedFields);
-const applicationActions = new Set<string>([
-	"agent.application.submitted",
-	"agent.application.updated",
-	"agent.application.resubmitted",
-	"agent.application.withdrawn",
-	"agent.application.approved",
-	"agent.application.rejected",
-]);
-const systemActions = new Set<string>([
-	"agent.workload.creation_succeeded",
-	"agent.workload.creation_failed",
-	"agent.workload.service_starting",
-	"agent.workload.service_ready",
-	"agent.workload.service_updating",
-	"agent.workload.service_unavailable",
-]);
-const detailedActions = new Set<string>([
-	"agent.configuration.revised",
-	"agent.access.updated",
-]);
 
 function validText(input: unknown): input is string {
 	return (
@@ -197,7 +241,7 @@ function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
 ): readonly PlatformAuditChangedFieldV1[] {
-	if (!detailedActions.has(action)) {
+	if (!platformAuditActionMetadata[action].details) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
 		return [];
 	}
@@ -238,17 +282,16 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 		!validText(row.auditId) ||
 		!validText(row.traceId) ||
 		!validText(row.actorId) ||
-		!actionSet.has(row.action) ||
+		!Object.hasOwn(platformAuditActionMetadata, row.action) ||
 		!validText(row.targetId) ||
 		!validDate(row.occurredAt)
 	) {
 		throw new PlatformAuditQueryError("unavailable");
 	}
 	const action = row.action as PlatformAuditActionV1;
-	const expectedActorType = systemActions.has(action) ? "system" : "user";
-	const expectedTargetType = applicationActions.has(action)
-		? "agent_application"
-		: "agent";
+	const metadata = platformAuditActionMetadata[action];
+	const expectedActorType = metadata.actorKind;
+	const expectedTargetType = metadata.subjectKind;
 	if (
 		row.actorType !== expectedActorType ||
 		row.targetType !== expectedTargetType ||
@@ -285,7 +328,7 @@ const auditSelection = {
 	details: auditEvents.details,
 };
 
-export class PostgresPlatformAuditQueryV1 implements PlatformAuditQueryV1 {
+export class PostgresPlatformAuditQueryV1 {
 	readonly #client;
 	readonly #database;
 
