@@ -42,6 +42,7 @@ describe("platform-core package surface", () => {
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
 			"platformIdempotencyV1",
+			"snapshotApplicationFoundationWritePlanV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href

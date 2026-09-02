@@ -673,6 +673,57 @@ export function applicationFoundationTransactionConformance(
 		}
 	});
 
+	it("binds direct replay identity and rejects staged plan accessors", async () => {
+		const harness = await createHarness();
+		const plan = await captureApplicationFoundationWritePlan();
+		try {
+			await expect(harness.transaction.commit(plan)).resolves.toMatchObject({
+				outcome: "committed",
+			});
+			const beforeInvalidReplay = await harness.snapshot();
+			const applicationId = "application replay mismatch";
+			const mismatchedReplay = {
+				...structuredClone(plan),
+				application: {
+					...structuredClone(plan.application),
+					applicationId,
+				},
+				result: { ...structuredClone(plan.result), applicationId },
+				outboxIntent: {
+					...structuredClone(plan.outboxIntent),
+					payload: {
+						...structuredClone(plan.outboxIntent.payload),
+						applicationId,
+					},
+				},
+				auditEvent: {
+					...structuredClone(plan.auditEvent),
+					targetId: applicationId,
+				},
+			} as ApplicationFoundationWritePlanV1;
+			await expect(
+				harness.transaction.commit(mismatchedReplay),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+
+			let getterReads = 0;
+			const stagedPlan = structuredClone(plan);
+			Object.defineProperty(stagedPlan.application, "applicationId", {
+				enumerable: true,
+				get() {
+					getterReads += 1;
+					return plan.application.applicationId;
+				},
+			});
+			await expect(
+				harness.transaction.commit(stagedPlan),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(getterReads).toBe(0);
+			await expect(harness.snapshot()).resolves.toEqual(beforeInvalidReplay);
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("atomically persists the complete admitted revision-one submission", async () => {
 		const harness = await createHarness();
 		const useCase = createUseCase(harness.transaction);

@@ -6,6 +6,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -95,7 +96,8 @@ function parseResult(input: unknown): CommitApplicationFoundationResultV1 {
 	) as unknown as CommitApplicationFoundationResultV1;
 }
 
-function validatedPlan(plan: ApplicationFoundationWritePlanV1) {
+function validatedPlan(input: ApplicationFoundationWritePlanV1) {
+	const plan = snapshotApplicationFoundationWritePlanV1(input);
 	let configuration: ReturnType<typeof decodeAgentConfigurationRecord>;
 	try {
 		configuration = decodeAgentConfigurationRecord(
@@ -190,7 +192,7 @@ function validatedPlan(plan: ApplicationFoundationWritePlanV1) {
 	) {
 		throw new ApplicationFoundationError("persistence_failed");
 	}
-	return { configuration, result };
+	return { plan, configuration, result };
 }
 
 function idempotencyWhere(
@@ -331,10 +333,10 @@ export class PostgresApplicationFoundationTransactionV1
 	}
 
 	async commit(
-		plan: ApplicationFoundationWritePlanV1,
+		input: ApplicationFoundationWritePlanV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
-			const { configuration, result } = validatedPlan(plan);
+			const { plan, configuration, result } = validatedPlan(input);
 			return await this.#database.transaction(async (transaction) => {
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)

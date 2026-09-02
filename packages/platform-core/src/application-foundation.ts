@@ -7,6 +7,7 @@ import {
 	AgentConfigurationError,
 	type AgentConfigurationRecordV1,
 	beginInitialAgentConfigurationAdmissionV1,
+	decodeAgentConfigurationRecordV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV1,
 } from "./agent-configuration.js";
@@ -246,6 +247,17 @@ const actorContextKeys = [
 	"rawRequestDigest",
 ] as const;
 
+function isEnumerableDataDescriptor(
+	descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & { value: unknown } {
+	return (
+		descriptor?.enumerable === true &&
+		Object.hasOwn(descriptor, "value") &&
+		!Object.hasOwn(descriptor, "get") &&
+		!Object.hasOwn(descriptor, "set")
+	);
+}
+
 function snapshotExactDataValues(
 	value: unknown,
 	expectedKeys: readonly string[],
@@ -269,12 +281,7 @@ function snapshotExactDataValues(
 		for (const key of [...expectedKeys, ...optionalKeys]) {
 			const descriptor = descriptors[key];
 			if (!descriptor && optionalKeys.includes(key)) continue;
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value") ||
-				Object.hasOwn(descriptor, "get") ||
-				Object.hasOwn(descriptor, "set")
-			) {
+			if (!isEnumerableDataDescriptor(descriptor)) {
 				return undefined;
 			}
 			normalized[key] = descriptor.value;
@@ -384,6 +391,220 @@ function parseApplicationFoundationActorContextV1(
 		invalidApplicationFoundationInput();
 	}
 	return { schemaVersion, userId, rawRequestDigest };
+}
+
+function requiredPlanObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> {
+	const values = snapshotExactDataValues(input, keys);
+	if (!values) throw new ApplicationFoundationError("persistence_failed");
+	return values;
+}
+
+function snapshotPlanArray(input: unknown, maximum: number): unknown[] {
+	try {
+		if (!Array.isArray(input) || input.length > maximum) throw new Error();
+		const descriptors = Object.getOwnPropertyDescriptors(input);
+		if (Reflect.ownKeys(descriptors).length !== input.length + 1) {
+			throw new Error();
+		}
+		return Array.from({ length: input.length }, (_, index) => {
+			const descriptor = descriptors[String(index)];
+			if (!isEnumerableDataDescriptor(descriptor)) {
+				throw new Error();
+			}
+			return descriptor.value;
+		});
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+}
+
+function snapshotPlanDate(input: unknown): Date {
+	try {
+		return new Date(Date.prototype.getTime.call(input));
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
+}
+
+function snapshotPlanAccessTarget(
+	input: unknown,
+): AgentConfigurationAccessTargetV1 {
+	const user = snapshotExactDataValues(input, ["kind", "userId"]);
+	if (user?.kind === "user") {
+		return { kind: "user", userId: user.userId as string };
+	}
+	const organization = snapshotExactDataValues(input, [
+		"kind",
+		"organizationId",
+	]);
+	if (organization?.kind === "organization") {
+		return {
+			kind: "organization",
+			organizationId: organization.organizationId as string,
+		};
+	}
+	throw new ApplicationFoundationError("persistence_failed");
+}
+
+export function snapshotApplicationFoundationWritePlanV1(
+	input: unknown,
+): ApplicationFoundationWritePlanV1 {
+	try {
+		const plan = requiredPlanObject(input, [
+			"schemaVersion",
+			"agent",
+			"application",
+			"configurationRevision",
+			"access",
+			"result",
+			"idempotency",
+			"outboxIntent",
+			"auditEvent",
+		]);
+		const agent = requiredPlanObject(plan.agent, [
+			"agentId",
+			"currentConfigurationRevision",
+			"authorizationRevision",
+			"createdAt",
+		]);
+		const application = requiredPlanObject(plan.application, [
+			"applicationId",
+			"agentId",
+			"applicantId",
+			"name",
+			"description",
+			"status",
+			"traceId",
+			"requestId",
+			"submittedAt",
+		]);
+		const configurationRevision = requiredPlanObject(
+			plan.configurationRevision,
+			["agentId", "revision", "configuration", "createdAt"],
+		);
+		const access = requiredPlanObject(plan.access, [
+			"agentId",
+			"ownerIds",
+			"availability",
+			"createdAt",
+		]);
+		const result = requiredPlanObject(plan.result, [
+			"schemaVersion",
+			"applicationId",
+			"agentId",
+			"configurationRevision",
+			"status",
+		]);
+		const idempotency = requiredPlanObject(plan.idempotency, [
+			"key",
+			"requestDigest",
+		]);
+		const outboxIntent = requiredPlanObject(plan.outboxIntent, [
+			"scopeType",
+			"scopeId",
+			"operation",
+			"payload",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		]);
+		const outboxPayload = requiredPlanObject(outboxIntent.payload, [
+			"schemaVersion",
+			"applicationId",
+			"agentId",
+			"configurationRevision",
+		]);
+		const auditEvent = requiredPlanObject(plan.auditEvent, [
+			"traceId",
+			"requestId",
+			"agentId",
+			"actorType",
+			"actorId",
+			"action",
+			"targetType",
+			"targetId",
+			"outcome",
+			"occurredAt",
+		]);
+		return {
+			schemaVersion: plan.schemaVersion as 1,
+			agent: {
+				agentId: agent.agentId as string,
+				currentConfigurationRevision: agent.currentConfigurationRevision as 1,
+				authorizationRevision: agent.authorizationRevision as string,
+				createdAt: snapshotPlanDate(agent.createdAt),
+			},
+			application: {
+				applicationId: application.applicationId as string,
+				agentId: application.agentId as string,
+				applicantId: application.applicantId as string,
+				name: application.name as string,
+				description: application.description as string,
+				status: application.status as "pending_approval",
+				traceId: application.traceId as string,
+				requestId: application.requestId as string,
+				submittedAt: snapshotPlanDate(application.submittedAt),
+			},
+			configurationRevision: {
+				agentId: configurationRevision.agentId as string,
+				revision: configurationRevision.revision as 1,
+				configuration: decodeAgentConfigurationRecordV1(
+					configurationRevision.configuration,
+				),
+				createdAt: snapshotPlanDate(configurationRevision.createdAt),
+			},
+			access: {
+				agentId: access.agentId as string,
+				ownerIds: snapshotPlanArray(access.ownerIds, 256) as string[],
+				availability: snapshotPlanArray(access.availability, 256).map(
+					snapshotPlanAccessTarget,
+				),
+				createdAt: snapshotPlanDate(access.createdAt),
+			},
+			result: {
+				schemaVersion: result.schemaVersion as 1,
+				applicationId: result.applicationId as string,
+				agentId: result.agentId as string,
+				configurationRevision: result.configurationRevision as 1,
+				status: result.status as "pending_approval",
+			},
+			idempotency: {
+				key: idempotency.key as string,
+				requestDigest: idempotency.requestDigest as string,
+			},
+			outboxIntent: {
+				scopeType: outboxIntent.scopeType as "agent",
+				scopeId: outboxIntent.scopeId as string,
+				operation: outboxIntent.operation as "agent.application.submitted.v1",
+				payload: {
+					schemaVersion: outboxPayload.schemaVersion as 1,
+					applicationId: outboxPayload.applicationId as string,
+					agentId: outboxPayload.agentId as string,
+					configurationRevision: outboxPayload.configurationRevision as 1,
+				},
+				traceId: outboxIntent.traceId as string,
+				requestId: outboxIntent.requestId as string,
+				occurredAt: snapshotPlanDate(outboxIntent.occurredAt),
+			},
+			auditEvent: {
+				traceId: auditEvent.traceId as string,
+				requestId: auditEvent.requestId as string,
+				agentId: auditEvent.agentId as string,
+				actorType: auditEvent.actorType as "user",
+				actorId: auditEvent.actorId as string,
+				action: auditEvent.action as "agent.application.submitted",
+				targetType: auditEvent.targetType as "agent_application",
+				targetId: auditEvent.targetId as string,
+				outcome: auditEvent.outcome as "succeeded",
+				occurredAt: snapshotPlanDate(auditEvent.occurredAt),
+			},
+		};
+	} catch {
+		throw new ApplicationFoundationError("persistence_failed");
+	}
 }
 
 function parseCommitDecision(
