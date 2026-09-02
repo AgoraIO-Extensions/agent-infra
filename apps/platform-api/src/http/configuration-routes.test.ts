@@ -214,7 +214,7 @@ describe("configuration routes", () => {
 		).toEqual([["org-old"], ["org-new"]]);
 	});
 
-	it("builds the complete Owner set from trusted identity", async () => {
+	it("passes co-Owner input to Core without resolving access policy", async () => {
 		const { app, update, readConfiguration } = createApp();
 		const response = await app.request("/api/v1/agents/agent-1/configuration", {
 			method: "PUT",
@@ -229,47 +229,9 @@ describe("configuration routes", () => {
 		});
 
 		expect(response.status).toBe(200);
-		expect(readConfiguration).toHaveBeenCalledWith({
-			agentId: "agent-1",
-			actorId: "user-1",
-			organizationIds: ["org-1"],
-			isAdministrator: false,
-			intent: "manage",
-		});
+		expect(readConfiguration).not.toHaveBeenCalled();
 		expect(update.mock.calls[0]?.[0]).toMatchObject({
-			changes: { ownerIds: ["user-1", "user-2"] },
-		});
-	});
-
-	it("lets administrators replace the complete Owner set", async () => {
-		const identity = {
-			resolve: vi.fn().mockResolvedValue({
-				schemaVersion: 1,
-				userId: "admin-1",
-				displayName: "Administrator",
-				accountStatus: "active",
-				organizationIds: [],
-				roles: ["employee", "system_admin"],
-				authorizationRevision: "authorization-1",
-			}),
-			hydrateUsers: vi.fn().mockResolvedValue([]),
-		};
-		const { app, update } = createApp({ identity });
-		const response = await app.request("/api/v1/agents/agent-1/configuration", {
-			method: "PUT",
-			headers: {
-				"content-type": "application/json",
-				"Idempotency-Key": "configuration-owner-handoff",
-			},
-			body: JSON.stringify({
-				schemaVersion: 1,
-				coOwnerIds: ["user-2"],
-			}),
-		});
-
-		expect(response.status).toBe(200);
-		expect(update.mock.calls[0]?.[0]).toMatchObject({
-			changes: { ownerIds: ["user-2"] },
+			changes: { coOwnerIds: ["user-2"] },
 		});
 	});
 

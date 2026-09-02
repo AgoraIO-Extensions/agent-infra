@@ -1364,7 +1364,7 @@ describe("Agent configuration policy", () => {
 				...command,
 				idempotencyKey: "atomic-access-01",
 				changes: {
-					ownerIds: ["owner_01", "owner_02"],
+					coOwnerIds: ["owner_02"],
 					availability: [
 						{ kind: "organization", organizationId: "org_platform" },
 					],
@@ -1395,7 +1395,7 @@ describe("Agent configuration policy", () => {
 				{
 					...command,
 					idempotencyKey: "atomic-access-stale-01",
-					changes: { ownerIds: ["owner_01", "owner_02"] },
+					changes: { coOwnerIds: ["owner_02"] },
 				},
 				actor,
 			),
@@ -1455,7 +1455,7 @@ describe("Agent configuration policy", () => {
 		const accessCommand = {
 			...command,
 			changes: {
-				ownerIds: ["owner_02", "owner_01"],
+				coOwnerIds: ["owner_02", "owner_01"],
 				availability: [
 					{ kind: "organization" as const, organizationId: "org_platform" },
 				],
@@ -1502,7 +1502,7 @@ describe("Agent configuration policy", () => {
 			...command,
 			idempotencyKey: "configuration-access-combined-01",
 			changes: {
-				ownerIds: ["owner_01", "owner_02"],
+				coOwnerIds: ["owner_02"],
 				environment: [{ name: "LOG_LEVEL", value: "debug" }],
 			},
 		};
@@ -1536,7 +1536,7 @@ describe("Agent configuration policy", () => {
 			rejected.useCase.update(
 				{
 					...command,
-					changes: { ownerIds: ["owner_01"] },
+					changes: { coOwnerIds: ["owner_01"] },
 					authorityContext: accessAuthority.authorityContext,
 					expectedRevision: 11,
 				} as never,
@@ -1579,7 +1579,7 @@ describe("Agent configuration policy", () => {
 					...command,
 					idempotencyKey: "configuration-access-partial-01",
 					changes: {
-						ownerIds: ["owner_01", "owner_revoked"],
+						coOwnerIds: ["owner_revoked"],
 						environment: [{ name: "LOG_LEVEL", value: "debug" }],
 					},
 				},
@@ -1590,6 +1590,65 @@ describe("Agent configuration policy", () => {
 			commitCount: 0,
 			idempotencyCount: 0,
 			lastPlan: null,
+		});
+	});
+
+	it("derives Owner replacement from the trusted access authority", async () => {
+		const rescueState = {
+			...accessState,
+			ownerIds: ["owner_revoked"],
+		};
+		const rescueAuthority = {
+			state: rescueState,
+			actorContext: {
+				schemaVersion: 1 as const,
+				userId: "admin_01",
+				accountStatus: "active" as const,
+				organizationIds: ["org_platform"],
+				isAdministrator: true,
+			},
+			authorityContext: {
+				schemaVersion: 1 as const,
+				users: [
+					{ userId: "owner_revoked", accountStatus: "revoked" as const },
+					{ userId: "owner_02", accountStatus: "active" as const },
+					{ userId: "admin_01", accountStatus: "active" as const },
+				],
+				organizationIds: ["org_platform"],
+			},
+		};
+		const harness = createHarness({
+			admissions: {
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "admin_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority: rescueAuthority,
+					},
+				] as never,
+			},
+			transactionState: {
+				managementState: rescueState,
+				authorizationRevision: "authorization_9",
+			},
+		});
+
+		await harness.useCase.update(
+			{
+				...command,
+				idempotencyKey: "configuration-owner-rescue",
+				changes: { coOwnerIds: ["owner_02"] },
+			},
+			{
+				schemaVersion: 1,
+				actorId: "admin_01",
+				rawRequestDigest: "1".repeat(64),
+			},
+		);
+
+		expect(harness.transaction.snapshot().managementState).toMatchObject({
+			ownerIds: ["owner_02"],
 		});
 	});
 
@@ -2200,7 +2259,7 @@ describe("Agent configuration policy", () => {
 					...command,
 					idempotencyKey: "locale-independent-canonicalization",
 					changes: {
-						ownerIds: ["owner_02", "owner_01"],
+						coOwnerIds: ["owner_02", "owner_01"],
 						availability: [
 							{ kind: "user" as const, userId: "owner_02" },
 							{ kind: "organization" as const, organizationId: "org_platform" },

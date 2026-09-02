@@ -192,7 +192,7 @@ export interface UpdateAgentConfigurationCommandV1 {
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly changes: {
-		readonly ownerIds?: readonly string[];
+		readonly coOwnerIds?: readonly string[];
 		readonly availability?: readonly AgentConfigurationAccessTargetV1[];
 		readonly source?: AgentConfigurationSourceSelectionV1;
 		readonly modelConfiguration?: AgentConfigurationModelInputV1;
@@ -1004,7 +1004,7 @@ export function parseAgentConfigurationChangesV1(
 		input,
 		[],
 		[
-			"ownerIds",
+			"coOwnerIds",
 			"availability",
 			"source",
 			"modelConfiguration",
@@ -1015,8 +1015,8 @@ export function parseAgentConfigurationChangesV1(
 		],
 	);
 	return {
-		...(Object.hasOwn(changes, "ownerIds")
-			? { ownerIds: parseOwnerIds(changes.ownerIds) }
+		...(Object.hasOwn(changes, "coOwnerIds")
+			? { coOwnerIds: parseOwnerIds(changes.coOwnerIds) }
 			: {}),
 		...(Object.hasOwn(changes, "availability")
 			? { availability: parseAvailability(changes.availability) }
@@ -2497,7 +2497,10 @@ export function createAgentConfigurationUseCaseV1(
 
 		let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 		const changedFields: AgentConfigurationChangedFieldV1[] = [];
-		if (changes.ownerIds !== undefined || changes.availability !== undefined) {
+		if (
+			changes.coOwnerIds !== undefined ||
+			changes.availability !== undefined
+		) {
 			const access = authorization.accessAuthority;
 			if (
 				!access ||
@@ -2508,12 +2511,20 @@ export function createAgentConfigurationUseCaseV1(
 			}
 			let decision: ReturnType<typeof decideAgentAccessUpdatePolicy>;
 			try {
+				const desiredOwnerIds =
+					changes.coOwnerIds === undefined
+						? access.state.ownerIds
+						: access.actorContext.isAdministrator
+							? changes.coOwnerIds
+							: [
+									...new Set([actorContext.actorId, ...changes.coOwnerIds]),
+								].toSorted(compareText);
 				decision = decideAgentAccessUpdatePolicy(
 					{
 						schemaVersion: 1,
 						agentId: command.agentId,
 						expectedRevision: access.state.revision,
-						desiredOwnerIds: changes.ownerIds ?? access.state.ownerIds,
+						desiredOwnerIds,
 						desiredAvailability:
 							changes.availability ?? access.state.availability,
 						requestId: command.requestId,
