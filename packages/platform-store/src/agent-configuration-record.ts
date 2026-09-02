@@ -146,10 +146,13 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 		kind: "custom" as const,
 		imageDigest,
 		admissionRevision: text(value.admissionRevision),
-		connectionEnabled: value.connectionEnabled,
 	};
 	if (interactionMode === "platform-adapter") {
-		return { ...base, interactionMode };
+		return {
+			...base,
+			interactionMode,
+			connectionEnabled: value.connectionEnabled,
+		};
 	}
 	if (
 		value.identityResponsibility !== "self-managed" &&
@@ -161,6 +164,7 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 		...base,
 		interactionMode,
 		identityResponsibility: value.identityResponsibility,
+		connectionEnabled: value.connectionEnabled,
 	};
 }
 

@@ -639,7 +639,7 @@ const applicationSelection = {
 				'approve_application', 'reject_application'
 			)
 		limit 1
-	)`,
+	)`.mapWith(agentManagementHistory.occurredAt),
 };
 
 const agentSelection = {

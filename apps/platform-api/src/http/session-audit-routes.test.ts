@@ -241,4 +241,19 @@ describe("session and audit routes", () => {
 		).toEqual({ kind: "system", actorId: "platform-worker" });
 		expect(identityAdapter.hydrateUsers).not.toHaveBeenCalled();
 	});
+
+	it("redacts unexpected audit persistence failures", async () => {
+		const { app, audit } = createApp();
+		audit.listAudit.mockRejectedValue(new Error("private database detail"));
+
+		const response = await app.request("/api/v1/admin/audit");
+		const body = await response.json();
+
+		expect(response.status).toBe(503);
+		expect(body).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(JSON.stringify(body)).not.toContain("private database detail");
+	});
 });

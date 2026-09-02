@@ -42,11 +42,16 @@ export interface SessionAuditRoutesDependencies {
 }
 
 function mapAuditError(error: unknown, traceId: string): never {
-	if (!(error instanceof PlatformAuditQueryError)) throw error;
-	if (error.code === "invalid_request") {
+	if (
+		error instanceof PlatformAuditQueryError &&
+		error.code === "invalid_request"
+	) {
 		throw new HttpProtocolError("INVALID_REQUEST", traceId);
 	}
-	if (error.code === "access_denied") {
+	if (
+		error instanceof PlatformAuditQueryError &&
+		error.code === "access_denied"
+	) {
 		throw new HttpProtocolError("FORBIDDEN", traceId);
 	}
 	throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
