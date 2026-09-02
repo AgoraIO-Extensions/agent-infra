@@ -394,9 +394,9 @@ export function agentConfigurationCustomImageUpgradeConformance(
 			},
 		});
 		try {
-			await expect(useCase.upgradeCustomImage(upgrade, actor)).rejects.toMatchObject(
-				{ code: "not_admitted" },
-			);
+			await expect(
+				useCase.upgradeCustomImage(upgrade, actor),
+			).rejects.toMatchObject({ code: "not_admitted" });
 			expect(await harness.snapshot()).toMatchObject({
 				commitCount: 0,
 				idempotencyCount: 0,
