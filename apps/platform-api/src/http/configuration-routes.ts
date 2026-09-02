@@ -93,7 +93,14 @@ function configurationChanges(
 			? {}
 			: { environment: input.environment }),
 		...(input.channels === undefined ? {} : { channels: input.channels }),
-		...(input.secrets === undefined ? {} : { secrets: prepared.secrets }),
+		...(input.secrets === undefined
+			? {}
+			: {
+					secrets: input.secrets.map(({ name }) => ({
+						name,
+						replace: true as const,
+					})),
+				}),
 	};
 }
 

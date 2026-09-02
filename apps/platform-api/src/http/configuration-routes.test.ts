@@ -235,6 +235,40 @@ describe("configuration routes", () => {
 		});
 	});
 
+	it("rebuilds prepared Secret metadata before Core", async () => {
+		const { app, update } = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [
+					{
+						name: "MODEL_API_KEY",
+						replace: true,
+						value: "adapter-private-value",
+					},
+				],
+				modelCredentialOptionIds: [],
+			}),
+		});
+		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+			method: "PUT",
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "configuration-secret-metadata",
+			},
+			body: JSON.stringify({
+				schemaVersion: 1,
+				secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(update.mock.calls[0]?.[0]).toMatchObject({
+			changes: { secrets: [{ name: "MODEL_API_KEY", replace: true }] },
+		});
+		expect(JSON.stringify(update.mock.calls)).not.toContain(
+			"adapter-private-value",
+		);
+	});
+
 	it("fails closed for denied authorization and secret preparation errors", async () => {
 		const denied = createApp({
 			configuration: {
