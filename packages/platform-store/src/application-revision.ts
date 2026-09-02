@@ -137,6 +137,20 @@ function compareAccessTargets(
 	return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
+function decodeAccessTarget(row: {
+	readonly targetType: unknown;
+	readonly targetId: unknown;
+}): AgentConfigurationAccessTargetV1 {
+	if (!validText(row.targetId)) unavailable();
+	if (row.targetType === "user") {
+		return { kind: "user", userId: row.targetId };
+	}
+	if (row.targetType === "organization") {
+		return { kind: "organization", organizationId: row.targetId };
+	}
+	unavailable();
+}
+
 function validateAccess(
 	ownerIds: readonly string[],
 	availability: readonly AgentConfigurationAccessTargetV1[],
@@ -315,14 +329,7 @@ export class PostgresApplicationRevisionTransactionV1
 				]);
 				const ownerIds = ownerRows.map(({ ownerId }) => ownerId).sort();
 				const availability = availabilityRows
-					.map(({ targetType, targetId }) =>
-						targetType === "user"
-							? { kind: "user" as const, userId: targetId }
-							: {
-									kind: "organization" as const,
-									organizationId: targetId,
-								},
-					)
+					.map(decodeAccessTarget)
 					.sort(compareAccessTargets);
 				validateAccess(ownerIds, availability);
 				const configuration = decodeAgentConfigurationRecord(row.configuration);
@@ -391,6 +398,12 @@ export class PostgresApplicationRevisionTransactionV1
 					.select({
 						managementRevision: agentApplications.managementRevision,
 						status: agentApplications.status,
+						approvalRevision: agentApplications.approvalRevision,
+						serviceAvailability: agentApplications.serviceAvailability,
+						desiredState: agentApplications.desiredState,
+						workloadRevision: agentApplications.workloadRevision,
+						fence: agentApplications.fence,
+						failureCode: agentApplications.failureCode,
 					})
 					.from(agentApplications)
 					.where(
@@ -458,7 +471,13 @@ export class PostgresApplicationRevisionTransactionV1
 				if (
 					!application ||
 					application.managementRevision !== plan.expected.managementRevision ||
-					application.status !== plan.management.transition.from
+					application.status !== plan.management.transition.from ||
+					application.approvalRevision !== null ||
+					application.serviceAvailability !== null ||
+					application.desiredState !== "stopped" ||
+					application.workloadRevision !== 0 ||
+					application.fence !== 0 ||
+					application.failureCode !== null
 				) {
 					return {
 						outcome: "conflict" as const,
@@ -681,14 +700,7 @@ export class PostgresApplicationRevisionTransactionV1
 		);
 		const ownerIds = ownerRows.map(({ ownerId }) => ownerId).sort();
 		const availability = availabilityRows
-			.map(({ targetType, targetId }) =>
-				targetType === "user"
-					? { kind: "user" as const, userId: targetId }
-					: {
-							kind: "organization" as const,
-							organizationId: targetId,
-						},
-			)
+			.map(decodeAccessTarget)
 			.sort(compareAccessTargets);
 		validateAccess(ownerIds, availability);
 		if (
