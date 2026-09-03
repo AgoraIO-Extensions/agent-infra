@@ -4,6 +4,8 @@ import {
 	ImageRegistryAdmissionRequestV1Schema,
 	ImageRegistryAdmissionResultV1Schema,
 	OciImageReferenceV1Schema,
+	parseImageRegistryAdmissionRequestV1,
+	parseRuntimeManifestLabelV1,
 	validateImageRegistryAdmissionResultV1,
 } from "../../src/workload/registry.js";
 
@@ -77,6 +79,64 @@ const admitted = {
 } as const;
 
 describe("ImageRegistryAdapter V1 contract", () => {
+	it("parses a bounded Runtime Manifest label into canonical data and evidence", () => {
+		expect(parseRuntimeManifestLabelV1(runtimeManifestLabel)).toEqual({
+			runtimeManifest: admitted.runtimeManifest,
+			runtimeManifestParsingEvidence: admitted.runtimeManifestParsingEvidence,
+		});
+	});
+
+	it("classifies a correlation-safe invalid image reference without echoing it", () => {
+		expect(
+			parseImageRegistryAdmissionRequestV1({
+				...request,
+				imageReference:
+					"https://user:registry-secret@registry.example/agents/codex:pilot",
+			}),
+		).toEqual({
+			status: "invalid-image-reference",
+			correlation: {
+				schemaVersion: 1,
+				requestId: request.requestId,
+				traceId: request.traceId,
+			},
+		});
+		expect(
+			parseImageRegistryAdmissionRequestV1({
+				...request,
+				requestId: "",
+				imageReference: "https://registry.example/agents/codex:pilot",
+			}),
+		).toEqual({ status: "invalid" });
+	});
+
+	it.each([
+		["an oversized label", " ".repeat(65_537)],
+		[
+			"a duplicate key",
+			runtimeManifestLabel.replace(
+				'"schemaVersion":1',
+				'"schemaVersion":1,"schemaVersion":1',
+			),
+		],
+		["a nested value deeper than eight", `${"[".repeat(9)}0${"]".repeat(9)}`],
+		[
+			"an unknown field",
+			JSON.stringify({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				untrusted: true,
+			}),
+		],
+	])("rejects %s before admission", (_name, label) => {
+		expect(() => parseRuntimeManifestLabelV1(label)).toThrow(
+			"Image registry Runtime Manifest is invalid",
+		);
+	});
+
 	it("accepts canonical OCI references and rejects credential-bearing input", () => {
 		for (const reference of [
 			"library/ubuntu:latest",

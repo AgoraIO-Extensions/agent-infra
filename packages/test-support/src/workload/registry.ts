@@ -1,5 +1,6 @@
 import {
-	ImageRegistryAdmissionRequestV1Schema,
+	ImageRegistryAdmissionResultV1Schema,
+	parseImageRegistryAdmissionRequestV1,
 	validateImageRegistryAdmissionResultV1,
 } from "@agent-infra/contracts/workload";
 
@@ -8,7 +9,26 @@ export function createFakeImageRegistryAdapterV1(
 ) {
 	return {
 		async admit(requestInput: unknown) {
-			const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
+			const parsedRequest = parseImageRegistryAdmissionRequestV1(requestInput);
+			if (parsedRequest.status === "invalid-image-reference") {
+				return ImageRegistryAdmissionResultV1Schema.parse({
+					schemaVersion: 1,
+					status: "rejected",
+					requestId: parsedRequest.correlation.requestId,
+					traceId: parsedRequest.correlation.traceId,
+					error: {
+						schemaVersion: 1,
+						code: "IMAGE_REFERENCE_INVALID",
+						message: "Image reference is invalid",
+						retryable: false,
+						traceId: parsedRequest.correlation.traceId,
+					},
+				});
+			}
+			if (parsedRequest.status === "invalid") {
+				throw new TypeError("Image registry request is invalid");
+			}
+			const request = parsedRequest.request;
 			const hasConfiguredOutcome = Object.hasOwn(
 				outcomesByImageReference,
 				request.imageReference,

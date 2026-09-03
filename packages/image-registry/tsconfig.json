@@ -1,0 +1,10 @@
+{
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/contracts/workload": ["../contracts/src/workload/index.ts"]
+		}
+	},
+	"include": ["src"]
+}
