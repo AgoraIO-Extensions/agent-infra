@@ -646,10 +646,12 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			vi.useFakeTimers();
 			try {
 				const tracked = trackableErrorResponse(status, {}, false, true);
+				let signal: AbortSignal | undefined;
 				const adapter = createOciImageRegistryAdapterV1({
 					imageReferencePrefix: "registry.example/agents",
 					endpoint: "https://registry.example",
-					async fetch() {
+					async fetch(_input, init) {
+						signal = init?.signal ?? undefined;
 						return tracked.response;
 					},
 					policy: {
@@ -675,6 +677,7 @@ describe("OCI ImageRegistryAdapter V1", () => {
 				});
 				expect(tracked.reads()).toBe(0);
 				expect(tracked.wasCancelled()).toBe(true);
+				expect(signal?.aborted).toBe(true);
 			} finally {
 				vi.useRealTimers();
 			}

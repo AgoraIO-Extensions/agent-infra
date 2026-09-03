@@ -336,6 +336,7 @@ async function requestOci(
 		return { status: "unavailable" };
 	} finally {
 		if (timeout !== undefined) clearTimeout(timeout);
+		controller.abort();
 	}
 }
 
