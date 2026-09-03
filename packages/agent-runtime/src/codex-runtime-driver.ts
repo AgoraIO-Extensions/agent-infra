@@ -31,8 +31,6 @@ type OpenCodexBridge = (
 export interface CodexRuntimeDriverOptions {
 	readonly path: string;
 	readonly bridgeOptions: CodexAppServerBridgeOptions;
-	/** @internal Test-only seam. Production always opens the pinned bridge. */
-	readonly openBridge?: OpenCodexBridge;
 }
 
 interface CodexExecution {
@@ -215,7 +213,10 @@ function isCodexOperation(
 	if (record.data.result.outcome !== "accepted") {
 		return record.data.result.outcome !== "unknown";
 	}
-	return session.executions[record.data.operationId] !== undefined;
+	const execution = session.executions[record.data.operationId];
+	return (
+		execution !== undefined && execution.status === record.data.result.status
+	);
 }
 
 function assertDriverState(value: unknown): asserts value is CodexDriverState {
@@ -237,6 +238,26 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 		if (!isCodexOperation(key, operation, sessions)) stateInvalid();
 	}
 	for (const [nativeSessionRef, session] of Object.entries(sessions)) {
+		for (const [executionId, execution] of Object.entries(session.executions)) {
+			const matchingOperations = Object.values(operations).filter(
+				(operation) => {
+					const record = operation.record;
+					return (
+						operation.state === "resolved" &&
+						operation.nativeSessionRef === nativeSessionRef &&
+						record?.nativeSessionRef === nativeSessionRef &&
+						record.agentId === session.agentId &&
+						record.conversationId === session.conversationId &&
+						record.sessionGeneration === session.sessionGeneration &&
+						record.kind === "submit-turn" &&
+						record.operationId === executionId &&
+						record.result.outcome === "accepted" &&
+						record.result.status === execution.status
+					);
+				},
+			);
+			if (matchingOperations.length !== 1) stateInvalid();
+		}
 		const operationKey = session.acceptanceUncertainOperationKey;
 		if (!operationKey) continue;
 		const operation = operations[operationKey];
@@ -380,14 +401,23 @@ class CodexRpc {
 export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly resumedSessions = new Set<string>();
 
-	private constructor(
+	protected constructor(
 		private readonly file: DurableJsonFile<CodexDriverState>,
 		private readonly rpc: CodexRpc,
 	) {}
 
 	static async open(options: CodexRuntimeDriverOptions) {
+		return CodexRuntimeDriver.openWithBridge(
+			options,
+			CodexAppServerBridge.open,
+		);
+	}
+
+	protected static async openWithBridge(
+		options: CodexRuntimeDriverOptions,
+		openBridge: OpenCodexBridge,
+	) {
 		const file = await CodexRuntimeDriver.openState(options.path);
-		const openBridge = options.openBridge ?? CodexAppServerBridge.open;
 		let bridge: CodexAppServerTransport;
 		try {
 			bridge = await openBridge({
@@ -600,6 +630,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (!session || !execution || execution.nativeTurnId !== nativeTurnId) {
 				stateInvalid();
 			}
+			const operation = Object.values(state.operations).find(
+				(candidate) =>
+					candidate.state === "resolved" &&
+					candidate.nativeSessionRef === nativeSessionRef &&
+					candidate.record?.operationId === executionId,
+			);
+			if (!operation?.record) stateInvalid();
+			if (operation.record.result.outcome !== "accepted") stateInvalid();
 			if (execution.status !== "running") return execution.status;
 			if (
 				status === "running" &&
@@ -614,6 +652,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} else if (session.activeExecutionId === executionId) {
 				session.activeExecutionId = undefined;
 			}
+			operation.record.result = {
+				outcome: "accepted",
+				status: execution.status,
+			};
 			return execution.status;
 		});
 	}

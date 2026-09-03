@@ -13,7 +13,8 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
-import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import type { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import {
 	ingressVerifiedRuntimeHost,
@@ -77,6 +78,28 @@ function submitCommand(
 		input: { text: "synthetic-input", attachments: [] },
 		...overrides,
 	};
+}
+
+function driverOptions(path: string) {
+	return {
+		path,
+		bridgeOptions: {
+			model: "gpt-5.3-codex",
+			reasoningEffort: "high",
+			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+		},
+	};
+}
+
+function openDriver(
+	path: string,
+	bridge: TestCodexBridge,
+	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+) {
+	return openCodexRuntimeDriverForTest(driverOptions(path), async (options) => {
+		onOpen?.(options);
+		return bridge;
+	});
 }
 
 class TestCodexBridge {
@@ -255,18 +278,13 @@ describe("Codex Runtime Driver", () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		let openedWith: CodexAppServerBridgeOptions | undefined;
-		const driver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async (options) => {
+		const driver = await openDriver(
+			join(directory, "driver.json"),
+			bridge,
+			(options) => {
 				openedWith = options;
-				return bridge;
 			},
-		});
+		);
 		drivers.push(driver);
 		const runtimeHost = ingressVerifiedRuntimeHost(
 			await RuntimeHost.open({
@@ -314,15 +332,10 @@ describe("Codex Runtime Driver", () => {
 	it("resumes the persisted Codex Session without starting a replacement", async () => {
 		const directory = await runtimeDirectory();
 		const firstBridge = new TestCodexBridge();
-		const firstDriver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => firstBridge,
-		});
+		const firstDriver = await openDriver(
+			join(directory, "driver.json"),
+			firstBridge,
+		);
 		drivers.push(firstDriver);
 		const command = submitCommand();
 		const firstResult = await firstDriver.execute(command);
@@ -330,15 +343,10 @@ describe("Codex Runtime Driver", () => {
 
 		const resumedBridge = new TestCodexBridge(firstBridge.nativeThreadId);
 		resumedBridge.setTurnStatus("completed");
-		const resumedDriver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => resumedBridge,
-		});
+		const resumedDriver = await openDriver(
+			join(directory, "driver.json"),
+			resumedBridge,
+		);
 		drivers.push(resumedDriver);
 
 		expect(
@@ -378,15 +386,7 @@ describe("Codex Runtime Driver", () => {
 	it("keeps duplicate and busy submit outcomes from starting another native Turn", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
-		const driver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => bridge,
-		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
@@ -415,15 +415,10 @@ describe("Codex Runtime Driver", () => {
 			"codex-native-turn-private",
 			true,
 		);
-		const interruptedDriver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => interruptedBridge,
-		});
+		const interruptedDriver = await openDriver(
+			join(directory, "driver.json"),
+			interruptedBridge,
+		);
 		drivers.push(interruptedDriver);
 
 		await expect(interruptedDriver.execute(command)).rejects.toMatchObject({
@@ -436,15 +431,10 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 
 		const recoveredBridge = new TestCodexBridge();
-		const recoveredDriver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => recoveredBridge,
-		});
+		const recoveredDriver = await openDriver(
+			join(directory, "driver.json"),
+			recoveredBridge,
+		);
 		drivers.push(recoveredDriver);
 
 		expect(await recoveredDriver.lookupOperation(command)).toEqual({
@@ -488,15 +478,7 @@ describe("Codex Runtime Driver", () => {
 	it("keeps terminal status sticky across out-of-order status reads", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
-		const driver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => bridge,
-		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
@@ -534,15 +516,7 @@ describe("Codex Runtime Driver", () => {
 	it("paginates to the requested historical native Turn status", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
-		const driver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => bridge,
-		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
@@ -585,15 +559,7 @@ describe("Codex Runtime Driver", () => {
 	it("fails closed for events and app-server notifications until #344 owns recovery", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
-		const driver = await CodexRuntimeDriver.open({
-			path: join(directory, "driver.json"),
-			bridgeOptions: {
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
-				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			},
-			openBridge: async () => bridge,
-		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
@@ -664,6 +630,31 @@ describe("Codex Runtime Driver", () => {
 				operations: {},
 			},
 		],
+		[
+			"unbacked active execution",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-private",
+						activeExecutionId: "execution-codex",
+						executions: {
+							"execution-codex": {
+								executionId: "execution-codex",
+								turnId: "turn-codex",
+								nativeTurnId: "codex-native-turn-private",
+								status: "running",
+							},
+						},
+					},
+				},
+				operations: {},
+			},
+		],
 	] as const)(
 		"fails closed without replacing corrupted durable %s",
 		async (_name, state) => {
@@ -673,17 +664,9 @@ describe("Codex Runtime Driver", () => {
 			await writeFile(path, contents);
 			const bridge = new TestCodexBridge();
 
-			await expect(
-				CodexRuntimeDriver.open({
-					path,
-					bridgeOptions: {
-						model: "gpt-5.3-codex",
-						reasoningEffort: "high",
-						provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-					},
-					openBridge: async () => bridge,
-				}),
-			).rejects.toMatchObject({ code: "RUNTIME_CODEX_STATE_INVALID" });
+			await expect(openDriver(path, bridge)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_STATE_INVALID",
+			});
 			expect(bridge.requests).toEqual([]);
 			expect(await readFile(path, "utf8")).toBe(contents);
 		},
@@ -694,15 +677,7 @@ describe("Codex Runtime Driver", () => {
 		async (kind) => {
 			const directory = await runtimeDirectory();
 			const bridge = new TestCodexBridge();
-			const driver = await CodexRuntimeDriver.open({
-				path: join(directory, "driver.json"),
-				bridgeOptions: {
-					model: "gpt-5.3-codex",
-					reasoningEffort: "high",
-					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-				},
-				openBridge: async () => bridge,
-			});
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
 			drivers.push(driver);
 			const command = submitCommand();
 			const accepted = await driver.execute(command);
