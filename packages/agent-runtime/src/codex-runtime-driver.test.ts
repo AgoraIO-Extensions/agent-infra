@@ -661,7 +661,9 @@ describe("Codex Runtime Driver", () => {
 			message: "Runtime command acceptance could not be confirmed",
 		});
 		expect(
-			recoveredBridge.requests.filter(({ method }) => method === "thread/start"),
+			recoveredBridge.requests.filter(
+				({ method }) => method === "thread/start",
+			),
 		).toHaveLength(0);
 		expect(
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
