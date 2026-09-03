@@ -180,6 +180,7 @@ export interface CreateConversationWritePlanV1 {
 		readonly scopeType: "agent";
 		readonly scopeId: string;
 		readonly actorId: string;
+		readonly channelId: string;
 		readonly commandType: "conversation.create";
 		readonly key: string;
 		readonly requestDigest: string;
@@ -309,6 +310,7 @@ export interface ConversationStopWritePlanV1 {
 		readonly operation: "conversation.turn.stop.v1";
 		readonly conversationId: string;
 		readonly executionId: string;
+		readonly sessionGeneration: number;
 		readonly stopRequestId: string;
 		readonly traceId: string;
 		readonly requestId: string;
@@ -336,6 +338,10 @@ export interface ConversationStopWritePlanV1 {
 }
 
 export interface ConversationExecutionTransactionPortV1 {
+	/**
+	 * Existing Conversation commands validate the persisted authority binding
+	 * before replay, then inspect active execution only after a replay miss.
+	 */
 	createConversation(
 		request: {
 			readonly command: CreateConversationCommandV1;
@@ -965,7 +971,11 @@ export function createConversationExecutionUseCaseV1(
 			});
 			if (!authority || authority.agentId !== command.agentId)
 				return { outcome: "denied" };
-			const requestDigest = digest(command);
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: "conversation.create",
+				agentId: command.agentId,
+			});
 			try {
 				return normalizeCreateDecision(
 					await dependencies.transaction.createConversation(
@@ -997,6 +1007,7 @@ export function createConversationExecutionUseCaseV1(
 									scopeType: "agent",
 									scopeId: authority.agentId,
 									actorId: authority.actorId,
+									channelId: authority.channelId,
 									commandType: "conversation.create",
 									key: command.idempotencyKey,
 									requestDigest,
@@ -1018,7 +1029,12 @@ export function createConversationExecutionUseCaseV1(
 				conversationId: command.conversationId,
 			});
 			if (!authority) return { outcome: "denied" };
-			const requestDigest = digest(command);
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: command.command,
+				conversationId: command.conversationId,
+				text: command.text,
+			});
 			try {
 				return normalizeCommandDecision(
 					await dependencies.transaction.executeMessage(
@@ -1187,7 +1203,12 @@ export function createConversationExecutionUseCaseV1(
 				conversationId: command.conversationId,
 			});
 			if (!authority) return { outcome: "denied" };
-			const requestDigest = digest(command);
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: command.command,
+				conversationId: command.conversationId,
+				sourceMessageId: command.sourceMessageId,
+			});
 			try {
 				return normalizeCommandDecision(
 					await dependencies.transaction.executeRegeneration(
@@ -1288,7 +1309,12 @@ export function createConversationExecutionUseCaseV1(
 				conversationId: command.conversationId,
 			});
 			if (!authority) return { outcome: "denied" };
-			const requestDigest = digest(command);
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: command.command,
+				conversationId: command.conversationId,
+				targetExecutionId: command.targetExecutionId,
+			});
 			try {
 				return normalizeStopDecision(
 					await dependencies.transaction.executeStop(
@@ -1355,6 +1381,7 @@ export function createConversationExecutionUseCaseV1(
 									operation: "conversation.turn.stop.v1",
 									conversationId: conversation.conversationId,
 									executionId: targetExecution.executionId,
+									sessionGeneration: conversation.sessionGeneration,
 									stopRequestId,
 									traceId: command.traceId,
 									requestId: command.requestId,

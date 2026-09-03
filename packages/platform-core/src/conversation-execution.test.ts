@@ -115,7 +115,7 @@ describe("Conversation execution use case", () => {
 		).rejects.toMatchObject({ code: "invalid_input" });
 	});
 
-	it("replays an accepted message before classifying a later active execution", async () => {
+	it("replays the exact logical message before classifying later state", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority,
 			newId: (() => {
@@ -140,10 +140,20 @@ describe("Conversation execution use case", () => {
 			traceId: "trace_message_replay",
 		};
 		const accepted = await conversation.accept(command);
-		expect(await conversation.accept(command)).toEqual({
+		if (accepted.outcome !== "accepted" || accepted.result.messageId === null) {
+			throw new Error("Expected an accepted initial message");
+		}
+		conversation.completeExecution(accepted.result.executionId);
+
+		expect(
+			await conversation.accept({
+				...command,
+				requestId: "request_message_replay_retry",
+				traceId: "trace_message_replay_retry",
+			}),
+		).toEqual({
 			outcome: "replayed",
-			result:
-				accepted.outcome === "accepted" ? accepted.result : expect.anything(),
+			result: accepted.result,
 		});
 		expect(
 			await conversation.accept({ ...command, text: "Changed submission" }),
@@ -151,6 +161,97 @@ describe("Conversation execution use case", () => {
 		expect(conversation.snapshot().messages).toHaveLength(1);
 		expect(conversation.snapshot().executions).toHaveLength(1);
 		expect(conversation.snapshot().outbox).toHaveLength(1);
+	});
+
+	it("does not replay a command across actor, Agent, or channel bindings", async () => {
+		let currentAuthority = authority;
+		const conversation = new FakeConversationExecutionV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority: currentAuthority };
+				},
+			},
+			newId: (() => {
+				let value = 1;
+				return () => `binding_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_binding",
+			requestId: "request_create_binding",
+			traceId: "trace_create_binding",
+		});
+		const command = {
+			schemaVersion: 1 as const,
+			command: "message" as const,
+			conversationId: "binding_1",
+			text: "Original message",
+			idempotencyKey: "message_binding",
+			requestId: "request_message_binding",
+			traceId: "trace_message_binding",
+		};
+		expect(await conversation.accept(command)).toMatchObject({
+			outcome: "accepted",
+		});
+		const before = conversation.snapshot();
+
+		for (const changedAuthority of [
+			{ ...authority, actorId: "user_02" },
+			{ ...authority, agentId: "agent_02" },
+			{ ...authority, channelId: "channel_02" },
+		]) {
+			currentAuthority = changedAuthority;
+			expect(await conversation.accept(command)).toEqual({ outcome: "denied" });
+			expect(conversation.snapshot()).toEqual(before);
+		}
+	});
+
+	it("scopes create idempotency by channel while replaying transport retries", async () => {
+		let currentAuthority = authority;
+		const conversation = new FakeConversationExecutionV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority: currentAuthority };
+				},
+			},
+			newId: (() => {
+				let value = 1;
+				return () => `create_channel_${value++}`;
+			})(),
+		});
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: authority.agentId,
+			idempotencyKey: "create_channel",
+			requestId: "request_create_channel",
+			traceId: "trace_create_channel",
+		};
+		const created = await conversation.createConversation(command);
+		if (created.outcome !== "accepted") throw new Error("Expected acceptance");
+		expect(
+			await conversation.createConversation({
+				...command,
+				requestId: "request_create_channel_retry",
+				traceId: "trace_create_channel_retry",
+			}),
+		).toEqual({ outcome: "replayed", result: created.result });
+
+		currentAuthority = { ...authority, channelId: "wecom" };
+		expect(await conversation.createConversation(command)).toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				conversationId: "create_channel_2",
+				agentId: authority.agentId,
+				status: "ready",
+			},
+		});
+		expect(conversation.snapshot().conversations).toMatchObject([
+			{ conversationId: "create_channel_1", channelId: authority.channelId },
+			{ conversationId: "create_channel_2", channelId: "wecom" },
+		]);
 	});
 
 	it("returns busy without a new visible side effect when the active execution cannot supplement", async () => {
@@ -281,17 +382,16 @@ describe("Conversation execution use case", () => {
 		});
 		conversation.completeExecution("regenerate_3");
 
-		expect(
-			await conversation.regenerate({
-				schemaVersion: 1,
-				command: "regenerate",
-				conversationId: "regenerate_1",
-				sourceMessageId: "regenerate_2",
-				idempotencyKey: "regenerate_01",
-				requestId: "request_regenerate_01",
-				traceId: "trace_regenerate_01",
-			}),
-		).toEqual({
+		const regenerated = await conversation.regenerate({
+			schemaVersion: 1,
+			command: "regenerate",
+			conversationId: "regenerate_1",
+			sourceMessageId: "regenerate_2",
+			idempotencyKey: "regenerate_01",
+			requestId: "request_regenerate_01",
+			traceId: "trace_regenerate_01",
+		});
+		expect(regenerated).toEqual({
 			outcome: "accepted",
 			result: {
 				schemaVersion: 1,
@@ -300,6 +400,20 @@ describe("Conversation execution use case", () => {
 				executionId: "regenerate_5",
 			},
 		});
+		if (regenerated.outcome !== "accepted") {
+			throw new Error("Expected acceptance");
+		}
+		expect(
+			await conversation.regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId: "regenerate_1",
+				sourceMessageId: "regenerate_2",
+				idempotencyKey: "regenerate_01",
+				requestId: "request_regenerate_01_retry",
+				traceId: "trace_regenerate_01_retry",
+			}),
+		).toEqual({ outcome: "replayed", result: regenerated.result });
 		expect(conversation.snapshot()).toMatchObject({
 			messages: [{ messageId: "regenerate_2", text: "Please answer" }],
 			executions: [
@@ -314,6 +428,152 @@ describe("Conversation execution use case", () => {
 				}),
 			]),
 		});
+	});
+
+	it("does not replay regeneration across Agent or channel bindings", async () => {
+		let currentAuthority = authority;
+		const conversation = new FakeConversationExecutionV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority: currentAuthority };
+				},
+			},
+			newId: (() => {
+				let value = 1;
+				return () => `regeneration_binding_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_regeneration_binding",
+			requestId: "request_create_regeneration_binding",
+			traceId: "trace_create_regeneration_binding",
+		});
+		const accepted = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "regeneration_binding_1",
+			text: "Original message",
+			idempotencyKey: "message_regeneration_binding",
+			requestId: "request_message_regeneration_binding",
+			traceId: "trace_message_regeneration_binding",
+		});
+		if (accepted.outcome !== "accepted" || accepted.result.messageId === null) {
+			throw new Error("Expected an accepted initial message");
+		}
+		conversation.completeExecution(accepted.result.executionId);
+		const command = {
+			schemaVersion: 1 as const,
+			command: "regenerate" as const,
+			conversationId: "regeneration_binding_1",
+			sourceMessageId: accepted.result.messageId,
+			idempotencyKey: "regenerate_binding",
+			requestId: "request_regenerate_binding",
+			traceId: "trace_regenerate_binding",
+		};
+		expect(await conversation.regenerate(command)).toMatchObject({
+			outcome: "accepted",
+		});
+		const before = conversation.snapshot();
+
+		for (const changedAuthority of [
+			{ ...authority, agentId: "agent_02" },
+			{ ...authority, channelId: "channel_02" },
+		]) {
+			currentAuthority = changedAuthority;
+			expect(await conversation.regenerate(command)).toEqual({
+				outcome: "denied",
+			});
+			expect(conversation.snapshot()).toEqual(before);
+		}
+	});
+
+	it("conflicts on changed regeneration sources and stop targets without effects", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `changed_key_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_changed_key",
+			requestId: "request_create_changed_key",
+			traceId: "trace_create_changed_key",
+		});
+		const submitAndComplete = async (idempotencyKey: string, text: string) => {
+			const accepted = await conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "changed_key_1",
+				text,
+				idempotencyKey,
+				requestId: `request_${idempotencyKey}`,
+				traceId: `trace_${idempotencyKey}`,
+			});
+			if (
+				accepted.outcome !== "accepted" ||
+				accepted.result.messageId === null
+			) {
+				throw new Error("Expected an accepted initial message");
+			}
+			conversation.completeExecution(accepted.result.executionId);
+			return {
+				messageId: accepted.result.messageId,
+				executionId: accepted.result.executionId,
+			};
+		};
+		const first = await submitAndComplete("message_changed_key_first", "First");
+		const second = await submitAndComplete(
+			"message_changed_key_second",
+			"Second",
+		);
+		const regeneration = {
+			schemaVersion: 1 as const,
+			command: "regenerate" as const,
+			conversationId: "changed_key_1",
+			sourceMessageId: first.messageId,
+			idempotencyKey: "regenerate_changed_key",
+			requestId: "request_regenerate_changed_key",
+			traceId: "trace_regenerate_changed_key",
+		};
+		const regenerated = await conversation.regenerate(regeneration);
+		if (regenerated.outcome !== "accepted")
+			throw new Error("Expected acceptance");
+		conversation.completeExecution(regenerated.result.executionId);
+		const beforeRegenerationConflict = conversation.snapshot();
+		expect(
+			await conversation.regenerate({
+				...regeneration,
+				sourceMessageId: second.messageId,
+			}),
+		).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
+		expect(conversation.snapshot()).toEqual(beforeRegenerationConflict);
+
+		const stop = {
+			schemaVersion: 1 as const,
+			command: "stop" as const,
+			conversationId: "changed_key_1",
+			targetExecutionId: first.executionId,
+			idempotencyKey: "stop_changed_key",
+			requestId: "request_stop_changed_key",
+			traceId: "trace_stop_changed_key",
+		};
+		expect(await conversation.stop(stop)).toMatchObject({
+			outcome: "accepted",
+			result: { status: "already_finished" },
+		});
+		const beforeStopConflict = conversation.snapshot();
+		expect(
+			await conversation.stop({
+				...stop,
+				targetExecutionId: second.executionId,
+			}),
+		).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
+		expect(conversation.snapshot()).toEqual(beforeStopConflict);
 	});
 
 	it("creates one stable stop intent without a Message or replacement Execution", async () => {
@@ -341,17 +601,16 @@ describe("Conversation execution use case", () => {
 			traceId: "trace_message_stop",
 		});
 
-		expect(
-			await conversation.stop({
-				schemaVersion: 1,
-				command: "stop",
-				conversationId: "stop_1",
-				targetExecutionId: "stop_3",
-				idempotencyKey: "stop_01",
-				requestId: "request_stop_01",
-				traceId: "trace_stop_01",
-			}),
-		).toEqual({
+		const stopped = await conversation.stop({
+			schemaVersion: 1,
+			command: "stop",
+			conversationId: "stop_1",
+			targetExecutionId: "stop_3",
+			idempotencyKey: "stop_01",
+			requestId: "request_stop_01",
+			traceId: "trace_stop_01",
+		});
+		expect(stopped).toEqual({
 			outcome: "accepted",
 			result: {
 				schemaVersion: 1,
@@ -359,6 +618,18 @@ describe("Conversation execution use case", () => {
 				executionId: "stop_3",
 			},
 		});
+		if (stopped.outcome !== "accepted") throw new Error("Expected acceptance");
+		expect(
+			await conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "stop_1",
+				targetExecutionId: "stop_3",
+				idempotencyKey: "stop_01",
+				requestId: "request_stop_01_retry",
+				traceId: "trace_stop_01_retry",
+			}),
+		).toEqual({ outcome: "replayed", result: stopped.result });
 		expect(
 			await conversation.stop({
 				schemaVersion: 1,
@@ -385,9 +656,110 @@ describe("Conversation execution use case", () => {
 					operation: "conversation.turn.stop.v1",
 					executionId: "stop_3",
 					stopRequestId: "stop_5",
+					sessionGeneration: 1,
 				}),
 			]),
 		});
+	});
+
+	it("does not replay stop across actor, Agent, or channel bindings", async () => {
+		let currentAuthority = authority;
+		const conversation = new FakeConversationExecutionV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority: currentAuthority };
+				},
+			},
+			newId: (() => {
+				let value = 1;
+				return () => `stop_binding_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_stop_binding",
+			requestId: "request_create_stop_binding",
+			traceId: "trace_create_stop_binding",
+		});
+		const accepted = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "stop_binding_1",
+			text: "Original message",
+			idempotencyKey: "message_stop_binding",
+			requestId: "request_message_stop_binding",
+			traceId: "trace_message_stop_binding",
+		});
+		if (accepted.outcome !== "accepted") throw new Error("Expected acceptance");
+		const command = {
+			schemaVersion: 1 as const,
+			command: "stop" as const,
+			conversationId: "stop_binding_1",
+			targetExecutionId: accepted.result.executionId,
+			idempotencyKey: "stop_binding",
+			requestId: "request_stop_binding",
+			traceId: "trace_stop_binding",
+		};
+		expect(await conversation.stop(command)).toMatchObject({
+			outcome: "accepted",
+		});
+		const before = conversation.snapshot();
+
+		for (const changedAuthority of [
+			{ ...authority, actorId: "user_02" },
+			{ ...authority, agentId: "agent_02" },
+			{ ...authority, channelId: "channel_02" },
+		]) {
+			currentAuthority = changedAuthority;
+			expect(await conversation.stop(command)).toEqual({ outcome: "denied" });
+			expect(conversation.snapshot()).toEqual(before);
+		}
+	});
+
+	it("denies a stop target from another Conversation without visible effects", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `cross_stop_${value++}`;
+			})(),
+		});
+		for (const idempotencyKey of [
+			"create_cross_stop_first",
+			"create_cross_stop_second",
+		]) {
+			await conversation.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey,
+				requestId: `request_${idempotencyKey}`,
+				traceId: `trace_${idempotencyKey}`,
+			});
+		}
+		await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "cross_stop_1",
+			text: "First conversation work",
+			idempotencyKey: "message_cross_stop",
+			requestId: "request_message_cross_stop",
+			traceId: "trace_message_cross_stop",
+		});
+		const before = conversation.snapshot();
+
+		expect(
+			await conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "cross_stop_2",
+				targetExecutionId: "cross_stop_4",
+				idempotencyKey: "stop_cross_stop",
+				requestId: "request_stop_cross_stop",
+				traceId: "trace_stop_cross_stop",
+			}),
+		).toEqual({ outcome: "denied" });
+		expect(conversation.snapshot()).toEqual(before);
 	});
 
 	it("returns already finished when a stop targets a terminal Execution", async () => {
@@ -415,6 +787,7 @@ describe("Conversation execution use case", () => {
 			traceId: "trace_message_terminal",
 		});
 		conversation.completeExecution("terminal_3");
+		const before = conversation.snapshot();
 
 		expect(
 			await conversation.stop({
@@ -441,5 +814,6 @@ describe("Conversation execution use case", () => {
 					({ operation }) => operation === "conversation.turn.stop.v1",
 				),
 		).toHaveLength(0);
+		expect(conversation.snapshot()).toEqual(before);
 	});
 });

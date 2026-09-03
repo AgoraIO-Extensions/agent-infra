@@ -51,6 +51,7 @@ interface StoredExecution {
 interface StoredOutbox {
 	readonly operation: string;
 	readonly executionId: string;
+	readonly sessionGeneration: number;
 	readonly messageId?: string;
 	readonly stopRequestId?: string;
 }
@@ -119,6 +120,20 @@ function isActiveExecution(execution: StoredExecution): boolean {
 	);
 }
 
+function isCurrentConversationBinding(
+	conversation: ConversationExecutionStateV1["conversation"],
+	authority: ConversationExecutionAuthorityV1,
+	conversationId: string,
+): boolean {
+	return (
+		conversation !== undefined &&
+		conversation.conversationId === conversationId &&
+		conversation.actorId === authority.actorId &&
+		conversation.agentId === authority.agentId &&
+		conversation.channelId === authority.channelId
+	);
+}
+
 export class FakeConversationExecutionV1
 	implements ConversationExecutionUseCaseV1
 {
@@ -151,6 +166,7 @@ export class FakeConversationExecutionV1
 				const idempotencyKey = key([
 					request.authority.agentId,
 					request.authority.actorId,
+					request.authority.channelId,
 					request.command.idempotencyKey,
 				]);
 				const existing = this.#createIdempotency.get(idempotencyKey);
@@ -182,6 +198,15 @@ export class FakeConversationExecutionV1
 				return decision;
 			},
 			executeMessage: async (request, decide) => {
+				if (
+					!isCurrentConversationBinding(
+						this.#conversations.get(request.command.conversationId),
+						request.authority,
+						request.command.conversationId,
+					)
+				) {
+					return { outcome: "denied" };
+				}
 				const idempotencyKey = key([
 					request.command.conversationId,
 					request.authority.actorId,
@@ -235,6 +260,7 @@ export class FakeConversationExecutionV1
 				this.#outbox.push({
 					operation: plan.outboxIntent.operation,
 					executionId: plan.outboxIntent.executionId,
+					sessionGeneration: plan.outboxIntent.sessionGeneration,
 					messageId: plan.outboxIntent.messageId,
 				});
 				this.#audit.push({
@@ -254,6 +280,15 @@ export class FakeConversationExecutionV1
 				return accepted;
 			},
 			executeRegeneration: async (request, decide) => {
+				if (
+					!isCurrentConversationBinding(
+						this.#conversations.get(request.command.conversationId),
+						request.authority,
+						request.command.conversationId,
+					)
+				) {
+					return { outcome: "denied" };
+				}
 				const idempotencyKey = key([
 					request.command.conversationId,
 					request.authority.actorId,
@@ -302,6 +337,7 @@ export class FakeConversationExecutionV1
 				this.#outbox.push({
 					operation: plan.outboxIntent.operation,
 					executionId: plan.outboxIntent.executionId,
+					sessionGeneration: plan.outboxIntent.sessionGeneration,
 					messageId: plan.outboxIntent.messageId,
 				});
 				this.#audit.push({
@@ -321,6 +357,15 @@ export class FakeConversationExecutionV1
 				return accepted;
 			},
 			executeStop: async (request, decide) => {
+				if (
+					!isCurrentConversationBinding(
+						this.#conversations.get(request.command.conversationId),
+						request.authority,
+						request.command.conversationId,
+					)
+				) {
+					return { outcome: "denied" };
+				}
 				const idempotencyKey = key([
 					request.command.conversationId,
 					request.authority.actorId,
@@ -364,6 +409,7 @@ export class FakeConversationExecutionV1
 				this.#outbox.push({
 					operation: plan.outboxIntent.operation,
 					executionId: plan.outboxIntent.executionId,
+					sessionGeneration: plan.outboxIntent.sessionGeneration,
 					stopRequestId: plan.outboxIntent.stopRequestId,
 				});
 				this.#audit.push({
@@ -446,7 +492,9 @@ export class FakeConversationExecutionV1
 		);
 		const target = targetExecutionId
 			? this.#executions.find(
-					(execution) => execution.executionId === targetExecutionId,
+					(execution) =>
+						execution.conversationId === conversationId &&
+						execution.executionId === targetExecutionId,
 				)
 			: undefined;
 		const stop = target
