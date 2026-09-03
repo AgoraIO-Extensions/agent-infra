@@ -122,7 +122,10 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
-			async fetch(input) {
+			async fetch(input, init) {
+				expect(new Headers(init?.headers).get("accept-encoding")).toBe(
+					"identity",
+				);
 				const url = requestUrl(input);
 				if (url.endsWith("/v2/codex/manifests/pilot")) {
 					return ociManifestResponse(registryManifestBody, manifestDigest);
@@ -613,6 +616,68 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		});
 		expect(policy).toHaveBeenCalledOnce();
 	});
+
+	it.each([
+		[
+			"a config key",
+			registryConfigBody.replace('"os":"linux"', '"os":"linux","os":"linux"'),
+			"OCI_CONFIG_INVALID",
+		],
+		[
+			"a Labels key",
+			registryConfigBody.replace(
+				`"io.agora.agent.runtime.manifest":${JSON.stringify(runtimeManifestLabel)}`,
+				`"io.agora.agent.runtime.manifest":${JSON.stringify(runtimeManifestLabel)},"io.agora.agent.runtime.manifest":${JSON.stringify(runtimeManifestLabel)}`,
+			),
+			"OCI_CONFIG_INVALID",
+		],
+		[
+			"a Runtime Manifest Label key",
+			registryConfigBody.replace(
+				JSON.stringify(runtimeManifestLabel),
+				JSON.stringify(
+					runtimeManifestLabel.replace(
+						'"schemaVersion":1',
+						'"schemaVersion":1,"schemaVersion":1',
+					),
+				),
+			),
+			"RUNTIME_MANIFEST_INVALID",
+		],
+	] as const)(
+		"fails closed for duplicate %s after policy without exposing config content",
+		async (_name, configBody, code) => {
+			const duplicateConfigDigest = digestText(configBody);
+			const duplicateManifestBody = ociManifestBody({
+				configDigest: duplicateConfigDigest,
+				configSize: Buffer.byteLength(configBody),
+			});
+			const duplicateManifestDigest = digestText(duplicateManifestBody);
+			const policy = vi.fn(async () => admittedPolicy);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch(input) {
+					return requestUrl(input).includes("/manifests/")
+						? ociManifestResponse(
+								duplicateManifestBody,
+								duplicateManifestDigest,
+							)
+						: ociConfigResponse(configBody);
+				},
+				policy: { authorize: policy },
+			});
+
+			const result = await adapter.admit(request);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: { code, retryable: false, traceId: request.traceId },
+			});
+			expect(policy).toHaveBeenCalledOnce();
+			expect(JSON.stringify(result)).not.toContain("models.example");
+		},
+	);
 
 	it("bounds oversized OCI responses before policy and redacts their content", async () => {
 		const oversizedManifest = JSON.stringify({

@@ -140,9 +140,11 @@ function createOciDistributionClientV1(options: {
 				) {
 					return { status: "invalid" };
 				}
+				const config = parseStrictOciJson(response.body);
+				if (config === undefined) return { status: "invalid" };
 				return {
 					status: "resolved",
-					config: JSON.parse(decodeUtf8(response.body)),
+					config,
 				};
 			} catch {
 				return { status: "invalid" };
@@ -355,7 +357,7 @@ async function readOciResponse(
 	const response = await binding.fetch(
 		new URL(`/v2/${path}`, binding.endpoint),
 		{
-			headers: { accept },
+			headers: { accept, "accept-encoding": "identity" },
 			redirect: "error",
 			signal,
 		},
@@ -472,15 +474,7 @@ function hasIdentityContentEncoding(
 function parseOciImageManifest(
 	input: Uint8Array,
 ): { readonly configDigest: string; readonly configSize: number } | undefined {
-	const errors: { error: number; offset: number; length: number }[] = [];
-	const root = parseTree(decodeUtf8(input), errors, {
-		allowTrailingComma: false,
-		disallowComments: true,
-	});
-	if (!root || errors.length > 0 || hasDuplicateJsonObjectKeys(root)) {
-		return undefined;
-	}
-	const manifest = asJsonRecord(getNodeValue(root));
+	const manifest = asJsonRecord(parseStrictOciJson(input));
 	const config = manifest
 		? asJsonRecord(ownValue(manifest, "config"))
 		: undefined;
@@ -500,6 +494,18 @@ function parseOciImageManifest(
 		configDigest: ownValue(config, "digest") as string,
 		configSize: ownValue(config, "size") as number,
 	};
+}
+
+function parseStrictOciJson(input: Uint8Array): unknown | undefined {
+	const errors: { error: number; offset: number; length: number }[] = [];
+	const root = parseTree(decodeUtf8(input), errors, {
+		allowTrailingComma: false,
+		disallowComments: true,
+	});
+	if (!root || errors.length > 0 || hasDuplicateJsonObjectKeys(root)) {
+		return undefined;
+	}
+	return getNodeValue(root);
 }
 
 function hasDuplicateJsonObjectKeys(node: JsonNode): boolean {
@@ -723,10 +729,10 @@ function parseOciConfig(
 			readonly runtimeManifestLabel: string | null | undefined;
 	  }
 	| undefined {
-	const root = asRecord(input);
+	const root = asJsonRecord(input);
 	if (!root) return undefined;
 	const configuration = ownValue(root, "config");
-	const config = configuration === undefined ? {} : asRecord(configuration);
+	const config = configuration === undefined ? {} : asJsonRecord(configuration);
 	if (!config) return undefined;
 	const entrypoint = optionalStrings(ownValue(config, "Entrypoint"));
 	const command = optionalStrings(ownValue(config, "Cmd"));
@@ -758,7 +764,7 @@ function parseOciConfig(
 	if (labels === undefined) {
 		return { ociConfig: ociConfig.data, runtimeManifestLabel: undefined };
 	}
-	const labelValues = asRecord(labels);
+	const labelValues = asJsonRecord(labels);
 	if (!labelValues) return undefined;
 	const label = ownValue(labelValues, runtimeManifestLabelName);
 	return {
