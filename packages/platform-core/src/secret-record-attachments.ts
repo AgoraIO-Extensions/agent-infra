@@ -40,6 +40,7 @@ interface SecretReference {
 	readonly name: string;
 	readonly secretId: string;
 	readonly secretVersion: number;
+	readonly isSet: boolean;
 }
 
 function validText(value: unknown): value is string {
@@ -60,27 +61,30 @@ function referencesForConfiguration(
 	configuration: AgentConfigurationRecordV1,
 ): SecretReference[] {
 	const references: SecretReference[] = [
-		...configuration.secrets.map(({ name, secretId, version }) => ({
+		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
 			name,
 			secretId,
 			secretVersion: version,
+			isSet,
 		})),
 		...(configuration.modelConfiguration?.options.map(
 			({ optionId, credential }) => ({
 				name: `model:${optionId}`,
 				secretId: credential.secretId,
 				secretVersion: credential.version,
+				isSet: credential.isSet,
 			}),
 		) ?? []),
 	];
 	if (
 		references.length > maximumAttachments ||
 		references.some(
-			({ name, secretId, secretVersion }) =>
+			({ name, secretId, secretVersion, isSet }) =>
 				!validText(name) ||
 				!validText(secretId) ||
 				!Number.isSafeInteger(secretVersion) ||
-				secretVersion < 1,
+				secretVersion < 1 ||
+				isSet !== true,
 		) ||
 		new Set(references.map(referenceKey)).size !== references.length ||
 		new Set(

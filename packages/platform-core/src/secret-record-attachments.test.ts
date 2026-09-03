@@ -96,6 +96,30 @@ describe("pending Secret record attachments", () => {
 		).resolves.toBeUndefined();
 	});
 
+	it("fails closed for unset Secret metadata", async () => {
+		const resolve = vi.fn();
+		await expect(
+			resolvePendingSecretRecordAttachmentsV1({
+				attachment: { resolve },
+				previousConfiguration: configuration(1, 1),
+				configuration: {
+					...configuration(2, 2),
+					secrets: [
+						{
+							name: "BOT_TOKEN",
+							secretId: "secret_bot_token",
+							version: 2,
+							isSet: false,
+						},
+					],
+				} as never,
+				ownerId: "owner_01",
+				occurredAt: new Date("2026-09-03T12:00:00.000Z"),
+			}),
+		).rejects.toBeInstanceOf(PendingSecretRecordAttachmentError);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it("fails closed for a malformed optional attachment", async () => {
 		await expect(
 			resolvePendingSecretRecordAttachmentsV1({

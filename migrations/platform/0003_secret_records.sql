@@ -26,7 +26,7 @@ CREATE TABLE "platform"."secret_records" (
 				'agentId', "platform"."secret_records"."agent_id",
 				'secretId', "platform"."secret_records"."secret_id",
 				'secretVersion', "platform"."secret_records"."secret_version",
-				'configurationRevision', "platform"."secret_records"."configuration_revision",
+				'configRevision', "platform"."secret_records"."configuration_revision",
 				'ownerType', "platform"."secret_records"."owner_type",
 				'ownerId', "platform"."secret_records"."owner_id",
 				'name', "platform"."secret_records"."name",

@@ -355,7 +355,7 @@ export const platformSecretRecords = platformSchema.table(
 				'agentId', ${table.agentId},
 				'secretId', ${table.secretId},
 				'secretVersion', ${table.secretVersion},
-				'configurationRevision', ${table.configurationRevision},
+				'configRevision', ${table.configurationRevision},
 				'ownerType', ${table.ownerType},
 				'ownerId', ${table.ownerId},
 				'name', ${table.name},
