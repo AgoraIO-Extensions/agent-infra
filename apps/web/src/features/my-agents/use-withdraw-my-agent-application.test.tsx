@@ -14,6 +14,7 @@ vi.mock("./my-agent-applications.js", () => ({
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	vi.useRealTimers();
 });
 
 describe("useWithdrawMyAgentApplication", () => {
@@ -47,6 +48,52 @@ describe("useWithdrawMyAgentApplication", () => {
 			2,
 			pendingApplication.applicationId,
 			vi.mocked(withdrawMyAgentApplication).mock.calls[0]?.[1],
+		);
+		queryClient.clear();
+	});
+
+	it("keeps an in-flight retry bound to the application that started it", async () => {
+		vi.useFakeTimers();
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: 1, retryDelay: 50 } },
+		});
+		vi.mocked(withdrawMyAgentApplication)
+			.mockRejectedValueOnce(new Error("transient transport failure"))
+			.mockResolvedValueOnce(pendingApplication);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result, rerender } = renderHook(
+			({ applicationId }: { applicationId: string }) =>
+				useWithdrawMyAgentApplication(applicationId),
+			{
+				initialProps: { applicationId: pendingApplication.applicationId },
+				wrapper,
+			},
+		);
+		let withdrawal: Promise<typeof pendingApplication> | undefined;
+
+		await act(async () => {
+			withdrawal = result.current.mutateAsync();
+			await Promise.resolve();
+		});
+		expect(withdrawMyAgentApplication).toHaveBeenCalledTimes(1);
+		const originalKey = vi.mocked(withdrawMyAgentApplication).mock
+			.calls[0]?.[1];
+
+		rerender({ applicationId: "application-pilot-next" });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(50);
+		});
+		await expect(withdrawal).resolves.toEqual(pendingApplication);
+		expect(withdrawMyAgentApplication).toHaveBeenNthCalledWith(
+			2,
+			pendingApplication.applicationId,
+			originalKey,
+		);
+		expect(withdrawMyAgentApplication).not.toHaveBeenCalledWith(
+			"application-pilot-next",
+			expect.any(String),
 		);
 		queryClient.clear();
 	});
