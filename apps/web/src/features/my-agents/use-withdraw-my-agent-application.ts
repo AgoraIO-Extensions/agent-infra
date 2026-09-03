@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { withdrawMyAgentApplication } from "./my-agent-applications.js";
 
@@ -10,7 +10,7 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 		idempotencyKey?: string;
 	}>({ applicationId });
 
-	return useMutation({
+	const withdrawal = useMutation({
 		mutationFn: () => {
 			if (pendingWithdrawal.current.applicationId !== applicationId) {
 				pendingWithdrawal.current = { applicationId };
@@ -31,4 +31,12 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 			}
 		},
 	});
+
+	useEffect(() => {
+		if (pendingWithdrawal.current.applicationId === applicationId) return;
+		pendingWithdrawal.current = { applicationId };
+		withdrawal.reset();
+	}, [applicationId, withdrawal.reset]);
+
+	return withdrawal;
 }

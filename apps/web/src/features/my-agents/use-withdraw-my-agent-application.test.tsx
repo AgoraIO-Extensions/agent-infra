@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -88,6 +88,38 @@ describe("useWithdrawMyAgentApplication", () => {
 		expect(vi.mocked(withdrawMyAgentApplication).mock.calls[2]?.[1]).not.toBe(
 			exhaustedKey,
 		);
+		queryClient.clear();
+	});
+
+	it("clears a terminal withdrawal error when the route application changes", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false } },
+		});
+		vi.mocked(withdrawMyAgentApplication).mockRejectedValueOnce(
+			new Error("withdrawal failed"),
+		);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result, rerender } = renderHook(
+			({ applicationId }: { applicationId: string }) =>
+				useWithdrawMyAgentApplication(applicationId),
+			{
+				initialProps: { applicationId: pendingApplication.applicationId },
+				wrapper,
+			},
+		);
+
+		await act(async () => {
+			await expect(result.current.mutateAsync()).rejects.toThrow(
+				"withdrawal failed",
+			);
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+
+		rerender({ applicationId: "application-pilot-next" });
+		await waitFor(() => expect(result.current.isError).toBe(false));
+		expect(result.current.error).toBeNull();
 		queryClient.clear();
 	});
 });
