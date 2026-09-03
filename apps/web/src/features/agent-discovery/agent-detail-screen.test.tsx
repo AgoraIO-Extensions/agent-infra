@@ -62,7 +62,17 @@ describe("AgentDetailScreen", () => {
 		"https://agent.example.test?access_token=secret",
 		"https://agent.example.test/#token=secret",
 	])("omits unsafe self-managed access entry %s", async (interactionUrl) => {
-		const agent = { ...startingAgent, interactionUrl };
+		const selfManagedAgent = AgentProjectionV1Schema.parse({
+			...startingAgent,
+			interactionUrl: "https://agent.example.test",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		const agent = { ...selfManagedAgent, interactionUrl };
 
 		const markup = await renderWithAgentRouter(
 			<AgentDetailScreen state={{ kind: "ready", agent }} />,
