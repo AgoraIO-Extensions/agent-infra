@@ -5,8 +5,11 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
+import { cleanup, render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach } from "vitest";
+
+afterEach(cleanup);
 
 export async function renderWithAgentRouter(content: ReactNode) {
 	const rootRoute = createRootRoute();
@@ -34,5 +37,5 @@ export async function renderWithAgentRouter(content: ReactNode) {
 		]),
 	});
 	await router.load();
-	return renderToStaticMarkup(<RouterProvider router={router} />);
+	return render(<RouterProvider router={router} />);
 }

@@ -1,5 +1,8 @@
 import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import {
+	createPilotAgentMockServerV1,
+	pilotFakeScenariosV1,
+} from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 
 import { createClient } from "../../pilot/generated/client/index.js";
@@ -12,58 +15,55 @@ const secondAgent = AgentProjectionV1Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
 });
+const emptyAgentPage = { status: 200, body: { items: [], nextCursor: null } };
+
+function createAgentClient(
+	server: ReturnType<typeof createPilotAgentMockServerV1>,
+) {
+	return createClient({
+		baseUrl: "https://platform.example.test",
+		fetch: server.fetch,
+	});
+}
 
 describe("Agent discovery generated-client consumer", () => {
 	it("consumes the generated visible-Agent list and preserves its projection", async () => {
-		const requests: Request[] = [];
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async (input) => {
-				const request = new Request(input);
-				requests.push(request);
-				return new Response(
-					JSON.stringify({ items: [startingAgent], nextCursor: null }),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
+		const server = createPilotAgentMockServerV1({
+			listAgents: {
+				status: 200,
+				body: { items: [startingAgent], nextCursor: null },
 			},
+			getAgent: { status: 200, body: startingAgent },
 		});
 
-		await expect(loadAgentDiscovery(client)).resolves.toEqual({
+		await expect(
+			loadAgentDiscovery(createAgentClient(server)),
+		).resolves.toEqual({
 			kind: "ready",
 			agents: [startingAgent],
 		});
-		expect(requests).toHaveLength(1);
-		expect(requests[0]?.url).toBe(
+		expect(server.requests).toHaveLength(1);
+		expect(server.requests[0]?.url).toBe(
 			"https://platform.example.test/api/v1/agents",
 		);
 	});
 
 	it("aggregates every visible-Agent page from the generated client", async () => {
 		const cursor = "agent-pilot-1";
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async (input) => {
-				const request = new Request(input);
-				const isSecondPage =
-					new URL(request.url).searchParams.get("cursor") === cursor;
-				return new Response(
-					JSON.stringify(
-						isSecondPage
-							? { items: [secondAgent], nextCursor: null }
-							: { items: [startingAgent], nextCursor: cursor },
-					),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
-			},
+		const server = createPilotAgentMockServerV1({
+			listAgents: (request) =>
+				new URL(request.url).searchParams.get("cursor") === cursor
+					? { status: 200, body: { items: [secondAgent], nextCursor: null } }
+					: {
+							status: 200,
+							body: { items: [startingAgent], nextCursor: cursor },
+						},
+			getAgent: { status: 200, body: startingAgent },
 		});
 
-		await expect(loadAgentDiscovery(client)).resolves.toEqual({
+		await expect(
+			loadAgentDiscovery(createAgentClient(server)),
+		).resolves.toEqual({
 			kind: "ready",
 			agents: [startingAgent, secondAgent],
 		});
@@ -71,47 +71,38 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("fails closed when a visible-Agent cursor repeats", async () => {
 		const cursor = "agent-pilot-1";
-		const requests: Request[] = [];
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async (input) => {
-				requests.push(new Request(input));
-				return new Response(
-					JSON.stringify({ items: [startingAgent], nextCursor: cursor }),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
+		const server = createPilotAgentMockServerV1({
+			listAgents: {
+				status: 200,
+				body: { items: [startingAgent], nextCursor: cursor },
 			},
+			getAgent: { status: 200, body: startingAgent },
 		});
 
-		await expect(loadAgentDiscovery(client)).rejects.toMatchObject({
+		await expect(
+			loadAgentDiscovery(createAgentClient(server)),
+		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
 		});
-		expect(requests).toHaveLength(2);
+		expect(server.requests).toHaveLength(2);
 	});
 
 	it("bounds a unique visible-Agent cursor chain", async () => {
 		let requests = 0;
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async () => {
+		const server = createPilotAgentMockServerV1({
+			listAgents: () => {
 				requests += 1;
-				return new Response(
-					JSON.stringify({
-						items: [],
-						nextCursor: `cursor-${requests}`,
-					}),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
+				return {
+					status: 200,
+					body: { items: [], nextCursor: `cursor-${requests}` },
+				};
 			},
+			getAgent: { status: 200, body: startingAgent },
 		});
 
-		await expect(loadAgentDiscovery(client)).rejects.toMatchObject({
+		await expect(
+			loadAgentDiscovery(createAgentClient(server)),
+		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
 		});
 		expect(requests).toBe(100);
@@ -119,19 +110,17 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("keeps non-retryable visible-Agent failures opaque", async () => {
 		for (const status of [403, 404]) {
-			const client = createClient({
-				baseUrl: "https://platform.example.test",
-				fetch: async () =>
-					new Response(
-						JSON.stringify(pilotFakeScenariosV1.unauthorized.response.body),
-						{
-							status,
-							headers: { "Content-Type": "application/json" },
-						},
-					),
+			const server = createPilotAgentMockServerV1({
+				listAgents: {
+					status,
+					body: pilotFakeScenariosV1.unauthorized.response.body,
+				},
+				getAgent: { status: 200, body: startingAgent },
 			});
 
-			await expect(loadAgentDiscovery(client)).resolves.toEqual({
+			await expect(
+				loadAgentDiscovery(createAgentClient(server)),
+			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
 			});
@@ -139,41 +128,37 @@ describe("Agent discovery generated-client consumer", () => {
 	});
 
 	it("rejects retryable generated-client list failures without exposing details", async () => {
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async () =>
-				new Response(
-					JSON.stringify({
-						...pilotFakeScenariosV1.unavailable.response.body,
-						message: "private upstream detail",
-					}),
-					{
-						status: 503,
-						headers: { "Content-Type": "application/json" },
-					},
-				),
+		const server = createPilotAgentMockServerV1({
+			listAgents: {
+				status: 503,
+				body: {
+					...pilotFakeScenariosV1.unavailable.response.body,
+					message: "private upstream detail",
+				},
+			},
+			getAgent: { status: 200, body: startingAgent },
 		});
 
-		await expect(loadAgentDiscovery(client)).rejects.toMatchObject({
+		await expect(
+			loadAgentDiscovery(createAgentClient(server)),
+		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
 		});
 	});
 
 	it("keeps missing and forbidden detail responses equally opaque", async () => {
 		for (const status of [403, 404]) {
-			const client = createClient({
-				baseUrl: "https://platform.example.test",
-				fetch: async () =>
-					new Response(
-						JSON.stringify(pilotFakeScenariosV1.unauthorized.response.body),
-						{
-							status,
-							headers: { "Content-Type": "application/json" },
-						},
-					),
+			const server = createPilotAgentMockServerV1({
+				listAgents: emptyAgentPage,
+				getAgent: {
+					status,
+					body: pilotFakeScenariosV1.unauthorized.response.body,
+				},
 			});
 
-			await expect(loadAgentDetail("agent-pilot-1", client)).resolves.toEqual({
+			await expect(
+				loadAgentDetail("agent-pilot-1", createAgentClient(server)),
+			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
 			});
@@ -181,23 +166,19 @@ describe("Agent discovery generated-client consumer", () => {
 	});
 
 	it("rejects retryable generated-client detail failures without exposing details", async () => {
-		const client = createClient({
-			baseUrl: "https://platform.example.test",
-			fetch: async () =>
-				new Response(
-					JSON.stringify({
-						...pilotFakeScenariosV1.unavailable.response.body,
-						message: "private upstream detail",
-					}),
-					{
-						status: 503,
-						headers: { "Content-Type": "application/json" },
-					},
-				),
+		const server = createPilotAgentMockServerV1({
+			listAgents: emptyAgentPage,
+			getAgent: {
+				status: 503,
+				body: {
+					...pilotFakeScenariosV1.unavailable.response.body,
+					message: "private upstream detail",
+				},
+			},
 		});
 
 		await expect(
-			loadAgentDetail("agent-pilot-1", client),
+			loadAgentDetail("agent-pilot-1", createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
 		});

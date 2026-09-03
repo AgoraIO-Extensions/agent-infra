@@ -1,5 +1,6 @@
 import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentDiscoveryScreen } from "./agent-discovery-screen.js";
@@ -11,17 +12,16 @@ const startingAgent = AgentProjectionV1Schema.parse(
 
 describe("AgentDiscoveryScreen", () => {
 	it("renders a visible Agent as a responsive detail link", async () => {
-		const markup = await renderWithAgentRouter(
+		await renderWithAgentRouter(
 			<AgentDiscoveryScreen
 				state={{ kind: "ready", agents: [startingAgent] }}
 			/>,
 		);
 
-		expect(markup).toContain("Release assistant");
-		expect(markup).toContain("Starting");
-		expect(markup).toContain('href="/agents/agent-pilot-1"');
-		expect(markup).toContain("sm:flex-row");
-		expect(markup).toContain("min-w-0");
+		const link = screen.getByRole("link", { name: /Release assistant/ });
+		expect(link.getAttribute("href")).toBe("/agents/agent-pilot-1");
+		expect(screen.getByText("Starting")).toBeTruthy();
+		expect(link.className).toContain("min-w-0");
 	});
 
 	it("uses Router navigation for an opaque Agent identifier", async () => {
@@ -30,25 +30,27 @@ describe("AgentDiscoveryScreen", () => {
 			agentId: "agent:tenant/01?draft#one%",
 		});
 
-		const markup = await renderWithAgentRouter(
+		await renderWithAgentRouter(
 			<AgentDiscoveryScreen state={{ kind: "ready", agents: [agent] }} />,
 		);
 
-		expect(markup).toContain(
-			'href="/agents/agent%3Atenant%2F01%3Fdraft%23one%25"',
-		);
+		expect(
+			screen
+				.getByRole("link", { name: /Release assistant/ })
+				.getAttribute("href"),
+		).toBe("/agents/agent%3Atenant%2F01%3Fdraft%23one%25");
 	});
 
 	it("renders an explicit empty state for an empty visible-Agent response", async () => {
-		const markup = await renderWithAgentRouter(
+		await renderWithAgentRouter(
 			<AgentDiscoveryScreen state={{ kind: "ready", agents: [] }} />,
 		);
 
-		expect(markup).toContain("No Agents are available to you.");
+		expect(screen.getByText("No Agents are available to you.")).toBeTruthy();
 	});
 
 	it("renders an unavailable list without stale Agent data", async () => {
-		const markup = await renderWithAgentRouter(
+		await renderWithAgentRouter(
 			<AgentDiscoveryScreen
 				state={{
 					kind: "unavailable",
@@ -57,19 +59,20 @@ describe("AgentDiscoveryScreen", () => {
 			/>,
 		);
 
-		expect(markup).toContain("Agents are unavailable");
-		expect(markup).toContain('role="alert"');
-		expect(markup).not.toContain("Release assistant");
-		expect(markup).not.toContain("forbidden");
-		expect(markup).not.toContain("missing");
+		expect(screen.getByRole("alert").textContent).toContain(
+			"Please contact an administrator.",
+		);
+		expect(screen.queryByText("Release assistant")).toBeNull();
+		expect(screen.queryByText(/forbidden|missing/i)).toBeNull();
 	});
 
 	it("renders an explicit loading state", async () => {
-		const markup = await renderWithAgentRouter(
+		await renderWithAgentRouter(
 			<AgentDiscoveryScreen state={{ kind: "loading" }} />,
 		);
 
-		expect(markup).toContain("Loading Agents...");
-		expect(markup).toContain('aria-live="polite"');
+		expect(
+			screen.getByText("Loading Agents...").getAttribute("aria-live"),
+		).toBe("polite");
 	});
 });
