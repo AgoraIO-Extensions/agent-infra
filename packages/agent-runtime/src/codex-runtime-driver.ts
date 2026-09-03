@@ -173,8 +173,11 @@ function isCodexSession(
 		return false;
 	}
 	let runningExecutionId: string | undefined;
+	const nativeTurnIds = new Set<string>();
 	for (const [executionId, execution] of Object.entries(value.executions)) {
 		if (!isCodexExecution(executionId, execution)) return false;
+		if (nativeTurnIds.has(execution.nativeTurnId)) return false;
+		nativeTurnIds.add(execution.nativeTurnId);
 		if (execution.status !== "running") continue;
 		if (runningExecutionId) return false;
 		runningExecutionId = executionId;
@@ -229,10 +232,14 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	) {
 		stateInvalid();
 	}
-	for (const [nativeSessionRef, session] of Object.entries(value.sessions)) {
-		if (!isCodexSession(nativeSessionRef, session)) stateInvalid();
-	}
 	const sessions = value.sessions as Record<string, CodexSession>;
+	const nativeThreadIds = new Set<string>();
+	for (const [nativeSessionRef, session] of Object.entries(sessions)) {
+		if (!isCodexSession(nativeSessionRef, session)) stateInvalid();
+		if (!session.threadId) continue;
+		if (nativeThreadIds.has(session.threadId)) stateInvalid();
+		nativeThreadIds.add(session.threadId);
+	}
 	const operations = value.operations as Record<string, CodexOperation>;
 	for (const [key, operation] of Object.entries(value.operations)) {
 		if (!isCodexOperation(key, operation, sessions)) stateInvalid();
@@ -667,7 +674,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const key = operationKey(command);
 			const existing = state.operations[key];
 			if (existing) return { operation: existing, created: false };
-			const nativeSessionRef = command.nativeSessionRef ?? randomUUID();
+			const matchingSessions = command.nativeSessionRef
+				? []
+				: Object.entries(state.sessions).filter(
+						([, candidate]) =>
+							candidate.agentId === command.agentId &&
+							candidate.conversationId === command.conversationId &&
+							candidate.sessionGeneration === command.sessionGeneration,
+					);
+			if (matchingSessions.length > 1) stateInvalid();
+			const nativeSessionRef =
+				command.nativeSessionRef ?? matchingSessions[0]?.[0] ?? randomUUID();
 			const session = state.sessions[nativeSessionRef];
 			if (session) {
 				if (
@@ -690,19 +707,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} else if (command.nativeSessionRef) {
 				unavailable();
 			} else {
-				const fencedSession = Object.values(state.sessions).some(
-					(candidate) =>
-						candidate.agentId === command.agentId &&
-						candidate.conversationId === command.conversationId &&
-						candidate.sessionGeneration === command.sessionGeneration &&
-						(candidate.acceptanceUncertainOperationKey !== undefined ||
-							Object.values(state.operations).some(
-								(operation) =>
-									operation.nativeSessionRef === candidate.nativeSessionRef &&
-									operation.state === "prepared",
-							)),
-				);
-				if (fencedSession) unavailable();
 				state.sessions[nativeSessionRef] = {
 					nativeSessionRef,
 					agentId: command.agentId,
@@ -767,6 +771,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await this.update((state) => {
 			const stored = state.sessions[nativeSessionRef];
 			if (!stored || stored.threadId) protocolInvalid();
+			if (
+				Object.entries(state.sessions).some(
+					([candidateRef, candidate]) =>
+						candidateRef !== nativeSessionRef &&
+						candidate.threadId === threadId,
+				)
+			) {
+				protocolInvalid();
+			}
 			stored.threadId = threadId;
 		});
 		this.resumedSessions.add(nativeSessionRef);
@@ -812,6 +825,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operation.record = record;
 			if (result.outcome !== "accepted") return;
 			if (!nativeTurnId) protocolInvalid();
+			if (
+				Object.values(session.executions).some(
+					(execution) => execution.nativeTurnId === nativeTurnId,
+				)
+			) {
+				protocolInvalid();
+			}
 			session.executions[command.executionId] = {
 				executionId: command.executionId,
 				turnId: command.turnId,

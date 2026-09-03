@@ -112,6 +112,8 @@ class TestCodexBridge {
 	private turnStatus: CodexTurnStatus = "inProgress";
 	private holdTurnsListResponses = false;
 	private turnsListPages?: TestTurnsListPage[];
+	private turnStartCount = 0;
+	private duplicateNextNativeTurnId = false;
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -154,8 +156,9 @@ class TestCodexBridge {
 				await this.close();
 				return;
 			}
+			const nativeTurnId = this.nextNativeTurnId();
 			this.respond(id, {
-				turn: { id: this.nativeTurnId, status: "inProgress" },
+				turn: { id: nativeTurnId, status: "inProgress" },
 			});
 			return;
 		}
@@ -168,6 +171,14 @@ class TestCodexBridge {
 
 	setTurnsListPages(pages: TestTurnsListPage[]) {
 		this.turnsListPages = structuredClone(pages);
+	}
+
+	duplicateNextTurnResponse() {
+		this.duplicateNextNativeTurnId = true;
+	}
+
+	continueAfterPersistedTurn() {
+		this.turnStartCount = 1;
 	}
 
 	holdTurnsList() {
@@ -243,6 +254,17 @@ class TestCodexBridge {
 			data: page.data.map((turn) => ({ ...turn, items: [] })),
 			...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
 		});
+	}
+
+	private nextNativeTurnId() {
+		const nativeTurnId = this.duplicateNextNativeTurnId
+			? this.nativeTurnId
+			: this.turnStartCount === 0
+				? this.nativeTurnId
+				: `${this.nativeTurnId}-${this.turnStartCount + 1}`;
+		this.duplicateNextNativeTurnId = false;
+		this.turnStartCount += 1;
+		return nativeTurnId;
 	}
 
 	private push(frame: CodexAppServerFrame) {
@@ -369,6 +391,7 @@ describe("Codex Runtime Driver", () => {
 			itemsView: "notLoaded",
 			limit: 100,
 		});
+		resumedBridge.continueAfterPersistedTurn();
 		expect(
 			(
 				await resumedDriver.execute(
@@ -405,6 +428,125 @@ describe("Codex Runtime Driver", () => {
 		expect(
 			bridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(1);
+	});
+
+	it("rejects a duplicate native thread response across Sessions", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		await driver.execute(submitCommand());
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					conversationId: "conversation-codex-other",
+					operationId: "execution-codex-other",
+					executionId: "execution-codex-other",
+					turnId: "turn-codex-other",
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(2);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("rejects a duplicate native Turn response in one Session", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const first = await driver.execute(submitCommand());
+		bridge.setTurnStatus("completed");
+		await driver.getStatus(first.nativeSessionRef, "execution-codex");
+		bridge.duplicateNextTurnResponse();
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					operationId: "execution-codex-duplicate-turn",
+					executionId: "execution-codex-duplicate-turn",
+					turnId: "turn-codex-duplicate-turn",
+					nativeSessionRef: first.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(2);
+	});
+
+	it("reuses an active Session for a ref-less submit retry", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		await driver.execute(submitCommand());
+
+		expect(
+			(
+				await driver.execute(
+					submitCommand({
+						operationId: "execution-codex-ref-less-retry",
+						executionId: "execution-codex-ref-less-retry",
+						turnId: "turn-codex-ref-less-retry",
+					}),
+				)
+			).result,
+		).toEqual({ outcome: "busy" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(1);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("fails closed for a ref-less submit with multiple matching Sessions", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		await writeFile(
+			path,
+			JSON.stringify({
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session-one": {
+						nativeSessionRef: "opaque-session-one",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-one",
+						executions: {},
+					},
+					"opaque-session-two": {
+						nativeSessionRef: "opaque-session-two",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-two",
+						executions: {},
+					},
+				},
+				operations: {},
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+
+		await expect(driver.execute(submitCommand())).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_STATE_INVALID",
+		});
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(0);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
 	});
 
 	it("keeps an unconfirmed native Turn unknown without retrying it", async () => {
@@ -653,6 +795,93 @@ describe("Codex Runtime Driver", () => {
 					},
 				},
 				operations: {},
+			},
+		],
+		[
+			"duplicate native thread",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session-one": {
+						nativeSessionRef: "opaque-session-one",
+						agentId: "agent-codex-one",
+						conversationId: "conversation-codex-one",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-duplicate",
+						executions: {},
+					},
+					"opaque-session-two": {
+						nativeSessionRef: "opaque-session-two",
+						agentId: "agent-codex-two",
+						conversationId: "conversation-codex-two",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-duplicate",
+						executions: {},
+					},
+				},
+				operations: {},
+			},
+		],
+		[
+			"duplicate native Turn",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-private",
+						activeExecutionId: "execution-codex-running",
+						executions: {
+							"execution-codex-completed": {
+								executionId: "execution-codex-completed",
+								turnId: "turn-codex-completed",
+								nativeTurnId: "codex-native-turn-duplicate",
+								status: "completed",
+							},
+							"execution-codex-running": {
+								executionId: "execution-codex-running",
+								turnId: "turn-codex-running",
+								nativeTurnId: "codex-native-turn-duplicate",
+								status: "running",
+							},
+						},
+					},
+				},
+				operations: {
+					'["agent-codex","conversation-codex",1,"submit-turn","execution-codex-completed"]':
+						{
+							state: "resolved",
+							nativeSessionRef: "opaque-session",
+							record: {
+								schemaVersion: 1,
+								agentId: "agent-codex",
+								conversationId: "conversation-codex",
+								sessionGeneration: 1,
+								kind: "submit-turn",
+								operationId: "execution-codex-completed",
+								nativeSessionRef: "opaque-session",
+								result: { outcome: "accepted", status: "completed" },
+							},
+						},
+					'["agent-codex","conversation-codex",1,"submit-turn","execution-codex-running"]':
+						{
+							state: "resolved",
+							nativeSessionRef: "opaque-session",
+							record: {
+								schemaVersion: 1,
+								agentId: "agent-codex",
+								conversationId: "conversation-codex",
+								sessionGeneration: 1,
+								kind: "submit-turn",
+								operationId: "execution-codex-running",
+								nativeSessionRef: "opaque-session",
+								result: { outcome: "accepted", status: "running" },
+							},
+						},
+				},
 			},
 		],
 	] as const)(
