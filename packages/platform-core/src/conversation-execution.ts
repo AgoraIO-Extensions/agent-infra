@@ -124,6 +124,7 @@ export interface ConversationExecutionStateV1 {
 				readonly actorId: string;
 				readonly turnId: string;
 				readonly sessionGeneration: number;
+				readonly stopPending: boolean;
 				readonly status: "submitted" | "processing" | "unknown";
 		  }
 		| undefined;
@@ -840,6 +841,7 @@ function parseState(
 				"actorId",
 				"turnId",
 				"sessionGeneration",
+				"stopPending",
 				"status",
 			]);
 			const executionStatus = execution.status;
@@ -849,6 +851,7 @@ function parseState(
 				!isText(execution.actorId) ||
 				!isText(execution.turnId) ||
 				!isPositiveSafeInteger(execution.sessionGeneration) ||
+				typeof execution.stopPending !== "boolean" ||
 				(executionStatus !== "submitted" &&
 					executionStatus !== "processing" &&
 					executionStatus !== "unknown")
@@ -861,6 +864,7 @@ function parseState(
 				actorId: execution.actorId,
 				turnId: execution.turnId,
 				sessionGeneration: execution.sessionGeneration,
+				stopPending: execution.stopPending,
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
 		})();
@@ -1222,6 +1226,7 @@ export function createConversationExecutionUseCaseV1(
 								return { outcome: "denied" };
 							if (state.activeExecution) {
 								if (
+									state.activeExecution.stopPending ||
 									!authority.supportsSupplementaryInstruction ||
 									state.activeExecution.actorId !== authority.actorId
 								) {

@@ -380,6 +380,7 @@ describe("Conversation execution use case", () => {
 				actorId: authority.actorId,
 				turnId: "turn_generation",
 				sessionGeneration: 1,
+				stopPending: false,
 				status: "submitted",
 			},
 		} satisfies ConversationExecutionStateV1;
@@ -1073,6 +1074,59 @@ describe("Conversation execution use case", () => {
 				}),
 			]),
 		});
+	});
+
+	it("does not supplement an Execution with a pending stop", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `stop_pending_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_stop_pending",
+			requestId: "request_create_stop_pending",
+			traceId: "trace_create_stop_pending",
+		});
+		const initial = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "stop_pending_1",
+			text: "Initial message",
+			idempotencyKey: "message_stop_pending_initial",
+			requestId: "request_message_stop_pending_initial",
+			traceId: "trace_message_stop_pending_initial",
+		});
+		if (initial.outcome !== "accepted") {
+			throw new Error("Expected an accepted initial message");
+		}
+		const stopped = await conversation.stop({
+			schemaVersion: 1,
+			command: "stop",
+			conversationId: "stop_pending_1",
+			targetExecutionId: initial.result.executionId,
+			idempotencyKey: "stop_pending",
+			requestId: "request_stop_pending",
+			traceId: "trace_stop_pending",
+		});
+		expect(stopped).toMatchObject({ outcome: "accepted" });
+		const before = conversation.snapshot();
+
+		expect(
+			await conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "stop_pending_1",
+				text: "Do not supplement a stopped Execution",
+				idempotencyKey: "message_stop_pending_followup",
+				requestId: "request_message_stop_pending_followup",
+				traceId: "trace_message_stop_pending_followup",
+			}),
+		).toEqual({ outcome: "busy" });
+		expect(conversation.snapshot()).toEqual(before);
 	});
 
 	it("does not replay stop across actor, Agent, or channel bindings", async () => {

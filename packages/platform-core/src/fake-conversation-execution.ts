@@ -512,6 +512,13 @@ export class FakeConversationExecutionV1
 					(candidate) => candidate.executionId === target.executionId,
 				)
 			: undefined;
+		const activeStopPending = active
+			? this.#stops.some(
+					(candidate) =>
+						candidate.executionId === active.executionId &&
+						candidate.status === "submitted",
+				)
+			: false;
 		return {
 			conversation: structuredClone(this.#conversations.get(conversationId)),
 			sourceMessage: source
@@ -545,6 +552,7 @@ export class FakeConversationExecutionV1
 						actorId: active.actorId,
 						turnId: active.turnId,
 						sessionGeneration: active.sessionGeneration,
+						stopPending: activeStopPending,
 						status: active.status as "submitted" | "processing" | "unknown",
 					}
 				: undefined,
