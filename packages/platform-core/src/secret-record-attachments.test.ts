@@ -71,11 +71,25 @@ describe("pending Secret record attachments", () => {
 		expect(attachments?.encryptedRecords).toEqual([{ opaque: "ciphertext" }]);
 	});
 
-	it("does not create a sidecar when the caller supplied none", async () => {
+	it("requires an attachment for a final Secret replacement", async () => {
 		await expect(
 			resolvePendingSecretRecordAttachmentsV1({
 				previousConfiguration: configuration(1, 1),
 				configuration: configuration(2, 2),
+				ownerId: "owner_01",
+				occurredAt: new Date("2026-09-03T12:00:00.000Z"),
+			}),
+		).rejects.toBeInstanceOf(PendingSecretRecordAttachmentError);
+	});
+
+	it("allows an omitted attachment when the final configuration is Secret-free", async () => {
+		await expect(
+			resolvePendingSecretRecordAttachmentsV1({
+				previousConfiguration: configuration(1, 1),
+				configuration: {
+					...configuration(2, 1),
+					secrets: [],
+				},
 				ownerId: "owner_01",
 				occurredAt: new Date("2026-09-03T12:00:00.000Z"),
 			}),

@@ -8,6 +8,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
 import { FakeAgentConfigurationAdmissionsV1 } from "./fake-agent-configuration.ts";
+import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
 
 const imageDigest = `sha256:${"a".repeat(64)}`;
 
@@ -594,6 +595,7 @@ export function agentConfigurationUseCaseConformance(
 						},
 					},
 					actor,
+					pendingSecretRecordAttachmentFixtureV1(),
 				),
 			).resolves.toEqual({
 				schemaVersion: 1,

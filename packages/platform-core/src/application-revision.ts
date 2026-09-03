@@ -10,7 +10,7 @@ import {
 	type AgentConfigurationSourceSelectionV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentConfigurationWritePlanV1,
-	createAgentConfigurationUseCaseV1,
+	createAgentConfigurationPlanCaptureUseCaseV1,
 	decodeAgentConfigurationRecordV1,
 	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
@@ -828,7 +828,7 @@ async function captureConfigurationPlan(
 			return decision;
 		},
 	};
-	const useCase = createAgentConfigurationUseCaseV1(
+	const useCase = createAgentConfigurationPlanCaptureUseCaseV1(
 		{
 			...dependencies,
 			authorizationAdmission,

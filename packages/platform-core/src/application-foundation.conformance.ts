@@ -15,6 +15,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import type { ApplicationFoundationSnapshot } from "./fake-application-foundation.ts";
+import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
 
 export const applicationFoundationFailurePoints = [
 	"agent",
@@ -274,10 +275,19 @@ function createUseCase(
 	transaction: ApplicationFoundationTransactionPortV1,
 	admissions = applicationFoundationAdmissionDependenciesV1(),
 ) {
-	return createApplicationFoundationUseCaseV1(
+	const useCase = createApplicationFoundationUseCaseV1(
 		{ transaction, ...admissions },
 		{ now: fixedNow },
 	);
+	return {
+		submit(...args: Parameters<typeof useCase.submit>) {
+			return useCase.submit(
+				args[0],
+				args[1],
+				args.length === 3 ? args[2] : pendingSecretRecordAttachmentFixtureV1(),
+			);
+		},
+	};
 }
 
 export async function captureApplicationFoundationWritePlan(): Promise<ApplicationFoundationWritePlanV1> {

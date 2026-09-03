@@ -316,6 +316,23 @@ describe("management routes", () => {
 		);
 	});
 
+	it("submits a credential-free application without preparing an attachment", async () => {
+		const { app, submit, prepareSecretReplacements } = createApp();
+		const response = await app.request("/api/v1/agent-applications", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...applicationBody, secrets: [] }),
+		});
+
+		expect(response.status).toBe(201);
+		expect(prepareSecretReplacements).not.toHaveBeenCalled();
+		expect(submit).toHaveBeenCalledWith(
+			expect.objectContaining({ secrets: [] }),
+			expect.anything(),
+			undefined,
+		);
+	});
+
 	it("uses server-derived scopes for application and Agent reads", async () => {
 		const user = createApp();
 		const admin = createApp({ administrator: true });

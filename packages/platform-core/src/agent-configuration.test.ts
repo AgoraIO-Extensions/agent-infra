@@ -26,6 +26,7 @@ import {
 	type FakeAgentConfigurationTransactionOptionsV1,
 	FakeAgentConfigurationTransactionV1,
 } from "./fake-agent-configuration.ts";
+import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
 
 const serverInstant = new Date("2026-08-31T04:00:00.000Z");
 const actor = {
@@ -232,6 +233,20 @@ describe("Agent configuration conformance", () => {
 });
 
 describe("Agent configuration Secret sidecar", () => {
+	it("fails closed before persistence when a Secret sidecar is missing", async () => {
+		const harness = createHarness();
+		await expect(
+			harness.useCase.update(
+				{
+					...command,
+					changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+				},
+				actor,
+			),
+		).rejects.toMatchObject({ code: "dependency_unavailable" });
+		expect(harness.transaction.snapshot().commitCount).toBe(0);
+	});
+
 	it("passes final encrypted records beside the configuration plan", async () => {
 		const harness = createHarness();
 		let attachments: unknown;
@@ -1074,7 +1089,11 @@ describe("Agent configuration policy", () => {
 			...actor,
 			rawRequestDigest: "c".repeat(64),
 		};
-		const first = await firstUseCase.update(secretCommand, firstActor as never);
+		const first = await firstUseCase.update(
+			secretCommand,
+			firstActor as never,
+			pendingSecretRecordAttachmentFixtureV1(),
+		);
 		await expect(
 			firstUseCase.update(secretCommand, firstActor as never),
 		).resolves.toEqual(first);
@@ -1911,6 +1930,7 @@ describe("Agent configuration policy", () => {
 					},
 				},
 				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toMatchObject({ changedFields: ["modelConfiguration"] });
 		expect(replaced.transaction.snapshot()).toMatchObject({
@@ -1977,6 +1997,7 @@ describe("Agent configuration policy", () => {
 					},
 				},
 				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toMatchObject({
 			changedFields: ["environment", "secrets"],
@@ -2342,6 +2363,7 @@ describe("Agent configuration policy", () => {
 		const baselineResult = await baseline.useCase.update(
 			baseline.command,
 			actor,
+			pendingSecretRecordAttachmentFixtureV1(),
 		);
 		const baselinePlan = baseline.transaction.snapshot().lastPlan;
 		const patched = scenario();
@@ -2354,7 +2376,11 @@ describe("Agent configuration policy", () => {
 			String.prototype.localeCompare = () => {
 				throw new Error("localeCompare must not be used");
 			};
-			patchedResult = await patched.useCase.update(patched.command, actor);
+			patchedResult = await patched.useCase.update(
+				patched.command,
+				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
+			);
 		} finally {
 			if (descriptor) {
 				Object.defineProperty(String.prototype, "localeCompare", descriptor);

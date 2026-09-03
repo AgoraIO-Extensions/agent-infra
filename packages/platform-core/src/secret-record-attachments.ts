@@ -115,7 +115,6 @@ export async function resolvePendingSecretRecordAttachmentsV1(input: {
 	readonly ownerId: string;
 	readonly occurredAt: Date;
 }): Promise<PendingSecretRecordAttachmentsV1 | undefined> {
-	if (input.attachment === undefined) return undefined;
 	if (
 		!validText(input.ownerId) ||
 		!validText(input.configuration.agentId) ||
@@ -148,6 +147,10 @@ export async function resolvePendingSecretRecordAttachmentsV1(input: {
 			}),
 		);
 	if (expected.length === 0) {
+		if (input.attachment === undefined) return undefined;
+		throw new PendingSecretRecordAttachmentError();
+	}
+	if (input.attachment === undefined) {
 		throw new PendingSecretRecordAttachmentError();
 	}
 	const immutableExpected = Object.freeze(expected);

@@ -2444,8 +2444,9 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 	});
 }
 
-export function createAgentConfigurationUseCaseV1(
+function createAgentConfigurationUseCaseV1Internal(
 	dependencies: AgentConfigurationUseCaseDependenciesV1,
+	resolveSecretRecordAttachments: boolean,
 	options: AgentConfigurationUseCaseOptionsV1 = {},
 ): AgentConfigurationUseCaseV1 {
 	const now = options.now ?? systemNow;
@@ -2988,16 +2989,18 @@ export function createAgentConfigurationUseCaseV1(
 			},
 		};
 		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
-		try {
-			attachments = await resolvePendingSecretRecordAttachmentsV1({
-				attachment,
-				previousConfiguration: current,
-				configuration: plan.configuration,
-				ownerId: actorContext.actorId,
-				occurredAt,
-			});
-		} catch {
-			throw new AgentConfigurationError("dependency_unavailable");
+		if (resolveSecretRecordAttachments) {
+			try {
+				attachments = await resolvePendingSecretRecordAttachmentsV1({
+					attachment,
+					previousConfiguration: current,
+					configuration: plan.configuration,
+					ownerId: actorContext.actorId,
+					occurredAt,
+				});
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
 		}
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
@@ -3073,4 +3076,23 @@ export function createAgentConfigurationUseCaseV1(
 			);
 		},
 	};
+}
+
+export function createAgentConfigurationUseCaseV1(
+	dependencies: AgentConfigurationUseCaseDependenciesV1,
+	options: AgentConfigurationUseCaseOptionsV1 = {},
+): AgentConfigurationUseCaseV1 {
+	return createAgentConfigurationUseCaseV1Internal(dependencies, true, options);
+}
+
+export function createAgentConfigurationPlanCaptureUseCaseV1(
+	dependencies: AgentConfigurationUseCaseDependenciesV1,
+	options: AgentConfigurationUseCaseOptionsV1 = {},
+): Pick<AgentConfigurationUseCaseV1, "update"> {
+	const useCase = createAgentConfigurationUseCaseV1Internal(
+		dependencies,
+		false,
+		options,
+	);
+	return { update: useCase.update };
 }
