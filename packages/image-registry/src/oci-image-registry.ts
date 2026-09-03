@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-
 import {
 	type ImageAdmissionPolicyEvidenceV1,
 	ImageAdmissionPolicyEvidenceV1Schema,
@@ -14,10 +13,21 @@ import {
 	parseRuntimeManifestLabelV1,
 	validateImageRegistryAdmissionResultV1,
 } from "@agent-infra/contracts/workload";
+import { getNodeValue, type Node as JsonNode, parseTree } from "jsonc-parser";
 
 const runtimeManifestLabelName = "io.agora.agent.runtime.manifest";
 const manifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const configMediaType = "application/vnd.oci.image.config.v1+json";
+const maxOciResponseBytes = 1024 * 1024;
+const ociRequestTimeoutMs = 30_000;
+const ociImageLayerMediaTypes = new Set([
+	"application/vnd.oci.image.layer.v1.tar",
+	"application/vnd.oci.image.layer.v1.tar+gzip",
+	"application/vnd.oci.image.layer.v1.tar+zstd",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+]);
 
 type OciDistributionFailureV1 =
 	| "not-found"
@@ -30,6 +40,7 @@ type OciManifestResolutionV1 =
 			readonly status: "resolved";
 			readonly immutableDigest: string;
 			readonly configDigest: string;
+			readonly configSize: number;
 	  }
 	| { readonly status: OciDistributionFailureV1 };
 
@@ -44,6 +55,7 @@ type OciDistributionClientV1 = {
 	readonly readConfig: (input: {
 		readonly imageReference: string;
 		readonly configDigest: string;
+		readonly configSize: number;
 	}) => Promise<OciConfigResolutionV1>;
 };
 
@@ -86,27 +98,24 @@ function createOciDistributionClientV1(options: {
 			);
 			if (response.status !== "ok") return response;
 			try {
-				const manifest = asRecord(JSON.parse(response.body));
-				const config = manifest
-					? asRecord(ownValue(manifest, "config"))
-					: undefined;
-				const configDigest = config ? ownValue(config, "digest") : undefined;
 				const immutableDigest = headerValue(
 					response.headers,
 					"docker-content-digest",
 				);
 				if (
-					typeof configDigest !== "string" ||
-					!ImmutableOciDigestV1Schema.safeParse(configDigest).success ||
+					!hasMediaType(response.headers, manifestMediaType) ||
 					typeof immutableDigest !== "string" ||
 					!ImmutableOciDigestV1Schema.safeParse(immutableDigest).success ||
-					digestText(response.body) !== immutableDigest ||
+					digestBytes(response.body) !== immutableDigest ||
 					(location.reference.startsWith("sha256:") &&
 						location.reference !== immutableDigest)
 				) {
 					return { status: "invalid" };
 				}
-				return { status: "resolved", immutableDigest, configDigest };
+				const manifest = parseOciImageManifest(response.body);
+				return manifest
+					? { status: "resolved", immutableDigest, ...manifest }
+					: { status: "invalid" };
 			} catch {
 				return { status: "invalid" };
 			}
@@ -124,10 +133,20 @@ function createOciDistributionClientV1(options: {
 			);
 			if (response.status !== "ok") return response;
 			try {
-				if (digestText(response.body) !== input.configDigest) {
+				if (
+					(!hasMediaType(response.headers, configMediaType) &&
+						!hasMediaType(response.headers, "application/octet-stream")) ||
+					response.body.byteLength !== input.configSize ||
+					digestBytes(response.body) !== input.configDigest
+				) {
 					return { status: "invalid" };
 				}
-				return { status: "resolved", config: JSON.parse(response.body) };
+				const config = parseStrictOciJson(response.body);
+				if (config === undefined) return { status: "invalid" };
+				return {
+					status: "resolved",
+					config,
+				};
 			} catch {
 				return { status: "invalid" };
 			}
@@ -282,8 +301,8 @@ function encodeRepository(repository: string): string {
 	return repository.split("/").map(encodeURIComponent).join("/");
 }
 
-function digestText(input: string): string {
-	return `sha256:${createHash("sha256").update(input, "utf8").digest("hex")}`;
+function digestBytes(input: Uint8Array): string {
+	return `sha256:${createHash("sha256").update(input).digest("hex")}`;
 }
 
 async function requestOci(
@@ -296,41 +315,138 @@ async function requestOci(
 ): Promise<
 	| {
 			readonly status: "ok";
-			readonly body: string;
+			readonly body: Uint8Array;
 			readonly headers: Readonly<Record<string, string | undefined>>;
 	  }
 	| { readonly status: OciDistributionFailureV1 }
 > {
+	const controller = new AbortController();
+	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const response = await binding.fetch(
-			new URL(`/v2/${path}`, binding.endpoint),
-			{
-				headers: { accept },
-				redirect: "error",
-			},
-		);
-		if (
-			typeof response !== "object" ||
-			response === null ||
-			!Number.isInteger(response.status) ||
-			typeof response.text !== "function" ||
-			typeof response.headers?.forEach !== "function"
-		) {
-			return { status: "invalid" };
-		}
-		const body = await response.text();
-		const headers: Record<string, string> = {};
-		response.headers.forEach((value, name) => {
-			headers[name] = value;
-		});
-		if (typeof body !== "string") return { status: "invalid" };
-		if (response.status === 200) {
-			return { status: "ok", body, headers };
-		}
-		return { status: responseFailure(response.status) };
+		return await Promise.race([
+			readOciResponse(binding, path, accept, controller.signal),
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => {
+					controller.abort();
+					reject(new Error("OCI request timed out"));
+				}, ociRequestTimeoutMs);
+			}),
+		]);
 	} catch {
 		return { status: "unavailable" };
+	} finally {
+		if (timeout !== undefined) clearTimeout(timeout);
+		controller.abort();
 	}
+}
+
+async function readOciResponse(
+	binding: {
+		readonly endpoint: URL;
+		readonly fetch: typeof globalThis.fetch;
+	},
+	path: string,
+	accept: string,
+	signal: AbortSignal,
+): Promise<
+	| {
+			readonly status: "ok";
+			readonly body: Uint8Array;
+			readonly headers: Readonly<Record<string, string | undefined>>;
+	  }
+	| { readonly status: OciDistributionFailureV1 }
+> {
+	const response = await binding.fetch(
+		new URL(`/v2/${path}`, binding.endpoint),
+		{
+			headers: { accept, "accept-encoding": "identity" },
+			redirect: "error",
+			signal,
+		},
+	);
+	if (
+		typeof response !== "object" ||
+		response === null ||
+		!Number.isInteger(response.status) ||
+		typeof response.headers?.forEach !== "function"
+	) {
+		return { status: "invalid" };
+	}
+	const headers: Record<string, string> = {};
+	response.headers.forEach((value, name) => {
+		headers[name] = value;
+	});
+	if (response.status !== 200) {
+		cancelOciBody(response.body);
+		return { status: responseFailure(response.status) };
+	}
+	if (!hasIdentityContentEncoding(headers)) {
+		cancelOciBody(response.body);
+		return { status: "invalid" };
+	}
+	const body = await readResponseBytes(response.body, headers);
+	if (body.status === "unavailable") return { status: "unavailable" };
+	if (body.status === "invalid" || body.status === "oversized") {
+		return { status: "invalid" };
+	}
+	return body.status === "ok"
+		? { status: "ok", body: body.bytes, headers }
+		: { status: "invalid" };
+}
+
+async function readResponseBytes(
+	body: ReadableStream<Uint8Array> | null,
+	headers: Readonly<Record<string, string | undefined>>,
+): Promise<
+	| { readonly status: "ok"; readonly bytes: Uint8Array }
+	| { readonly status: "empty" | "invalid" | "oversized" | "unavailable" }
+> {
+	const contentLength = headerValue(headers, "content-length");
+	if (contentLength !== undefined && !isBoundedContentLength(contentLength)) {
+		cancelOciBody(body);
+		return { status: "oversized" };
+	}
+	if (body === null) return { status: "empty" };
+	if (typeof body.getReader !== "function") return { status: "invalid" };
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	try {
+		reader = body.getReader();
+		const chunks: Uint8Array[] = [];
+		let length = 0;
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			if (!(chunk.value instanceof Uint8Array)) return { status: "invalid" };
+			length += chunk.value.byteLength;
+			if (length > maxOciResponseBytes) {
+				cancelOciBody(reader);
+				return { status: "oversized" };
+			}
+			chunks.push(chunk.value);
+		}
+		return { status: "ok", bytes: Buffer.concat(chunks, length) };
+	} catch {
+		return { status: "unavailable" };
+	} finally {
+		reader?.releaseLock();
+	}
+}
+
+function cancelOciBody(
+	input: { readonly cancel: () => Promise<unknown> } | null | undefined,
+): void {
+	if (!input) return;
+	try {
+		void Promise.resolve(input.cancel()).catch(() => undefined);
+	} catch {
+		return;
+	}
+}
+
+function isBoundedContentLength(input: string): boolean {
+	if (!/^\d+$/.test(input)) return true;
+	const length = Number(input);
+	return Number.isSafeInteger(length) && length <= maxOciResponseBytes;
 }
 
 function responseFailure(status: number): OciDistributionFailureV1 {
@@ -348,6 +464,122 @@ function headerValue(
 			return value;
 	}
 	return undefined;
+}
+
+function hasMediaType(
+	headers: Readonly<Record<string, string | undefined>>,
+	expected: string,
+): boolean {
+	const value = headerValue(headers, "content-type");
+	return value?.split(";", 1)[0]?.trim().toLowerCase() === expected;
+}
+
+function hasIdentityContentEncoding(
+	headers: Readonly<Record<string, string | undefined>>,
+): boolean {
+	const value = headerValue(headers, "content-encoding");
+	return (
+		value === undefined ||
+		value.trim() === "" ||
+		value.trim().toLowerCase() === "identity"
+	);
+}
+
+function parseOciImageManifest(
+	input: Uint8Array,
+): { readonly configDigest: string; readonly configSize: number } | undefined {
+	const manifest = asJsonRecord(parseStrictOciJson(input));
+	const config = manifest
+		? asJsonRecord(ownValue(manifest, "config"))
+		: undefined;
+	const layers = manifest ? ownValue(manifest, "layers") : undefined;
+	if (
+		!manifest ||
+		ownValue(manifest, "schemaVersion") !== 2 ||
+		ownValue(manifest, "mediaType") !== manifestMediaType ||
+		Object.hasOwn(manifest, "artifactType") ||
+		!isOciDescriptor(config, configMediaType) ||
+		!Array.isArray(layers) ||
+		!layers.every((layer) => isOciImageLayerDescriptor(asJsonRecord(layer)))
+	) {
+		return undefined;
+	}
+	return {
+		configDigest: ownValue(config, "digest") as string,
+		configSize: ownValue(config, "size") as number,
+	};
+}
+
+function parseStrictOciJson(input: Uint8Array): unknown | undefined {
+	const errors: { error: number; offset: number; length: number }[] = [];
+	const root = parseTree(decodeUtf8(input), errors, {
+		allowTrailingComma: false,
+		disallowComments: true,
+	});
+	if (!root || errors.length > 0 || hasDuplicateJsonObjectKeys(root)) {
+		return undefined;
+	}
+	return getNodeValue(root);
+}
+
+function hasDuplicateJsonObjectKeys(node: JsonNode): boolean {
+	if (node.type === "object") {
+		const keys = new Set<string>();
+		for (const property of node.children ?? []) {
+			const [key, value] = property.children ?? [];
+			if (typeof key?.value !== "string" || !value) return true;
+			if (keys.has(key.value) || hasDuplicateJsonObjectKeys(value)) return true;
+			keys.add(key.value);
+		}
+	}
+	if (node.type === "array") {
+		return (node.children ?? []).some(hasDuplicateJsonObjectKeys);
+	}
+	return false;
+}
+
+function asJsonRecord(input: unknown): Record<string, unknown> | undefined {
+	if (typeof input !== "object" || input === null || Array.isArray(input)) {
+		return undefined;
+	}
+	const prototype = Object.getPrototypeOf(input);
+	return prototype === Object.prototype || prototype === null
+		? (input as Record<string, unknown>)
+		: undefined;
+}
+
+function isOciDescriptor(
+	input: Record<string, unknown> | undefined,
+	expectedMediaType?: string,
+): input is Record<string, unknown> {
+	const mediaType = input ? ownValue(input, "mediaType") : undefined;
+	const digest = input ? ownValue(input, "digest") : undefined;
+	const size = input ? ownValue(input, "size") : undefined;
+	return (
+		typeof mediaType === "string" &&
+		mediaType.length > 0 &&
+		(expectedMediaType === undefined || mediaType === expectedMediaType) &&
+		typeof digest === "string" &&
+		ImmutableOciDigestV1Schema.safeParse(digest).success &&
+		typeof size === "number" &&
+		Number.isSafeInteger(size) &&
+		size >= 0
+	);
+}
+
+function isOciImageLayerDescriptor(
+	input: Record<string, unknown> | undefined,
+): boolean {
+	const mediaType = input ? ownValue(input, "mediaType") : undefined;
+	return (
+		typeof mediaType === "string" &&
+		ociImageLayerMediaTypes.has(mediaType) &&
+		isOciDescriptor(input)
+	);
+}
+
+function decodeUtf8(input: Uint8Array): string {
+	return new TextDecoder("utf-8", { fatal: true }).decode(input);
 }
 
 async function resolveManifest(
@@ -438,6 +670,7 @@ async function resolveConfig(
 			await distribution.readConfig({
 				imageReference: request.imageReference,
 				configDigest: manifest.configDigest,
+				configSize: manifest.configSize,
 			}),
 		);
 	} catch {
@@ -462,13 +695,17 @@ function normalizeManifestResolution(input: unknown): OciManifestResolutionV1 {
 		result?.status === "resolved" &&
 		typeof result.immutableDigest === "string" &&
 		typeof result.configDigest === "string" &&
+		typeof result.configSize === "number" &&
 		ImmutableOciDigestV1Schema.safeParse(result.immutableDigest).success &&
-		ImmutableOciDigestV1Schema.safeParse(result.configDigest).success
+		ImmutableOciDigestV1Schema.safeParse(result.configDigest).success &&
+		Number.isSafeInteger(result.configSize) &&
+		result.configSize >= 0
 	) {
 		return {
 			status: "resolved",
 			immutableDigest: result.immutableDigest,
 			configDigest: result.configDigest,
+			configSize: result.configSize,
 		};
 	}
 	return result && isDistributionFailure(result.status)
@@ -506,10 +743,10 @@ function parseOciConfig(
 			readonly runtimeManifestLabel: string | null | undefined;
 	  }
 	| undefined {
-	const root = asRecord(input);
+	const root = asJsonRecord(input);
 	if (!root) return undefined;
 	const configuration = ownValue(root, "config");
-	const config = configuration === undefined ? {} : asRecord(configuration);
+	const config = configuration === undefined ? {} : asJsonRecord(configuration);
 	if (!config) return undefined;
 	const entrypoint = optionalStrings(ownValue(config, "Entrypoint"));
 	const command = optionalStrings(ownValue(config, "Cmd"));
@@ -541,7 +778,7 @@ function parseOciConfig(
 	if (labels === undefined) {
 		return { ociConfig: ociConfig.data, runtimeManifestLabel: undefined };
 	}
-	const labelValues = asRecord(labels);
+	const labelValues = asJsonRecord(labels);
 	if (!labelValues) return undefined;
 	const label = ownValue(labelValues, runtimeManifestLabelName);
 	return {
