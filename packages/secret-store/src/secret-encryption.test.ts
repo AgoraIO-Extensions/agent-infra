@@ -155,6 +155,12 @@ describe("Secret encryptor V1", () => {
 		]) {
 			expect(() => decrypt(record, dek, aadBinding)).toThrow();
 		}
+		expect(() =>
+			encodeSecretAadV1({
+				...record.crypto.aadBinding,
+				configRevision: Number.MAX_SAFE_INTEGER + 1,
+			}),
+		).toThrow("Secret AAD binding is invalid");
 	});
 
 	it("fails closed for invalid inputs and exposes no decrypt operation", () => {

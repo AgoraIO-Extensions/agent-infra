@@ -120,7 +120,10 @@ export function encodeSecretAadV1(input: unknown): Buffer {
 	} catch {
 		throw new TypeError("Secret AAD binding is invalid");
 	}
-	if (!Number.isSafeInteger(binding.secretVersion)) {
+	if (
+		!Number.isSafeInteger(binding.secretVersion) ||
+		!Number.isSafeInteger(binding.configRevision)
+	) {
 		throw new TypeError("Secret AAD binding is invalid");
 	}
 	return Buffer.concat(
