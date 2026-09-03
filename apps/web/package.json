@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
 		"@tailwindcss/vite": "^4.3.3",
+		"@tanstack/react-query": "^5.102.8",
 		"@tanstack/react-router": "^1.170.18",
 		"react": "catalog:",
 		"react-dom": "catalog:"
@@ -22,10 +23,12 @@
 		"@agent-infra/config": "workspace:*",
 		"@agent-infra/test-support": "workspace:*",
 		"@tanstack/router-plugin": "^1.168.23",
+		"@testing-library/react": "^16.3.3",
 		"@types/node": "catalog:",
 		"@types/react": "catalog:",
 		"@types/react-dom": "catalog:",
 		"@vitejs/plugin-react": "^6.0.4",
+		"jsdom": "^30.0.1",
 		"shadcn": "^4.16.0",
 		"tailwindcss": "catalog:",
 		"typescript": "catalog:",

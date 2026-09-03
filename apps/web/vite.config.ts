@@ -1,7 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	server: {
@@ -9,6 +9,9 @@ export default defineConfig({
 	},
 	resolve: {
 		tsconfigPaths: true,
+	},
+	test: {
+		environment: "jsdom",
 	},
 	plugins: [
 		tailwindcss(),

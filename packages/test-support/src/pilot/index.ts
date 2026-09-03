@@ -1,4 +1,5 @@
 export * from "./delegated.ts";
+export * from "./mock-server.ts";
 
 const protocolError = (
 	code: string,
