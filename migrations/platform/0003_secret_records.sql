@@ -37,3 +37,5 @@ CREATE TABLE "platform"."secret_records" (
 --> statement-breakpoint
 ALTER TABLE "platform"."secret_records" ADD CONSTRAINT "secret_record_configuration_revision_fk" FOREIGN KEY ("agent_id","configuration_revision") REFERENCES "platform"."agent_configuration_revisions"("agent_id","revision") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "secret_record_dek_fingerprint_unique" ON "platform"."secret_records" USING btree ("dek_fingerprint");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "secret_record_agent_secret_version_unique" ON "platform"."secret_records" USING btree ("agent_id","secret_id","secret_version");
