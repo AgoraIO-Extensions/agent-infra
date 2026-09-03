@@ -113,6 +113,50 @@ function ociConfigResponse(
 	return response(body, { ...init, status: init.status ?? 200, headers });
 }
 
+function trackableErrorResponse(
+	status: number,
+	headers: Readonly<Record<string, string>>,
+	stalled = false,
+): {
+	readonly response: Response;
+	readonly reads: () => number;
+	readonly wasCancelled: () => boolean;
+} {
+	let reads = 0;
+	let cancelled = false;
+	return {
+		response: {
+			status,
+			headers: new Headers(headers),
+			body: {
+				cancel() {
+					cancelled = true;
+					return Promise.resolve();
+				},
+				getReader() {
+					if (!stalled) {
+						reads += 1;
+						throw new Error("error body must not be read");
+					}
+					return {
+						read() {
+							reads += 1;
+							return new Promise<never>(() => undefined);
+						},
+						cancel() {
+							cancelled = true;
+							return Promise.resolve();
+						},
+						releaseLock() {},
+					};
+				},
+			},
+		} as never,
+		reads: () => reads,
+		wasCancelled: () => cancelled,
+	};
+}
+
 function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
 	return input instanceof Request ? input.url : input.toString();
 }
@@ -533,6 +577,102 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		});
 		expect(policy).not.toHaveBeenCalled();
 		expect(JSON.stringify(result)).not.toContain("registry-secret");
+	});
+
+	it.each([
+		[
+			"a gzip 404",
+			404,
+			{ "content-encoding": "gzip" },
+			"IMAGE_NOT_FOUND",
+			false,
+		],
+		[
+			"an oversized 401",
+			401,
+			{ "content-length": "1048577" },
+			"IMAGE_NOT_ADMITTED",
+			false,
+		],
+		[
+			"a gzip 403",
+			403,
+			{ "content-encoding": "gzip" },
+			"IMAGE_NOT_ADMITTED",
+			false,
+		],
+		[
+			"an oversized 429",
+			429,
+			{ "content-length": "1048577" },
+			"IMAGE_REGISTRY_UNAVAILABLE",
+			true,
+		],
+	] as const)(
+		"classifies %s from status without reading its body",
+		async (_name, status, headers, code, retryable) => {
+			const tracked = trackableErrorResponse(status, headers);
+			const policy = vi.fn(async () => admittedPolicy);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch() {
+					return tracked.response;
+				},
+				policy: { authorize: policy },
+			});
+
+			const result = await adapter.admit(request);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: { code, retryable, traceId: request.traceId },
+			});
+			expect(policy).not.toHaveBeenCalled();
+			expect(tracked.reads()).toBe(0);
+			expect(tracked.wasCancelled()).toBe(true);
+		},
+	);
+
+	it("classifies a stalled 503 without waiting for or reading its body", async () => {
+		vi.useFakeTimers();
+		try {
+			const tracked = trackableErrorResponse(503, {}, true);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch() {
+					return tracked.response;
+				},
+				policy: {
+					async authorize() {
+						throw new Error("policy must not be called");
+					},
+				},
+			});
+			const pending = adapter.admit(request);
+			const deadline = new Promise<"deadline">((resolve) => {
+				setTimeout(() => resolve("deadline"), 60_000);
+			});
+
+			await vi.advanceTimersByTimeAsync(60_000);
+			const result = await Promise.race([
+				pending,
+				deadline.then(() => ({ status: "deadline" }) as const),
+			]);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			});
+			expect(tracked.reads()).toBe(0);
+			expect(tracked.wasCancelled()).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it.each([

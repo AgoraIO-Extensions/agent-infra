@@ -375,6 +375,10 @@ async function readOciResponse(
 	response.headers.forEach((value, name) => {
 		headers[name] = value;
 	});
+	if (response.status !== 200) {
+		await response.body?.cancel().catch(() => undefined);
+		return { status: responseFailure(response.status) };
+	}
 	if (!hasIdentityContentEncoding(headers)) {
 		await response.body?.cancel().catch(() => undefined);
 		return { status: "invalid" };
@@ -384,12 +388,9 @@ async function readOciResponse(
 	if (body.status === "invalid" || body.status === "oversized") {
 		return { status: "invalid" };
 	}
-	if (response.status === 200) {
-		return body.status === "ok"
-			? { status: "ok", body: body.bytes, headers }
-			: { status: "invalid" };
-	}
-	return { status: responseFailure(response.status) };
+	return body.status === "ok"
+		? { status: "ok", body: body.bytes, headers }
+		: { status: "invalid" };
 }
 
 async function readResponseBytes(
