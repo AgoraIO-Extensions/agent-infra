@@ -19,6 +19,25 @@ services:
       retries: 12
       start_period: 5s
 
+  object-storage:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    init: true
+    environment:
+      MINIO_ROOT_PASSWORD: agent_infra_local_storage
+      MINIO_ROOT_USER: agent_infra
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - local-topology-object-storage:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   web:
     build:
       context: .
@@ -86,4 +105,5 @@ services:
       start_period: 10s
 
 volumes:
+  local-topology-object-storage:
   local-topology-postgres:
