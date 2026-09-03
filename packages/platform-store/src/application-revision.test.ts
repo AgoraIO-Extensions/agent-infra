@@ -383,27 +383,40 @@ async function capturePlan(
 	status: "pending_approval" | "rejected" = "pending_approval",
 	access = false,
 	availability: AgentManagementStateV1["availability"] = [],
-): Promise<ApplicationRevisionWritePlanV1> {
+): Promise<{
+	readonly plan: ApplicationRevisionWritePlanV1;
+	readonly attachments: Parameters<
+		ApplicationRevisionTransactionPortV1["commit"]
+	>[1];
+}> {
 	const state = readState(status, availability);
 	let captured: ApplicationRevisionWritePlanV1 | undefined;
+	let attachments: Parameters<
+		ApplicationRevisionTransactionPortV1["commit"]
+	>[1];
 	const transaction: ApplicationRevisionTransactionPortV1 = {
 		async read() {
 			return { outcome: "ready", state: structuredClone(state) };
 		},
-		async commit(plan) {
+		async commit(plan, nextAttachments) {
 			captured = structuredClone(plan);
+			attachments = structuredClone(nextAttachments);
 			return { outcome: "conflict", reason: "stale_management" };
 		},
 	};
 	await expect(
 		useCase(transaction, state.management)
-			.revise(command("capture-plan", access), actor())
+			.revise(
+				command("capture-plan", access),
+				actor(),
+				createSecretRecordFixtureResolver(),
+			)
 			.catch((error: unknown) => {
 				throw error;
 			}),
 	).rejects.toMatchObject({ code: "stale_revision" });
 	if (!captured) throw new Error("Expected application revision plan");
-	return captured;
+	return { plan: captured, attachments };
 }
 
 async function createConformanceHarness(
@@ -642,7 +655,11 @@ describe("PostgreSQL application revision transaction", () => {
 		const adapter = openAdapter();
 		const revision = useCase(adapter, state);
 		const input = command("revise-rejected", true);
-		const first = await revision.revise(input, actor());
+		const first = await revision.revise(
+			input,
+			actor(),
+			createSecretRecordFixtureResolver(),
+		);
 		expect(first).toEqual({
 			schemaVersion: 1,
 			applicationId,
@@ -737,12 +754,12 @@ describe("PostgreSQL application revision transaction", () => {
 	it("serializes exact and competing concurrent revisions", async () => {
 		await resetDatabase();
 		await seed();
-		const plan = await capturePlan();
+		const { plan, attachments } = await capturePlan();
 		const first = openAdapter();
 		const second = openAdapter();
 		const exact = await Promise.all([
-			first.commit(structuredClone(plan)),
-			second.commit(structuredClone(plan)),
+			first.commit(structuredClone(plan), structuredClone(attachments)),
+			second.commit(structuredClone(plan), structuredClone(attachments)),
 		]);
 		expect(exact.map(({ outcome }) => outcome).sort()).toEqual([
 			"committed",
@@ -782,8 +799,8 @@ describe("PostgreSQL application revision transaction", () => {
 				: null,
 		};
 		const outcomes = await Promise.all([
-			first.commit(structuredClone(plan)),
-			second.commit(competing),
+			first.commit(structuredClone(plan), structuredClone(attachments)),
+			second.commit(competing, structuredClone(attachments)),
 		]);
 		expect(outcomes.map(({ outcome }) => outcome).sort()).toEqual([
 			"committed",
@@ -795,7 +812,7 @@ describe("PostgreSQL application revision transaction", () => {
 	it("snapshots hostile plans without invoking accessors and persists nothing", async () => {
 		await resetDatabase();
 		await seed();
-		const plan = await capturePlan();
+		const { plan, attachments } = await capturePlan();
 		const hostile = structuredClone(plan);
 		let reads = 0;
 		Object.defineProperty(hostile.application, "name", {
@@ -806,7 +823,9 @@ describe("PostgreSQL application revision transaction", () => {
 			},
 		});
 		const adapter = openAdapter();
-		await expect(adapter.commit(hostile)).rejects.toMatchObject({
+		await expect(
+			adapter.commit(hostile, structuredClone(attachments)),
+		).rejects.toMatchObject({
 			name: "ApplicationRevisionStoreError",
 			code: "unavailable",
 		});
@@ -826,7 +845,9 @@ describe("PostgreSQL application revision transaction", () => {
 					}
 				: null,
 		} as ApplicationRevisionWritePlanV1;
-		await expect(adapter.commit(malformed)).rejects.toMatchObject({
+		await expect(
+			adapter.commit(malformed, structuredClone(attachments)),
+		).rejects.toMatchObject({
 			name: "ApplicationRevisionStoreError",
 			code: "unavailable",
 		});
@@ -843,7 +864,11 @@ describe("PostgreSQL application revision transaction", () => {
 		const oldAvailability = [
 			{ kind: "user" as const, userId: "user_previous" },
 		];
-		const plan = await capturePlan("pending_approval", true, oldAvailability);
+		const { plan, attachments } = await capturePlan(
+			"pending_approval",
+			true,
+			oldAvailability,
+		);
 		const points = [
 			["configuration", "platform.agent_configuration_revisions", "insert", ""],
 			["authorization", "platform.agents", "update", ""],
@@ -885,7 +910,9 @@ describe("PostgreSQL application revision transaction", () => {
 			await seed("pending_approval", oldAvailability);
 			await armFailure(point, table, operation, condition);
 			try {
-				await expect(openAdapter().commit(plan)).rejects.toEqual(
+				await expect(
+					openAdapter().commit(plan, structuredClone(attachments)),
+				).rejects.toEqual(
 					expect.objectContaining({
 						name: "ApplicationRevisionStoreError",
 						code: "unavailable",
