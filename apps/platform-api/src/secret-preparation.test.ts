@@ -73,6 +73,44 @@ describe("pending Secret preparation", () => {
 		).rejects.toThrow("spent");
 	});
 
+	it("captures the encryptor before returning the one-shot resolver", async () => {
+		let available = true;
+		const input = {
+			plaintexts: [
+				{
+					secretId: "secret_01",
+					version: 2,
+					plaintext: "plaintext-never-retained",
+				},
+			],
+			get encryptor() {
+				if (!available) throw new Error("input must not be retained");
+				return encryptor;
+			},
+		};
+		const resolver = createPendingSecretRecordAttachmentResolverV1(input);
+		available = false;
+
+		await expect(
+			resolver.resolve({
+				schemaVersion: 1,
+				expected: [
+					{
+						schemaVersion: 1,
+						ownerType: "agent-owner",
+						ownerId: "owner_01",
+						agentId: "agent_01",
+						name: "BOT_TOKEN",
+						secretId: "secret_01",
+						secretVersion: 2,
+						configurationRevision: 7,
+						occurredAt: "2026-09-03T12:00:00.000Z",
+					},
+				],
+			}),
+		).resolves.toHaveLength(1);
+	});
+
 	it("rejects attachment objects with values outside the capability", () => {
 		expect(() =>
 			parsePendingSecretRecordAttachmentResolverV1({

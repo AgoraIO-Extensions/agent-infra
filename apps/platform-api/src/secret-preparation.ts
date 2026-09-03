@@ -43,6 +43,7 @@ export function createPendingSecretRecordAttachmentResolverV1(input: {
 	readonly encryptor: SecretEncryptorV1;
 	readonly plaintexts: readonly PreparedSecretPlaintextV1[];
 }): PendingSecretRecordAttachmentResolverV1 {
+	const encryptor = input.encryptor;
 	const plaintexts = new Map(
 		input.plaintexts.map((plaintext) => [
 			key(plaintext.secretId, plaintext.version),
@@ -76,7 +77,7 @@ export function createPendingSecretRecordAttachmentResolverV1(input: {
 					if (plaintext === undefined) {
 						throw new TypeError("Prepared Secret plaintext is unavailable");
 					}
-					return input.encryptor.encrypt({
+					return encryptor.encrypt({
 						schemaVersion: 1,
 						secretId: expectation.secretId,
 						ownerType: expectation.ownerType,
