@@ -4,13 +4,16 @@ import {
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type { AgentConfigurationUseCaseV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationUseCaseV1,
+	PendingSecretRecordAttachmentResolverV1,
+} from "@agent-infra/platform-core";
 import type {
 	AgentConfigurationQueryInputV1,
 	AgentConfigurationQueryResultV1,
 } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
-
+import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	HttpProtocolError,
 	parseIdempotencyKey,
@@ -61,6 +64,7 @@ export interface ConfigurationRoutesDependencies {
 			readonly replace: true;
 		}[];
 		readonly modelCredentialOptionIds: readonly string[];
+		readonly attachment?: PendingSecretRecordAttachmentResolverV1;
 	}>;
 }
 
@@ -136,7 +140,10 @@ function validatePreparedSecrets(
 		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 	>,
 	traceId: string,
-): ReadonlySet<string> {
+): {
+	readonly modelCredentialOptionIds: ReadonlySet<string>;
+	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
+} {
 	try {
 		const requestedSecrets = (input.secrets ?? [])
 			.map(({ name }) => name)
@@ -169,7 +176,20 @@ function validatePreparedSecrets(
 		) {
 			throw new Error();
 		}
-		return new Set(preparedModels as string[]);
+		const attachment =
+			prepared.attachment === undefined
+				? undefined
+				: parsePendingSecretRecordAttachmentResolverV1(prepared.attachment);
+		if (
+			(requestedSecrets.length > 0 || requestedModels.length > 0) &&
+			attachment === undefined
+		) {
+			throw new Error();
+		}
+		return {
+			modelCredentialOptionIds: new Set(preparedModels as string[]),
+			...(attachment === undefined ? {} : { attachment }),
+		};
 	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
@@ -238,7 +258,7 @@ export function registerConfigurationRoutes(
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 		}
-		const preparedModelCredentialOptionIds = validatePreparedSecrets(
+		const preparedSecrets = validatePreparedSecrets(
 			body,
 			prepared,
 			metadata.traceId,
@@ -251,13 +271,17 @@ export function registerConfigurationRoutes(
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
-					changes: configurationChanges(body, preparedModelCredentialOptionIds),
+					changes: configurationChanges(
+						body,
+						preparedSecrets.modelCredentialOptionIds,
+					),
 				},
 				{
 					schemaVersion: 1,
 					actorId: identity.userId,
 					rawRequestDigest,
 				},
+				preparedSecrets.attachment,
 			);
 		} catch (error) {
 			throw mapCoreError(error, metadata.traceId);

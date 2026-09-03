@@ -14,6 +14,7 @@ import type {
 	AgentManagementInterfaceV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
+	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
@@ -24,7 +25,7 @@ import type {
 	AgentManagementPageV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
-
+import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	HttpProtocolError,
 	parseIdempotencyKey,
@@ -90,6 +91,7 @@ export interface SecretPreparationInput extends RequestMetadata {
 export interface SecretPreparationResult {
 	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
 	readonly modelConfiguration?: AgentConfigurationModelInputV1;
+	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
 }
 
 export interface ManagementRouteDependencies {
@@ -167,6 +169,17 @@ function fail(
 	traceId: string,
 ): never {
 	throw new HttpProtocolError(code, traceId);
+}
+
+function preparedSecretAttachment(
+	input: unknown,
+	traceId: string,
+): PendingSecretRecordAttachmentResolverV1 {
+	try {
+		return parsePendingSecretRecordAttachmentResolverV1(input);
+	} catch {
+		fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
 }
 
 async function queryOrUnavailable<T>(
@@ -366,11 +379,16 @@ async function prepareApplicationInput(
 				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 		}
+		const attachment = preparedSecretAttachment(
+			prepared.attachment,
+			metadata.traceId,
+		);
 		return {
 			secrets: prepared.secrets.map(({ name }) => ({
 				name,
 				replace: true as const,
 			})),
+			attachment,
 			...(prepared.modelConfiguration === undefined
 				? {}
 				: {
@@ -479,6 +497,7 @@ export function registerManagementRoutes(
 					channels: [],
 				},
 				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
+				prepared.attachment,
 			);
 			const application = await applicationOrUnavailable(
 				dependencies,
@@ -587,6 +606,7 @@ export function registerManagementRoutes(
 					isAdministrator: identity.roles.includes("system_admin"),
 					rawRequestDigest,
 				},
+				prepared.attachment,
 			);
 			const application = await applicationOrUnavailable(
 				dependencies,

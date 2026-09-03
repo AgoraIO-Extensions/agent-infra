@@ -14,6 +14,11 @@ import {
 	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
+import {
+	type PendingSecretRecordAttachmentResolverV1,
+	type PendingSecretRecordAttachmentsV1,
+	resolvePendingSecretRecordAttachmentsV1,
+} from "./secret-record-attachments.js";
 
 export type AgentConfigurationSourceV1 =
 	| {
@@ -310,7 +315,10 @@ export interface AgentConfigurationTransactionPortV1 {
 		  }
 		| { readonly outcome: "idempotency_conflict" }
 	>;
-	commit(plan: AgentConfigurationWritePlanV1): Promise<
+	commit(
+		plan: AgentConfigurationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
+	): Promise<
 		| {
 				readonly outcome: "committed";
 				readonly result: AgentConfigurationResultV1;
@@ -479,6 +487,7 @@ export interface AgentConfigurationUseCaseV1 {
 	update(
 		command: UpdateAgentConfigurationCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1>;
 	upgradeCustomImage(
 		command: UpgradeCustomAgentImageCommandV1,
@@ -2435,8 +2444,9 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 	});
 }
 
-export function createAgentConfigurationUseCaseV1(
+function createAgentConfigurationUseCaseV1Internal(
 	dependencies: AgentConfigurationUseCaseDependenciesV1,
+	resolveSecretRecordAttachments: boolean,
 	options: AgentConfigurationUseCaseOptionsV1 = {},
 ): AgentConfigurationUseCaseV1 {
 	const now = options.now ?? systemNow;
@@ -2452,6 +2462,7 @@ export function createAgentConfigurationUseCaseV1(
 			current: AgentConfigurationRecordV1,
 		) => UpdateAgentConfigurationCommandV1["changes"],
 		preserveConnectionEnabled = false,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1> => {
 		await admitCurrentAuthorization(
 			dependencies.authorizationAdmission,
@@ -2977,13 +2988,27 @@ export function createAgentConfigurationUseCaseV1(
 				occurredAt,
 			},
 		};
+		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+		if (resolveSecretRecordAttachments) {
+			try {
+				attachments = await resolvePendingSecretRecordAttachmentsV1({
+					attachment,
+					previousConfiguration: current,
+					configuration: plan.configuration,
+					ownerId: actorContext.actorId,
+					occurredAt,
+				});
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+		}
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 		>;
 		try {
 			const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
 			decision = parseTransactionCommitDecision(
-				await dependencies.transaction.commit(capturedPlan),
+				await dependencies.transaction.commit(capturedPlan, attachments),
 				command.agentId,
 			);
 		} catch {
@@ -3001,7 +3026,7 @@ export function createAgentConfigurationUseCaseV1(
 		return decision.result;
 	};
 	return {
-		async update(commandInput, actorContextInput) {
+		async update(commandInput, actorContextInput, attachment) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			return await execute(
@@ -3009,6 +3034,8 @@ export function createAgentConfigurationUseCaseV1(
 				actorContext,
 				requestDigest(command, actorContext),
 				() => command.changes,
+				false,
+				attachment,
 			);
 		},
 		async upgradeCustomImage(commandInput, actorContextInput) {
@@ -3049,4 +3076,60 @@ export function createAgentConfigurationUseCaseV1(
 			);
 		},
 	};
+}
+
+export function createAgentConfigurationUseCaseV1(
+	dependencies: AgentConfigurationUseCaseDependenciesV1,
+	options: AgentConfigurationUseCaseOptionsV1 = {},
+): AgentConfigurationUseCaseV1 {
+	return createAgentConfigurationUseCaseV1Internal(dependencies, true, options);
+}
+
+export async function captureAgentConfigurationWritePlanV1(input: {
+	readonly command: UpdateAgentConfigurationCommandV1;
+	readonly actorContext: AgentConfigurationActorContextV1;
+	readonly current: AgentConfigurationRecordV1;
+	readonly authorizationRevision: string;
+	readonly dependencies: Omit<
+		AgentConfigurationUseCaseDependenciesV1,
+		"transaction"
+	>;
+	readonly now?: () => Date;
+}): Promise<AgentConfigurationWritePlanV1 | null> {
+	let captured: AgentConfigurationWritePlanV1 | undefined;
+	const useCase = createAgentConfigurationUseCaseV1Internal(
+		{
+			...input.dependencies,
+			transaction: {
+				async read() {
+					return {
+						outcome: "ready" as const,
+						record: {
+							schemaVersion: 1 as const,
+							configuration: input.current,
+							authorizationRevision: input.authorizationRevision,
+						},
+					};
+				},
+				async commit(plan) {
+					captured = snapshotAgentConfigurationWritePlanV1(plan);
+					return { outcome: "committed" as const, result: plan.result };
+				},
+			},
+		},
+		false,
+		{ now: input.now },
+	);
+	try {
+		await useCase.update(input.command, input.actorContext);
+	} catch (error) {
+		if (
+			error instanceof AgentConfigurationError &&
+			error.code === "no_change"
+		) {
+			return null;
+		}
+		throw error;
+	}
+	return captured ?? null;
 }

@@ -17,6 +17,7 @@
 		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
+		"@agent-infra/secret-store": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "^4.12.32"
 	},

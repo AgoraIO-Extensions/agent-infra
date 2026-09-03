@@ -6,6 +6,7 @@ import type {
 	ApplicationRevisionResultV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
+	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
 import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
@@ -31,6 +32,7 @@ import {
 	idempotencyRecords,
 	outboxItems,
 } from "./schema.js";
+import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 const scopeType = "agent_application";
 const commandType = "agent.application.revise.v1";
@@ -381,6 +383,7 @@ export class PostgresApplicationRevisionTransactionV1
 
 	async commit(
 		input: ApplicationRevisionWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<ApplicationRevisionTransactionPortV1["commit"]> {
 		try {
 			const { plan, result, configuration } = validatedPlan(input);
@@ -484,7 +487,10 @@ export class PostgresApplicationRevisionTransactionV1
 						reason: "stale_management" as const,
 					};
 				}
-				await this.#requireCurrentIntegrity(transaction, plan);
+				const previousConfiguration = await this.#requireCurrentIntegrity(
+					transaction,
+					plan,
+				);
 
 				if (configuration && plan.configuration) {
 					if (
@@ -518,6 +524,20 @@ export class PostgresApplicationRevisionTransactionV1
 						)
 						.returning({ id: agents.id });
 					if (advancedAgent.length !== 1) unavailable();
+				}
+				if (
+					attachments !== undefined &&
+					(plan.configuration === null || configuration === null)
+				) {
+					throw new ApplicationRevisionStoreError();
+				}
+				if (configuration !== null) {
+					await insertPendingSecretRecordAttachments(
+						transaction,
+						attachments,
+						configuration,
+						previousConfiguration,
+					);
 				}
 
 				const advancedApplication = await transaction
@@ -663,7 +683,7 @@ export class PostgresApplicationRevisionTransactionV1
 			Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 		>[0],
 		plan: ApplicationRevisionWritePlanV1,
-	): Promise<void> {
+	): Promise<ReturnType<typeof decodeAgentConfigurationRecord>> {
 		const [configurationRows, ownerRows, availabilityRows] = await Promise.all([
 			transaction
 				.select({
@@ -713,5 +733,6 @@ export class PostgresApplicationRevisionTransactionV1
 		) {
 			unavailable();
 		}
+		return current;
 	}
 }

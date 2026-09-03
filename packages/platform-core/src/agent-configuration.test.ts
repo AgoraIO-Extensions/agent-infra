@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	agentConfigurationConformanceAdmissionsV1,
@@ -26,6 +26,7 @@ import {
 	type FakeAgentConfigurationTransactionOptionsV1,
 	FakeAgentConfigurationTransactionV1,
 } from "./fake-agent-configuration.ts";
+import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
 
 const serverInstant = new Date("2026-08-31T04:00:00.000Z");
 const actor = {
@@ -228,6 +229,57 @@ describe("Agent configuration conformance", () => {
 			failNextCommitAsStale: () => harness.transaction.failNextCommitAsStale(),
 			close: async () => undefined,
 		};
+	});
+});
+
+describe("Agent configuration Secret sidecar", () => {
+	it("fails closed before persistence when a Secret sidecar is missing", async () => {
+		const harness = createHarness();
+		await expect(
+			harness.useCase.update(
+				{
+					...command,
+					changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+				},
+				actor,
+			),
+		).rejects.toMatchObject({ code: "dependency_unavailable" });
+		expect(harness.transaction.snapshot().commitCount).toBe(0);
+	});
+
+	it("passes final encrypted records beside the configuration plan", async () => {
+		const harness = createHarness();
+		let attachments: unknown;
+		const transaction = {
+			read: harness.transaction.read.bind(harness.transaction),
+			async commit(
+				plan: Parameters<typeof harness.transaction.commit>[0],
+				nextAttachments?: unknown,
+			) {
+				attachments = nextAttachments;
+				return await harness.transaction.commit(plan);
+			},
+		};
+		const resolve = vi.fn().mockResolvedValue([{ encrypted: "ciphertext" }]);
+		await harness.useCaseWithDependencies({ transaction }).update(
+			{
+				...command,
+				changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+			},
+			actor,
+			{ resolve },
+		);
+
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(attachments).toMatchObject({
+			expected: [
+				expect.objectContaining({
+					name: "BOT_TOKEN",
+					configurationRevision: 8,
+				}),
+			],
+			encryptedRecords: [{ encrypted: "ciphertext" }],
+		});
 	});
 });
 
@@ -1037,7 +1089,11 @@ describe("Agent configuration policy", () => {
 			...actor,
 			rawRequestDigest: "c".repeat(64),
 		};
-		const first = await firstUseCase.update(secretCommand, firstActor as never);
+		const first = await firstUseCase.update(
+			secretCommand,
+			firstActor as never,
+			pendingSecretRecordAttachmentFixtureV1(),
+		);
 		await expect(
 			firstUseCase.update(secretCommand, firstActor as never),
 		).resolves.toEqual(first);
@@ -1874,6 +1930,7 @@ describe("Agent configuration policy", () => {
 					},
 				},
 				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toMatchObject({ changedFields: ["modelConfiguration"] });
 		expect(replaced.transaction.snapshot()).toMatchObject({
@@ -1940,6 +1997,7 @@ describe("Agent configuration policy", () => {
 					},
 				},
 				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toMatchObject({
 			changedFields: ["environment", "secrets"],
@@ -2305,6 +2363,7 @@ describe("Agent configuration policy", () => {
 		const baselineResult = await baseline.useCase.update(
 			baseline.command,
 			actor,
+			pendingSecretRecordAttachmentFixtureV1(),
 		);
 		const baselinePlan = baseline.transaction.snapshot().lastPlan;
 		const patched = scenario();
@@ -2317,7 +2376,11 @@ describe("Agent configuration policy", () => {
 			String.prototype.localeCompare = () => {
 				throw new Error("localeCompare must not be used");
 			};
-			patchedResult = await patched.useCase.update(patched.command, actor);
+			patchedResult = await patched.useCase.update(
+				patched.command,
+				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
+			);
 		} finally {
 			if (descriptor) {
 				Object.defineProperty(String.prototype, "localeCompare", descriptor);

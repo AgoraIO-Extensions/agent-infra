@@ -17,17 +17,19 @@
 	"scripts": {
 		"build": "tsdown && node src/copy-migrations.mjs",
 		"check-migrations": "node src/check-migrations.mjs",
-		"check-types": "tsc --noEmit",
+		"check-types": "pnpm --filter @agent-infra/contracts build && pnpm --filter @agent-infra/secret-store build && tsc --noEmit",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",
 		"test": "pnpm --filter @agent-infra/platform-core build && pnpm build && pnpm check-migrations && vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"drizzle-orm": "catalog:",
 		"postgres": "catalog:"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
+		"@agent-infra/secret-store": "workspace:*",
 		"@types/node": "catalog:",
 		"drizzle-kit": "catalog:",
 		"tsdown": "0.22.14",

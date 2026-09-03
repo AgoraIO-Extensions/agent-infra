@@ -154,6 +154,9 @@ importers:
       '@agent-infra/platform-store':
         specifier: workspace:*
         version: link:../../packages/platform-store
+      '@agent-infra/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.0)
@@ -371,6 +374,9 @@ importers:
 
   packages/platform-store:
     dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -384,6 +390,9 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../config
+      '@agent-infra/secret-store':
+        specifier: workspace:*
+        version: link:../secret-store
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3

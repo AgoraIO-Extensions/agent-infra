@@ -2,14 +2,18 @@ import type {
 	ApplicationFoundationTransactionPortV1,
 	ApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
+import { createApplicationFoundationUseCaseV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	type ApplicationFoundationFailurePoint,
+	applicationFoundationActorContextV1,
+	applicationFoundationAdmissionDependenciesV1,
 	applicationFoundationCommandV1,
 	applicationFoundationConfigurationV1,
 	applicationFoundationTransactionConformance,
+	captureApplicationFoundationSubmission,
 	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
 } from "../../platform-core/src/application-foundation.conformance.ts";
@@ -17,6 +21,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import {
+	createSecretRecordFixtureResolver,
+	materializeSecretRecordFixtureAttachments,
+} from "./secret-record-fixture.ts";
 
 const triggerName = "application_foundation_injected_failure";
 const functionName = "platform.application_foundation_injected_failure";
@@ -226,9 +234,12 @@ describe("PostgreSQL application foundation transaction", () => {
 		let armedPoint: ApplicationFoundationFailurePoint | undefined;
 		const transaction: ApplicationFoundationTransactionPortV1 = {
 			read: (input) => adapter.read(input),
-			async commit(plan: ApplicationFoundationWritePlanV1) {
+			async commit(plan: ApplicationFoundationWritePlanV1, attachments) {
 				try {
-					return await adapter.commit(plan);
+					return await adapter.commit(
+						plan,
+						await materializeSecretRecordFixtureAttachments(attachments),
+					);
 				} finally {
 					await disarmFailure(armedPoint);
 					armedPoint = undefined;
@@ -268,6 +279,44 @@ describe("PostgreSQL application foundation transaction", () => {
 				await adapter.close();
 			},
 		};
+	});
+
+	it("atomically persists final pending Secret ciphertext records", async () => {
+		await resetDatabase();
+		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
+			databaseUrl,
+		});
+		try {
+			const foundation = createApplicationFoundationUseCaseV1({
+				transaction: adapter,
+				...applicationFoundationAdmissionDependenciesV1(),
+			});
+			await foundation.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+				createSecretRecordFixtureResolver(),
+			);
+			const records = await adminClient`
+				select agent_id, secret_id, secret_version, configuration_revision,
+					owner_id, name, lifecycle_state, record
+				from platform.secret_records
+				order by secret_id
+			`;
+			expect(records).toHaveLength(2);
+			expect(records).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						agent_id: applicationFoundationCommandV1.agentId,
+						configuration_revision: "1",
+						owner_id: applicationFoundationActorContextV1.userId,
+						lifecycle_state: "pending",
+					}),
+				]),
+			);
+			expect(JSON.stringify(records)).not.toContain("fixture:");
+		} finally {
+			await adapter.close();
+		}
 	});
 
 	it("rejects malicious canonical plans before any write", async () => {
@@ -322,8 +371,14 @@ describe("PostgreSQL application foundation transaction", () => {
 			databaseUrl,
 		});
 		try {
-			const plan = await captureApplicationFoundationWritePlan();
-			await expect(submission.commit(plan)).resolves.toMatchObject({
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
+			await expect(
+				submission.commit(
+					plan,
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
+			).resolves.toMatchObject({
 				outcome: "committed",
 			});
 			await expect(
@@ -390,10 +445,17 @@ describe("PostgreSQL application foundation transaction", () => {
 			databaseUrl,
 		});
 		try {
-			const plan = await captureApplicationFoundationWritePlan();
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
 			const decisions = await Promise.all([
-				first.commit(structuredClone(plan)),
-				second.commit(structuredClone(plan)),
+				first.commit(
+					structuredClone(plan),
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
+				second.commit(
+					structuredClone(plan),
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
 			]);
 			expect(decisions.map(({ outcome }) => outcome).toSorted()).toEqual([
 				"committed",

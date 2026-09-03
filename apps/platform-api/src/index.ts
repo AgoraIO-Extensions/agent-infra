@@ -135,6 +135,10 @@ export function createPlatformApiShutdown(
 }
 
 export {
+	createPendingSecretRecordAttachmentResolverV1,
+	type PreparedSecretPlaintextV1,
+} from "./secret-preparation.js";
+export {
 	assemblePlatformApi,
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,

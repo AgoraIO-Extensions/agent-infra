@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	applicationFoundationActorContextV1,
@@ -13,6 +13,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
+import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
 
 const serverInstant = "2026-08-30T12:00:00.000Z";
 const errorBrand = Symbol.for(
@@ -26,20 +27,29 @@ function readyTransaction(
 		async read() {
 			return { outcome: "ready" };
 		},
-		commit: (plan) => transaction.commit(plan),
+		commit: (plan, attachments) => transaction.commit(plan, attachments),
 	};
 }
 
 function createUseCase(
 	transaction: Pick<ApplicationFoundationTransactionPortV1, "commit">,
 ) {
-	return createApplicationFoundationUseCaseV1(
+	const useCase = createApplicationFoundationUseCaseV1(
 		{
 			transaction: readyTransaction(transaction),
 			...applicationFoundationAdmissionDependenciesV1(),
 		},
 		{ now: () => new Date(serverInstant) },
 	);
+	return {
+		submit(...args: Parameters<typeof useCase.submit>) {
+			return useCase.submit(
+				args[0],
+				args[1],
+				args.length === 3 ? args[2] : pendingSecretRecordAttachmentFixtureV1(),
+			);
+		},
+	};
 }
 
 function immutableBrandedError(
@@ -266,6 +276,7 @@ describe("Application foundation use case", () => {
 			useCase.submit(
 				applicationFoundationCommandV1,
 				applicationFoundationActorContextV1,
+				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toMatchObject({ configurationRevision: 1 });
 		if (!captured) throw new Error("Expected a captured write plan");
@@ -472,5 +483,61 @@ describe("Fake application foundation transaction", () => {
 			snapshot: () => Promise.resolve(transaction.snapshot()),
 			close: () => Promise.resolve(),
 		};
+	});
+});
+
+describe("Application foundation Secret sidecar", () => {
+	it("fails closed before persistence when a Secret sidecar is missing", async () => {
+		let commits = 0;
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: readyTransaction({
+					async commit(plan) {
+						commits += 1;
+						return { outcome: "committed", result: plan.result };
+					},
+				}),
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+
+		await expect(
+			useCase.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+			),
+		).rejects.toMatchObject({ code: "dependency_unavailable" });
+		expect(commits).toBe(0);
+	});
+
+	it("passes final encrypted records beside, not inside, the write plan", async () => {
+		let attachments: unknown;
+		let plan: ApplicationFoundationWritePlanV1 | undefined;
+		const resolve = vi.fn().mockResolvedValue([{ encrypted: "ciphertext" }]);
+		await createUseCase({
+			async commit(nextPlan, nextAttachments) {
+				plan = nextPlan;
+				attachments = nextAttachments;
+				return { outcome: "committed", result: nextPlan.result };
+			},
+		}).submit(
+			applicationFoundationCommandV1,
+			applicationFoundationActorContextV1,
+			{ resolve },
+		);
+
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(attachments).toMatchObject({
+			expected: expect.arrayContaining([
+				expect.objectContaining({
+					name: "BOT_TOKEN",
+					ownerId: "owner_01",
+					configurationRevision: 1,
+				}),
+			]),
+			encryptedRecords: [{ encrypted: "ciphertext" }],
+		});
+		expect(JSON.stringify(plan)).not.toContain("ciphertext");
 	});
 });

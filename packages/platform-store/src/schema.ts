@@ -1,3 +1,4 @@
+import type { PlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
 import {
@@ -273,6 +274,102 @@ export const agentConfigurationRevisions = platformSchema.table(
 					'revision', ${table.revision}
 				)
 			)`,
+		),
+	],
+);
+
+export const platformSecretRecords = platformSchema.table(
+	"secret_records",
+	{
+		agentId: text("agent_id").notNull(),
+		secretId: text("secret_id").notNull(),
+		secretVersion: bigint("secret_version", { mode: "number" }).notNull(),
+		configurationRevision: bigint("configuration_revision", {
+			mode: "number",
+		}).notNull(),
+		ownerType: varchar("owner_type", { length: 32 }).notNull(),
+		ownerId: text("owner_id").notNull(),
+		name: text("name").notNull(),
+		lifecycleState: varchar("lifecycle_state", { length: 32 })
+			.default("pending")
+			.notNull(),
+		dekFingerprint: varchar("dek_fingerprint", { length: 64 }).notNull(),
+		record: jsonb("record").$type<PlatformSecretRecordV1>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [
+				table.agentId,
+				table.secretId,
+				table.secretVersion,
+				table.configurationRevision,
+			],
+		}),
+		foreignKey({
+			columns: [table.agentId, table.configurationRevision],
+			foreignColumns: [
+				agentConfigurationRevisions.agentId,
+				agentConfigurationRevisions.revision,
+			],
+			name: "secret_record_configuration_revision_fk",
+		}),
+		check(
+			"secret_record_agent_id_non_empty",
+			sql`char_length(${table.agentId}) > 0`,
+		),
+		check(
+			"secret_record_id_non_empty",
+			sql`char_length(${table.secretId}) > 0`,
+		),
+		check(
+			"secret_record_owner_id_non_empty",
+			sql`char_length(${table.ownerId}) > 0`,
+		),
+		check("secret_record_name_non_empty", sql`char_length(${table.name}) > 0`),
+		check(
+			"secret_record_version_safe",
+			sql`${table.secretVersion} between 1 and 9007199254740991`,
+		),
+		check(
+			"secret_record_configuration_revision_safe",
+			sql`${table.configurationRevision} between 1 and 9007199254740991`,
+		),
+		check(
+			"secret_record_owner_type",
+			sql`${table.ownerType} in ('agent-owner', 'platform')`,
+		),
+		check(
+			"secret_record_lifecycle_state",
+			sql`${table.lifecycleState} = 'pending'`,
+		),
+		check(
+			"secret_record_dek_fingerprint_format",
+			sql`${table.dekFingerprint} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"secret_record_identity_matches",
+			sql`jsonb_typeof(${table.record}) = 'object' and ${table.record} @> jsonb_build_object(
+				'schemaVersion', 1,
+				'agentId', ${table.agentId},
+				'secretId', ${table.secretId},
+				'secretVersion', ${table.secretVersion},
+				'configRevision', ${table.configurationRevision},
+				'ownerType', ${table.ownerType},
+				'ownerId', ${table.ownerId},
+				'name', ${table.name},
+				'lifecycleState', ${table.lifecycleState},
+				'crypto', jsonb_build_object('dekFingerprint', ${table.dekFingerprint})
+			)`,
+		),
+		uniqueIndex("secret_record_dek_fingerprint_unique").on(
+			table.dekFingerprint,
+		),
+		uniqueIndex("secret_record_agent_secret_version_unique").on(
+			table.agentId,
+			table.secretId,
+			table.secretVersion,
 		),
 	],
 );
@@ -571,6 +668,7 @@ export const platformInfrastructureTables = [
 	agents,
 	agentApplications,
 	agentConfigurationRevisions,
+	platformSecretRecords,
 	agentOwners,
 	agentAvailability,
 	agentManagementHistory,

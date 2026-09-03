@@ -10,7 +10,7 @@ import {
 	type AgentConfigurationSourceSelectionV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentConfigurationWritePlanV1,
-	createAgentConfigurationUseCaseV1,
+	captureAgentConfigurationWritePlanV1,
 	decodeAgentConfigurationRecordV1,
 	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
@@ -31,6 +31,11 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
+import {
+	type PendingSecretRecordAttachmentResolverV1,
+	type PendingSecretRecordAttachmentsV1,
+	resolvePendingSecretRecordAttachmentsV1,
+} from "./secret-record-attachments.js";
 
 export interface ReviseApplicationCommandV1 {
 	readonly schemaVersion: 1;
@@ -151,6 +156,7 @@ export interface ApplicationRevisionTransactionPortV1 {
 	}): Promise<ApplicationRevisionReadDecisionV1>;
 	commit(
 		plan: ApplicationRevisionWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): Promise<ApplicationRevisionCommitDecisionV1>;
 }
 
@@ -158,6 +164,7 @@ export interface ApplicationRevisionUseCaseV1 {
 	revise(
 		command: ReviseApplicationCommandV1,
 		actorContext: ApplicationRevisionActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<ApplicationRevisionResultV1>;
 }
 
@@ -802,7 +809,7 @@ async function captureConfigurationPlan(
 	plan: AgentConfigurationWritePlanV1 | null;
 	nextAuthorizationRevision: string;
 }> {
-	let capturedPlan: AgentConfigurationWritePlanV1 | undefined;
+	let capturedPlan: AgentConfigurationWritePlanV1 | null = null;
 	let nextAuthorizationRevision: string | undefined;
 	const authorizationAdmission = {
 		async authorize(
@@ -821,32 +828,9 @@ async function captureConfigurationPlan(
 			return decision;
 		},
 	};
-	const useCase = createAgentConfigurationUseCaseV1(
-		{
-			...dependencies,
-			authorizationAdmission,
-			transaction: {
-				async read() {
-					return {
-						outcome: "ready" as const,
-						record: {
-							schemaVersion: 1 as const,
-							configuration: state.configuration,
-							authorizationRevision: state.authorizationRevision,
-						},
-					};
-				},
-				async commit(plan) {
-					capturedPlan = plan;
-					return { outcome: "committed" as const, result: plan.result };
-				},
-			},
-		},
-		{ now },
-	);
 	try {
-		await useCase.update(
-			{
+		capturedPlan = await captureAgentConfigurationWritePlanV1({
+			command: {
 				schemaVersion: 1,
 				agentId: state.application.agentId,
 				idempotencyKey: command.idempotencyKey,
@@ -871,20 +855,24 @@ async function captureConfigurationPlan(
 						: {}),
 				},
 			},
-			{
+			actorContext: {
 				schemaVersion: 1,
 				actorId: actorContext.userId,
 				rawRequestDigest: actorContext.rawRequestDigest,
 			} satisfies AgentConfigurationActorContextV1,
-		);
+			current: state.configuration,
+			authorizationRevision: state.authorizationRevision,
+			dependencies: { ...dependencies, authorizationAdmission },
+			now,
+		});
 	} catch (error) {
 		const normalized = configurationError(error);
-		if (normalized.code !== "no_change") throw normalized;
+		throw normalized;
 	}
 	if (!nextAuthorizationRevision) {
 		throw new ApplicationRevisionError("dependency_unavailable");
 	}
-	return { plan: capturedPlan ?? null, nextAuthorizationRevision };
+	return { plan: capturedPlan, nextAuthorizationRevision };
 }
 
 async function captureManagementPlan(
@@ -990,7 +978,7 @@ export function createApplicationRevisionUseCaseV1(
 ): ApplicationRevisionUseCaseV1 {
 	const now = options.now ?? (() => new Date());
 	return {
-		async revise(commandInput, actorContextInput) {
+		async revise(commandInput, actorContextInput, attachment) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			let readDecision: ApplicationRevisionReadDecisionV1;
@@ -1115,11 +1103,27 @@ export function createApplicationRevisionUseCaseV1(
 				},
 				auditEvent: management.auditEvent,
 			};
+			let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+			if (plan.configuration !== null) {
+				try {
+					attachments = await resolvePendingSecretRecordAttachmentsV1({
+						attachment,
+						previousConfiguration: state.configuration,
+						configuration: plan.configuration.configuration,
+						ownerId: actorContext.userId,
+						occurredAt,
+					});
+				} catch {
+					throw new ApplicationRevisionError("dependency_unavailable");
+				}
+			} else if (attachment !== undefined) {
+				throw new ApplicationRevisionError("dependency_unavailable");
+			}
 			let commitDecision: ApplicationRevisionCommitDecisionV1;
 			try {
 				const capturedPlan = snapshotApplicationRevisionWritePlanV1(plan);
 				commitDecision = parseCommitDecision(
-					await dependencies.transaction.commit(capturedPlan),
+					await dependencies.transaction.commit(capturedPlan, attachments),
 					result,
 				);
 			} catch {
