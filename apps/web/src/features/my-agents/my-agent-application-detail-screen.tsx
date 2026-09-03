@@ -73,6 +73,24 @@ export function MyAgentApplicationDetailScreen({
 						{applicationStatusLabels[application.status]}
 					</dd>
 				</div>
+				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+					<dt className="font-medium text-slate-700 text-sm">Submitted</dt>
+					<dd className="text-slate-950 text-sm">
+						<time dateTime={application.submittedAt}>
+							{application.submittedAt}
+						</time>
+					</dd>
+				</div>
+				{application.status === "rejected" ? (
+					<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+						<dt className="font-medium text-slate-700 text-sm">
+							Decision reason
+						</dt>
+						<dd className="text-slate-950 text-sm">
+							{application.decision?.reason ?? "No reason was provided."}
+						</dd>
+					</div>
+				) : null}
 			</dl>
 			<div className="flex flex-wrap gap-4">
 				<Link

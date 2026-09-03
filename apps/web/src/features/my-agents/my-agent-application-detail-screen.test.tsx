@@ -1,3 +1,4 @@
+import { AgentApplicationProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -29,5 +30,36 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 		expect(screen.queryByText("Owner settings")).toBeNull();
 		expect(screen.queryByText("Approve application")).toBeNull();
+	});
+
+	it("renders a rejected application history without lifecycle controls", async () => {
+		const rejectedApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			applicationId: "application-pilot-rejected",
+			status: "rejected",
+			decision: {
+				decidedAt: "2026-09-03T09:00:00Z",
+				reason: "Resource capacity is currently unavailable.",
+			},
+		});
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "ready", application: rejectedApplication }}
+				withdrawing={false}
+			/>,
+		);
+
+		expect(screen.getByText("Rejected")).toBeTruthy();
+		expect(screen.getByText("Decision reason")).toBeTruthy();
+		expect(
+			screen.getByText("Resource capacity is currently unavailable."),
+		).toBeTruthy();
+		expect(screen.getByText("Submitted")).toBeTruthy();
+		expect(screen.getByText("2026-09-03T08:00:00Z").tagName).toBe("TIME");
+		expect(
+			screen.queryByRole("button", { name: "Withdraw application" }),
+		).toBeNull();
+		expect(screen.queryByText(/retry|owner settings/i)).toBeNull();
 	});
 });
