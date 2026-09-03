@@ -68,6 +68,10 @@ export const ImageAdmissionPolicyEvidenceV1Schema = z.strictObject({
 	evaluatedAt: WorkloadTimestampV1Schema,
 });
 
+export type ImageAdmissionPolicyEvidenceV1 = z.infer<
+	typeof ImageAdmissionPolicyEvidenceV1Schema
+>;
+
 export const RuntimeManifestParsingEvidenceV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	labelName: z.literal("io.agora.agent.runtime.manifest"),
@@ -213,27 +217,47 @@ function inspectJsonNode(
 	return { duplicateKeys, maxDepth };
 }
 
-function parseRuntimeManifestLabel(
-	label: string,
-	evidence: z.infer<typeof RuntimeManifestParsingEvidenceV1Schema>,
-) {
+export function parseRuntimeManifestLabelV1(label: string): {
+	readonly runtimeManifest: RuntimeManifestV1;
+	readonly runtimeManifestParsingEvidence: z.infer<
+		typeof RuntimeManifestParsingEvidenceV1Schema
+	>;
+} {
+	if (
+		!String.prototype.isWellFormed.call(label) ||
+		Buffer.byteLength(label, "utf8") > 65_536
+	) {
+		throw new Error("Image registry Runtime Manifest is invalid");
+	}
 	const errors: { error: number; offset: number; length: number }[] = [];
 	const root = parseTree(label, errors, {
 		allowTrailingComma: false,
 		disallowComments: true,
 	});
 	if (!root || errors.length > 0) {
-		throw new Error("Image registry Runtime Manifest mismatch");
+		throw new Error("Image registry Runtime Manifest is invalid");
 	}
 	const inspected = inspectJsonNode(root, 1);
-	if (
-		inspected.duplicateKeys ||
-		inspected.maxDepth > 8 ||
-		inspected.maxDepth !== evidence.maxDepth
-	) {
-		throw new Error("Image registry Runtime Manifest mismatch");
+	if (inspected.duplicateKeys || inspected.maxDepth > 8) {
+		throw new Error("Image registry Runtime Manifest is invalid");
 	}
-	return getNodeValue(root);
+	let runtimeManifest: RuntimeManifestV1;
+	try {
+		runtimeManifest = canonicalRuntimeManifest(getNodeValue(root));
+	} catch {
+		throw new Error("Image registry Runtime Manifest is invalid");
+	}
+	return {
+		runtimeManifest,
+		runtimeManifestParsingEvidence: {
+			schemaVersion: 1,
+			labelName: "io.agora.agent.runtime.manifest",
+			utf8ByteLength: Buffer.byteLength(label, "utf8"),
+			maxDepth: inspected.maxDepth,
+			duplicateKeysDetected: false,
+			unknownFieldsDetected: false,
+		},
+	};
 }
 
 function canonicalRuntimeManifest(manifestInput: unknown) {
@@ -274,12 +298,14 @@ export function validateImageRegistryAdmissionResultV1(
 	if (result.status === "admitted") {
 		let labelManifest: RuntimeManifestV1;
 		try {
-			labelManifest = canonicalRuntimeManifest(
-				parseRuntimeManifestLabel(
-					result.runtimeManifestLabel,
-					result.runtimeManifestParsingEvidence,
-				),
-			);
+			const parsed = parseRuntimeManifestLabelV1(result.runtimeManifestLabel);
+			if (
+				JSON.stringify(parsed.runtimeManifestParsingEvidence) !==
+				JSON.stringify(result.runtimeManifestParsingEvidence)
+			) {
+				throw new Error("Image registry Runtime Manifest mismatch");
+			}
+			labelManifest = parsed.runtimeManifest;
 		} catch {
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
