@@ -17,7 +17,7 @@
 	"scripts": {
 		"build": "tsdown && node src/copy-migrations.mjs",
 		"check-migrations": "node src/check-migrations.mjs",
-		"check-types": "tsc --noEmit",
+		"check-types": "pnpm --filter @agent-infra/contracts build && pnpm --filter @agent-infra/secret-store build && tsc --noEmit",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",
 		"test": "pnpm --filter @agent-infra/platform-core build && pnpm build && pnpm check-migrations && vitest run src"
 	},
