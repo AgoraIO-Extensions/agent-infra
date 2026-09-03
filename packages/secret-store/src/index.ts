@@ -125,6 +125,7 @@ export function encodeSecretAadV1(input: unknown): Buffer {
 	}
 	return Buffer.concat(
 		[
+			binding.schemaVersion.toString(10),
 			aadVersion,
 			binding.secretId,
 			binding.ownerType,
@@ -132,7 +133,10 @@ export function encodeSecretAadV1(input: unknown): Buffer {
 			binding.agentId,
 			binding.name,
 			binding.secretVersion.toString(10),
+			binding.configRevision.toString(10),
 			binding.algorithmVersion,
+			binding.wrappingAlgorithmVersion,
+			binding.wrappingKeyVersion,
 		].map(encodeLengthPrefixedUtf8),
 	);
 }

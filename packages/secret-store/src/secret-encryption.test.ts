@@ -133,6 +133,7 @@ describe("Secret encryptor V1", () => {
 
 		expect(encodeSecretAadV1(record.crypto.aadBinding).toString("hex")).toBe(
 			[
+				"0000000131",
 				"00000016706c6174666f726d2d7365637265742d6161643a7631",
 				"000000097365637265745f3031",
 				"0000000b6167656e742d6f776e6572",
@@ -140,16 +141,20 @@ describe("Secret encryptor V1", () => {
 				"000000086167656e745f3031",
 				"0000000d4d4f44454c5f4150495f4b4559",
 				"0000000132",
+				"0000000137",
 				"0000000e6165732d3235362d67636d3a7631",
+				"000000127273612d6f6165702d7368613235363a7631",
+				"0000000b6b65792d323032362d3039",
 			].join(""),
 		);
 		expect(decrypt(record, dek)).toBe(plaintext);
-		expect(() =>
-			decrypt(record, dek, {
-				...record.crypto.aadBinding,
-				agentId: "agent_02",
-			}),
-		).toThrow();
+		for (const aadBinding of [
+			{ ...record.crypto.aadBinding, agentId: "agent_02" },
+			{ ...record.crypto.aadBinding, configRevision: 8 },
+			{ ...record.crypto.aadBinding, wrappingKeyVersion: "key-2026-10" },
+		]) {
+			expect(() => decrypt(record, dek, aadBinding)).toThrow();
+		}
 	});
 
 	it("fails closed for invalid inputs and exposes no decrypt operation", () => {
@@ -159,6 +164,25 @@ describe("Secret encryptor V1", () => {
 					schemaVersion: 1,
 					activeWrappingKeyVersion: "key-missing",
 					keys: [],
+				},
+			}),
+		).toThrow("Secret encryption keys are invalid");
+		expect(() =>
+			createSecretEncryptorV1({
+				encryptionKeys: {
+					schemaVersion: 1,
+					activeWrappingKeyVersion: "key-2026-09",
+					keys: [
+						{
+							schemaVersion: 1,
+							keyVersion: "key-2026-09",
+							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+							publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
+							publicKeyFingerprint: "0".repeat(64),
+							rsaModulusBits: 3072,
+							status: "active",
+						},
+					],
 				},
 			}),
 		).toThrow("Secret encryption keys are invalid");
