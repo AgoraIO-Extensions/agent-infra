@@ -13,6 +13,7 @@ import {
 	applicationFoundationCommandV1,
 	applicationFoundationConfigurationV1,
 	applicationFoundationTransactionConformance,
+	captureApplicationFoundationSubmission,
 	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
 } from "../../platform-core/src/application-foundation.conformance.ts";
@@ -370,8 +371,14 @@ describe("PostgreSQL application foundation transaction", () => {
 			databaseUrl,
 		});
 		try {
-			const plan = await captureApplicationFoundationWritePlan();
-			await expect(submission.commit(plan)).resolves.toMatchObject({
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
+			await expect(
+				submission.commit(
+					plan,
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
+			).resolves.toMatchObject({
 				outcome: "committed",
 			});
 			await expect(
@@ -438,10 +445,17 @@ describe("PostgreSQL application foundation transaction", () => {
 			databaseUrl,
 		});
 		try {
-			const plan = await captureApplicationFoundationWritePlan();
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
 			const decisions = await Promise.all([
-				first.commit(structuredClone(plan)),
-				second.commit(structuredClone(plan)),
+				first.commit(
+					structuredClone(plan),
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
+				second.commit(
+					structuredClone(plan),
+					await materializeSecretRecordFixtureAttachments(attachments),
+				),
 			]);
 			expect(decisions.map(({ outcome }) => outcome).toSorted()).toEqual([
 				"committed",

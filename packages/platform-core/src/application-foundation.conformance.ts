@@ -290,14 +290,23 @@ function createUseCase(
 	};
 }
 
-export async function captureApplicationFoundationWritePlan(): Promise<ApplicationFoundationWritePlanV1> {
+export async function captureApplicationFoundationSubmission(): Promise<{
+	readonly plan: ApplicationFoundationWritePlanV1;
+	readonly attachments: Parameters<
+		ApplicationFoundationTransactionPortV1["commit"]
+	>[1];
+}> {
 	let captured: ApplicationFoundationWritePlanV1 | undefined;
+	let attachments: Parameters<
+		ApplicationFoundationTransactionPortV1["commit"]
+	>[1];
 	await createUseCase({
 		async read() {
 			return { outcome: "ready" };
 		},
-		async commit(plan) {
+		async commit(plan, nextAttachments) {
 			captured = plan;
+			attachments = nextAttachments;
 			return { outcome: "committed", result: plan.result };
 		},
 	}).submit(
@@ -305,7 +314,11 @@ export async function captureApplicationFoundationWritePlan(): Promise<Applicati
 		applicationFoundationActorContextV1,
 	);
 	if (!captured) throw new Error("Expected a captured Foundation write plan");
-	return captured;
+	return { plan: captured, attachments };
+}
+
+export async function captureApplicationFoundationWritePlan(): Promise<ApplicationFoundationWritePlanV1> {
+	return (await captureApplicationFoundationSubmission()).plan;
 }
 
 export function applicationFoundationTransactionConformance(
@@ -685,9 +698,12 @@ export function applicationFoundationTransactionConformance(
 
 	it("binds direct replay identity and rejects staged plan accessors", async () => {
 		const harness = await createHarness();
-		const plan = await captureApplicationFoundationWritePlan();
+		const { plan, attachments } =
+			await captureApplicationFoundationSubmission();
 		try {
-			await expect(harness.transaction.commit(plan)).resolves.toMatchObject({
+			await expect(
+				harness.transaction.commit(plan, attachments),
+			).resolves.toMatchObject({
 				outcome: "committed",
 			});
 			const beforeInvalidReplay = await harness.snapshot();
