@@ -246,6 +246,44 @@ describe("Conversation execution use case", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
+	it("fails closed when authorization results are malformed", async () => {
+		const transaction = {
+			async createConversation() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
+			async executeMessage() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
+			async executeRegeneration() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
+			async executeStop() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
+		} satisfies ConversationExecutionTransactionPortV1;
+		const conversation = createConversationExecutionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return {
+						outcome: "allowed",
+						authority: { ...authority, actorId: undefined },
+					} as never;
+				},
+			},
+			transaction,
+		});
+
+		await expect(
+			conversation.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_malformed_authorization",
+				requestId: "request_create_malformed_authorization",
+				traceId: "trace_create_malformed_authorization",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
 	it("replays the exact logical message before classifying later state", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority,

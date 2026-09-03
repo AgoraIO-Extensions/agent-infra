@@ -669,8 +669,7 @@ async function authorize(
 		if (values.outcome === "denied") return undefined;
 		if (values.outcome !== "allowed") unavailable();
 		return parseAuthority(values.authority);
-	} catch (error) {
-		if (error instanceof ConversationExecutionError) throw error;
+	} catch {
 		unavailable();
 	}
 }
