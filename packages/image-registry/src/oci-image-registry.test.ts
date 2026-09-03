@@ -117,6 +117,7 @@ function trackableErrorResponse(
 	status: number,
 	headers: Readonly<Record<string, string>>,
 	stalled = false,
+	hangingCancel = false,
 ): {
 	readonly response: Response;
 	readonly reads: () => number;
@@ -131,7 +132,9 @@ function trackableErrorResponse(
 			body: {
 				cancel() {
 					cancelled = true;
-					return Promise.resolve();
+					return hangingCancel
+						? new Promise<never>(() => undefined)
+						: Promise.resolve();
 				},
 				getReader() {
 					if (!stalled) {
@@ -631,6 +634,50 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			expect(policy).not.toHaveBeenCalled();
 			expect(tracked.reads()).toBe(0);
 			expect(tracked.wasCancelled()).toBe(true);
+		},
+	);
+
+	it.each([
+		[404, "IMAGE_NOT_FOUND", false],
+		[401, "IMAGE_NOT_ADMITTED", false],
+	] as const)(
+		"classifies a %i with a hanging body cancel without reading it",
+		async (status, code, retryable) => {
+			vi.useFakeTimers();
+			try {
+				const tracked = trackableErrorResponse(status, {}, false, true);
+				const adapter = createOciImageRegistryAdapterV1({
+					imageReferencePrefix: "registry.example/agents",
+					endpoint: "https://registry.example",
+					async fetch() {
+						return tracked.response;
+					},
+					policy: {
+						async authorize() {
+							throw new Error("policy must not be called");
+						},
+					},
+				});
+				const pending = adapter.admit(request);
+				const deadline = new Promise<"deadline">((resolve) => {
+					setTimeout(() => resolve("deadline"), 60_000);
+				});
+
+				await vi.advanceTimersByTimeAsync(60_000);
+				const result = await Promise.race([
+					pending,
+					deadline.then(() => ({ status: "deadline" }) as const),
+				]);
+
+				expect(result).toMatchObject({
+					status: "rejected",
+					error: { code, retryable, traceId: request.traceId },
+				});
+				expect(tracked.reads()).toBe(0);
+				expect(tracked.wasCancelled()).toBe(true);
+			} finally {
+				vi.useRealTimers();
+			}
 		},
 	);
 

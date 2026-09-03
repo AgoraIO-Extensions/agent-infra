@@ -376,11 +376,11 @@ async function readOciResponse(
 		headers[name] = value;
 	});
 	if (response.status !== 200) {
-		await response.body?.cancel().catch(() => undefined);
+		cancelOciBody(response.body);
 		return { status: responseFailure(response.status) };
 	}
 	if (!hasIdentityContentEncoding(headers)) {
-		await response.body?.cancel().catch(() => undefined);
+		cancelOciBody(response.body);
 		return { status: "invalid" };
 	}
 	const body = await readResponseBytes(response.body, headers);
@@ -402,7 +402,7 @@ async function readResponseBytes(
 > {
 	const contentLength = headerValue(headers, "content-length");
 	if (contentLength !== undefined && !isBoundedContentLength(contentLength)) {
-		await body?.cancel().catch(() => undefined);
+		cancelOciBody(body);
 		return { status: "oversized" };
 	}
 	if (body === null) return { status: "empty" };
@@ -418,7 +418,7 @@ async function readResponseBytes(
 			if (!(chunk.value instanceof Uint8Array)) return { status: "invalid" };
 			length += chunk.value.byteLength;
 			if (length > maxOciResponseBytes) {
-				await reader.cancel().catch(() => undefined);
+				cancelOciBody(reader);
 				return { status: "oversized" };
 			}
 			chunks.push(chunk.value);
@@ -428,6 +428,17 @@ async function readResponseBytes(
 		return { status: "unavailable" };
 	} finally {
 		reader?.releaseLock();
+	}
+}
+
+function cancelOciBody(
+	input: { readonly cancel: () => Promise<unknown> } | null | undefined,
+): void {
+	if (!input) return;
+	try {
+		void Promise.resolve(input.cancel()).catch(() => undefined);
+	} catch {
+		return;
 	}
 }
 
