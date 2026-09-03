@@ -111,7 +111,7 @@ class TestCodexBridge {
 	private turnsListPages?: TestTurnsListPage[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
-	private closeOnThreadStart = false;
+	private dropThreadStartResponse = false;
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -134,7 +134,7 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "thread/start") {
-			if (this.closeOnThreadStart) {
+			if (this.dropThreadStartResponse) {
 				await this.close();
 				return;
 			}
@@ -183,8 +183,8 @@ class TestCodexBridge {
 		this.turnStartCount = 1;
 	}
 
-	closeOnNextThreadStart() {
-		this.closeOnThreadStart = true;
+	dropNextThreadStartResponse() {
+		this.dropThreadStartResponse = true;
 	}
 
 	holdTurnsList() {
@@ -630,11 +630,11 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(0);
 	});
 
-	it("retries a command when thread creation failed before its Turn started", async () => {
+	it("keeps a command unknown when its native Session start response is lost", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
 		const failedBridge = new TestCodexBridge();
-		failedBridge.closeOnNextThreadStart();
+		failedBridge.dropNextThreadStartResponse();
 		const failedDriver = await openDriver(path, failedBridge);
 		drivers.push(failedDriver);
 		const command = submitCommand();
@@ -649,15 +649,23 @@ describe("Codex Runtime Driver", () => {
 		const recoveredBridge = new TestCodexBridge();
 		const recoveredDriver = await openDriver(path, recoveredBridge);
 		drivers.push(recoveredDriver);
-		const recovered = await recoveredDriver.execute(command);
 
-		expect(recovered.result).toEqual({
-			outcome: "accepted",
-			status: "running",
+		expect(await recoveredDriver.lookupOperation(command)).toEqual({
+			state: "unknown",
+		});
+		const unknown = await recoveredDriver.execute(command);
+
+		expect(unknown.result).toEqual({
+			outcome: "unknown",
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			message: "Runtime command acceptance could not be confirmed",
 		});
 		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(0);
+		expect(
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
-		).toHaveLength(1);
+		).toHaveLength(0);
 	});
 
 	it("keeps terminal status sticky across out-of-order status reads", async () => {

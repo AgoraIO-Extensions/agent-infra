@@ -513,7 +513,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			session = await this.ensureThread(prepared.operation.nativeSessionRef);
 		} catch (error) {
-			await this.discardPreparedBeforeTurn(
+			await this.markAcceptanceUncertain(
 				command,
 				prepared.operation.nativeSessionRef,
 			);
@@ -792,36 +792,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				stateInvalid();
 			}
 			session.acceptanceUncertainOperationKey = key;
-		});
-	}
-
-	private async discardPreparedBeforeTurn(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
-		nativeSessionRef: string,
-	) {
-		const key = operationKey(command);
-		await this.update((state) => {
-			const operation = state.operations[key];
-			const session = state.sessions[nativeSessionRef];
-			if (
-				!session ||
-				!operation ||
-				operation.nativeSessionRef !== nativeSessionRef ||
-				operation.state !== "prepared" ||
-				session.acceptanceUncertainOperationKey !== undefined
-			) {
-				stateInvalid();
-			}
-			delete state.operations[key];
-			if (
-				session.threadId === undefined &&
-				Object.keys(session.executions).length === 0 &&
-				!Object.values(state.operations).some(
-					(candidate) => candidate.nativeSessionRef === nativeSessionRef,
-				)
-			) {
-				delete state.sessions[nativeSessionRef];
-			}
 		});
 	}
 
