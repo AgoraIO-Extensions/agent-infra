@@ -487,7 +487,10 @@ export class PostgresApplicationRevisionTransactionV1
 						reason: "stale_management" as const,
 					};
 				}
-				await this.#requireCurrentIntegrity(transaction, plan);
+				const previousConfiguration = await this.#requireCurrentIntegrity(
+					transaction,
+					plan,
+				);
 
 				if (configuration && plan.configuration) {
 					if (
@@ -533,6 +536,7 @@ export class PostgresApplicationRevisionTransactionV1
 						transaction,
 						attachments,
 						configuration,
+						previousConfiguration,
 					);
 				}
 
@@ -679,7 +683,7 @@ export class PostgresApplicationRevisionTransactionV1
 			Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 		>[0],
 		plan: ApplicationRevisionWritePlanV1,
-	): Promise<void> {
+	): Promise<ReturnType<typeof decodeAgentConfigurationRecord>> {
 		const [configurationRows, ownerRows, availabilityRows] = await Promise.all([
 			transaction
 				.select({
@@ -729,5 +733,6 @@ export class PostgresApplicationRevisionTransactionV1
 		) {
 			unavailable();
 		}
+		return current;
 	}
 }

@@ -20,7 +20,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
-import { createSecretRecordFixtureResolver } from "./secret-record-fixture.ts";
+import {
+	createSecretRecordFixtureResolver,
+	materializeSecretRecordFixtureAttachments,
+} from "./secret-record-fixture.ts";
 
 const triggerName = "application_foundation_injected_failure";
 const functionName = "platform.application_foundation_injected_failure";
@@ -230,9 +233,12 @@ describe("PostgreSQL application foundation transaction", () => {
 		let armedPoint: ApplicationFoundationFailurePoint | undefined;
 		const transaction: ApplicationFoundationTransactionPortV1 = {
 			read: (input) => adapter.read(input),
-			async commit(plan: ApplicationFoundationWritePlanV1) {
+			async commit(plan: ApplicationFoundationWritePlanV1, attachments) {
 				try {
-					return await adapter.commit(plan);
+					return await adapter.commit(
+						plan,
+						await materializeSecretRecordFixtureAttachments(attachments),
+					);
 				} finally {
 					await disarmFailure(armedPoint);
 					armedPoint = undefined;

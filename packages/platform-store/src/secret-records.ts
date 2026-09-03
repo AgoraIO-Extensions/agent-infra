@@ -167,9 +167,23 @@ export async function insertPendingSecretRecordAttachments(
 	transaction: Transaction,
 	attachments: PendingSecretRecordAttachmentsV1 | undefined,
 	configuration: AgentConfigurationRecordV1,
+	previousConfiguration?: AgentConfigurationRecordV1,
 ): Promise<void> {
-	if (attachments === undefined) return;
 	try {
+		const configurationReferences = configurationReferenceKeys(configuration);
+		const previousReferences =
+			previousConfiguration === undefined
+				? new Set<string>()
+				: configurationReferenceKeys(previousConfiguration);
+		const introducedReferences = new Set(
+			[...configurationReferences].filter(
+				(reference) => !previousReferences.has(reference),
+			),
+		);
+		if (attachments === undefined) {
+			if (introducedReferences.size !== 0) throw new Error();
+			return;
+		}
 		if (attachments.schemaVersion !== 1) throw new Error();
 		const expected = snapshotArray(attachments.expected, 160).map(
 			snapshotExpectation,
@@ -178,8 +192,13 @@ export async function insertPendingSecretRecordAttachments(
 			expected.map((expectation) => [expectationKey(expectation), expectation]),
 		);
 		if (expectedByKey.size !== expected.length) throw new Error();
-		const configurationReferences = configurationReferenceKeys(configuration);
+		const expectedReferences = new Set(expected.map(configurationReferenceKey));
 		if (
+			expectedReferences.size !== expected.length ||
+			expectedReferences.size !== introducedReferences.size ||
+			[...expectedReferences].some(
+				(reference) => !introducedReferences.has(reference),
+			) ||
 			expected.some(
 				(expectation) =>
 					expectation.agentId !== configuration.agentId ||

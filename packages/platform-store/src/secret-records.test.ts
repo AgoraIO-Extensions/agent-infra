@@ -112,6 +112,27 @@ describe("pending Secret record Store sidecar", () => {
 		expect(JSON.stringify(values.mock.calls)).not.toContain("plaintext");
 	});
 
+	it("requires an encrypted record for each introduced Secret reference", async () => {
+		const { transaction: database, insert } = transaction();
+		await expect(
+			insertPendingSecretRecordAttachments(database, undefined, configuration),
+		).rejects.toBeInstanceOf(PendingSecretRecordStoreError);
+		expect(insert).not.toHaveBeenCalled();
+	});
+
+	it("allows a retained Secret reference without a new encrypted record", async () => {
+		const { transaction: database, insert } = transaction();
+		await expect(
+			insertPendingSecretRecordAttachments(
+				database,
+				undefined,
+				configuration,
+				configuration,
+			),
+		).resolves.toBeUndefined();
+		expect(insert).not.toHaveBeenCalled();
+	});
+
 	it("rejects mismatched or malformed attachment data before insertion", async () => {
 		for (const encryptedRecords of [
 			[{ ...record(), name: "OTHER_TOKEN" }],

@@ -39,7 +39,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
-import { createSecretRecordFixtureResolver } from "./secret-record-fixture.ts";
+import {
+	createSecretRecordFixtureResolver,
+	materializeSecretRecordFixtureAttachments,
+} from "./secret-record-fixture.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -263,7 +266,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		let failNextCommitAsStale = false;
 		const transaction: AgentConfigurationTransactionPortV1 = {
 			read: adapter.read.bind(adapter),
-			async commit(plan) {
+			async commit(plan, attachments) {
 				if (failNextCommitAsStale) {
 					failNextCommitAsStale = false;
 					await adminClient`
@@ -272,7 +275,10 @@ describe("PostgreSQL Agent configuration transaction", () => {
 						where id = 'agent_01'
 					`;
 				}
-				const decision = await adapter.commit(plan);
+				const decision = await adapter.commit(
+					plan,
+					await materializeSecretRecordFixtureAttachments(attachments),
+				);
 				if (decision.outcome === "committed") lastPlan = structuredClone(plan);
 				return decision;
 			},

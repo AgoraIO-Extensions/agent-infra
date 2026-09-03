@@ -1,6 +1,9 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 
-import type { PendingSecretRecordAttachmentResolverV1 } from "@agent-infra/platform-core";
+import type {
+	PendingSecretRecordAttachmentResolverV1,
+	PendingSecretRecordAttachmentsV1,
+} from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 
 const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -43,5 +46,19 @@ export function createSecretRecordFixtureResolver(): PendingSecretRecordAttachme
 				}),
 			);
 		},
+	};
+}
+
+export async function materializeSecretRecordFixtureAttachments(
+	attachments: PendingSecretRecordAttachmentsV1 | undefined,
+): Promise<PendingSecretRecordAttachmentsV1 | undefined> {
+	if (attachments === undefined) return undefined;
+	return {
+		schemaVersion: 1,
+		expected: attachments.expected,
+		encryptedRecords: await createSecretRecordFixtureResolver().resolve({
+			schemaVersion: 1,
+			expected: attachments.expected,
+		}),
 	};
 }

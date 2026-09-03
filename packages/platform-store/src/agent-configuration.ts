@@ -249,6 +249,26 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					return { outcome: "stale" as const };
 				}
+				const [previous] = await transaction
+					.select({ configuration: agentConfigurationRevisions.configuration })
+					.from(agentConfigurationRevisions)
+					.where(
+						and(
+							eq(agentConfigurationRevisions.agentId, plan.agentId),
+							eq(agentConfigurationRevisions.revision, plan.baseRevision),
+						),
+					)
+					.limit(1);
+				if (!previous?.configuration) throw new AgentConfigurationStoreError();
+				const previousConfiguration = decodeAgentConfigurationRecord(
+					previous.configuration,
+				);
+				if (
+					previousConfiguration.agentId !== plan.agentId ||
+					previousConfiguration.revision !== plan.baseRevision
+				) {
+					throw new AgentConfigurationStoreError();
+				}
 
 				let applicationId: string | undefined;
 				if (plan.accessUpdate) {
@@ -285,6 +305,7 @@ export class PostgresAgentConfigurationTransactionV1
 					transaction,
 					attachments,
 					configuration,
+					previousConfiguration,
 				);
 
 				if (plan.accessUpdate && applicationId) {
