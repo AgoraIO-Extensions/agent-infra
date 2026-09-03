@@ -459,6 +459,7 @@ export class CodexAppServerBridge {
 		});
 		process.stderr.resume();
 		process.stdout.on("data", (chunk: Buffer) => this.receive(chunk));
+		process.stdin.on("error", () => this.fail(exited()));
 		process.once("error", () => this.fail(unavailable()));
 		process.once("close", () => {
 			this.#isClosed = true;
@@ -520,13 +521,27 @@ export class CodexAppServerBridge {
 		}
 		if (Buffer.byteLength(encoded) > maximumFrameBytes) throw invalidFrame();
 		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const rejectExited = () => {
+				const error = exited();
+				this.fail(error);
+				reject(error);
+			};
+			const settle = (work: () => void) => {
+				if (settled) return;
+				settled = true;
+				this.#process.stdin.off("error", onWriteError);
+				work();
+			};
+			const onWriteError = () => settle(rejectExited);
+			this.#process.stdin.once("error", onWriteError);
 			try {
 				this.#process.stdin.write(encoded, (error) => {
-					if (error) reject(exited());
-					else resolve();
+					if (error) settle(rejectExited);
+					else settle(resolve);
 				});
 			} catch {
-				reject(exited());
+				settle(rejectExited);
 			}
 		});
 	}

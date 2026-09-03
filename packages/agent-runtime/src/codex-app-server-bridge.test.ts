@@ -49,10 +49,13 @@ async function installFakeCodex(mode: string) {
 	await writeFile(
 		executable,
 		`#!/usr/bin/env node
-const { appendFileSync, mkdirSync, writeFileSync } = require("node:fs");
+const { appendFileSync, closeSync, mkdirSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const args = process.argv.slice(2);
 const mode = process.env.CODEX_APP_SERVER_BRIDGE_MODE;
+if (mode === "stdin-closed" && args[0] === "app-server" && args[1] !== "generate-json-schema") {
+  closeSync(0);
+}
 if (process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH) {
   appendFileSync(process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH, JSON.stringify({ args, executable: process.argv[1], pid: process.pid }) + "\\n");
 }
@@ -84,12 +87,13 @@ if (mode === "stderr-exit") {
   process.stderr.write("redacted-child-output\\n");
   process.exit(9);
 }
-if (["shutdown-hangs", "schema-hangs", "version-hangs"].includes(mode)) {
-  if (mode === "shutdown-hangs") {
-    process.on("SIGTERM", () => {});
-    setInterval(() => {}, 1_000);
-  }
-  process.stdin.resume();
+if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes(mode)) {
+	if (mode === "shutdown-hangs") {
+		process.on("SIGTERM", () => {});
+		setInterval(() => {}, 1_000);
+	}
+	if (mode === "stdin-closed") setInterval(() => {}, 1_000);
+	else process.stdin.resume();
 } else {
   process.stdin.on("data", (chunk) => process.stdout.write(chunk));
   process.stdin.on("end", () => process.exit(0));
@@ -326,6 +330,21 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			).rejects.toMatchObject({ code: "CODEX_APP_SERVER_FRAME_INVALID" });
 		},
 	);
+
+	it("fails queue consumers and reaps a process whose stdin rejects writes", async () => {
+		const { capturePath } = await installFakeCodex("stdin-closed");
+		const bridge = await CodexAppServerBridge.open(options());
+		const { pid } = await readAppCapture(capturePath);
+		childPids.push(pid);
+		const iterator = bridge.frames()[Symbol.asyncIterator]();
+		await expect(
+			bridge.send({ id: 9, method: "synthetic/request" }),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
+		await expect(iterator.next()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_EXITED",
+		});
+		await expectChildExited(pid);
+	});
 
 	it("bounds a hanging provenance probe", async () => {
 		await installFakeCodex("version-hangs");
