@@ -4,12 +4,13 @@ import {
 	type ImageAdmissionPolicyEvidenceV1,
 	ImageAdmissionPolicyEvidenceV1Schema,
 	type ImageRegistryAdmissionRequestV1,
-	ImageRegistryAdmissionRequestV1Schema,
 	type ImageRegistryAdmissionResultV1,
+	ImageRegistryAdmissionResultV1Schema,
 	ImmutableOciDigestV1Schema,
 	type OciImageConfigV1,
 	OciImageConfigV1Schema,
 	OciImageReferenceV1Schema,
+	parseImageRegistryAdmissionRequestV1,
 	parseRuntimeManifestLabelV1,
 	validateImageRegistryAdmissionResultV1,
 } from "@agent-infra/contracts/workload";
@@ -18,26 +19,13 @@ const runtimeManifestLabelName = "io.agora.agent.runtime.manifest";
 const manifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const configMediaType = "application/vnd.oci.image.config.v1+json";
 
-export interface OciDistributionHttpResponseV1 {
-	readonly status: number;
-	readonly headers: Readonly<Record<string, string | undefined>>;
-	readonly body: string;
-}
-
-export interface OciDistributionHttpV1 {
-	get(input: {
-		readonly url: string;
-		readonly headers: Readonly<Record<string, string>>;
-	}): Promise<OciDistributionHttpResponseV1>;
-}
-
 type OciDistributionFailureV1 =
 	| "not-found"
 	| "not-admitted"
 	| "invalid"
 	| "unavailable";
 
-export type OciManifestResolutionV1 =
+type OciManifestResolutionV1 =
 	| {
 			readonly status: "resolved";
 			readonly immutableDigest: string;
@@ -45,19 +33,19 @@ export type OciManifestResolutionV1 =
 	  }
 	| { readonly status: OciDistributionFailureV1 };
 
-export type OciConfigResolutionV1 =
+type OciConfigResolutionV1 =
 	| { readonly status: "resolved"; readonly config: unknown }
 	| { readonly status: OciDistributionFailureV1 };
 
-export interface OciDistributionClientV1 {
-	resolveManifest(input: {
+type OciDistributionClientV1 = {
+	readonly resolveManifest: (input: {
 		readonly imageReference: string;
-	}): Promise<OciManifestResolutionV1>;
-	readConfig(input: {
+	}) => Promise<OciManifestResolutionV1>;
+	readonly readConfig: (input: {
 		readonly imageReference: string;
 		readonly configDigest: string;
-	}): Promise<OciConfigResolutionV1>;
-}
+	}) => Promise<OciConfigResolutionV1>;
+};
 
 export interface OciImageAdmissionPolicyV1 {
 	authorize(
@@ -80,10 +68,10 @@ export interface ImageRegistryAdapterV1 {
 	): Promise<ImageRegistryAdmissionResultV1>;
 }
 
-export function createOciDistributionClientV1(options: {
+function createOciDistributionClientV1(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
-	readonly http: OciDistributionHttpV1;
+	readonly fetch: typeof globalThis.fetch;
 }): OciDistributionClientV1 {
 	const binding = parseBinding(options);
 
@@ -148,15 +136,29 @@ export function createOciDistributionClientV1(options: {
 }
 
 export function createOciImageRegistryAdapterV1(options: {
-	readonly distribution: OciDistributionClientV1;
+	readonly imageReferencePrefix: string;
+	readonly endpoint: string;
+	readonly fetch?: typeof globalThis.fetch;
 	readonly policy: OciImageAdmissionPolicyV1;
 }): ImageRegistryAdapterV1 {
+	const distribution = createOciDistributionClientV1({
+		imageReferencePrefix: options.imageReferencePrefix,
+		endpoint: options.endpoint,
+		fetch: options.fetch ?? globalThis.fetch,
+	});
 	return {
 		async admit(
 			requestInput: unknown,
 		): Promise<ImageRegistryAdmissionResultV1> {
-			const request = ImageRegistryAdmissionRequestV1Schema.parse(requestInput);
-			const manifest = await resolveManifest(options.distribution, request);
+			const parsedRequest = parseImageRegistryAdmissionRequestV1(requestInput);
+			if (parsedRequest.status === "invalid-image-reference") {
+				return rejected(parsedRequest.correlation, "IMAGE_REFERENCE_INVALID");
+			}
+			if (parsedRequest.status === "invalid") {
+				throw new TypeError("Image registry request is invalid");
+			}
+			const request = parsedRequest.request;
+			const manifest = await resolveManifest(distribution, request);
 			if (manifest.status !== "resolved") {
 				return rejected(request, distributionFailureCode(manifest.status));
 			}
@@ -166,11 +168,7 @@ export function createOciImageRegistryAdapterV1(options: {
 				return rejected(request, policy.code);
 			}
 
-			const config = await resolveConfig(
-				options.distribution,
-				request,
-				manifest,
-			);
+			const config = await resolveConfig(distribution, request, manifest);
 			if (config.status !== "resolved") {
 				return rejected(request, config.code);
 			}
@@ -208,18 +206,18 @@ export function createOciImageRegistryAdapterV1(options: {
 function parseBinding(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
-	readonly http: OciDistributionHttpV1;
+	readonly fetch: typeof globalThis.fetch;
 }): {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: URL;
-	readonly http: OciDistributionHttpV1;
+	readonly fetch: typeof globalThis.fetch;
 } {
 	if (
 		typeof options.imageReferencePrefix !== "string" ||
 		!OciImageReferenceV1Schema.safeParse(
 			`${options.imageReferencePrefix}/probe:tag`,
 		).success ||
-		typeof options.http?.get !== "function"
+		typeof options.fetch !== "function"
 	) {
 		throw new TypeError("OCI Distribution configuration is invalid");
 	}
@@ -245,7 +243,7 @@ function parseBinding(options: {
 	return {
 		imageReferencePrefix: options.imageReferencePrefix,
 		endpoint,
-		http: options.http,
+		fetch: options.fetch,
 	};
 }
 
@@ -291,7 +289,7 @@ function digestText(input: string): string {
 async function requestOci(
 	binding: {
 		readonly endpoint: URL;
-		readonly http: OciDistributionHttpV1;
+		readonly fetch: typeof globalThis.fetch;
 	},
 	path: string,
 	accept: string,
@@ -299,26 +297,35 @@ async function requestOci(
 	| {
 			readonly status: "ok";
 			readonly body: string;
-			readonly headers: OciDistributionHttpResponseV1["headers"];
+			readonly headers: Readonly<Record<string, string | undefined>>;
 	  }
 	| { readonly status: OciDistributionFailureV1 }
 > {
 	try {
-		const response = await binding.http.get({
-			url: new URL(`/v2/${path}`, binding.endpoint).toString(),
-			headers: { accept },
-		});
+		const response = await binding.fetch(
+			new URL(`/v2/${path}`, binding.endpoint),
+			{
+				headers: { accept },
+				redirect: "error",
+			},
+		);
 		if (
+			typeof response !== "object" ||
+			response === null ||
 			!Number.isInteger(response.status) ||
-			typeof response.body !== "string" ||
-			typeof response.headers !== "object" ||
-			response.headers === null ||
-			Array.isArray(response.headers)
+			typeof response.text !== "function" ||
+			typeof response.headers?.forEach !== "function"
 		) {
 			return { status: "invalid" };
 		}
+		const body = await response.text();
+		const headers: Record<string, string> = {};
+		response.headers.forEach((value, name) => {
+			headers[name] = value;
+		});
+		if (typeof body !== "string") return { status: "invalid" };
 		if (response.status === 200) {
-			return { status: "ok", body: response.body, headers: response.headers };
+			return { status: "ok", body, headers };
 		}
 		return { status: responseFailure(response.status) };
 	} catch {
@@ -608,8 +615,9 @@ function distributionFailureCode(
 }
 
 function rejected(
-	request: ImageRegistryAdmissionRequestV1,
+	request: Pick<ImageRegistryAdmissionRequestV1, "requestId" | "traceId">,
 	code:
+		| "IMAGE_REFERENCE_INVALID"
 		| "IMAGE_NOT_FOUND"
 		| "IMAGE_NOT_ADMITTED"
 		| "OCI_CONFIG_INVALID"
@@ -619,6 +627,7 @@ function rejected(
 		| "IMAGE_ADMISSION_POLICY_UNAVAILABLE",
 ): ImageRegistryAdmissionResultV1 {
 	const errors = {
+		IMAGE_REFERENCE_INVALID: ["Image reference is invalid", false],
 		IMAGE_NOT_FOUND: ["Image was not found", false],
 		IMAGE_NOT_ADMITTED: [
 			"The image is not admitted by deployment policy",
@@ -634,7 +643,7 @@ function rejected(
 		],
 	} as const;
 	const [message, retryable] = errors[code];
-	return validateImageRegistryAdmissionResultV1(request, {
+	return ImageRegistryAdmissionResultV1Schema.parse({
 		schemaVersion: 1,
 		status: "rejected",
 		requestId: request.requestId,

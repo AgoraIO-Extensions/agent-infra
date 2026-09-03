@@ -189,6 +189,73 @@ export type ImageRegistryAdmissionResultV1 = z.infer<
 >;
 export type OciImageConfigV1 = z.infer<typeof OciImageConfigV1Schema>;
 
+export interface ImageRegistryAdmissionRequestCorrelationV1 {
+	readonly schemaVersion: 1;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
+export type ImageRegistryAdmissionRequestParseResultV1 =
+	| {
+			readonly status: "accepted";
+			readonly request: ImageRegistryAdmissionRequestV1;
+	  }
+	| {
+			readonly status: "invalid-image-reference";
+			readonly correlation: ImageRegistryAdmissionRequestCorrelationV1;
+	  }
+	| { readonly status: "invalid" };
+
+export function parseImageRegistryAdmissionRequestV1(
+	input: unknown,
+): ImageRegistryAdmissionRequestParseResultV1 {
+	const parsed = ImageRegistryAdmissionRequestV1Schema.safeParse(input);
+	if (parsed.success) return { status: "accepted", request: parsed.data };
+
+	const record = recordInput(input);
+	if (
+		!record ||
+		OciImageReferenceV1Schema.safeParse(ownInputValue(record, "imageReference"))
+			.success
+	) {
+		return { status: "invalid" };
+	}
+	const normalized = ImageRegistryAdmissionRequestV1Schema.safeParse({
+		schemaVersion: ownInputValue(record, "schemaVersion"),
+		requestId: ownInputValue(record, "requestId"),
+		traceId: ownInputValue(record, "traceId"),
+		subjectRef: ownInputValue(record, "subjectRef"),
+		agentId: ownInputValue(record, "agentId"),
+		imageReference: "registry.invalid/image:invalid",
+		usage: ownInputValue(record, "usage"),
+		admissionPolicyRef: ownInputValue(record, "admissionPolicyRef"),
+	});
+	return normalized.success
+		? {
+				status: "invalid-image-reference",
+				correlation: {
+					schemaVersion: normalized.data.schemaVersion,
+					requestId: normalized.data.requestId,
+					traceId: normalized.data.traceId,
+				},
+			}
+		: { status: "invalid" };
+}
+
+function recordInput(input: unknown): Record<string, unknown> | undefined {
+	return typeof input === "object" &&
+		input !== null &&
+		!Array.isArray(input) &&
+		Object.getPrototypeOf(input) === Object.prototype
+		? (input as Record<string, unknown>)
+		: undefined;
+}
+
+function ownInputValue(input: Record<string, unknown>, key: string): unknown {
+	const descriptor = Object.getOwnPropertyDescriptor(input, key);
+	return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
 function inspectJsonNode(
 	node: JsonNode,
 	depth: number,

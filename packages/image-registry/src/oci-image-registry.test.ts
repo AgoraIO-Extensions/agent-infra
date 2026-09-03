@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createFakeImageRegistryAdapterV1 } from "../../test-support/src/workload/registry.js";
 import {
-	createOciDistributionClientV1,
 	createOciImageRegistryAdapterV1,
 	type ImageRegistryAdapterV1,
 } from "./oci-image-registry.js";
@@ -47,47 +46,43 @@ const request = {
 	admissionPolicyRef: "policy_01",
 } as const;
 
-const resolvedManifest = {
-	status: "resolved" as const,
-	immutableDigest: manifestDigest,
-	configDigest,
-};
-
 const admittedPolicy = {
 	status: "admitted" as const,
 	decisionRef: "decision_01",
 	evaluatedAt: "2026-09-03T00:00:00Z",
 };
 
+function response(
+	body: string,
+	init: ConstructorParameters<typeof Response>[1] = {},
+) {
+	return new Response(body, init);
+}
+
+function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
+	return input instanceof Request ? input.url : input.toString();
+}
+
 describe("OCI ImageRegistryAdapter V1", () => {
 	it("resolves an approved Tag to an immutable Digest and sanitized candidate", async () => {
-		const distribution = createOciDistributionClientV1({
+		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
-			http: {
-				async get({ url }) {
-					if (url.endsWith("/v2/codex/manifests/pilot")) {
-						return {
-							status: 200,
-							headers: { "docker-content-digest": manifestDigest },
-							body: registryManifestBody,
-						};
-					}
-					if (
-						url.endsWith(`/v2/codex/blobs/${encodeURIComponent(configDigest)}`)
-					) {
-						return {
-							status: 200,
-							headers: {},
-							body: registryConfigBody,
-						};
-					}
-					throw new Error(`Unexpected OCI request ${url}`);
-				},
+			async fetch(input) {
+				const url = requestUrl(input);
+				if (url.endsWith("/v2/codex/manifests/pilot")) {
+					return response(registryManifestBody, {
+						status: 200,
+						headers: { "docker-content-digest": manifestDigest },
+					});
+				}
+				if (
+					url.endsWith(`/v2/codex/blobs/${encodeURIComponent(configDigest)}`)
+				) {
+					return response(registryConfigBody, { status: 200 });
+				}
+				throw new Error(`Unexpected OCI request ${url}`);
 			},
-		});
-		const adapter = createOciImageRegistryAdapterV1({
-			distribution,
 			policy: {
 				async authorize(input) {
 					expect(input).toEqual({
@@ -160,21 +155,17 @@ describe("OCI ImageRegistryAdapter V1", () => {
 
 	it("resolves equivalent Tag and Digest references to the same immutable candidate", async () => {
 		const adapter = createOciImageRegistryAdapterV1({
-			distribution: createOciDistributionClientV1({
-				imageReferencePrefix: "registry.example/agents",
-				endpoint: "https://registry.example",
-				http: {
-					async get({ url }) {
-						return url.includes("/manifests/")
-							? {
-									status: 200,
-									headers: { "docker-content-digest": manifestDigest },
-									body: registryManifestBody,
-								}
-							: { status: 200, headers: {}, body: registryConfigBody };
-					},
-				},
-			}),
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				const url = requestUrl(input);
+				return url.includes("/manifests/")
+					? response(registryManifestBody, {
+							status: 200,
+							headers: { "docker-content-digest": manifestDigest },
+						})
+					: response(registryConfigBody, { status: 200 });
+			},
 			policy: {
 				async authorize() {
 					return admittedPolicy;
@@ -195,42 +186,84 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		]);
 	});
 
+	it("uses native fetch when no test seam is configured", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			return new URL(input.toString()).pathname.includes("/manifests/")
+				? new Response(registryManifestBody, {
+						status: 200,
+						headers: { "docker-content-digest": manifestDigest },
+					})
+				: new Response(registryConfigBody, { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				policy: {
+					async authorize() {
+						return admittedPolicy;
+					},
+				},
+			});
+
+			expect(await adapter.admit(request)).toMatchObject({
+				status: "admitted",
+				immutableDigest: manifestDigest,
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("uses the canonical repository when an image reference contains both a Tag and Digest", async () => {
-		const distribution = createOciDistributionClientV1({
+		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
-			http: {
-				async get({ url }) {
+			async fetch(input) {
+				const url = requestUrl(input);
+				if (url.includes("/manifests/")) {
 					expect(new URL(url).pathname).toBe(
 						`/v2/codex/manifests/${encodeURIComponent(manifestDigest)}`,
 					);
-					return {
+					return response(registryManifestBody, {
 						status: 200,
 						headers: { "docker-content-digest": manifestDigest },
-						body: registryManifestBody,
-					};
+					});
+				}
+				return response(registryConfigBody, { status: 200 });
+			},
+			policy: {
+				async authorize() {
+					return admittedPolicy;
 				},
 			},
 		});
 
 		expect(
-			await distribution.resolveManifest({
+			await adapter.admit({
+				...request,
 				imageReference: `registry.example/agents/codex:pilot@${manifestDigest}`,
 			}),
-		).toEqual(resolvedManifest);
+		).toMatchObject({ status: "admitted", immutableDigest: manifestDigest });
 	});
 
 	it("stops before config retrieval when deployment policy rejects another subject", async () => {
 		let configReads = 0;
 		const adapter = createOciImageRegistryAdapterV1({
-			distribution: {
-				async resolveManifest() {
-					return resolvedManifest;
-				},
-				async readConfig() {
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				const url = requestUrl(input);
+				if (url.includes("/blobs/")) {
 					configReads += 1;
-					return { status: "unavailable" as const };
-				},
+					throw new Error("config must not be requested");
+				}
+				return response(registryManifestBody, {
+					status: 200,
+					headers: { "docker-content-digest": manifestDigest },
+				});
 			},
 			policy: {
 				async authorize(input) {
@@ -256,20 +289,16 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		let policyCalls = 0;
 		let configReads = 0;
 		const adapter = createOciImageRegistryAdapterV1({
-			distribution: createOciDistributionClientV1({
-				imageReferencePrefix: "registry.example/agents",
-				endpoint: "https://registry.example",
-				http: {
-					async get({ url }) {
-						if (url.includes("/blobs/")) configReads += 1;
-						return {
-							status: 200,
-							headers: { "docker-content-digest": manifestDigest },
-							body: registryManifestBody,
-						};
-					},
-				},
-			}),
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				const url = requestUrl(input);
+				if (url.includes("/blobs/")) configReads += 1;
+				return response(registryManifestBody, {
+					status: 200,
+					headers: { "docker-content-digest": manifestDigest },
+				});
+			},
 			policy: {
 				async authorize() {
 					policyCalls += 1;
@@ -293,42 +322,34 @@ describe("OCI ImageRegistryAdapter V1", () => {
 	});
 
 	it("rejects OCI response bytes that do not match their advertised Digest", async () => {
-		const distribution = createOciDistributionClientV1({
+		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
-			http: {
-				async get() {
-					return {
-						status: 200,
-						headers: { "docker-content-digest": manifestDigest },
-						body: JSON.stringify({ config: { digest: configDigest } }),
-					};
+			async fetch() {
+				return response(JSON.stringify({ config: { digest: configDigest } }), {
+					status: 200,
+					headers: { "docker-content-digest": manifestDigest },
+				});
+			},
+			policy: {
+				async authorize() {
+					throw new Error("policy must not be called");
 				},
 			},
 		});
 
-		expect(
-			await distribution.resolveManifest({
-				imageReference: request.imageReference,
-			}),
-		).toEqual({ status: "invalid" });
-		expect(
-			await distribution.readConfig({
-				imageReference: request.imageReference,
-				configDigest,
-			}),
-		).toEqual({ status: "invalid" });
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID", retryable: false },
+		});
 	});
 
 	it("fails closed when a Distribution client returns a malformed outcome", async () => {
 		const adapter = createOciImageRegistryAdapterV1({
-			distribution: {
-				async resolveManifest() {
-					return { status: "corrupted" } as never;
-				},
-				async readConfig() {
-					throw new Error("readConfig must not be called");
-				},
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch() {
+				return { status: "corrupted" } as never;
 			},
 			policy: {
 				async authorize() {
@@ -377,14 +398,25 @@ describe("OCI ImageRegistryAdapter V1", () => {
 	] as const)(
 		"returns a stable rejection for %s",
 		async (_name, config, code) => {
+			const configBody = JSON.stringify(config);
+			const expectedConfigDigest = digestText(configBody);
+			const manifestBody = JSON.stringify({
+				config: { digest: expectedConfigDigest },
+			});
+			const expectedManifestDigest = digestText(manifestBody);
 			const adapter = createOciImageRegistryAdapterV1({
-				distribution: {
-					async resolveManifest() {
-						return resolvedManifest;
-					},
-					async readConfig() {
-						return { status: "resolved" as const, config };
-					},
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch(input) {
+					const url = requestUrl(input);
+					return url.includes("/manifests/")
+						? response(manifestBody, {
+								status: 200,
+								headers: {
+									"docker-content-digest": expectedManifestDigest,
+								},
+							})
+						: response(configBody, { status: 200 });
 				},
 				policy: {
 					async authorize() {
@@ -497,38 +529,24 @@ const adapterFactories: readonly {
 		name: "OCI",
 		create(scenario) {
 			return createOciImageRegistryAdapterV1({
-				distribution: createOciDistributionClientV1({
-					imageReferencePrefix: "registry.example/agents",
-					endpoint: "https://registry.example",
-					http: {
-						async get({ url }) {
-							if (scenario === "unavailable") {
-								throw new Error("Bearer registry-secret");
-							}
-							if (scenario === "not-admitted") {
-								return {
-									status: 403,
-									headers: {},
-									body: "registry-secret",
-								};
-							}
-							if (url.endsWith("/v2/codex/manifests/pilot")) {
-								return {
-									status: 200,
-									headers: {
-										"docker-content-digest": conformanceManifestDigest,
-									},
-									body: conformanceManifestBody,
-								};
-							}
-							return {
-								status: 200,
-								headers: {},
-								body: conformanceConfigBody,
-							};
-						},
-					},
-				}),
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch(input) {
+					const url = requestUrl(input);
+					if (scenario === "unavailable") {
+						throw new Error("Bearer registry-secret");
+					}
+					if (scenario === "not-admitted") {
+						return response("registry-secret", { status: 403 });
+					}
+					if (url.endsWith("/v2/codex/manifests/pilot")) {
+						return response(conformanceManifestBody, {
+							status: 200,
+							headers: { "docker-content-digest": conformanceManifestDigest },
+						});
+					}
+					return response(conformanceConfigBody, { status: 200 });
+				},
 				policy: {
 					async authorize() {
 						return {
@@ -586,6 +604,24 @@ describe.each(adapterFactories)(
 				error: {
 					code: "IMAGE_REGISTRY_UNAVAILABLE",
 					retryable: true,
+					traceId: request.traceId,
+				},
+			});
+			expect(JSON.stringify(result)).not.toContain("registry-secret");
+		});
+
+		it("returns a stable rejection for a credential-bearing image reference", async () => {
+			const result = await create("admitted").admit({
+				...request,
+				imageReference:
+					"https://user:registry-secret@registry.example/agents/codex:pilot",
+			});
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REFERENCE_INVALID",
+					retryable: false,
 					traceId: request.traceId,
 				},
 			});

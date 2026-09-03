@@ -8,7 +8,7 @@ const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
 describe("image-registry package surface", () => {
-	it("publishes only deployment-neutral OCI adapter factories", async () => {
+	it("publishes only the deployment-neutral OCI adapter factory", async () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.exports).toEqual({
 			".": {
@@ -22,7 +22,6 @@ describe("image-registry package surface", () => {
 			new URL("../dist/index.mjs", import.meta.url).href
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
-			"createOciDistributionClientV1",
 			"createOciImageRegistryAdapterV1",
 		]);
 

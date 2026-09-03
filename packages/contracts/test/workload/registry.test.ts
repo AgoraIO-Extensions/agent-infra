@@ -4,6 +4,7 @@ import {
 	ImageRegistryAdmissionRequestV1Schema,
 	ImageRegistryAdmissionResultV1Schema,
 	OciImageReferenceV1Schema,
+	parseImageRegistryAdmissionRequestV1,
 	parseRuntimeManifestLabelV1,
 	validateImageRegistryAdmissionResultV1,
 } from "../../src/workload/registry.js";
@@ -83,6 +84,30 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			runtimeManifest: admitted.runtimeManifest,
 			runtimeManifestParsingEvidence: admitted.runtimeManifestParsingEvidence,
 		});
+	});
+
+	it("classifies a correlation-safe invalid image reference without echoing it", () => {
+		expect(
+			parseImageRegistryAdmissionRequestV1({
+				...request,
+				imageReference:
+					"https://user:registry-secret@registry.example/agents/codex:pilot",
+			}),
+		).toEqual({
+			status: "invalid-image-reference",
+			correlation: {
+				schemaVersion: 1,
+				requestId: request.requestId,
+				traceId: request.traceId,
+			},
+		});
+		expect(
+			parseImageRegistryAdmissionRequestV1({
+				...request,
+				requestId: "",
+				imageReference: "https://registry.example/agents/codex:pilot",
+			}),
+		).toEqual({ status: "invalid" });
 	});
 
 	it.each([
