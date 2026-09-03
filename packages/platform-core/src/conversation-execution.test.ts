@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import {
+	type ConversationExecutionTransactionPortV1,
+	createConversationExecutionUseCaseV1,
+} from "./conversation-execution.ts";
 import { FakeConversationExecutionV1 } from "./fake-conversation-execution.ts";
 
 const authority = {
@@ -113,6 +117,106 @@ describe("Conversation execution use case", () => {
 				actorId: "user_other",
 			} as never),
 		).rejects.toMatchObject({ code: "invalid_input" });
+	});
+
+	it("fails closed when transaction results are malformed", async () => {
+		const transaction = {
+			async createConversation() {
+				return {
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						conversationId: "conversation_01",
+						agentId: authority.agentId,
+						status: "ready",
+						injected: true,
+					},
+				} as never;
+			},
+			async executeMessage() {
+				return {
+					outcome: "replayed",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "execution_01",
+					},
+				} as never;
+			},
+			async executeRegeneration() {
+				return {
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: "message_01",
+						executionId: "execution_01",
+					},
+				} as never;
+			},
+			async executeStop() {
+				return {
+					outcome: "replayed",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						executionId: "execution_other",
+					},
+				} as never;
+			},
+		} satisfies ConversationExecutionTransactionPortV1;
+		const conversation = createConversationExecutionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority };
+				},
+			},
+			transaction,
+		});
+
+		await expect(
+			conversation.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_malformed",
+				requestId: "request_create_malformed",
+				traceId: "trace_create_malformed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "conversation_01",
+				text: "Message",
+				idempotencyKey: "message_malformed",
+				requestId: "request_message_malformed",
+				traceId: "trace_message_malformed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId: "conversation_01",
+				sourceMessageId: "message_01",
+				idempotencyKey: "regenerate_malformed",
+				requestId: "request_regenerate_malformed",
+				traceId: "trace_regenerate_malformed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "conversation_01",
+				targetExecutionId: "execution_01",
+				idempotencyKey: "stop_malformed",
+				requestId: "request_stop_malformed",
+				traceId: "trace_stop_malformed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
 	it("replays the exact logical message before classifying later state", async () => {

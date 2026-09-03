@@ -918,41 +918,201 @@ function digest(input: unknown): string {
 	}
 }
 
+function trySnapshotObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> | undefined {
+	try {
+		return snapshotObject(input, keys);
+	} catch {
+		return undefined;
+	}
+}
+
+function transactionObject(
+	input: unknown,
+	keys: readonly string[],
+): Record<string, unknown> {
+	return trySnapshotObject(input, keys) ?? unavailable();
+}
+
+function parseCreateConversationResult(
+	input: unknown,
+	expectedAgentId: string,
+): ConversationCreatedResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"conversationId",
+		"agentId",
+		"status",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		!isText(values.conversationId) ||
+		values.agentId !== expectedAgentId ||
+		values.status !== "ready"
+	) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 1,
+		conversationId: values.conversationId,
+		agentId: expectedAgentId,
+		status: "ready",
+	};
+}
+
+function parseMessageCommandResult(
+	input: unknown,
+): ConversationCommandResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"status",
+		"messageId",
+		"executionId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.status !== "submitted" ||
+		!isText(values.messageId) ||
+		!isText(values.executionId)
+	) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 1,
+		status: "submitted",
+		messageId: values.messageId,
+		executionId: values.executionId,
+	};
+}
+
+function parseRegenerationCommandResult(
+	input: unknown,
+): ConversationCommandResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"status",
+		"messageId",
+		"executionId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.status !== "submitted" ||
+		values.messageId !== null ||
+		!isText(values.executionId)
+	) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 1,
+		status: "submitted",
+		messageId: null,
+		executionId: values.executionId,
+	};
+}
+
+function parseStopCommandResult(
+	input: unknown,
+	expectedExecutionId: string,
+): ConversationStopResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"status",
+		"executionId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		(values.status !== "submitted" && values.status !== "already_finished") ||
+		values.executionId !== expectedExecutionId
+	) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 1,
+		status: values.status,
+		executionId: expectedExecutionId,
+	};
+}
+
+function parseAcceptedOrReplayedDecision<T>(
+	input: unknown,
+	parseResult: (input: unknown) => T,
+):
+	| { readonly outcome: "accepted" | "replayed"; readonly result: T }
+	| undefined {
+	const values = trySnapshotObject(input, ["outcome", "result"]);
+	if (!values) return undefined;
+	if (values.outcome !== "accepted" && values.outcome !== "replayed") {
+		return unavailable();
+	}
+	return {
+		outcome: values.outcome,
+		result: parseResult(values.result),
+	};
+}
+
+function parseConflictDecision(
+	input: unknown,
+):
+	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" }
+	| undefined {
+	const values = trySnapshotObject(input, ["outcome", "reason"]);
+	if (!values) return undefined;
+	if (
+		values.outcome !== "conflict" ||
+		values.reason !== "idempotency_conflict"
+	) {
+		return unavailable();
+	}
+	return { outcome: "conflict", reason: "idempotency_conflict" };
+}
+
 function normalizeCreateDecision(
-	input: CreateConversationDecisionV1,
+	input: unknown,
+	expectedAgentId: string,
 ): CreateConversationDecisionV1 {
-	if (input.outcome === "accepted" || input.outcome === "replayed")
-		return input;
-	if (input.outcome === "denied") return input;
-	if (input.outcome === "conflict" && input.reason === "idempotency_conflict")
-		return input;
-	return unavailable();
+	const resultDecision = parseAcceptedOrReplayedDecision(input, (result) =>
+		parseCreateConversationResult(result, expectedAgentId),
+	);
+	if (resultDecision) return resultDecision;
+	const bare = trySnapshotObject(input, ["outcome"]);
+	if (bare) {
+		if (bare.outcome === "denied") return { outcome: "denied" };
+		return unavailable();
+	}
+	return parseConflictDecision(input) ?? unavailable();
 }
 
 function normalizeCommandDecision(
-	input: ConversationCommandDecisionV1,
+	input: unknown,
+	parseResult: (input: unknown) => ConversationCommandResultV1,
 ): ConversationCommandDecisionV1 {
-	if (
-		input.outcome === "accepted" ||
-		input.outcome === "replayed" ||
-		input.outcome === "busy" ||
-		input.outcome === "denied"
-	)
-		return input;
-	if (input.outcome === "conflict" && input.reason === "idempotency_conflict")
-		return input;
-	return unavailable();
+	const resultDecision = parseAcceptedOrReplayedDecision(input, parseResult);
+	if (resultDecision) return resultDecision;
+	const bare = trySnapshotObject(input, ["outcome"]);
+	if (bare) {
+		if (bare.outcome === "busy") return { outcome: "busy" };
+		if (bare.outcome === "denied") return { outcome: "denied" };
+		return unavailable();
+	}
+	return parseConflictDecision(input) ?? unavailable();
 }
 
 function normalizeStopDecision(
-	input: ConversationStopDecisionV1,
+	input: unknown,
+	expectedExecutionId: string,
 ): ConversationStopDecisionV1 {
-	if (input.outcome === "accepted" || input.outcome === "replayed")
-		return input;
-	if (input.outcome === "denied") return input;
-	if (input.outcome === "conflict" && input.reason === "idempotency_conflict")
-		return input;
-	return unavailable();
+	const resultDecision = parseAcceptedOrReplayedDecision(input, (result) =>
+		parseStopCommandResult(result, expectedExecutionId),
+	);
+	if (resultDecision) return resultDecision;
+	const bare = trySnapshotObject(input, ["outcome"]);
+	if (bare) {
+		if (bare.outcome === "denied") return { outcome: "denied" };
+		return unavailable();
+	}
+	return parseConflictDecision(input) ?? unavailable();
 }
 
 export function createConversationExecutionUseCaseV1(
@@ -1015,6 +1175,7 @@ export function createConversationExecutionUseCaseV1(
 							};
 						},
 					),
+					authority.agentId,
 				);
 			} catch (error) {
 				if (error instanceof ConversationExecutionError) throw error;
@@ -1189,6 +1350,7 @@ export function createConversationExecutionUseCaseV1(
 							};
 						},
 					),
+					parseMessageCommandResult,
 				);
 			} catch (error) {
 				if (error instanceof ConversationExecutionError) throw error;
@@ -1295,6 +1457,7 @@ export function createConversationExecutionUseCaseV1(
 							};
 						},
 					),
+					parseRegenerationCommandResult,
 				);
 			} catch (error) {
 				if (error instanceof ConversationExecutionError) throw error;
@@ -1409,6 +1572,7 @@ export function createConversationExecutionUseCaseV1(
 							};
 						},
 					),
+					command.targetExecutionId,
 				);
 			} catch (error) {
 				if (error instanceof ConversationExecutionError) throw error;
