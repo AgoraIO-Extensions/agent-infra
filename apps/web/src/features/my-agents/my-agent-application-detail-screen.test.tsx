@@ -119,4 +119,19 @@ describe("MyAgentApplicationDetailScreen", () => {
 			"Unable to withdraw application. Please try again.",
 		);
 	});
+
+	it("renders a retryable detail failure without a stale application", async () => {
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "unavailable", retryable: true }}
+				withdrawing={false}
+			/>,
+		);
+
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Please try again shortly.",
+		);
+		expect(screen.queryByText("Release assistant request")).toBeNull();
+	});
 });

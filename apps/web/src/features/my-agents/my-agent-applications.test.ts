@@ -170,6 +170,19 @@ describe("My Agents generated-client consumer", () => {
 		}
 	});
 
+	it("surfaces a retryable current applicant history failure", async () => {
+		const client = createApplicationClient(async () =>
+			jsonResponse(
+				pilotFakeScenariosV1.unavailable.response.status,
+				pilotFakeScenariosV1.unavailable.response.body,
+			),
+		);
+
+		await expect(loadMyAgentApplications(client)).rejects.toMatchObject({
+			message: "My Agent data is temporarily unavailable",
+		});
+	});
+
 	it("consumes a current applicant application detail", async () => {
 		const requests: Request[] = [];
 		const client = createApplicationClient(async (input, init) => {

@@ -50,4 +50,14 @@ describe("MyAgentsScreen", () => {
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 		expect(screen.queryByText(/forbidden|missing/i)).toBeNull();
 	});
+
+	it("renders a retryable current applicant history failure", async () => {
+		await renderWithMyAgentsRouter(
+			<MyAgentsScreen state={{ kind: "unavailable", retryable: true }} />,
+		);
+
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Please try again shortly.",
+		);
+	});
 });
