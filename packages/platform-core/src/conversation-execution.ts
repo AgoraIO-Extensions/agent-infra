@@ -18,7 +18,11 @@ export interface ConversationExecutionAuthorityV1 {
 export interface ConversationExecutionAuthorizationPortV1 {
 	authorize(input: {
 		readonly schemaVersion: 1;
-		readonly operation: "conversation.create" | "message" | "regenerate";
+		readonly operation:
+			| "conversation.create"
+			| "message"
+			| "regenerate"
+			| "stop";
 		readonly agentId?: string;
 		readonly conversationId?: string;
 	}): Promise<
@@ -58,6 +62,16 @@ export interface ConversationRegenerateCommandV1 {
 	readonly traceId: string;
 }
 
+export interface ConversationStopCommandV1 {
+	readonly schemaVersion: 1;
+	readonly command: "stop";
+	readonly conversationId: string;
+	readonly targetExecutionId: string;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
 export interface ConversationExecutionConversationStateV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
@@ -79,6 +93,27 @@ export interface ConversationExecutionStateV1 {
 				readonly conversationId: string;
 				readonly actorId: string;
 				readonly role: "user";
+		  }
+		| undefined;
+	readonly targetExecution:
+		| {
+				readonly executionId: string;
+				readonly conversationId: string;
+				readonly actorId: string;
+				readonly status:
+					| "submitted"
+					| "processing"
+					| "unknown"
+					| "completed"
+					| "failed"
+					| "cancelled";
+		  }
+		| undefined;
+	readonly existingStop:
+		| {
+				readonly executionId: string;
+				readonly stopRequestId: string;
+				readonly status: "submitted" | "completed";
 		  }
 		| undefined;
 	readonly activeExecution:
@@ -106,6 +141,12 @@ export interface ConversationCommandResultV1 {
 	readonly executionId: string;
 }
 
+export interface ConversationStopResultV1 {
+	readonly schemaVersion: 1;
+	readonly status: "submitted" | "already_finished";
+	readonly executionId: string;
+}
+
 export type CreateConversationDecisionV1 =
 	| {
 			readonly outcome: "accepted" | "replayed";
@@ -120,6 +161,14 @@ export type ConversationCommandDecisionV1 =
 			readonly result: ConversationCommandResultV1;
 	  }
 	| { readonly outcome: "busy" }
+	| { readonly outcome: "denied" }
+	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
+
+export type ConversationStopDecisionV1 =
+	| {
+			readonly outcome: "accepted" | "replayed";
+			readonly result: ConversationStopResultV1;
+	  }
 	| { readonly outcome: "denied" }
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
 
@@ -248,6 +297,44 @@ export interface ConversationRegenerationWritePlanV1 {
 	};
 }
 
+export interface ConversationStopWritePlanV1 {
+	readonly schemaVersion: 1;
+	readonly targetExecution: {
+		readonly executionId: string;
+		readonly conversationId: string;
+		readonly actorId: string;
+	};
+	readonly stopRequestId: string;
+	readonly outboxIntent: {
+		readonly operation: "conversation.turn.stop.v1";
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly stopRequestId: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly auditEvent: {
+		readonly action: "conversation.stop.accepted";
+		readonly actorId: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly result: ConversationStopResultV1;
+	readonly idempotency: {
+		readonly scopeType: "conversation";
+		readonly scopeId: string;
+		readonly actorId: string;
+		readonly commandType: "stop";
+		readonly key: string;
+		readonly requestDigest: string;
+	};
+}
+
 export interface ConversationExecutionTransactionPortV1 {
 	createConversation(
 		request: {
@@ -281,6 +368,21 @@ export interface ConversationExecutionTransactionPortV1 {
 			| ConversationRegenerationWritePlanV1
 			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
 	): Promise<ConversationCommandDecisionV1>;
+	executeStop(
+		request: {
+			readonly command: ConversationStopCommandV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+			readonly requestDigest: string;
+		},
+		decide: (
+			state: ConversationExecutionStateV1,
+		) =>
+			| ConversationStopWritePlanV1
+			| Extract<
+					ConversationStopDecisionV1,
+					{ outcome: "accepted" | "replayed" | "denied" }
+			  >,
+	): Promise<ConversationStopDecisionV1>;
 }
 
 export interface ConversationExecutionUseCaseV1 {
@@ -293,6 +395,7 @@ export interface ConversationExecutionUseCaseV1 {
 	regenerate(
 		command: ConversationRegenerateCommandV1,
 	): Promise<ConversationCommandDecisionV1>;
+	stop(command: ConversationStopCommandV1): Promise<ConversationStopDecisionV1>;
 }
 
 export interface ConversationExecutionUseCaseDependenciesV1 {
@@ -480,6 +583,39 @@ function parseRegenerateCommand(
 	};
 }
 
+function parseStopCommand(input: unknown): ConversationStopCommandV1 {
+	const values = snapshotObject(input, [
+		"schemaVersion",
+		"command",
+		"conversationId",
+		"targetExecutionId",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.command !== "stop" ||
+		!isText(values.conversationId) ||
+		!isText(values.targetExecutionId) ||
+		typeof values.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(values.idempotencyKey) ||
+		!isText(values.requestId) ||
+		!isText(values.traceId)
+	) {
+		invalidInput();
+	}
+	return {
+		schemaVersion: 1,
+		command: "stop",
+		conversationId: values.conversationId,
+		targetExecutionId: values.targetExecutionId,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+	};
+}
+
 function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
@@ -560,11 +696,15 @@ function parseState(
 		const values = snapshotObject(input, [
 			"conversation",
 			"sourceMessage",
+			"targetExecution",
+			"existingStop",
 			"activeExecution",
 		]);
 		if (values.conversation === undefined) {
 			if (
 				values.sourceMessage !== undefined ||
+				values.targetExecution !== undefined ||
+				values.existingStop !== undefined ||
 				values.activeExecution !== undefined
 			) {
 				unavailable();
@@ -572,6 +712,8 @@ function parseState(
 			return {
 				conversation: undefined,
 				sourceMessage: undefined,
+				targetExecution: undefined,
+				existingStop: undefined,
 				activeExecution: undefined,
 			};
 		}
@@ -629,6 +771,57 @@ function parseState(
 				role: "user" as const,
 			};
 		})();
+		const targetExecution = (() => {
+			if (values.targetExecution === undefined) return undefined;
+			const execution = snapshotObject(values.targetExecution, [
+				"executionId",
+				"conversationId",
+				"actorId",
+				"status",
+			]);
+			const status = execution.status;
+			if (
+				!isText(execution.executionId) ||
+				!isText(execution.conversationId) ||
+				!isText(execution.actorId) ||
+				(status !== "submitted" &&
+					status !== "processing" &&
+					status !== "unknown" &&
+					status !== "completed" &&
+					status !== "failed" &&
+					status !== "cancelled")
+			) {
+				unavailable();
+			}
+			return {
+				executionId: execution.executionId,
+				conversationId: execution.conversationId,
+				actorId: execution.actorId,
+				status: status as NonNullable<
+					ConversationExecutionStateV1["targetExecution"]
+				>["status"],
+			};
+		})();
+		const existingStop = (() => {
+			if (values.existingStop === undefined) return undefined;
+			const stop = snapshotObject(values.existingStop, [
+				"executionId",
+				"stopRequestId",
+				"status",
+			]);
+			if (
+				!isText(stop.executionId) ||
+				!isText(stop.stopRequestId) ||
+				(stop.status !== "submitted" && stop.status !== "completed")
+			) {
+				unavailable();
+			}
+			return {
+				executionId: stop.executionId,
+				stopRequestId: stop.stopRequestId,
+				status: stop.status as "submitted" | "completed",
+			};
+		})();
 		const activeExecution = (() => {
 			if (values.activeExecution === undefined) return undefined;
 			const execution = snapshotObject(values.activeExecution, [
@@ -670,6 +863,19 @@ function parseState(
 		) {
 			unavailable();
 		}
+		if (
+			targetExecution &&
+			targetExecution.conversationId !== conversation.conversationId
+		) {
+			unavailable();
+		}
+		if (
+			existingStop &&
+			(!targetExecution ||
+				existingStop.executionId !== targetExecution.executionId)
+		) {
+			unavailable();
+		}
 		const sessionGeneration = conversation.sessionGeneration as number;
 		const lastConversationCursor =
 			conversation.lastConversationCursor as number;
@@ -689,6 +895,8 @@ function parseState(
 				lastConversationCursor,
 			},
 			sourceMessage,
+			targetExecution,
+			existingStop,
 			activeExecution,
 		};
 	} catch {
@@ -725,6 +933,17 @@ function normalizeCommandDecision(
 		input.outcome === "denied"
 	)
 		return input;
+	if (input.outcome === "conflict" && input.reason === "idempotency_conflict")
+		return input;
+	return unavailable();
+}
+
+function normalizeStopDecision(
+	input: ConversationStopDecisionV1,
+): ConversationStopDecisionV1 {
+	if (input.outcome === "accepted" || input.outcome === "replayed")
+		return input;
+	if (input.outcome === "denied") return input;
 	if (input.outcome === "conflict" && input.reason === "idempotency_conflict")
 		return input;
 	return unavailable();
@@ -1049,6 +1268,114 @@ export function createConversationExecutionUseCaseV1(
 									scopeId: conversation.conversationId,
 									actorId: authority.actorId,
 									commandType: "regenerate",
+									key: command.idempotencyKey,
+									requestDigest,
+								},
+							};
+						},
+					),
+				);
+			} catch (error) {
+				if (error instanceof ConversationExecutionError) throw error;
+				return unavailable();
+			}
+		},
+		async stop(commandInput) {
+			const command = parseStopCommand(commandInput);
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "stop",
+				conversationId: command.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			const requestDigest = digest(command);
+			try {
+				return normalizeStopDecision(
+					await dependencies.transaction.executeStop(
+						{ command, authority, requestDigest },
+						(stateInput) => {
+							const state = parseState(stateInput);
+							const conversation = state.conversation;
+							const targetExecution = state.targetExecution;
+							if (
+								!conversation ||
+								conversation.conversationId !== command.conversationId ||
+								conversation.actorId !== authority.actorId ||
+								conversation.agentId !== authority.agentId ||
+								conversation.channelId !== authority.channelId ||
+								!targetExecution ||
+								targetExecution.executionId !== command.targetExecutionId ||
+								targetExecution.actorId !== authority.actorId
+							) {
+								return { outcome: "denied" };
+							}
+							if (state.existingStop) {
+								return {
+									outcome: "replayed",
+									result: {
+										schemaVersion: 1,
+										status:
+											state.existingStop.status === "completed"
+												? "already_finished"
+												: "submitted",
+										executionId: targetExecution.executionId,
+									},
+								};
+							}
+							if (
+								targetExecution.status === "completed" ||
+								targetExecution.status === "failed" ||
+								targetExecution.status === "cancelled"
+							) {
+								return {
+									outcome: "accepted",
+									result: {
+										schemaVersion: 1,
+										status: "already_finished",
+										executionId: targetExecution.executionId,
+									},
+								};
+							}
+							const occurredAt = safeNow(now);
+							const stopRequestId = nextOpaqueId(newId);
+							const result: ConversationStopResultV1 = {
+								schemaVersion: 1,
+								status: "submitted",
+								executionId: targetExecution.executionId,
+							};
+							return {
+								schemaVersion: 1,
+								targetExecution: {
+									executionId: targetExecution.executionId,
+									conversationId: conversation.conversationId,
+									actorId: authority.actorId,
+								},
+								stopRequestId,
+								outboxIntent: {
+									operation: "conversation.turn.stop.v1",
+									conversationId: conversation.conversationId,
+									executionId: targetExecution.executionId,
+									stopRequestId,
+									traceId: command.traceId,
+									requestId: command.requestId,
+									occurredAt,
+								},
+								auditEvent: {
+									action: "conversation.stop.accepted",
+									actorId: authority.actorId,
+									agentId: authority.agentId,
+									conversationId: conversation.conversationId,
+									executionId: targetExecution.executionId,
+									traceId: command.traceId,
+									requestId: command.requestId,
+									occurredAt,
+								},
+								result,
+								idempotency: {
+									scopeType: "conversation",
+									scopeId: conversation.conversationId,
+									actorId: authority.actorId,
+									commandType: "stop",
 									key: command.idempotencyKey,
 									requestDigest,
 								},

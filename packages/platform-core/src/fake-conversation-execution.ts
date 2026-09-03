@@ -8,6 +8,8 @@ import {
 	type ConversationExecutionUseCaseV1,
 	type ConversationMessageWritePlanV1,
 	type ConversationRegenerationWritePlanV1,
+	type ConversationStopDecisionV1,
+	type ConversationStopWritePlanV1,
 	type CreateConversationDecisionV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
@@ -49,7 +51,14 @@ interface StoredExecution {
 interface StoredOutbox {
 	readonly operation: string;
 	readonly executionId: string;
-	readonly messageId: string;
+	readonly messageId?: string;
+	readonly stopRequestId?: string;
+}
+
+interface StoredStop {
+	readonly executionId: string;
+	readonly stopRequestId: string;
+	status: "submitted" | "completed";
 }
 
 interface StoredAudit {
@@ -91,6 +100,17 @@ function isRegenerationWritePlan(
 	return !Object.hasOwn(decision, "outcome");
 }
 
+function isStopWritePlan(
+	decision:
+		| ConversationStopWritePlanV1
+		| Extract<
+				ConversationStopDecisionV1,
+				{ outcome: "accepted" | "replayed" | "denied" }
+		  >,
+): decision is ConversationStopWritePlanV1 {
+	return !Object.hasOwn(decision, "outcome");
+}
+
 function isActiveExecution(execution: StoredExecution): boolean {
 	return (
 		execution.status === "submitted" ||
@@ -108,6 +128,7 @@ export class FakeConversationExecutionV1
 	>();
 	readonly #messages: StoredMessage[] = [];
 	readonly #executions: StoredExecution[] = [];
+	readonly #stops: StoredStop[] = [];
 	readonly #outbox: StoredOutbox[] = [];
 	readonly #audit: StoredAudit[] = [];
 	readonly #createIdempotency = new Map<
@@ -117,6 +138,10 @@ export class FakeConversationExecutionV1
 	readonly #commandIdempotency = new Map<
 		string,
 		StoredIdempotency<ConversationCommandDecisionV1>
+	>();
+	readonly #stopIdempotency = new Map<
+		string,
+		StoredIdempotency<ConversationStopDecisionV1>
 	>();
 	readonly #interface: ConversationExecutionUseCaseV1;
 
@@ -295,6 +320,68 @@ export class FakeConversationExecutionV1
 				});
 				return accepted;
 			},
+			executeStop: async (request, decide) => {
+				const idempotencyKey = key([
+					request.command.conversationId,
+					request.authority.actorId,
+					request.command.command,
+					request.command.idempotencyKey,
+				]);
+				const existing = this.#stopIdempotency.get(idempotencyKey);
+				if (existing) {
+					if (existing.requestDigest !== request.requestDigest) {
+						return { outcome: "conflict", reason: "idempotency_conflict" };
+					}
+					if (existing.decision.outcome === "accepted") {
+						return {
+							outcome: "replayed",
+							result: structuredClone(existing.decision.result),
+						};
+					}
+					return structuredClone(existing.decision);
+				}
+				const decision = decide(
+					this.#state(
+						request.command.conversationId,
+						undefined,
+						request.command.targetExecutionId,
+					),
+				);
+				if (!isStopWritePlan(decision)) {
+					if (decision.outcome === "denied") return decision;
+					this.#stopIdempotency.set(idempotencyKey, {
+						requestDigest: request.requestDigest,
+						decision,
+					});
+					return decision;
+				}
+				const plan: ConversationStopWritePlanV1 = decision;
+				this.#stops.push({
+					executionId: plan.targetExecution.executionId,
+					stopRequestId: plan.stopRequestId,
+					status: "submitted",
+				});
+				this.#outbox.push({
+					operation: plan.outboxIntent.operation,
+					executionId: plan.outboxIntent.executionId,
+					stopRequestId: plan.outboxIntent.stopRequestId,
+				});
+				this.#audit.push({
+					action: plan.auditEvent.action,
+					actorId: plan.auditEvent.actorId,
+					traceId: plan.auditEvent.traceId,
+					requestId: plan.auditEvent.requestId,
+				});
+				const accepted = {
+					outcome: "accepted",
+					result: structuredClone(plan.result),
+				} as const;
+				this.#stopIdempotency.set(idempotencyKey, {
+					requestDigest: request.requestDigest,
+					decision: accepted,
+				});
+				return accepted;
+			},
 		};
 		this.#interface = createConversationExecutionUseCaseV1(
 			{
@@ -316,6 +403,9 @@ export class FakeConversationExecutionV1
 	regenerate: ConversationExecutionUseCaseV1["regenerate"] = (command) =>
 		this.#interface.regenerate(command);
 
+	stop: ConversationExecutionUseCaseV1["stop"] = (command) =>
+		this.#interface.stop(command);
+
 	completeExecution(executionId: string) {
 		const execution = this.#executions.find(
 			(candidate) => candidate.executionId === executionId,
@@ -331,6 +421,7 @@ export class FakeConversationExecutionV1
 			conversations: [...this.#conversations.values()],
 			messages: this.#messages,
 			executions: this.#executions,
+			stops: this.#stops,
 			outbox: this.#outbox,
 			audit: this.#audit,
 		});
@@ -339,6 +430,7 @@ export class FakeConversationExecutionV1
 	#state(
 		conversationId: string,
 		sourceMessageId?: string,
+		targetExecutionId?: string,
 	): ConversationExecutionStateV1 {
 		const source = sourceMessageId
 			? this.#messages.find(
@@ -352,6 +444,16 @@ export class FakeConversationExecutionV1
 				execution.conversationId === conversationId &&
 				isActiveExecution(execution),
 		);
+		const target = targetExecutionId
+			? this.#executions.find(
+					(execution) => execution.executionId === targetExecutionId,
+				)
+			: undefined;
+		const stop = target
+			? this.#stops.find(
+					(candidate) => candidate.executionId === target.executionId,
+				)
+			: undefined;
 		return {
 			conversation: structuredClone(this.#conversations.get(conversationId)),
 			sourceMessage: source
@@ -360,6 +462,21 @@ export class FakeConversationExecutionV1
 						conversationId: source.conversationId,
 						actorId: source.actorId,
 						role: source.role,
+					}
+				: undefined,
+			targetExecution: target
+				? {
+						executionId: target.executionId,
+						conversationId: target.conversationId,
+						actorId: target.actorId,
+						status: target.status,
+					}
+				: undefined,
+			existingStop: stop
+				? {
+						executionId: stop.executionId,
+						stopRequestId: stop.stopRequestId,
+						status: stop.status,
 					}
 				: undefined,
 			activeExecution: active

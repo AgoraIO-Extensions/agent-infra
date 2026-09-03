@@ -315,4 +315,131 @@ describe("Conversation execution use case", () => {
 			]),
 		});
 	});
+
+	it("creates one stable stop intent without a Message or replacement Execution", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `stop_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_stop",
+			requestId: "request_create_stop",
+			traceId: "trace_create_stop",
+		});
+		await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "stop_1",
+			text: "Please work",
+			idempotencyKey: "message_stop",
+			requestId: "request_message_stop",
+			traceId: "trace_message_stop",
+		});
+
+		expect(
+			await conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "stop_1",
+				targetExecutionId: "stop_3",
+				idempotencyKey: "stop_01",
+				requestId: "request_stop_01",
+				traceId: "trace_stop_01",
+			}),
+		).toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "submitted",
+				executionId: "stop_3",
+			},
+		});
+		expect(
+			await conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "stop_1",
+				targetExecutionId: "stop_3",
+				idempotencyKey: "stop_02",
+				requestId: "request_stop_02",
+				traceId: "trace_stop_02",
+			}),
+		).toEqual({
+			outcome: "replayed",
+			result: {
+				schemaVersion: 1,
+				status: "submitted",
+				executionId: "stop_3",
+			},
+		});
+		expect(conversation.snapshot()).toMatchObject({
+			messages: [{ messageId: "stop_2" }],
+			executions: [{ executionId: "stop_3" }],
+			outbox: expect.arrayContaining([
+				expect.objectContaining({
+					operation: "conversation.turn.stop.v1",
+					executionId: "stop_3",
+					stopRequestId: "stop_5",
+				}),
+			]),
+		});
+	});
+
+	it("returns already finished when a stop targets a terminal Execution", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `terminal_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_terminal",
+			requestId: "request_create_terminal",
+			traceId: "trace_create_terminal",
+		});
+		await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "terminal_1",
+			text: "Finished work",
+			idempotencyKey: "message_terminal",
+			requestId: "request_message_terminal",
+			traceId: "trace_message_terminal",
+		});
+		conversation.completeExecution("terminal_3");
+
+		expect(
+			await conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "terminal_1",
+				targetExecutionId: "terminal_3",
+				idempotencyKey: "stop_terminal",
+				requestId: "request_stop_terminal",
+				traceId: "trace_stop_terminal",
+			}),
+		).toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "already_finished",
+				executionId: "terminal_3",
+			},
+		});
+		expect(
+			conversation
+				.snapshot()
+				.outbox.filter(
+					({ operation }) => operation === "conversation.turn.stop.v1",
+				),
+		).toHaveLength(0);
+	});
 });
