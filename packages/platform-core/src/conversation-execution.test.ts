@@ -16,6 +16,33 @@ const authority = {
 };
 
 describe("Conversation execution use case", () => {
+	it("uses deterministic Fake defaults when controls are omitted", async () => {
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: authority.agentId,
+			idempotencyKey: "create_deterministic_default",
+			requestId: "request_create_deterministic_default",
+			traceId: "trace_create_deterministic_default",
+		};
+		const first = new FakeConversationExecutionV1({ authority });
+		const second = new FakeConversationExecutionV1({ authority });
+		const expected = {
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				conversationId: "fake_conversation_1",
+				agentId: authority.agentId,
+				status: "ready",
+			},
+		} as const;
+
+		for (const conversation of [first, second]) {
+			await expect(conversation.createConversation(command)).resolves.toEqual(
+				expected,
+			);
+		}
+	});
+
 	it("atomically accepts a first message without accepting caller identity", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority,
@@ -582,6 +609,7 @@ describe("Conversation execution use case", () => {
 		const before = conversation.snapshot();
 
 		for (const changedAuthority of [
+			{ ...authority, actorId: "user_02" },
 			{ ...authority, agentId: "agent_02" },
 			{ ...authority, channelId: "channel_02" },
 		]) {

@@ -161,6 +161,9 @@ export class FakeConversationExecutionV1
 	readonly #interface: ConversationExecutionUseCaseV1;
 
 	constructor(options: FakeConversationExecutionOptionsV1 = {}) {
+		let nextId = 1;
+		const now = options.now ?? (() => new Date(0));
+		const newId = options.newId ?? (() => `fake_conversation_${nextId++}`);
 		const transaction: ConversationExecutionTransactionPortV1 = {
 			createConversation: async (request, decide) => {
 				const idempotencyKey = key([
@@ -435,7 +438,7 @@ export class FakeConversationExecutionV1
 					options.authorization ?? defaultAuthorization(options.authority),
 				transaction,
 			},
-			options,
+			{ now, newId },
 		);
 	}
 
