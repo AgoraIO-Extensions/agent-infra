@@ -281,7 +281,11 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					throw new StaleAgentConfigurationCommit();
 				}
-				await insertPendingSecretRecordAttachments(transaction, attachments);
+				await insertPendingSecretRecordAttachments(
+					transaction,
+					attachments,
+					configuration,
+				);
 
 				if (plan.accessUpdate && applicationId) {
 					const accessAdvanced = await transaction

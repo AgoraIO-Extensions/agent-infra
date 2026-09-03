@@ -1,4 +1,5 @@
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -70,6 +71,20 @@ function attachments(encryptedRecords: unknown) {
 	};
 }
 
+const configuration = {
+	agentId: "agent_01",
+	revision: 7,
+	secrets: [
+		{
+			name: "BOT_TOKEN",
+			secretId: "secret_01",
+			version: 2,
+			isSet: true,
+		},
+	],
+	modelConfiguration: null,
+} as unknown as AgentConfigurationRecordV1;
+
 function transaction() {
 	const values = vi.fn().mockResolvedValue(undefined);
 	const insert = vi.fn().mockReturnValue({ values });
@@ -82,6 +97,7 @@ describe("pending Secret record Store sidecar", () => {
 		await insertPendingSecretRecordAttachments(
 			database,
 			attachments([record()]),
+			configuration,
 		);
 
 		expect(insert).toHaveBeenCalledOnce();
@@ -108,9 +124,23 @@ describe("pending Secret record Store sidecar", () => {
 				insertPendingSecretRecordAttachments(
 					database,
 					attachments(encryptedRecords) as never,
+					configuration,
 				),
 			).rejects.toBeInstanceOf(PendingSecretRecordStoreError);
 			expect(insert).not.toHaveBeenCalled();
 		}
+	});
+
+	it("rejects a valid ciphertext record unrelated to the admitted configuration", async () => {
+		const unrelated = attachments([{ ...record(), name: "OTHER_TOKEN" }]);
+		const expected = unrelated.expected[0];
+		if (!expected) throw new Error("Expected attachment metadata");
+		unrelated.expected = [{ ...expected, name: "OTHER_TOKEN" }];
+		const { transaction: database, insert } = transaction();
+
+		await expect(
+			insertPendingSecretRecordAttachments(database, unrelated, configuration),
+		).rejects.toBeInstanceOf(PendingSecretRecordStoreError);
+		expect(insert).not.toHaveBeenCalled();
 	});
 });

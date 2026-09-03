@@ -410,7 +410,11 @@ export class PostgresApplicationFoundationTransactionV1
 					configuration,
 					createdAt: plan.configurationRevision.createdAt,
 				});
-				await insertPendingSecretRecordAttachments(transaction, attachments);
+				await insertPendingSecretRecordAttachments(
+					transaction,
+					attachments,
+					configuration,
+				);
 				await transaction.insert(agentOwners).values(
 					plan.access.ownerIds.map((ownerId) => ({
 						agentId: plan.access.agentId,

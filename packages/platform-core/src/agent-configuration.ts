@@ -3085,14 +3085,51 @@ export function createAgentConfigurationUseCaseV1(
 	return createAgentConfigurationUseCaseV1Internal(dependencies, true, options);
 }
 
-export function createAgentConfigurationPlanCaptureUseCaseV1(
-	dependencies: AgentConfigurationUseCaseDependenciesV1,
-	options: AgentConfigurationUseCaseOptionsV1 = {},
-): Pick<AgentConfigurationUseCaseV1, "update"> {
+export async function captureAgentConfigurationWritePlanV1(input: {
+	readonly command: UpdateAgentConfigurationCommandV1;
+	readonly actorContext: AgentConfigurationActorContextV1;
+	readonly current: AgentConfigurationRecordV1;
+	readonly authorizationRevision: string;
+	readonly dependencies: Omit<
+		AgentConfigurationUseCaseDependenciesV1,
+		"transaction"
+	>;
+	readonly now?: () => Date;
+}): Promise<AgentConfigurationWritePlanV1 | null> {
+	let captured: AgentConfigurationWritePlanV1 | undefined;
 	const useCase = createAgentConfigurationUseCaseV1Internal(
-		dependencies,
+		{
+			...input.dependencies,
+			transaction: {
+				async read() {
+					return {
+						outcome: "ready" as const,
+						record: {
+							schemaVersion: 1 as const,
+							configuration: input.current,
+							authorizationRevision: input.authorizationRevision,
+						},
+					};
+				},
+				async commit(plan) {
+					captured = snapshotAgentConfigurationWritePlanV1(plan);
+					return { outcome: "committed" as const, result: plan.result };
+				},
+			},
+		},
 		false,
-		options,
+		{ now: input.now },
 	);
-	return { update: useCase.update };
+	try {
+		await useCase.update(input.command, input.actorContext);
+	} catch (error) {
+		if (
+			error instanceof AgentConfigurationError &&
+			error.code === "no_change"
+		) {
+			return null;
+		}
+		throw error;
+	}
+	return captured ?? null;
 }

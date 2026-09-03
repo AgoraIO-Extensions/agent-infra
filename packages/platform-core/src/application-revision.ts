@@ -10,7 +10,7 @@ import {
 	type AgentConfigurationSourceSelectionV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentConfigurationWritePlanV1,
-	createAgentConfigurationPlanCaptureUseCaseV1,
+	captureAgentConfigurationWritePlanV1,
 	decodeAgentConfigurationRecordV1,
 	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
@@ -809,7 +809,7 @@ async function captureConfigurationPlan(
 	plan: AgentConfigurationWritePlanV1 | null;
 	nextAuthorizationRevision: string;
 }> {
-	let capturedPlan: AgentConfigurationWritePlanV1 | undefined;
+	let capturedPlan: AgentConfigurationWritePlanV1 | null = null;
 	let nextAuthorizationRevision: string | undefined;
 	const authorizationAdmission = {
 		async authorize(
@@ -828,32 +828,9 @@ async function captureConfigurationPlan(
 			return decision;
 		},
 	};
-	const useCase = createAgentConfigurationPlanCaptureUseCaseV1(
-		{
-			...dependencies,
-			authorizationAdmission,
-			transaction: {
-				async read() {
-					return {
-						outcome: "ready" as const,
-						record: {
-							schemaVersion: 1 as const,
-							configuration: state.configuration,
-							authorizationRevision: state.authorizationRevision,
-						},
-					};
-				},
-				async commit(plan) {
-					capturedPlan = plan;
-					return { outcome: "committed" as const, result: plan.result };
-				},
-			},
-		},
-		{ now },
-	);
 	try {
-		await useCase.update(
-			{
+		capturedPlan = await captureAgentConfigurationWritePlanV1({
+			command: {
 				schemaVersion: 1,
 				agentId: state.application.agentId,
 				idempotencyKey: command.idempotencyKey,
@@ -878,20 +855,24 @@ async function captureConfigurationPlan(
 						: {}),
 				},
 			},
-			{
+			actorContext: {
 				schemaVersion: 1,
 				actorId: actorContext.userId,
 				rawRequestDigest: actorContext.rawRequestDigest,
 			} satisfies AgentConfigurationActorContextV1,
-		);
+			current: state.configuration,
+			authorizationRevision: state.authorizationRevision,
+			dependencies: { ...dependencies, authorizationAdmission },
+			now,
+		});
 	} catch (error) {
 		const normalized = configurationError(error);
-		if (normalized.code !== "no_change") throw normalized;
+		throw normalized;
 	}
 	if (!nextAuthorizationRevision) {
 		throw new ApplicationRevisionError("dependency_unavailable");
 	}
-	return { plan: capturedPlan ?? null, nextAuthorizationRevision };
+	return { plan: capturedPlan, nextAuthorizationRevision };
 }
 
 async function captureManagementPlan(

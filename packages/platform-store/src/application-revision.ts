@@ -522,10 +522,19 @@ export class PostgresApplicationRevisionTransactionV1
 						.returning({ id: agents.id });
 					if (advancedAgent.length !== 1) unavailable();
 				}
-				if (attachments !== undefined && plan.configuration === null) {
+				if (
+					attachments !== undefined &&
+					(plan.configuration === null || configuration === null)
+				) {
 					throw new ApplicationRevisionStoreError();
 				}
-				await insertPendingSecretRecordAttachments(transaction, attachments);
+				if (configuration !== null) {
+					await insertPendingSecretRecordAttachments(
+						transaction,
+						attachments,
+						configuration,
+					);
+				}
 
 				const advancedApplication = await transaction
 					.update(agentApplications)

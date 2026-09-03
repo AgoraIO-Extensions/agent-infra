@@ -3,6 +3,7 @@ import { types } from "node:util";
 
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
+	AgentConfigurationRecordV1,
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "@agent-infra/platform-core";
@@ -117,9 +118,55 @@ function expectationKey(input: PendingSecretRecordExpectationV1): string {
 	return `${input.agentId}\0${input.secretId}\0${input.secretVersion}\0${input.configurationRevision}`;
 }
 
+function configurationReferenceKey(input: {
+	readonly name: string;
+	readonly secretId: string;
+	readonly secretVersion: number;
+}): string {
+	return `${input.name}\0${input.secretId}\0${input.secretVersion}`;
+}
+
+function configurationReferenceKeys(
+	configuration: AgentConfigurationRecordV1,
+): ReadonlySet<string> {
+	const references = [
+		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
+			name,
+			secretId,
+			secretVersion: version,
+			isSet,
+		})),
+		...(configuration.modelConfiguration?.options.map(
+			({ optionId, credential }) => ({
+				name: `model:${optionId}`,
+				secretId: credential.secretId,
+				secretVersion: credential.version,
+				isSet: credential.isSet,
+			}),
+		) ?? []),
+	];
+	if (
+		references.length > 160 ||
+		references.some(
+			({ name, secretId, secretVersion, isSet }) =>
+				!validText(name) ||
+				!validText(secretId) ||
+				!Number.isSafeInteger(secretVersion) ||
+				secretVersion < 1 ||
+				isSet !== true,
+		) ||
+		new Set(references.map(configurationReferenceKey)).size !==
+			references.length
+	) {
+		throw new PendingSecretRecordStoreError();
+	}
+	return new Set(references.map(configurationReferenceKey));
+}
+
 export async function insertPendingSecretRecordAttachments(
 	transaction: Transaction,
 	attachments: PendingSecretRecordAttachmentsV1 | undefined,
+	configuration: AgentConfigurationRecordV1,
 ): Promise<void> {
 	if (attachments === undefined) return;
 	try {
@@ -131,6 +178,17 @@ export async function insertPendingSecretRecordAttachments(
 			expected.map((expectation) => [expectationKey(expectation), expectation]),
 		);
 		if (expectedByKey.size !== expected.length) throw new Error();
+		const configurationReferences = configurationReferenceKeys(configuration);
+		if (
+			expected.some(
+				(expectation) =>
+					expectation.agentId !== configuration.agentId ||
+					expectation.configurationRevision !== configuration.revision ||
+					!configurationReferences.has(configurationReferenceKey(expectation)),
+			)
+		) {
+			throw new Error();
+		}
 		const records = snapshotArray(
 			attachments.encryptedRecords,
 			expected.length,
