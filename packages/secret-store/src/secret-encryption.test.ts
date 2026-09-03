@@ -7,9 +7,8 @@ import {
 	privateDecrypt,
 } from "node:crypto";
 
+import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { describe, expect, it } from "vitest";
-
-import { validatePlatformSecretRecordV1 } from "../../contracts/src/workload/secret.js";
 import * as secretStore from "./index.js";
 import { createSecretEncryptorV1, encodeSecretAadV1 } from "./index.js";
 
