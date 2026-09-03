@@ -102,6 +102,25 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByRole("link", { name: "Open Agent" })).toBeNull();
 	});
 
+	it("omits a direct access entry when Platform owns self-managed identity", async () => {
+		const agent = AgentProjectionV1Schema.parse({
+			...startingAgent,
+			interactionUrl: "https://agent.example.test",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+			},
+		});
+
+		await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+
+		expect(screen.queryByRole("link", { name: "Open Agent" })).toBeNull();
+	});
+
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen

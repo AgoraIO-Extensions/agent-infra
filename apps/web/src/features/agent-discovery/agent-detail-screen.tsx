@@ -86,7 +86,8 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 	const { agent } = state;
 	const interactionUrl =
 		agent.source.kind === "custom" &&
-		agent.source.interactionMode === "self-managed"
+		agent.source.interactionMode === "self-managed" &&
+		agent.source.identityResponsibility === "self-managed"
 			? safeInteractionUrl(agent.interactionUrl)
 			: undefined;
 	return (
