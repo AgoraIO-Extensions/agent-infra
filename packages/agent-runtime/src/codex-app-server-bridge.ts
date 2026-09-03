@@ -3,6 +3,11 @@ import {
 	type ChildProcessWithoutNullStreams,
 	spawn,
 } from "node:child_process";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { access, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { TextDecoder } from "node:util";
 
 const defaultTimeoutMs = 5_000;
@@ -14,6 +19,8 @@ const modelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const reasoningEffortPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
+const codexExecutableName = "codex";
+const schemaArtifactName = "codex_app_server_protocol.v2.schemas.json";
 
 export interface CodexAppServerProvenanceV2 {
 	readonly protocolVersion: 2;
@@ -111,9 +118,9 @@ class FrameQueue {
 	}
 
 	next(): Promise<IteratorResult<CodexAppServerFrame>> {
+		if (this.failure) return Promise.reject(this.failure);
 		const value = this.values.shift();
 		if (value) return Promise.resolve({ done: false, value });
-		if (this.failure) return Promise.reject(this.failure);
 		if (this.finished) return Promise.resolve({ done: true, value: undefined });
 		return new Promise((resolve, reject) =>
 			this.waiters.push({ resolve, reject }),
@@ -271,64 +278,155 @@ function kill(
 	}
 }
 
-function probeVersion(timeoutMs: number): Promise<void> {
-	let process: ReturnType<typeof spawn>;
+async function waitForResult<T>(promise: Promise<T>, timeoutMs: number) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		process = spawn("codex", ["--version"], {
-			stdio: ["ignore", "pipe", "pipe"],
+		return await Promise.race([
+			promise,
+			new Promise<undefined>((resolve) => {
+				timer = setTimeout(() => resolve(undefined), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+async function reapChild(
+	process: Pick<ChildProcess, "kill">,
+	closed: Promise<true>,
+	timeoutMs: number,
+) {
+	kill(process);
+	if (await waitForResult(closed, timeoutMs)) return;
+	kill(process, "SIGKILL");
+	await waitForResult(closed, timeoutMs);
+}
+
+async function resolveCodexExecutable() {
+	const path = process.env.PATH;
+	if (!path) throw unavailable();
+	for (const directory of path.split(delimiter)) {
+		if (!directory) continue;
+		const candidate = join(directory, codexExecutableName);
+		try {
+			await access(candidate, constants.X_OK);
+			return await realpath(candidate);
+		} catch {
+			// Continue searching only PATH entries.
+		}
+	}
+	throw unavailable();
+}
+
+interface CommandOutput {
+	stdout: string;
+	stdoutTooLarge: boolean;
+}
+
+type CommandOutcome =
+	| { kind: "close"; code: number | null }
+	| { kind: "error" };
+
+async function runCodexCommand(
+	executable: string,
+	args: readonly string[],
+	timeoutMs: number,
+	captureStdout: boolean,
+): Promise<CommandOutput> {
+	let process: ChildProcess;
+	try {
+		process = spawn(executable, args, {
+			stdio: ["ignore", captureStdout ? "pipe" : "ignore", "ignore"],
 		});
 	} catch {
-		return Promise.reject(unavailable());
+		throw unavailable();
 	}
-	const stdout = process.stdout;
-	const stderr = process.stderr;
-	if (!stdout || !stderr) {
-		kill(process);
-		return Promise.reject(unavailable());
-	}
-	stderr.resume();
-	return new Promise((resolve, reject) => {
-		let output = "";
-		let outputBytes = 0;
-		let outputTooLarge = false;
-		let settled = false;
-		const settle = (work: () => void) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			work();
-		};
-		const timer = setTimeout(() => {
-			kill(process);
-			settle(() => reject(timedOut()));
-		}, timeoutMs);
-		stdout.on("data", (chunk: Buffer) => {
-			if (outputTooLarge) return;
-			if (chunk.byteLength > maximumFrameBytes - outputBytes) {
-				outputTooLarge = true;
-				return;
-			}
-			outputBytes += chunk.byteLength;
-			output += chunk.toString("utf8");
-		});
-		process.once("error", () => settle(() => reject(unavailable())));
-		process.once("close", (code) => {
-			if (
-				code !== 0 ||
-				outputTooLarge ||
-				output.trim() !==
-					`codex-cli ${CODEX_APP_SERVER_V2_PROVENANCE.codexVersion}`
-			) {
-				settle(() =>
-					reject(
-						output.length === 0 ? unavailable() : provenanceMismatchError(),
-					),
-				);
-				return;
-			}
-			settle(resolve);
-		});
+	const closed = new Promise<true>((resolve) => {
+		process.once("close", () => resolve(true));
 	});
+	const outcome = new Promise<CommandOutcome>((resolve) => {
+		process.once("error", () => resolve({ kind: "error" }));
+		process.once("close", (code) => resolve({ kind: "close", code }));
+	});
+	let stdout = "";
+	let stdoutBytes = 0;
+	let stdoutTooLarge = false;
+	if (captureStdout) {
+		if (!process.stdout) {
+			await reapChild(process, closed, timeoutMs);
+			throw unavailable();
+		}
+		process.stdout.on("data", (chunk: Buffer) => {
+			if (stdoutTooLarge) return;
+			if (chunk.byteLength > maximumFrameBytes - stdoutBytes) {
+				stdoutTooLarge = true;
+				return;
+			}
+			stdoutBytes += chunk.byteLength;
+			stdout += chunk.toString("utf8");
+		});
+	}
+	const result = await waitForResult(outcome, timeoutMs);
+	if (!result) {
+		await reapChild(process, closed, timeoutMs);
+		throw timedOut();
+	}
+	if (result.kind === "error" || result.code !== 0) {
+		await reapChild(process, closed, timeoutMs);
+		throw unavailable();
+	}
+	return { stdout, stdoutTooLarge };
+}
+
+async function probeVersion(executable: string, timeoutMs: number) {
+	const output = await runCodexCommand(
+		executable,
+		["--version"],
+		timeoutMs,
+		true,
+	);
+	if (
+		output.stdoutTooLarge ||
+		output.stdout.trim() !==
+			`codex-cli ${CODEX_APP_SERVER_V2_PROVENANCE.codexVersion}`
+	) {
+		throw provenanceMismatchError();
+	}
+}
+
+async function verifySchema(executable: string, timeoutMs: number) {
+	let directory: string;
+	try {
+		directory = await mkdtemp(join(tmpdir(), "agent-runtime-codex-schema-"));
+	} catch {
+		throw unavailable();
+	}
+	let failure: CodexAppServerBridgeError | undefined;
+	try {
+		await runCodexCommand(
+			executable,
+			["app-server", "generate-json-schema", "--out", directory],
+			timeoutMs,
+			false,
+		);
+		const schema = await readFile(join(directory, schemaArtifactName));
+		const digest = `sha256:${createHash("sha256").update(schema).digest("hex")}`;
+		if (digest !== CODEX_APP_SERVER_V2_PROVENANCE.schemaSha256) {
+			failure = provenanceMismatchError();
+		}
+	} catch (error) {
+		failure =
+			error instanceof CodexAppServerBridgeError
+				? error
+				: provenanceMismatchError();
+	}
+	try {
+		await rm(directory, { recursive: true, force: true });
+	} catch {
+		failure ??= unavailable();
+	}
+	if (failure) throw failure;
 }
 
 function provenanceMismatchError() {
@@ -346,6 +444,7 @@ export class CodexAppServerBridge {
 	#failure?: CodexAppServerBridgeError;
 	#closing = false;
 	#isClosed = false;
+	#reaping?: Promise<void>;
 	#process: ChildProcessWithoutNullStreams;
 	#shutdownTimeoutMs: number;
 
@@ -371,11 +470,13 @@ export class CodexAppServerBridge {
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
-		await probeVersion(validated.startupTimeoutMs);
+		const executable = await resolveCodexExecutable();
+		await probeVersion(executable, validated.startupTimeoutMs);
+		await verifySchema(executable, validated.startupTimeoutMs);
 		let process: ChildProcessWithoutNullStreams;
 		try {
 			process = spawn(
-				"codex",
+				executable,
 				[
 					"app-server",
 					"--stdio",
@@ -432,6 +533,7 @@ export class CodexAppServerBridge {
 
 	async close() {
 		if (this.#isClosed) return;
+		if (this.#reaping) return this.#reaping;
 		if (this.#closing) return this.#exit;
 		this.#closing = true;
 		try {
@@ -442,17 +544,7 @@ export class CodexAppServerBridge {
 		try {
 			await this.waitForExit(this.#shutdownTimeoutMs);
 		} catch {
-			kill(this.#process);
-			try {
-				await this.waitForExit(this.#shutdownTimeoutMs);
-			} catch {
-				kill(this.#process, "SIGKILL");
-				try {
-					await this.waitForExit(this.#shutdownTimeoutMs);
-				} catch {
-					throw timedOut();
-				}
-			}
+			await this.reapOwnedChild();
 			throw timedOut();
 		}
 	}
@@ -468,8 +560,7 @@ export class CodexAppServerBridge {
 				work();
 			};
 			const timer = setTimeout(() => {
-				kill(this.#process);
-				settle(() => reject(timedOut()));
+				void this.reapOwnedChild().then(() => settle(() => reject(timedOut())));
 			}, timeoutMs);
 			this.#process.once("spawn", () => settle(resolve));
 			this.#process.once("error", () => settle(() => reject(unavailable())));
@@ -540,5 +631,27 @@ export class CodexAppServerBridge {
 		if (this.#failure) return;
 		this.#failure = error;
 		this.#queue.fail(error);
+		void this.reapOwnedChild();
+	}
+
+	private async reapOwnedChild() {
+		if (this.#isClosed) return;
+		if (this.#reaping) return this.#reaping;
+		this.#closing = true;
+		this.#reaping = (async () => {
+			kill(this.#process);
+			try {
+				await this.waitForExit(this.#shutdownTimeoutMs);
+				return;
+			} catch {
+				kill(this.#process, "SIGKILL");
+				try {
+					await this.waitForExit(this.#shutdownTimeoutMs);
+				} catch {
+					// The process could not be reaped within the bounded cleanup window.
+				}
+			}
+		})();
+		return this.#reaping;
 	}
 }

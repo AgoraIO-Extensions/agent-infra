@@ -1,8 +1,32 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	chmod,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:crypto", () => ({
+	createHash: () => {
+		let value = "";
+		return {
+			update: (input: Uint8Array) => {
+				value += Buffer.from(input).toString("utf8");
+				return {
+					digest: () =>
+						value === "schema-matches"
+							? "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+							: "0".repeat(64),
+				};
+			},
+		};
+	},
+}));
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
@@ -25,28 +49,46 @@ async function installFakeCodex(mode: string) {
 	await writeFile(
 		executable,
 		`#!/usr/bin/env node
-const { writeFileSync } = require("node:fs");
+const { appendFileSync, mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
 const args = process.argv.slice(2);
 const mode = process.env.CODEX_APP_SERVER_BRIDGE_MODE;
+if (process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH) {
+  appendFileSync(process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH, JSON.stringify({ args, executable: process.argv[1], pid: process.pid }) + "\\n");
+}
 if (args[0] === "--version") {
   if (mode === "version-hangs") setInterval(() => {}, 1_000);
   if (mode === "version-mismatch") process.stdout.write("codex-cli 0.0.0\\n");
   else process.stdout.write("codex-cli 0.153.0\\n");
   if (mode !== "version-hangs") process.exit(0);
 }
-if (process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH) {
-  writeFileSync(process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH, JSON.stringify({ args, pid: process.pid }));
+if (args[0] === "app-server" && args[1] === "generate-json-schema") {
+  if (mode === "schema-hangs") {
+    setInterval(() => {}, 1_000);
+  } else {
+    const output = args[args.indexOf("--out") + 1];
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "codex_app_server_protocol.v2.schemas.json"), mode === "schema-mismatch" ? "schema-mismatch" : "schema-matches");
+    process.exit(0);
+  }
 }
 if (mode === "startup-exit") process.exit(9);
 if (mode === "malformed-frame") process.stdout.write("not-json\\n");
 if (mode === "oversized-frame") process.stdout.write("x".repeat(65_537) + "\\n");
+if (mode === "queue-overflow") {
+  for (let index = 0; index <= 256; index += 1) {
+    process.stdout.write(JSON.stringify({ id: index }) + "\\n");
+  }
+}
 if (mode === "stderr-exit") {
   process.stderr.write("redacted-child-output\\n");
   process.exit(9);
 }
-if (mode === "shutdown-hangs") {
-  process.on("SIGTERM", () => {});
-  setInterval(() => {}, 1_000);
+if (["shutdown-hangs", "schema-hangs", "version-hangs"].includes(mode)) {
+  if (mode === "shutdown-hangs") {
+    process.on("SIGTERM", () => {});
+    setInterval(() => {}, 1_000);
+  }
   process.stdin.resume();
 } else {
   process.stdin.on("data", (chunk) => process.stdout.write(chunk));
@@ -72,18 +114,48 @@ function options(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-async function readCapture(path: string) {
+async function readAppCapture(path: string) {
+	const captures = await readCaptures(path, 3);
+	const capture = captures.at(-1);
+	if (capture?.args[0] !== "app-server") {
+		throw new Error("fake Codex did not record its app-server launch");
+	}
+	return capture;
+}
+
+async function readCaptures(path: string, minimum = 1) {
 	for (let attempt = 0; attempt < 50; attempt += 1) {
 		try {
-			return JSON.parse(await readFile(path, "utf8")) as {
-				args: string[];
-				pid: number;
-			};
-		} catch {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
+			const contents = await readFile(path, "utf8");
+			const captures = contents
+				.trim()
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							args: string[];
+							executable: string;
+							pid: number;
+						},
+				);
+			if (captures.length >= minimum) return captures;
+		} catch {}
+		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("fake Codex did not record its launch");
+}
+
+async function expectChildExited(pid: number) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("bridge child remained alive after a fatal error");
 }
 
 afterEach(async () => {
@@ -111,17 +183,32 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
-	it("starts only with the supported pinned argv and bounded active model configuration", async () => {
+	it("measures one resolved executable before starting supported bounded argv", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		const bridge = await CodexAppServerBridge.open(options());
 		const iterator = bridge.frames()[Symbol.asyncIterator]();
 		await bridge.send({ id: 1, method: "synthetic/request" });
 		await iterator.next();
 		expect(bridge).not.toHaveProperty("process");
-		const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
-			args: string[];
-			pid: number;
-		};
+		const captures = await readCaptures(capturePath);
+		expect(captures).toHaveLength(3);
+		expect(captures.map(({ executable }) => executable)).toEqual([
+			captures[0]?.executable,
+			captures[0]?.executable,
+			captures[0]?.executable,
+		]);
+		expect(captures[0]?.args).toEqual(["--version"]);
+		expect(captures[1]?.args).toEqual([
+			"app-server",
+			"generate-json-schema",
+			"--out",
+			expect.any(String),
+		]);
+		const schemaDirectory = captures[1]?.args[3];
+		if (!schemaDirectory) throw new Error("expected schema directory");
+		await expect(access(schemaDirectory)).rejects.toThrow();
+		const captured = captures[2];
+		if (!captured) throw new Error("expected app-server launch");
 		expect(captured.args).toEqual([
 			"app-server",
 			"--stdio",
@@ -179,6 +266,24 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it("fails closed when the measured app-server schema differs from the pin", async () => {
+		const { capturePath } = await installFakeCodex("schema-mismatch");
+		const error = await CodexAppServerBridge.open(options()).catch(
+			(value: unknown) => value,
+		);
+		expect(error).toMatchObject({
+			code: "CODEX_APP_SERVER_PROVENANCE_MISMATCH",
+		});
+		expect(error).not.toMatchObject({
+			message: expect.stringContaining("agent-runtime-codex-schema"),
+		});
+		const captures = await readCaptures(capturePath);
+		expect(captures.map(({ args }) => args.slice(0, 2))).toEqual([
+			["--version"],
+			["app-server", "generate-json-schema"],
+		]);
+	});
+
 	it("frames JSONL without exposing the child process", async () => {
 		await installFakeCodex("echo");
 		const bridge = await CodexAppServerBridge.open(options());
@@ -208,6 +313,20 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it.each(["malformed-frame", "oversized-frame", "queue-overflow"])(
+		"reaps its child after fatal %s output without an explicit close",
+		async (mode) => {
+			const { capturePath } = await installFakeCodex(mode);
+			const bridge = await CodexAppServerBridge.open(options());
+			const { pid } = await readAppCapture(capturePath);
+			childPids.push(pid);
+			await expectChildExited(pid);
+			await expect(
+				bridge.frames()[Symbol.asyncIterator]().next(),
+			).rejects.toMatchObject({ code: "CODEX_APP_SERVER_FRAME_INVALID" });
+		},
+	);
+
 	it("bounds a hanging provenance probe", async () => {
 		await installFakeCodex("version-hangs");
 		await expect(
@@ -215,12 +334,24 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_TIMEOUT" });
 	});
 
+	it("bounds a hanging schema probe", async () => {
+		const { capturePath } = await installFakeCodex("schema-hangs");
+		await expect(CodexAppServerBridge.open(options())).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		const captures = await readCaptures(capturePath, 2);
+		expect(captures[1]?.args.slice(0, 2)).toEqual([
+			"app-server",
+			"generate-json-schema",
+		]);
+	}, 10_000);
+
 	it("kills a bridge process that ignores graceful shutdown", async () => {
 		const { capturePath } = await installFakeCodex("shutdown-hangs");
 		const bridge = await CodexAppServerBridge.open(
 			options({ shutdownTimeoutMs: 25 }),
 		);
-		const { pid } = await readCapture(capturePath);
+		const { pid } = await readAppCapture(capturePath);
 		childPids.push(pid);
 		await expect(bridge.close()).rejects.toMatchObject({
 			code: "CODEX_APP_SERVER_TIMEOUT",
