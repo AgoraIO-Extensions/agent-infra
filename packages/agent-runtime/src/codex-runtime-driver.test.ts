@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,7 @@ import type {
 	RuntimeDriverCommandV1,
 	RuntimeSubmitTurnRequestV1,
 } from "@agent-infra/contracts/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
@@ -23,6 +23,8 @@ import { RuntimeHost } from "./runtime-host.js";
 
 const directories: string[] = [];
 const drivers: CodexRuntimeDriver[] = [];
+
+type CodexTurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
 async function runtimeDirectory() {
 	const directory = await mkdtemp(
@@ -76,8 +78,11 @@ class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
+	private readonly heldTurnsListRequestIds: number[] = [];
 	private wake?: () => void;
 	private closed = false;
+	private turnStatus: CodexTurnStatus = "inProgress";
+	private holdTurnsListResponses = false;
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -107,6 +112,14 @@ class TestCodexBridge {
 			this.respond(id, { thread: { id: this.nativeThreadId } });
 			return;
 		}
+		if (method === "thread/turns/list") {
+			if (this.holdTurnsListResponses) {
+				this.heldTurnsListRequestIds.push(id);
+				return;
+			}
+			this.respondTurnsList(id);
+			return;
+		}
 		if (method === "turn/start") {
 			if (this.closeOnTurnStart) {
 				await this.close();
@@ -118,6 +131,41 @@ class TestCodexBridge {
 			return;
 		}
 		throw new Error(`Unexpected Codex JSON-RPC method: ${method}`);
+	}
+
+	setTurnStatus(status: CodexTurnStatus) {
+		this.turnStatus = status;
+	}
+
+	holdTurnsList() {
+		this.holdTurnsListResponses = true;
+	}
+
+	pendingTurnsListCount() {
+		return this.heldTurnsListRequestIds.length;
+	}
+
+	respondToHeldTurnsList(kind: "error" | "missing-result") {
+		const id = this.heldTurnsListRequestIds.shift();
+		if (id === undefined) throw new Error("No held turns-list request");
+		if (kind === "error") {
+			this.push({
+				id,
+				error: { code: -32_000, message: "synthetic protocol error" },
+			});
+			return;
+		}
+		this.push({ id });
+	}
+
+	emitNotification() {
+		this.push({
+			method: "turn/started",
+			params: {
+				threadId: this.nativeThreadId,
+				turnId: this.nativeTurnId,
+			},
+		});
 	}
 
 	frames(): AsyncIterable<CodexAppServerFrame> {
@@ -139,7 +187,23 @@ class TestCodexBridge {
 	}
 
 	private respond(id: number, result: unknown) {
-		this.queuedFrames.push({ id, result });
+		this.push({ id, result });
+	}
+
+	private respondTurnsList(id: number) {
+		this.respond(id, {
+			data: [
+				{
+					id: this.nativeTurnId,
+					status: this.turnStatus,
+					items: [],
+				},
+			],
+		});
+	}
+
+	private push(frame: CodexAppServerFrame) {
+		this.queuedFrames.push(frame);
 		const wake = this.wake;
 		this.wake = undefined;
 		wake?.();
@@ -207,7 +271,13 @@ describe("Codex Runtime Driver", () => {
 			"initialize",
 			"thread/start",
 			"turn/start",
+			"thread/turns/list",
 		]);
+		expect(bridge.requests[3]?.params).toEqual({
+			threadId: bridge.nativeThreadId,
+			itemsView: "notLoaded",
+			limit: 1,
+		});
 		expect(response).toMatchObject({
 			operationId: request.executionId,
 			result: { outcome: "accepted", status: "running" },
@@ -239,6 +309,7 @@ describe("Codex Runtime Driver", () => {
 		await firstDriver.close();
 
 		const resumedBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		resumedBridge.setTurnStatus("completed");
 		const resumedDriver = await CodexRuntimeDriver.open({
 			path: join(directory, "driver.json"),
 			bridgeOptions: {
@@ -255,15 +326,33 @@ describe("Codex Runtime Driver", () => {
 				firstResult.nativeSessionRef,
 				command.executionId,
 			),
-		).toBe("running");
+		).toBe("completed");
 		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
 			"thread/resume",
+			"thread/turns/list",
 		]);
 		expect(resumedBridge.requests[1]?.params).toEqual({
 			threadId: firstBridge.nativeThreadId,
 			excludeTurns: true,
 		});
+		expect(resumedBridge.requests[2]?.params).toEqual({
+			threadId: firstBridge.nativeThreadId,
+			itemsView: "notLoaded",
+			limit: 1,
+		});
+		expect(
+			(
+				await resumedDriver.execute(
+					submitCommand({
+						operationId: "execution-codex-after-completion",
+						executionId: "execution-codex-after-completion",
+						turnId: "turn-codex-after-completion",
+						nativeSessionRef: firstResult.nativeSessionRef,
+					}),
+				)
+			).result,
+		).toEqual({ outcome: "accepted", status: "running" });
 	});
 
 	it("keeps duplicate and busy submit outcomes from starting another native Turn", async () => {
@@ -350,4 +439,151 @@ describe("Codex Runtime Driver", () => {
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(0);
 	});
+
+	it("fails closed for events and app-server notifications until #344 owns recovery", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await CodexRuntimeDriver.open({
+			path: join(directory, "driver.json"),
+			bridgeOptions: {
+				model: "gpt-5.3-codex",
+				reasoningEffort: "high",
+				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			},
+			openBridge: async () => bridge,
+		});
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await expect(
+			driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			driver.subscribeEvents(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+
+		bridge.emitNotification();
+		await vi.waitFor(async () => {
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		});
+	});
+
+	it.each([
+		[
+			"schema version",
+			{
+				schemaVersion: 2,
+				sessions: {},
+				operations: {},
+			},
+		],
+		[
+			"Session shape",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-private",
+						executions: [],
+					},
+				},
+				operations: {},
+			},
+		],
+		[
+			"execution shape",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						threadId: "codex-native-thread-private",
+						activeExecutionId: "execution-codex",
+						executions: {
+							"execution-codex": {
+								executionId: "execution-codex",
+								turnId: "turn-codex",
+								nativeTurnId: "codex-native-turn-private",
+								status: "idle",
+							},
+						},
+					},
+				},
+				operations: {},
+			},
+		],
+	] as const)(
+		"fails closed without replacing corrupted durable %s",
+		async (_name, state) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const contents = JSON.stringify(state);
+			await writeFile(path, contents);
+			const bridge = new TestCodexBridge();
+
+			await expect(
+				CodexRuntimeDriver.open({
+					path,
+					bridgeOptions: {
+						model: "gpt-5.3-codex",
+						reasoningEffort: "high",
+						provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+					},
+					openBridge: async () => bridge,
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_STATE_INVALID" });
+			expect(bridge.requests).toEqual([]);
+			expect(await readFile(path, "utf8")).toBe(contents);
+		},
+	);
+
+	it.each(["error", "missing-result"] as const)(
+		"fails all pending requests for a malformed turns-list %s response",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await CodexRuntimeDriver.open({
+				path: join(directory, "driver.json"),
+				bridgeOptions: {
+					model: "gpt-5.3-codex",
+					reasoningEffort: "high",
+					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+				},
+				openBridge: async () => bridge,
+			});
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			bridge.holdTurnsList();
+			const first = driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const second = driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+
+			await vi.waitFor(() => {
+				expect(bridge.pendingTurnsListCount()).toBe(2);
+			});
+			bridge.respondToHeldTurnsList(kind);
+			await expect(first).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+			await expect(second).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+		},
+	);
 });
