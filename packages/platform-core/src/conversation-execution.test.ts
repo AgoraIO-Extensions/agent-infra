@@ -254,4 +254,65 @@ describe("Conversation execution use case", () => {
 			]),
 		});
 	});
+
+	it("regenerates from an existing user message only after the active turn finishes", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `regenerate_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_regenerate",
+			requestId: "request_create_regenerate",
+			traceId: "trace_create_regenerate",
+		});
+		await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "regenerate_1",
+			text: "Please answer",
+			idempotencyKey: "message_regenerate",
+			requestId: "request_message_regenerate",
+			traceId: "trace_message_regenerate",
+		});
+		conversation.completeExecution("regenerate_3");
+
+		expect(
+			await conversation.regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId: "regenerate_1",
+				sourceMessageId: "regenerate_2",
+				idempotencyKey: "regenerate_01",
+				requestId: "request_regenerate_01",
+				traceId: "trace_regenerate_01",
+			}),
+		).toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "submitted",
+				messageId: null,
+				executionId: "regenerate_5",
+			},
+		});
+		expect(conversation.snapshot()).toMatchObject({
+			messages: [{ messageId: "regenerate_2", text: "Please answer" }],
+			executions: [
+				{ executionId: "regenerate_3", status: "completed" },
+				{ executionId: "regenerate_5", status: "submitted" },
+			],
+			outbox: expect.arrayContaining([
+				expect.objectContaining({
+					operation: "conversation.turn.regenerate.v1",
+					executionId: "regenerate_5",
+					messageId: "regenerate_2",
+				}),
+			]),
+		});
+	});
 });

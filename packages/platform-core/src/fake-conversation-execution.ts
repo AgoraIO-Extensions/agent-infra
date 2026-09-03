@@ -7,6 +7,7 @@ import {
 	type ConversationExecutionUseCaseOptionsV1,
 	type ConversationExecutionUseCaseV1,
 	type ConversationMessageWritePlanV1,
+	type ConversationRegenerationWritePlanV1,
 	type CreateConversationDecisionV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
@@ -25,6 +26,8 @@ interface StoredIdempotency<T> {
 interface StoredMessage {
 	readonly messageId: string;
 	readonly conversationId: string;
+	readonly actorId: string;
+	readonly role: "user";
 	readonly executionId: string;
 	readonly text: string;
 }
@@ -34,7 +37,13 @@ interface StoredExecution {
 	readonly conversationId: string;
 	readonly actorId: string;
 	readonly turnId: string;
-	readonly status: "submitted";
+	status:
+		| "submitted"
+		| "processing"
+		| "unknown"
+		| "completed"
+		| "failed"
+		| "cancelled";
 }
 
 interface StoredOutbox {
@@ -74,6 +83,22 @@ function isMessageWritePlan(
 	return !Object.hasOwn(decision, "outcome");
 }
 
+function isRegenerationWritePlan(
+	decision:
+		| ConversationRegenerationWritePlanV1
+		| { readonly outcome: "busy" | "denied" },
+): decision is ConversationRegenerationWritePlanV1 {
+	return !Object.hasOwn(decision, "outcome");
+}
+
+function isActiveExecution(execution: StoredExecution): boolean {
+	return (
+		execution.status === "submitted" ||
+		execution.status === "processing" ||
+		execution.status === "unknown"
+	);
+}
+
 export class FakeConversationExecutionV1
 	implements ConversationExecutionUseCaseV1
 {
@@ -89,7 +114,7 @@ export class FakeConversationExecutionV1
 		string,
 		StoredIdempotency<CreateConversationDecisionV1>
 	>();
-	readonly #messageIdempotency = new Map<
+	readonly #commandIdempotency = new Map<
 		string,
 		StoredIdempotency<ConversationCommandDecisionV1>
 	>();
@@ -135,9 +160,10 @@ export class FakeConversationExecutionV1
 				const idempotencyKey = key([
 					request.command.conversationId,
 					request.authority.actorId,
+					request.command.command,
 					request.command.idempotencyKey,
 				]);
-				const existing = this.#messageIdempotency.get(idempotencyKey);
+				const existing = this.#commandIdempotency.get(idempotencyKey);
 				if (existing) {
 					if (existing.requestDigest !== request.requestDigest) {
 						return { outcome: "conflict", reason: "idempotency_conflict" };
@@ -150,27 +176,10 @@ export class FakeConversationExecutionV1
 					}
 					return structuredClone(existing.decision);
 				}
-				const active = this.#executions.find(
-					(execution) =>
-						execution.conversationId === request.command.conversationId,
-				);
-				const decision = decide({
-					conversation: structuredClone(
-						this.#conversations.get(request.command.conversationId),
-					),
-					activeExecution: active
-						? {
-								executionId: active.executionId,
-								conversationId: active.conversationId,
-								actorId: active.actorId,
-								turnId: active.turnId,
-								status: active.status,
-							}
-						: undefined,
-				});
+				const decision = decide(this.#state(request.command.conversationId));
 				if (!isMessageWritePlan(decision)) {
 					if (decision.outcome === "denied") return decision;
-					this.#messageIdempotency.set(idempotencyKey, {
+					this.#commandIdempotency.set(idempotencyKey, {
 						requestDigest: request.requestDigest,
 						decision,
 					});
@@ -184,6 +193,8 @@ export class FakeConversationExecutionV1
 				this.#messages.push({
 					messageId: plan.message.messageId,
 					conversationId: plan.message.conversationId,
+					actorId: plan.message.actorId,
+					role: "user",
 					executionId: plan.message.executionId,
 					text: plan.message.text,
 				});
@@ -211,7 +222,74 @@ export class FakeConversationExecutionV1
 					outcome: "accepted",
 					result: structuredClone(plan.result),
 				} as const;
-				this.#messageIdempotency.set(idempotencyKey, {
+				this.#commandIdempotency.set(idempotencyKey, {
+					requestDigest: request.requestDigest,
+					decision: accepted,
+				});
+				return accepted;
+			},
+			executeRegeneration: async (request, decide) => {
+				const idempotencyKey = key([
+					request.command.conversationId,
+					request.authority.actorId,
+					request.command.command,
+					request.command.idempotencyKey,
+				]);
+				const existing = this.#commandIdempotency.get(idempotencyKey);
+				if (existing) {
+					if (existing.requestDigest !== request.requestDigest) {
+						return { outcome: "conflict", reason: "idempotency_conflict" };
+					}
+					if (existing.decision.outcome === "accepted") {
+						return {
+							outcome: "replayed",
+							result: structuredClone(existing.decision.result),
+						};
+					}
+					return structuredClone(existing.decision);
+				}
+				const decision = decide(
+					this.#state(
+						request.command.conversationId,
+						request.command.sourceMessageId,
+					),
+				);
+				if (!isRegenerationWritePlan(decision)) {
+					if (decision.outcome === "denied") return decision;
+					this.#commandIdempotency.set(idempotencyKey, {
+						requestDigest: request.requestDigest,
+						decision,
+					});
+					return decision;
+				}
+				const plan: ConversationRegenerationWritePlanV1 = decision;
+				this.#conversations.set(
+					plan.conversation.conversationId,
+					structuredClone(plan.conversation),
+				);
+				this.#executions.push({
+					executionId: plan.execution.executionId,
+					conversationId: plan.execution.conversationId,
+					actorId: plan.execution.actorId,
+					turnId: plan.execution.turnId,
+					status: plan.execution.status,
+				});
+				this.#outbox.push({
+					operation: plan.outboxIntent.operation,
+					executionId: plan.outboxIntent.executionId,
+					messageId: plan.outboxIntent.messageId,
+				});
+				this.#audit.push({
+					action: plan.auditEvent.action,
+					actorId: plan.auditEvent.actorId,
+					traceId: plan.auditEvent.traceId,
+					requestId: plan.auditEvent.requestId,
+				});
+				const accepted = {
+					outcome: "accepted",
+					result: structuredClone(plan.result),
+				} as const;
+				this.#commandIdempotency.set(idempotencyKey, {
 					requestDigest: request.requestDigest,
 					decision: accepted,
 				});
@@ -235,6 +313,19 @@ export class FakeConversationExecutionV1
 	accept: ConversationExecutionUseCaseV1["accept"] = (command) =>
 		this.#interface.accept(command);
 
+	regenerate: ConversationExecutionUseCaseV1["regenerate"] = (command) =>
+		this.#interface.regenerate(command);
+
+	completeExecution(executionId: string) {
+		const execution = this.#executions.find(
+			(candidate) => candidate.executionId === executionId,
+		);
+		if (!execution || !isActiveExecution(execution)) {
+			throw new Error("Execution is not active");
+		}
+		execution.status = "completed";
+	}
+
 	snapshot() {
 		return structuredClone({
 			conversations: [...this.#conversations.values()],
@@ -243,5 +334,43 @@ export class FakeConversationExecutionV1
 			outbox: this.#outbox,
 			audit: this.#audit,
 		});
+	}
+
+	#state(
+		conversationId: string,
+		sourceMessageId?: string,
+	): ConversationExecutionStateV1 {
+		const source = sourceMessageId
+			? this.#messages.find(
+					(message) =>
+						message.conversationId === conversationId &&
+						message.messageId === sourceMessageId,
+				)
+			: undefined;
+		const active = this.#executions.find(
+			(execution) =>
+				execution.conversationId === conversationId &&
+				isActiveExecution(execution),
+		);
+		return {
+			conversation: structuredClone(this.#conversations.get(conversationId)),
+			sourceMessage: source
+				? {
+						messageId: source.messageId,
+						conversationId: source.conversationId,
+						actorId: source.actorId,
+						role: source.role,
+					}
+				: undefined,
+			activeExecution: active
+				? {
+						executionId: active.executionId,
+						conversationId: active.conversationId,
+						actorId: active.actorId,
+						turnId: active.turnId,
+						status: active.status as "submitted" | "processing" | "unknown",
+					}
+				: undefined,
+		};
 	}
 }

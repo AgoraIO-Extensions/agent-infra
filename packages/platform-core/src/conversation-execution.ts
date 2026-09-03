@@ -18,7 +18,7 @@ export interface ConversationExecutionAuthorityV1 {
 export interface ConversationExecutionAuthorizationPortV1 {
 	authorize(input: {
 		readonly schemaVersion: 1;
-		readonly operation: "conversation.create" | "message";
+		readonly operation: "conversation.create" | "message" | "regenerate";
 		readonly agentId?: string;
 		readonly conversationId?: string;
 	}): Promise<
@@ -48,6 +48,16 @@ export interface ConversationMessageCommandV1 {
 	readonly traceId: string;
 }
 
+export interface ConversationRegenerateCommandV1 {
+	readonly schemaVersion: 1;
+	readonly command: "regenerate";
+	readonly conversationId: string;
+	readonly sourceMessageId: string;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
 export interface ConversationExecutionConversationStateV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
@@ -63,6 +73,14 @@ export interface ConversationExecutionConversationStateV1 {
 
 export interface ConversationExecutionStateV1 {
 	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
+	readonly sourceMessage:
+		| {
+				readonly messageId: string;
+				readonly conversationId: string;
+				readonly actorId: string;
+				readonly role: "user";
+		  }
+		| undefined;
 	readonly activeExecution:
 		| {
 				readonly executionId: string;
@@ -84,7 +102,7 @@ export interface ConversationCreatedResultV1 {
 export interface ConversationCommandResultV1 {
 	readonly schemaVersion: 1;
 	readonly status: "submitted";
-	readonly messageId: string;
+	readonly messageId: string | null;
 	readonly executionId: string;
 }
 
@@ -138,7 +156,6 @@ export interface ConversationMessageWritePlanV1 {
 		readonly agentId: string;
 		readonly actorId: string;
 		readonly channelId: string;
-		readonly messageId: string;
 		readonly turnId: string;
 		readonly status: "submitted";
 		readonly sessionGeneration: number;
@@ -182,6 +199,55 @@ export interface ConversationMessageWritePlanV1 {
 	};
 }
 
+export interface ConversationRegenerationWritePlanV1 {
+	readonly schemaVersion: 1;
+	readonly kind: "regenerate";
+	readonly conversation: ConversationExecutionConversationStateV1;
+	readonly execution: {
+		readonly executionId: string;
+		readonly conversationId: string;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly channelId: string;
+		readonly turnId: string;
+		readonly status: "submitted";
+		readonly sessionGeneration: number;
+		readonly deliveryFence: number;
+		readonly authorizationRevision: string;
+		readonly createdAt: Date;
+	};
+	readonly outboxIntent: {
+		readonly operation: "conversation.turn.regenerate.v1";
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly messageId: string;
+		readonly turnId: string;
+		readonly sessionGeneration: number;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly auditEvent: {
+		readonly action: "conversation.regeneration.accepted";
+		readonly actorId: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly result: ConversationCommandResultV1;
+	readonly idempotency: {
+		readonly scopeType: "conversation";
+		readonly scopeId: string;
+		readonly actorId: string;
+		readonly commandType: "regenerate";
+		readonly key: string;
+		readonly requestDigest: string;
+	};
+}
+
 export interface ConversationExecutionTransactionPortV1 {
 	createConversation(
 		request: {
@@ -203,6 +269,18 @@ export interface ConversationExecutionTransactionPortV1 {
 			| ConversationMessageWritePlanV1
 			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
 	): Promise<ConversationCommandDecisionV1>;
+	executeRegeneration(
+		request: {
+			readonly command: ConversationRegenerateCommandV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+			readonly requestDigest: string;
+		},
+		decide: (
+			state: ConversationExecutionStateV1,
+		) =>
+			| ConversationRegenerationWritePlanV1
+			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
+	): Promise<ConversationCommandDecisionV1>;
 }
 
 export interface ConversationExecutionUseCaseV1 {
@@ -211,6 +289,9 @@ export interface ConversationExecutionUseCaseV1 {
 	): Promise<CreateConversationDecisionV1>;
 	accept(
 		command: ConversationMessageCommandV1,
+	): Promise<ConversationCommandDecisionV1>;
+	regenerate(
+		command: ConversationRegenerateCommandV1,
 	): Promise<ConversationCommandDecisionV1>;
 }
 
@@ -364,6 +445,41 @@ function parseMessageCommand(input: unknown): ConversationMessageCommandV1 {
 	};
 }
 
+function parseRegenerateCommand(
+	input: unknown,
+): ConversationRegenerateCommandV1 {
+	const values = snapshotObject(input, [
+		"schemaVersion",
+		"command",
+		"conversationId",
+		"sourceMessageId",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.command !== "regenerate" ||
+		!isText(values.conversationId) ||
+		!isText(values.sourceMessageId) ||
+		typeof values.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(values.idempotencyKey) ||
+		!isText(values.requestId) ||
+		!isText(values.traceId)
+	) {
+		invalidInput();
+	}
+	return {
+		schemaVersion: 1,
+		command: "regenerate",
+		conversationId: values.conversationId,
+		sourceMessageId: values.sourceMessageId,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+	};
+}
+
 function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
@@ -441,10 +557,23 @@ function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
 	try {
-		const values = snapshotObject(input, ["conversation", "activeExecution"]);
+		const values = snapshotObject(input, [
+			"conversation",
+			"sourceMessage",
+			"activeExecution",
+		]);
 		if (values.conversation === undefined) {
-			if (values.activeExecution !== undefined) unavailable();
-			return { conversation: undefined, activeExecution: undefined };
+			if (
+				values.sourceMessage !== undefined ||
+				values.activeExecution !== undefined
+			) {
+				unavailable();
+			}
+			return {
+				conversation: undefined,
+				sourceMessage: undefined,
+				activeExecution: undefined,
+			};
 		}
 		const conversation = snapshotObject(values.conversation, [
 			"schemaVersion",
@@ -477,6 +606,29 @@ function parseState(
 		) {
 			unavailable();
 		}
+		const sourceMessage = (() => {
+			if (values.sourceMessage === undefined) return undefined;
+			const message = snapshotObject(values.sourceMessage, [
+				"messageId",
+				"conversationId",
+				"actorId",
+				"role",
+			]);
+			if (
+				!isText(message.messageId) ||
+				!isText(message.conversationId) ||
+				!isText(message.actorId) ||
+				message.role !== "user"
+			) {
+				unavailable();
+			}
+			return {
+				messageId: message.messageId,
+				conversationId: message.conversationId,
+				actorId: message.actorId,
+				role: "user" as const,
+			};
+		})();
 		const activeExecution = (() => {
 			if (values.activeExecution === undefined) return undefined;
 			const execution = snapshotObject(values.activeExecution, [
@@ -512,6 +664,12 @@ function parseState(
 		) {
 			unavailable();
 		}
+		if (
+			sourceMessage &&
+			sourceMessage.conversationId !== conversation.conversationId
+		) {
+			unavailable();
+		}
 		const sessionGeneration = conversation.sessionGeneration as number;
 		const lastConversationCursor =
 			conversation.lastConversationCursor as number;
@@ -530,6 +688,7 @@ function parseState(
 				authorizationRevision: conversation.authorizationRevision,
 				lastConversationCursor,
 			},
+			sourceMessage,
 			activeExecution,
 		};
 	} catch {
@@ -755,7 +914,6 @@ export function createConversationExecutionUseCaseV1(
 									agentId: authority.agentId,
 									actorId: authority.actorId,
 									channelId: authority.channelId,
-									messageId,
 									turnId,
 									status: "submitted",
 									sessionGeneration: conversation.sessionGeneration,
@@ -790,6 +948,107 @@ export function createConversationExecutionUseCaseV1(
 									scopeId: conversation.conversationId,
 									actorId: authority.actorId,
 									commandType: "message",
+									key: command.idempotencyKey,
+									requestDigest,
+								},
+							};
+						},
+					),
+				);
+			} catch (error) {
+				if (error instanceof ConversationExecutionError) throw error;
+				return unavailable();
+			}
+		},
+		async regenerate(commandInput) {
+			const command = parseRegenerateCommand(commandInput);
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "regenerate",
+				conversationId: command.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			const requestDigest = digest(command);
+			try {
+				return normalizeCommandDecision(
+					await dependencies.transaction.executeRegeneration(
+						{ command, authority, requestDigest },
+						(stateInput) => {
+							const state = parseState(stateInput);
+							const conversation = state.conversation;
+							const sourceMessage = state.sourceMessage;
+							if (
+								!conversation ||
+								conversation.conversationId !== command.conversationId ||
+								conversation.actorId !== authority.actorId ||
+								conversation.agentId !== authority.agentId ||
+								conversation.channelId !== authority.channelId ||
+								!sourceMessage ||
+								sourceMessage.messageId !== command.sourceMessageId ||
+								sourceMessage.actorId !== authority.actorId
+							) {
+								return { outcome: "denied" };
+							}
+							if (conversation.status === "unavailable")
+								return { outcome: "denied" };
+							if (state.activeExecution) return { outcome: "busy" };
+							const occurredAt = safeNow(now);
+							const executionId = nextOpaqueId(newId);
+							const turnId = nextOpaqueId(newId);
+							const result: ConversationCommandResultV1 = {
+								schemaVersion: 1,
+								status: "submitted",
+								messageId: null,
+								executionId,
+							};
+							return {
+								schemaVersion: 1,
+								kind: "regenerate",
+								conversation: {
+									...conversation,
+									status: "active",
+									authorizationRevision: authority.authorizationRevision,
+								},
+								execution: {
+									executionId,
+									conversationId: conversation.conversationId,
+									agentId: authority.agentId,
+									actorId: authority.actorId,
+									channelId: authority.channelId,
+									turnId,
+									status: "submitted",
+									sessionGeneration: conversation.sessionGeneration,
+									deliveryFence: 0,
+									authorizationRevision: authority.authorizationRevision,
+									createdAt: occurredAt,
+								},
+								outboxIntent: {
+									operation: "conversation.turn.regenerate.v1",
+									conversationId: conversation.conversationId,
+									executionId,
+									messageId: sourceMessage.messageId,
+									turnId,
+									sessionGeneration: conversation.sessionGeneration,
+									traceId: command.traceId,
+									requestId: command.requestId,
+									occurredAt,
+								},
+								auditEvent: {
+									action: "conversation.regeneration.accepted",
+									actorId: authority.actorId,
+									agentId: authority.agentId,
+									conversationId: conversation.conversationId,
+									executionId,
+									traceId: command.traceId,
+									requestId: command.requestId,
+									occurredAt,
+								},
+								result,
+								idempotency: {
+									scopeType: "conversation",
+									scopeId: conversation.conversationId,
+									actorId: authority.actorId,
+									commandType: "regenerate",
 									key: command.idempotencyKey,
 									requestDigest,
 								},
