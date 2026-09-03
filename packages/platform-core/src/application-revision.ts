@@ -31,6 +31,11 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
+import {
+	type PendingSecretRecordAttachmentResolverV1,
+	type PendingSecretRecordAttachmentsV1,
+	resolvePendingSecretRecordAttachmentsV1,
+} from "./secret-record-attachments.js";
 
 export interface ReviseApplicationCommandV1 {
 	readonly schemaVersion: 1;
@@ -151,6 +156,7 @@ export interface ApplicationRevisionTransactionPortV1 {
 	}): Promise<ApplicationRevisionReadDecisionV1>;
 	commit(
 		plan: ApplicationRevisionWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): Promise<ApplicationRevisionCommitDecisionV1>;
 }
 
@@ -158,6 +164,7 @@ export interface ApplicationRevisionUseCaseV1 {
 	revise(
 		command: ReviseApplicationCommandV1,
 		actorContext: ApplicationRevisionActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<ApplicationRevisionResultV1>;
 }
 
@@ -990,7 +997,7 @@ export function createApplicationRevisionUseCaseV1(
 ): ApplicationRevisionUseCaseV1 {
 	const now = options.now ?? (() => new Date());
 	return {
-		async revise(commandInput, actorContextInput) {
+		async revise(commandInput, actorContextInput, attachment) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			let readDecision: ApplicationRevisionReadDecisionV1;
@@ -1115,11 +1122,27 @@ export function createApplicationRevisionUseCaseV1(
 				},
 				auditEvent: management.auditEvent,
 			};
+			let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+			if (plan.configuration !== null) {
+				try {
+					attachments = await resolvePendingSecretRecordAttachmentsV1({
+						attachment,
+						previousConfiguration: state.configuration,
+						configuration: plan.configuration.configuration,
+						ownerId: actorContext.userId,
+						occurredAt,
+					});
+				} catch {
+					throw new ApplicationRevisionError("dependency_unavailable");
+				}
+			} else if (attachment !== undefined) {
+				throw new ApplicationRevisionError("dependency_unavailable");
+			}
 			let commitDecision: ApplicationRevisionCommitDecisionV1;
 			try {
 				const capturedPlan = snapshotApplicationRevisionWritePlanV1(plan);
 				commitDecision = parseCommitDecision(
-					await dependencies.transaction.commit(capturedPlan),
+					await dependencies.transaction.commit(capturedPlan, attachments),
 					result,
 				);
 			} catch {

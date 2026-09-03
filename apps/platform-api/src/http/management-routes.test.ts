@@ -179,6 +179,7 @@ function createApp(
 			},
 		],
 		modelConfiguration: undefined,
+		attachment: { resolve: vi.fn() },
 	});
 	const allocateApplicationIds = vi
 		.fn()
@@ -286,6 +287,7 @@ describe("management routes", () => {
 				userId: "user-1",
 				rawRequestDigest: createHash("sha256").update(rawBody).digest("hex"),
 			},
+			expect.objectContaining({ resolve: expect.any(Function) }),
 		);
 		expect(submit.mock.calls[0]?.[0]).not.toEqual(
 			expect.objectContaining({ requestId: headers["x-request-id"] }),
@@ -592,6 +594,21 @@ describe("management routes", () => {
 
 		expect(malformedResponse.status).toBe(503);
 		expect(malformed.submit).not.toHaveBeenCalled();
+
+		const missingAttachment = createApp();
+		missingAttachment.prepareSecretReplacements.mockResolvedValue({
+			secrets: [{ name: "MODEL_API_KEY", replace: true }],
+		} as never);
+		const missingAttachmentResponse = await missingAttachment.app.request(
+			"/api/v1/agent-applications",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(applicationBody),
+			},
+		);
+		expect(missingAttachmentResponse.status).toBe(503);
+		expect(missingAttachment.submit).not.toHaveBeenCalled();
 
 		const allocator = createApp();
 		allocator.allocateApplicationIds.mockRejectedValue(

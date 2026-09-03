@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	applicationFoundationActorContextV1,
@@ -26,7 +26,7 @@ function readyTransaction(
 		async read() {
 			return { outcome: "ready" };
 		},
-		commit: (plan) => transaction.commit(plan),
+		commit: (plan, attachments) => transaction.commit(plan, attachments),
 	};
 }
 
@@ -472,5 +472,37 @@ describe("Fake application foundation transaction", () => {
 			snapshot: () => Promise.resolve(transaction.snapshot()),
 			close: () => Promise.resolve(),
 		};
+	});
+});
+
+describe("Application foundation Secret sidecar", () => {
+	it("passes final encrypted records beside, not inside, the write plan", async () => {
+		let attachments: unknown;
+		let plan: ApplicationFoundationWritePlanV1 | undefined;
+		const resolve = vi.fn().mockResolvedValue([{ encrypted: "ciphertext" }]);
+		await createUseCase({
+			async commit(nextPlan, nextAttachments) {
+				plan = nextPlan;
+				attachments = nextAttachments;
+				return { outcome: "committed", result: nextPlan.result };
+			},
+		}).submit(
+			applicationFoundationCommandV1,
+			applicationFoundationActorContextV1,
+			{ resolve },
+		);
+
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(attachments).toMatchObject({
+			expected: expect.arrayContaining([
+				expect.objectContaining({
+					name: "BOT_TOKEN",
+					ownerId: "owner_01",
+					configurationRevision: 1,
+				}),
+			]),
+			encryptedRecords: [{ encrypted: "ciphertext" }],
+		});
+		expect(JSON.stringify(plan)).not.toContain("ciphertext");
 	});
 });

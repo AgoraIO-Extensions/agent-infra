@@ -67,6 +67,7 @@ function createApp(overrides: Record<string, unknown> = {}) {
 			modelCredentialOptionIds: input.modelCredentials.map(
 				({ optionId }: { optionId: string }) => optionId,
 			),
+			attachment: { resolve: vi.fn() },
 		}));
 	registerConfigurationRoutes(app, {
 		identity: {
@@ -246,6 +247,7 @@ describe("configuration routes", () => {
 					},
 				],
 				modelCredentialOptionIds: [],
+				attachment: { resolve: vi.fn() },
 			}),
 		});
 		const response = await app.request("/api/v1/agents/agent-1/configuration", {
@@ -316,6 +318,29 @@ describe("configuration routes", () => {
 		expect(malformedShapeResponse.status).toBe(503);
 		expect(malformedShape.update).not.toHaveBeenCalled();
 
+		const missingAttachment = createApp({
+			prepareSecretReplacements: vi.fn().mockResolvedValue({
+				secrets: [{ name: "MODEL_API_KEY", replace: true }],
+				modelCredentialOptionIds: [],
+			}),
+		});
+		const missingAttachmentResponse = await missingAttachment.app.request(
+			"/api/v1/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "configuration-secret-missing-attachment",
+				},
+				body: JSON.stringify({
+					schemaVersion: 1,
+					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
+				}),
+			},
+		);
+		expect(missingAttachmentResponse.status).toBe(503);
+		expect(missingAttachment.update).not.toHaveBeenCalled();
+
 		const modelCredentialBody = {
 			schemaVersion: 1,
 			modelConfiguration: {
@@ -336,6 +361,7 @@ describe("configuration routes", () => {
 			prepareSecretReplacements: vi.fn().mockResolvedValue({
 				secrets: [],
 				modelCredentialOptionIds: ["model-primary"],
+				attachment: { resolve: vi.fn() },
 			}),
 		});
 		const validModelsResponse = await validModels.app.request(

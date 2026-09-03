@@ -112,7 +112,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					from platform_migrations.history
 					order by id
 				`;
-			expect(migrationHistory).toHaveLength(3);
+			expect(migrationHistory).toHaveLength(4);
 
 			const migratedColumns = await client`
 					select table_name, array_agg(column_name order by ordinal_position) as columns

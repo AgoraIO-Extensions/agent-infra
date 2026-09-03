@@ -39,6 +39,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { createSecretRecordFixtureResolver } from "./secret-record-fixture.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -304,6 +305,208 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			},
 			async close() {},
 		};
+	});
+
+	it("atomically persists direct configuration Secret ciphertext records", async () => {
+		await clearDatabase();
+		await seed();
+		const adapter = openTransaction();
+		const input = {
+			schemaVersion: 1 as const,
+			agentId: "agent_01",
+			idempotencyKey: "configuration-secret-sidecar",
+			requestId: "request_01",
+			traceId: "trace_secret_sidecar",
+			changes: { secrets: [{ name: "BOT_TOKEN", replace: true as const }] },
+		};
+		const first = await useCase(adapter).update(
+			input,
+			actor,
+			createSecretRecordFixtureResolver(),
+		);
+		const records = await adminClient`
+			select agent_id, secret_id, secret_version, configuration_revision,
+				owner_id, lifecycle_state, record
+			from platform.secret_records
+			order by secret_id
+		`;
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			agent_id: "agent_01",
+			secret_id: "secret_bot_token",
+			secret_version: "3",
+			configuration_revision: "8",
+			owner_id: "owner_01",
+			lifecycle_state: "pending",
+		});
+		expect(JSON.stringify(records)).not.toContain("fixture:");
+		const replayResolve = vi.fn();
+		await expect(
+			useCase(adapter).update(input, actor, { resolve: replayResolve }),
+		).resolves.toEqual(first);
+		expect(replayResolve).not.toHaveBeenCalled();
+		expect(
+			await adminClient`select count(*) as count from platform.secret_records`,
+		).toEqual([{ count: "1" }]);
+	});
+
+	it("does not insert pending Secret records after a stale revision", async () => {
+		await clearDatabase();
+		await seed();
+		const adapter = openTransaction();
+		const fixture = createSecretRecordFixtureResolver();
+		const resolve = vi.fn(fixture.resolve);
+		const transaction: AgentConfigurationTransactionPortV1 = {
+			read: adapter.read.bind(adapter),
+			async commit(plan, attachments) {
+				await adminClient`
+					update platform.agents set current_configuration_revision = 8
+					where id = 'agent_01'
+				`;
+				return await adapter.commit(plan, attachments);
+			},
+		};
+		await expect(
+			useCase(transaction).update(
+				{
+					schemaVersion: 1,
+					agentId: "agent_01",
+					idempotencyKey: "configuration-secret-stale",
+					requestId: "request_01",
+					traceId: "trace_secret_stale",
+					changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+				},
+				actor,
+				{ resolve },
+			),
+		).rejects.toMatchObject({ code: "stale_revision" });
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(
+			await adminClient`select count(*) as count from platform.secret_records`,
+		).toEqual([{ count: "0" }]);
+	});
+
+	it("rejects a reused DEK fingerprint without committing a second revision", async () => {
+		await clearDatabase();
+		await seed();
+		const adapter = openTransaction();
+		await useCase(adapter).update(
+			{
+				schemaVersion: 1,
+				agentId: "agent_01",
+				idempotencyKey: "configuration-secret-first",
+				requestId: "request_01",
+				traceId: "trace_secret_first",
+				changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+			},
+			actor,
+			createSecretRecordFixtureResolver(),
+		);
+		const [persisted] = await adminClient`
+			select dek_fingerprint from platform.secret_records
+		`;
+		const fingerprint = String(persisted?.dek_fingerprint);
+		const admissions = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			secretReplacements: [
+				{
+					requestId: "request_collision",
+					name: "BOT_TOKEN",
+					secretId: "secret_bot_token_replacement",
+					version: 4,
+				},
+			],
+		});
+		const collisionUseCase = createAgentConfigurationUseCaseV1(
+			{
+				transaction: adapter,
+				authorizationAdmission: admissions,
+				imageAdmission: admissions,
+				modelAdmission: admissions,
+				secretAdmission: admissions,
+				actionAdmission: admissions,
+				channelAdmission: admissions,
+			},
+			{ now: () => new Date(occurredAt) },
+		);
+		const fixture = createSecretRecordFixtureResolver();
+		await expect(
+			collisionUseCase.update(
+				{
+					schemaVersion: 1,
+					agentId: "agent_01",
+					idempotencyKey: "configuration-secret-collision",
+					requestId: "request_collision",
+					traceId: "trace_secret_collision",
+					changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+				},
+				actor,
+				{
+					async resolve(input) {
+						const records = await fixture.resolve(input);
+						if (!Array.isArray(records) || records.length !== 1) {
+							throw new Error("Expected one fixture record");
+						}
+						return records.map((record) => ({
+							...(record as Record<string, unknown>),
+							crypto: {
+								...(record as { crypto: Record<string, unknown> }).crypto,
+								dekFingerprint: fingerprint,
+							},
+						}));
+					},
+				},
+			),
+		).rejects.toMatchObject({ code: "persistence_failed" });
+		expect(await snapshot()).toMatchObject({
+			currentRevision: 8,
+			configurationCount: 2,
+			idempotencyCount: 1,
+			outboxCount: 1,
+			auditCount: 1,
+		});
+		expect(
+			await adminClient`select count(*) as count from platform.secret_records`,
+		).toEqual([{ count: "1" }]);
+	});
+
+	it("rolls back the configuration revision when pending Secret insertion fails", async () => {
+		await clearDatabase();
+		await seed();
+		await armFailure(
+			"secret_record",
+			"platform.secret_records",
+			"insert",
+			false,
+		);
+		try {
+			await expect(
+				useCase(openTransaction()).update(
+					{
+						schemaVersion: 1,
+						agentId: "agent_01",
+						idempotencyKey: "configuration-secret-rollback",
+						requestId: "request_01",
+						traceId: "trace_secret_rollback",
+						changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+					},
+					actor,
+					createSecretRecordFixtureResolver(),
+				),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+		} finally {
+			await disarmFailure("secret_record", "platform.secret_records");
+		}
+		expect(await snapshot()).toMatchObject({
+			currentRevision: 7,
+			configurationCount: 1,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
+		});
+		expect(
+			await adminClient`select count(*) as count from platform.secret_records`,
+		).toEqual([{ count: "0" }]);
 	});
 
 	agentConfigurationCustomImageUpgradeConformance(async (input) => {

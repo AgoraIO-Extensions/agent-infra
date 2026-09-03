@@ -6,6 +6,7 @@ import type {
 	ApplicationRevisionResultV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
+	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
 import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
@@ -31,6 +32,7 @@ import {
 	idempotencyRecords,
 	outboxItems,
 } from "./schema.js";
+import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 const scopeType = "agent_application";
 const commandType = "agent.application.revise.v1";
@@ -381,6 +383,7 @@ export class PostgresApplicationRevisionTransactionV1
 
 	async commit(
 		input: ApplicationRevisionWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<ApplicationRevisionTransactionPortV1["commit"]> {
 		try {
 			const { plan, result, configuration } = validatedPlan(input);
@@ -519,6 +522,10 @@ export class PostgresApplicationRevisionTransactionV1
 						.returning({ id: agents.id });
 					if (advancedAgent.length !== 1) unavailable();
 				}
+				if (attachments !== undefined && plan.configuration === null) {
+					throw new ApplicationRevisionStoreError();
+				}
+				await insertPendingSecretRecordAttachments(transaction, attachments);
 
 				const advancedApplication = await transaction
 					.update(agentApplications)

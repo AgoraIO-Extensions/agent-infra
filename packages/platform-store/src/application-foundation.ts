@@ -6,6 +6,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	type PendingSecretRecordAttachmentsV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
@@ -24,6 +25,7 @@ import {
 	idempotencyRecords,
 	outboxItems,
 } from "./schema.js";
+import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
@@ -334,6 +336,7 @@ export class PostgresApplicationFoundationTransactionV1
 
 	async commit(
 		input: ApplicationFoundationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
@@ -407,6 +410,7 @@ export class PostgresApplicationFoundationTransactionV1
 					configuration,
 					createdAt: plan.configurationRevision.createdAt,
 				});
+				await insertPendingSecretRecordAttachments(transaction, attachments);
 				await transaction.insert(agentOwners).values(
 					plan.access.ownerIds.map((ownerId) => ({
 						agentId: plan.access.agentId,

@@ -14,6 +14,11 @@ import {
 	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
+import {
+	type PendingSecretRecordAttachmentResolverV1,
+	type PendingSecretRecordAttachmentsV1,
+	resolvePendingSecretRecordAttachmentsV1,
+} from "./secret-record-attachments.js";
 
 export type AgentConfigurationSourceV1 =
 	| {
@@ -310,7 +315,10 @@ export interface AgentConfigurationTransactionPortV1 {
 		  }
 		| { readonly outcome: "idempotency_conflict" }
 	>;
-	commit(plan: AgentConfigurationWritePlanV1): Promise<
+	commit(
+		plan: AgentConfigurationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
+	): Promise<
 		| {
 				readonly outcome: "committed";
 				readonly result: AgentConfigurationResultV1;
@@ -479,6 +487,7 @@ export interface AgentConfigurationUseCaseV1 {
 	update(
 		command: UpdateAgentConfigurationCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1>;
 	upgradeCustomImage(
 		command: UpgradeCustomAgentImageCommandV1,
@@ -2452,6 +2461,7 @@ export function createAgentConfigurationUseCaseV1(
 			current: AgentConfigurationRecordV1,
 		) => UpdateAgentConfigurationCommandV1["changes"],
 		preserveConnectionEnabled = false,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1> => {
 		await admitCurrentAuthorization(
 			dependencies.authorizationAdmission,
@@ -2977,13 +2987,25 @@ export function createAgentConfigurationUseCaseV1(
 				occurredAt,
 			},
 		};
+		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+		try {
+			attachments = await resolvePendingSecretRecordAttachmentsV1({
+				attachment,
+				previousConfiguration: current,
+				configuration: plan.configuration,
+				ownerId: actorContext.actorId,
+				occurredAt,
+			});
+		} catch {
+			throw new AgentConfigurationError("dependency_unavailable");
+		}
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 		>;
 		try {
 			const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
 			decision = parseTransactionCommitDecision(
-				await dependencies.transaction.commit(capturedPlan),
+				await dependencies.transaction.commit(capturedPlan, attachments),
 				command.agentId,
 			);
 		} catch {
@@ -3001,7 +3023,7 @@ export function createAgentConfigurationUseCaseV1(
 		return decision.result;
 	};
 	return {
-		async update(commandInput, actorContextInput) {
+		async update(commandInput, actorContextInput, attachment) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			return await execute(
@@ -3009,6 +3031,8 @@ export function createAgentConfigurationUseCaseV1(
 				actorContext,
 				requestDigest(command, actorContext),
 				() => command.changes,
+				false,
+				attachment,
 			);
 		},
 		async upgradeCustomImage(commandInput, actorContextInput) {

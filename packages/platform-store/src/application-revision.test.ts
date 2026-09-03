@@ -39,6 +39,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { createSecretRecordFixtureResolver } from "./secret-record-fixture.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -562,6 +563,36 @@ afterAll(async () => {
 
 describe("PostgreSQL application revision transaction", () => {
 	applicationRevisionTransactionConformance(createConformanceHarness);
+
+	it("atomically persists revision Secret ciphertext records", async () => {
+		await resetDatabase();
+		await seed("rejected");
+		const adapter = openAdapter();
+		const revision = useCase(adapter, managementState("rejected"));
+		await revision.revise(
+			command("revision-secret-sidecar"),
+			actor(),
+			createSecretRecordFixtureResolver(),
+		);
+		const records = await adminClient`
+			select agent_id, secret_id, secret_version, configuration_revision,
+				owner_id, lifecycle_state, record
+			from platform.secret_records
+			order by secret_id
+		`;
+		expect(records).toHaveLength(2);
+		expect(records).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					agent_id: agentId,
+					configuration_revision: "8",
+					owner_id: applicantId,
+					lifecycle_state: "pending",
+				}),
+			]),
+		);
+		expect(JSON.stringify(records)).not.toContain("fixture:");
+	});
 
 	it("returns only the applicant-scoped complete revision state", async () => {
 		await resetDatabase();

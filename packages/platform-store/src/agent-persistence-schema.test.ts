@@ -9,6 +9,7 @@ import {
 	agents,
 	auditEvents,
 	platformInfrastructureTables,
+	platformSecretRecords,
 	platformStatusValues,
 } from "./schema.ts";
 
@@ -80,6 +81,20 @@ describe("Agent persistence schema contract", () => {
 			"created_at",
 			"configuration",
 		]);
+		expect(columnNames(platformSecretRecords)).toEqual([
+			"agent_id",
+			"secret_id",
+			"secret_version",
+			"configuration_revision",
+			"owner_type",
+			"owner_id",
+			"name",
+			"lifecycle_state",
+			"dek_fingerprint",
+			"record",
+			"created_at",
+			"updated_at",
+		]);
 		expect(columnNames(agentAvailability)).toEqual([
 			"agent_id",
 			"target_type",
@@ -99,5 +114,6 @@ describe("Agent persistence schema contract", () => {
 		expect(columnNames(auditEvents)).toContain("details");
 		expect(platformInfrastructureTables).toContain(agentAvailability);
 		expect(platformInfrastructureTables).toContain(agentManagementHistory);
+		expect(platformInfrastructureTables).toContain(platformSecretRecords);
 	});
 });

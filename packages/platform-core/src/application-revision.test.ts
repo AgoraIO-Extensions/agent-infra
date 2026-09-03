@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	applicationRevisionActorContextV1,
 	applicationRevisionAdmissionsV1,
@@ -42,6 +42,42 @@ describe("Application revision transaction conformance", () => {
 });
 
 describe("Application revision input and plan boundary", () => {
+	it("passes final encrypted records beside the revision plan", async () => {
+		let attachments: unknown;
+		const resolve = vi.fn().mockResolvedValue([{ encrypted: "ciphertext" }]);
+		const revision = createUseCase({
+			async read() {
+				return {
+					outcome: "ready",
+					state: structuredClone(applicationRevisionStateV1),
+				};
+			},
+			async commit(plan, nextAttachments) {
+				attachments = nextAttachments;
+				return { outcome: "committed", result: plan.result };
+			},
+		});
+		await revision.revise(
+			{
+				...applicationRevisionCommandV1,
+				secrets: [{ name: "BOT_TOKEN", replace: true }],
+			},
+			applicationRevisionActorContextV1,
+			{ resolve },
+		);
+
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(attachments).toMatchObject({
+			expected: [
+				expect.objectContaining({
+					name: "BOT_TOKEN",
+					configurationRevision: 8,
+				}),
+			],
+			encryptedRecords: [{ encrypted: "ciphertext" }],
+		});
+	});
+
 	it("retains an applicant who also has administrator authority", async () => {
 		const transaction = new FakeApplicationRevisionTransactionV1(
 			applicationRevisionStateV1,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	agentConfigurationConformanceAdmissionsV1,
@@ -228,6 +228,43 @@ describe("Agent configuration conformance", () => {
 			failNextCommitAsStale: () => harness.transaction.failNextCommitAsStale(),
 			close: async () => undefined,
 		};
+	});
+});
+
+describe("Agent configuration Secret sidecar", () => {
+	it("passes final encrypted records beside the configuration plan", async () => {
+		const harness = createHarness();
+		let attachments: unknown;
+		const transaction = {
+			read: harness.transaction.read.bind(harness.transaction),
+			async commit(
+				plan: Parameters<typeof harness.transaction.commit>[0],
+				nextAttachments?: unknown,
+			) {
+				attachments = nextAttachments;
+				return await harness.transaction.commit(plan);
+			},
+		};
+		const resolve = vi.fn().mockResolvedValue([{ encrypted: "ciphertext" }]);
+		await harness.useCaseWithDependencies({ transaction }).update(
+			{
+				...command,
+				changes: { secrets: [{ name: "BOT_TOKEN", replace: true }] },
+			},
+			actor,
+			{ resolve },
+		);
+
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(attachments).toMatchObject({
+			expected: [
+				expect.objectContaining({
+					name: "BOT_TOKEN",
+					configurationRevision: 8,
+				}),
+			],
+			encryptedRecords: [{ encrypted: "ciphertext" }],
+		});
 	});
 });
 

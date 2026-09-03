@@ -6,6 +6,7 @@ import type {
 	AgentConfigurationRecordV1,
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationWritePlanV1,
+	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
 import { snapshotAgentConfigurationWritePlanV1 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
@@ -29,6 +30,7 @@ import {
 	agents,
 	idempotencyRecords,
 } from "./schema.js";
+import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 const commandType = "agent.configuration.update.v1";
 const scopeType = "agent";
@@ -200,6 +202,7 @@ export class PostgresAgentConfigurationTransactionV1
 
 	async commit(
 		input: AgentConfigurationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
@@ -278,6 +281,7 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					throw new StaleAgentConfigurationCommit();
 				}
+				await insertPendingSecretRecordAttachments(transaction, attachments);
 
 				if (plan.accessUpdate && applicationId) {
 					const accessAdvanced = await transaction

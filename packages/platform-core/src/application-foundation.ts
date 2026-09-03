@@ -11,6 +11,11 @@ import {
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV1,
 } from "./agent-configuration.js";
+import {
+	type PendingSecretRecordAttachmentResolverV1,
+	type PendingSecretRecordAttachmentsV1,
+	resolvePendingSecretRecordAttachmentsV1,
+} from "./secret-record-attachments.js";
 
 export interface CommitApplicationFoundationCommandV1
 	extends InitialAgentConfigurationCommandV1 {
@@ -127,6 +132,7 @@ export interface ApplicationFoundationTransactionPortV1 {
 	}): Promise<ApplicationFoundationReadDecisionV1>;
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
 	): Promise<ApplicationFoundationCommitDecisionV1>;
 }
 
@@ -134,6 +140,7 @@ export interface ApplicationFoundationUseCaseV1 {
 	submit(
 		command: CommitApplicationFoundationCommandV1,
 		actorContext: ApplicationFoundationActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<CommitApplicationFoundationResultV1>;
 }
 
@@ -724,7 +731,7 @@ export function createApplicationFoundationUseCaseV1(
 ): ApplicationFoundationUseCaseV1 {
 	const now = options.now ?? systemNow;
 	return {
-		async submit(commandInput, actorContextInput) {
+		async submit(commandInput, actorContextInput, attachment) {
 			const actorContext =
 				parseApplicationFoundationActorContextV1(actorContextInput);
 			const command = parseApplicationFoundationCommandV1(commandInput);
@@ -863,10 +870,21 @@ export function createApplicationFoundationUseCaseV1(
 					occurredAt: submittedAt,
 				},
 			};
+			let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+			try {
+				attachments = await resolvePendingSecretRecordAttachmentsV1({
+					attachment,
+					configuration: plan.configurationRevision.configuration,
+					ownerId: actorContext.userId,
+					occurredAt: submittedAt,
+				});
+			} catch {
+				throw new ApplicationFoundationError("dependency_unavailable");
+			}
 			let decision: ApplicationFoundationCommitDecisionV1;
 			try {
 				decision = parseCommitDecision(
-					await dependencies.transaction.commit(plan),
+					await dependencies.transaction.commit(plan, attachments),
 					result,
 				);
 			} catch (error) {

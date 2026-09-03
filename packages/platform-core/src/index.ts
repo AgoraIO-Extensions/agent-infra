@@ -42,3 +42,8 @@ export * from "./agent-management.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./idempotency.js";
+export type {
+	PendingSecretRecordAttachmentResolverV1,
+	PendingSecretRecordAttachmentsV1,
+	PendingSecretRecordExpectationV1,
+} from "./secret-record-attachments.js";
