@@ -1,6 +1,14 @@
-import type { Client } from "../../pilot/generated/client/index.js";
+import type {
+	Client,
+	RequestResult,
+} from "../../pilot/generated/client/index.js";
 import { getAgent, listAgents } from "../../pilot/generated/sdk.gen.js";
-import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type {
+	AgentProjectionV1,
+	ListAgentsData,
+	ListAgentsErrors,
+	ListAgentsResponses,
+} from "../../pilot/generated/types.gen.js";
 
 type UnavailableState = {
 	kind: "unavailable";
@@ -18,25 +26,44 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV1 }
 	| UnavailableState;
 
+const retryableError = () => new Error("Agent data is temporarily unavailable");
+
 function unavailable(error: { retryable?: boolean } | undefined) {
+	if (error?.retryable !== false) throw retryableError();
+
 	return {
 		kind: "unavailable" as const,
-		retryable: error?.retryable ?? true,
+		retryable: false,
 	};
 }
 
 export async function loadAgentDiscovery(
 	client?: Client,
 ): Promise<AgentDiscoveryState> {
-	const result = await listAgents({ client, responseStyle: "fields" });
-	if (result.data) {
-		return {
-			kind: "ready",
-			agents: result.data.items,
-		};
-	}
+	const agents: AgentProjectionV1[] = [];
+	const cursors = new Set<string>();
+	let cursor: string | null = null;
 
-	return unavailable(result.error);
+	do {
+		const query: ListAgentsData["query"] =
+			cursor === null ? undefined : { cursor };
+		const result: Awaited<
+			RequestResult<ListAgentsResponses, ListAgentsErrors, false>
+		> = await listAgents<false>({
+			client,
+			query,
+			responseStyle: "fields",
+			throwOnError: false,
+		});
+		if (!result.data) return unavailable(result.error);
+
+		agents.push(...result.data.items);
+		cursor = result.data.nextCursor;
+		if (cursor !== null && cursors.has(cursor)) throw retryableError();
+		if (cursor !== null) cursors.add(cursor);
+	} while (cursor !== null);
+
+	return { kind: "ready", agents };
 }
 
 export async function loadAgentDetail(
@@ -47,6 +74,7 @@ export async function loadAgentDetail(
 		client,
 		path: { agentId },
 		responseStyle: "fields",
+		throwOnError: false,
 	});
 	return result.data
 		? { kind: "ready", agent: result.data }
