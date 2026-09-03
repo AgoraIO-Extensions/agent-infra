@@ -84,7 +84,11 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 	}
 
 	const { agent } = state;
-	const interactionUrl = safeInteractionUrl(agent.interactionUrl);
+	const interactionUrl =
+		agent.source.kind === "custom" &&
+		agent.source.interactionMode === "self-managed"
+			? safeInteractionUrl(agent.interactionUrl)
+			: undefined;
 	return (
 		<section aria-labelledby="agent-detail-heading" className="space-y-6">
 			<header className="space-y-2 border-slate-200 border-b pb-5">

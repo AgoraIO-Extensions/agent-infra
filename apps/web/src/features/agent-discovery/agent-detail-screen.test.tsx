@@ -72,6 +72,25 @@ describe("AgentDetailScreen", () => {
 		expect(markup).not.toContain(interactionUrl);
 	});
 
+	it("omits a self-managed access entry from a platform-adapter projection", async () => {
+		const agent = AgentProjectionV1Schema.parse({
+			...startingAgent,
+			interactionUrl: "https://agent.example.test",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "platform-adapter",
+			},
+		});
+
+		const markup = await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+
+		expect(markup).not.toContain("Open Agent");
+		expect(markup).not.toContain("agent.example.test");
+	});
+
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {
 		const markup = await renderWithAgentRouter(
 			<AgentDetailScreen
