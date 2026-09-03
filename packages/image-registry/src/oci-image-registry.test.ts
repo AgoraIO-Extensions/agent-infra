@@ -8,6 +8,9 @@ import {
 	type ImageRegistryAdapterV1,
 } from "./oci-image-registry.js";
 
+const ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
+const ociConfigMediaType = "application/vnd.oci.image.config.v1+json";
+
 const runtimeManifestLabel = JSON.stringify({
 	schemaVersion: 1,
 	interactionMode: "platform-adapter",
@@ -29,11 +32,23 @@ const registryConfigBody = JSON.stringify({
 	},
 });
 const configDigest = digestText(registryConfigBody);
-const registryManifestBody = JSON.stringify({
-	schemaVersion: 2,
-	config: { digest: configDigest },
+const registryManifestBody = ociManifestBody({
+	configDigest,
+	configSize: Buffer.byteLength(registryConfigBody),
 });
 const manifestDigest = digestText(registryManifestBody);
+const malformedManifest = Buffer.concat([
+	Buffer.from(
+		`{"schemaVersion":2,"mediaType":"${ociManifestMediaType}","config":{"mediaType":"${ociConfigMediaType}","digest":"${configDigest}","size":${Buffer.byteLength(registryConfigBody)}},"layers":[],"note":"`,
+		"utf8",
+	),
+	Buffer.from([0x80]),
+	Buffer.from('"}', "utf8"),
+]);
+const decodedMalformedManifestDigest = digestText(
+	new TextDecoder("utf-8").decode(malformedManifest),
+);
+const rawMalformedManifestDigest = digestBytes(malformedManifest);
 
 const request = {
 	schemaVersion: 1,
@@ -53,10 +68,48 @@ const admittedPolicy = {
 };
 
 function response(
-	body: string,
+	body: ConstructorParameters<typeof Response>[0],
 	init: ConstructorParameters<typeof Response>[1] = {},
 ) {
 	return new Response(body, init);
+}
+
+function ociManifestBody(input: {
+	readonly configDigest: string;
+	readonly configSize: number;
+}): string {
+	return JSON.stringify({
+		schemaVersion: 2,
+		mediaType: ociManifestMediaType,
+		config: {
+			mediaType: ociConfigMediaType,
+			digest: input.configDigest,
+			size: input.configSize,
+		},
+		layers: [],
+	});
+}
+
+function ociManifestResponse(
+	body: ConstructorParameters<typeof Response>[0],
+	digest: string,
+	init: ConstructorParameters<typeof Response>[1] = {},
+): Response {
+	const headers = new Headers(init.headers);
+	if (!headers.has("content-type"))
+		headers.set("content-type", ociManifestMediaType);
+	headers.set("docker-content-digest", digest);
+	return response(body, { ...init, status: init.status ?? 200, headers });
+}
+
+function ociConfigResponse(
+	body: ConstructorParameters<typeof Response>[0],
+	init: ConstructorParameters<typeof Response>[1] = {},
+): Response {
+	const headers = new Headers(init.headers);
+	if (!headers.has("content-type"))
+		headers.set("content-type", ociConfigMediaType);
+	return response(body, { ...init, status: init.status ?? 200, headers });
 }
 
 function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
@@ -71,15 +124,12 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			async fetch(input) {
 				const url = requestUrl(input);
 				if (url.endsWith("/v2/codex/manifests/pilot")) {
-					return response(registryManifestBody, {
-						status: 200,
-						headers: { "docker-content-digest": manifestDigest },
-					});
+					return ociManifestResponse(registryManifestBody, manifestDigest);
 				}
 				if (
 					url.endsWith(`/v2/codex/blobs/${encodeURIComponent(configDigest)}`)
 				) {
-					return response(registryConfigBody, { status: 200 });
+					return ociConfigResponse(registryConfigBody);
 				}
 				throw new Error(`Unexpected OCI request ${url}`);
 			},
@@ -160,11 +210,8 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			async fetch(input) {
 				const url = requestUrl(input);
 				return url.includes("/manifests/")
-					? response(registryManifestBody, {
-							status: 200,
-							headers: { "docker-content-digest": manifestDigest },
-						})
-					: response(registryConfigBody, { status: 200 });
+					? ociManifestResponse(registryManifestBody, manifestDigest)
+					: ociConfigResponse(registryConfigBody);
 			},
 			policy: {
 				async authorize() {
@@ -189,11 +236,8 @@ describe("OCI ImageRegistryAdapter V1", () => {
 	it("uses native fetch when no test seam is configured", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
 			return new URL(input.toString()).pathname.includes("/manifests/")
-				? new Response(registryManifestBody, {
-						status: 200,
-						headers: { "docker-content-digest": manifestDigest },
-					})
-				: new Response(registryConfigBody, { status: 200 });
+				? ociManifestResponse(registryManifestBody, manifestDigest)
+				: ociConfigResponse(registryConfigBody);
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		try {
@@ -227,12 +271,9 @@ describe("OCI ImageRegistryAdapter V1", () => {
 					expect(new URL(url).pathname).toBe(
 						`/v2/codex/manifests/${encodeURIComponent(manifestDigest)}`,
 					);
-					return response(registryManifestBody, {
-						status: 200,
-						headers: { "docker-content-digest": manifestDigest },
-					});
+					return ociManifestResponse(registryManifestBody, manifestDigest);
 				}
-				return response(registryConfigBody, { status: 200 });
+				return ociConfigResponse(registryConfigBody);
 			},
 			policy: {
 				async authorize() {
@@ -260,10 +301,7 @@ describe("OCI ImageRegistryAdapter V1", () => {
 					configReads += 1;
 					throw new Error("config must not be requested");
 				}
-				return response(registryManifestBody, {
-					status: 200,
-					headers: { "docker-content-digest": manifestDigest },
-				});
+				return ociManifestResponse(registryManifestBody, manifestDigest);
 			},
 			policy: {
 				async authorize(input) {
@@ -294,10 +332,7 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			async fetch(input) {
 				const url = requestUrl(input);
 				if (url.includes("/blobs/")) configReads += 1;
-				return response(registryManifestBody, {
-					status: 200,
-					headers: { "docker-content-digest": manifestDigest },
-				});
+				return ociManifestResponse(registryManifestBody, manifestDigest);
 			},
 			policy: {
 				async authorize() {
@@ -326,10 +361,10 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
 			async fetch() {
-				return response(JSON.stringify({ config: { digest: configDigest } }), {
-					status: 200,
-					headers: { "docker-content-digest": manifestDigest },
-				});
+				return ociManifestResponse(
+					registryManifestBody,
+					`sha256:${"f".repeat(64)}`,
+				);
 			},
 			policy: {
 				async authorize() {
@@ -342,6 +377,258 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			status: "rejected",
 			error: { code: "OCI_CONFIG_INVALID", retryable: false },
 		});
+	});
+
+	it("uses received bytes for Digest verification before decoding a valid BOM", async () => {
+		const rawConfig = Buffer.from(`\uFEFF${registryConfigBody}`, "utf8");
+		const rawConfigDigest = digestBytes(rawConfig);
+		const rawManifest = Buffer.from(
+			`\uFEFF${ociManifestBody({
+				configDigest: rawConfigDigest,
+				configSize: rawConfig.byteLength,
+			})}`,
+			"utf8",
+		);
+		const rawManifestDigest = digestBytes(rawManifest);
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				return requestUrl(input).includes("/manifests/")
+					? ociManifestResponse(rawManifest, rawManifestDigest)
+					: ociConfigResponse(rawConfig);
+			},
+			policy: { authorize: policy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "admitted",
+			immutableDigest: rawManifestDigest,
+			ociConfig: { configDigest: rawConfigDigest },
+		});
+		expect(policy).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["a Digest derived from decoded text", decodedMalformedManifestDigest],
+		["its matching raw Digest", rawMalformedManifestDigest],
+	] as const)("rejects malformed UTF-8 with %s", async (_name, digest) => {
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch() {
+				return ociManifestResponse(malformedManifest, digest);
+			},
+			policy: { authorize: policy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID", retryable: false },
+		});
+		expect(policy).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[
+			"a non-image manifest Content-Type",
+			"application/vnd.oci.image.index.v1+json",
+			ociManifestBody({
+				configDigest,
+				configSize: Buffer.byteLength(registryConfigBody),
+			}),
+		],
+		[
+			"an incomplete OCI config descriptor",
+			ociManifestMediaType,
+			JSON.stringify({
+				schemaVersion: 2,
+				mediaType: ociManifestMediaType,
+				config: { digest: configDigest },
+				layers: [],
+			}),
+		],
+	] as const)(
+		"rejects %s before policy evaluation",
+		async (_name, contentType, body) => {
+			const policy = vi.fn(async () => admittedPolicy);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				async fetch() {
+					return ociManifestResponse(body, digestText(body), {
+						headers: { "content-type": contentType },
+					});
+				},
+				policy: { authorize: policy },
+			});
+
+			const result = await adapter.admit(request);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: { code: "OCI_CONFIG_INVALID", retryable: false },
+			});
+			expect(policy).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects an OCI config response with a non-config Content-Type", async () => {
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				return requestUrl(input).includes("/manifests/")
+					? ociManifestResponse(registryManifestBody, manifestDigest)
+					: ociConfigResponse(registryConfigBody, {
+							status: 200,
+							headers: { "content-type": "application/json" },
+						});
+			},
+			policy: { authorize: policy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID", retryable: false },
+		});
+		expect(policy).toHaveBeenCalledOnce();
+	});
+
+	it("bounds oversized OCI responses before policy and redacts their content", async () => {
+		const oversizedManifest = JSON.stringify({
+			...JSON.parse(registryManifestBody),
+			annotation: `registry-secret-${"x".repeat(2 * 1024 * 1024)}`,
+		});
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch() {
+				return ociManifestResponse(
+					oversizedManifest,
+					digestText(oversizedManifest),
+				);
+			},
+			policy: { authorize: policy },
+		});
+
+		const result = await adapter.admit(request);
+
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID", retryable: false },
+		});
+		expect(policy).not.toHaveBeenCalled();
+		expect(JSON.stringify(result)).not.toContain("registry-secret");
+	});
+
+	it("aborts a stalled OCI fetch by the fixed transport deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			const fetch = vi.fn(
+				(
+					_input: Parameters<typeof globalThis.fetch>[0],
+					init?: Parameters<typeof globalThis.fetch>[1],
+				) =>
+					new Promise<Response>((_resolve, reject) => {
+						init?.signal?.addEventListener(
+							"abort",
+							() => reject(new Error("registry-secret timeout")),
+							{ once: true },
+						);
+					}),
+			);
+			const policy = vi.fn(async () => admittedPolicy);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				fetch,
+				policy: { authorize: policy },
+			});
+			const pending = adapter.admit(request);
+			const deadline = new Promise<"deadline">((resolve) => {
+				setTimeout(() => resolve("deadline"), 60_000);
+			});
+
+			await vi.advanceTimersByTimeAsync(60_000);
+			const result = await Promise.race([
+				pending,
+				deadline.then(() => ({ status: "deadline" }) as const),
+			]);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			});
+			expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+			expect(policy).not.toHaveBeenCalled();
+			expect(JSON.stringify(result)).not.toContain("registry-secret");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts a stalled OCI response body by the fixed transport deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			const fetch = vi.fn(
+				(
+					_input: Parameters<typeof globalThis.fetch>[0],
+					init?: Parameters<typeof globalThis.fetch>[1],
+				) =>
+					Promise.resolve(
+						ociManifestResponse(
+							new ReadableStream<Uint8Array>({
+								start(controller) {
+									init?.signal?.addEventListener(
+										"abort",
+										() => controller.error(new Error("registry-secret body")),
+										{ once: true },
+									);
+								},
+							}),
+							manifestDigest,
+						),
+					),
+			);
+			const policy = vi.fn(async () => admittedPolicy);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				fetch,
+				policy: { authorize: policy },
+			});
+			const pending = adapter.admit(request);
+			const deadline = new Promise<"deadline">((resolve) => {
+				setTimeout(() => resolve("deadline"), 60_000);
+			});
+
+			await vi.advanceTimersByTimeAsync(60_000);
+			const result = await Promise.race([
+				pending,
+				deadline.then(() => ({ status: "deadline" }) as const),
+			]);
+
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			});
+			expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+			expect(policy).not.toHaveBeenCalled();
+			expect(JSON.stringify(result)).not.toContain("registry-secret");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("fails closed when a Distribution client returns a malformed outcome", async () => {
@@ -400,8 +687,9 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		async (_name, config, code) => {
 			const configBody = JSON.stringify(config);
 			const expectedConfigDigest = digestText(configBody);
-			const manifestBody = JSON.stringify({
-				config: { digest: expectedConfigDigest },
+			const manifestBody = ociManifestBody({
+				configDigest: expectedConfigDigest,
+				configSize: Buffer.byteLength(configBody),
 			});
 			const expectedManifestDigest = digestText(manifestBody);
 			const adapter = createOciImageRegistryAdapterV1({
@@ -410,13 +698,8 @@ describe("OCI ImageRegistryAdapter V1", () => {
 				async fetch(input) {
 					const url = requestUrl(input);
 					return url.includes("/manifests/")
-						? response(manifestBody, {
-								status: 200,
-								headers: {
-									"docker-content-digest": expectedManifestDigest,
-								},
-							})
-						: response(configBody, { status: 200 });
+						? ociManifestResponse(manifestBody, expectedManifestDigest)
+						: ociConfigResponse(configBody);
 				},
 				policy: {
 					async authorize() {
@@ -456,8 +739,9 @@ const conformanceConfigBody = JSON.stringify({
 	},
 });
 const conformanceConfigDigest = digestText(conformanceConfigBody);
-const conformanceManifestBody = JSON.stringify({
-	config: { digest: conformanceConfigDigest },
+const conformanceManifestBody = ociManifestBody({
+	configDigest: conformanceConfigDigest,
+	configSize: Buffer.byteLength(conformanceConfigBody),
 });
 const conformanceManifestDigest = digestText(conformanceManifestBody);
 
@@ -540,12 +824,12 @@ const adapterFactories: readonly {
 						return response("registry-secret", { status: 403 });
 					}
 					if (url.endsWith("/v2/codex/manifests/pilot")) {
-						return response(conformanceManifestBody, {
-							status: 200,
-							headers: { "docker-content-digest": conformanceManifestDigest },
-						});
+						return ociManifestResponse(
+							conformanceManifestBody,
+							conformanceManifestDigest,
+						);
 					}
-					return response(conformanceConfigBody, { status: 200 });
+					return ociConfigResponse(conformanceConfigBody);
 				},
 				policy: {
 					async authorize() {
@@ -632,4 +916,8 @@ describe.each(adapterFactories)(
 
 function digestText(input: string): string {
 	return `sha256:${createHash("sha256").update(input, "utf8").digest("hex")}`;
+}
+
+function digestBytes(input: Uint8Array): string {
+	return `sha256:${createHash("sha256").update(input).digest("hex")}`;
 }
