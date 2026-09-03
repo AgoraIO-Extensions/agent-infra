@@ -515,7 +515,11 @@ export class CodexAppServerBridge {
 		if (!isPlainRecord(frame)) throw invalidFrame();
 		let encoded: string;
 		try {
-			encoded = `${JSON.stringify(frame)}\n`;
+			const payload = JSON.stringify(frame);
+			if (payload === undefined || !isPlainRecord(JSON.parse(payload))) {
+				throw invalidFrame();
+			}
+			encoded = `${payload}\n`;
 		} catch {
 			throw invalidFrame();
 		}

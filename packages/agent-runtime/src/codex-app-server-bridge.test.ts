@@ -304,6 +304,21 @@ describe.sequential("Codex app-server v2 bridge", () => {
 	});
 
 	it.each([
+		["undefined", { toJSON: (): undefined => undefined }],
+		["a scalar", { toJSON: (): number => 1 }],
+	] as const)(
+		"rejects a frame whose toJSON serializes to %s",
+		async (_name, frame) => {
+			await installFakeCodex("echo");
+			const bridge = await CodexAppServerBridge.open(options());
+			await expect(bridge.send(frame)).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_FRAME_INVALID",
+			});
+			await bridge.close();
+		},
+	);
+
+	it.each([
 		["malformed-frame", "CODEX_APP_SERVER_FRAME_INVALID"],
 		["oversized-frame", "CODEX_APP_SERVER_FRAME_INVALID"],
 		["startup-exit", "CODEX_APP_SERVER_EXITED"],
