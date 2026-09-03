@@ -13,6 +13,7 @@ export const agentManagementStatusLabels = {
 	creation_failed: "Creation failed",
 	disabled: "Disabled",
 } satisfies Record<
-	AgentApplicationProjectionV1["status"] | AgentProjectionV1["managementStatus"],
+	| AgentApplicationProjectionV1["status"]
+	| AgentProjectionV1["managementStatus"],
 	string
 >;

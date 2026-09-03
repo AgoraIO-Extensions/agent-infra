@@ -8,7 +8,6 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 	return useMutation({
 		mutationFn: () =>
 			withdrawMyAgentApplication(applicationId, crypto.randomUUID()),
-		onSuccess: () =>
-			queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
 	});
 }

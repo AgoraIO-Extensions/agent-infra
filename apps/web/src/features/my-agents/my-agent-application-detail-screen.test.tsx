@@ -22,9 +22,13 @@ describe("MyAgentApplicationDetailScreen", () => {
 		).toBeTruthy();
 		expect(screen.getByText("Pending approval")).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "Back to My Agents" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: "Back to My Agents" })
+				.getAttribute("href"),
 		).toBe("/my-agents");
-		fireEvent.click(screen.getByRole("button", { name: "Withdraw application" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Withdraw application" }),
+		);
 		expect(onWithdraw).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("link", { name: "Open Agent" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();

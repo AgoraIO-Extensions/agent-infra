@@ -98,7 +98,7 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
 					<dt className="font-medium text-slate-700 text-sm">Agent status</dt>
 					<dd className="text-slate-950 text-sm">
-							{agentManagementStatusLabels[agent.managementStatus]}
+						{agentManagementStatusLabels[agent.managementStatus]}
 					</dd>
 				</div>
 				{agent.serviceAvailability ? (
