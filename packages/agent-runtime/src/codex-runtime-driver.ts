@@ -331,11 +331,18 @@ class CodexRpc {
 		void this.consume();
 	}
 
-	async request(method: string, params: Record<string, unknown>) {
+	async request<T>(
+		method: string,
+		params: Record<string, unknown>,
+		parse: (value: unknown) => T,
+	) {
 		if (this.failed) unavailable();
 		const id = this.nextRequestId++;
-		const response = new Promise<unknown>((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+		const response = new Promise<T>((resolve, reject) => {
+			this.pending.set(id, {
+				resolve: (value) => resolve(parse(value)),
+				reject,
+			});
 		});
 		try {
 			await this.bridge.send({ id, method, params });
@@ -394,8 +401,13 @@ class CodexRpc {
 			this.fail(protocolInvalidError());
 			return;
 		}
+		try {
+			pending.resolve(frame.result);
+		} catch {
+			this.fail(protocolInvalidError());
+			return;
+		}
 		this.pending.delete(frame.id);
-		pending.resolve(frame.result);
 	}
 
 	private fail(error = unavailableError()) {
@@ -438,10 +450,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const rpc = new CodexRpc(bridge);
 		try {
-			const initialized = await rpc.request("initialize", {
-				clientInfo: { name: "agent-infra-runtime", version: "1" },
-			});
-			if (!isPlainRecord(initialized)) protocolInvalid();
+			await rpc.request(
+				"initialize",
+				{ clientInfo: { name: "agent-infra-runtime", version: "1" } },
+				(value) => {
+					if (!isPlainRecord(value)) protocolInvalid();
+				},
+			);
 			return new CodexRuntimeDriver(file, rpc);
 		} catch (error) {
 			await rpc.close();
@@ -493,23 +508,32 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
 		try {
-			const started = await this.rpc.request("turn/start", {
-				threadId: session.threadId,
-				clientUserMessageId: command.operationId,
-				input: [{ type: "text", text }],
-			});
-			const turn = isPlainRecord(started) ? started.turn : undefined;
-			if (
-				!isPlainRecord(turn) ||
-				typeof turn.id !== "string" ||
-				turn.id.length === 0
-			) {
-				protocolInvalid();
-			}
+			const turn = await this.rpc.request(
+				"turn/start",
+				{
+					threadId: session.threadId,
+					clientUserMessageId: command.operationId,
+					input: [{ type: "text", text }],
+				},
+				(value) => {
+					const started = isPlainRecord(value) ? value.turn : undefined;
+					if (
+						!isPlainRecord(started) ||
+						typeof started.id !== "string" ||
+						started.id.length === 0
+					) {
+						protocolInvalid();
+					}
+					return {
+						id: started.id,
+						status: statusForTurn(started.status),
+					};
+				},
+			);
 			return await this.resolve(
 				command,
 				session.nativeSessionRef,
-				{ outcome: "accepted", status: statusForTurn(turn.status) },
+				{ outcome: "accepted", status: turn.status },
 				turn.id,
 			);
 		} catch (error) {
@@ -588,13 +612,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let cursor: string | undefined;
 		const seenCursors = new Set<string>();
 		for (let page = 0; page < maximumTurnsListPages; page += 1) {
-			const value = await this.rpc.request("thread/turns/list", {
-				threadId,
-				itemsView: "notLoaded",
-				limit: turnsListPageSize,
-				...(cursor === undefined ? {} : { cursor }),
-			});
-			const result = this.statusFromTurnsList(value, nativeTurnId);
+			const result = await this.rpc.request(
+				"thread/turns/list",
+				{
+					threadId,
+					itemsView: "notLoaded",
+					limit: turnsListPageSize,
+					...(cursor === undefined ? {} : { cursor }),
+				},
+				(value) => this.statusFromTurnsList(value, nativeTurnId),
+			);
 			if (result.status !== undefined) return result.status;
 			if (result.nextCursor === undefined) unavailable();
 			if (seenCursors.has(result.nextCursor)) protocolInvalid();
@@ -760,16 +787,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
 		}
-		const started = await this.rpc.request("thread/start", {});
-		const thread = isPlainRecord(started) ? started.thread : undefined;
-		if (
-			!isPlainRecord(thread) ||
-			typeof thread.id !== "string" ||
-			thread.id.length === 0
-		) {
-			protocolInvalid();
-		}
-		const threadId = thread.id;
+		const threadId = await this.rpc.request("thread/start", {}, (value) => {
+			const thread = isPlainRecord(value) ? value.thread : undefined;
+			if (
+				!isPlainRecord(thread) ||
+				typeof thread.id !== "string" ||
+				thread.id.length === 0
+			) {
+				protocolInvalid();
+			}
+			return thread.id;
+		});
 		await this.update((state) => {
 			const stored = state.sessions[nativeSessionRef];
 			if (!stored || stored.threadId) protocolInvalid();
@@ -792,14 +820,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (this.resumedSessions.has(nativeSessionRef)) return;
 		const session = this.session(nativeSessionRef);
 		if (!session.threadId) unavailable();
-		const resumed = await this.rpc.request("thread/resume", {
-			threadId: session.threadId,
-			excludeTurns: true,
-		});
-		const thread = isPlainRecord(resumed) ? resumed.thread : undefined;
-		if (!isPlainRecord(thread) || thread.id !== session.threadId) {
-			protocolInvalid();
-		}
+		await this.rpc.request(
+			"thread/resume",
+			{ threadId: session.threadId, excludeTurns: true },
+			(value) => {
+				const thread = isPlainRecord(value) ? value.thread : undefined;
+				if (!isPlainRecord(thread) || thread.id !== session.threadId) {
+					protocolInvalid();
+				}
+			},
+		);
 		this.resumedSessions.add(nativeSessionRef);
 	}
 

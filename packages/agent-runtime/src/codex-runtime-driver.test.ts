@@ -207,6 +207,12 @@ class TestCodexBridge {
 		});
 	}
 
+	respondToHeldTurnsListWithInvalidData(index = 0) {
+		const id = this.heldTurnsListRequestIds.splice(index, 1)[0];
+		if (id === undefined) throw new Error("No held turns-list request");
+		this.respond(id, { data: "invalid" });
+	}
+
 	emitNotification() {
 		this.push({
 			method: "turn/started",
@@ -929,4 +935,33 @@ describe("Codex Runtime Driver", () => {
 			});
 		},
 	);
+
+	it("fails all pending requests for a structurally invalid turns-list result", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.holdTurnsList();
+		const first = driver.getStatus(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const second = driver.getStatus(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(2);
+		});
+		bridge.respondToHeldTurnsListWithInvalidData();
+		await expect(first).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
+		await expect(second).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
+	});
 });
