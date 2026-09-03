@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 import { withdrawMyAgentApplication } from "./my-agent-applications.js";
 
@@ -45,7 +45,7 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 		},
 	});
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (pendingWithdrawal.current.applicationId === applicationId) return;
 		pendingWithdrawal.current = { applicationId };
 		withdrawal.reset();
