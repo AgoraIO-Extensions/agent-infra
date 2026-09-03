@@ -25,5 +25,10 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 			pendingWithdrawal.current.idempotencyKey = undefined;
 			return queryClient.invalidateQueries({ queryKey: ["my-agents"] });
 		},
+		onError: () => {
+			if (pendingWithdrawal.current.applicationId === applicationId) {
+				pendingWithdrawal.current.idempotencyKey = undefined;
+			}
+		},
 	});
 }

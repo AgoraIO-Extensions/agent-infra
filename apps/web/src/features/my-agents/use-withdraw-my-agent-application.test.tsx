@@ -50,4 +50,44 @@ describe("useWithdrawMyAgentApplication", () => {
 		);
 		queryClient.clear();
 	});
+
+	it("starts a new idempotency key after retries exhaust", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: 1, retryDelay: 0 } },
+		});
+		vi.mocked(withdrawMyAgentApplication)
+			.mockRejectedValueOnce(new Error("first transport failure"))
+			.mockRejectedValueOnce(new Error("second transport failure"))
+			.mockResolvedValueOnce(pendingApplication);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() => useWithdrawMyAgentApplication(pendingApplication.applicationId),
+			{ wrapper },
+		);
+
+		await act(async () => {
+			await expect(result.current.mutateAsync()).rejects.toThrow(
+				"second transport failure",
+			);
+		});
+		expect(withdrawMyAgentApplication).toHaveBeenCalledTimes(2);
+		const exhaustedKey = vi.mocked(withdrawMyAgentApplication).mock
+			.calls[0]?.[1];
+		expect(vi.mocked(withdrawMyAgentApplication).mock.calls[1]?.[1]).toBe(
+			exhaustedKey,
+		);
+
+		await act(async () => {
+			await expect(result.current.mutateAsync()).resolves.toEqual(
+				pendingApplication,
+			);
+		});
+		expect(withdrawMyAgentApplication).toHaveBeenCalledTimes(3);
+		expect(vi.mocked(withdrawMyAgentApplication).mock.calls[2]?.[1]).not.toBe(
+			exhaustedKey,
+		);
+		queryClient.clear();
+	});
 });
