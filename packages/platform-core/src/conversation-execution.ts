@@ -1176,8 +1176,7 @@ export function createConversationExecutionUseCaseV1(
 					),
 					authority.agentId,
 				);
-			} catch (error) {
-				if (error instanceof ConversationExecutionError) throw error;
+			} catch {
 				return unavailable();
 			}
 		},
@@ -1351,8 +1350,7 @@ export function createConversationExecutionUseCaseV1(
 					),
 					parseMessageCommandResult,
 				);
-			} catch (error) {
-				if (error instanceof ConversationExecutionError) throw error;
+			} catch {
 				return unavailable();
 			}
 		},
@@ -1458,8 +1456,7 @@ export function createConversationExecutionUseCaseV1(
 					),
 					parseRegenerationCommandResult,
 				);
-			} catch (error) {
-				if (error instanceof ConversationExecutionError) throw error;
+			} catch {
 				return unavailable();
 			}
 		},
@@ -1573,8 +1570,7 @@ export function createConversationExecutionUseCaseV1(
 					),
 					command.targetExecutionId,
 				);
-			} catch (error) {
-				if (error instanceof ConversationExecutionError) throw error;
+			} catch {
 				return unavailable();
 			}
 		},

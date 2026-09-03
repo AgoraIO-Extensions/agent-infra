@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	ConversationExecutionError,
 	type ConversationExecutionTransactionPortV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.ts";
@@ -280,6 +281,74 @@ describe("Conversation execution use case", () => {
 				idempotencyKey: "create_malformed_authorization",
 				requestId: "request_create_malformed_authorization",
 				traceId: "trace_create_malformed_authorization",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it("fails closed when a transaction throws an internal validation error", async () => {
+		const transaction = {
+			async createConversation() {
+				throw new ConversationExecutionError("invalid_input");
+			},
+			async executeMessage() {
+				throw new ConversationExecutionError("invalid_input");
+			},
+			async executeRegeneration() {
+				throw new ConversationExecutionError("invalid_input");
+			},
+			async executeStop() {
+				throw new ConversationExecutionError("invalid_input");
+			},
+		} satisfies ConversationExecutionTransactionPortV1;
+		const conversation = createConversationExecutionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority };
+				},
+			},
+			transaction,
+		});
+
+		await expect(
+			conversation.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_transaction_error",
+				requestId: "request_create_transaction_error",
+				traceId: "trace_create_transaction_error",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "conversation_transaction_error",
+				text: "Message",
+				idempotencyKey: "message_transaction_error",
+				requestId: "request_message_transaction_error",
+				traceId: "trace_message_transaction_error",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId: "conversation_transaction_error",
+				sourceMessageId: "message_transaction_error",
+				idempotencyKey: "regenerate_transaction_error",
+				requestId: "request_regenerate_transaction_error",
+				traceId: "trace_regenerate_transaction_error",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "conversation_transaction_error",
+				targetExecutionId: "execution_transaction_error",
+				idempotencyKey: "stop_transaction_error",
+				requestId: "request_stop_transaction_error",
+				traceId: "trace_stop_transaction_error",
 			}),
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
