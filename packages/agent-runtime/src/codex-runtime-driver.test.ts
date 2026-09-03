@@ -195,6 +195,10 @@ class TestCodexBridge {
 		return this.heldTurnsListRequestIds.length;
 	}
 
+	isClosed() {
+		return this.closed;
+	}
+
 	respondToHeldTurnsList(kind: "error" | "missing-result") {
 		const id = this.heldTurnsListRequestIds.shift();
 		if (id === undefined) throw new Error("No held turns-list request");
@@ -1038,5 +1042,6 @@ describe("Codex Runtime Driver", () => {
 		for (const failure of failures) {
 			expect(failure).toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		}
+		expect(bridge.isClosed()).toBe(true);
 	});
 });

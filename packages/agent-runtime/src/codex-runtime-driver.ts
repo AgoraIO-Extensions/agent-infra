@@ -426,6 +426,7 @@ class CodexRpc {
 	private fail(error = unavailableError()) {
 		if (this.failed) return;
 		this.failed = true;
+		void this.bridge.close?.().catch(() => {});
 		for (const pending of this.pending.values()) pending.reject(error);
 		this.pending.clear();
 	}
