@@ -30,7 +30,8 @@ type OpenCodexBridge = (
 
 export interface CodexRuntimeDriverOptions {
 	readonly path: string;
-	readonly bridgeOptions: CodexAppServerBridgeOptions;
+	readonly model: string;
+	readonly reasoningEffort: string;
 }
 
 interface CodexExecution {
@@ -428,7 +429,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let bridge: CodexAppServerTransport;
 		try {
 			bridge = await openBridge({
-				...options.bridgeOptions,
+				model: options.model,
+				reasoningEffort: options.reasoningEffort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 			});
 		} catch {

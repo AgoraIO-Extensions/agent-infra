@@ -83,11 +83,8 @@ function submitCommand(
 function driverOptions(path: string) {
 	return {
 		path,
-		bridgeOptions: {
-			model: "gpt-5.3-codex",
-			reasoningEffort: "high",
-			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-		},
+		model: "gpt-5.3-codex",
+		reasoningEffort: "high",
 	};
 }
 
