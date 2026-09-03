@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	ConversationExecutionError,
+	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.ts";
@@ -353,6 +354,109 @@ describe("Conversation execution use case", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
+	it("uses the target Execution generation for supplement and stop intents", async () => {
+		let supplementGeneration: number | undefined;
+		let stopGeneration: number | undefined;
+		const conversation = {
+			schemaVersion: 1,
+			conversationId: "conversation_generation",
+			agentId: authority.agentId,
+			actorId: authority.actorId,
+			channelId: authority.channelId,
+			status: "active",
+			sessionGeneration: 2,
+			hostSessionRef: "host_session_2",
+			authorizationRevision: authority.authorizationRevision,
+			lastConversationCursor: 0,
+		} as const;
+		const supplementState = {
+			conversation,
+			sourceMessage: undefined,
+			targetExecution: undefined,
+			existingStop: undefined,
+			activeExecution: {
+				executionId: "execution_generation",
+				conversationId: conversation.conversationId,
+				actorId: authority.actorId,
+				turnId: "turn_generation",
+				sessionGeneration: 1,
+				status: "submitted",
+			},
+		} satisfies ConversationExecutionStateV1;
+		const stopState = {
+			conversation,
+			sourceMessage: undefined,
+			targetExecution: {
+				executionId: "execution_generation",
+				conversationId: conversation.conversationId,
+				actorId: authority.actorId,
+				sessionGeneration: 1,
+				status: "submitted",
+			},
+			existingStop: undefined,
+			activeExecution: undefined,
+		} satisfies ConversationExecutionStateV1;
+		const transaction = {
+			async createConversation() {
+				throw new Error("Not used by this test");
+			},
+			async executeMessage(_request, decide) {
+				const decision = decide(supplementState);
+				if ("outcome" in decision) {
+					throw new Error("Expected a supplement plan");
+				}
+				supplementGeneration = decision.outboxIntent.sessionGeneration;
+				return { outcome: "accepted", result: decision.result };
+			},
+			async executeRegeneration() {
+				throw new Error("Not used by this test");
+			},
+			async executeStop(_request, decide) {
+				const decision = decide(stopState);
+				if ("outcome" in decision) {
+					throw new Error("Expected a stop plan");
+				}
+				stopGeneration = decision.outboxIntent.sessionGeneration;
+				return { outcome: "accepted", result: decision.result };
+			},
+		} satisfies ConversationExecutionTransactionPortV1;
+		const useCase = createConversationExecutionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority };
+				},
+			},
+			transaction,
+		});
+
+		await expect(
+			useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: conversation.conversationId,
+				text: "Supplemental instruction",
+				idempotencyKey: "message_generation",
+				requestId: "request_message_generation",
+				traceId: "trace_message_generation",
+			}),
+		).resolves.toMatchObject({ outcome: "accepted" });
+		await expect(
+			useCase.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: conversation.conversationId,
+				targetExecutionId: "execution_generation",
+				idempotencyKey: "stop_generation",
+				requestId: "request_stop_generation",
+				traceId: "trace_stop_generation",
+			}),
+		).resolves.toMatchObject({ outcome: "accepted" });
+		expect({ supplementGeneration, stopGeneration }).toEqual({
+			supplementGeneration: 1,
+			stopGeneration: 1,
+		});
+	});
+
 	it("replays the exact logical message before classifying later state", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority,
@@ -529,6 +633,76 @@ describe("Conversation execution use case", () => {
 		expect(await conversation.accept(busy)).toEqual({ outcome: "busy" });
 		expect(await conversation.accept(busy)).toEqual({ outcome: "busy" });
 		expect(conversation.snapshot()).toEqual(before);
+	});
+
+	it("re-evaluates transient busy message and regeneration attempts", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority: { ...authority, supportsSupplementaryInstruction: false },
+			newId: (() => {
+				let value = 1;
+				return () => `busy_retry_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_busy_retry",
+			requestId: "request_create_busy_retry",
+			traceId: "trace_create_busy_retry",
+		});
+		const initial = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "busy_retry_1",
+			text: "Initial message",
+			idempotencyKey: "message_busy_retry_initial",
+			requestId: "request_message_busy_retry_initial",
+			traceId: "trace_message_busy_retry_initial",
+		});
+		if (initial.outcome !== "accepted" || initial.result.messageId === null) {
+			throw new Error("Expected an accepted initial message");
+		}
+		const busyMessage = {
+			schemaVersion: 1 as const,
+			command: "message" as const,
+			conversationId: "busy_retry_1",
+			text: "Wait for the active turn",
+			idempotencyKey: "message_busy_retry",
+			requestId: "request_message_busy_retry",
+			traceId: "trace_message_busy_retry",
+		};
+		expect(await conversation.accept(busyMessage)).toEqual({ outcome: "busy" });
+		conversation.completeExecution(initial.result.executionId);
+		const acceptedMessage = await conversation.accept(busyMessage);
+		expect(acceptedMessage).toMatchObject({ outcome: "accepted" });
+		if (acceptedMessage.outcome !== "accepted") {
+			throw new Error("Expected a retried message to be accepted");
+		}
+
+		const busyRegeneration = {
+			schemaVersion: 1 as const,
+			command: "regenerate" as const,
+			conversationId: "busy_retry_1",
+			sourceMessageId: initial.result.messageId,
+			idempotencyKey: "regenerate_busy_retry",
+			requestId: "request_regenerate_busy_retry",
+			traceId: "trace_regenerate_busy_retry",
+		};
+		expect(await conversation.regenerate(busyRegeneration)).toEqual({
+			outcome: "busy",
+		});
+		conversation.completeExecution(acceptedMessage.result.executionId);
+		expect(await conversation.regenerate(busyRegeneration)).toMatchObject({
+			outcome: "accepted",
+		});
+		expect(conversation.snapshot()).toMatchObject({
+			messages: [{ messageId: "busy_retry_2" }, { messageId: "busy_retry_5" }],
+			executions: [
+				{ executionId: "busy_retry_3", status: "completed" },
+				{ executionId: "busy_retry_6", status: "completed" },
+				{ executionId: "busy_retry_8", status: "submitted" },
+			],
+		});
 	});
 
 	it("adds a supplemental message to the current execution without opening a second turn", async () => {

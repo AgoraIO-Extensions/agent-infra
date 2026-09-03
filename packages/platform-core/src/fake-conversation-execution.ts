@@ -39,6 +39,7 @@ interface StoredExecution {
 	readonly conversationId: string;
 	readonly actorId: string;
 	readonly turnId: string;
+	readonly sessionGeneration: number;
 	status:
 		| "submitted"
 		| "processing"
@@ -231,7 +232,9 @@ export class FakeConversationExecutionV1
 				}
 				const decision = decide(this.#state(request.command.conversationId));
 				if (!isMessageWritePlan(decision)) {
-					if (decision.outcome === "denied") return decision;
+					if (decision.outcome === "denied" || decision.outcome === "busy") {
+						return decision;
+					}
 					this.#commandIdempotency.set(idempotencyKey, {
 						requestDigest: request.requestDigest,
 						decision,
@@ -257,6 +260,7 @@ export class FakeConversationExecutionV1
 						conversationId: plan.execution.conversationId,
 						actorId: plan.execution.actorId,
 						turnId: plan.execution.turnId,
+						sessionGeneration: plan.execution.sessionGeneration,
 						status: plan.execution.status,
 					});
 				}
@@ -318,7 +322,9 @@ export class FakeConversationExecutionV1
 					),
 				);
 				if (!isRegenerationWritePlan(decision)) {
-					if (decision.outcome === "denied") return decision;
+					if (decision.outcome === "denied" || decision.outcome === "busy") {
+						return decision;
+					}
 					this.#commandIdempotency.set(idempotencyKey, {
 						requestDigest: request.requestDigest,
 						decision,
@@ -335,6 +341,7 @@ export class FakeConversationExecutionV1
 					conversationId: plan.execution.conversationId,
 					actorId: plan.execution.actorId,
 					turnId: plan.execution.turnId,
+					sessionGeneration: plan.execution.sessionGeneration,
 					status: plan.execution.status,
 				});
 				this.#outbox.push({
@@ -520,6 +527,7 @@ export class FakeConversationExecutionV1
 						executionId: target.executionId,
 						conversationId: target.conversationId,
 						actorId: target.actorId,
+						sessionGeneration: target.sessionGeneration,
 						status: target.status,
 					}
 				: undefined,
@@ -536,6 +544,7 @@ export class FakeConversationExecutionV1
 						conversationId: active.conversationId,
 						actorId: active.actorId,
 						turnId: active.turnId,
+						sessionGeneration: active.sessionGeneration,
 						status: active.status as "submitted" | "processing" | "unknown",
 					}
 				: undefined,

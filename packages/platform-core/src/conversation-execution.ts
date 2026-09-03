@@ -100,6 +100,7 @@ export interface ConversationExecutionStateV1 {
 				readonly executionId: string;
 				readonly conversationId: string;
 				readonly actorId: string;
+				readonly sessionGeneration: number;
 				readonly status:
 					| "submitted"
 					| "processing"
@@ -122,6 +123,7 @@ export interface ConversationExecutionStateV1 {
 				readonly conversationId: string;
 				readonly actorId: string;
 				readonly turnId: string;
+				readonly sessionGeneration: number;
 				readonly status: "submitted" | "processing" | "unknown";
 		  }
 		| undefined;
@@ -782,6 +784,7 @@ function parseState(
 				"executionId",
 				"conversationId",
 				"actorId",
+				"sessionGeneration",
 				"status",
 			]);
 			const status = execution.status;
@@ -789,6 +792,7 @@ function parseState(
 				!isText(execution.executionId) ||
 				!isText(execution.conversationId) ||
 				!isText(execution.actorId) ||
+				!isPositiveSafeInteger(execution.sessionGeneration) ||
 				(status !== "submitted" &&
 					status !== "processing" &&
 					status !== "unknown" &&
@@ -802,6 +806,7 @@ function parseState(
 				executionId: execution.executionId,
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
+				sessionGeneration: execution.sessionGeneration,
 				status: status as NonNullable<
 					ConversationExecutionStateV1["targetExecution"]
 				>["status"],
@@ -834,6 +839,7 @@ function parseState(
 				"conversationId",
 				"actorId",
 				"turnId",
+				"sessionGeneration",
 				"status",
 			]);
 			const executionStatus = execution.status;
@@ -842,6 +848,7 @@ function parseState(
 				!isText(execution.conversationId) ||
 				!isText(execution.actorId) ||
 				!isText(execution.turnId) ||
+				!isPositiveSafeInteger(execution.sessionGeneration) ||
 				(executionStatus !== "submitted" &&
 					executionStatus !== "processing" &&
 					executionStatus !== "unknown")
@@ -853,6 +860,7 @@ function parseState(
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
 				turnId: execution.turnId,
+				sessionGeneration: execution.sessionGeneration,
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
 		})();
@@ -1249,7 +1257,7 @@ export function createConversationExecutionUseCaseV1(
 										executionId: state.activeExecution.executionId,
 										messageId,
 										turnId: state.activeExecution.turnId,
-										sessionGeneration: conversation.sessionGeneration,
+										sessionGeneration: state.activeExecution.sessionGeneration,
 										traceId: command.traceId,
 										requestId: command.requestId,
 										occurredAt,
@@ -1540,7 +1548,7 @@ export function createConversationExecutionUseCaseV1(
 									operation: "conversation.turn.stop.v1",
 									conversationId: conversation.conversationId,
 									executionId: targetExecution.executionId,
-									sessionGeneration: conversation.sessionGeneration,
+									sessionGeneration: targetExecution.sessionGeneration,
 									stopRequestId,
 									traceId: command.traceId,
 									requestId: command.requestId,
