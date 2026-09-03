@@ -57,9 +57,66 @@ describe("MyAgentApplicationDetailScreen", () => {
 		).toBeTruthy();
 		expect(screen.getByText("Submitted")).toBeTruthy();
 		expect(screen.getByText("2026-09-03T08:00:00Z").tagName).toBe("TIME");
+		expect(screen.getByText("2026-09-03T09:00:00Z").tagName).toBe("TIME");
 		expect(
 			screen.queryByRole("button", { name: "Withdraw application" }),
 		).toBeNull();
 		expect(screen.queryByText(/retry|owner settings/i)).toBeNull();
+	});
+
+	it("renders an approved decision history without inventing a rejection reason", async () => {
+		const approvedApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			applicationId: "application-pilot-approved",
+			agentId: "agent-pilot-approved",
+			status: "creating",
+			decision: {
+				decidedAt: "2026-09-03T10:00:00Z",
+				reason: null,
+			},
+		});
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "ready", application: approvedApplication }}
+				withdrawing={false}
+			/>,
+		);
+
+		expect(screen.getByText("Creating")).toBeTruthy();
+		expect(screen.getByText("Decision date")).toBeTruthy();
+		expect(screen.getByText("2026-09-03T10:00:00Z").tagName).toBe("TIME");
+		expect(screen.queryByText("Decision reason")).toBeNull();
+	});
+
+	it("keeps unavailable details opaque and reports a withdrawal error", async () => {
+		const unavailable = await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "unavailable", retryable: false }}
+				withdrawing={false}
+			/>,
+		);
+
+		expect(screen.getByRole("alert").textContent).toBe(
+			"This application is unavailable.",
+		);
+		expect(screen.queryByText("Release assistant request")).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Withdraw application" }),
+		).toBeNull();
+		unavailable.unmount();
+
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "ready", application: pendingApplication }}
+				withdrawalError
+				withdrawing={false}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Unable to withdraw application. Please try again.",
+		);
 	});
 });

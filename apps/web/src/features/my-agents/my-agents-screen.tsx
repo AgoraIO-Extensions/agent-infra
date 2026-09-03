@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import { applicationStatusLabels } from "./application-status.js";
+import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { MyAgentApplicationsState } from "./my-agent-applications.js";
 
 type MyAgentsScreenProps = {
@@ -71,7 +71,7 @@ export function MyAgentsScreen({ state }: MyAgentsScreenProps) {
 						</Link>
 						<div className="flex items-center gap-3 self-start sm:self-auto">
 							<span className="border border-slate-300 px-2 py-1 text-slate-700 text-xs">
-								{applicationStatusLabels[application.status]}
+								{agentManagementStatusLabels[application.status]}
 							</span>
 							{application.agentId ? (
 								<Link

@@ -1,23 +1,13 @@
 import { Link } from "@tanstack/react-router";
 
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { AgentDetailState } from "./agent-discovery.js";
 import { agentServiceAvailabilityLabel } from "./agent-discovery-screen.js";
 
 type AgentDetailScreenProps = {
 	state: AgentDetailState | { kind: "loading" };
 };
-
-const managementStatusLabels = {
-	pending_approval: "Pending approval",
-	withdrawn: "Withdrawn",
-	rejected: "Rejected",
-	creating: "Creating",
-	available: "Available",
-	stopped: "Stopped",
-	creation_failed: "Creation failed",
-	disabled: "Disabled",
-} satisfies Record<AgentProjectionV1["managementStatus"], string>;
 
 const channelKindLabels = {
 	web: "Web",
@@ -108,7 +98,7 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
 					<dt className="font-medium text-slate-700 text-sm">Agent status</dt>
 					<dd className="text-slate-950 text-sm">
-						{managementStatusLabels[agent.managementStatus]}
+							{agentManagementStatusLabels[agent.managementStatus]}
 					</dd>
 				</div>
 				{agent.serviceAvailability ? (

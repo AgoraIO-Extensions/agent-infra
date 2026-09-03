@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import { applicationStatusLabels } from "./application-status.js";
+import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { MyAgentApplicationState } from "./my-agent-applications.js";
 
 type MyAgentApplicationDetailScreenProps = {
@@ -70,7 +70,7 @@ export function MyAgentApplicationDetailScreen({
 						Application status
 					</dt>
 					<dd className="text-slate-950 text-sm">
-						{applicationStatusLabels[application.status]}
+						{agentManagementStatusLabels[application.status]}
 					</dd>
 				</div>
 				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
@@ -81,15 +81,29 @@ export function MyAgentApplicationDetailScreen({
 						</time>
 					</dd>
 				</div>
-				{application.status === "rejected" ? (
-					<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-						<dt className="font-medium text-slate-700 text-sm">
-							Decision reason
-						</dt>
-						<dd className="text-slate-950 text-sm">
-							{application.decision?.reason ?? "No reason was provided."}
-						</dd>
-					</div>
+				{application.decision ? (
+					<>
+						<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+							<dt className="font-medium text-slate-700 text-sm">
+								Decision date
+							</dt>
+							<dd className="text-slate-950 text-sm">
+								<time dateTime={application.decision.decidedAt}>
+									{application.decision.decidedAt}
+								</time>
+							</dd>
+						</div>
+						{application.decision.reason ? (
+							<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+								<dt className="font-medium text-slate-700 text-sm">
+									Decision reason
+								</dt>
+								<dd className="text-slate-950 text-sm">
+									{application.decision.reason}
+								</dd>
+							</div>
+						) : null}
+					</>
 				) : null}
 			</dl>
 			<div className="flex flex-wrap gap-4">
