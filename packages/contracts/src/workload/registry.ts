@@ -68,6 +68,10 @@ export const ImageAdmissionPolicyEvidenceV1Schema = z.strictObject({
 	evaluatedAt: WorkloadTimestampV1Schema,
 });
 
+export type ImageAdmissionPolicyEvidenceV1 = z.infer<
+	typeof ImageAdmissionPolicyEvidenceV1Schema
+>;
+
 export const RuntimeManifestParsingEvidenceV1Schema = z.strictObject({
 	schemaVersion: WorkloadSchemaVersionV1Schema,
 	labelName: z.literal("io.agora.agent.runtime.manifest"),
@@ -185,6 +189,73 @@ export type ImageRegistryAdmissionResultV1 = z.infer<
 >;
 export type OciImageConfigV1 = z.infer<typeof OciImageConfigV1Schema>;
 
+export interface ImageRegistryAdmissionRequestCorrelationV1 {
+	readonly schemaVersion: 1;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
+export type ImageRegistryAdmissionRequestParseResultV1 =
+	| {
+			readonly status: "accepted";
+			readonly request: ImageRegistryAdmissionRequestV1;
+	  }
+	| {
+			readonly status: "invalid-image-reference";
+			readonly correlation: ImageRegistryAdmissionRequestCorrelationV1;
+	  }
+	| { readonly status: "invalid" };
+
+export function parseImageRegistryAdmissionRequestV1(
+	input: unknown,
+): ImageRegistryAdmissionRequestParseResultV1 {
+	const parsed = ImageRegistryAdmissionRequestV1Schema.safeParse(input);
+	if (parsed.success) return { status: "accepted", request: parsed.data };
+
+	const record = recordInput(input);
+	if (
+		!record ||
+		OciImageReferenceV1Schema.safeParse(ownInputValue(record, "imageReference"))
+			.success
+	) {
+		return { status: "invalid" };
+	}
+	const normalized = ImageRegistryAdmissionRequestV1Schema.safeParse({
+		schemaVersion: ownInputValue(record, "schemaVersion"),
+		requestId: ownInputValue(record, "requestId"),
+		traceId: ownInputValue(record, "traceId"),
+		subjectRef: ownInputValue(record, "subjectRef"),
+		agentId: ownInputValue(record, "agentId"),
+		imageReference: "registry.invalid/image:invalid",
+		usage: ownInputValue(record, "usage"),
+		admissionPolicyRef: ownInputValue(record, "admissionPolicyRef"),
+	});
+	return normalized.success
+		? {
+				status: "invalid-image-reference",
+				correlation: {
+					schemaVersion: normalized.data.schemaVersion,
+					requestId: normalized.data.requestId,
+					traceId: normalized.data.traceId,
+				},
+			}
+		: { status: "invalid" };
+}
+
+function recordInput(input: unknown): Record<string, unknown> | undefined {
+	return typeof input === "object" &&
+		input !== null &&
+		!Array.isArray(input) &&
+		Object.getPrototypeOf(input) === Object.prototype
+		? (input as Record<string, unknown>)
+		: undefined;
+}
+
+function ownInputValue(input: Record<string, unknown>, key: string): unknown {
+	const descriptor = Object.getOwnPropertyDescriptor(input, key);
+	return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
 function inspectJsonNode(
 	node: JsonNode,
 	depth: number,
@@ -213,27 +284,47 @@ function inspectJsonNode(
 	return { duplicateKeys, maxDepth };
 }
 
-function parseRuntimeManifestLabel(
-	label: string,
-	evidence: z.infer<typeof RuntimeManifestParsingEvidenceV1Schema>,
-) {
+export function parseRuntimeManifestLabelV1(label: string): {
+	readonly runtimeManifest: RuntimeManifestV1;
+	readonly runtimeManifestParsingEvidence: z.infer<
+		typeof RuntimeManifestParsingEvidenceV1Schema
+	>;
+} {
+	if (
+		!String.prototype.isWellFormed.call(label) ||
+		Buffer.byteLength(label, "utf8") > 65_536
+	) {
+		throw new Error("Image registry Runtime Manifest is invalid");
+	}
 	const errors: { error: number; offset: number; length: number }[] = [];
 	const root = parseTree(label, errors, {
 		allowTrailingComma: false,
 		disallowComments: true,
 	});
 	if (!root || errors.length > 0) {
-		throw new Error("Image registry Runtime Manifest mismatch");
+		throw new Error("Image registry Runtime Manifest is invalid");
 	}
 	const inspected = inspectJsonNode(root, 1);
-	if (
-		inspected.duplicateKeys ||
-		inspected.maxDepth > 8 ||
-		inspected.maxDepth !== evidence.maxDepth
-	) {
-		throw new Error("Image registry Runtime Manifest mismatch");
+	if (inspected.duplicateKeys || inspected.maxDepth > 8) {
+		throw new Error("Image registry Runtime Manifest is invalid");
 	}
-	return getNodeValue(root);
+	let runtimeManifest: RuntimeManifestV1;
+	try {
+		runtimeManifest = canonicalRuntimeManifest(getNodeValue(root));
+	} catch {
+		throw new Error("Image registry Runtime Manifest is invalid");
+	}
+	return {
+		runtimeManifest,
+		runtimeManifestParsingEvidence: {
+			schemaVersion: 1,
+			labelName: "io.agora.agent.runtime.manifest",
+			utf8ByteLength: Buffer.byteLength(label, "utf8"),
+			maxDepth: inspected.maxDepth,
+			duplicateKeysDetected: false,
+			unknownFieldsDetected: false,
+		},
+	};
 }
 
 function canonicalRuntimeManifest(manifestInput: unknown) {
@@ -274,12 +365,14 @@ export function validateImageRegistryAdmissionResultV1(
 	if (result.status === "admitted") {
 		let labelManifest: RuntimeManifestV1;
 		try {
-			labelManifest = canonicalRuntimeManifest(
-				parseRuntimeManifestLabel(
-					result.runtimeManifestLabel,
-					result.runtimeManifestParsingEvidence,
-				),
-			);
+			const parsed = parseRuntimeManifestLabelV1(result.runtimeManifestLabel);
+			if (
+				JSON.stringify(parsed.runtimeManifestParsingEvidence) !==
+				JSON.stringify(result.runtimeManifestParsingEvidence)
+			) {
+				throw new Error("Image registry Runtime Manifest mismatch");
+			}
+			labelManifest = parsed.runtimeManifest;
 		} catch {
 			throw new Error("Image registry Runtime Manifest mismatch");
 		}
