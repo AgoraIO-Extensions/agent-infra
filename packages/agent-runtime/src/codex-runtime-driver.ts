@@ -79,6 +79,7 @@ const capabilities: RuntimeCapabilitiesV1 = {
 
 const turnsListPageSize = 100;
 const maximumTurnsListPages = 8;
+const rpcRequestTimeoutMs = 30_000;
 
 const persistedTurnStatuses = [
 	"running",
@@ -344,14 +345,26 @@ class CodexRpc {
 				reject,
 			});
 		});
+		const timeoutError = unavailableError();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				this.fail(timeoutError);
+				reject(timeoutError);
+			}, rpcRequestTimeoutMs);
+		});
 		try {
-			await this.bridge.send({ id, method, params });
-		} catch {
+			await Promise.race([this.bridge.send({ id, method, params }), deadline]);
+			return await Promise.race([response, deadline]);
+		} catch (error) {
 			this.pending.delete(id);
-			this.fail();
-			unavailable();
+			const failure =
+				error instanceof RuntimeHostError ? error : unavailableError();
+			this.fail(failure);
+			throw failure;
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
 		}
-		return response;
 	}
 
 	async close() {
@@ -489,14 +502,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) {
 			unavailable();
 		}
+		const text = "text" in command.input ? command.input.text : undefined;
+		if (!text) unavailable();
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		const session = await this.ensureThread(
-			prepared.operation.nativeSessionRef,
-		);
+		let session: CodexSession;
+		try {
+			session = await this.ensureThread(prepared.operation.nativeSessionRef);
+		} catch (error) {
+			await this.discardPreparedBeforeTurn(
+				command,
+				prepared.operation.nativeSessionRef,
+			);
+			throw error;
+		}
 		if (
 			session.activeExecutionId &&
 			session.activeExecutionId !== command.executionId
@@ -505,8 +527,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				outcome: "busy",
 			});
 		}
-		const text = "text" in command.input ? command.input.text : undefined;
-		if (!text) unavailable();
 		try {
 			const turn = await this.rpc.request(
 				"turn/start",
@@ -772,6 +792,36 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				stateInvalid();
 			}
 			session.acceptanceUncertainOperationKey = key;
+		});
+	}
+
+	private async discardPreparedBeforeTurn(
+		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		nativeSessionRef: string,
+	) {
+		const key = operationKey(command);
+		await this.update((state) => {
+			const operation = state.operations[key];
+			const session = state.sessions[nativeSessionRef];
+			if (
+				!session ||
+				!operation ||
+				operation.nativeSessionRef !== nativeSessionRef ||
+				operation.state !== "prepared" ||
+				session.acceptanceUncertainOperationKey !== undefined
+			) {
+				stateInvalid();
+			}
+			delete state.operations[key];
+			if (
+				session.threadId === undefined &&
+				Object.keys(session.executions).length === 0 &&
+				!Object.values(state.operations).some(
+					(candidate) => candidate.nativeSessionRef === nativeSessionRef,
+				)
+			) {
+				delete state.sessions[nativeSessionRef];
+			}
 		});
 	}
 

@@ -111,6 +111,7 @@ class TestCodexBridge {
 	private turnsListPages?: TestTurnsListPage[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
+	private closeOnThreadStart = false;
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -133,6 +134,10 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "thread/start") {
+			if (this.closeOnThreadStart) {
+				await this.close();
+				return;
+			}
 			this.respond(id, { thread: { id: this.nativeThreadId } });
 			return;
 		}
@@ -176,6 +181,10 @@ class TestCodexBridge {
 
 	continueAfterPersistedTurn() {
 		this.turnStartCount = 1;
+	}
+
+	closeOnNextThreadStart() {
+		this.closeOnThreadStart = true;
 	}
 
 	holdTurnsList() {
@@ -290,6 +299,7 @@ class TestCodexBridge {
 }
 
 afterEach(async () => {
+	vi.useRealTimers();
 	await Promise.all(drivers.splice(0).map((driver) => driver.close()));
 	await Promise.all(
 		directories
@@ -618,6 +628,36 @@ describe("Codex Runtime Driver", () => {
 				({ method }) => method === "thread/start",
 			),
 		).toHaveLength(0);
+	});
+
+	it("retries a command when thread creation failed before its Turn started", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const failedBridge = new TestCodexBridge();
+		failedBridge.closeOnNextThreadStart();
+		const failedDriver = await openDriver(path, failedBridge);
+		drivers.push(failedDriver);
+		const command = submitCommand();
+
+		await expect(failedDriver.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(
+			failedBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+
+		const recoveredBridge = new TestCodexBridge();
+		const recoveredDriver = await openDriver(path, recoveredBridge);
+		drivers.push(recoveredDriver);
+		const recovered = await recoveredDriver.execute(command);
+
+		expect(recovered.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
 	});
 
 	it("keeps terminal status sticky across out-of-order status reads", async () => {
@@ -963,5 +1003,30 @@ describe("Codex Runtime Driver", () => {
 		await expect(second).rejects.toMatchObject({
 			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
 		});
+	});
+
+	it("fails all pending requests when a turns-list response times out", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.holdTurnsList();
+		vi.useFakeTimers();
+		const failures: unknown[] = [];
+		void driver
+			.getStatus(accepted.nativeSessionRef, command.executionId)
+			.catch((error: unknown) => failures.push(error));
+		void driver
+			.getStatus(accepted.nativeSessionRef, command.executionId)
+			.catch((error: unknown) => failures.push(error));
+
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		expect(failures).toHaveLength(2);
+		for (const failure of failures) {
+			expect(failure).toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		}
 	});
 });
