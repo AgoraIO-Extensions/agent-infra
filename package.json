@@ -16,6 +16,8 @@
 		"check-types": "turbo run check-types",
 		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test",
 		"smoke": "node tests/smoke.mjs",
+		"local-topology": "pnpm build && docker compose --project-name agent-infra-local-topology up -d --wait postgres && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra pnpm --filter @agent-infra/platform-store migrate && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra node tests/local-topology.mjs",
+		"local-topology:down": "docker compose --project-name agent-infra-local-topology down --volumes --remove-orphans",
 		"format": "biome check --write .",
 		"dev:web": "turbo run dev -F @agent-infra/web",
 		"dev:platform-api": "turbo run dev -F @agent-infra/platform-api",

@@ -1,6 +1,24 @@
 name: agent-infra
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    init: true
+    environment:
+      POSTGRES_DB: agent_infra
+      POSTGRES_PASSWORD: agent_infra_local
+      POSTGRES_USER: agent_infra
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - local-topology-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_infra -d agent_infra"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   web:
     build:
       context: .
@@ -66,3 +84,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+volumes:
+  local-topology-postgres:
