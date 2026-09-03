@@ -27,6 +27,7 @@ export type AgentDetailState =
 	| UnavailableState;
 
 const retryableError = () => new Error("Agent data is temporarily unavailable");
+const maximumAgentDiscoveryPages = 100;
 
 function unavailable(error: { retryable?: boolean } | undefined) {
 	if (error?.retryable !== false) throw retryableError();
@@ -43,8 +44,11 @@ export async function loadAgentDiscovery(
 	const agents: AgentProjectionV1[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
+	let pages = 0;
 
 	do {
+		if (pages >= maximumAgentDiscoveryPages) throw retryableError();
+		pages += 1;
 		const query: ListAgentsData["query"] =
 			cursor === null ? undefined : { cursor };
 		const result: Awaited<

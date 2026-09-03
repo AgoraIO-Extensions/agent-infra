@@ -39,6 +39,22 @@ const channelStatusLabels = {
 	string
 >;
 
+function safeInteractionUrl(input: string | null) {
+	if (!input) return undefined;
+	try {
+		const url = new URL(input);
+		return url.protocol === "https:" &&
+			!url.username &&
+			!url.password &&
+			!url.search &&
+			!url.hash
+			? url.href
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 	if (state.kind === "loading") {
 		return <p aria-live="polite">Loading Agent...</p>;
@@ -68,6 +84,7 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 	}
 
 	const { agent } = state;
+	const interactionUrl = safeInteractionUrl(agent.interactionUrl);
 	return (
 		<section aria-labelledby="agent-detail-heading" className="space-y-6">
 			<header className="space-y-2 border-slate-200 border-b pb-5">
@@ -162,11 +179,11 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 				>
 					Back to Agents
 				</Link>
-				{agent.interactionUrl ? (
+				{interactionUrl ? (
 					<a
 						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
-						href={agent.interactionUrl}
-						rel="noreferrer"
+						href={interactionUrl}
+						rel="noopener noreferrer"
 						target="_blank"
 					>
 						Open Agent

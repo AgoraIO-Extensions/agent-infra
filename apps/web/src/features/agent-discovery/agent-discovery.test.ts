@@ -92,6 +92,31 @@ describe("Agent discovery generated-client consumer", () => {
 		expect(requests).toHaveLength(2);
 	});
 
+	it("bounds a unique visible-Agent cursor chain", async () => {
+		let requests = 0;
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => {
+				requests += 1;
+				return new Response(
+					JSON.stringify({
+						items: [],
+						nextCursor: `cursor-${requests}`,
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			},
+		});
+
+		await expect(loadAgentDiscovery(client)).rejects.toMatchObject({
+			message: "Agent data is temporarily unavailable",
+		});
+		expect(requests).toBe(100);
+	});
+
 	it("keeps non-retryable visible-Agent failures opaque", async () => {
 		for (const status of [403, 404]) {
 			const client = createClient({

@@ -52,8 +52,24 @@ describe("AgentDetailScreen", () => {
 			<AgentDetailScreen state={{ kind: "ready", agent }} />,
 		);
 
-		expect(markup).toContain('href="https://agent.example.test"');
+		expect(markup).toContain('href="https://agent.example.test/"');
 		expect(markup).toContain("Open Agent");
+	});
+
+	it.each([
+		"javascript:alert(1)",
+		"https://user:password@agent.example.test",
+		"https://agent.example.test?access_token=secret",
+		"https://agent.example.test/#token=secret",
+	])("omits unsafe self-managed access entry %s", async (interactionUrl) => {
+		const agent = { ...startingAgent, interactionUrl };
+
+		const markup = await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+
+		expect(markup).not.toContain("Open Agent");
+		expect(markup).not.toContain(interactionUrl);
 	});
 
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {
