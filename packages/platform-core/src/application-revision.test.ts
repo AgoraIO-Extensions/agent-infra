@@ -42,6 +42,49 @@ describe("Application revision transaction conformance", () => {
 });
 
 describe("Application revision input and plan boundary", () => {
+	it("retains an applicant who also has administrator authority", async () => {
+		const transaction = new FakeApplicationRevisionTransactionV1(
+			applicationRevisionStateV1,
+		);
+		const dependencies = applicationRevisionAdmissionsV1();
+		const authorizationAdmission = dependencies.authorizationAdmission;
+		const revision = createApplicationRevisionUseCaseV1(
+			{
+				transaction,
+				...dependencies,
+				authorizationAdmission: {
+					async authorize(input) {
+						const decision = await authorizationAdmission.authorize(input);
+						if (decision.status !== "admitted" || !decision.accessAuthority) {
+							return decision;
+						}
+						return {
+							...decision,
+							accessAuthority: {
+								...decision.accessAuthority,
+								actorContext: {
+									...decision.accessAuthority.actorContext,
+									isAdministrator: true,
+								},
+							},
+						};
+					},
+				},
+			},
+			{ now: () => new Date("2026-09-02T04:00:00.000Z") },
+		);
+
+		await revision.revise(applicationRevisionCommandV1, {
+			...applicationRevisionActorContextV1,
+			isAdministrator: true,
+		});
+
+		expect(transaction.snapshot().state.management.ownerIds).toEqual([
+			"owner_01",
+			"owner_02",
+		]);
+	});
+
 	it("rejects command and actor accessors without reading them", async () => {
 		for (const target of ["command", "actor"] as const) {
 			let getterReads = 0;

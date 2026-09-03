@@ -619,7 +619,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				idempotencyKey: "owner-concurrent",
 				requestId: "request_owner",
 				traceId: "trace_owner",
-				changes: { ownerIds: ["owner_01", "owner_02"] },
+				changes: { coOwnerIds: ["owner_02"] },
 			},
 			actor,
 		);
@@ -1200,7 +1200,7 @@ async function captureAccessPlan(
 				requestId: "request_access",
 				traceId: "trace_access",
 				changes: {
-					ownerIds: ["owner_01", "owner_02"],
+					coOwnerIds: ["owner_02"],
 					availability: [
 						{ kind: "organization", organizationId: "org_platform" },
 					],

@@ -2,7 +2,7 @@
 
 ## Project Context
 
-`agent-infra` 是企业级 Agent 平台。仓库已进入 M1 工程底座阶段，脚手架已生成，领域功能尚未实现。
+`agent-infra` 是企业级 Agent 平台。仓库已进入 M1 领域功能实现阶段，Platform 的 Agent 管理、配置、持久化和 HTTP Adapter 已实现；其他部署单元按工程架构 Spec 逐步实现。
 
 ## Source Of Truth
 

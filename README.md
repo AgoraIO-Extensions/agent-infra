@@ -17,13 +17,13 @@
 
 ## 当前状态
 
-仓库已进入 M1 工程底座阶段。当前提交提供可安装、构建、测试和独立生成镜像的工程骨架，
-尚未实现领域功能。
+仓库已进入 M1 领域功能实现阶段。当前提交已实现 Platform 的 Agent 管理、配置、
+持久化和 HTTP Adapter；其他部署单元仍按工程架构 Spec 逐步实现。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
 | Web | `apps/web` | React、TanStack Router、Vite 与最小启动页 |
-| Platform API | `apps/platform-api` | Hono 进程与健康检查 |
+| Platform API | `apps/platform-api` | Agent 管理、配置、会话和审计 HTTP API |
 | Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
 | Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
 

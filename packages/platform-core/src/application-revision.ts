@@ -253,7 +253,7 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 	let changes: UpdateAgentConfigurationCommandV1["changes"];
 	try {
 		changes = parseAgentConfigurationChangesV1({
-			ownerIds: coOwnerIds,
+			coOwnerIds,
 			availability: values.availability,
 			source: values.source,
 			...(Object.hasOwn(values, "modelConfiguration")
@@ -270,7 +270,7 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 		invalidCommand();
 	}
 	if (
-		!changes.ownerIds ||
+		!changes.coOwnerIds ||
 		!changes.availability ||
 		!changes.source ||
 		!changes.environment ||
@@ -285,7 +285,7 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 		traceId: values.traceId,
 		name: values.name,
 		description: values.description,
-		coOwnerIds: changes.ownerIds,
+		coOwnerIds: changes.coOwnerIds,
 		availability: changes.availability,
 		source: changes.source,
 		...(Object.hasOwn(changes, "modelConfiguration")
@@ -844,9 +844,6 @@ async function captureConfigurationPlan(
 		},
 		{ now },
 	);
-	const ownerIds = [
-		...new Set([state.application.applicantId, ...command.coOwnerIds]),
-	].toSorted();
 	try {
 		await useCase.update(
 			{
@@ -856,7 +853,9 @@ async function captureConfigurationPlan(
 				requestId: command.requestId,
 				traceId: command.traceId,
 				changes: {
-					ownerIds,
+					coOwnerIds: [
+						...new Set([state.application.applicantId, ...command.coOwnerIds]),
+					].toSorted(),
 					availability: command.availability,
 					source: command.source,
 					...(command.modelConfiguration === undefined
