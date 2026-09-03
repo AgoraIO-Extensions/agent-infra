@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentDiscoveryState } from "./agent-discovery.js";
 
@@ -60,14 +62,18 @@ export function AgentDiscoveryScreen({ state }: AgentDiscoveryScreenProps) {
 						className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
 						key={agent.agentId}
 					>
-						<a className="min-w-0" href={`/agents/${agent.agentId}`}>
+						<Link
+							className="min-w-0"
+							params={{ agentId: agent.agentId }}
+							to="/agents/$agentId"
+						>
 							<strong className="block truncate text-slate-950">
 								{agent.name}
 							</strong>
 							<span className="block truncate text-slate-600 text-sm">
 								{agent.description}
 							</span>
-						</a>
+						</Link>
 						{agent.serviceAvailability ? (
 							<span className="self-start border border-slate-300 px-2 py-1 text-slate-700 text-xs sm:self-auto">
 								{agentServiceAvailabilityLabel(agent.serviceAvailability)}

@@ -1,17 +1,17 @@
 import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentDetailScreen } from "./agent-detail-screen.js";
+import { renderWithAgentRouter } from "./test-router.js";
 
 const startingAgent = AgentProjectionV1Schema.parse(
 	pilotFakeScenariosV1.starting.response.body,
 );
 
 describe("AgentDetailScreen", () => {
-	it("renders a projected Agent as a responsive read-only detail", () => {
-		const markup = renderToStaticMarkup(
+	it("renders a projected Agent as a responsive read-only detail", async () => {
+		const markup = await renderWithAgentRouter(
 			<AgentDetailScreen state={{ kind: "ready", agent: startingAgent }} />,
 		);
 
@@ -19,14 +19,45 @@ describe("AgentDetailScreen", () => {
 		expect(markup).toContain("Helps the release team");
 		expect(markup).toContain("Available");
 		expect(markup).toContain("Starting");
+		expect(markup).toContain("Owner");
+		expect(markup).toContain("Channels");
+		expect(markup).toContain("Web: available");
+		expect(markup).toContain("WeCom bot: not configured");
+		expect(markup).toContain("Model options");
+		expect(markup).toContain("Primary model");
+		expect(markup).toContain("medium, high");
+		expect(markup).toContain("Connection actions");
+		expect(markup).toContain("github / issues.read (v3)");
 		expect(markup).toContain('href="/agents"');
 		expect(markup).toContain("sm:flex-row");
+		expect(markup).not.toContain("MODEL_API_KEY");
+		expect(markup).not.toContain("WORKSPACE_NAME");
 		expect(markup).not.toContain("Approve application");
 		expect(markup).not.toContain("Owner settings");
 	});
 
-	it("renders one opaque unavailable state for a missing or forbidden Agent", () => {
-		const markup = renderToStaticMarkup(
+	it("renders a server-projected self-managed access entry", async () => {
+		const agent = AgentProjectionV1Schema.parse({
+			...startingAgent,
+			interactionUrl: "https://agent.example.test",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+
+		const markup = await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+
+		expect(markup).toContain('href="https://agent.example.test"');
+		expect(markup).toContain("Open Agent");
+	});
+
+	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {
+		const markup = await renderWithAgentRouter(
 			<AgentDetailScreen
 				state={{
 					kind: "unavailable",
@@ -42,8 +73,8 @@ describe("AgentDetailScreen", () => {
 		expect(markup).not.toContain("missing");
 	});
 
-	it("renders an explicit loading state", () => {
-		const markup = renderToStaticMarkup(
+	it("renders an explicit loading state", async () => {
+		const markup = await renderWithAgentRouter(
 			<AgentDetailScreen state={{ kind: "loading" }} />,
 		);
 

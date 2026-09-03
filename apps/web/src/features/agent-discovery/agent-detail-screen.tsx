@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentDetailState } from "./agent-discovery.js";
 import { agentServiceAvailabilityLabel } from "./agent-discovery-screen.js";
@@ -17,6 +19,26 @@ const managementStatusLabels = {
 	disabled: "Disabled",
 } satisfies Record<AgentProjectionV1["managementStatus"], string>;
 
+const channelKindLabels = {
+	web: "Web",
+	wecom_bot: "WeCom bot",
+	wecom_app: "WeCom app",
+} satisfies Record<
+	AgentProjectionV1["configuration"]["channels"][number]["kind"],
+	string
+>;
+
+const channelStatusLabels = {
+	available: "available",
+	not_configured: "not configured",
+	binding: "binding",
+	bound: "bound",
+	failed: "failed",
+} satisfies Record<
+	AgentProjectionV1["configuration"]["channels"][number]["status"],
+	string
+>;
+
 export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 	if (state.kind === "loading") {
 		return <p aria-live="polite">Loading Agent...</p>;
@@ -35,12 +57,12 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 						? "Please try again shortly."
 						: "This Agent is unavailable."}
 				</p>
-				<a
+				<Link
 					className="text-slate-700 text-sm underline underline-offset-4"
-					href="/agents"
+					to="/agents"
 				>
 					Back to Agents
-				</a>
+				</Link>
 			</section>
 		);
 	}
@@ -77,13 +99,80 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 						</dd>
 					</div>
 				) : null}
+				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+					<dt className="font-medium text-slate-700 text-sm">Owners</dt>
+					<dd className="text-slate-950 text-sm">
+						{agent.configuration.owners
+							.map((owner) => owner.displayName)
+							.join(", ")}
+					</dd>
+				</div>
+				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+					<dt className="font-medium text-slate-700 text-sm">Channels</dt>
+					<dd className="text-slate-950 text-sm">
+						{agent.configuration.channels.length > 0
+							? agent.configuration.channels
+									.map(
+										(channel) =>
+											`${channelKindLabels[channel.kind]}: ${channelStatusLabels[channel.status]}`,
+									)
+									.join(", ")
+							: "No platform channels"}
+					</dd>
+				</div>
+				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+					<dt className="font-medium text-slate-700 text-sm">Model options</dt>
+					<dd className="text-slate-950 text-sm">
+						{agent.configuration.modelOptions.length > 0
+							? agent.configuration.modelOptions
+									.map((option) => {
+										const defaultSuffix =
+											option.optionId ===
+											agent.configuration.defaultModelOptionId
+												? ` (default${agent.configuration.defaultReasoningLevel ? `: ${agent.configuration.defaultReasoningLevel}` : ""})`
+												: "";
+										return `${option.displayName}${defaultSuffix}: ${option.reasoningLevels.join(", ")}`;
+									})
+									.join("; ")
+							: "No selectable models"}
+					</dd>
+				</div>
+				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
+					<dt className="font-medium text-slate-700 text-sm">
+						Connection actions
+					</dt>
+					<dd className="text-slate-950 text-sm">
+						{!agent.capabilities.connection
+							? "Not required"
+							: agent.configuration.actions.length === 0
+								? "Connection capability available"
+								: agent.configuration.actions
+										.map(
+											(action) =>
+												`${action.providerId} / ${action.actionId} (${action.actionVersion})`,
+										)
+										.join(", ")}
+					</dd>
+				</div>
 			</dl>
-			<a
-				className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
-				href="/agents"
-			>
-				Back to Agents
-			</a>
+			<div className="flex flex-wrap gap-4">
+				<Link
+					className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+					to="/agents"
+				>
+					Back to Agents
+				</Link>
+				{agent.interactionUrl ? (
+					<a
+						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						href={agent.interactionUrl}
+						rel="noreferrer"
+						target="_blank"
+					>
+						Open Agent
+					</a>
+				) : null}
+			</div>
 		</section>
 	);
 }
