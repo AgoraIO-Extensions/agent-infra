@@ -50,6 +50,7 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("rejects invalid contract scenario data before serving a response", () => {
+		const protocolError = pilotFakeScenariosV1.unauthorized.response.body;
 		expect(() =>
 			createPilotAgentMockServerV1({
 				listAgents: {
@@ -77,5 +78,35 @@ describe("Pilot Agent Mock Server", () => {
 				},
 			}),
 		).toThrow();
+		expect(() =>
+			createPilotAgentMockServerV1({
+				listAgents: { status: 201, body: protocolError },
+				getAgent: { status: 200, body: startingAgent },
+			}),
+		).toThrow();
+		expect(() =>
+			createPilotAgentMockServerV1({
+				listAgents: { status: 500, body: protocolError },
+				getAgent: { status: 200, body: startingAgent },
+			}),
+		).toThrow();
+	});
+
+	it("rejects requests that violate the generated Agent operation schemas", async () => {
+		const server = createPilotAgentMockServerV1({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgent },
+		});
+
+		await expect(
+			server.fetch(
+				new Request("https://platform.example.test/api/v1/agents?limit=101"),
+			),
+		).rejects.toThrow();
+		await expect(
+			server.fetch(
+				new Request("https://platform.example.test/api/v1/agents/%E0"),
+			),
+		).rejects.toThrow();
 	});
 });

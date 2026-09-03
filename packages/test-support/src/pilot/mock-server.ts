@@ -1,9 +1,4 @@
-import { OpaqueCursorV1Schema } from "@agent-infra/contracts";
-import {
-	AgentProjectionV1Schema,
-	PilotProtocolErrorV1Schema,
-	pilotBrowserHttpOpenApiPathsV1,
-} from "@agent-infra/contracts/pilot";
+import { pilotBrowserHttpOpenApiPathsV1 } from "@agent-infra/contracts/pilot";
 
 export type PilotAgentMockResponseV1 = {
 	readonly status: number;
@@ -24,38 +19,49 @@ export type PilotAgentMockServerV1 = {
 	readonly requests: readonly Request[];
 };
 
-const agentListResponseSchema =
-	pilotBrowserHttpOpenApiPathsV1["/api/v1/agents"].get.responses["200"].content[
-		"application/json"
-	].schema;
-
-function validateListResponse(response: PilotAgentMockResponseV1) {
-	if (response.status !== 200) {
-		PilotProtocolErrorV1Schema.parse(response.body);
-		return;
-	}
-
-	const page = agentListResponseSchema.parse(response.body) as {
-		items: unknown[];
-		nextCursor: unknown;
+type Schema = { parse(input: unknown): unknown };
+type Operation = {
+	readonly requestParams: {
+		readonly path?: Schema;
+		readonly query?: Schema;
 	};
-	for (const agent of page.items) AgentProjectionV1Schema.parse(agent);
-	if (page.nextCursor !== null) OpaqueCursorV1Schema.parse(page.nextCursor);
-}
+	readonly responses: Record<
+		string,
+		{
+			readonly content: {
+				readonly "application/json": { readonly schema: Schema };
+			};
+		}
+	>;
+};
 
-function validateDetailResponse(response: PilotAgentMockResponseV1) {
-	if (response.status === 200) {
-		AgentProjectionV1Schema.parse(response.body);
-		return;
+const listAgentsOperation = pilotBrowserHttpOpenApiPathsV1["/api/v1/agents"]
+	.get as unknown as Operation;
+const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agents/{agentId}"
+].get as unknown as Operation;
+
+function validateResponse(
+	operation: Operation,
+	response: PilotAgentMockResponseV1,
+) {
+	if (!Number.isInteger(response.status)) {
+		throw new TypeError("Pilot Agent Mock Server response status is invalid");
 	}
-	PilotProtocolErrorV1Schema.parse(response.body);
+	const schema =
+		operation.responses[String(response.status)]?.content["application/json"]
+			?.schema;
+	if (!schema) {
+		throw new TypeError("Pilot Agent Mock Server response is not declared");
+	}
+	schema.parse(response.body);
 }
 
 function validateStaticResponse<TArgs extends readonly unknown[]>(
 	responder: PilotAgentMockResponderV1<TArgs>,
-	validate: (response: PilotAgentMockResponseV1) => void,
+	operation: Operation,
 ) {
-	if (typeof responder !== "function") validate(responder);
+	if (typeof responder !== "function") validateResponse(operation, responder);
 }
 
 function jsonResponse(response: PilotAgentMockResponseV1) {
@@ -68,8 +74,8 @@ function jsonResponse(response: PilotAgentMockResponseV1) {
 export function createPilotAgentMockServerV1(
 	scenario: PilotAgentMockServerScenarioV1,
 ): PilotAgentMockServerV1 {
-	validateStaticResponse(scenario.listAgents, validateListResponse);
-	validateStaticResponse(scenario.getAgent, validateDetailResponse);
+	validateStaticResponse(scenario.listAgents, listAgentsOperation);
+	validateStaticResponse(scenario.getAgent, getAgentOperation);
 
 	const requests: Request[] = [];
 	const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -78,22 +84,26 @@ export function createPilotAgentMockServerV1(
 		const url = new URL(request.url);
 
 		if (request.method === "GET" && url.pathname === "/api/v1/agents") {
+			listAgentsOperation.requestParams.query?.parse(
+				Object.fromEntries(url.searchParams),
+			);
 			const response =
 				typeof scenario.listAgents === "function"
 					? scenario.listAgents(request)
 					: scenario.listAgents;
-			validateListResponse(response);
+			validateResponse(listAgentsOperation, response);
 			return jsonResponse(response);
 		}
 
 		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(url.pathname)?.[1];
 		if (request.method === "GET" && agentIdPath !== undefined) {
 			const agentId = decodeURIComponent(agentIdPath);
+			getAgentOperation.requestParams.path?.parse({ agentId });
 			const response =
 				typeof scenario.getAgent === "function"
 					? scenario.getAgent(request, agentId)
 					: scenario.getAgent;
-			validateDetailResponse(response);
+			validateResponse(getAgentOperation, response);
 			return jsonResponse(response);
 		}
 
