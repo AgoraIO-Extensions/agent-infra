@@ -26,6 +26,11 @@ const drivers: CodexRuntimeDriver[] = [];
 
 type CodexTurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
+interface TestTurnsListPage {
+	data: { id: string; status: CodexTurnStatus }[];
+	nextCursor?: string | null;
+}
+
 async function runtimeDirectory() {
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-runtime-codex-driver-"),
@@ -83,6 +88,7 @@ class TestCodexBridge {
 	private closed = false;
 	private turnStatus: CodexTurnStatus = "inProgress";
 	private holdTurnsListResponses = false;
+	private turnsListPages?: TestTurnsListPage[];
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -137,6 +143,10 @@ class TestCodexBridge {
 		this.turnStatus = status;
 	}
 
+	setTurnsListPages(pages: TestTurnsListPage[]) {
+		this.turnsListPages = structuredClone(pages);
+	}
+
 	holdTurnsList() {
 		this.holdTurnsListResponses = true;
 	}
@@ -156,6 +166,14 @@ class TestCodexBridge {
 			return;
 		}
 		this.push({ id });
+	}
+
+	respondToHeldTurnsListWithStatus(status: CodexTurnStatus, index = 0) {
+		const id = this.heldTurnsListRequestIds.splice(index, 1)[0];
+		if (id === undefined) throw new Error("No held turns-list request");
+		this.respondTurnsListPage(id, {
+			data: [{ id: this.nativeTurnId, status }],
+		});
 	}
 
 	emitNotification() {
@@ -191,14 +209,16 @@ class TestCodexBridge {
 	}
 
 	private respondTurnsList(id: number) {
+		const page = this.turnsListPages?.shift() ?? {
+			data: [{ id: this.nativeTurnId, status: this.turnStatus }],
+		};
+		this.respondTurnsListPage(id, page);
+	}
+
+	private respondTurnsListPage(id: number, page: TestTurnsListPage) {
 		this.respond(id, {
-			data: [
-				{
-					id: this.nativeTurnId,
-					status: this.turnStatus,
-					items: [],
-				},
-			],
+			data: page.data.map((turn) => ({ ...turn, items: [] })),
+			...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
 		});
 	}
 
@@ -276,7 +296,7 @@ describe("Codex Runtime Driver", () => {
 		expect(bridge.requests[3]?.params).toEqual({
 			threadId: bridge.nativeThreadId,
 			itemsView: "notLoaded",
-			limit: 1,
+			limit: 100,
 		});
 		expect(response).toMatchObject({
 			operationId: request.executionId,
@@ -339,7 +359,7 @@ describe("Codex Runtime Driver", () => {
 		expect(resumedBridge.requests[2]?.params).toEqual({
 			threadId: firstBridge.nativeThreadId,
 			itemsView: "notLoaded",
-			limit: 1,
+			limit: 100,
 		});
 		expect(
 			(
@@ -430,14 +450,136 @@ describe("Codex Runtime Driver", () => {
 		expect(await recoveredDriver.lookupOperation(command)).toEqual({
 			state: "unknown",
 		});
-		expect((await recoveredDriver.execute(command)).result).toEqual({
+		const unknown = await recoveredDriver.execute(command);
+		expect(unknown.result).toEqual({
 			outcome: "unknown",
 			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 			message: "Runtime command acceptance could not be confirmed",
 		});
+		await expect(
+			recoveredDriver.execute(
+				submitCommand({
+					operationId: "execution-codex-after-unknown",
+					executionId: "execution-codex-after-unknown",
+					turnId: "turn-codex-after-unknown",
+					nativeSessionRef: unknown.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.execute(
+				submitCommand({
+					operationId: "execution-codex-replacement-after-unknown",
+					executionId: "execution-codex-replacement-after-unknown",
+					turnId: "turn-codex-replacement-after-unknown",
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		expect(
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(0);
+		expect(
+			recoveredBridge.requests.filter(
+				({ method }) => method === "thread/start",
+			),
+		).toHaveLength(0);
+	});
+
+	it("keeps terminal status sticky across out-of-order status reads", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await CodexRuntimeDriver.open({
+			path: join(directory, "driver.json"),
+			bridgeOptions: {
+				model: "gpt-5.3-codex",
+				reasoningEffort: "high",
+				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			},
+			openBridge: async () => bridge,
+		});
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.holdTurnsList();
+		const firstStatus = driver.getStatus(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const secondStatus = driver.getStatus(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(2);
+		});
+		bridge.respondToHeldTurnsListWithStatus("completed", 1);
+		expect(await secondStatus).toBe("completed");
+		bridge.respondToHeldTurnsListWithStatus("inProgress");
+		expect(await firstStatus).toBe("completed");
+		expect(
+			(
+				await driver.execute(
+					submitCommand({
+						operationId: "execution-codex-after-terminal",
+						executionId: "execution-codex-after-terminal",
+						turnId: "turn-codex-after-terminal",
+						nativeSessionRef: accepted.nativeSessionRef,
+					}),
+				)
+			).result,
+		).toEqual({ outcome: "accepted", status: "running" });
+	});
+
+	it("paginates to the requested historical native Turn status", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await CodexRuntimeDriver.open({
+			path: join(directory, "driver.json"),
+			bridgeOptions: {
+				model: "gpt-5.3-codex",
+				reasoningEffort: "high",
+				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			},
+			openBridge: async () => bridge,
+		});
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.setTurnsListPages([
+			{
+				data: [
+					{
+						id: "codex-native-later-turn-private",
+						status: "completed",
+					},
+				],
+				nextCursor: "next-turn-page-private",
+			},
+			{
+				data: [{ id: bridge.nativeTurnId, status: "completed" }],
+				nextCursor: null,
+			},
+		]);
+
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		const turnsListRequests = bridge.requests.filter(
+			({ method }) => method === "thread/turns/list",
+		);
+		expect(turnsListRequests).toHaveLength(2);
+		expect(turnsListRequests[0]?.params).toEqual({
+			threadId: bridge.nativeThreadId,
+			itemsView: "notLoaded",
+			limit: 100,
+		});
+		expect(turnsListRequests[1]?.params).toEqual({
+			threadId: bridge.nativeThreadId,
+			itemsView: "notLoaded",
+			limit: 100,
+			cursor: "next-turn-page-private",
+		});
 	});
 
 	it("fails closed for events and app-server notifications until #344 owns recovery", async () => {
