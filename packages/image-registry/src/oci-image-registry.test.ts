@@ -414,6 +414,28 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		expect(policy).toHaveBeenCalledOnce();
 	});
 
+	it("accepts an octet-stream OCI config blob with an OCI config descriptor", async () => {
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				return requestUrl(input).includes("/manifests/")
+					? ociManifestResponse(registryManifestBody, manifestDigest)
+					: ociConfigResponse(registryConfigBody, {
+							headers: { "content-type": "application/octet-stream" },
+						});
+			},
+			policy: { authorize: policy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "admitted",
+			immutableDigest: manifestDigest,
+		});
+		expect(policy).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		["a Digest derived from decoded text", decodedMalformedManifestDigest],
 		["its matching raw Digest", rawMalformedManifestDigest],

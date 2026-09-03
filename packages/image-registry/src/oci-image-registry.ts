@@ -134,7 +134,8 @@ function createOciDistributionClientV1(options: {
 			if (response.status !== "ok") return response;
 			try {
 				if (
-					!hasMediaType(response.headers, configMediaType) ||
+					(!hasMediaType(response.headers, configMediaType) &&
+						!hasMediaType(response.headers, "application/octet-stream")) ||
 					response.body.byteLength !== input.configSize ||
 					digestBytes(response.body) !== input.configDigest
 				) {
