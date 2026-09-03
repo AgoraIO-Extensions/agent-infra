@@ -319,6 +319,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../contracts
+      jsonc-parser:
+        specifier: 'catalog:'
+        version: 3.3.1
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-
 import {
 	type ImageAdmissionPolicyEvidenceV1,
 	ImageAdmissionPolicyEvidenceV1Schema,
@@ -14,12 +13,21 @@ import {
 	parseRuntimeManifestLabelV1,
 	validateImageRegistryAdmissionResultV1,
 } from "@agent-infra/contracts/workload";
+import { getNodeValue, type Node as JsonNode, parseTree } from "jsonc-parser";
 
 const runtimeManifestLabelName = "io.agora.agent.runtime.manifest";
 const manifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const configMediaType = "application/vnd.oci.image.config.v1+json";
 const maxOciResponseBytes = 1024 * 1024;
 const ociRequestTimeoutMs = 30_000;
+const ociImageLayerMediaTypes = new Set([
+	"application/vnd.oci.image.layer.v1.tar",
+	"application/vnd.oci.image.layer.v1.tar+gzip",
+	"application/vnd.oci.image.layer.v1.tar+zstd",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+	"application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+]);
 
 type OciDistributionFailureV1 =
 	| "not-found"
@@ -364,6 +372,10 @@ async function readOciResponse(
 	response.headers.forEach((value, name) => {
 		headers[name] = value;
 	});
+	if (!hasIdentityContentEncoding(headers)) {
+		await response.body?.cancel().catch(() => undefined);
+		return { status: "invalid" };
+	}
 	const body = await readResponseBytes(response.body, headers);
 	if (body.status === "unavailable") return { status: "unavailable" };
 	if (body.status === "invalid" || body.status === "oversized") {
@@ -446,19 +458,41 @@ function hasMediaType(
 	return value?.split(";", 1)[0]?.trim().toLowerCase() === expected;
 }
 
+function hasIdentityContentEncoding(
+	headers: Readonly<Record<string, string | undefined>>,
+): boolean {
+	const value = headerValue(headers, "content-encoding");
+	return (
+		value === undefined ||
+		value.trim() === "" ||
+		value.trim().toLowerCase() === "identity"
+	);
+}
+
 function parseOciImageManifest(
 	input: Uint8Array,
 ): { readonly configDigest: string; readonly configSize: number } | undefined {
-	const manifest = asRecord(JSON.parse(decodeUtf8(input)));
-	const config = manifest ? asRecord(ownValue(manifest, "config")) : undefined;
+	const errors: { error: number; offset: number; length: number }[] = [];
+	const root = parseTree(decodeUtf8(input), errors, {
+		allowTrailingComma: false,
+		disallowComments: true,
+	});
+	if (!root || errors.length > 0 || hasDuplicateJsonObjectKeys(root)) {
+		return undefined;
+	}
+	const manifest = asJsonRecord(getNodeValue(root));
+	const config = manifest
+		? asJsonRecord(ownValue(manifest, "config"))
+		: undefined;
 	const layers = manifest ? ownValue(manifest, "layers") : undefined;
 	if (
 		!manifest ||
 		ownValue(manifest, "schemaVersion") !== 2 ||
 		ownValue(manifest, "mediaType") !== manifestMediaType ||
+		Object.hasOwn(manifest, "artifactType") ||
 		!isOciDescriptor(config, configMediaType) ||
 		!Array.isArray(layers) ||
-		!layers.every((layer) => isOciDescriptor(asRecord(layer)))
+		!layers.every((layer) => isOciImageLayerDescriptor(asJsonRecord(layer)))
 	) {
 		return undefined;
 	}
@@ -466,6 +500,32 @@ function parseOciImageManifest(
 		configDigest: ownValue(config, "digest") as string,
 		configSize: ownValue(config, "size") as number,
 	};
+}
+
+function hasDuplicateJsonObjectKeys(node: JsonNode): boolean {
+	if (node.type === "object") {
+		const keys = new Set<string>();
+		for (const property of node.children ?? []) {
+			const [key, value] = property.children ?? [];
+			if (typeof key?.value !== "string" || !value) return true;
+			if (keys.has(key.value) || hasDuplicateJsonObjectKeys(value)) return true;
+			keys.add(key.value);
+		}
+	}
+	if (node.type === "array") {
+		return (node.children ?? []).some(hasDuplicateJsonObjectKeys);
+	}
+	return false;
+}
+
+function asJsonRecord(input: unknown): Record<string, unknown> | undefined {
+	if (typeof input !== "object" || input === null || Array.isArray(input)) {
+		return undefined;
+	}
+	const prototype = Object.getPrototypeOf(input);
+	return prototype === Object.prototype || prototype === null
+		? (input as Record<string, unknown>)
+		: undefined;
 }
 
 function isOciDescriptor(
@@ -484,6 +544,17 @@ function isOciDescriptor(
 		typeof size === "number" &&
 		Number.isSafeInteger(size) &&
 		size >= 0
+	);
+}
+
+function isOciImageLayerDescriptor(
+	input: Record<string, unknown> | undefined,
+): boolean {
+	const mediaType = input ? ownValue(input, "mediaType") : undefined;
+	return (
+		typeof mediaType === "string" &&
+		ociImageLayerMediaTypes.has(mediaType) &&
+		isOciDescriptor(input)
 	);
 }
 

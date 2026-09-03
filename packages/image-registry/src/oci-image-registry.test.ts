@@ -77,6 +77,7 @@ function response(
 function ociManifestBody(input: {
 	readonly configDigest: string;
 	readonly configSize: number;
+	readonly layers?: readonly unknown[];
 }): string {
 	return JSON.stringify({
 		schemaVersion: 2,
@@ -86,7 +87,7 @@ function ociManifestBody(input: {
 			digest: input.configDigest,
 			size: input.configSize,
 		},
-		layers: [],
+		layers: input.layers ?? [],
 	});
 }
 
@@ -474,6 +475,121 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			expect(policy).not.toHaveBeenCalled();
 		},
 	);
+
+	it("rejects a transformed Content-Encoding without exposing response content", async () => {
+		const encodedManifest = JSON.stringify({
+			...JSON.parse(registryManifestBody),
+			annotation: "registry-secret",
+		});
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch() {
+				return ociManifestResponse(
+					encodedManifest,
+					digestText(encodedManifest),
+					{ headers: { "content-encoding": "gzip" } },
+				);
+			},
+			policy: { authorize: policy },
+		});
+
+		const result = await adapter.admit(request);
+
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: {
+				code: "OCI_CONFIG_INVALID",
+				message: "OCI image config is invalid",
+				retryable: false,
+				traceId: request.traceId,
+			},
+		});
+		expect(policy).not.toHaveBeenCalled();
+		expect(JSON.stringify(result)).not.toContain("registry-secret");
+	});
+
+	it.each([
+		[
+			"a duplicate manifest key",
+			registryManifestBody.replace(
+				'"schemaVersion":2',
+				'"schemaVersion":2,"schemaVersion":2',
+			),
+		],
+		[
+			"a nested duplicate manifest key",
+			registryManifestBody.replace(
+				`"mediaType":"${ociConfigMediaType}"`,
+				`"mediaType":"${ociConfigMediaType}","mediaType":"${ociConfigMediaType}"`,
+			),
+		],
+		[
+			"artifactType presence",
+			JSON.stringify({ ...JSON.parse(registryManifestBody), artifactType: "" }),
+		],
+		[
+			"an OCI artifact layer media type",
+			ociManifestBody({
+				configDigest,
+				configSize: Buffer.byteLength(registryConfigBody),
+				layers: [
+					{
+						mediaType: "application/vnd.oci.empty.v1+json",
+						digest: `sha256:${"a".repeat(64)}`,
+						size: 2,
+					},
+				],
+			}),
+		],
+	] as const)("rejects %s before policy evaluation", async (_name, body) => {
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch() {
+				return ociManifestResponse(body, digestText(body));
+			},
+			policy: { authorize: policy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID", retryable: false },
+		});
+		expect(policy).not.toHaveBeenCalled();
+	});
+
+	it("accepts an OCI image layer descriptor", async () => {
+		const manifestBody = ociManifestBody({
+			configDigest,
+			configSize: Buffer.byteLength(registryConfigBody),
+			layers: [
+				{
+					mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+					digest: `sha256:${"b".repeat(64)}`,
+					size: 2,
+				},
+			],
+		});
+		const manifestDigest = digestText(manifestBody);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input) {
+				return requestUrl(input).includes("/manifests/")
+					? ociManifestResponse(manifestBody, manifestDigest)
+					: ociConfigResponse(registryConfigBody);
+			},
+			policy: { authorize: async () => admittedPolicy },
+		});
+
+		expect(await adapter.admit(request)).toMatchObject({
+			status: "admitted",
+			immutableDigest: manifestDigest,
+		});
+	});
 
 	it("rejects an OCI config response with a non-config Content-Type", async () => {
 		const policy = vi.fn(async () => admittedPolicy);

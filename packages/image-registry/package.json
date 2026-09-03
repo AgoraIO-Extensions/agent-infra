@@ -20,7 +20,8 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
-		"@agent-infra/contracts": "workspace:*"
+		"@agent-infra/contracts": "workspace:*",
+		"jsonc-parser": "catalog:"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
