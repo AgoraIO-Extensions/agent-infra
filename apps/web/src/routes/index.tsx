@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/")({
 	component: HomeComponent,
@@ -18,6 +18,12 @@ function HomeComponent() {
 					当前页面仅验证 Web 部署单元。产品功能将按 PRD 与工程架构 Spec
 					分阶段交付。
 				</p>
+				<Link
+					className="inline-flex min-h-11 items-center border border-slate-900 bg-slate-900 px-4 font-medium text-sm text-white transition-colors hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2"
+					to="/agents"
+				>
+					查看 Agent
+				</Link>
 			</section>
 		</main>
 	);

@@ -5,6 +5,6 @@ import { loadAgentDiscovery } from "./agent-discovery.js";
 export function useAgentDiscovery() {
 	return useQuery({
 		queryKey: ["agents"],
-		queryFn: loadAgentDiscovery,
+		queryFn: () => loadAgentDiscovery(),
 	});
 }

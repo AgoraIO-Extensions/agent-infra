@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
 		"@tailwindcss/vite": "^4.3.3",
+		"@tanstack/react-query": "^5.102.8",
 		"@tanstack/react-router": "^1.170.18",
 		"react": "catalog:",
 		"react-dom": "catalog:"
