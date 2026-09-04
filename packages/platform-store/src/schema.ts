@@ -555,15 +555,15 @@ export const conversationExecutions = platformSchema.table(
 		deliveryFence: bigint("delivery_fence", { mode: "number" })
 			.default(0)
 			.notNull(),
-		lastEventSequence: bigint("last_event_sequence", { mode: "number" })
-			.default(0)
-			.notNull(),
-		lastRuntimeCursor: text("last_runtime_cursor"),
 		authorizationRevision: text("authorization_revision").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		lastEventSequence: bigint("last_event_sequence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		lastRuntimeCursor: text("last_runtime_cursor"),
 	},
 	(table) => [
 		foreignKey({

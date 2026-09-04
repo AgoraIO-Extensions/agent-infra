@@ -63,7 +63,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterEach(async () => {
-	await client`truncate platform.conversation_audit_events, platform.audit_events,
+	await client`truncate platform.conversation_events,
+		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items,
 		platform.idempotency_records, platform.conversation_stops,
 		platform.conversation_messages, platform.conversation_executions,
