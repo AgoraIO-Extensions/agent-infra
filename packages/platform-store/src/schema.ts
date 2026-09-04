@@ -611,6 +611,10 @@ export const conversationExecutions = platformSchema.table(
 			"conversation_execution_authorization_revision_non_empty",
 			sql`char_length(${table.authorizationRevision}) > 0`,
 		),
+		uniqueIndex("conversation_execution_id_conversation_unique").on(
+			table.executionId,
+			table.conversationId,
+		),
 		uniqueIndex("conversation_active_execution_unique")
 			.on(table.conversationId)
 			.where(sql`${table.status} in ('submitted', 'processing', 'unknown')`),
@@ -766,14 +770,12 @@ export const conversationEvents = platformSchema.table(
 	},
 	(table) => [
 		foreignKey({
-			columns: [table.conversationId],
-			foreignColumns: [conversations.id],
-			name: "conversation_event_conversation_fk",
-		}),
-		foreignKey({
-			columns: [table.executionId],
-			foreignColumns: [conversationExecutions.executionId],
-			name: "conversation_event_execution_fk",
+			columns: [table.executionId, table.conversationId],
+			foreignColumns: [
+				conversationExecutions.executionId,
+				conversationExecutions.conversationId,
+			],
+			name: "conversation_event_execution_conversation_fk",
 		}),
 		check(
 			"conversation_event_id_non_empty",

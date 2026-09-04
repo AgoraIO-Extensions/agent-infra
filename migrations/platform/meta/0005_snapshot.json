@@ -1,5 +1,5 @@
 {
-  "id": "f6b98dde-6345-4eda-b158-de88d0c71cf7",
+  "id": "53c8fe03-4288-42e4-8889-72a12f53c2a6",
   "prevId": "89356d82-0836-4272-9c27-f9b8a12cc604",
   "version": "7",
   "dialect": "postgresql",
@@ -1154,30 +1154,18 @@
         }
       },
       "foreignKeys": {
-        "conversation_event_conversation_fk": {
-          "name": "conversation_event_conversation_fk",
-          "tableFrom": "conversation_events",
-          "tableTo": "conversations",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "conversation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "conversation_event_execution_fk": {
-          "name": "conversation_event_execution_fk",
+        "conversation_event_execution_conversation_fk": {
+          "name": "conversation_event_execution_conversation_fk",
           "tableFrom": "conversation_events",
           "tableTo": "conversation_executions",
           "schemaTo": "platform",
           "columnsFrom": [
-            "execution_id"
+            "execution_id",
+            "conversation_id"
           ],
           "columnsTo": [
-            "execution_id"
+            "execution_id",
+            "conversation_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -1312,6 +1300,27 @@
         }
       },
       "indexes": {
+        "conversation_execution_id_conversation_unique": {
+          "name": "conversation_execution_id_conversation_unique",
+          "columns": [
+            {
+              "expression": "execution_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "conversation_active_execution_unique": {
           "name": "conversation_active_execution_unique",
           "columns": [

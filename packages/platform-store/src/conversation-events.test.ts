@@ -187,6 +187,58 @@ describe("PostgreSQL Conversation event transaction", () => {
 		}
 	});
 
+	it("uses database time for operational event updates", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openEvents("event_postgres_database_time");
+		const input = {
+			...eventInput(conversationId, executionId),
+			occurredAt: "2099-01-01T00:00:00.000Z",
+		};
+		try {
+			await expect(events.persist(input)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			const [timestamps] = await client<
+				{
+					conversation_updated_at: Date;
+					execution_updated_at: Date;
+				}[]
+			>`
+				select c.updated_at as conversation_updated_at,
+					e.updated_at as execution_updated_at
+				from platform.conversations c
+				join platform.conversation_executions e on e.execution_id = ${executionId}
+				where c.id = ${conversationId}
+			`;
+			if (!timestamps) throw new Error("Expected persisted timestamps");
+			const future = new Date(input.occurredAt).getTime();
+			expect(timestamps.conversation_updated_at.getTime()).toBeLessThan(future);
+			expect(timestamps.execution_updated_at.getTime()).toBeLessThan(future);
+		} finally {
+			await close();
+		}
+	});
+
+	it("rejects an event that pairs an Execution with another Conversation", async () => {
+		const execution = await seedConversation();
+		const conversation = await seedConversation();
+		await expect(
+			client`
+				insert into platform.conversation_events
+					(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+					 conversation_cursor, event_type, event_payload, event_digest,
+					 runtime_cursor, occurred_at)
+				values
+					(${`event_cross_conversation_${nextFixture++}`},
+					 ${conversation.conversationId}, ${execution.executionId}, 'adapter_cross', 1,
+					 1, 'text.delta', ${client.json({ type: "text.delta", text: "Hello" })},
+					 ${"0".repeat(64)}, 'runtime_cross', now())
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_execution_conversation_fk",
+		});
+	});
+
 	it("rolls back a failed new-event write without advancing either cursor", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const { events, close } = openEvents("event_postgres_rollback");
