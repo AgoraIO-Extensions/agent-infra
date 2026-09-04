@@ -40,9 +40,6 @@ export function useWithdrawMyAgentApplication(applicationId: string) {
 			clearAttempt(attempt);
 			return queryClient.invalidateQueries({ queryKey: ["my-agents"] });
 		},
-		onError: (_error, attempt) => {
-			clearAttempt(attempt);
-		},
 	});
 
 	useLayoutEffect(() => {

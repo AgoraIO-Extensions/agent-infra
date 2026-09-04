@@ -98,7 +98,7 @@ describe("useWithdrawMyAgentApplication", () => {
 		queryClient.clear();
 	});
 
-	it("starts a new idempotency key after retries exhaust", async () => {
+	it("reuses an idempotency key when a caller retries after an error", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { mutations: { retry: 1, retryDelay: 0 } },
 		});
@@ -132,7 +132,7 @@ describe("useWithdrawMyAgentApplication", () => {
 			);
 		});
 		expect(withdrawMyAgentApplication).toHaveBeenCalledTimes(3);
-		expect(vi.mocked(withdrawMyAgentApplication).mock.calls[2]?.[1]).not.toBe(
+		expect(vi.mocked(withdrawMyAgentApplication).mock.calls[2]?.[1]).toBe(
 			exhaustedKey,
 		);
 		queryClient.clear();
