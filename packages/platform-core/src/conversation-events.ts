@@ -647,8 +647,8 @@ export function createConversationEventUseCaseV1(
 								deliveryFence: command.deliveryFence,
 							};
 						})();
-						expected = next;
-						return next;
+						expected = structuredClone(next);
+						return structuredClone(next);
 					},
 				);
 				return normalizeDecision(decision, expected);

@@ -212,6 +212,30 @@ describe("Conversation event ingestion", () => {
 		});
 	});
 
+	it("fails closed when a transaction mutates the Core event plan", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (_request, decide) => {
+				const plan = decide(activeState());
+				if (Object.hasOwn(plan, "outcome")) {
+					throw new Error("Expected an accepted event plan");
+				}
+				const mutablePlan = plan as {
+					event: { conversationId: string };
+				};
+				mutablePlan.event.conversationId = "conversation_other";
+				return { outcome: "accepted", event: mutablePlan.event } as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1(
+			{ transaction },
+			{ newId: () => "event_1" },
+		);
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
 	it("fails closed when a transaction returns a raw replay event", async () => {
 		const persisted = {
 			schemaVersion: 1 as const,
