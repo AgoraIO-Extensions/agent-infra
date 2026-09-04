@@ -217,6 +217,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			actions,
 			environment,
 			secrets,
+			source: application?.source,
 			configureModels,
 			models,
 			defaultModelOptionId,
@@ -316,7 +317,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								Standard template ID
 							</label>
 							<input
-								className={inputClassName}
+								className={`${inputClassName} disabled:cursor-not-allowed disabled:bg-slate-100`}
+								disabled={props.mode === "update"}
 								id="application-template-id"
 								onChange={(event) => setTemplateId(event.target.value)}
 								required
@@ -332,7 +334,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								Image reference
 							</label>
 							<input
-								className={inputClassName}
+								className={`${inputClassName} disabled:cursor-not-allowed disabled:bg-slate-100`}
+								disabled={props.mode === "update"}
 								id="application-image-reference"
 								onChange={(event) => setImageReference(event.target.value)}
 								required
@@ -349,7 +352,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								Identity responsibility
 							</label>
 							<select
-								className={inputClassName}
+								className={`${inputClassName} disabled:cursor-not-allowed disabled:bg-slate-100`}
+								disabled={props.mode === "update"}
 								id="application-identity-responsibility"
 								onChange={(event) =>
 									setIdentityResponsibility(

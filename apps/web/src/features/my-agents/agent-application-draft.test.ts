@@ -110,4 +110,20 @@ describe("Agent application draft", () => {
 			environment: [{ name: "LOG_LEVEL", value: "debug" }],
 		});
 	});
+
+	it("uses the projected source when serializing an update", () => {
+		expect(
+			buildAgentApplicationRequest("update", {
+				...standardCreateDraft,
+				source: { kind: "standard", templateId: "codex" },
+				templateId: "changed-template",
+				configureModels: false,
+				secrets: [],
+			}),
+		).toEqual(
+			expect.objectContaining({
+				source: { kind: "standard", templateId: "codex" },
+			}),
+		);
+	});
 });

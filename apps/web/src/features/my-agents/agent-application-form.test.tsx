@@ -126,6 +126,7 @@ describe("AgentApplicationForm", () => {
 	});
 
 	it("keeps the source fixed for an existing application", () => {
+		const onSubmit = vi.fn();
 		const customApplication = AgentApplicationProjectionV1Schema.parse({
 			...pendingApplication,
 			source: {
@@ -144,7 +145,7 @@ describe("AgentApplicationForm", () => {
 				action="resubmit"
 				application={customApplication}
 				mode="update"
-				onSubmit={vi.fn()}
+				onSubmit={onSubmit}
 				submitting={false}
 			/>,
 		);
@@ -152,6 +153,15 @@ describe("AgentApplicationForm", () => {
 		expect(
 			(screen.getByLabelText("Source kind") as HTMLSelectElement).disabled,
 		).toBe(true);
+		expect(
+			(screen.getByLabelText("Image reference") as HTMLInputElement).disabled,
+		).toBe(true);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Resubmit application" }),
+		);
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ source: customApplication.source }),
+		);
 	});
 
 	it("submits a custom self-managed source with its identity responsibility", () => {
