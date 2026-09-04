@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import {
 	access,
 	chmod,
@@ -136,6 +137,25 @@ function options(overrides: Record<string, unknown> = {}) {
 		startupTimeoutMs: 5_000,
 		shutdownTimeoutMs: 1_000,
 		...overrides,
+	};
+}
+
+function createStalledBridge(isolatedDirectory: string) {
+	const process = new EventEmitter();
+	Object.assign(process, {
+		stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+		stdout: new EventEmitter(),
+		stderr: Object.assign(new EventEmitter(), { resume: vi.fn() }),
+		kill: vi.fn(),
+	});
+	const Bridge = CodexAppServerBridge as unknown as new (
+		child: never,
+		shutdownTimeoutMs: number,
+		directory: string,
+	) => CodexAppServerBridge;
+	return {
+		bridge: new Bridge(process as never, 25, isolatedDirectory),
+		process,
 	};
 }
 
@@ -498,5 +518,20 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			code: "CODEX_APP_SERVER_TIMEOUT",
 		});
 		expect(() => process.kill(pid, 0)).toThrow();
+	});
+
+	it("keeps its private runtime directory until an unreaped child closes", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-stalled-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		await expect(bridge.close()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		await expect(access(isolatedDirectory)).resolves.toBeUndefined();
+		process.emit("close");
+		await expectPathRemoved(isolatedDirectory);
+		directories.splice(directories.indexOf(isolatedDirectory), 1);
 	});
 });

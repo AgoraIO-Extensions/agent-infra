@@ -738,27 +738,24 @@ export class CodexAppServerBridge {
 		if (this.#reaping) return this.#reaping;
 		this.#closing = true;
 		this.#reaping = (async () => {
+			kill(this.#process);
 			try {
-				kill(this.#process);
+				await this.waitForExit(this.#shutdownTimeoutMs);
+				return;
+			} catch {
+				kill(this.#process, "SIGKILL");
 				try {
 					await this.waitForExit(this.#shutdownTimeoutMs);
-					return;
 				} catch {
-					kill(this.#process, "SIGKILL");
-					try {
-						await this.waitForExit(this.#shutdownTimeoutMs);
-					} catch {
-						// The process could not be reaped within the bounded cleanup window.
-					}
+					// The process could not be reaped within the bounded cleanup window.
 				}
-			} finally {
-				await this.cleanIsolatedDirectory();
 			}
 		})();
 		return this.#reaping;
 	}
 
 	private cleanIsolatedDirectory() {
+		if (!this.#isClosed) return Promise.resolve();
 		this.#cleaning ??= removeIsolatedDirectory(this.isolatedDirectory);
 		return this.#cleaning;
 	}
