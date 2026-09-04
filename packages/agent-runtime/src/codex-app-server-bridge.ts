@@ -332,13 +332,18 @@ async function createIsolatedLaunchPolicy(): Promise<IsolatedLaunchPolicy> {
 		const directory = await mkdtemp(
 			join(tmpdir(), isolatedRuntimeDirectoryPrefix),
 		);
+		const environment: NodeJS.ProcessEnv = {
+			CODEX_HOME: directory,
+			HOME: directory,
+			PATH: path,
+		};
+		if (process.platform === "darwin") {
+			environment.__CF_USER_TEXT_ENCODING =
+				process.env.__CF_USER_TEXT_ENCODING ?? "";
+		}
 		return {
 			directory,
-			environment: {
-				CODEX_HOME: directory,
-				HOME: directory,
-				PATH: path,
-			},
+			environment,
 		};
 	} catch {
 		throw unavailable();
@@ -626,7 +631,11 @@ export class CodexAppServerBridge {
 			await this.cleanIsolatedDirectory();
 			return;
 		}
-		if (this.#reaping) return this.#reaping;
+		if (this.#reaping) {
+			await this.#reaping;
+			await this.cleanIsolatedDirectory();
+			return;
+		}
 		if (this.#closing) {
 			await this.#exit;
 			await this.cleanIsolatedDirectory();

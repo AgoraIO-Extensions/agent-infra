@@ -78,6 +78,7 @@ if (capturePath) {
     environment: {
       codexHome: process.env.CODEX_HOME,
       home: process.env.HOME,
+      cfUserTextEncoding: process.env.__CF_USER_TEXT_ENCODING,
       hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
       hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
     },
@@ -187,6 +188,7 @@ async function readCaptures(path: string, minimum = 1) {
 							environment: {
 								codexHome?: string;
 								home?: string;
+								cfUserTextEncoding?: string;
 								hasMcpConfiguration: boolean;
 								hasConnectionCredential: boolean;
 							};
@@ -269,6 +271,11 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
 				expect(capture.environment.codexHome).toBeDefined();
 				expect(capture.environment.home).toBeDefined();
+				if (process.platform === "darwin") {
+					expect(capture.environment.cfUserTextEncoding).toBe(
+						process.env.__CF_USER_TEXT_ENCODING ?? "",
+					);
+				}
 				expect(await realpath(capture.environment.codexHome ?? "")).toBe(
 					await realpath(capture.cwd),
 				);
@@ -533,5 +540,38 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		process.emit("close");
 		await expectPathRemoved(isolatedDirectory);
 		directories.splice(directories.indexOf(isolatedDirectory), 1);
+	});
+
+	it("waits for private runtime cleanup after a concurrent reap", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-reaping-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		const internals = bridge as unknown as {
+			reapOwnedChild(): Promise<void>;
+			cleanIsolatedDirectory(): Promise<void>;
+		};
+		let releaseCleanup!: () => void;
+		const cleanup = new Promise<void>((resolve) => {
+			releaseCleanup = resolve;
+		});
+		const clean = vi
+			.spyOn(internals, "cleanIsolatedDirectory")
+			.mockReturnValue(cleanup);
+		const reaping = internals.reapOwnedChild();
+		const closing = bridge.close();
+		process.emit("close");
+		await reaping;
+		await vi.waitFor(() => expect(clean).toHaveBeenCalled());
+		let settled = false;
+		void closing.then(() => {
+			settled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(settled).toBe(false);
+		releaseCleanup();
+		await closing;
+		clean.mockRestore();
 	});
 });
