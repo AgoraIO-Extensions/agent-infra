@@ -972,7 +972,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					yield event;
 					if (event.type === "completed") return;
 				}
-				if (driver.isExecutionTerminal(nativeSessionRef, executionId)) return;
 				const waiter = driver.waitForEvent(
 					driver.eventStreamKey(nativeSessionRef, executionId),
 					signal,
@@ -983,15 +982,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						executionId,
 						cursor,
 					);
-					if (pending.length === 0) {
-						await waiter.promise;
-						if (signal?.aborted) return;
-						pending = await driver.replayEvents(
-							nativeSessionRef,
-							executionId,
-							cursor,
-						);
-					}
+					if (pending.length > 0) continue;
+					if (driver.isExecutionTerminal(nativeSessionRef, executionId)) return;
+					await waiter.promise;
+					if (signal?.aborted) return;
+					pending = await driver.replayEvents(
+						nativeSessionRef,
+						executionId,
+						cursor,
+					);
 				} finally {
 					waiter.cancel();
 				}
@@ -1029,7 +1028,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				);
 				if (!resolved) return;
 				this.assertJournalOpen(resolved.journal);
-				if (started.status !== "running") return;
+				if (started.status !== "running") protocolInvalid();
 				const appended = this.appendStatusEvent(
 					resolved.session,
 					resolved.journal,

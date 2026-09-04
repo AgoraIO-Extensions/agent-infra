@@ -1024,6 +1024,61 @@ describe("Codex Runtime Driver", () => {
 		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 	});
 
+	it("fails closed for a terminal started notification", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const accepted = await driver.execute(submitCommand());
+
+		await bridge.emitNotification("completed");
+		await vi.waitFor(() => expect(bridge.isClosed()).toBe(true));
+		await expect(
+			driver.execute(
+				submitCommand({
+					conversationId: "conversation-codex-after-terminal-start",
+					operationId: "execution-codex-after-terminal-start",
+					executionId: "execution-codex-after-terminal-start",
+					turnId: "turn-codex-after-terminal-start",
+					nativeSessionRef: accepted.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+	});
+
+	it("replays a terminal event persisted after subscription setup", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.filter((event) => event.type === "completed")).toHaveLength(
+				1,
+			);
+		});
+		const iterator = stream[Symbol.asyncIterator]();
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: { type: "status", payload: { status: "running" } },
+		});
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: { type: "completed", payload: { status: "completed" } },
+		});
+	});
+
 	it("persists a terminal Turn notification and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
