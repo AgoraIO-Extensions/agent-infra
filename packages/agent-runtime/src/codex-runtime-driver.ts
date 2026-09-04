@@ -178,9 +178,11 @@ function isCodexSession(
 	) {
 		return false;
 	}
+	const executions = Object.entries(value.executions);
+	if (executions.length > 0 && value.threadId === undefined) return false;
 	let runningExecutionId: string | undefined;
 	const nativeTurnIds = new Set<string>();
-	for (const [executionId, execution] of Object.entries(value.executions)) {
+	for (const [executionId, execution] of executions) {
 		if (!isCodexExecution(executionId, execution)) return false;
 		if (nativeTurnIds.has(execution.nativeTurnId)) return false;
 		nativeTurnIds.add(execution.nativeTurnId);

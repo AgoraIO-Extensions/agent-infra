@@ -1044,6 +1044,45 @@ describe("Codex Runtime Driver", () => {
 			},
 		],
 		[
+			"execution without a native thread",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						executions: {
+							"execution-codex": {
+								executionId: "execution-codex",
+								turnId: "turn-codex",
+								nativeTurnId: "codex-native-turn-private",
+								status: "completed",
+							},
+						},
+					},
+				},
+				operations: {
+					'["agent-codex","conversation-codex",1,"submit-turn","execution-codex"]':
+						{
+							state: "resolved",
+							nativeSessionRef: "opaque-session",
+							record: {
+								schemaVersion: 1,
+								agentId: "agent-codex",
+								conversationId: "conversation-codex",
+								sessionGeneration: 1,
+								kind: "submit-turn",
+								operationId: "execution-codex",
+								nativeSessionRef: "opaque-session",
+								result: { outcome: "accepted", status: "completed" },
+							},
+						},
+				},
+			},
+		],
+		[
 			"duplicate native thread",
 			{
 				schemaVersion: 1,
