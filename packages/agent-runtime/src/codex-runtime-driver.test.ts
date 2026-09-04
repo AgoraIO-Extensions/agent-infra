@@ -730,6 +730,58 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
+	it("keeps a generation barrier active when a running cancellation retry cannot read its Turn", async () => {
+		const directory = await runtimeDirectory();
+		const hostPath = join(directory, "host.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const runtimeHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(hostPath),
+				driver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		const request = submitRequest();
+		const submitted = await runtimeHost.submitTurn(request);
+		const cancellation = generationCancelRequest(
+			request,
+			submitted.hostSessionRef,
+		);
+
+		expect((await runtimeHost.cancelGeneration(cancellation)).result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		bridge.holdTurnsList();
+		const retry = runtimeHost.cancelGeneration({
+			...cancellation,
+			requestId: "request-codex-generation-cancel-retry-failure",
+			deliveryFence: 2,
+		});
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+		bridge.respondToHeldTurnsList("error");
+
+		expect((await retry).result).toEqual({
+			outcome: "unknown",
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			message: "Runtime command acceptance could not be confirmed",
+		});
+		const state = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<string, { generationBarrier?: { state: string } }>;
+		};
+		expect(
+			state.sessions[submitted.hostSessionRef]?.generationBarrier?.state,
+		).toBe("active");
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(1);
+	});
+
 	it("recovers the actual completion after an interrupted stop response without replaying it", async () => {
 		const directory = await runtimeDirectory();
 		const hostPath = join(directory, "host.json");
@@ -753,8 +805,10 @@ describe("Codex Runtime Driver", () => {
 		const submitted = await firstHost.submitTurn(request);
 		const stop = stopRequest(request, submitted.hostSessionRef);
 
-		await expect(firstHost.stop(stop)).rejects.toMatchObject({
-			code: "RUNTIME_DRIVER_INVALID",
+		expect((await firstHost.stop(stop)).result).toEqual({
+			outcome: "unknown",
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			message: "Runtime command acceptance could not be confirmed",
 		});
 		expect(
 			firstBridge.requests.filter(({ method }) => method === "turn/interrupt"),

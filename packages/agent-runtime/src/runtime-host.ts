@@ -87,6 +87,22 @@ function acceptanceUnknown() {
 	} as const;
 }
 
+function isInterruption(operation: StoredOperation) {
+	return operation.kind === "stop" || operation.kind === "generation-cancel";
+}
+
+function unknownOperationResponse(
+	hostSessionRef: string,
+	operationId: string,
+): RuntimeOperationResponseV1 {
+	return {
+		schemaVersion: 1,
+		hostSessionRef,
+		operationId,
+		result: acceptanceUnknown(),
+	};
+}
+
 async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
@@ -576,10 +592,20 @@ export class RuntimeHost {
 				const nativeSessionRef =
 					this.options.store.nativeSessionRef(hostSessionRef) ??
 					nativeSessionRequired();
-				result = await this.currentDriverResult(
-					{ nativeSessionRef, result },
-					operation.executionId,
-				);
+				try {
+					result = await this.currentDriverResult(
+						{ nativeSessionRef, result },
+						operation.executionId,
+					);
+				} catch (error) {
+					if (isInterruption(operation)) {
+						return unknownOperationResponse(
+							hostSessionRef,
+							operation.operationId,
+						);
+					}
+					throw error;
+				}
 				await this.options.store.resolveOperation(
 					hostSessionRef,
 					operation.operationId,
@@ -595,22 +621,25 @@ export class RuntimeHost {
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
-		const lookup = parseDriverLookup(
-			await callDriver(() =>
-				this.options.driver.lookupOperation(operation.command),
-			),
-			operation,
-			this.options.store.nativeSessionRef(hostSessionRef),
-		);
+		let lookup: ReturnType<typeof parseDriverLookup>;
+		try {
+			lookup = parseDriverLookup(
+				await callDriver(() =>
+					this.options.driver.lookupOperation(operation.command),
+				),
+				operation,
+				this.options.store.nativeSessionRef(hostSessionRef),
+			);
+		} catch (error) {
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
+			}
+			throw error;
+		}
 		if (lookup.state === "unknown") {
 			const result = acceptanceUnknown();
-			if (operation.kind === "stop" || operation.kind === "generation-cancel") {
-				return {
-					schemaVersion: 1,
-					hostSessionRef,
-					operationId: operation.operationId,
-					result,
-				};
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
 			}
 			await this.options.store.resolveOperation(
 				hostSessionRef,
@@ -624,15 +653,23 @@ export class RuntimeHost {
 				result,
 			};
 		}
-		const driverRecord = parseDriverRecord(
-			lookup.state === "found"
-				? lookup.record
-				: await callDriver(() =>
-						this.options.driver.execute(operation.command),
-					),
-			operation,
-			this.options.store.nativeSessionRef(hostSessionRef),
-		);
+		let driverRecord: ReturnType<typeof parseDriverRecord>;
+		try {
+			driverRecord = parseDriverRecord(
+				lookup.state === "found"
+					? lookup.record
+					: await callDriver(() =>
+							this.options.driver.execute(operation.command),
+						),
+				operation,
+				this.options.store.nativeSessionRef(hostSessionRef),
+			);
+		} catch (error) {
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
+			}
+			throw error;
+		}
 		await this.options.afterDriverResult?.(operation.operationId);
 		let result: RuntimeOperationResponseV1["result"];
 		try {
@@ -641,13 +678,8 @@ export class RuntimeHost {
 				operation.executionId,
 			);
 		} catch (error) {
-			if (operation.kind === "stop" || operation.kind === "generation-cancel") {
-				return {
-					schemaVersion: 1,
-					hostSessionRef,
-					operationId: operation.operationId,
-					result: acceptanceUnknown(),
-				};
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
 			}
 			throw error;
 		}
