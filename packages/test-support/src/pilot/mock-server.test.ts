@@ -1,4 +1,7 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApplicationProjectionV1Schema,
+	AgentProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import { pilotFakeScenariosV1 } from "./index.js";
@@ -10,6 +13,43 @@ const startingAgent = AgentProjectionV1Schema.parse(
 const secondAgent = AgentProjectionV1Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
+});
+const pendingApplication = AgentApplicationProjectionV1Schema.parse({
+	schemaVersion: 1,
+	applicationId: "application-pilot-1",
+	agentId: null,
+	name: "Release assistant request",
+	description: "Helps the release team",
+	source: { kind: "standard", templateId: "codex" },
+	status: "pending_approval",
+	resourceProfile: {
+		profileId: "small",
+		displayName: "Small",
+		estimatedResources: {
+			cpuMillicores: 250,
+			memoryMiB: 512,
+			storageGiB: 1,
+		},
+	},
+	configuration: {
+		owners: [
+			{
+				userId: "user-applicant-1",
+				displayName: "Applicant",
+				roles: ["employee"],
+			},
+		],
+		availability: [],
+		modelOptions: [],
+		defaultModelOptionId: null,
+		defaultReasoningLevel: null,
+		actions: [],
+		environment: [],
+		channels: [],
+		secrets: [],
+	},
+	submittedAt: "2026-09-03T08:00:00Z",
+	decision: null,
 });
 const cursor = "cursor:agent-pilot-1";
 
@@ -47,6 +87,56 @@ describe("Pilot Agent Mock Server", () => {
 			"https://platform.example.test/api/v1/agents",
 			`https://platform.example.test/api/v1/agents?cursor=${cursor}`,
 		]);
+	});
+
+	it("routes schema-validated Agent Application operations", async () => {
+		const withdrawnApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			status: "withdrawn",
+		});
+		const server = createPilotAgentMockServerV1({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgent },
+			listAgentApplications: {
+				status: 200,
+				body: { items: [pendingApplication], nextCursor: null },
+			},
+			getAgentApplication: { status: 200, body: pendingApplication },
+			withdrawAgentApplication: { status: 200, body: withdrawnApplication },
+		});
+
+		const list = await server.fetch(
+			new Request("https://platform.example.test/api/v1/agent-applications"),
+		);
+		const detail = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+			),
+		);
+		const withdrawal = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
+				{
+					method: "POST",
+					headers: { "Idempotency-Key": "withdrawal-request-1" },
+				},
+			),
+		);
+
+		expect(await list.json()).toEqual({
+			items: [pendingApplication],
+			nextCursor: null,
+		});
+		expect(await detail.json()).toEqual(pendingApplication);
+		expect(await withdrawal.json()).toEqual(withdrawnApplication);
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
+					{ method: "POST" },
+				),
+			),
+		).rejects.toThrow();
 	});
 
 	it("rejects invalid contract scenario data before serving a response", () => {
@@ -88,6 +178,16 @@ describe("Pilot Agent Mock Server", () => {
 			createPilotAgentMockServerV1({
 				listAgents: { status: 500, body: protocolError },
 				getAgent: { status: 200, body: startingAgent },
+			}),
+		).toThrow();
+		expect(() =>
+			createPilotAgentMockServerV1({
+				listAgents: { status: 200, body: { items: [], nextCursor: null } },
+				getAgent: { status: 200, body: startingAgent },
+				withdrawAgentApplication: {
+					status: 201,
+					body: pendingApplication,
+				},
 			}),
 		).toThrow();
 	});
