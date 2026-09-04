@@ -122,6 +122,10 @@ function nonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0;
 }
 
+function ownRecordValue<T>(record: Record<string, T>, key: string) {
+	return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 function isPersistedTurnStatus(value: unknown): value is PersistedTurnStatus {
 	return (
 		typeof value === "string" &&
@@ -199,7 +203,7 @@ function isCodexOperation(
 	) {
 		return false;
 	}
-	const session = sessions[value.nativeSessionRef];
+	const session = ownRecordValue(sessions, value.nativeSessionRef);
 	if (!session) return false;
 	if (value.state === "prepared") {
 		if (value.record !== undefined) return false;
@@ -247,7 +251,7 @@ function isCodexOperation(
 	if (record.data.result.outcome !== "accepted") {
 		return record.data.result.outcome !== "unknown";
 	}
-	const execution = session.executions[record.data.operationId];
+	const execution = ownRecordValue(session.executions, record.data.operationId);
 	return (
 		execution !== undefined && execution.status === record.data.result.status
 	);
@@ -277,16 +281,16 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	}
 	for (const [nativeSessionRef, session] of Object.entries(sessions)) {
 		for (const [executionId, execution] of Object.entries(session.executions)) {
-			const operation =
-				operations[
-					operationKey({
-						agentId: session.agentId,
-						conversationId: session.conversationId,
-						sessionGeneration: session.sessionGeneration,
-						kind: "submit-turn",
-						operationId: executionId,
-					})
-				];
+			const operation = ownRecordValue(
+				operations,
+				operationKey({
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					kind: "submit-turn",
+					operationId: executionId,
+				}),
+			);
 			const record = operation?.record;
 			if (
 				operation?.state !== "resolved" ||
@@ -300,7 +304,7 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 		}
 		const uncertainOperationKey = session.acceptanceUncertainOperationKey;
 		if (!uncertainOperationKey) continue;
-		const operation = operations[uncertainOperationKey];
+		const operation = ownRecordValue(operations, uncertainOperationKey);
 		if (
 			operation?.state !== "prepared" ||
 			operation.nativeSessionRef !== nativeSessionRef
@@ -466,6 +470,10 @@ class CodexRpc {
 
 export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly resumedSessions = new Set<string>();
+	private readonly inFlightExecutions = new Map<
+		string,
+		Promise<RuntimeDriverOperationRecordV1>
+	>();
 
 	protected constructor(
 		private readonly file: DurableJsonFile<CodexDriverState>,
@@ -538,6 +546,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		const key = operationKey(command);
+		const inFlight = this.inFlightExecutions.get(key);
+		if (inFlight) return inFlight;
+		const execution = this.executeOnce(command, text);
+		this.inFlightExecutions.set(key, execution);
+		try {
+			return await execution;
+		} finally {
+			if (this.inFlightExecutions.get(key) === execution) {
+				this.inFlightExecutions.delete(key);
+			}
+		}
+	}
+
+	private async executeOnce(
+		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		text: string,
+	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (!prepared.created) {
@@ -608,7 +634,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	async lookupOperation(
 		command: RuntimeDriverCommandV1,
 	): Promise<RuntimeDriverLookup> {
-		const operation = this.readState().operations[operationKey(command)];
+		const operation = ownRecordValue(
+			this.readState().operations,
+			operationKey(command),
+		);
 		if (!operation) return { state: "missing" };
 		if (!operation.record) return { state: "unknown" };
 		return { state: "found", record: operation.record };
@@ -616,7 +645,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
 		const session = this.session(nativeSessionRef);
-		const execution = session.executions[executionId];
+		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		if (execution.status !== "running") return execution.status;
 		await this.resumeSession(nativeSessionRef);
@@ -725,21 +754,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		status: PersistedTurnStatus,
 	) {
 		return this.update((state) => {
-			const session = state.sessions[nativeSessionRef];
-			const execution = session?.executions[executionId];
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const execution = session
+				? ownRecordValue(session.executions, executionId)
+				: undefined;
 			if (!session || !execution || execution.nativeTurnId !== nativeTurnId) {
 				stateInvalid();
 			}
-			const operation =
-				state.operations[
-					operationKey({
-						agentId: session.agentId,
-						conversationId: session.conversationId,
-						sessionGeneration: session.sessionGeneration,
-						kind: "submit-turn",
-						operationId: executionId,
-					})
-				];
+			const operation = ownRecordValue(
+				state.operations,
+				operationKey({
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					kind: "submit-turn",
+					operationId: executionId,
+				}),
+			);
 			if (!operation?.record) stateInvalid();
 			if (operation.record.result.outcome !== "accepted") stateInvalid();
 			if (execution.status !== "running") return execution.status;
@@ -769,7 +800,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		return this.update((state) => {
 			const key = operationKey(command);
-			const existing = state.operations[key];
+			const existing = ownRecordValue(state.operations, key);
 			if (existing) return { operation: existing, created: false };
 			const matchingSessions = command.nativeSessionRef
 				? []
@@ -782,7 +813,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (matchingSessions.length > 1) stateInvalid();
 			const nativeSessionRef =
 				command.nativeSessionRef ?? matchingSessions[0]?.[0] ?? randomUUID();
-			const session = state.sessions[nativeSessionRef];
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
 			if (session) {
 				if (
 					session.agentId !== command.agentId ||
@@ -827,8 +858,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		const key = operationKey(command);
 		await this.update((state) => {
-			const session = state.sessions[nativeSessionRef];
-			const operation = state.operations[key];
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const operation = ownRecordValue(state.operations, key);
 			if (
 				!session ||
 				!operation ||
@@ -849,8 +880,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		const key = operationKey(command);
 		await this.update((state) => {
-			const session = state.sessions[nativeSessionRef];
-			const operation = state.operations[key];
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const operation = ownRecordValue(state.operations, key);
 			if (
 				!session?.threadId ||
 				!operation ||
@@ -865,7 +896,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private session(nativeSessionRef: string) {
-		const session = this.readState().sessions[nativeSessionRef];
+		const session = ownRecordValue(this.readState().sessions, nativeSessionRef);
 		if (!session) unavailable();
 		return session;
 	}
@@ -888,7 +919,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return thread.id;
 		});
 		await this.update((state) => {
-			const stored = state.sessions[nativeSessionRef];
+			const stored = ownRecordValue(state.sessions, nativeSessionRef);
 			if (!stored || stored.threadId) protocolInvalid();
 			if (
 				Object.entries(state.sessions).some(
@@ -939,8 +970,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			result,
 		};
 		await this.update((state) => {
-			const operation = state.operations[operationKey(command)];
-			const session = state.sessions[nativeSessionRef];
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
 			if (!operation || !session) protocolInvalid();
 			operation.state = "resolved";
 			operation.record = record;

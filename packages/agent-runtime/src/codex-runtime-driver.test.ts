@@ -462,6 +462,25 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
+	it("coalesces concurrent retries for one operation", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+
+		const [first, duplicate] = await Promise.all([
+			driver.execute(command),
+			driver.execute(command),
+		]);
+
+		expect(duplicate).toEqual(first);
+		expect(first.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
 	it("does not start a second native Turn for concurrent idle-Session submits", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -540,6 +559,21 @@ describe("Codex Runtime Driver", () => {
 			"thread/resume",
 			"thread/turns/list",
 		]);
+	});
+
+	it("fails closed for inherited Session and Execution identifiers", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const accepted = await driver.execute(submitCommand());
+
+		await expect(
+			driver.getStatus(accepted.nativeSessionRef, "constructor"),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			driver.getStatus("constructor", "execution-codex"),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 	});
 
 	it("rejects a duplicate native thread response across Sessions", async () => {
