@@ -12,6 +12,11 @@ type PilotAgentMockResponderV1<TArgs extends readonly unknown[]> =
 export type PilotAgentMockServerScenarioV1 = {
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
+	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
+	readonly getAgentApplication?: PilotAgentMockResponderV1<[Request, string]>;
+	readonly withdrawAgentApplication?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
 };
 
 export type PilotAgentMockServerV1 = {
@@ -24,6 +29,7 @@ type Operation = {
 	readonly requestParams: {
 		readonly path?: Schema;
 		readonly query?: Schema;
+		readonly header?: Schema;
 	};
 	readonly responses: Record<
 		string,
@@ -40,6 +46,15 @@ const listAgentsOperation = pilotBrowserHttpOpenApiPathsV1["/api/v1/agents"]
 const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agents/{agentId}"
 ].get as unknown as Operation;
+const listAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agent-applications"
+].get as unknown as Operation;
+const getAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agent-applications/{applicationId}"
+].get as unknown as Operation;
+const withdrawAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agent-applications/{applicationId}/withdraw"
+].post as unknown as Operation;
 
 function validateResponse(
 	operation: Operation,
@@ -58,10 +73,12 @@ function validateResponse(
 }
 
 function validateStaticResponse<TArgs extends readonly unknown[]>(
-	responder: PilotAgentMockResponderV1<TArgs>,
+	responder: PilotAgentMockResponderV1<TArgs> | undefined,
 	operation: Operation,
 ) {
-	if (typeof responder !== "function") validateResponse(operation, responder);
+	if (responder !== undefined && typeof responder !== "function") {
+		validateResponse(operation, responder);
+	}
 }
 
 function jsonResponse(response: PilotAgentMockResponseV1) {
@@ -76,6 +93,18 @@ export function createPilotAgentMockServerV1(
 ): PilotAgentMockServerV1 {
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
+	validateStaticResponse(
+		scenario.listAgentApplications,
+		listAgentApplicationsOperation,
+	);
+	validateStaticResponse(
+		scenario.getAgentApplication,
+		getAgentApplicationOperation,
+	);
+	validateStaticResponse(
+		scenario.withdrawAgentApplication,
+		withdrawAgentApplicationOperation,
+	);
 
 	const requests: Request[] = [];
 	const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -92,6 +121,65 @@ export function createPilotAgentMockServerV1(
 					? scenario.listAgents(request)
 					: scenario.listAgents;
 			validateResponse(listAgentsOperation, response);
+			return jsonResponse(response);
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/api/v1/agent-applications" &&
+			scenario.listAgentApplications !== undefined
+		) {
+			listAgentApplicationsOperation.requestParams.query?.parse(
+				Object.fromEntries(url.searchParams),
+			);
+			const responder = scenario.listAgentApplications;
+			const response =
+				typeof responder === "function" ? responder(request) : responder;
+			validateResponse(listAgentApplicationsOperation, response);
+			return jsonResponse(response);
+		}
+
+		const withdrawalApplicationId =
+			/^\/api\/v1\/agent-applications\/([^/]+)\/withdraw$/.exec(
+				url.pathname,
+			)?.[1];
+		if (
+			request.method === "POST" &&
+			withdrawalApplicationId !== undefined &&
+			scenario.withdrawAgentApplication !== undefined
+		) {
+			const applicationId = decodeURIComponent(withdrawalApplicationId);
+			withdrawAgentApplicationOperation.requestParams.path?.parse({
+				applicationId,
+			});
+			withdrawAgentApplicationOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			const responder = scenario.withdrawAgentApplication;
+			const response =
+				typeof responder === "function"
+					? responder(request, applicationId)
+					: responder;
+			validateResponse(withdrawAgentApplicationOperation, response);
+			return jsonResponse(response);
+		}
+
+		const applicationIdPath = /^\/api\/v1\/agent-applications\/([^/]+)$/.exec(
+			url.pathname,
+		)?.[1];
+		if (
+			request.method === "GET" &&
+			applicationIdPath !== undefined &&
+			scenario.getAgentApplication !== undefined
+		) {
+			const applicationId = decodeURIComponent(applicationIdPath);
+			getAgentApplicationOperation.requestParams.path?.parse({ applicationId });
+			const responder = scenario.getAgentApplication;
+			const response =
+				typeof responder === "function"
+					? responder(request, applicationId)
+					: responder;
+			validateResponse(getAgentApplicationOperation, response);
 			return jsonResponse(response);
 		}
 
