@@ -1,5 +1,5 @@
 interface:
-  display_name: "Generate Goal with Roadmap"
-  short_description: "Generate one bounded Goal from live Roadmap state"
+  display_name: "从 Roadmap 生成 Goal"
+  short_description: "从实时 Roadmap 生成一个范围固定的 coordinator Goal"
 policy:
   allow_implicit_invocation: false
