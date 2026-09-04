@@ -17,6 +17,11 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly withdrawAgentApplication?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
+	readonly listPendingAgentApplications?: PilotAgentMockResponderV1<[Request]>;
+	readonly decideAgentApplication?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
+	readonly commandAgentLifecycle?: PilotAgentMockResponderV1<[Request, string]>;
 };
 
 export type PilotAgentMockServerV1 = {
@@ -25,12 +30,18 @@ export type PilotAgentMockServerV1 = {
 };
 
 type Schema = { parse(input: unknown): unknown };
+type JsonRequestBody = {
+	readonly content: {
+		readonly "application/json": { readonly schema: Schema };
+	};
+};
 type Operation = {
 	readonly requestParams: {
 		readonly path?: Schema;
 		readonly query?: Schema;
 		readonly header?: Schema;
 	};
+	readonly requestBody?: JsonRequestBody;
 	readonly responses: Record<
 		string,
 		{
@@ -54,6 +65,15 @@ const getAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
 ].get as unknown as Operation;
 const withdrawAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agent-applications/{applicationId}/withdraw"
+].post as unknown as Operation;
+const listPendingAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/admin/agent-applications"
+].get as unknown as Operation;
+const decideAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/admin/agent-applications/{applicationId}/decision"
+].post as unknown as Operation;
+const commandAgentLifecycleOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agents/{agentId}/lifecycle"
 ].post as unknown as Operation;
 
 function validateResponse(
@@ -81,6 +101,18 @@ function validateStaticResponse<TArgs extends readonly unknown[]>(
 	}
 }
 
+async function validateJsonRequestBody(operation: Operation, request: Request) {
+	const schema = operation.requestBody?.content["application/json"].schema;
+	if (!schema) return;
+	let body: unknown;
+	try {
+		body = await request.clone().json();
+	} catch {
+		throw new TypeError("Pilot Agent Mock Server request body is invalid");
+	}
+	schema.parse(body);
+}
+
 function jsonResponse(response: PilotAgentMockResponseV1) {
 	return new Response(JSON.stringify(response.body), {
 		status: response.status,
@@ -105,6 +137,18 @@ export function createPilotAgentMockServerV1(
 		scenario.withdrawAgentApplication,
 		withdrawAgentApplicationOperation,
 	);
+	validateStaticResponse(
+		scenario.listPendingAgentApplications,
+		listPendingAgentApplicationsOperation,
+	);
+	validateStaticResponse(
+		scenario.decideAgentApplication,
+		decideAgentApplicationOperation,
+	);
+	validateStaticResponse(
+		scenario.commandAgentLifecycle,
+		commandAgentLifecycleOperation,
+	);
 
 	const requests: Request[] = [];
 	const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -121,6 +165,70 @@ export function createPilotAgentMockServerV1(
 					? scenario.listAgents(request)
 					: scenario.listAgents;
 			validateResponse(listAgentsOperation, response);
+			return jsonResponse(response);
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/api/v1/admin/agent-applications" &&
+			scenario.listPendingAgentApplications !== undefined
+		) {
+			listPendingAgentApplicationsOperation.requestParams.query?.parse(
+				Object.fromEntries(url.searchParams),
+			);
+			const responder = scenario.listPendingAgentApplications;
+			const response =
+				typeof responder === "function" ? responder(request) : responder;
+			validateResponse(listPendingAgentApplicationsOperation, response);
+			return jsonResponse(response);
+		}
+
+		const decisionApplicationId =
+			/^\/api\/v1\/admin\/agent-applications\/([^/]+)\/decision$/.exec(
+				url.pathname,
+			)?.[1];
+		if (
+			request.method === "POST" &&
+			decisionApplicationId !== undefined &&
+			scenario.decideAgentApplication !== undefined
+		) {
+			const applicationId = decodeURIComponent(decisionApplicationId);
+			decideAgentApplicationOperation.requestParams.path?.parse({
+				applicationId,
+			});
+			decideAgentApplicationOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			await validateJsonRequestBody(decideAgentApplicationOperation, request);
+			const responder = scenario.decideAgentApplication;
+			const response =
+				typeof responder === "function"
+					? responder(request, applicationId)
+					: responder;
+			validateResponse(decideAgentApplicationOperation, response);
+			return jsonResponse(response);
+		}
+
+		const lifecycleAgentId = /^\/api\/v1\/agents\/([^/]+)\/lifecycle$/.exec(
+			url.pathname,
+		)?.[1];
+		if (
+			request.method === "POST" &&
+			lifecycleAgentId !== undefined &&
+			scenario.commandAgentLifecycle !== undefined
+		) {
+			const agentId = decodeURIComponent(lifecycleAgentId);
+			commandAgentLifecycleOperation.requestParams.path?.parse({ agentId });
+			commandAgentLifecycleOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			await validateJsonRequestBody(commandAgentLifecycleOperation, request);
+			const responder = scenario.commandAgentLifecycle;
+			const response =
+				typeof responder === "function"
+					? responder(request, agentId)
+					: responder;
+			validateResponse(commandAgentLifecycleOperation, response);
 			return jsonResponse(response);
 		}
 

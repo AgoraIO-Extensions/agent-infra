@@ -139,6 +139,70 @@ describe("Pilot Agent Mock Server", () => {
 		).rejects.toThrow();
 	});
 
+	it("routes schema-validated administrator decisions and lifecycle commands", async () => {
+		const server = createPilotAgentMockServerV1({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgent },
+			listPendingAgentApplications: {
+				status: 200,
+				body: { items: [pendingApplication], nextCursor: null },
+			},
+			decideAgentApplication: { status: 200, body: pendingApplication },
+			commandAgentLifecycle: { status: 202, body: startingAgent },
+		});
+
+		const pending = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/admin/agent-applications",
+			),
+		);
+		const decision = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/admin/agent-applications/application-pilot-1/decision",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Idempotency-Key": "application-decision-1",
+					},
+					body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+				},
+			),
+		);
+		const lifecycle = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Idempotency-Key": "agent-lifecycle-1",
+					},
+					body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+				},
+			),
+		);
+
+		expect(await pending.json()).toEqual({
+			items: [pendingApplication],
+			nextCursor: null,
+		});
+		expect(await decision.json()).toEqual(pendingApplication);
+		expect(await lifecycle.json()).toEqual(startingAgent);
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+					{
+						method: "POST",
+						headers: { "Idempotency-Key": "agent-lifecycle-invalid" },
+						body: JSON.stringify({ schemaVersion: 1, command: "unknown" }),
+					},
+				),
+			),
+		).rejects.toThrow();
+	});
+
 	it("rejects invalid contract scenario data before serving a response", () => {
 		const protocolError = pilotFakeScenariosV1.unauthorized.response.body;
 		expect(() =>
