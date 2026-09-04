@@ -103,10 +103,28 @@ function unknownOperationResponse(
 	};
 }
 
+const driverUncertain = Symbol("driverUncertain");
+
+function isUncertainDriverFailure(error: unknown) {
+	return (
+		error instanceof RuntimeHostError &&
+		error.driverFailureKind === "unavailable"
+	);
+}
+
 async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch {
+		driverInvalid();
+	}
+}
+
+async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
+	try {
+		return await work();
+	} catch (error) {
+		if (isUncertainDriverFailure(error)) return driverUncertain;
 		driverInvalid();
 	}
 }
@@ -617,16 +635,14 @@ export class RuntimeHost {
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
-		let rawLookup: Awaited<ReturnType<RuntimeDriver["lookupOperation"]>>;
-		try {
-			rawLookup = await callDriver(() =>
-				this.options.driver.lookupOperation(operation.command),
-			);
-		} catch (error) {
+		const rawLookup = await callDriverWithUncertainty(() =>
+			this.options.driver.lookupOperation(operation.command),
+		);
+		if (rawLookup === driverUncertain) {
 			if (isInterruption(operation)) {
 				return unknownOperationResponse(hostSessionRef, operation.operationId);
 			}
-			throw error;
+			driverInvalid();
 		}
 		const lookup = parseDriverLookup(
 			rawLookup,
@@ -654,19 +670,19 @@ export class RuntimeHost {
 		if (lookup.state === "found") {
 			rawDriverRecord = lookup.record;
 		} else {
-			try {
-				rawDriverRecord = await callDriver(() =>
-					this.options.driver.execute(operation.command),
-				);
-			} catch (error) {
+			const executed = await callDriverWithUncertainty(() =>
+				this.options.driver.execute(operation.command),
+			);
+			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
 					return unknownOperationResponse(
 						hostSessionRef,
 						operation.operationId,
 					);
 				}
-				throw error;
+				driverInvalid();
 			}
+			rawDriverRecord = executed;
 		}
 		const driverRecord = parseDriverRecord(
 			rawDriverRecord,
@@ -787,17 +803,15 @@ export class RuntimeHost {
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
-		let rawStatus: unknown;
-		try {
-			rawStatus = await callDriver(() =>
-				this.options.driver.getStatus(
-					record.nativeSessionRef,
-					operation.executionId,
-				),
-			);
-		} catch (error) {
+		const rawStatus = await callDriverWithUncertainty(() =>
+			this.options.driver.getStatus(
+				record.nativeSessionRef,
+				operation.executionId,
+			),
+		);
+		if (rawStatus === driverUncertain) {
 			if (isInterruption(operation)) return acceptanceUnknown();
-			throw error;
+			driverInvalid();
 		}
 		const status = RuntimeStatusV1Schema.safeParse(rawStatus);
 		if (!status.success) driverInvalid();

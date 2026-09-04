@@ -631,6 +631,7 @@ function unavailableError() {
 		"Codex Runtime is unavailable",
 		503,
 		true,
+		"unavailable",
 	);
 }
 

@@ -730,7 +730,7 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
-	it("keeps a generation barrier active when a running cancellation retry cannot read its Turn", async () => {
+	it("fails closed while keeping a generation barrier active for an invalid cancellation retry", async () => {
 		const directory = await runtimeDirectory();
 		const hostPath = join(directory, "host.json");
 		const bridge = new TestCodexBridge();
@@ -766,10 +766,8 @@ describe("Codex Runtime Driver", () => {
 		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
 		bridge.respondToHeldTurnsList("error");
 
-		expect((await retry).result).toEqual({
-			outcome: "unknown",
-			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-			message: "Runtime command acceptance could not be confirmed",
+		await expect(retry).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
 		});
 		const state = JSON.parse(await readFile(hostPath, "utf8")) as {
 			sessions: Record<string, { generationBarrier?: { state: string } }>;
