@@ -57,7 +57,7 @@ const unavailableAgent = AgentProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AgentLifecycleControls", () => {
-	it("keeps service availability distinct from management status and offers only the permitted Owner controls", () => {
+	it("keeps service availability distinct from management status and offers server-permitted Owner controls", () => {
 		const onCommand = vi.fn();
 		render(
 			<AgentLifecycleControls
@@ -75,7 +75,7 @@ describe("AgentLifecycleControls", () => {
 			),
 		).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Restart Agent" })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "Stop Agent" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Stop Agent" })).toBeTruthy();
 		expect(
 			screen.getByText("Lifecycle controls").closest("section")?.className,
 		).toContain("sm:flex-row");
@@ -85,7 +85,7 @@ describe("AgentLifecycleControls", () => {
 	});
 
 	it.each(["starting", "updating"] as const)(
-		"does not offer Owner lifecycle commands while service is %s",
+		"offers Owner lifecycle commands while service is %s",
 		(serviceAvailability) => {
 			render(
 				<AgentLifecycleControls
@@ -95,7 +95,10 @@ describe("AgentLifecycleControls", () => {
 				/>,
 			);
 
-			expect(screen.queryByRole("button")).toBeNull();
+			expect(screen.getByRole("button", { name: "Stop Agent" })).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: "Restart Agent" }),
+			).toBeTruthy();
 		},
 	);
 
