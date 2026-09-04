@@ -131,16 +131,24 @@ Snapshot 始终固定。只完成现有 Issue contract 内的工作。正确实�
 
 ### Review 与 Approve
 
-每条 lane 执行仓库 validation 和 current-head Review。处理并显式解决全部 Review conversations，
-重跑受影响验证，并确认全部 required current-head checks 与适用的 Human Validation 成功，之后才
-判断 approval-ready。
+每条 lane 执行仓库 validation 和 current-head Review。Agent 处理全部 actionable findings，但由
+评论者或有权限人员确认并 resolve Review conversations。每次修复后重跑受影响验证并回读当前
+head。
+
+当前 head 的 CI 与自动 Review 已成功、没有剩余 Agent 可处理项，但 Human Validation 或 Review
+conversation resolution 仍待人工时，使用 `$wecom` 发送一次 `human-validation-required` 通知，
+按 `PR + head SHA` 去重。内容只包含 Map、Issue、PR、head、已通过 gates 与所需人工动作。该等待
+是 verified wait，其他 lanes 继续。
+
+全部 required current-head checks、适用的 Human Validation 和 Review conversations 均通过后，
+才判断 approval-ready。
 
 单个 PR 达到 approval-ready 后，使用 `$wecom` 通知用户本地私有 alias `me`。先 resolve-only；
 每个 `PR + head SHA` 只发送一次，内容包含 Map、Issue、PR、head、已通过 gates 和 Approve 请求，
 不包含凭证或源码正文。head 更新后必须重新达到 approval-ready 才能再次通知。其他 lanes 继续。
 
-人工 Approve 是 verified wait。按约 30 秒、60 秒、2 分钟、5 分钟逐步降低轮询频率；审批等待
-保持 Goal active，不计入 blocked 条件。
+人工验证、conversation resolution 和 Approve 都是 verified wait。按约 30 秒、60 秒、2 分钟、
+5 分钟逐步降低轮询频率；这些等待保持 Goal active，不计入 blocked 条件。
 
 ### 人工干预
 
