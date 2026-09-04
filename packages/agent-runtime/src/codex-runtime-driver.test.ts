@@ -112,6 +112,7 @@ class TestCodexBridge {
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
+	private dropThreadResumeResponse = false;
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -142,6 +143,10 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "thread/resume") {
+			if (this.dropThreadResumeResponse) {
+				await this.close();
+				return;
+			}
 			this.respond(id, { thread: { id: this.nativeThreadId } });
 			return;
 		}
@@ -185,6 +190,10 @@ class TestCodexBridge {
 
 	dropNextThreadStartResponse() {
 		this.dropThreadStartResponse = true;
+	}
+
+	dropNextThreadResumeResponse() {
+		this.dropThreadResumeResponse = true;
 	}
 
 	holdTurnsList() {
@@ -691,6 +700,48 @@ describe("Codex Runtime Driver", () => {
 		expect(
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(0);
+	});
+
+	it("retries a command after its persisted Session resume fails before Turn start", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const first = await firstDriver.execute(submitCommand());
+		firstBridge.setTurnStatus("completed");
+		await firstDriver.getStatus(first.nativeSessionRef, "execution-codex");
+		await firstDriver.close();
+		const command = submitCommand({
+			operationId: "execution-codex-after-resume-failure",
+			executionId: "execution-codex-after-resume-failure",
+			turnId: "turn-codex-after-resume-failure",
+			nativeSessionRef: first.nativeSessionRef,
+		});
+		const failedBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		failedBridge.dropNextThreadResumeResponse();
+		const failedDriver = await openDriver(path, failedBridge);
+		drivers.push(failedDriver);
+
+		await expect(failedDriver.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(
+			failedBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		recoveredBridge.continueAfterPersistedTurn();
+		const recoveredDriver = await openDriver(path, recoveredBridge);
+		drivers.push(recoveredDriver);
+
+		expect((await recoveredDriver.execute(command)).result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
 	});
 
 	it("keeps terminal status sticky across out-of-order status reads", async () => {

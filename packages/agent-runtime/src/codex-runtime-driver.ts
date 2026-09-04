@@ -513,14 +513,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
+		const hasPersistedThread =
+			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
 		let session: CodexSession;
 		try {
 			session = await this.ensureThread(prepared.operation.nativeSessionRef);
 		} catch (error) {
-			await this.markAcceptanceUncertain(
-				command,
-				prepared.operation.nativeSessionRef,
-			);
+			if (hasPersistedThread) {
+				await this.discardPreparedResume(
+					command,
+					prepared.operation.nativeSessionRef,
+				);
+			} else {
+				await this.markAcceptanceUncertain(
+					command,
+					prepared.operation.nativeSessionRef,
+				);
+			}
 			throw error;
 		}
 		if (
@@ -801,6 +810,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				stateInvalid();
 			}
 			session.acceptanceUncertainOperationKey = key;
+		});
+	}
+
+	private async discardPreparedResume(
+		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		nativeSessionRef: string,
+	) {
+		const key = operationKey(command);
+		await this.update((state) => {
+			const session = state.sessions[nativeSessionRef];
+			const operation = state.operations[key];
+			if (
+				!session?.threadId ||
+				!operation ||
+				operation.nativeSessionRef !== nativeSessionRef ||
+				operation.state !== "prepared" ||
+				session.acceptanceUncertainOperationKey !== undefined
+			) {
+				stateInvalid();
+			}
+			delete state.operations[key];
 		});
 	}
 
