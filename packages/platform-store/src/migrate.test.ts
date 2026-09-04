@@ -1,3 +1,6 @@
+import { resolve } from "node:path";
+
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +16,12 @@ import {
 } from "./schema.ts";
 
 type PostgresClient = ReturnType<typeof postgres>;
+const migrations = readMigrationFiles({
+	migrationsFolder: resolve(
+		import.meta.dirname,
+		"../../../migrations/platform",
+	),
+});
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
@@ -112,7 +121,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 					from platform_migrations.history
 					order by id
 				`;
-			expect(migrationHistory).toHaveLength(4);
+			expect(migrationHistory).toHaveLength(migrations.length);
 
 			const migratedColumns = await client`
 					select table_name, array_agg(column_name order by ordinal_position) as columns
@@ -221,6 +230,16 @@ describe("Platform PostgreSQL migration foundation", () => {
 					...platformStatusValues.agentServiceAvailability,
 				],
 				audit_outcome: [...platformStatusValues.auditOutcome],
+				conversation_execution_status: [
+					...platformStatusValues.conversationExecutionStatus,
+				],
+				conversation_message_status: [
+					...platformStatusValues.conversationMessageStatus,
+				],
+				conversation_status: [...platformStatusValues.conversationStatus],
+				conversation_stop_status: [
+					...platformStatusValues.conversationStopStatus,
+				],
 				idempotency_status: [...platformStatusValues.idempotencyStatus],
 				outbox_status: [...platformStatusValues.outboxStatus],
 			});
@@ -263,12 +282,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 					select table_name as object_name
 					from information_schema.tables
 					where table_schema = 'platform'
-						and table_name ~ '(connection|conversation|kubernetes|credential|message)'
+					and table_name ~ '(connection|kubernetes|credential)'
 					union all
 				select table_name || '.' || column_name
 				from information_schema.columns
 				where table_schema = 'platform'
-					and column_name ~ '(connection|conversation|kubernetes|credential|message_body)'
+					and column_name ~ '(connection|kubernetes|credential|message_body)'
 				`;
 			expect(forbiddenObjects).toEqual([]);
 

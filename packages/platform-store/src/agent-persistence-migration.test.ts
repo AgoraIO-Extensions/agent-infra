@@ -87,7 +87,7 @@ describe("Agent persistence migration", () => {
 			from platform_migrations.history
 			order by id
 		`;
-		expect(migrationHistory).toHaveLength(4);
+		expect(migrationHistory).toHaveLength(migrations.length);
 		await migratePlatformDatabase({ databaseUrl });
 		expect(
 			await client`
