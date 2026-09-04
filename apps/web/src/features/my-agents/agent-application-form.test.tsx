@@ -125,7 +125,7 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 
-	it("requires a replacement model configuration when a custom application becomes standard", () => {
+	it("keeps the source fixed for an existing application", () => {
 		const customApplication = AgentApplicationProjectionV1Schema.parse({
 			...pendingApplication,
 			source: {
@@ -149,13 +149,8 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Source kind"), {
-			target: { value: "standard" },
-		});
-
-		expect(screen.getByLabelText("Model option ID")).toBeTruthy();
 		expect(
-			(screen.getByLabelText("Credential value") as HTMLInputElement).required,
+			(screen.getByLabelText("Source kind") as HTMLSelectElement).disabled,
 		).toBe(true);
 	});
 

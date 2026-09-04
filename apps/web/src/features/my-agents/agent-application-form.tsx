@@ -284,7 +284,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							Source kind
 						</label>
 						<select
-							className={inputClassName}
+							className={`${inputClassName} disabled:cursor-not-allowed disabled:bg-slate-100`}
+							disabled={props.mode === "update"}
 							id="application-source-kind"
 							onChange={(event) => {
 								const kind = event.target.value as AgentApplicationSourceKind;
