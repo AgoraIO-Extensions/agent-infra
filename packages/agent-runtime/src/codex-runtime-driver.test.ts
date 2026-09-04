@@ -32,6 +32,14 @@ interface TestTurnsListPage {
 	nextCursor?: string | null;
 }
 
+interface TestItemsListPage {
+	data: {
+		turnId: string;
+		item: { id: string; type: string; text?: string };
+	}[];
+	nextCursor?: string | null;
+}
+
 async function runtimeDirectory() {
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-runtime-codex-driver-"),
@@ -104,13 +112,16 @@ class TestCodexBridge {
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
+	private readonly heldTurnStartRequestIds: number[] = [];
 	private wake?: () => void;
 	private notificationRead?: () => void;
 	private closed = false;
 	private turnStatus: CodexTurnStatus = "inProgress";
+	private holdTurnStartResponses = false;
 	private holdTurnsListResponses = false;
 	private holdTurnsListSend = false;
 	private turnsListPages?: TestTurnsListPage[];
+	private itemsListPages?: TestItemsListPage[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
@@ -161,9 +172,17 @@ class TestCodexBridge {
 			this.respondTurnsList(id);
 			return;
 		}
+		if (method === "thread/items/list") {
+			this.respondItemsList(id);
+			return;
+		}
 		if (method === "turn/start") {
 			if (this.closeOnTurnStart) {
 				await this.close();
+				return;
+			}
+			if (this.holdTurnStartResponses) {
+				this.heldTurnStartRequestIds.push(id);
 				return;
 			}
 			const nativeTurnId = this.nextNativeTurnId();
@@ -181,6 +200,10 @@ class TestCodexBridge {
 
 	setTurnsListPages(pages: TestTurnsListPage[]) {
 		this.turnsListPages = structuredClone(pages);
+	}
+
+	setItemsListPages(pages: TestItemsListPage[]) {
+		this.itemsListPages = structuredClone(pages);
 	}
 
 	duplicateNextTurnResponse() {
@@ -201,6 +224,22 @@ class TestCodexBridge {
 
 	holdTurnsList() {
 		this.holdTurnsListResponses = true;
+	}
+
+	holdTurnStart() {
+		this.holdTurnStartResponses = true;
+	}
+
+	pendingTurnStartCount() {
+		return this.heldTurnStartRequestIds.length;
+	}
+
+	respondToHeldTurnStart(status: CodexTurnStatus = "inProgress") {
+		const id = this.heldTurnStartRequestIds.shift();
+		if (id === undefined) throw new Error("No held turn-start request");
+		this.respond(id, {
+			turn: { id: this.nextNativeTurnId(), status },
+		});
 	}
 
 	holdTurnsListRequestSend() {
@@ -249,7 +288,43 @@ class TestCodexBridge {
 				method: "turn/started",
 				params: {
 					threadId: this.nativeThreadId,
+					turn: {
+						id: this.nativeTurnId,
+						status: "inProgress",
+						items: [],
+					},
+				},
+			});
+		});
+	}
+
+	emitAgentMessageDelta(delta: string) {
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push({
+				method: "item/agentMessage/delta",
+				params: {
+					threadId: this.nativeThreadId,
 					turnId: this.nativeTurnId,
+					itemId: "codex-native-item-private",
+					delta,
+				},
+			});
+		});
+	}
+
+	emitTurnCompleted(status: Exclude<CodexTurnStatus, "inProgress">) {
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push({
+				method: "turn/completed",
+				params: {
+					threadId: this.nativeThreadId,
+					turn: {
+						id: this.nativeTurnId,
+						status,
+						items: [],
+					},
 				},
 			});
 		});
@@ -287,6 +362,14 @@ class TestCodexBridge {
 	private respondTurnsListPage(id: number, page: TestTurnsListPage) {
 		this.respond(id, {
 			data: page.data.map((turn) => ({ ...turn, items: [] })),
+			...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+		});
+	}
+
+	private respondItemsList(id: number) {
+		const page = this.itemsListPages?.shift() ?? { data: [] };
+		this.respond(id, {
+			data: page.data.map((entry) => structuredClone(entry)),
 			...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
 		});
 	}
@@ -445,6 +528,381 @@ describe("Codex Runtime Driver", () => {
 				)
 			).result,
 		).toEqual({ outcome: "accepted", status: "running" });
+	});
+
+	it("persists a turn-start notification that races the Turn binding and replays it once", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const submitted = driver.execute(command);
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnStartCount()).toBe(1);
+		});
+		const notification = bridge.emitNotification();
+		bridge.respondToHeldTurnStart();
+		const accepted = await submitted;
+		await notification;
+
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events).toEqual([
+			expect.objectContaining({
+				executionId: command.executionId,
+				type: "status",
+				payload: { status: "running" },
+			}),
+		]);
+		expect(JSON.stringify(events)).not.toContain(bridge.nativeThreadId);
+		expect(JSON.stringify(events)).not.toContain(bridge.nativeTurnId);
+	});
+
+	it("binds a terminal notification that races the Turn response as terminal", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const submitted = driver.execute(command);
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnStartCount()).toBe(1);
+		});
+		const notification = bridge.emitTurnCompleted("completed");
+		bridge.respondToHeldTurnStart();
+		const accepted = await submitted;
+		await notification;
+
+		expect(accepted.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		expect(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).toEqual([
+			expect.objectContaining({
+				type: "completed",
+				payload: { status: "completed" },
+			}),
+		]);
+	});
+
+	it("keeps equal native delta occurrences distinct with stable local cursors", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await bridge.emitAgentMessageDelta("same-delta");
+		await vi.waitFor(async () => {
+			expect(
+				(
+					await driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					)
+				).filter((event) => event.type === "text"),
+			).toHaveLength(1);
+		});
+		await bridge.emitAgentMessageDelta("same-delta");
+		const textEvents = await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const text = events.filter((event) => event.type === "text");
+			expect(text).toHaveLength(2);
+			return text;
+		});
+
+		expect(textEvents).toEqual([
+			expect.objectContaining({ payload: { delta: "same-delta" } }),
+			expect.objectContaining({ payload: { delta: "same-delta" } }),
+		]);
+		expect(textEvents[0]?.cursor).not.toBe(textEvents[1]?.cursor);
+		expect(textEvents[0]?.adapterEventKey).not.toBe(
+			textEvents[1]?.adapterEventKey,
+		);
+		expect(JSON.stringify(textEvents)).not.toContain(
+			"codex-native-item-private",
+		);
+	});
+
+	it("streams existing and later persisted journal events once", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const abort = new AbortController();
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			undefined,
+			abort.signal,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: {
+				executionId: command.executionId,
+				type: "status",
+				payload: { status: "running" },
+			},
+		});
+		const next = iterator.next();
+		await bridge.emitAgentMessageDelta("later-delta");
+		expect(await next).toMatchObject({
+			done: false,
+			value: {
+				executionId: command.executionId,
+				type: "text",
+				payload: { delta: "later-delta" },
+			},
+		});
+		abort.abort();
+		expect(await iterator.next()).toEqual({ done: true, value: undefined });
+	});
+
+	it("persists a terminal Turn notification and replays it once", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await bridge.emitTurnCompleted("completed");
+		const events = await vi.waitFor(async () => {
+			const replayed = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(
+				replayed.filter((event) => event.type === "completed"),
+			).toHaveLength(1);
+			return replayed;
+		});
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		expect(events.at(-1)).toMatchObject({
+			type: "completed",
+			payload: { status: "completed" },
+		});
+		expect(JSON.stringify(events)).not.toContain(bridge.nativeThreadId);
+		expect(JSON.stringify(events)).not.toContain(bridge.nativeTurnId);
+	});
+
+	it("recovers persisted Turn status and item history after Driver restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.setTurnStatus("completed");
+		resumedBridge.setItemsListPages([
+			{
+				data: [
+					{
+						turnId: firstBridge.nativeTurnId,
+						item: {
+							id: "codex-native-item-private",
+							type: "agentMessage",
+							text: "persisted answer",
+						},
+					},
+				],
+			},
+		]);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const events = await resumedDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events).toEqual([
+			expect.objectContaining({
+				type: "status",
+				payload: { status: "running" },
+			}),
+			expect.objectContaining({
+				type: "text",
+				payload: { delta: "persisted answer" },
+			}),
+			expect.objectContaining({
+				type: "completed",
+				payload: { status: "completed" },
+			}),
+		]);
+		expect(
+			await resumedDriver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("completed");
+		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
+			"initialize",
+			"thread/resume",
+			"thread/turns/list",
+			"thread/items/list",
+		]);
+		expect(
+			resumedBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+		expect(JSON.stringify(events)).not.toContain(firstBridge.nativeThreadId);
+		expect(JSON.stringify(events)).not.toContain(firstBridge.nativeTurnId);
+		expect(JSON.stringify(events)).not.toContain("codex-native-item-private");
+	});
+
+	it("fails closed with a redacted error when persisted item recovery is malformed", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.setItemsListPages([
+			{
+				data: [
+					{
+						turnId: firstBridge.nativeTurnId,
+						item: {
+							id: "codex-native-item-private",
+							type: "agentMessage",
+						},
+					},
+				],
+			},
+		]);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const failure = await resumedDriver
+			.replayEvents(accepted.nativeSessionRef, command.executionId)
+			.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		expect(failure).toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			message: "Codex Runtime returned an invalid response",
+		});
+		expect(JSON.stringify(failure)).not.toContain(firstBridge.nativeThreadId);
+		expect(JSON.stringify(failure)).not.toContain(firstBridge.nativeTurnId);
+		expect(JSON.stringify(failure)).not.toContain("codex-native-item-private");
+	});
+
+	it("keeps the original local cursor when recovery sees an already journaled item", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstBridge.emitAgentMessageDelta("already-persisted");
+		const original = await vi.waitFor(async () => {
+			const events = await firstDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const event = events.find((candidate) => candidate.type === "text");
+			if (!event) throw new Error("expected journaled text event");
+			return event;
+		});
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.setItemsListPages([
+			{
+				data: [
+					{
+						turnId: firstBridge.nativeTurnId,
+						item: {
+							id: "codex-native-item-private",
+							type: "agentMessage",
+							text: "already-persisted",
+						},
+					},
+				],
+			},
+		]);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const recovered = (
+			await resumedDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			)
+		).find((candidate) => candidate.type === "text");
+		expect(recovered).toMatchObject({
+			cursor: original.cursor,
+			adapterEventKey: original.adapterEventKey,
+			payload: { delta: "already-persisted" },
+		});
+	});
+
+	it("fails closed for duplicate durable journal identities", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		await firstDriver.execute(submitCommand());
+		await firstDriver.close();
+		const state = JSON.parse(await readFile(path, "utf8")) as {
+			sessions: Record<
+				string,
+				{ journals?: Record<string, { events: unknown[] }> }
+			>;
+		};
+		const journal = Object.values(state.sessions)[0]?.journals?.[
+			firstBridge.nativeTurnId
+		];
+		if (!journal?.events[0]) throw new Error("expected durable journal event");
+		journal.events.push(structuredClone(journal.events[0]));
+		await writeFile(path, JSON.stringify(state));
+		const resumedBridge = new TestCodexBridge();
+
+		await expect(openDriver(path, resumedBridge)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_STATE_INVALID",
+			message: "Codex Runtime session state is unavailable",
+		});
+		expect(resumedBridge.requests).toEqual([]);
 	});
 
 	it("coalesces concurrent persisted Session resumes", async () => {
@@ -989,20 +1447,13 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
-	it("keeps polling after app-server notifications until #344 owns event recovery", async () => {
+	it("keeps polling after a persisted app-server notification", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
-
-		await expect(
-			driver.replayEvents(accepted.nativeSessionRef, command.executionId),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-		await expect(
-			driver.subscribeEvents(accepted.nativeSessionRef, command.executionId),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 
 		await bridge.emitNotification();
 		await vi.waitFor(async () => {
