@@ -7,6 +7,7 @@ import type {
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusResponseV1,
+	RuntimeStatusV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSupplementRequestV1,
@@ -60,6 +61,12 @@ function nativeSessionRequired(): never {
 		"RUNTIME_SESSION_UNAVAILABLE",
 		"Runtime session could not be recovered",
 		503,
+	);
+}
+
+function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
+	return (
+		status === "completed" || status === "failed" || status === "cancelled"
 	);
 }
 
@@ -532,12 +539,15 @@ export class RuntimeHost {
 					request,
 					request.tombstoneId,
 				);
-				const response = await this.dispatch(
-					request.hostSessionRef,
-					prepared.operation,
-				);
-				if (response.result.outcome === "accepted") {
-					await this.options.store.confirmGenerationBarrier(
+					const response = await this.dispatch(
+						request.hostSessionRef,
+						prepared.operation,
+					);
+					if (
+						response.result.outcome === "accepted" &&
+						isTerminalRuntimeStatus(response.result.status)
+					) {
+						await this.options.store.confirmGenerationBarrier(
 						request.hostSessionRef,
 						request.tombstoneId,
 					);
@@ -553,11 +563,27 @@ export class RuntimeHost {
 		operation: StoredOperation,
 	): Promise<RuntimeOperationResponseV1> {
 		if (operation.state === "resolved" && operation.result) {
+			let result = operation.result;
+			if (result.outcome === "accepted" && result.status === "running") {
+				const nativeSessionRef =
+					this.options.store.nativeSessionRef(hostSessionRef) ??
+					nativeSessionRequired();
+				result = await this.currentDriverResult(
+					{ nativeSessionRef, result },
+					operation.executionId,
+				);
+				await this.options.store.resolveOperation(
+					hostSessionRef,
+					operation.operationId,
+					result,
+					nativeSessionRef,
+				);
+			}
 			return {
 				schemaVersion: 1,
 				hostSessionRef,
 				operationId: operation.operationId,
-				result: operation.result,
+				result,
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
@@ -574,6 +600,17 @@ export class RuntimeHost {
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 				message: "Runtime command acceptance could not be confirmed",
 			} as const;
+			if (
+				operation.kind === "stop" ||
+				operation.kind === "generation-cancel"
+			) {
+				return {
+					schemaVersion: 1,
+					hostSessionRef,
+					operationId: operation.operationId,
+					result,
+				};
+			}
 			await this.options.store.resolveOperation(
 				hostSessionRef,
 				operation.operationId,
@@ -599,7 +636,6 @@ export class RuntimeHost {
 		const result = await this.currentDriverResult(
 			driverRecord,
 			operation.executionId,
-			operation.kind,
 		);
 		await this.options.store.resolveOperation(
 			hostSessionRef,
@@ -648,11 +684,10 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
-							recoveredResult = await this.currentDriverResult(
-								lookup.record,
-								operation.executionId,
-								operation.kind,
-							);
+								recoveredResult = await this.currentDriverResult(
+									lookup.record,
+									operation.executionId,
+								);
 							await this.options.store.resolveOperation(
 								session.hostSessionRef,
 								operation.operationId,
@@ -672,10 +707,11 @@ export class RuntimeHost {
 							);
 						}
 					}
-					if (
-						operation.kind === "generation-cancel" &&
-						recoveredResult.outcome === "accepted"
-					) {
+						if (
+							operation.kind === "generation-cancel" &&
+							recoveredResult.outcome === "accepted" &&
+							isTerminalRuntimeStatus(recoveredResult.status)
+						) {
 						await this.options.store.confirmGenerationBarrier(
 							session.hostSessionRef,
 							operation.operationId,
@@ -698,14 +734,13 @@ export class RuntimeHost {
 	}
 
 	private async currentDriverResult(
-		record: Awaited<ReturnType<RuntimeDriver["execute"]>>,
+		record: Pick<
+			Awaited<ReturnType<RuntimeDriver["execute"]>>,
+			"nativeSessionRef" | "result"
+		>,
 		executionId: string,
-		operationKind: StoredOperation["kind"],
 	) {
-		if (
-			record.result.outcome !== "accepted" ||
-			["stop", "generation-cancel"].includes(operationKind)
-		) {
+		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
 		const status = RuntimeStatusV1Schema.safeParse(

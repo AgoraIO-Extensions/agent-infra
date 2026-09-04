@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import type {
 	RuntimeDriverCommandV1,
+	RuntimeGenerationCancelRequestV1,
+	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -155,6 +157,61 @@ function submitCommand(
 	};
 }
 
+function stopRequest(
+	request: RuntimeSubmitTurnRequestV1,
+	hostSessionRef: string,
+	overrides: Partial<RuntimeStopRequestV1> = {},
+): RuntimeStopRequestV1 {
+	const binding = {
+		agentId: request.agentId,
+		actorId: request.actorId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+	};
+	return {
+		schemaVersion: 1,
+		requestId: "request-codex-stop",
+		...binding,
+		deliveryFence: 1,
+		executionDeliveryFence: 1,
+		hostSessionRef,
+		stopRequestId: "stop-codex",
+		grant: runtimeGrantFixture(binding, ["turn.stop"]),
+		...overrides,
+	};
+}
+
+function generationCancelRequest(
+	request: RuntimeSubmitTurnRequestV1,
+	hostSessionRef: string,
+	overrides: Partial<RuntimeGenerationCancelRequestV1> = {},
+): RuntimeGenerationCancelRequestV1 {
+	const binding = {
+		agentId: request.agentId,
+		actorId: request.actorId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+	};
+	return {
+		schemaVersion: 1,
+		requestId: "request-codex-generation-cancel",
+		...binding,
+		deliveryFence: 1,
+		hostSessionRef,
+		tombstoneId: "generation-codex",
+		grant: runtimeGrantFixture(binding, ["generation.cancel"]),
+		...overrides,
+	};
+}
+
 function driverOptions(path: string) {
 	return {
 		path,
@@ -222,6 +279,8 @@ class TestCodexBridge {
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
+	private dropInterruptResponse = false;
+	private interruptTerminalStatus?: Exclude<CodexTurnStatus, "inProgress">;
 	private configReadResult: Record<string, unknown> = configReadResult();
 
 	constructor(
@@ -301,6 +360,18 @@ class TestCodexBridge {
 			});
 			return;
 		}
+		if (method === "turn/interrupt") {
+			if (this.interruptTerminalStatus) {
+				this.turnStatus = this.interruptTerminalStatus;
+			}
+			if (this.dropInterruptResponse) {
+				this.dropInterruptResponse = false;
+				await this.close();
+				return;
+			}
+			this.respond(id, {});
+			return;
+		}
 		throw new Error(`Unexpected Codex JSON-RPC method: ${method}`);
 	}
 
@@ -334,6 +405,14 @@ class TestCodexBridge {
 
 	dropNextThreadResumeResponse() {
 		this.dropThreadResumeResponse = true;
+	}
+
+	dropNextInterruptResponse() {
+		this.dropInterruptResponse = true;
+	}
+
+	completeOnInterrupt(status: Exclude<CodexTurnStatus, "inProgress">) {
+		this.interruptTerminalStatus = status;
 	}
 
 	holdTurnsList() {
@@ -604,6 +683,113 @@ describe("Codex Runtime Driver", () => {
 			modelSelection: true,
 			connection: false,
 		});
+	});
+
+	it("waits for a durable terminal Turn before confirming generation cancellation", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const runtimeHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(join(directory, "host.json")),
+				driver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		const request = submitRequest();
+		const submitted = await runtimeHost.submitTurn(request);
+		const cancellation = generationCancelRequest(
+			request,
+			submitted.hostSessionRef,
+		);
+
+		expect((await runtimeHost.cancelGeneration(cancellation)).result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(1);
+
+		bridge.setTurnStatus("interrupted");
+		expect(
+			(
+				await runtimeHost.cancelGeneration({
+					...cancellation,
+					requestId: "request-codex-generation-cancel-retry",
+					deliveryFence: 2,
+				})
+			).result,
+		).toEqual({ outcome: "accepted", status: "cancelled" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(1);
+	});
+
+	it("recovers the actual completion after an interrupted stop response without replaying it", async () => {
+		const directory = await runtimeDirectory();
+		const hostPath = join(directory, "host.json");
+		const driverPath = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		firstBridge.completeOnInterrupt("completed");
+		firstBridge.dropNextInterruptResponse();
+		const firstDriver = await openDriver(driverPath, firstBridge);
+		drivers.push(firstDriver);
+		const firstHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(hostPath),
+				driver: firstDriver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		const request = submitRequest();
+		const submitted = await firstHost.submitTurn(request);
+		const stop = stopRequest(request, submitted.hostSessionRef);
+
+		await expect(firstHost.stop(stop)).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+		});
+		expect(
+			firstBridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(1);
+
+		const recoveredBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		const recoveredDriver = await openDriver(driverPath, recoveredBridge);
+		drivers.push(recoveredDriver);
+		const recoveredHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(hostPath),
+				driver: recoveredDriver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		recoveredBridge.setTurnStatus("completed");
+
+		expect(
+			(
+				await recoveredHost.stop({
+					...stop,
+					requestId: "request-codex-stop-retry",
+					deliveryFence: 2,
+				})
+			).result,
+		).toEqual({ outcome: "accepted", status: "completed" });
+		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(0);
 	});
 
 	it("accepts the scalar features.plugins session flag origin", async () => {
