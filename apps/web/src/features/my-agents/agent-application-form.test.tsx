@@ -30,6 +30,51 @@ describe("AgentApplicationForm", () => {
 		expect(
 			(screen.getByLabelText("Model option ID") as HTMLInputElement).required,
 		).toBe(true);
+		expect(
+			(screen.getByLabelText("Credential value") as HTMLInputElement).required,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("does not submit an initial standard application without a model credential", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Application name"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("Description"), {
+			target: { value: "Helps the release team" },
+		});
+		fireEvent.change(screen.getByLabelText("Standard template ID"), {
+			target: { value: "codex" },
+		});
+		fireEvent.change(screen.getByLabelText("Model option ID"), {
+			target: { value: "model-primary" },
+		});
+		fireEvent.change(screen.getByLabelText("Model endpoint ID"), {
+			target: { value: "endpoint-primary" },
+		});
+		fireEvent.change(screen.getByLabelText("Model ID"), {
+			target: { value: "gpt-5" },
+		});
+		fireEvent.change(screen.getByLabelText("Reasoning levels"), {
+			target: { value: "medium" },
+		});
+		fireEvent.change(screen.getByLabelText("Default model option ID"), {
+			target: { value: "model-primary" },
+		});
+		fireEvent.change(screen.getByLabelText("Default reasoning level"), {
+			target: { value: "medium" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
@@ -185,6 +230,9 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Reasoning levels"), {
 			target: { value: "medium\nhigh" },
 		});
+		fireEvent.change(screen.getByLabelText("Credential value"), {
+			target: { value: "never-echo-model" },
+		});
 		fireEvent.change(screen.getByLabelText("Default model option ID"), {
 			target: { value: "model-primary" },
 		});
@@ -219,6 +267,7 @@ describe("AgentApplicationForm", () => {
 						endpointId: "endpoint-primary",
 						modelId: "gpt-5",
 						reasoningLevels: ["medium", "high"],
+						credentialValue: "never-echo-model",
 					},
 				],
 				defaultOptionId: "model-primary",
