@@ -42,6 +42,19 @@ function resourceSummary(application: AgentApplicationProjectionV1) {
 	return `${estimatedResources.cpuMillicores}m CPU, ${estimatedResources.memoryMiB} MiB memory, ${estimatedResources.storageGiB} GiB storage`;
 }
 
+function DecisionFeedback({
+	decision,
+}: {
+	decision?: AgentApplicationProjectionV1;
+}) {
+	return decision ? (
+		<p className="mt-4 font-medium text-slate-950 text-sm" role="status">
+			Decision submitted for {decision.name}:{" "}
+			{agentManagementStatusLabels[decision.status]}.
+		</p>
+	) : null;
+}
+
 function ApplicationDecisionControls({
 	application,
 	onDecision,
@@ -134,6 +147,7 @@ export function AdminAgentApplicationsScreen({
 				>
 					Agent approvals are unavailable
 				</h1>
+				<DecisionFeedback decision={decisionResult} />
 				<p className="mt-4 text-slate-600" role="alert">
 					{state.retryable
 						? "Please try again shortly."
@@ -151,12 +165,7 @@ export function AdminAgentApplicationsScreen({
 			>
 				Agent approvals
 			</h1>
-			{decisionResult ? (
-				<p className="mt-4 font-medium text-slate-950 text-sm" role="status">
-					Decision submitted for {decisionResult.name}:{" "}
-					{agentManagementStatusLabels[decisionResult.status]}.
-				</p>
-			) : null}
+			<DecisionFeedback decision={decisionResult} />
 			{state.applications.length === 0 ? (
 				<p className="mt-4 text-slate-600">No pending Agent applications.</p>
 			) : (

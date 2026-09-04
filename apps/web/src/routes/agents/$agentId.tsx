@@ -11,6 +11,7 @@ export const Route = createFileRoute("/agents/$agentId")({
 function AgentDetailRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
+	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
 
 	return (
 		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -24,9 +25,7 @@ function AgentDetailRoute() {
 								: query.data
 					}
 				/>
-				{query.data?.kind === "ready" ? (
-					<AgentLifecycleWorkflow agent={query.data.agent} />
-				) : null}
+				{agent ? <AgentLifecycleWorkflow agent={agent} /> : null}
 			</div>
 		</main>
 	);
