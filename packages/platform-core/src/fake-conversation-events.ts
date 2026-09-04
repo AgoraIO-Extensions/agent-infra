@@ -36,6 +36,7 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 	#lastSequence = 0;
 
 	constructor(private readonly options: FakeConversationEventsOptionsV1) {
+		let nextEventId = 1;
 		const transaction: ConversationEventTransactionPortV1 = {
 			persistEvent: async (request, decide) => {
 				const existing = this.#events.find(
@@ -55,7 +56,9 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 		};
 		this.#interface = createConversationEventUseCaseV1(
 			{ transaction },
-			options,
+			{
+				newId: options.newId ?? (() => `event_${nextEventId++}`),
+			},
 		);
 	}
 
