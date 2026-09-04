@@ -122,6 +122,24 @@ const maximumTurnsListPages = 8;
 const itemsListPageSize = 100;
 const maximumItemsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
+const containedServerRequestMethods = new Set([
+	"item/tool/call",
+	"mcpServer/elicitation/request",
+]);
+const delegatedToolUnavailableJsonRpcError = Object.freeze({
+	code: -32_001,
+	message: "Platform delegated tools are unavailable",
+});
+const isolatedConfigurationKeys = [
+	"mcp_servers",
+	"plugins",
+	"marketplaces",
+] as const;
+const requiredConfigurationOriginKeys = [
+	"model",
+	"model_reasoning_effort",
+	"features.plugins",
+] as const;
 
 const persistedTurnStatuses = [
 	"running",
@@ -166,6 +184,38 @@ function nonEmptyString(value: unknown): value is string {
 
 function ownRecordValue<T>(record: Record<string, T>, key: string) {
 	return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+function isJsonRpcRequestId(value: unknown): value is string | number {
+	return (
+		typeof value === "string" ||
+		(typeof value === "number" && Number.isSafeInteger(value))
+	);
+}
+
+function isEmptyRecord(value: unknown) {
+	return isPlainRecord(value) && Object.keys(value).length === 0;
+}
+
+function assertSessionFlagOrigin(origin: unknown) {
+	if (
+		!isPlainRecord(origin) ||
+		!isPlainRecord(origin.name) ||
+		typeof origin.name.type !== "string" ||
+		typeof origin.version !== "string"
+	) {
+		protocolInvalid();
+	}
+	if (origin.name.type !== "sessionFlags") configurationInvalid();
+}
+
+function assertOnlySessionFlagOrigins(value: Record<string, unknown>) {
+	for (const key of requiredConfigurationOriginKeys) {
+		const origin = ownRecordValue(value, key);
+		if (origin === undefined) configurationInvalid();
+		assertSessionFlagOrigin(origin);
+	}
+	for (const origin of Object.values(value)) assertSessionFlagOrigin(origin);
 }
 
 function isPersistedTurnStatus(value: unknown): value is PersistedTurnStatus {
@@ -546,6 +596,14 @@ function protocolInvalid(): never {
 	throw protocolInvalidError();
 }
 
+function configurationInvalid(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_CODEX_CONFIGURATION_INVALID",
+		"Codex Runtime configuration is unavailable",
+		503,
+	);
+}
+
 function stateInvalid(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_CODEX_STATE_INVALID",
@@ -562,6 +620,32 @@ function statusForTurn(
 	if (value === "failed") return "failed";
 	if (value === "interrupted") return "cancelled";
 	protocolInvalid();
+}
+
+function assertContainedConfiguration(
+	value: unknown,
+	expected: Pick<CodexRuntimeDriverOptions, "model" | "reasoningEffort">,
+) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["config", "origins"]) ||
+		!isPlainRecord(value.config) ||
+		!isPlainRecord(value.origins)
+	) {
+		protocolInvalid();
+	}
+	if (
+		value.config.model !== expected.model ||
+		value.config.model_reasoning_effort !== expected.reasoningEffort ||
+		!isPlainRecord(value.config.features) ||
+		value.config.features.plugins !== false
+	) {
+		configurationInvalid();
+	}
+	assertOnlySessionFlagOrigins(value.origins);
+	for (const key of isolatedConfigurationKeys) {
+		if (!isEmptyRecord(value.config[key])) configurationInvalid();
+	}
 }
 
 function turnStartedNotification(frame: CodexAppServerFrame) {
@@ -711,6 +795,18 @@ class CodexRpc {
 			}
 			return;
 		}
+		if ("method" in frame) {
+			if (
+				typeof frame.method !== "string" ||
+				!isJsonRpcRequestId(frame.id) ||
+				!containedServerRequestMethods.has(frame.method)
+			) {
+				this.fail(protocolInvalidError());
+				return;
+			}
+			this.denyDelegatedToolRequest(frame.id);
+			return;
+		}
 		if (typeof frame.id !== "number" || !Number.isSafeInteger(frame.id)) {
 			this.fail(protocolInvalidError());
 			return;
@@ -726,11 +822,20 @@ class CodexRpc {
 		}
 		try {
 			pending.resolve(frame.result);
-		} catch {
-			this.fail(protocolInvalidError());
+		} catch (error) {
+			this.fail(
+				error instanceof RuntimeHostError ? error : protocolInvalidError(),
+			);
 			return;
 		}
 		this.pending.delete(frame.id);
+	}
+
+	private denyDelegatedToolRequest(id: string | number) {
+		// #186 owns the only delegated Tool route; native request parameters stay opaque here.
+		void this.bridge
+			.send({ id, error: delegatedToolUnavailableJsonRpcError })
+			.catch(() => this.fail(unavailableError()));
 	}
 
 	private fail(error = unavailableError()) {
@@ -791,6 +896,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				{ clientInfo: { name: "agent-infra-runtime", version: "1" } },
 				(value) => {
 					if (!isPlainRecord(value)) protocolInvalid();
+				},
+			);
+			await driver.rpc.request(
+				"config/read",
+				{ includeLayers: false },
+				(value) => {
+					assertContainedConfiguration(value, options);
 				},
 			);
 			return driver;
