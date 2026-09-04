@@ -57,7 +57,7 @@ const unavailableAgent = AgentProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AgentLifecycleControls", () => {
-	it("keeps service availability distinct from management status and offers Owner restart controls", () => {
+	it("keeps service availability distinct from management status and offers only the permitted Owner controls", () => {
 		const onCommand = vi.fn();
 		render(
 			<AgentLifecycleControls
@@ -74,8 +74,8 @@ describe("AgentLifecycleControls", () => {
 				"Service is temporarily unavailable. History is read-only until it recovers.",
 			),
 		).toBeTruthy();
-		expect(screen.getByRole("button", { name: "Stop Agent" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Restart Agent" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Stop Agent" })).toBeNull();
 		expect(
 			screen.getByText("Lifecycle controls").closest("section")?.className,
 		).toContain("sm:flex-row");
@@ -83,6 +83,21 @@ describe("AgentLifecycleControls", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
 		expect(onCommand).toHaveBeenCalledWith("restart");
 	});
+
+	it.each(["starting", "updating"] as const)(
+		"does not offer Owner lifecycle commands while service is %s",
+		(serviceAvailability) => {
+			render(
+				<AgentLifecycleControls
+					agent={{ ...unavailableAgent, serviceAvailability }}
+					onCommand={vi.fn()}
+					session={{ kind: "ready", session: ownerSession }}
+				/>,
+			);
+
+			expect(screen.queryByRole("button")).toBeNull();
+		},
+	);
 
 	it("uses the server-projected management state to limit Owner and administrator controls", () => {
 		const owner = vi.fn();
@@ -180,6 +195,18 @@ describe("AgentLifecycleControls", () => {
 		);
 		expect(screen.getByRole("status").textContent).toBe(
 			"Lifecycle command submitted: Creating.",
+		);
+
+		rerender(
+			<AgentLifecycleControls
+				agent={failedAgent}
+				commandError={Object.assign(new Error(), { retryable: false })}
+				onCommand={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Your permission or this Agent changed. Refresh the page.",
 		);
 	});
 });

@@ -18,8 +18,10 @@ type PendingDecision = {
 	readonly decision: AgentApplicationDecision;
 };
 
+type RequestError = Error & { readonly retryable?: boolean };
+
 type AdminAgentApplicationsScreenProps = {
-	decisionError?: boolean;
+	decisionError?: RequestError | null;
 	decisionResult?: AgentApplicationProjectionV1;
 	onDecision: (
 		applicationId: string,
@@ -107,7 +109,7 @@ function ApplicationDecisionControls({
 }
 
 export function AdminAgentApplicationsScreen({
-	decisionError = false,
+	decisionError = null,
 	decisionResult,
 	onDecision,
 	pendingDecision,
@@ -149,15 +151,17 @@ export function AdminAgentApplicationsScreen({
 			>
 				Agent approvals
 			</h1>
+			{decisionResult ? (
+				<p className="mt-4 font-medium text-slate-950 text-sm" role="status">
+					Decision submitted for {decisionResult.name}:{" "}
+					{agentManagementStatusLabels[decisionResult.status]}.
+				</p>
+			) : null}
 			{state.applications.length === 0 ? (
 				<p className="mt-4 text-slate-600">No pending Agent applications.</p>
 			) : (
 				<ul className="mt-4 divide-y divide-slate-200 border-slate-200 border-y">
 					{state.applications.map((application) => {
-						const decision =
-							decisionResult?.applicationId === application.applicationId
-								? decisionResult
-								: undefined;
 						return (
 							<li
 								className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start sm:justify-between"
@@ -189,15 +193,6 @@ export function AdminAgentApplicationsScreen({
 											<dd className="inline">{resourceSummary(application)}</dd>
 										</div>
 									</dl>
-									{decision ? (
-										<p
-											className="font-medium text-slate-950 text-sm"
-											role="status"
-										>
-											Decision submitted:{" "}
-											{agentManagementStatusLabels[decision.status]}.
-										</p>
-									) : null}
 								</div>
 								{application.status === "pending_approval" ? (
 									<ApplicationDecisionControls
@@ -213,7 +208,9 @@ export function AdminAgentApplicationsScreen({
 			)}
 			{decisionError ? (
 				<p className="mt-4 text-slate-600" role="alert">
-					Unable to submit the application decision.
+					{decisionError.retryable === false
+						? "Your permission or this application changed. Refresh the page."
+						: "Unable to submit the application decision. Please try again shortly."}
 				</p>
 			) : null}
 		</section>
