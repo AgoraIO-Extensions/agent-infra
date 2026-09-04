@@ -10,6 +10,7 @@ type PilotAgentMockResponderV1<TArgs extends readonly unknown[]> =
 	| ((...args: TArgs) => PilotAgentMockResponseV1);
 
 export type PilotAgentMockServerScenarioV1 = {
+	readonly getCurrentSession?: PilotAgentMockResponderV1<[Request]>;
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
@@ -54,6 +55,9 @@ type Operation = {
 
 const listAgentsOperation = pilotBrowserHttpOpenApiPathsV1["/api/v1/agents"]
 	.get as unknown as Operation;
+const getCurrentSessionOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/session"
+].get as unknown as Operation;
 const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agents/{agentId}"
 ].get as unknown as Operation;
@@ -123,6 +127,10 @@ function jsonResponse(response: PilotAgentMockResponseV1) {
 export function createPilotAgentMockServerV1(
 	scenario: PilotAgentMockServerScenarioV1,
 ): PilotAgentMockServerV1 {
+	validateStaticResponse(
+		scenario.getCurrentSession,
+		getCurrentSessionOperation,
+	);
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
 	validateStaticResponse(
@@ -155,6 +163,18 @@ export function createPilotAgentMockServerV1(
 		const request = new Request(input, init);
 		requests.push(request);
 		const url = new URL(request.url);
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/api/v1/session" &&
+			scenario.getCurrentSession !== undefined
+		) {
+			const responder = scenario.getCurrentSession;
+			const response =
+				typeof responder === "function" ? responder(request) : responder;
+			validateResponse(getCurrentSessionOperation, response);
+			return jsonResponse(response);
+		}
 
 		if (request.method === "GET" && url.pathname === "/api/v1/agents") {
 			listAgentsOperation.requestParams.query?.parse(
