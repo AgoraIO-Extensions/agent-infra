@@ -157,6 +157,22 @@ function submitCommand(
 	};
 }
 
+function stopCommand(
+	nativeSessionRef: string,
+): Extract<RuntimeDriverCommandV1, { kind: "stop" }> {
+	return {
+		schemaVersion: 1,
+		kind: "stop",
+		operationId: "stop-codex",
+		agentId: "agent-codex",
+		conversationId: "conversation-codex",
+		executionId: "execution-codex",
+		turnId: "turn-codex",
+		sessionGeneration: 1,
+		nativeSessionRef,
+	};
+}
+
 function stopRequest(
 	request: RuntimeSubmitTurnRequestV1,
 	hostSessionRef: string,
@@ -844,6 +860,40 @@ describe("Codex Runtime Driver", () => {
 				({ method }) => method === "turn/interrupt",
 			),
 		).toHaveLength(0);
+	});
+
+	it("coalesces concurrent stop resolution from execution and lookup", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.completeOnInterrupt("completed");
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const submitted = await driver.execute(submitCommand());
+		const command = stopCommand(submitted.nativeSessionRef);
+
+		bridge.holdTurnsList();
+		const execution = driver.execute(command);
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+		const lookup = driver.lookupOperation(command);
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(2));
+
+		bridge.respondToHeldTurnsListWithStatus("inProgress", 0);
+		await vi.waitFor(() =>
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1),
+		);
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(2));
+
+		bridge.respondToHeldTurnsListWithStatus("completed", 0);
+		await expect(lookup).resolves.toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "completed" } },
+		});
+		bridge.respondToHeldTurnsListWithStatus("completed");
+		await expect(execution).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "completed" },
+		});
 	});
 
 	it("accepts the scalar features.plugins session flag origin", async () => {

@@ -2153,18 +2153,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			nativeSessionRef,
 			result: { outcome: "accepted", status },
 		};
-		await this.update((state) => {
+		return this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
-			if (
-				operation?.state !== "prepared" ||
-				!operationMatchesCommand(operation, command)
-			) {
+			if (!operation || !operationMatchesCommand(operation, command)) {
 				stateInvalid();
 			}
+			if (operation.state === "resolved") {
+				if (!operation.record) stateInvalid();
+				return operation.record;
+			}
+			if (operation.state !== "prepared") stateInvalid();
 			operation.state = "resolved";
 			operation.record = record;
+			return record;
 		});
-		return record;
 	}
 
 	private unknown(command: RuntimeDriverCommandV1, nativeSessionRef: string) {
