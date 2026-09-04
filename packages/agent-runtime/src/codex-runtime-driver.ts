@@ -1018,31 +1018,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (started) {
 			if (started.status !== "running") return;
 			const streamKey = await this.update((state) => {
-				const matchingSessions = Object.entries(state.sessions).filter(
-					([, session]) => session.threadId === started.threadId,
-				);
-				if (matchingSessions.length === 0) return;
-				if (matchingSessions.length !== 1) stateInvalid();
-				const [nativeSessionRef, session] = matchingSessions[0] ?? [];
-				if (!nativeSessionRef || !session) stateInvalid();
-				const execution = Object.values(session.executions).find(
-					(candidate) => candidate.nativeTurnId === started.nativeTurnId,
-				);
-				const preparedOperations = Object.entries(state.operations).filter(
-					([, operation]) =>
-						operation.nativeSessionRef === nativeSessionRef &&
-						operation.state === "prepared",
-				);
-				if (preparedOperations.length > 1) stateInvalid();
-				const pendingOperationKey = preparedOperations[0]?.[0];
-				if (!execution && !pendingOperationKey) return;
-				const journal = this.ensureJournal(
-					session,
+				const resolved = this.resolveNotificationJournal(
+					state,
+					started.threadId,
 					started.nativeTurnId,
-					execution ? undefined : pendingOperationKey,
 				);
-				return execution && this.appendStatusEvent(session, journal)
-					? this.eventStreamKey(nativeSessionRef, execution.executionId)
+				if (!resolved) return;
+				const appended = this.appendStatusEvent(
+					resolved.session,
+					resolved.journal,
+				);
+				return resolved.execution && appended
+					? this.eventStreamKey(
+							resolved.nativeSessionRef,
+							resolved.execution.executionId,
+						)
 					: undefined;
 			});
 			if (streamKey) this.notifyEventStream(streamKey);
@@ -1052,44 +1042,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
 			const streamKey = await this.update((state) => {
-				const matchingSessions = Object.entries(state.sessions).filter(
-					([, session]) => session.threadId === completed.threadId,
-				);
-				if (matchingSessions.length === 0) return;
-				if (matchingSessions.length !== 1) stateInvalid();
-				const [nativeSessionRef, session] = matchingSessions[0] ?? [];
-				if (!nativeSessionRef || !session) stateInvalid();
-				const execution = Object.values(session.executions).find(
-					(candidate) => candidate.nativeTurnId === completed.nativeTurnId,
-				);
-				const preparedOperations = Object.entries(state.operations).filter(
-					([, operation]) =>
-						operation.nativeSessionRef === nativeSessionRef &&
-						operation.state === "prepared",
-				);
-				if (preparedOperations.length > 1) stateInvalid();
-				const pendingOperationKey = preparedOperations[0]?.[0];
-				if (!execution && !pendingOperationKey) return;
-				const journal = this.ensureJournal(
-					session,
+				const resolved = this.resolveNotificationJournal(
+					state,
+					completed.threadId,
 					completed.nativeTurnId,
-					execution ? undefined : pendingOperationKey,
 				);
+				if (!resolved) return;
 				const appended = this.appendCompletedEvent(
-					session,
-					journal,
+					resolved.session,
+					resolved.journal,
 					completed.status,
 				);
-				if (!execution) return;
+				if (!resolved.execution) return;
 				this.setExecutionStatus(
 					state,
-					nativeSessionRef,
-					execution.executionId,
+					resolved.nativeSessionRef,
+					resolved.execution.executionId,
 					completed.nativeTurnId,
 					completed.status,
 				);
 				return appended
-					? this.eventStreamKey(nativeSessionRef, execution.executionId)
+					? this.eventStreamKey(
+							resolved.nativeSessionRef,
+							resolved.execution.executionId,
+						)
 					: undefined;
 			});
 			if (streamKey) this.notifyEventStream(streamKey);
@@ -1099,35 +1075,61 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const delta = agentMessageDeltaNotification(frame);
 		if (!delta || delta.delta.length === 0) return;
 		const streamKey = await this.update((state) => {
-			const matchingSessions = Object.entries(state.sessions).filter(
-				([, session]) => session.threadId === delta.threadId,
-			);
-			if (matchingSessions.length === 0) return;
-			if (matchingSessions.length !== 1) stateInvalid();
-			const [nativeSessionRef, session] = matchingSessions[0] ?? [];
-			if (!nativeSessionRef || !session) stateInvalid();
-			const execution = Object.values(session.executions).find(
-				(candidate) => candidate.nativeTurnId === delta.nativeTurnId,
-			);
-			const preparedOperations = Object.entries(state.operations).filter(
-				([, operation]) =>
-					operation.nativeSessionRef === nativeSessionRef &&
-					operation.state === "prepared",
-			);
-			if (preparedOperations.length > 1) stateInvalid();
-			const pendingOperationKey = preparedOperations[0]?.[0];
-			if (!execution && !pendingOperationKey) return;
-			const journal = this.ensureJournal(
-				session,
+			const resolved = this.resolveNotificationJournal(
+				state,
+				delta.threadId,
 				delta.nativeTurnId,
-				execution ? undefined : pendingOperationKey,
 			);
-			this.appendTextEvent(session, journal, delta.nativeItemId, delta.delta);
-			return execution
-				? this.eventStreamKey(nativeSessionRef, execution.executionId)
+			if (!resolved) return;
+			this.appendTextEvent(
+				resolved.session,
+				resolved.journal,
+				delta.nativeItemId,
+				delta.delta,
+			);
+			return resolved.execution
+				? this.eventStreamKey(
+						resolved.nativeSessionRef,
+						resolved.execution.executionId,
+					)
 				: undefined;
 		});
 		if (streamKey) this.notifyEventStream(streamKey);
+	}
+
+	private resolveNotificationJournal(
+		state: CodexDriverState,
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		const matchingSessions = Object.entries(state.sessions).filter(
+			([, session]) => session.threadId === threadId,
+		);
+		if (matchingSessions.length === 0) return undefined;
+		if (matchingSessions.length !== 1) stateInvalid();
+		const [nativeSessionRef, session] = matchingSessions[0] ?? [];
+		if (!nativeSessionRef || !session) stateInvalid();
+		const execution = Object.values(session.executions).find(
+			(candidate) => candidate.nativeTurnId === nativeTurnId,
+		);
+		const preparedOperations = Object.entries(state.operations).filter(
+			([, operation]) =>
+				operation.nativeSessionRef === nativeSessionRef &&
+				operation.state === "prepared",
+		);
+		if (preparedOperations.length > 1) stateInvalid();
+		const pendingOperationKey = preparedOperations[0]?.[0];
+		if (!execution && !pendingOperationKey) return undefined;
+		return {
+			nativeSessionRef,
+			session,
+			execution,
+			journal: this.ensureJournal(
+				session,
+				nativeTurnId,
+				execution ? undefined : pendingOperationKey,
+			),
+		};
 	}
 
 	private ensureJournal(

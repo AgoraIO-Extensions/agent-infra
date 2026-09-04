@@ -40,6 +40,60 @@ interface TestItemsListPage {
 	nextCursor?: string | null;
 }
 
+// Narrow fixtures copied from the generated schema pinned by the Bridge provenance.
+const pinnedV2EventRecoveryFrames = {
+	threadStarted: {
+		method: "turn/started",
+		params: {
+			threadId: "codex-native-thread-private",
+			turn: {
+				id: "codex-native-turn-private",
+				status: "inProgress",
+				items: [],
+			},
+		},
+	},
+	agentMessageDelta: {
+		method: "item/agentMessage/delta",
+		params: {
+			threadId: "codex-native-thread-private",
+			turnId: "codex-native-turn-private",
+			itemId: "codex-native-item-private",
+			delta: "schema-delta",
+		},
+	},
+	turnCompleted: {
+		method: "turn/completed",
+		params: {
+			threadId: "codex-native-thread-private",
+			turn: {
+				id: "codex-native-turn-private",
+				status: "completed",
+				items: [],
+			},
+		},
+	},
+	threadItemsListRequest: {
+		threadId: "codex-native-thread-private",
+		turnId: "codex-native-turn-private",
+		limit: 100,
+		sortDirection: "asc",
+	},
+	threadItemsListResponse: {
+		data: [
+			{
+				turnId: "codex-native-turn-private",
+				item: {
+					id: "codex-native-item-private",
+					type: "agentMessage",
+					text: "schema-history",
+				},
+			},
+		],
+		nextCursor: null,
+	},
+};
+
 async function runtimeDirectory() {
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-runtime-codex-driver-"),
@@ -281,7 +335,7 @@ class TestCodexBridge {
 		this.respond(id, { data: "invalid" });
 	}
 
-	emitNotification() {
+	emitNotification(status: CodexTurnStatus = "inProgress") {
 		return new Promise<void>((resolve) => {
 			this.notificationRead = resolve;
 			this.push({
@@ -290,7 +344,7 @@ class TestCodexBridge {
 					threadId: this.nativeThreadId,
 					turn: {
 						id: this.nativeTurnId,
-						status: "inProgress",
+						status,
 						items: [],
 					},
 				},
@@ -327,6 +381,13 @@ class TestCodexBridge {
 					},
 				},
 			});
+		});
+	}
+
+	emitFrame(frame: CodexAppServerFrame) {
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push(frame);
 		});
 	}
 
@@ -594,6 +655,114 @@ describe("Codex Runtime Driver", () => {
 				payload: { status: "completed" },
 			}),
 		]);
+	});
+
+	it("preserves started and delta order when a terminal start response races them", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const submitted = driver.execute(command);
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnStartCount()).toBe(1);
+		});
+		await bridge.emitNotification();
+		await bridge.emitAgentMessageDelta("before-terminal-response");
+		bridge.respondToHeldTurnStart("completed");
+		const accepted = await submitted;
+
+		expect(accepted.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).toEqual([
+			expect.objectContaining({
+				type: "status",
+				payload: { status: "running" },
+			}),
+			expect.objectContaining({
+				type: "text",
+				payload: { delta: "before-terminal-response" },
+			}),
+			expect.objectContaining({
+				type: "completed",
+				payload: { status: "completed" },
+			}),
+		]);
+	});
+
+	it("accepts the pinned v2 event recovery wire shapes", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge, (options) => {
+			expect(options.provenance).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
+		});
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await bridge.emitFrame(pinnedV2EventRecoveryFrames.threadStarted);
+		await bridge.emitFrame(pinnedV2EventRecoveryFrames.agentMessageDelta);
+		await bridge.emitFrame(pinnedV2EventRecoveryFrames.turnCompleted);
+		const events = await vi.waitFor(async () => {
+			const replayed = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(replayed).toHaveLength(3);
+			return replayed;
+		});
+		expect(events.map((event) => event.type)).toEqual([
+			"status",
+			"text",
+			"completed",
+		]);
+	});
+
+	it("restores the pinned v2 thread-items-list response", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge();
+		resumedBridge.setItemsListPages([
+			structuredClone(pinnedV2EventRecoveryFrames.threadItemsListResponse),
+		]);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+		const events = await resumedDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events).toEqual([
+			expect.objectContaining({
+				type: "status",
+				payload: { status: "running" },
+			}),
+			expect.objectContaining({
+				type: "text",
+				payload: { delta: "schema-history" },
+			}),
+		]);
+		expect(
+			resumedBridge.requests.find(
+				({ method }) => method === "thread/items/list",
+			),
+		).toEqual({
+			method: "thread/items/list",
+			params: pinnedV2EventRecoveryFrames.threadItemsListRequest,
+		});
 	});
 
 	it("keeps equal native delta occurrences distinct with stable local cursors", async () => {
