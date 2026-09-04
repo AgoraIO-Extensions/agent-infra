@@ -93,7 +93,7 @@ function host(
 	driver: FakeRuntimeDriver,
 	hooks: {
 		afterOperationPrepared?: () => void;
-		afterDriverResult?: () => void;
+		afterDriverResult?: (operationId: string) => void;
 	} = {},
 ) {
 	return openIngressVerifiedRuntimeHost({
@@ -280,6 +280,96 @@ describe("RuntimeHost crash-window recovery", () => {
 			recovered.result,
 		);
 		expect(await driver.sideEffectCount()).toBe(1);
+	});
+
+	it("keeps an unconfirmed generation cancellation prepared until recovery can prove it", async () => {
+		const root = await directory();
+		const hostPath = join(root, "host.json");
+		const driverPath = join(root, "driver.json");
+		const original = request();
+		const firstHost = await host(
+			await FileRuntimeStore.open(hostPath),
+			await FakeRuntimeDriver.open(driverPath),
+		);
+		const submitted = await firstHost.submitTurn(original);
+		const tombstoneId = "generation-crash-unknown";
+		const crashingHost = await host(
+			await FileRuntimeStore.open(hostPath),
+			await FakeRuntimeDriver.open(driverPath),
+			{
+				afterDriverResult: (operationId) => {
+					if (operationId === tombstoneId) {
+						throw new Error("simulated crash after generation cancellation");
+					}
+				},
+			},
+		);
+
+		await expect(
+			crashingHost.cancelGeneration({
+				schemaVersion: 1,
+				requestId: "request-generation-crash-unknown",
+				...runtimeGrantRequestContext(original),
+				agentId: original.agentId,
+				conversationId: original.conversationId,
+				executionId: original.executionId,
+				turnId: original.turnId,
+				sessionGeneration: original.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				tombstoneId,
+				grant: signedGrant(original, ["generation.cancel"]),
+			}),
+		).rejects.toThrow("simulated crash after generation cancellation");
+		const provenDriverState = await readFile(driverPath, "utf8");
+		await (await FakeRuntimeDriver.open(driverPath)).makeOperationUnknown(
+			tombstoneId,
+		);
+
+		await openIngressVerifiedRuntimeHost({
+			store: await FileRuntimeStore.open(hostPath),
+			driver: await FakeRuntimeDriver.open(driverPath),
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+		});
+		const unknownState = JSON.parse(
+			await readFile(hostPath, "utf8"),
+		) as MutableStoreState;
+		expect(
+			unknownState.sessions[submitted.hostSessionRef]?.operations[tombstoneId],
+		).toMatchObject({ state: "prepared" });
+		expect(unknownState.sessions[submitted.hostSessionRef]).toMatchObject({
+			generationBarrier: { state: "active", tombstoneId },
+		});
+
+		await writeFile(driverPath, provenDriverState, "utf8");
+		await openIngressVerifiedRuntimeHost({
+			store: await FileRuntimeStore.open(hostPath),
+			driver: await FakeRuntimeDriver.open(driverPath),
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+		});
+		const recoveredState = JSON.parse(
+			await readFile(hostPath, "utf8"),
+		) as MutableStoreState;
+		expect(
+			recoveredState.sessions[submitted.hostSessionRef]?.operations[
+				tombstoneId
+			],
+		).toMatchObject({
+			state: "resolved",
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(recoveredState.sessions[submitted.hostSessionRef]).toMatchObject({
+			generationBarrier: { state: "confirmed", tombstoneId },
+		});
+		expect(
+			await (await FakeRuntimeDriver.open(driverPath)).sideEffectCount(),
+		).toBe(2);
 	});
 
 	it("fails closed when durable Host state is corrupted", async () => {

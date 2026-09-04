@@ -87,7 +87,7 @@ function acceptanceUnknown() {
 	} as const;
 }
 
-function isInterruption(operation: StoredOperation) {
+function isInterruption(operation: Pick<StoredOperation, "kind">) {
 	return operation.kind === "stop" || operation.kind === "generation-cancel";
 }
 
@@ -592,19 +592,15 @@ export class RuntimeHost {
 				const nativeSessionRef =
 					this.options.store.nativeSessionRef(hostSessionRef) ??
 					nativeSessionRequired();
-				try {
-					result = await this.currentDriverResult(
-						{ nativeSessionRef, result },
-						operation.executionId,
+				result = await this.currentDriverResult(
+					{ nativeSessionRef, result },
+					operation,
+				);
+				if (isInterruption(operation) && result.outcome === "unknown") {
+					return unknownOperationResponse(
+						hostSessionRef,
+						operation.operationId,
 					);
-				} catch (error) {
-					if (isInterruption(operation)) {
-						return unknownOperationResponse(
-							hostSessionRef,
-							operation.operationId,
-						);
-					}
-					throw error;
 				}
 				await this.options.store.resolveOperation(
 					hostSessionRef,
@@ -621,14 +617,10 @@ export class RuntimeHost {
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
-		let lookup: ReturnType<typeof parseDriverLookup>;
+		let rawLookup: Awaited<ReturnType<RuntimeDriver["lookupOperation"]>>;
 		try {
-			lookup = parseDriverLookup(
-				await callDriver(() =>
-					this.options.driver.lookupOperation(operation.command),
-				),
-				operation,
-				this.options.store.nativeSessionRef(hostSessionRef),
+			rawLookup = await callDriver(() =>
+				this.options.driver.lookupOperation(operation.command),
 			);
 		} catch (error) {
 			if (isInterruption(operation)) {
@@ -636,11 +628,16 @@ export class RuntimeHost {
 			}
 			throw error;
 		}
+		const lookup = parseDriverLookup(
+			rawLookup,
+			operation,
+			this.options.store.nativeSessionRef(hostSessionRef),
+		);
 		if (lookup.state === "unknown") {
-			const result = acceptanceUnknown();
 			if (isInterruption(operation)) {
 				return unknownOperationResponse(hostSessionRef, operation.operationId);
 			}
+			const result = acceptanceUnknown();
 			await this.options.store.resolveOperation(
 				hostSessionRef,
 				operation.operationId,
@@ -653,35 +650,33 @@ export class RuntimeHost {
 				result,
 			};
 		}
-		let driverRecord: ReturnType<typeof parseDriverRecord>;
-		try {
-			driverRecord = parseDriverRecord(
-				lookup.state === "found"
-					? lookup.record
-					: await callDriver(() =>
-							this.options.driver.execute(operation.command),
-						),
-				operation,
-				this.options.store.nativeSessionRef(hostSessionRef),
-			);
-		} catch (error) {
-			if (isInterruption(operation)) {
-				return unknownOperationResponse(hostSessionRef, operation.operationId);
+		let rawDriverRecord: Awaited<ReturnType<RuntimeDriver["execute"]>>;
+		if (lookup.state === "found") {
+			rawDriverRecord = lookup.record;
+		} else {
+			try {
+				rawDriverRecord = await callDriver(() =>
+					this.options.driver.execute(operation.command),
+				);
+			} catch (error) {
+				if (isInterruption(operation)) {
+					return unknownOperationResponse(
+						hostSessionRef,
+						operation.operationId,
+					);
+				}
+				throw error;
 			}
-			throw error;
 		}
+		const driverRecord = parseDriverRecord(
+			rawDriverRecord,
+			operation,
+			this.options.store.nativeSessionRef(hostSessionRef),
+		);
 		await this.options.afterDriverResult?.(operation.operationId);
-		let result: RuntimeOperationResponseV1["result"];
-		try {
-			result = await this.currentDriverResult(
-				driverRecord,
-				operation.executionId,
-			);
-		} catch (error) {
-			if (isInterruption(operation)) {
-				return unknownOperationResponse(hostSessionRef, operation.operationId);
-			}
-			throw error;
+		const result = await this.currentDriverResult(driverRecord, operation);
+		if (isInterruption(operation) && result.outcome === "unknown") {
+			return unknownOperationResponse(hostSessionRef, operation.operationId);
 		}
 		await this.options.store.resolveOperation(
 			hostSessionRef,
@@ -732,21 +727,28 @@ export class RuntimeHost {
 						if (lookup.state === "found") {
 							recoveredResult = await this.currentDriverResult(
 								lookup.record,
-								operation.executionId,
+								operation,
 							);
-							await this.options.store.resolveOperation(
-								session.hostSessionRef,
-								operation.operationId,
-								recoveredResult,
-								lookup.record.nativeSessionRef,
-							);
+							if (
+								!isInterruption(operation) ||
+								recoveredResult.outcome !== "unknown"
+							) {
+								await this.options.store.resolveOperation(
+									session.hostSessionRef,
+									operation.operationId,
+									recoveredResult,
+									lookup.record.nativeSessionRef,
+								);
+							}
 						} else {
 							recoveredResult = acceptanceUnknown();
-							await this.options.store.resolveOperation(
-								session.hostSessionRef,
-								operation.operationId,
-								recoveredResult,
-							);
+							if (!isInterruption(operation)) {
+								await this.options.store.resolveOperation(
+									session.hostSessionRef,
+									operation.operationId,
+									recoveredResult,
+								);
+							}
 						}
 					}
 					if (
@@ -780,16 +782,24 @@ export class RuntimeHost {
 			Awaited<ReturnType<RuntimeDriver["execute"]>>,
 			"nativeSessionRef" | "result"
 		>,
-		executionId: string,
+		operation: Pick<StoredOperation, "executionId" | "kind">,
 	) {
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
-		const status = RuntimeStatusV1Schema.safeParse(
-			await callDriver(() =>
-				this.options.driver.getStatus(record.nativeSessionRef, executionId),
-			),
-		);
+		let rawStatus: unknown;
+		try {
+			rawStatus = await callDriver(() =>
+				this.options.driver.getStatus(
+					record.nativeSessionRef,
+					operation.executionId,
+				),
+			);
+		} catch (error) {
+			if (isInterruption(operation)) return acceptanceUnknown();
+			throw error;
+		}
+		const status = RuntimeStatusV1Schema.safeParse(rawStatus);
 		if (!status.success) driverInvalid();
 		return {
 			outcome: "accepted" as const,
