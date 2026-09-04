@@ -788,7 +788,9 @@ describe("Codex Runtime Driver", () => {
 			).result,
 		).toEqual({ outcome: "accepted", status: "completed" });
 		expect(
-			recoveredBridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			recoveredBridge.requests.filter(
+				({ method }) => method === "turn/interrupt",
+			),
 		).toHaveLength(0);
 	});
 

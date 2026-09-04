@@ -79,6 +79,14 @@ function driverInvalid(): never {
 	);
 }
 
+function acceptanceUnknown() {
+	return {
+		outcome: "unknown" as const,
+		code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+		message: "Runtime command acceptance could not be confirmed",
+	} as const;
+}
+
 async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
@@ -539,15 +547,15 @@ export class RuntimeHost {
 					request,
 					request.tombstoneId,
 				);
-					const response = await this.dispatch(
-						request.hostSessionRef,
-						prepared.operation,
-					);
-					if (
-						response.result.outcome === "accepted" &&
-						isTerminalRuntimeStatus(response.result.status)
-					) {
-						await this.options.store.confirmGenerationBarrier(
+				const response = await this.dispatch(
+					request.hostSessionRef,
+					prepared.operation,
+				);
+				if (
+					response.result.outcome === "accepted" &&
+					isTerminalRuntimeStatus(response.result.status)
+				) {
+					await this.options.store.confirmGenerationBarrier(
 						request.hostSessionRef,
 						request.tombstoneId,
 					);
@@ -595,15 +603,8 @@ export class RuntimeHost {
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		if (lookup.state === "unknown") {
-			const result = {
-				outcome: "unknown",
-				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-				message: "Runtime command acceptance could not be confirmed",
-			} as const;
-			if (
-				operation.kind === "stop" ||
-				operation.kind === "generation-cancel"
-			) {
+			const result = acceptanceUnknown();
+			if (operation.kind === "stop" || operation.kind === "generation-cancel") {
 				return {
 					schemaVersion: 1,
 					hostSessionRef,
@@ -633,10 +634,23 @@ export class RuntimeHost {
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
-		const result = await this.currentDriverResult(
-			driverRecord,
-			operation.executionId,
-		);
+		let result: RuntimeOperationResponseV1["result"];
+		try {
+			result = await this.currentDriverResult(
+				driverRecord,
+				operation.executionId,
+			);
+		} catch (error) {
+			if (operation.kind === "stop" || operation.kind === "generation-cancel") {
+				return {
+					schemaVersion: 1,
+					hostSessionRef,
+					operationId: operation.operationId,
+					result: acceptanceUnknown(),
+				};
+			}
+			throw error;
+		}
 		await this.options.store.resolveOperation(
 			hostSessionRef,
 			operation.operationId,
@@ -684,10 +698,10 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
-								recoveredResult = await this.currentDriverResult(
-									lookup.record,
-									operation.executionId,
-								);
+							recoveredResult = await this.currentDriverResult(
+								lookup.record,
+								operation.executionId,
+							);
 							await this.options.store.resolveOperation(
 								session.hostSessionRef,
 								operation.operationId,
@@ -695,11 +709,7 @@ export class RuntimeHost {
 								lookup.record.nativeSessionRef,
 							);
 						} else {
-							recoveredResult = {
-								outcome: "unknown",
-								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-								message: "Runtime command acceptance could not be confirmed",
-							} as const;
+							recoveredResult = acceptanceUnknown();
 							await this.options.store.resolveOperation(
 								session.hostSessionRef,
 								operation.operationId,
@@ -707,11 +717,11 @@ export class RuntimeHost {
 							);
 						}
 					}
-						if (
-							operation.kind === "generation-cancel" &&
-							recoveredResult.outcome === "accepted" &&
-							isTerminalRuntimeStatus(recoveredResult.status)
-						) {
+					if (
+						operation.kind === "generation-cancel" &&
+						recoveredResult.outcome === "accepted" &&
+						isTerminalRuntimeStatus(recoveredResult.status)
+					) {
 						await this.options.store.confirmGenerationBarrier(
 							session.hostSessionRef,
 							operation.operationId,

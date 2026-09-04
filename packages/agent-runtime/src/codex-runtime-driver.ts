@@ -194,7 +194,9 @@ function operationMatchesCommand(
 	command: RuntimeDriverCommandV1,
 ) {
 	if (!isCodexInterruptionCommand(command)) {
-		return operation.executionId === undefined && operation.turnId === undefined;
+		return (
+			operation.executionId === undefined && operation.turnId === undefined
+		);
 	}
 	return (
 		operation.nativeSessionRef === command.nativeSessionRef &&
@@ -473,7 +475,8 @@ function isCodexOperation(
 		return false;
 	}
 	if (!Array.isArray(identity) || identity.length !== 5) return false;
-	const [agentId, conversationId, sessionGeneration, kind, operationId] = identity;
+	const [agentId, conversationId, sessionGeneration, kind, operationId] =
+		identity;
 	if (
 		agentId !== session.agentId ||
 		conversationId !== session.conversationId ||
@@ -1123,7 +1126,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operationKey(command),
 		);
 		if (!operation) return { state: "missing" };
-		if (!operationMatchesCommand(operation, command)) return { state: "unknown" };
+		if (!operationMatchesCommand(operation, command))
+			return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
 		const status = await this.getStatus(
@@ -2151,8 +2155,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
 			if (
-				!operation ||
-				operation.state !== "prepared" ||
+				operation?.state !== "prepared" ||
 				!operationMatchesCommand(operation, command)
 			) {
 				stateInvalid();
@@ -2163,10 +2166,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return record;
 	}
 
-	private unknown(
-		command: RuntimeDriverCommandV1,
-		nativeSessionRef: string,
-	) {
+	private unknown(command: RuntimeDriverCommandV1, nativeSessionRef: string) {
 		return {
 			schemaVersion: 1 as const,
 			agentId: command.agentId,

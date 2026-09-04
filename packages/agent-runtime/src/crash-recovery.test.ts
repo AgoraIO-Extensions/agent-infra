@@ -692,22 +692,30 @@ describe("RuntimeHost crash-window recovery", () => {
 				}),
 			).rejects.toMatchObject({ code: "RUNTIME_SESSION_RECOVERY_BLOCKED" });
 			const tombstoneId = `generation-driver-${failure}`;
-			expect(
-				await recoveredHost.cancelGeneration({
-					schemaVersion: 1,
-					requestId: `request-driver-${failure}-cancel`,
-					...runtimeGrantRequestContext(affectedRequest),
-					agentId: affectedRequest.agentId,
-					conversationId: affectedRequest.conversationId,
-					executionId: affectedRequest.executionId,
-					turnId: affectedRequest.turnId,
-					sessionGeneration: affectedRequest.sessionGeneration,
-					deliveryFence: 1,
-					hostSessionRef: affected.hostSessionRef,
-					tombstoneId,
-					grant: signedGrant(affectedRequest, ["generation.cancel"]),
-				}),
-			).toMatchObject({ result: { outcome: "accepted", status: "cancelled" } });
+			const cancellation = await recoveredHost.cancelGeneration({
+				schemaVersion: 1,
+				requestId: `request-driver-${failure}-cancel`,
+				...runtimeGrantRequestContext(affectedRequest),
+				agentId: affectedRequest.agentId,
+				conversationId: affectedRequest.conversationId,
+				executionId: affectedRequest.executionId,
+				turnId: affectedRequest.turnId,
+				sessionGeneration: affectedRequest.sessionGeneration,
+				deliveryFence: 1,
+				hostSessionRef: affected.hostSessionRef,
+				tombstoneId,
+				grant: signedGrant(affectedRequest, ["generation.cancel"]),
+			});
+			expect(cancellation).toMatchObject(
+				failure === "status"
+					? {
+							result: {
+								outcome: "unknown",
+								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+							},
+						}
+					: { result: { outcome: "accepted", status: "cancelled" } },
+			);
 			await restartedDriver.clearRecoveryFailures();
 			await openIngressVerifiedRuntimeHost({
 				store: await FileRuntimeStore.open(hostPath),
