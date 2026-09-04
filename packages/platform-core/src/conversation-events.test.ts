@@ -127,16 +127,12 @@ describe("Conversation event ingestion", () => {
 		});
 	});
 
-	it("preserves equal text occurrences at distinct adapter event keys", async () => {
+	it("uses deterministic Fake IDs for equal text at distinct adapter event keys", async () => {
 		const events = new FakeConversationEventsV1({
 			conversationId: event.conversationId,
 			executionId: event.executionId,
 			sessionGeneration: event.sessionGeneration,
 			deliveryFence: event.deliveryFence,
-			newId: (() => {
-				let next = 1;
-				return () => `event_${next++}`;
-			})(),
 		});
 
 		const first = await events.persist(event);
@@ -149,10 +145,12 @@ describe("Conversation event ingestion", () => {
 			throw new Error("Expected both normalized events to be accepted");
 		}
 		expect(second.event).toMatchObject({
+			eventId: "event_2",
 			sequence: 2,
 			conversationCursor: 2,
 			event: event.event,
 		});
+		expect(first.event.eventId).toBe("event_1");
 		expect(events.snapshot().events).toEqual([first.event, second.event]);
 	});
 
