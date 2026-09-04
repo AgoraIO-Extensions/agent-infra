@@ -555,6 +555,10 @@ export const conversationExecutions = platformSchema.table(
 		deliveryFence: bigint("delivery_fence", { mode: "number" })
 			.default(0)
 			.notNull(),
+		lastEventSequence: bigint("last_event_sequence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		lastRuntimeCursor: text("last_runtime_cursor"),
 		authorizationRevision: text("authorization_revision").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -594,6 +598,14 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_delivery_fence_safe",
 			sql`${table.deliveryFence} between 0 and 9007199254740991`,
+		),
+		check(
+			"conversation_execution_last_event_sequence_safe",
+			sql`${table.lastEventSequence} between 0 and 9007199254740991`,
+		),
+		check(
+			"conversation_execution_last_runtime_cursor_non_empty",
+			sql`${table.lastRuntimeCursor} IS NULL OR char_length(${table.lastRuntimeCursor}) > 0`,
 		),
 		check(
 			"conversation_execution_authorization_revision_non_empty",
@@ -729,6 +741,80 @@ export const conversationAuditEvents = platformSchema.table(
 		index("conversation_audit_conversation_idx").on(
 			table.conversationId,
 			table.occurredAt,
+		),
+	],
+);
+
+export const conversationEvents = platformSchema.table(
+	"conversation_events",
+	{
+		eventId: text("event_id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		executionId: text("execution_id").notNull(),
+		adapterEventKey: text("adapter_event_key").notNull(),
+		sequence: bigint("sequence", { mode: "number" }).notNull(),
+		conversationCursor: bigint("conversation_cursor", {
+			mode: "number",
+		}).notNull(),
+		eventType: varchar("event_type", { length: 128 }).notNull(),
+		eventPayload: jsonb("event_payload")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		eventDigest: varchar("event_digest", { length: 64 }).notNull(),
+		runtimeCursor: text("runtime_cursor").notNull(),
+		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "conversation_event_conversation_fk",
+		}),
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_event_execution_fk",
+		}),
+		check("conversation_event_id_non_empty", sql`char_length(${table.eventId}) > 0`),
+		check(
+			"conversation_event_adapter_key_non_empty",
+			sql`char_length(${table.adapterEventKey}) > 0`,
+		),
+		check(
+			"conversation_event_sequence_safe",
+			sql`${table.sequence} between 1 and 9007199254740991`,
+		),
+		check(
+			"conversation_event_cursor_safe",
+			sql`${table.conversationCursor} between 1 and 9007199254740991`,
+		),
+		check(
+			"conversation_event_type_non_empty",
+			sql`char_length(${table.eventType}) > 0`,
+		),
+		check(
+			"conversation_event_digest_format",
+			sql`${table.eventDigest} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"conversation_event_runtime_cursor_non_empty",
+			sql`char_length(${table.runtimeCursor}) > 0`,
+		),
+		uniqueIndex("conversation_event_execution_adapter_key_unique").on(
+			table.executionId,
+			table.adapterEventKey,
+		),
+		uniqueIndex("conversation_event_execution_sequence_unique").on(
+			table.executionId,
+			table.sequence,
+		),
+		uniqueIndex("conversation_event_conversation_cursor_unique").on(
+			table.conversationId,
+			table.conversationCursor,
+		),
+		index("conversation_event_conversation_cursor_idx").on(
+			table.conversationId,
+			table.conversationCursor,
 		),
 	],
 );
@@ -960,6 +1046,7 @@ export const platformInfrastructureTables = [
 	conversationMessages,
 	conversationStops,
 	conversationAuditEvents,
+	conversationEvents,
 	outboxItems,
 	auditEvents,
 	idempotencyRecords,

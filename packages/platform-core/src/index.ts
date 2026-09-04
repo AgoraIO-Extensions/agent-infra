@@ -42,6 +42,7 @@ export * from "./agent-management.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-execution.js";
+export * from "./conversation-events.js";
 export * from "./idempotency.js";
 export type {
 	PendingSecretRecordAttachmentResolverV1,
