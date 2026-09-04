@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +53,14 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	decision: null,
 });
 const cursor = "cursor:agent-pilot-1";
+const administratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-administrator-1",
+		displayName: "Administrator",
+		roles: ["system_admin"],
+	},
+});
 
 describe("Pilot Agent Mock Server", () => {
 	it("routes list pages by the generated client's cursor request", async () => {
@@ -143,6 +152,7 @@ describe("Pilot Agent Mock Server", () => {
 		const server = createPilotAgentMockServerV1({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: startingAgent },
+			getCurrentSession: { status: 200, body: administratorSession },
 			listPendingAgentApplications: {
 				status: 200,
 				body: { items: [pendingApplication], nextCursor: null },
@@ -151,6 +161,9 @@ describe("Pilot Agent Mock Server", () => {
 			commandAgentLifecycle: { status: 202, body: startingAgent },
 		});
 
+		const session = await server.fetch(
+			new Request("https://platform.example.test/api/v1/session"),
+		);
 		const pending = await server.fetch(
 			new Request(
 				"https://platform.example.test/api/v1/admin/agent-applications",
@@ -183,6 +196,7 @@ describe("Pilot Agent Mock Server", () => {
 			),
 		);
 
+		expect(await session.json()).toEqual(administratorSession);
 		expect(await pending.json()).toEqual({
 			items: [pendingApplication],
 			nextCursor: null,
