@@ -67,12 +67,7 @@ function visibleLifecycleCommands(
 
 	// These projections only select visible controls. The Platform still authorizes every command.
 	if (isOwner && agent.managementStatus === "available") {
-		if (agent.serviceAvailability === "ready") {
-			commands.push("stop", "restart");
-		}
-		if (agent.serviceAvailability === "unavailable") {
-			commands.push("restart");
-		}
+		commands.push("stop", "restart");
 	}
 	if (isOwner && agent.managementStatus === "stopped") {
 		commands.push("restart");
