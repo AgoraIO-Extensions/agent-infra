@@ -972,6 +972,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					yield event;
 					if (event.type === "completed") return;
 				}
+				if (driver.isExecutionTerminal(nativeSessionRef, executionId)) return;
 				const waiter = driver.waitForEvent(
 					driver.eventStreamKey(nativeSessionRef, executionId),
 					signal,
@@ -1028,6 +1029,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					started.nativeTurnId,
 				);
 				if (!resolved) return;
+				this.assertJournalOpen(resolved.journal);
 				const appended = this.appendStatusEvent(
 					resolved.session,
 					resolved.journal,
@@ -1085,6 +1087,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				delta.nativeTurnId,
 			);
 			if (!resolved) return;
+			this.assertJournalOpen(resolved.journal);
 			this.appendTextEvent(
 				resolved.session,
 				resolved.journal,
@@ -1170,6 +1173,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return journal;
 	}
 
+	private assertJournalOpen(journal: CodexEventJournal) {
+		if (journal.events.some((event) => event.type === "completed")) {
+			protocolInvalid();
+		}
+	}
+
 	private appendStatusEvent(session: CodexSession, journal: CodexEventJournal) {
 		if (journal.events.some((event) => event.type === "status")) return false;
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
@@ -1253,6 +1262,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private eventStreamKey(nativeSessionRef: string, executionId: string) {
 		return JSON.stringify([nativeSessionRef, executionId]);
+	}
+
+	private isExecutionTerminal(nativeSessionRef: string, executionId: string) {
+		const execution = ownRecordValue(
+			this.session(nativeSessionRef).executions,
+			executionId,
+		);
+		if (!execution) unavailable();
+		return execution.status !== "running";
 	}
 
 	private notifyEventStream(key: string) {

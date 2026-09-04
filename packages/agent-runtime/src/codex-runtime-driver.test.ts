@@ -916,6 +916,82 @@ describe("Codex Runtime Driver", () => {
 		).toEqual({ done: true, value: undefined });
 	});
 
+	it("ends a recovery stream from its terminal cursor", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		await bridge.emitTurnCompleted("completed");
+		const terminal = await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const completed = events.find((event) => event.type === "completed");
+			expect(completed).toBeDefined();
+			return completed;
+		});
+		if (!terminal) throw new Error("expected a terminal event");
+		const abort = new AbortController();
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			terminal.cursor,
+			abort.signal,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		try {
+			expect(
+				await Promise.race([
+					iterator.next(),
+					new Promise((resolve) => {
+						setTimeout(() => resolve("timed out"), 100);
+					}),
+				]),
+			).toEqual({ done: true, value: undefined });
+		} finally {
+			abort.abort();
+			await iterator.next();
+		}
+	});
+
+	it("fails closed when a delta follows a terminal event", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		await iterator.next();
+		const terminal = iterator.next();
+		await bridge.emitTurnCompleted("completed");
+		expect(await terminal).toMatchObject({
+			done: false,
+			value: { type: "completed", payload: { status: "completed" } },
+		});
+		await bridge.emitAgentMessageDelta("late-delta");
+		await vi.waitFor(() => expect(bridge.isClosed()).toBe(true));
+		await expect(
+			driver.execute(
+				submitCommand({
+					operationId: "execution-codex-after-terminal",
+					executionId: "execution-codex-after-terminal",
+					turnId: "turn-codex-after-terminal",
+					nativeSessionRef: accepted.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+	});
+
 	it("persists a terminal Turn notification and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
