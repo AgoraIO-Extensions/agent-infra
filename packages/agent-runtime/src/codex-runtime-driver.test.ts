@@ -108,6 +108,7 @@ class TestCodexBridge {
 	private closed = false;
 	private turnStatus: CodexTurnStatus = "inProgress";
 	private holdTurnsListResponses = false;
+	private holdTurnsListSend = false;
 	private turnsListPages?: TestTurnsListPage[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
@@ -151,6 +152,7 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "thread/turns/list") {
+			if (this.holdTurnsListSend) return new Promise<void>(() => {});
 			if (this.holdTurnsListResponses) {
 				this.heldTurnsListRequestIds.push(id);
 				return;
@@ -198,6 +200,10 @@ class TestCodexBridge {
 
 	holdTurnsList() {
 		this.holdTurnsListResponses = true;
+	}
+
+	holdTurnsListRequestSend() {
+		this.holdTurnsListSend = true;
 	}
 
 	pendingTurnsListCount() {
@@ -451,6 +457,37 @@ describe("Codex Runtime Driver", () => {
 		);
 
 		expect(busy.result).toEqual({ outcome: "busy" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("does not start a second native Turn for concurrent idle-Session submits", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const first = driver.execute(submitCommand());
+		const second = driver.execute(
+			submitCommand({
+				operationId: "execution-codex-concurrent",
+				executionId: "execution-codex-concurrent",
+				turnId: "turn-codex-concurrent",
+			}),
+		);
+		const [firstResult, secondResult] = await Promise.allSettled([
+			first,
+			second,
+		]);
+
+		expect(firstResult).toMatchObject({
+			status: "fulfilled",
+			value: { result: { outcome: "accepted", status: "running" } },
+		});
+		expect(secondResult).toMatchObject({
+			status: "rejected",
+			reason: { code: "RUNTIME_CODEX_UNAVAILABLE" },
+		});
 		expect(
 			bridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(1);
@@ -1183,5 +1220,38 @@ describe("Codex Runtime Driver", () => {
 			expect(failure).toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		}
 		expect(bridge.isClosed()).toBe(true);
+	});
+
+	it("does not leave an unhandled rejection when a request send times out", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.holdTurnsListRequestSend();
+		vi.useFakeTimers();
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown) => unhandled.push(error);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const status = driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const outcome = status.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(await outcome).toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			await Promise.resolve();
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
 	});
 });

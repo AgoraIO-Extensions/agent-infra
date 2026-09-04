@@ -376,6 +376,7 @@ class CodexRpc {
 				reject,
 			});
 		});
+		void response.catch(() => {});
 		const timeoutError = unavailableError();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const deadline = new Promise<never>((_, reject) => {
