@@ -12,8 +12,9 @@ coordinator Goal；不创建 Goal、不修改外部状态、不改变 Git，也�
 
 - **snapshot**：生成 Goal 时冻结的 Issue 集合。
 - **lane**：一个 primary Issue、worktree、branch、subagent 和 PR 的所有权链。
-- **approval-ready**：当前 PR head 的全部 Review thread 已处理，required CI 与自动 Review
-  均成功，没有 blocking review decision，只差人工 Approve。
+- **approval-ready**：当前 PR head 的全部 required checks（包含适用的 Human Validation）均
+  成功，全部 Review conversations 已显式 resolved，没有 blocking review decision，只差人工
+  Approve。
 - **terminal proof**：当前回读已经把每条 lane 归入 Delivered 或 Human-retired。
 
 ## 1. 读取实时事实
@@ -119,8 +120,9 @@ Project items 和 default-branch head。变化或冲突的 lane 进入人工干�
 Open Target 是人工预测，Start 是实际开始。Delivered 或 Human-retired 时，把 lane Project Status
 设为 `Done`，Target 设为实际终止时间。Parent/Map Start 使用有可靠证据的最早 descendant start；
 历史时间不可证且现有 Start 仍在未来时，使用当前 Goal 的实际开始，不编造更早历史，也不因此
-阻塞 lane。全部 required descendants 终止后，从事实重新计算 ancestor Status，并把 Target 设为
-最晚实际终止时间；仍有工作或 retirement 改变依赖路线时保持 ancestor 非终态。每次写入后回读。
+阻塞 lane。Ancestor Project 终态只跟随该 ancestor Issue 的 durable state：Issue 保持 open 时维持
+`In Progress`，以 completed/not-planned 关闭后才设为 `Done`，Target 使用实际关闭时间。Goal 不从
+snapshot 完成情况推断 parent/Map 已完成。每次写入后回读。
 
 ### Scope Control
 
@@ -129,8 +131,9 @@ Snapshot 始终固定。只完成现有 Issue contract 内的工作。正确实�
 
 ### Review 与 Approve
 
-每条 lane 执行仓库 validation 和 current-head Review。处理全部 actionable Review threads，并重跑
-受影响验证，之后才判断 approval-ready。
+每条 lane 执行仓库 validation 和 current-head Review。处理并显式解决全部 Review conversations，
+重跑受影响验证，并确认全部 required current-head checks 与适用的 Human Validation 成功，之后才
+判断 approval-ready。
 
 单个 PR 达到 approval-ready 后，使用 `$wecom` 通知用户本地私有 alias `me`。先 resolve-only；
 每个 `PR + head SHA` 只发送一次，内容包含 Map、Issue、PR、head、已通过 gates 和 Approve 请求，
