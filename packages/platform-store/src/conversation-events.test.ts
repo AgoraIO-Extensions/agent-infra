@@ -1,6 +1,6 @@
 import {
-	createConversationEventUseCaseV1,
 	type ConversationEventUseCaseV1,
+	createConversationEventUseCaseV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -60,13 +60,13 @@ async function seedConversation(): Promise<{
 	return { conversationId, executionId };
 }
 
-function openEvents(
-	eventId: string,
-): {
+function openEvents(eventId: string): {
 	readonly events: ConversationEventUseCaseV1;
 	readonly close: () => Promise<void>;
 } {
-	const transaction = new PostgresConversationEventTransactionV1({ databaseUrl });
+	const transaction = new PostgresConversationEventTransactionV1({
+		databaseUrl,
+	});
 	return {
 		events: createConversationEventUseCaseV1(
 			{ transaction },
@@ -113,7 +113,10 @@ describe("PostgreSQL Conversation event transaction", () => {
 			expect(accepted.event).not.toHaveProperty("runtimeCursor");
 
 			expect(
-				await events.persist({ ...input, deliveryFence: input.deliveryFence - 1 }),
+				await events.persist({
+					...input,
+					deliveryFence: input.deliveryFence - 1,
+				}),
 			).toEqual({ outcome: "replayed", event: accepted.event });
 
 			const [state] = await client`
@@ -153,7 +156,10 @@ describe("PostgreSQL Conversation event transaction", () => {
 		try {
 			const input = eventInput(conversationId, executionId);
 			await expect(
-				events.persist({ ...input, sessionGeneration: input.sessionGeneration - 1 }),
+				events.persist({
+					...input,
+					sessionGeneration: input.sessionGeneration - 1,
+				}),
 			).resolves.toEqual({ outcome: "stale" });
 			await expect(
 				events.persist({ ...input, deliveryFence: input.deliveryFence - 1 }),
@@ -235,8 +241,12 @@ describe("PostgreSQL Conversation event transaction", () => {
 		let firstClosed = false;
 		try {
 			const results = await Promise.all([
-				first.events.persist(eventInput(conversationId, executionId, "adapter_event_1")),
-				second.events.persist(eventInput(conversationId, executionId, "adapter_event_2")),
+				first.events.persist(
+					eventInput(conversationId, executionId, "adapter_event_1"),
+				),
+				second.events.persist(
+					eventInput(conversationId, executionId, "adapter_event_2"),
+				),
 			]);
 			const allocated = results.map((result) => {
 				if (result.outcome !== "accepted") {
@@ -244,7 +254,9 @@ describe("PostgreSQL Conversation event transaction", () => {
 				}
 				return result.event;
 			});
-			expect(allocated.map((event) => event.sequence).toSorted()).toEqual([1, 2]);
+			expect(allocated.map((event) => event.sequence).toSorted()).toEqual([
+				1, 2,
+			]);
 			expect(
 				allocated.map((event) => event.conversationCursor).toSorted(),
 			).toEqual([1, 2]);
