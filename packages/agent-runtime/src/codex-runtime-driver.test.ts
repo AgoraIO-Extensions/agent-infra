@@ -1079,7 +1079,7 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
-	it("replays a terminal event that races an empty live replay", async () => {
+	it("replays a terminal event that races the initial live replay", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -1091,7 +1091,7 @@ describe("Codex Runtime Driver", () => {
 		vi.spyOn(driver, "replayEvents").mockImplementation(async (...args) => {
 			const events = await replay(...args);
 			replays += 1;
-			if (replays === 2) {
+			if (replays === 1) {
 				await bridge.emitTurnCompleted("completed");
 				await vi.waitFor(async () => {
 					const persisted = await replay(...args);
@@ -1116,6 +1116,53 @@ describe("Codex Runtime Driver", () => {
 			done: false,
 			value: { type: "completed", payload: { status: "completed" } },
 		});
+	});
+
+	it("does not yield replayed events after stream abort", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const replay = driver.replayEvents.bind(driver);
+		let replays = 0;
+		let releaseReplay: (() => void) | undefined;
+		vi.spyOn(driver, "replayEvents").mockImplementation(async (...args) => {
+			replays += 1;
+			if (replays === 2) {
+				await new Promise<void>((resolve) => {
+					releaseReplay = resolve;
+				});
+			}
+			return replay(...args);
+		});
+		const abort = new AbortController();
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			undefined,
+			abort.signal,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: { type: "status", payload: { status: "running" } },
+		});
+		const next = iterator.next();
+		await bridge.emitAgentMessageDelta("after-abort");
+		await vi.waitFor(() => expect(releaseReplay).toBeTypeOf("function"));
+		await vi.waitFor(async () => {
+			const events = await replay(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.filter((event) => event.type === "text")).toHaveLength(1);
+		});
+		abort.abort();
+		releaseReplay?.();
+		expect(await next).toEqual({ done: true, value: undefined });
 	});
 
 	it("persists a terminal Turn notification and replays it once", async () => {

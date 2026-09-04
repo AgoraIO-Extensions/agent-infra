@@ -958,30 +958,49 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal?: AbortSignal,
 	): Promise<AsyncIterable<RuntimeEventV1>> {
 		const driver = this;
+		const key = this.eventStreamKey(nativeSessionRef, executionId);
+		const initialWaiter = this.waitForEvent(key, signal);
+		let initialEvents: RuntimeEventV1[];
+		try {
+			initialEvents = await this.replayEvents(
+				nativeSessionRef,
+				executionId,
+				afterCursor,
+			);
+		} catch (error) {
+			initialWaiter.cancel();
+			throw error;
+		}
 		return (async function* () {
 			let cursor = afterCursor;
+			let pending = initialEvents;
+			let waiter = initialWaiter;
+			let hasInitialReplay = true;
 			while (!signal?.aborted) {
-				const waiter = driver.waitForEvent(
-					driver.eventStreamKey(nativeSessionRef, executionId),
-					signal,
-				);
+				if (!hasInitialReplay) {
+					waiter = driver.waitForEvent(key, signal);
+				}
 				try {
-					const pending = await driver.replayEvents(
-						nativeSessionRef,
-						executionId,
-						cursor,
-					);
+					if (!hasInitialReplay) {
+						pending = await driver.replayEvents(
+							nativeSessionRef,
+							executionId,
+							cursor,
+						);
+					}
+					hasInitialReplay = false;
 					if (pending.length > 0) {
 						for (const event of pending) {
+							if (signal?.aborted) return;
 							cursor = event.cursor;
 							yield event;
 							if (event.type === "completed") return;
 						}
-						continue;
+						pending = [];
 					}
 					if (
 						driver.isExecutionTerminal(nativeSessionRef, executionId) &&
-						!waiter.wasWoken()
+						!waiter.wasNotified()
 					) {
 						return;
 					}
@@ -1272,26 +1291,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private waitForEvent(key: string, signal?: AbortSignal) {
-		let wake: () => void = () => undefined;
-		let wasWoken = false;
+		let wakeForEvent: () => void = () => undefined;
+		let notified = false;
+		let abort: () => void = () => undefined;
 		const promise = new Promise<void>((resolve) => {
-			wake = () => {
-				wasWoken = true;
+			const settle = () => {
 				cleanup();
 				resolve();
 			};
+			wakeForEvent = () => {
+				notified = true;
+				settle();
+			};
+			abort = settle;
 		});
 		const waiters = this.eventWaiters.get(key) ?? new Set<() => void>();
 		this.eventWaiters.set(key, waiters);
-		waiters.add(wake);
+		waiters.add(wakeForEvent);
 		const cleanup = () => {
-			waiters.delete(wake);
+			waiters.delete(wakeForEvent);
 			if (waiters.size === 0) this.eventWaiters.delete(key);
-			signal?.removeEventListener("abort", wake);
+			signal?.removeEventListener("abort", abort);
 		};
-		signal?.addEventListener("abort", wake, { once: true });
-		if (signal?.aborted) wake();
-		return { promise, cancel: cleanup, wasWoken: () => wasWoken };
+		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) abort();
+		return { promise, cancel: cleanup, wasNotified: () => notified };
 	}
 
 	private async recoverEventHistory(

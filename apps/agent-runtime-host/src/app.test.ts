@@ -223,6 +223,45 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		expect(stream).not.toMatch(/native|vendor|stdio|protocol/i);
 	});
 
+	it("returns a redacted failure before opening SSE when initial recovery fails", async () => {
+		const { app, driver } = await setup();
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		Object.assign(driver, {
+			subscribeEvents: async () => {
+				throw new RuntimeHostError(
+					"UPSTREAM_RECOVERY_ERROR",
+					"native recovery detail",
+					503,
+				);
+			},
+		});
+
+		const response = await app.request("/internal/runtime/v1/events/stream", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...body,
+				requestId: "request-http-initial-stream-recovery",
+				hostSessionRef: submitted.hostSessionRef,
+				input: undefined,
+			}),
+		});
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("content-type")).toContain("application/json");
+		const error = await response.json();
+		expect(error).toMatchObject({ code: "RUNTIME_DRIVER_INVALID" });
+		expect(JSON.stringify(error)).not.toContain("native recovery detail");
+	});
+
 	it("keeps a live SSE subscription open after the confirmed cursor", async () => {
 		const { app } = await setup();
 		const body = submitBody();
