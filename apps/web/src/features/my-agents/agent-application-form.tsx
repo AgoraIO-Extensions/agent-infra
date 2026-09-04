@@ -199,6 +199,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		sourceKind,
 		configureModels,
 	);
+	const requiresReplacementCredential =
+		props.mode === "create" ||
+		(application?.source.kind !== "standard" && sourceKind === "standard");
 
 	const submit = () => {
 		const draft = {
@@ -286,8 +289,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							onChange={(event) => {
 								const kind = event.target.value as AgentApplicationSourceKind;
 								setSourceKind(kind);
-								if (kind === "standard" && models.length === 0) {
-									setModels([blankModel()]);
+								if (kind === "standard") {
+									if (models.length === 0) setModels([blankModel()]);
+									if (sourceKind !== "standard") setConfigureModels(true);
 								}
 								if (kind !== "standard") setConfigureModels(false);
 							}}
@@ -570,7 +574,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									{
 										key: "credentialValue",
 										label: "Credential value",
-										required: props.mode === "create",
+										required: requiresReplacementCredential,
 										type: "password",
 									},
 								]}

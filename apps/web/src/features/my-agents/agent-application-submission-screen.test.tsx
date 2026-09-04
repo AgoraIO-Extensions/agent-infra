@@ -27,6 +27,9 @@ describe("AgentApplicationSubmissionScreen", () => {
 				.getByRole("link", { name: "Open application" })
 				.getAttribute("href"),
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
+		expect(
+			screen.queryByRole("button", { name: "Create application" }),
+		).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 

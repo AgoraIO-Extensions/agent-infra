@@ -53,12 +53,14 @@ export function AgentApplicationSubmissionScreen(
 					{heading}
 				</h1>
 			</header>
-			<AgentApplicationForm
-				key={
-					props.mode === "update" ? props.application.applicationId : "create"
-				}
-				{...props}
-			/>
+			{props.result ? null : (
+				<AgentApplicationForm
+					key={
+						props.mode === "update" ? props.application.applicationId : "create"
+					}
+					{...props}
+				/>
+			)}
 			{props.result ? (
 				<p className="font-medium text-slate-950 text-sm" role="status">
 					Application submitted:{" "}
