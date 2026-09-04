@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import {
+	type ConversationEventStateV1,
+	type ConversationEventTransactionPortV1,
+	createConversationEventUseCaseV1,
+} from "./conversation-events.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 
 const event = {
@@ -13,6 +18,24 @@ const event = {
 	occurredAt: "2026-09-04T00:00:00.000Z",
 	event: { type: "text.delta" as const, text: "Hello" },
 };
+
+function activeState(): ConversationEventStateV1 {
+	return {
+		conversation: {
+			conversationId: event.conversationId,
+			sessionGeneration: event.sessionGeneration,
+			lastConversationCursor: 0,
+		},
+		execution: {
+			executionId: event.executionId,
+			conversationId: event.conversationId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+			lastSequence: 0,
+		},
+		existingEvent: undefined,
+	};
+}
 
 describe("Conversation event ingestion", () => {
 	it("allocates once and replays the original event before stale-fence classification", async () => {
@@ -158,5 +181,73 @@ describe("Conversation event ingestion", () => {
 			}),
 		).rejects.toMatchObject({ code: "unavailable" });
 		expect(events.snapshot().lastConversationCursor).toBe(1);
+	});
+
+	it("fails closed when a transaction returns a forged event decision", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (_request, decide) => {
+				decide(activeState());
+				return {
+					outcome: "accepted",
+					event: {
+						schemaVersion: 1,
+						eventId: "event_forged",
+						conversationId: "conversation_other",
+						executionId: event.executionId,
+						sequence: 1,
+						conversationCursor: 1,
+						occurredAt: event.occurredAt,
+						event: event.event,
+					},
+				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1(
+			{ transaction },
+			{ newId: () => "event_1" },
+		);
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("fails closed when a transaction returns a raw replay event", async () => {
+		const persisted = {
+			schemaVersion: 1 as const,
+			eventId: "event_replayed",
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sequence: 1,
+			conversationCursor: 1,
+			occurredAt: event.occurredAt,
+			event: event.event,
+		};
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				decide({
+					...activeState(),
+					existingEvent: {
+						event: persisted,
+						eventDigest: request.eventDigest,
+					},
+				});
+				return {
+					outcome: "replayed",
+					event: {
+						...persisted,
+						event: {
+							...persisted.event,
+							nativeSessionId: "private_runtime_session",
+						},
+					},
+				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
 	});
 });

@@ -528,13 +528,53 @@ function nextCounter(value: number): number {
 	return value + 1;
 }
 
+function isWritePlan(
+	value: ConversationEventWritePlanV1 | ConversationEventDecisionV1,
+): value is ConversationEventWritePlanV1 {
+	return !Object.hasOwn(value, "outcome");
+}
+
+function samePersistedEvent(
+	left: PersistedConversationEventV1,
+	right: PersistedConversationEventV1,
+) {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function normalizeDecision(
-	input: ConversationEventDecisionV1,
+	input: unknown,
+	expected:
+		| ConversationEventWritePlanV1
+		| ConversationEventDecisionV1
+		| undefined,
 ): ConversationEventDecisionV1 {
-	if (input.outcome === "accepted" || input.outcome === "replayed")
-		return input;
-	if (input.outcome === "stale") return input;
-	return unavailable();
+	try {
+		if (!expected) return unavailable();
+		const values = snapshotObject(input, ["outcome"], ["event"]);
+		if (isWritePlan(expected)) {
+			if (values.outcome !== "accepted" || values.event === undefined) {
+				return unavailable();
+			}
+			const event = parsePersistedEvent(values.event);
+			if (!samePersistedEvent(event, expected.event)) return unavailable();
+			return { outcome: "accepted", event };
+		}
+		if (expected.outcome === "stale") {
+			if (values.outcome !== "stale" || values.event !== undefined) {
+				return unavailable();
+			}
+			return { outcome: "stale" };
+		}
+		if (expected.outcome !== "replayed" || values.outcome !== "replayed") {
+			return unavailable();
+		}
+		if (values.event === undefined) return unavailable();
+		const event = parsePersistedEvent(values.event);
+		if (!samePersistedEvent(event, expected.event)) return unavailable();
+		return { outcome: "replayed", event };
+	} catch {
+		return unavailable();
+	}
 }
 
 export function createConversationEventUseCaseV1(
@@ -547,11 +587,16 @@ export function createConversationEventUseCaseV1(
 			const command = parseCommand(commandInput);
 			const digest = eventDigest(command);
 			try {
-				return normalizeDecision(
-					await dependencies.transaction.persistEvent(
-						{ command, eventDigest: digest },
-						(stateInput) => {
-							const state = parseState(stateInput);
+				let expected:
+					| ConversationEventWritePlanV1
+					| ConversationEventDecisionV1
+					| undefined;
+				const decision = await dependencies.transaction.persistEvent(
+					{ command, eventDigest: digest },
+					(stateInput) => {
+						if (expected !== undefined) return unavailable();
+						const state = parseState(stateInput);
+						const next = (() => {
 							if (state.existingEvent) {
 								if (
 									state.existingEvent.eventDigest !== digest ||
@@ -562,7 +607,7 @@ export function createConversationEventUseCaseV1(
 									return unavailable();
 								}
 								return {
-									outcome: "replayed",
+									outcome: "replayed" as const,
 									event: state.existingEvent.event,
 								};
 							}
@@ -578,7 +623,7 @@ export function createConversationEventUseCaseV1(
 								execution.sessionGeneration !== command.sessionGeneration ||
 								execution.deliveryFence !== command.deliveryFence
 							) {
-								return { outcome: "stale" };
+								return { outcome: "stale" as const };
 							}
 							const event: PersistedConversationEventV1 = {
 								schemaVersion: 1,
@@ -593,7 +638,7 @@ export function createConversationEventUseCaseV1(
 								event: command.event,
 							};
 							return {
-								schemaVersion: 1,
+								schemaVersion: 1 as const,
 								event,
 								adapterEventKey: command.adapterEventKey,
 								eventDigest: digest,
@@ -601,9 +646,12 @@ export function createConversationEventUseCaseV1(
 								sessionGeneration: command.sessionGeneration,
 								deliveryFence: command.deliveryFence,
 							};
-						},
-					),
+						})();
+						expected = next;
+						return next;
+					},
 				);
+				return normalizeDecision(decision, expected);
 			} catch (error) {
 				if (error instanceof ConversationEventError) throw error;
 				return unavailable();
