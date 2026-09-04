@@ -42,6 +42,12 @@ const originalMcpConfiguration = process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
 const originalConnectionCredential =
 	process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
 const childPids: number[] = [];
+const isolatedEnvironmentKeys = [
+	"CODEX_HOME",
+	"HOME",
+	"PATH",
+	...(process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : []),
+].sort();
 
 async function installFakeCodex(mode: string) {
 	const directory = await mkdtemp(
@@ -67,6 +73,7 @@ if (capturePath) {
     executable: process.argv[1],
     pid: process.pid,
     cwd: process.cwd(),
+    environmentKeys: Object.keys(process.env).sort(),
     environment: {
       codexHome: process.env.CODEX_HOME,
       home: process.env.HOME,
@@ -156,6 +163,7 @@ async function readCaptures(path: string, minimum = 1) {
 							executable: string;
 							pid: number;
 							cwd: string;
+							environmentKeys: string[];
 							environment: {
 								codexHome?: string;
 								home?: string;
@@ -238,6 +246,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		try {
 			for (const capture of captures) {
 				expect(capture.cwd).not.toBe(process.cwd());
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
 				expect(capture.environment.codexHome).toBeDefined();
 				expect(capture.environment.home).toBeDefined();
 				expect(await realpath(capture.environment.codexHome ?? "")).toBe(
