@@ -125,6 +125,21 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(screen.getByRole("status").textContent).toBe(
 			"Decision submitted for Release assistant request: Creating.",
 		);
+
+		rerender(
+			<AdminAgentApplicationsScreen
+				decisionResult={approvedApplication}
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "unavailable", retryable: true }}
+			/>,
+		);
+		expect(screen.getByRole("status").textContent).toBe(
+			"Decision submitted for Release assistant request: Creating.",
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Please try again shortly.",
+		);
 	});
 
 	it("distinguishes retryable and permission-lost decision failures", () => {
