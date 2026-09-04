@@ -469,6 +469,7 @@ class CodexRpc {
 
 export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly resumedSessions = new Set<string>();
+	private readonly inFlightSessionResumes = new Map<string, Promise<void>>();
 	private readonly inFlightExecutions = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecordV1>
@@ -937,6 +938,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async resumeSession(nativeSessionRef: string) {
 		if (this.resumedSessions.has(nativeSessionRef)) return;
+		const inFlight = this.inFlightSessionResumes.get(nativeSessionRef);
+		if (inFlight) return inFlight;
+		const resume = this.resumeSessionOnce(nativeSessionRef);
+		this.inFlightSessionResumes.set(nativeSessionRef, resume);
+		try {
+			await resume;
+		} finally {
+			if (this.inFlightSessionResumes.get(nativeSessionRef) === resume) {
+				this.inFlightSessionResumes.delete(nativeSessionRef);
+			}
+		}
+	}
+
+	private async resumeSessionOnce(nativeSessionRef: string) {
 		const session = this.session(nativeSessionRef);
 		if (!session.threadId) unavailable();
 		await this.rpc.request(

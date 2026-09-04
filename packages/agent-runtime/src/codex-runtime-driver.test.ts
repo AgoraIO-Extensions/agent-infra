@@ -447,6 +447,42 @@ describe("Codex Runtime Driver", () => {
 		).toEqual({ outcome: "accepted", status: "running" });
 	});
 
+	it("coalesces concurrent persisted Session resumes", async () => {
+		const directory = await runtimeDirectory();
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			join(directory, "driver.json"),
+			firstBridge,
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const firstResult = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const resumedDriver = await openDriver(
+			join(directory, "driver.json"),
+			resumedBridge,
+		);
+		drivers.push(resumedDriver);
+
+		await expect(
+			Promise.all([
+				resumedDriver.getStatus(
+					firstResult.nativeSessionRef,
+					command.executionId,
+				),
+				resumedDriver.getStatus(
+					firstResult.nativeSessionRef,
+					command.executionId,
+				),
+			]),
+		).resolves.toEqual(["running", "running"]);
+		expect(
+			resumedBridge.requests.filter(({ method }) => method === "thread/resume"),
+		).toHaveLength(1);
+	});
+
 	it("keeps duplicate and busy submit outcomes from starting another native Turn", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
