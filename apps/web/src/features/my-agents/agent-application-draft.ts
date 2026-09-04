@@ -42,6 +42,7 @@ export type AgentApplicationFormDraft = {
 	name: string;
 	organizationAvailabilityIds: string;
 	secrets: readonly AgentApplicationEnvironmentDraft[];
+	source?: AgentApplicationCreateRequestV1Writable["source"];
 	sourceKind: AgentApplicationSourceKind;
 	templateId: string;
 	userAvailabilityIds: string;
@@ -76,7 +77,8 @@ function requestBody(
 	draft: AgentApplicationFormDraft,
 ) {
 	const source: AgentApplicationCreateRequestV1Writable["source"] =
-		draft.sourceKind === "standard"
+		draft.source ??
+		(draft.sourceKind === "standard"
 			? { kind: "standard", templateId: draft.templateId.trim() }
 			: draft.sourceKind === "custom-platform-adapter"
 				? {
@@ -89,7 +91,7 @@ function requestBody(
 						imageReference: draft.imageReference.trim(),
 						interactionMode: "self-managed",
 						identityResponsibility: draft.identityResponsibility,
-					};
+					});
 	const modelConfiguration = showsModelConfiguration(
 		mode,
 		draft.sourceKind,
