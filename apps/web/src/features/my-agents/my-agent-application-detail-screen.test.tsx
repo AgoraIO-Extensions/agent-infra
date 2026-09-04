@@ -30,6 +30,11 @@ describe("MyAgentApplicationDetailScreen", () => {
 			screen.getByRole("button", { name: "Withdraw application" }),
 		);
 		expect(onWithdraw).toHaveBeenCalledOnce();
+		expect(
+			screen
+				.getByRole("link", { name: "Edit application" })
+				.getAttribute("href"),
+		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25/edit");
 		expect(screen.queryByRole("link", { name: "Open Agent" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 		expect(screen.queryByText("Owner settings")).toBeNull();
@@ -65,7 +70,12 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(
 			screen.queryByRole("button", { name: "Withdraw application" }),
 		).toBeNull();
-		expect(screen.queryByText(/retry|owner settings/i)).toBeNull();
+		expect(
+			screen
+				.getByRole("link", { name: "Resubmit application" })
+				.getAttribute("href"),
+		).toBe("/my-agents/application-pilot-rejected/edit");
+		expect(screen.queryByText(/owner settings/i)).toBeNull();
 	});
 
 	it("renders an approved decision history without inventing a rejection reason", async () => {

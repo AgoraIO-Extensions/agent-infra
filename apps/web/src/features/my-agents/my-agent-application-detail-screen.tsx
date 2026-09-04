@@ -47,6 +47,12 @@ export function MyAgentApplicationDetailScreen({
 	}
 
 	const { application } = state;
+	const editLabel =
+		application.status === "pending_approval"
+			? "Edit application"
+			: application.status === "rejected"
+				? "Resubmit application"
+				: undefined;
 	return (
 		<section
 			aria-labelledby="my-agent-application-detail-heading"
@@ -120,6 +126,15 @@ export function MyAgentApplicationDetailScreen({
 						to="/agents/$agentId"
 					>
 						Open Agent
+					</Link>
+				) : null}
+				{editLabel ? (
+					<Link
+						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						params={{ applicationId: application.applicationId }}
+						to="/my-agents/$applicationId/edit"
+					>
+						{editLabel}
 					</Link>
 				) : null}
 				{application.status === "pending_approval" ? (

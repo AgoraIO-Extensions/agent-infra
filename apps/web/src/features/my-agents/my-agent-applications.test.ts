@@ -7,9 +7,15 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createClient } from "../../pilot/generated/client/index.js";
+import type {
+	AgentApplicationCreateRequestV1Writable,
+	AgentApplicationUpdateRequestV1Writable,
+} from "../../pilot/generated/types.gen.js";
 import {
+	createMyAgentApplication,
 	loadMyAgentApplication,
 	loadMyAgentApplications,
+	updateMyAgentApplication,
 	withdrawMyAgentApplication,
 } from "./my-agent-applications.js";
 
@@ -63,7 +69,11 @@ const withdrawnApplication = AgentApplicationProjectionV1Schema.parse({
 
 type ApplicationScenario = Pick<
 	PilotAgentMockServerScenarioV1,
-	"listAgentApplications" | "getAgentApplication" | "withdrawAgentApplication"
+	| "createAgentApplication"
+	| "getAgentApplication"
+	| "listAgentApplications"
+	| "updateAgentApplication"
+	| "withdrawAgentApplication"
 >;
 
 function createApplicationServer(scenario: ApplicationScenario) {
@@ -87,6 +97,95 @@ function createApplicationClient(
 }
 
 describe("My Agents generated-client consumer", () => {
+	it("submits create and update commands through generated writable operations", async () => {
+		const updatedApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			name: "Updated release assistant request",
+		});
+		const server = createApplicationServer({
+			createAgentApplication: { status: 201, body: pendingApplication },
+			updateAgentApplication: { status: 200, body: updatedApplication },
+		});
+		const client = createApplicationClient(server);
+		const createBody = {
+			schemaVersion: 1,
+			name: pendingApplication.name,
+			description: pendingApplication.description,
+			source: pendingApplication.source,
+			coOwnerIds: [],
+			availability: [],
+			actions: [],
+			environment: [],
+			secrets: [],
+		} satisfies AgentApplicationCreateRequestV1Writable;
+		const { secrets: _secrets, ...updateBody } = createBody;
+
+		await expect(
+			createMyAgentApplication(createBody, "application-create-1", client),
+		).resolves.toEqual(pendingApplication);
+		await expect(
+			updateMyAgentApplication(
+				pendingApplication.applicationId,
+				updateBody satisfies AgentApplicationUpdateRequestV1Writable,
+				"application-update-1",
+				client,
+			),
+		).resolves.toEqual(updatedApplication);
+		expect(
+			server.requests.map((request) => [request.method, request.url]),
+		).toEqual([
+			["POST", "https://platform.example.test/api/v1/agent-applications"],
+			[
+				"PUT",
+				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+			],
+		]);
+		expect(server.requests[0]?.headers.get("Idempotency-Key")).toBe(
+			"application-create-1",
+		);
+		expect(server.requests[1]?.headers.get("Idempotency-Key")).toBe(
+			"application-update-1",
+		);
+		await expect(server.requests[0]?.clone().json()).resolves.toEqual(
+			createBody,
+		);
+		await expect(server.requests[1]?.clone().json()).resolves.toEqual(
+			updateBody,
+		);
+	});
+
+	it("fails closed when an update response belongs to another application", async () => {
+		const server = createApplicationServer({
+			updateAgentApplication: {
+				status: 200,
+				body: {
+					...pendingApplication,
+					applicationId: "application-other",
+				},
+			},
+		});
+		const { secrets: _secrets, ...updateBody } = {
+			schemaVersion: 1,
+			name: pendingApplication.name,
+			description: pendingApplication.description,
+			source: pendingApplication.source,
+			coOwnerIds: [],
+			availability: [],
+			actions: [],
+			environment: [],
+			secrets: [],
+		} satisfies AgentApplicationCreateRequestV1Writable;
+
+		await expect(
+			updateMyAgentApplication(
+				pendingApplication.applicationId,
+				updateBody satisfies AgentApplicationUpdateRequestV1Writable,
+				"application-update-cross-subject",
+				createApplicationClient(server),
+			),
+		).rejects.toMatchObject({ retryable: false });
+	});
+
 	it("uses schema-validated Pilot responses for current applicant list, detail, and withdrawal", async () => {
 		const server = createApplicationServer({
 			listAgentApplications: {
