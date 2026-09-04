@@ -447,6 +447,25 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
+	it("rejects a submit whose operation and Execution identities differ", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+
+		await expect(
+			driver.execute(
+				submitCommand({ operationId: "operation-codex-not-an-execution" }),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_STATE_INVALID" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(0);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+	});
+
 	it("rejects a duplicate native thread response across Sessions", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -710,6 +729,24 @@ describe("Codex Runtime Driver", () => {
 				)
 			).result,
 		).toEqual({ outcome: "accepted", status: "running" });
+	});
+
+	it("returns a persisted terminal status when native Turn history is unavailable", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		bridge.setTurnStatus("completed");
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		bridge.setTurnsListPages([{ data: [], nextCursor: null }]);
+
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
 	});
 
 	it("paginates to the requested historical native Turn status", async () => {

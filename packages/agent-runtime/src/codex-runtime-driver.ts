@@ -248,28 +248,30 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	}
 	for (const [nativeSessionRef, session] of Object.entries(sessions)) {
 		for (const [executionId, execution] of Object.entries(session.executions)) {
-			const matchingOperations = Object.values(operations).filter(
-				(operation) => {
-					const record = operation.record;
-					return (
-						operation.state === "resolved" &&
-						operation.nativeSessionRef === nativeSessionRef &&
-						record?.nativeSessionRef === nativeSessionRef &&
-						record.agentId === session.agentId &&
-						record.conversationId === session.conversationId &&
-						record.sessionGeneration === session.sessionGeneration &&
-						record.kind === "submit-turn" &&
-						record.operationId === executionId &&
-						record.result.outcome === "accepted" &&
-						record.result.status === execution.status
-					);
-				},
-			);
-			if (matchingOperations.length !== 1) stateInvalid();
+			const operation =
+				operations[
+					operationKey({
+						agentId: session.agentId,
+						conversationId: session.conversationId,
+						sessionGeneration: session.sessionGeneration,
+						kind: "submit-turn",
+						operationId: executionId,
+					})
+				];
+			const record = operation?.record;
+			if (
+				operation?.state !== "resolved" ||
+				operation.nativeSessionRef !== nativeSessionRef ||
+				!record ||
+				record.result.outcome !== "accepted" ||
+				record.result.status !== execution.status
+			) {
+				stateInvalid();
+			}
 		}
-		const operationKey = session.acceptanceUncertainOperationKey;
-		if (!operationKey) continue;
-		const operation = operations[operationKey];
+		const uncertainOperationKey = session.acceptanceUncertainOperationKey;
+		if (!uncertainOperationKey) continue;
+		const operation = operations[uncertainOperationKey];
 		if (
 			operation?.state !== "prepared" ||
 			operation.nativeSessionRef !== nativeSessionRef
@@ -503,6 +505,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) {
 			unavailable();
 		}
+		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
 		const prepared = await this.prepare(command);
@@ -573,10 +576,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
-		await this.resumeSession(nativeSessionRef);
 		const session = this.session(nativeSessionRef);
 		const execution = session.executions[executionId];
 		if (!execution || !session.threadId) unavailable();
+		if (execution.status !== "running") return execution.status;
+		await this.resumeSession(nativeSessionRef);
 		const status = await this.readNativeTurnStatus(
 			session.threadId,
 			execution.nativeTurnId,
@@ -687,12 +691,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (!session || !execution || execution.nativeTurnId !== nativeTurnId) {
 				stateInvalid();
 			}
-			const operation = Object.values(state.operations).find(
-				(candidate) =>
-					candidate.state === "resolved" &&
-					candidate.nativeSessionRef === nativeSessionRef &&
-					candidate.record?.operationId === executionId,
-			);
+			const operation =
+				state.operations[
+					operationKey({
+						agentId: session.agentId,
+						conversationId: session.conversationId,
+						sessionGeneration: session.sessionGeneration,
+						kind: "submit-turn",
+						operationId: executionId,
+					})
+				];
 			if (!operation?.record) stateInvalid();
 			if (operation.record.result.outcome !== "accepted") stateInvalid();
 			if (execution.status !== "running") return execution.status;
