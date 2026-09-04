@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:crypto", () => ({
 	createHash: () => {
@@ -29,10 +29,19 @@ vi.mock("node:crypto", () => ({
 	},
 }));
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const filesystem = await importOriginal<typeof import("node:fs/promises")>();
+	return { ...filesystem, access: vi.fn(filesystem.access) };
+});
+
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
 } from "./codex-app-server-bridge.js";
+
+const originalAccess = (
+	await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+).access;
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
@@ -41,6 +50,7 @@ const originalCodexHome = process.env.CODEX_HOME;
 const originalMcpConfiguration = process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
 const originalConnectionCredential =
 	process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
+const originalPlatform = process.platform;
 const childPids: number[] = [];
 const isolatedEnvironmentKeys = [
 	"CODEX_HOME",
@@ -204,6 +214,7 @@ async function expectPathRemoved(path: string) {
 }
 
 afterEach(async () => {
+	vi.mocked(access).mockImplementation(originalAccess);
 	for (const pid of childPids.splice(0)) {
 		try {
 			process.kill(pid, "SIGKILL");
@@ -232,9 +243,59 @@ afterEach(async () => {
 			.splice(0)
 			.map((directory) => rm(directory, { recursive: true })),
 	);
+	Object.defineProperty(process, "platform", { value: originalPlatform });
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	beforeEach(() => {
+		Object.defineProperty(process, "platform", { value: "linux" });
+	});
+
+	it("fails closed before spawning on macOS because managed preferences cannot be isolated", async () => {
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		const { capturePath } = await installFakeCodex("echo");
+
+		await expect(CodexAppServerBridge.open(options())).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+		});
+		await expect(readFile(capturePath, "utf8")).rejects.toThrow();
+	});
+
+	it.each([
+		"/etc/codex/config.toml",
+		"/etc/codex/managed_config.toml",
+		"/etc/codex/requirements.toml",
+	])(
+		"fails closed before spawning when host configuration exists at %s",
+		async (path) => {
+			const { capturePath } = await installFakeCodex("echo");
+			vi.mocked(access).mockImplementation(async (candidate, mode) => {
+				if (candidate === path && mode === 0) return;
+				return originalAccess(candidate, mode);
+			});
+
+			await expect(CodexAppServerBridge.open(options())).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			await expect(readFile(capturePath, "utf8")).rejects.toThrow();
+		},
+	);
+
+	it("fails closed before spawning when host configuration cannot be inspected", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		vi.mocked(access).mockImplementation(async (candidate, mode) => {
+			if (candidate === "/etc/codex/config.toml" && mode === 0) {
+				throw Object.assign(new Error("unavailable"), { code: "EACCES" });
+			}
+			return originalAccess(candidate, mode);
+		});
+
+		await expect(CodexAppServerBridge.open(options())).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+		});
+		await expect(readFile(capturePath, "utf8")).rejects.toThrow();
+	});
+
 	it("starts every Codex subprocess with an isolated deployment-owned tool configuration", async () => {
 		process.env.CODEX_HOME = "/parent-codex-home";
 		process.env.HOME = "/parent-home";
