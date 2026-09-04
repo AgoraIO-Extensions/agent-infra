@@ -118,7 +118,7 @@ function configReadResult(
 		origins: {
 			model: { name: { type: "sessionFlags" }, version: "1" },
 			model_reasoning_effort: { name: { type: "sessionFlags" }, version: "1" },
-			"features.plugins.enabled": {
+			"features.plugins": {
 				name: { type: "sessionFlags" },
 				version: "1",
 			},
@@ -449,6 +449,16 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
+	it("accepts the scalar features.plugins session flag origin", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+
+		expect(bridge.isClosed()).toBe(false);
+	});
+
 	it.each([
 		[
 			"MCP server",
@@ -524,11 +534,7 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-	it.each([
-		"model",
-		"model_reasoning_effort",
-		"features.plugins.enabled",
-	] as const)(
+	it.each(["model", "model_reasoning_effort", "features.plugins"] as const)(
 		"fails closed when the required %s configuration origin is absent",
 		async (originKey) => {
 			const directory = await runtimeDirectory();
@@ -546,11 +552,7 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-	it.each([
-		"model",
-		"model_reasoning_effort",
-		"features.plugins.enabled",
-	] as const)(
+	it.each(["model", "model_reasoning_effort", "features.plugins"] as const)(
 		"fails closed when the required %s configuration origin is not a session flag",
 		async (originKey) => {
 			const directory = await runtimeDirectory();

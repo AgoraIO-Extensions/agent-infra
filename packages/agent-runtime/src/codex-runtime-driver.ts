@@ -96,7 +96,7 @@ const isolatedConfigurationKeys = [
 const requiredConfigurationOriginKeys = [
 	"model",
 	"model_reasoning_effort",
-	"features.plugins.enabled",
+	"features.plugins",
 ] as const;
 
 const persistedTurnStatuses = [
