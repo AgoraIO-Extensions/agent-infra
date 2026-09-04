@@ -1,0 +1,5 @@
+interface:
+  display_name: "Generate Goal with Roadmap"
+  short_description: "Generate one bounded Goal from live Roadmap state"
+policy:
+  allow_implicit_invocation: false

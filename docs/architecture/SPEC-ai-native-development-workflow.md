@@ -36,6 +36,10 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 Skill 调用轨迹；受保护路径、CI、Review thread、CODEOWNER Approve、人工验证和分支保护继续从
 外层校验交付结果与安全边界。
 
+需要为本地受监督的并行工作生成有界 Goal 时，人工可以显式调用仓库级
+[`gen-goal-with-roadmap`](../../.agents/skills/gen-goal-with-roadmap/SKILL.md)。该 Skill 只生成文本；
+Issue、依赖、PR、Review、合并和 Project 的权威不变，非 Goal 交付不需要调用。
+
 ## 3. 权威依据
 
 开发工作按以下顺序确定依据：
