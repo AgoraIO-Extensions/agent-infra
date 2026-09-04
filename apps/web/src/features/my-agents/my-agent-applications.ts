@@ -38,6 +38,29 @@ export type MyAgentApplicationState =
 	| { kind: "ready"; application: AgentApplicationProjectionV1 }
 	| UnavailableState;
 
+export type AgentApplicationEditAction = "edit" | "resubmit";
+
+const agentApplicationEditActionByStatus: Partial<
+	Record<AgentApplicationProjectionV1["status"], AgentApplicationEditAction>
+> = {
+	pending_approval: "edit",
+	rejected: "resubmit",
+};
+
+export const agentApplicationEditActionLabels: Record<
+	AgentApplicationEditAction,
+	string
+> = {
+	edit: "Edit application",
+	resubmit: "Resubmit application",
+};
+
+export function getAgentApplicationEditAction(
+	application: AgentApplicationProjectionV1,
+) {
+	return agentApplicationEditActionByStatus[application.status];
+}
+
 function requestError(retryable: boolean) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
 		retryable,

@@ -8,7 +8,7 @@ import { pendingApplication } from "./test-fixtures.js";
 afterEach(cleanup);
 
 describe("AgentApplicationForm", () => {
-	it("submits a schema-derived create request from employee-entered fields", () => {
+	it("requires model configuration for a standard-template application", () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -27,19 +27,13 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Standard template ID"), {
 			target: { value: "codex" },
 		});
+		expect(screen.getByLabelText("Model option ID")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
-		expect(onSubmit).toHaveBeenCalledWith({
-			schemaVersion: 1,
-			name: "Release assistant",
-			description: "Helps the release team",
-			source: { kind: "standard", templateId: "codex" },
-			coOwnerIds: [],
-			availability: [],
-			actions: [],
-			environment: [],
-			secrets: [],
-		});
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByRole("alert").textContent).toContain(
+			"Complete the default and every configured model option.",
+		);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
@@ -58,6 +52,7 @@ describe("AgentApplicationForm", () => {
 		});
 		render(
 			<AgentApplicationForm
+				action="resubmit"
 				application={rejectedApplication}
 				mode="update"
 				onSubmit={onSubmit}
@@ -179,7 +174,6 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Secret value"), {
 			target: { value: "never-echo" },
 		});
-		fireEvent.click(screen.getByLabelText("Configure models"));
 		fireEvent.change(screen.getByLabelText("Model option ID"), {
 			target: { value: "model-primary" },
 		});
@@ -281,6 +275,7 @@ describe("AgentApplicationForm", () => {
 		});
 		const { rerender } = render(
 			<AgentApplicationForm
+				action="resubmit"
 				application={first}
 				key={first.applicationId}
 				mode="update"
@@ -294,6 +289,7 @@ describe("AgentApplicationForm", () => {
 
 		rerender(
 			<AgentApplicationForm
+				action="resubmit"
 				application={second}
 				key={second.applicationId}
 				mode="update"

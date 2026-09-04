@@ -7,6 +7,10 @@ import type {
 } from "../../pilot/generated/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
+import {
+	type AgentApplicationEditAction,
+	agentApplicationEditActionLabels,
+} from "./my-agent-applications.js";
 
 type RequestError = Error & { readonly retryable?: boolean };
 
@@ -19,6 +23,7 @@ type AgentApplicationSubmissionScreenProps =
 			submitting: boolean;
 	  }
 	| {
+			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV1;
 			error?: RequestError | null;
 			mode: "update";
@@ -33,9 +38,7 @@ export function AgentApplicationSubmissionScreen(
 	const heading =
 		props.mode === "create"
 			? "Create application"
-			: props.application.status === "rejected"
-				? "Resubmit application"
-				: "Edit application";
+			: agentApplicationEditActionLabels[props.action];
 
 	return (
 		<section

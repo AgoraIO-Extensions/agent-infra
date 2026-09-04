@@ -26,6 +26,18 @@ const createBody = {
 	source: pendingApplication.source,
 	coOwnerIds: [],
 	availability: [],
+	modelConfiguration: {
+		options: [
+			{
+				optionId: "model-option-1",
+				endpointId: "model-endpoint-1",
+				modelId: "gpt-5",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultOptionId: "model-option-1",
+		defaultReasoningLevel: "medium",
+	},
 	actions: [],
 	environment: [],
 	secrets: [],
@@ -45,9 +57,14 @@ describe("useAgentApplicationSubmission", () => {
 		const wrapper = ({ children }: { children: ReactNode }) => (
 			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 		);
-		const { result } = renderHook(() => useAgentApplicationSubmission(), {
-			wrapper,
-		});
+		const { rerender, result } = renderHook(
+			({ applicationId }: { applicationId?: string }) =>
+				useAgentApplicationSubmission(applicationId),
+			{
+				initialProps: { applicationId: pendingApplication.applicationId },
+				wrapper,
+			},
+		);
 
 		act(() => {
 			expect(result.current.create(createBody)).toBeUndefined();
@@ -74,6 +91,9 @@ describe("useAgentApplicationSubmission", () => {
 		expect(vi.mocked(createMyAgentApplication).mock.calls[0]?.[1]).not.toBe(
 			vi.mocked(updateMyAgentApplication).mock.calls[0]?.[2],
 		);
+		expect(result.current.isSuccess).toBe(true);
+		rerender({ applicationId: "application-other" });
+		await waitFor(() => expect(result.current.isIdle).toBe(true));
 		queryClient.clear();
 	});
 });
