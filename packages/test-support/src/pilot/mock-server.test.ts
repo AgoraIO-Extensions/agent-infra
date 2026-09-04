@@ -52,6 +52,37 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	decision: null,
 });
 const cursor = "cursor:agent-pilot-1";
+const applicationInput = {
+	schemaVersion: 1,
+	name: "Release assistant request",
+	description: "Helps the release team",
+	source: { kind: "standard" as const, templateId: "codex" },
+	coOwnerIds: ["user-co-owner-1"],
+	availability: [
+		{ kind: "organization" as const, organizationId: "organization-1" },
+	],
+	modelConfiguration: {
+		options: [
+			{
+				optionId: "model-option-1",
+				endpointId: "model-endpoint-1",
+				modelId: "gpt-5",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultOptionId: "model-option-1",
+		defaultReasoningLevel: "medium",
+	},
+	actions: [
+		{
+			providerId: "provider-1",
+			actionId: "action-1",
+			actionVersion: "1",
+		},
+	],
+	environment: [{ name: "LOG_LEVEL", value: "info" }],
+	secrets: [{ name: "API_TOKEN", value: "test-secret" }],
+};
 
 describe("Pilot Agent Mock Server", () => {
 	it("routes list pages by the generated client's cursor request", async () => {
@@ -134,6 +165,93 @@ describe("Pilot Agent Mock Server", () => {
 				new Request(
 					"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
 					{ method: "POST" },
+				),
+			),
+		).rejects.toThrow();
+	});
+
+	it("routes schema-validated Agent Application create and update commands", async () => {
+		const updatedApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			name: "Updated release assistant request",
+		});
+		const server = createPilotAgentMockServerV1({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgent },
+			createAgentApplication: { status: 201, body: pendingApplication },
+			updateAgentApplication: { status: 200, body: updatedApplication },
+		});
+
+		const created = await server.fetch(
+			new Request("https://platform.example.test/api/v1/agent-applications", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"Idempotency-Key": "create-request-1",
+				},
+				body: JSON.stringify(applicationInput),
+			}),
+		);
+		const updated = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+				{
+					method: "PUT",
+					headers: {
+						"Content-Type": "application/json",
+						"Idempotency-Key": "update-request-1",
+					},
+					body: JSON.stringify({
+						...applicationInput,
+						name: "Updated release assistant request",
+						secrets: undefined,
+					}),
+				},
+			),
+		);
+
+		expect(created.status).toBe(201);
+		expect(await created.json()).toEqual(pendingApplication);
+		expect(updated.status).toBe(200);
+		expect(await updated.json()).toEqual(updatedApplication);
+		expect(server.requests).toHaveLength(2);
+		expect(await server.requests[0]?.json()).toEqual(applicationInput);
+		const updateRequestBody = await server.requests[1]?.json();
+		expect(updateRequestBody).toMatchObject({
+			name: "Updated release assistant request",
+		});
+		expect(updateRequestBody).not.toHaveProperty("secrets");
+
+		await expect(
+			server.fetch(
+				new Request("https://platform.example.test/api/v1/agent-applications", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(applicationInput),
+				}),
+			),
+		).rejects.toThrow();
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+					{
+						method: "PUT",
+						headers: { "Idempotency-Key": "update-request-2" },
+						body: JSON.stringify({ ...applicationInput, name: "" }),
+					},
+				),
+			),
+		).rejects.toThrow();
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v1/agent-applications/%E0",
+					{
+						method: "PUT",
+						headers: { "Idempotency-Key": "update-request-3" },
+						body: JSON.stringify(applicationInput),
+					},
 				),
 			),
 		).rejects.toThrow();
