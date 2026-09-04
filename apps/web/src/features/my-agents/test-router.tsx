@@ -38,6 +38,16 @@ export async function renderWithMyAgentsRouter(content: ReactNode) {
 		path: "/my-agents/$applicationId",
 		component: () => null,
 	});
+	const applicationEditRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/my-agents/$applicationId/edit",
+		component: () => null,
+	});
+	const applicationCreateRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/my-agents/new",
+		component: () => null,
+	});
 	const router = createRouter({
 		history: createMemoryHistory({ initialEntries: ["/"] }),
 		routeTree: rootRoute.addChildren([
@@ -46,6 +56,8 @@ export async function renderWithMyAgentsRouter(content: ReactNode) {
 			agentDetailRoute,
 			myAgentsRoute,
 			applicationDetailRoute,
+			applicationEditRoute,
+			applicationCreateRoute,
 		]),
 	});
 	await router.load();
