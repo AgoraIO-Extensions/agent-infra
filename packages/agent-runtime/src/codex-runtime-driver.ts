@@ -957,40 +957,35 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		afterCursor?: string,
 		signal?: AbortSignal,
 	): Promise<AsyncIterable<RuntimeEventV1>> {
-		const initialEvents = await this.replayEvents(
-			nativeSessionRef,
-			executionId,
-			afterCursor,
-		);
 		const driver = this;
 		return (async function* () {
 			let cursor = afterCursor;
-			let pending = initialEvents;
 			while (!signal?.aborted) {
-				for (const event of pending) {
-					cursor = event.cursor;
-					yield event;
-					if (event.type === "completed") return;
-				}
 				const waiter = driver.waitForEvent(
 					driver.eventStreamKey(nativeSessionRef, executionId),
 					signal,
 				);
 				try {
-					pending = await driver.replayEvents(
+					const pending = await driver.replayEvents(
 						nativeSessionRef,
 						executionId,
 						cursor,
 					);
-					if (pending.length > 0) continue;
-					if (driver.isExecutionTerminal(nativeSessionRef, executionId)) return;
+					if (pending.length > 0) {
+						for (const event of pending) {
+							cursor = event.cursor;
+							yield event;
+							if (event.type === "completed") return;
+						}
+						continue;
+					}
+					if (
+						driver.isExecutionTerminal(nativeSessionRef, executionId) &&
+						!waiter.wasWoken()
+					) {
+						return;
+					}
 					await waiter.promise;
-					if (signal?.aborted) return;
-					pending = await driver.replayEvents(
-						nativeSessionRef,
-						executionId,
-						cursor,
-					);
 				} finally {
 					waiter.cancel();
 				}
@@ -1278,8 +1273,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private waitForEvent(key: string, signal?: AbortSignal) {
 		let wake: () => void = () => undefined;
+		let wasWoken = false;
 		const promise = new Promise<void>((resolve) => {
 			wake = () => {
+				wasWoken = true;
 				cleanup();
 				resolve();
 			};
@@ -1294,7 +1291,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		signal?.addEventListener("abort", wake, { once: true });
 		if (signal?.aborted) wake();
-		return { promise, cancel: cleanup };
+		return { promise, cancel: cleanup, wasWoken: () => wasWoken };
 	}
 
 	private async recoverEventHistory(

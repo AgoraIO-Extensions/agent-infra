@@ -1079,6 +1079,45 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
+	it("replays a terminal event that races an empty live replay", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const replay = driver.replayEvents.bind(driver);
+		let replays = 0;
+		vi.spyOn(driver, "replayEvents").mockImplementation(async (...args) => {
+			const events = await replay(...args);
+			replays += 1;
+			if (replays === 2) {
+				await bridge.emitTurnCompleted("completed");
+				await vi.waitFor(async () => {
+					const persisted = await replay(...args);
+					expect(
+						persisted.filter((event) => event.type === "completed"),
+					).toHaveLength(1);
+				});
+			}
+			return events;
+		});
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: { type: "status", payload: { status: "running" } },
+		});
+		expect(await iterator.next()).toMatchObject({
+			done: false,
+			value: { type: "completed", payload: { status: "completed" } },
+		});
+	});
+
 	it("persists a terminal Turn notification and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
