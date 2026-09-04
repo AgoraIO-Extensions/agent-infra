@@ -8,7 +8,7 @@ import { pendingApplication } from "./test-fixtures.js";
 afterEach(cleanup);
 
 describe("AgentApplicationForm", () => {
-	it("requires model configuration for a standard-template application", () => {
+	it("shows required model fields for a standard-template application", () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -27,13 +27,12 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Standard template ID"), {
 			target: { value: "codex" },
 		});
-		expect(screen.getByLabelText("Model option ID")).toBeTruthy();
+		expect(
+			(screen.getByLabelText("Model option ID") as HTMLInputElement).required,
+		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert").textContent).toContain(
-			"Complete the default and every configured model option.",
-		);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
@@ -251,12 +250,12 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Action provider ID"), {
 			target: { value: "github" },
 		});
+		expect(
+			(screen.getByLabelText("Action ID") as HTMLInputElement).required,
+		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert").textContent).toContain(
-			"Complete every configured Action",
-		);
 	});
 
 	it("uses a new server projection when an edit form changes application", () => {
