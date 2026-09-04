@@ -616,6 +616,7 @@ function validateCreatePlan(
 	const result = parseCreatedResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, true);
 	if (
+		request.command.agentId !== authority.agentId ||
 		conversation.conversationId !== result.conversationId ||
 		conversation.agentId !== authority.agentId ||
 		conversation.actorId !== authority.actorId ||
@@ -695,6 +696,8 @@ function validateMessagePlan(
 		outbox.conversationId !== current.conversationId ||
 		outbox.messageId !== message.messageId ||
 		outbox.executionId !== message.executionId ||
+		outbox.traceId !== request.command.traceId ||
+		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
 		audit.conversationId !== current.conversationId ||
@@ -812,6 +815,8 @@ function validateRegenerationPlan(
 		outbox.messageId !== state.sourceMessage.messageId ||
 		outbox.turnId !== execution.turnId ||
 		outbox.sessionGeneration !== execution.sessionGeneration ||
+		outbox.traceId !== request.command.traceId ||
+		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
 		audit.conversationId !== current.conversationId ||
@@ -888,6 +893,8 @@ function validateStopPlan(
 		outbox.executionId !== executionId ||
 		outbox.sessionGeneration !== persistedTarget.sessionGeneration ||
 		outbox.stopRequestId !== stopRequestId ||
+		outbox.traceId !== request.command.traceId ||
+		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
 		audit.conversationId !== current.conversationId ||
@@ -1072,6 +1079,7 @@ async function readMessageState(
 		where conversation_id = ${conversation.conversationId}
 			and status in ('submitted', 'processing', 'unknown')
 		limit 2
+		for update
 	`;
 	if (activeRows.length > 1) unavailable();
 	const active = activeRows[0];
@@ -1166,6 +1174,7 @@ async function readStopState(
 		where conversation_id = ${conversation.conversationId}
 			and execution_id = ${targetExecutionId}
 		limit 1
+		for update
 	`;
 	const target = rows[0];
 	if (!target) return state;
@@ -1355,6 +1364,9 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<CreateConversationDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			if (request.command.agentId !== authority.agentId) {
+				return { outcome: "denied" };
+			}
 			const scope = {
 				scopeType: "agent",
 				scopeId: createIdempotencyScopeId(

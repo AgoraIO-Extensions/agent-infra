@@ -1026,6 +1026,46 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
+	it("denies a create command whose Agent differs from the resolved authority", async () => {
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+		let decided = false;
+		try {
+			await expect(
+				transaction.createConversation(
+					{
+						command: {
+							schemaVersion: 1,
+							agentId: "agent_foreign",
+							idempotencyKey: "foreign_agent_create",
+							requestId: "request_foreign_agent_create",
+							traceId: "trace_foreign_agent_create",
+						},
+						authority,
+						requestDigest: "a".repeat(64),
+					},
+					() => {
+						decided = true;
+						throw new Error("the decision callback must not run");
+					},
+				),
+			).resolves.toEqual({ outcome: "denied" });
+			expect(decided).toBe(false);
+			expect(await commandEffectCounts()).toEqual({
+				conversations: 0,
+				messages: 0,
+				executions: 0,
+				stops: 0,
+				outbox: 0,
+				audit: 0,
+				idempotency: 0,
+			});
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it("records terminal stop idempotency without creating a stop side effect", async () => {
 		const { transaction, useCase } = createConversation();
 		try {
