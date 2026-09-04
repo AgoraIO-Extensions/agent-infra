@@ -174,8 +174,37 @@ function openDriver(
 	});
 }
 
+function configReadResult(
+	overrides: {
+		config?: Record<string, unknown>;
+		origins?: Record<string, unknown>;
+	} = {},
+) {
+	return {
+		config: {
+			model: "gpt-5.3-codex",
+			model_reasoning_effort: "high",
+			mcp_servers: {},
+			plugins: {},
+			marketplaces: {},
+			features: { plugins: false },
+			...overrides.config,
+		},
+		origins: {
+			model: { name: { type: "sessionFlags" }, version: "1" },
+			model_reasoning_effort: { name: { type: "sessionFlags" }, version: "1" },
+			"features.plugins": {
+				name: { type: "sessionFlags" },
+				version: "1",
+			},
+			...overrides.origins,
+		},
+	};
+}
+
 class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
+	readonly responses: CodexAppServerFrame[] = [];
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
@@ -193,6 +222,7 @@ class TestCodexBridge {
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
+	private configReadResult: Record<string, unknown> = configReadResult();
 
 	constructor(
 		readonly nativeThreadId = "codex-native-thread-private",
@@ -203,6 +233,15 @@ class TestCodexBridge {
 	async send(frame: CodexAppServerFrame) {
 		const { id, method, params } = frame;
 		if (
+			(typeof id === "string" ||
+				(typeof id === "number" && Number.isSafeInteger(id))) &&
+			!("method" in frame) &&
+			"error" in frame
+		) {
+			this.responses.push(frame);
+			return;
+		}
+		if (
 			typeof id !== "number" ||
 			!Number.isSafeInteger(id) ||
 			typeof method !== "string"
@@ -212,6 +251,10 @@ class TestCodexBridge {
 		this.requests.push({ method, params });
 		if (method === "initialize") {
 			this.respond(id, {});
+			return;
+		}
+		if (method === "config/read") {
+			this.respond(id, this.configReadResult);
 			return;
 		}
 		if (method === "thread/start") {
@@ -267,6 +310,10 @@ class TestCodexBridge {
 
 	setTurnsListPages(pages: TestTurnsListPage[]) {
 		this.turnsListPages = structuredClone(pages);
+	}
+
+	setConfigReadResult(result: Record<string, unknown>) {
+		this.configReadResult = structuredClone(result);
 	}
 
 	setItemsListPages(pages: TestItemsListPage[]) {
@@ -362,6 +409,14 @@ class TestCodexBridge {
 					},
 				},
 			});
+		});
+	}
+
+	emitServerRequest(method: string, params: Record<string, unknown>) {
+		this.push({
+			id: "native-tool-request-private",
+			method,
+			params,
 		});
 	}
 
@@ -527,11 +582,13 @@ describe("Codex Runtime Driver", () => {
 		});
 		expect(bridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
+			"config/read",
 			"thread/start",
 			"turn/start",
 			"thread/turns/list",
 		]);
-		expect(bridge.requests[3]?.params).toEqual({
+		expect(bridge.requests[1]?.params).toEqual({ includeLayers: false });
+		expect(bridge.requests[4]?.params).toEqual({
 			threadId: bridge.nativeThreadId,
 			itemsView: "notLoaded",
 			limit: 100,
@@ -548,6 +605,159 @@ describe("Codex Runtime Driver", () => {
 			connection: false,
 		});
 	});
+
+	it("accepts the scalar features.plugins session flag origin", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+
+		expect(bridge.isClosed()).toBe(false);
+	});
+
+	it.each([
+		[
+			"MCP server",
+			configReadResult({
+				config: { mcp_servers: { inherited: { opaque: "private" } } },
+				origins: {
+					"mcp_servers.inherited": {
+						name: { type: "system" },
+						version: "1",
+					},
+				},
+			}),
+		],
+		[
+			"plugin",
+			configReadResult({
+				config: { plugins: { inherited: { opaque: "private" } } },
+				origins: {
+					"plugins.inherited": {
+						name: { type: "enterpriseManaged" },
+						version: "1",
+					},
+				},
+			}),
+		],
+		[
+			"plugin marketplace",
+			configReadResult({
+				config: { marketplaces: { inherited: { opaque: "private" } } },
+			}),
+		],
+		[
+			"plugin feature",
+			configReadResult({ config: { features: { plugins: true } } }),
+		],
+		[
+			"model override",
+			configReadResult({ config: { model: "unapproved-model" } }),
+		],
+		[
+			"non-session origin",
+			configReadResult({
+				origins: {
+					model: { name: { type: "mdm" }, version: "1" },
+				},
+			}),
+		],
+	] as const)(
+		"fails closed for an inherited %s configuration without persisting it",
+		async (_name, configuration) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			bridge.setConfigReadResult(configuration);
+
+			const error = await openDriver(path, bridge).catch(
+				(value: unknown) => value,
+			);
+			expect(error).toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+				message: "Codex Runtime configuration is unavailable",
+			});
+			expect(JSON.stringify(error)).not.toContain("private");
+			expect(bridge.requests).toEqual([
+				{
+					method: "initialize",
+					params: { clientInfo: { name: "agent-infra-runtime", version: "1" } },
+				},
+				{ method: "config/read", params: { includeLayers: false } },
+			]);
+			expect(await readFile(path, "utf8")).not.toContain("private");
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it.each(["model", "model_reasoning_effort", "features.plugins"] as const)(
+		"fails closed when the required %s configuration origin is absent",
+		async (originKey) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const configuration = configReadResult();
+			delete configuration.origins[originKey];
+			bridge.setConfigReadResult(configuration);
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it.each(["model", "model_reasoning_effort", "features.plugins"] as const)(
+		"fails closed when the required %s configuration origin is not a session flag",
+		async (originKey) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.setConfigReadResult(
+				configReadResult({
+					origins: {
+						[originKey]: { name: { type: "system" }, version: "1" },
+					},
+				}),
+			);
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it.each([
+		["missing config", { origins: {} }, "RUNTIME_CODEX_PROTOCOL_INVALID"],
+		[
+			"unexpected layers",
+			{ ...configReadResult(), layers: [] },
+			"RUNTIME_CODEX_PROTOCOL_INVALID",
+		],
+		[
+			"malformed origin",
+			configReadResult({
+				origins: { model: { name: "invalid", version: "1" } },
+			}),
+			"RUNTIME_CODEX_PROTOCOL_INVALID",
+		],
+	] as const)(
+		"fails closed for a pinned config/read response with %s",
+		async (_name, configuration, code) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.setConfigReadResult(configuration);
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({ code });
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
 
 	it("resumes the persisted Codex Session without starting a replacement", async () => {
 		const directory = await runtimeDirectory();
@@ -577,14 +787,15 @@ describe("Codex Runtime Driver", () => {
 		).toBe("completed");
 		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
+			"config/read",
 			"thread/resume",
 			"thread/turns/list",
 		]);
-		expect(resumedBridge.requests[1]?.params).toEqual({
+		expect(resumedBridge.requests[2]?.params).toEqual({
 			threadId: firstBridge.nativeThreadId,
 			excludeTurns: true,
 		});
-		expect(resumedBridge.requests[2]?.params).toEqual({
+		expect(resumedBridge.requests[3]?.params).toEqual({
 			threadId: firstBridge.nativeThreadId,
 			itemsView: "notLoaded",
 			limit: 100,
@@ -1266,6 +1477,7 @@ describe("Codex Runtime Driver", () => {
 		).toBe("completed");
 		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
+			"config/read",
 			"thread/resume",
 			"thread/turns/list",
 			"thread/items/list",
@@ -1685,6 +1897,7 @@ describe("Codex Runtime Driver", () => {
 		).toBe("running");
 		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
+			"config/read",
 			"thread/resume",
 			"thread/turns/list",
 		]);
@@ -2090,6 +2303,46 @@ describe("Codex Runtime Driver", () => {
 			).toBe("running");
 		});
 	});
+
+	it.each([
+		["dynamic delegated Tool", "item/tool/call"],
+		["MCP elicitation", "mcpServer/elicitation/request"],
+	] as const)(
+		"contains a native %s request without calling a provider or exposing its parameters",
+		async (_name, method) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+
+			bridge.emitServerRequest(method, {
+				connectionCredential: "connection-credential-private",
+			});
+			await vi.waitFor(() => {
+				expect(bridge.responses).toContainEqual({
+					id: "native-tool-request-private",
+					error: {
+						code: -32_001,
+						message: "Platform delegated tools are unavailable",
+					},
+				});
+			});
+
+			expect(bridge.isClosed()).toBe(false);
+			expect(
+				bridge.requests.map(({ method: requestMethod }) => requestMethod),
+			).toEqual(["initialize", "config/read"]);
+			expect(JSON.stringify(bridge.responses)).not.toContain(
+				"connection-credential-private",
+			);
+			expect(
+				await readFile(join(directory, "driver.json"), "utf8"),
+			).not.toContain("connection-credential-private");
+			expect(await driver.getCapabilities()).toMatchObject({
+				connection: false,
+			});
+		},
+	);
 
 	it.each([
 		[

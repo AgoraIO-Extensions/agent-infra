@@ -1,8 +1,10 @@
+import { EventEmitter } from "node:events";
 import {
 	access,
 	chmod,
 	mkdtemp,
 	readFile,
+	realpath,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -35,9 +37,18 @@ import {
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
-const originalMode = process.env.CODEX_APP_SERVER_BRIDGE_MODE;
-const originalCapturePath = process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH;
+const originalHome = process.env.HOME;
+const originalCodexHome = process.env.CODEX_HOME;
+const originalMcpConfiguration = process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
+const originalConnectionCredential =
+	process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
 const childPids: number[] = [];
+const isolatedEnvironmentKeys = [
+	"CODEX_HOME",
+	"HOME",
+	"PATH",
+	...(process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : []),
+].sort();
 
 async function installFakeCodex(mode: string) {
 	const directory = await mkdtemp(
@@ -52,12 +63,26 @@ async function installFakeCodex(mode: string) {
 const { appendFileSync, closeSync, mkdirSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const args = process.argv.slice(2);
-const mode = process.env.CODEX_APP_SERVER_BRIDGE_MODE;
+const mode = ${JSON.stringify(mode)};
+const capturePath = ${JSON.stringify(capturePath)};
 if (mode === "stdin-closed" && args[0] === "app-server" && args[1] !== "generate-json-schema") {
   closeSync(0);
 }
-if (process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH) {
-  appendFileSync(process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH, JSON.stringify({ args, executable: process.argv[1], pid: process.pid }) + "\\n");
+if (capturePath) {
+  appendFileSync(capturePath, JSON.stringify({
+    args,
+    executable: process.argv[1],
+    pid: process.pid,
+    cwd: process.cwd(),
+    environmentKeys: Object.keys(process.env).sort(),
+    environment: {
+      codexHome: process.env.CODEX_HOME,
+      home: process.env.HOME,
+      cfUserTextEncoding: process.env.__CF_USER_TEXT_ENCODING,
+      hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
+      hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
+    },
+  }) + "\\n");
 }
 if (args[0] === "--version") {
   if (mode === "version-hangs") setInterval(() => {}, 1_000);
@@ -102,8 +127,6 @@ if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes
 	);
 	await chmod(executable, 0o755);
 	process.env.PATH = `${directory}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
-	process.env.CODEX_APP_SERVER_BRIDGE_MODE = mode;
-	process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH = capturePath;
 	return { capturePath };
 }
 
@@ -115,6 +138,25 @@ function options(overrides: Record<string, unknown> = {}) {
 		startupTimeoutMs: 5_000,
 		shutdownTimeoutMs: 1_000,
 		...overrides,
+	};
+}
+
+function createStalledBridge(isolatedDirectory: string) {
+	const process = new EventEmitter();
+	Object.assign(process, {
+		stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+		stdout: new EventEmitter(),
+		stderr: Object.assign(new EventEmitter(), { resume: vi.fn() }),
+		kill: vi.fn(),
+	});
+	const Bridge = CodexAppServerBridge as unknown as new (
+		child: never,
+		shutdownTimeoutMs: number,
+		directory: string,
+	) => CodexAppServerBridge;
+	return {
+		bridge: new Bridge(process as never, 25, isolatedDirectory),
+		process,
 	};
 }
 
@@ -141,6 +183,15 @@ async function readCaptures(path: string, minimum = 1) {
 							args: string[];
 							executable: string;
 							pid: number;
+							cwd: string;
+							environmentKeys: string[];
+							environment: {
+								codexHome?: string;
+								home?: string;
+								cfUserTextEncoding?: string;
+								hasMcpConfiguration: boolean;
+								hasConnectionCredential: boolean;
+							};
 						},
 				);
 			if (captures.length >= minimum) return captures;
@@ -162,6 +213,18 @@ async function expectChildExited(pid: number) {
 	throw new Error("bridge child remained alive after a fatal error");
 }
 
+async function expectPathRemoved(path: string) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		try {
+			await access(path);
+		} catch {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("bridge private runtime directory remained after child exit");
+}
+
 afterEach(async () => {
 	for (const pid of childPids.splice(0)) {
 		try {
@@ -171,13 +234,20 @@ afterEach(async () => {
 		}
 	}
 	process.env.PATH = originalPath;
-	if (originalMode === undefined)
-		delete process.env.CODEX_APP_SERVER_BRIDGE_MODE;
-	else process.env.CODEX_APP_SERVER_BRIDGE_MODE = originalMode;
-	if (originalCapturePath === undefined) {
-		delete process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH;
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+	else process.env.CODEX_HOME = originalCodexHome;
+	if (originalMcpConfiguration === undefined) {
+		delete process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
 	} else {
-		process.env.CODEX_APP_SERVER_BRIDGE_CAPTURE_PATH = originalCapturePath;
+		process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION = originalMcpConfiguration;
+	}
+	if (originalConnectionCredential === undefined) {
+		delete process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
+	} else {
+		process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL =
+			originalConnectionCredential;
 	}
 	await Promise.all(
 		directories
@@ -187,6 +257,55 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	it("starts every Codex subprocess with an isolated deployment-owned tool configuration", async () => {
+		process.env.CODEX_HOME = "/parent-codex-home";
+		process.env.HOME = "/parent-home";
+		process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION = "mcp-private";
+		process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL = "connection-private";
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(options());
+		const captures = await readCaptures(capturePath, 3);
+		try {
+			for (const capture of captures) {
+				expect(capture.cwd).not.toBe(process.cwd());
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+				expect(capture.environment.codexHome).toBeDefined();
+				expect(capture.environment.home).toBeDefined();
+				if (process.platform === "darwin") {
+					expect(capture.environment.cfUserTextEncoding).toBe(
+						process.env.__CF_USER_TEXT_ENCODING ?? "",
+					);
+				}
+				expect(await realpath(capture.environment.codexHome ?? "")).toBe(
+					await realpath(capture.cwd),
+				);
+				expect(await realpath(capture.environment.home ?? "")).toBe(
+					await realpath(capture.cwd),
+				);
+				expect(capture.environment.hasMcpConfiguration).toBe(false);
+				expect(capture.environment.hasConnectionCredential).toBe(false);
+			}
+			expect(captures[2]?.args).toEqual([
+				"app-server",
+				"--stdio",
+				"--strict-config",
+				"--config",
+				'model="gpt-5.3-codex"',
+				"--config",
+				'model_reasoning_effort="high"',
+				"--config",
+				"mcp_servers={}",
+				"--config",
+				"features.plugins=false",
+			]);
+		} finally {
+			await bridge.close();
+		}
+		for (const capture of captures) {
+			await expect(access(capture.cwd)).rejects.toThrow();
+		}
+	});
+
 	it("measures one resolved executable before starting supported bounded argv", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		const bridge = await CodexAppServerBridge.open(options());
@@ -221,6 +340,10 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			'model="gpt-5.3-codex"',
 			"--config",
 			'model_reasoning_effort="high"',
+			"--config",
+			"mcp_servers={}",
+			"--config",
+			"features.plugins=false",
 		]);
 		expect(captured.args).not.toContain("--session-source");
 		expect(bridge.provenance()).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
@@ -332,6 +455,17 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it("removes its private runtime directory after an unexpected child exit", async () => {
+		const { capturePath } = await installFakeCodex("startup-exit");
+		const bridge = await CodexAppServerBridge.open(options());
+		const { cwd } = await readAppCapture(capturePath);
+		await expect(
+			bridge.frames()[Symbol.asyncIterator]().next(),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
+		await expectPathRemoved(cwd);
+		await bridge.close();
+	});
+
 	it.each(["malformed-frame", "oversized-frame", "queue-overflow"])(
 		"reaps its child after fatal %s output without an explicit close",
 		async (mode) => {
@@ -391,5 +525,53 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			code: "CODEX_APP_SERVER_TIMEOUT",
 		});
 		expect(() => process.kill(pid, 0)).toThrow();
+	});
+
+	it("keeps its private runtime directory until an unreaped child closes", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-stalled-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		await expect(bridge.close()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		await expect(access(isolatedDirectory)).resolves.toBeUndefined();
+		process.emit("close");
+		await expectPathRemoved(isolatedDirectory);
+		directories.splice(directories.indexOf(isolatedDirectory), 1);
+	});
+
+	it("waits for private runtime cleanup after a concurrent reap", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-reaping-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		const internals = bridge as unknown as {
+			reapOwnedChild(): Promise<void>;
+			cleanIsolatedDirectory(): Promise<void>;
+		};
+		let releaseCleanup!: () => void;
+		const cleanup = new Promise<void>((resolve) => {
+			releaseCleanup = resolve;
+		});
+		const clean = vi
+			.spyOn(internals, "cleanIsolatedDirectory")
+			.mockReturnValue(cleanup);
+		const reaping = internals.reapOwnedChild();
+		const closing = bridge.close();
+		process.emit("close");
+		await reaping;
+		await vi.waitFor(() => expect(clean).toHaveBeenCalled());
+		let settled = false;
+		void closing.then(() => {
+			settled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(settled).toBe(false);
+		releaseCleanup();
+		await closing;
+		clean.mockRestore();
 	});
 });
