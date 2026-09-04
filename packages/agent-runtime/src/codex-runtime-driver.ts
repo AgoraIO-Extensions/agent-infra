@@ -1021,7 +1021,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async recordNotification(frame: CodexAppServerFrame) {
 		const started = turnStartedNotification(frame);
 		if (started) {
-			if (started.status !== "running") return;
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -1030,6 +1029,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				);
 				if (!resolved) return;
 				this.assertJournalOpen(resolved.journal);
+				if (started.status !== "running") return;
 				const appended = this.appendStatusEvent(
 					resolved.session,
 					resolved.journal,

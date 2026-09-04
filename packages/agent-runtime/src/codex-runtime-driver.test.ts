@@ -992,6 +992,38 @@ describe("Codex Runtime Driver", () => {
 		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 	});
 
+	it("fails closed when a terminal started notification follows a terminal event", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.filter((event) => event.type === "completed")).toHaveLength(
+				1,
+			);
+		});
+
+		await bridge.emitNotification("completed");
+		await vi.waitFor(() => expect(bridge.isClosed()).toBe(true));
+		await expect(
+			driver.execute(
+				submitCommand({
+					operationId: "execution-codex-after-terminal-started",
+					executionId: "execution-codex-after-terminal-started",
+					turnId: "turn-codex-after-terminal-started",
+					nativeSessionRef: accepted.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+	});
+
 	it("persists a terminal Turn notification and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
