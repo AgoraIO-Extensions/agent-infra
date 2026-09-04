@@ -472,11 +472,30 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 		for (const [nativeTurnId, journal] of Object.entries(
 			session.journals ?? {},
 		)) {
+			const completedEvents = journal.events.filter(
+				(event): event is CodexJournalCompletedEvent =>
+					event.type === "completed",
+			);
+			const completedEvent = completedEvents[0];
+			if (
+				completedEvents.length > 1 ||
+				(completedEvent !== undefined &&
+					journal.events.at(-1) !== completedEvent)
+			) {
+				stateInvalid();
+			}
 			const execution = Object.values(session.executions).find(
 				(candidate) => candidate.nativeTurnId === nativeTurnId,
 			);
 			if (execution) {
-				if (journal.pendingOperationKey !== undefined) stateInvalid();
+				if (
+					journal.pendingOperationKey !== undefined ||
+					(execution.status === "running"
+						? completedEvent !== undefined
+						: completedEvent?.payload.status !== execution.status)
+				) {
+					stateInvalid();
+				}
 				continue;
 			}
 			const pendingOperation = journal.pendingOperationKey
@@ -1212,14 +1231,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		delta: string,
 	) {
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
-		journal.events.push({
+		const event: CodexJournalTextEvent = {
 			cursor,
 			adapterEventKey,
 			occurredAt: new Date().toISOString(),
 			nativeItemId,
 			type: "text",
 			payload: { delta },
-		});
+		};
+		const completedIndex = journal.events.findIndex(
+			(candidate) => candidate.type === "completed",
+		);
+		if (completedIndex === -1) journal.events.push(event);
+		else journal.events.splice(completedIndex, 0, event);
 	}
 
 	private appendCompletedEvent(
@@ -1567,6 +1591,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!operation?.record) stateInvalid();
 		if (operation.record.result.outcome !== "accepted") stateInvalid();
 		if (execution.status !== "running") {
+			if (status !== execution.status) protocolInvalid();
 			this.appendCompletedEvent(
 				session,
 				this.ensureJournal(session, nativeTurnId),

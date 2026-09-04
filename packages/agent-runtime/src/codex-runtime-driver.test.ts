@@ -40,6 +40,19 @@ interface TestItemsListPage {
 	nextCursor?: string | null;
 }
 
+interface StoredEventJournal {
+	events: Record<string, unknown>[];
+}
+
+interface StoredCodexSession {
+	eventSequence?: number;
+	journals?: Record<string, StoredEventJournal>;
+}
+
+interface StoredCodexDriverState {
+	sessions: Record<string, StoredCodexSession>;
+}
+
 // Narrow fixtures copied from the generated schema pinned by the Bridge provenance.
 const pinnedV2EventRecoveryFrames = {
 	threadStarted: {
@@ -1364,6 +1377,61 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
+	it("replays recovered text before a persisted terminal event", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			const events = await firstDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.at(-1)?.type).toBe("completed");
+		});
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.setTurnStatus("completed");
+		resumedBridge.setItemsListPages([
+			{
+				data: [
+					{
+						turnId: firstBridge.nativeTurnId,
+						item: {
+							id: "codex-native-item-private",
+							type: "agentMessage",
+							text: "recovered-after-terminal",
+						},
+					},
+				],
+			},
+		]);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const events = await resumedDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.map((event) => event.type)).toEqual([
+			"status",
+			"text",
+			"completed",
+		]);
+		expect(events[1]).toMatchObject({
+			type: "text",
+			payload: { delta: "recovered-after-terminal" },
+		});
+	});
+
 	it("fails closed for duplicate durable journal identities", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -1391,6 +1459,76 @@ describe("Codex Runtime Driver", () => {
 			message: "Codex Runtime session state is unavailable",
 		});
 		expect(resumedBridge.requests).toEqual([]);
+	});
+
+	it("fails closed for inconsistent durable terminal journals", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const accepted = await firstDriver.execute(submitCommand());
+		await firstBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			const events = await firstDriver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-codex",
+			);
+			expect(events.at(-1)?.type).toBe("completed");
+		});
+		await firstDriver.close();
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+
+		for (const corrupt of [
+			(journal: StoredEventJournal) => {
+				const completed = journal.events.find(
+					(event) => event.type === "completed",
+				);
+				if (!completed) throw new Error("expected completed event");
+				journal.events.push({
+					...completed,
+					cursor: "cursor-duplicate-terminal",
+					adapterEventKey: "adapter-event-duplicate-terminal",
+				});
+			},
+			(journal: StoredEventJournal) => {
+				journal.events.push({
+					cursor: "cursor-after-terminal",
+					adapterEventKey: "adapter-event-after-terminal",
+					occurredAt: "2026-09-04T00:00:00.000Z",
+					nativeItemId: "item-after-terminal",
+					type: "text",
+					payload: { delta: "late" },
+				});
+			},
+			(journal: StoredEventJournal) => {
+				const completed = journal.events.find(
+					(event) => event.type === "completed",
+				);
+				if (!completed) throw new Error("expected completed event");
+				completed.payload = { status: "failed" };
+			},
+			(journal: StoredEventJournal) => {
+				journal.events.pop();
+			},
+		]) {
+			const candidate = structuredClone(state);
+			const session = Object.values(candidate.sessions)[0];
+			const journal = session?.journals?.[firstBridge.nativeTurnId];
+			if (!session || !journal) throw new Error("expected durable journal");
+			corrupt(journal);
+			session.eventSequence = journal.events.length;
+			await writeFile(path, JSON.stringify(candidate));
+			const resumedBridge = new TestCodexBridge();
+
+			await expect(openDriver(path, resumedBridge)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_STATE_INVALID",
+				message: "Codex Runtime session state is unavailable",
+			});
+			expect(resumedBridge.requests).toEqual([]);
+		}
 	});
 
 	it("coalesces concurrent persisted Session resumes", async () => {
@@ -1836,7 +1974,7 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
-	it("keeps terminal status sticky across out-of-order status reads", async () => {
+	it("fails closed for an out-of-order status that conflicts with a terminal read", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -1859,7 +1997,9 @@ describe("Codex Runtime Driver", () => {
 		bridge.respondToHeldTurnsListWithStatus("completed", 1);
 		expect(await secondStatus).toBe("completed");
 		bridge.respondToHeldTurnsListWithStatus("inProgress");
-		expect(await firstStatus).toBe("completed");
+		await expect(firstStatus).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
 		expect(
 			(
 				await driver.execute(
