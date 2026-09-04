@@ -125,6 +125,40 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 
+	it("requires a replacement model configuration when a custom application becomes standard", () => {
+		const customApplication = AgentApplicationProjectionV1Schema.parse({
+			...pendingApplication,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/release:v1",
+				interactionMode: "platform-adapter",
+			},
+			status: "rejected",
+			decision: {
+				decidedAt: "2026-09-04T00:00:00Z",
+				reason: "Capacity is unavailable.",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				action="resubmit"
+				application={customApplication}
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Source kind"), {
+			target: { value: "standard" },
+		});
+
+		expect(screen.getByLabelText("Model option ID")).toBeTruthy();
+		expect(
+			(screen.getByLabelText("Credential value") as HTMLInputElement).required,
+		).toBe(true);
+	});
+
 	it("submits a custom self-managed source with its identity responsibility", () => {
 		const onSubmit = vi.fn();
 		render(
