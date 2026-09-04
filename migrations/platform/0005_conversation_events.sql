@@ -21,8 +21,8 @@ CREATE TABLE "platform"."conversation_events" (
 --> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "last_event_sequence" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "last_runtime_cursor" text;--> statement-breakpoint
-ALTER TABLE "platform"."conversation_events" ADD CONSTRAINT "conversation_event_conversation_fk" FOREIGN KEY ("conversation_id") REFERENCES "platform"."conversations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "platform"."conversation_events" ADD CONSTRAINT "conversation_event_execution_fk" FOREIGN KEY ("execution_id") REFERENCES "platform"."conversation_executions"("execution_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "conversation_execution_id_conversation_unique" ON "platform"."conversation_executions" USING btree ("execution_id","conversation_id");--> statement-breakpoint
+ALTER TABLE "platform"."conversation_events" ADD CONSTRAINT "conversation_event_execution_conversation_fk" FOREIGN KEY ("execution_id","conversation_id") REFERENCES "platform"."conversation_executions"("execution_id","conversation_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "conversation_event_execution_adapter_key_unique" ON "platform"."conversation_events" USING btree ("execution_id","adapter_event_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "conversation_event_execution_sequence_unique" ON "platform"."conversation_events" USING btree ("execution_id","sequence");--> statement-breakpoint
 CREATE UNIQUE INDEX "conversation_event_conversation_cursor_unique" ON "platform"."conversation_events" USING btree ("conversation_id","conversation_cursor");--> statement-breakpoint

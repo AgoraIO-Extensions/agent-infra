@@ -554,7 +554,7 @@ export class PostgresConversationEventTransactionV1
 				update platform.conversation_executions
 				set last_event_sequence = ${plan.event.sequence},
 					last_runtime_cursor = ${plan.runtimeCursor},
-					updated_at = ${plan.event.occurredAt}
+					updated_at = now()
 				where execution_id = ${plan.event.executionId}
 					and conversation_id = ${plan.event.conversationId}
 					and session_generation = ${plan.sessionGeneration}
@@ -566,7 +566,7 @@ export class PostgresConversationEventTransactionV1
 			const updatedConversation = await transaction<{ id: string }[]>`
 				update platform.conversations
 				set last_conversation_cursor = ${plan.event.conversationCursor},
-					updated_at = ${plan.event.occurredAt}
+					updated_at = now()
 				where id = ${plan.event.conversationId}
 					and session_generation = ${plan.sessionGeneration}
 					and last_conversation_cursor = ${currentConversation.lastConversationCursor}
