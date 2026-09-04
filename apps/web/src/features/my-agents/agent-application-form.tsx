@@ -5,6 +5,10 @@ import type {
 	AgentApplicationProjectionV1,
 	AgentApplicationUpdateRequestV1Writable,
 } from "../../pilot/generated/types.gen.js";
+import {
+	type AgentApplicationEditAction,
+	agentApplicationEditActionLabels,
+} from "./my-agent-applications.js";
 
 type AgentApplicationFormProps =
 	| {
@@ -13,6 +17,7 @@ type AgentApplicationFormProps =
 			submitting: boolean;
 	  }
 	| {
+			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV1;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV1Writable) => void;
@@ -210,10 +215,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const [secrets, setSecrets] = useState<EnvironmentDraft[]>([]);
 	const [configureModels, setConfigureModels] = useState(false);
-	const [models, setModels] = useState<ModelDraft[]>([]);
+	const [models, setModels] = useState<ModelDraft[]>(() =>
+		props.mode === "create" ? [blankModel()] : [],
+	);
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState("");
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState("");
 	const [formError, setFormError] = useState<string | null>(null);
+	const requiresModelConfiguration =
+		props.mode === "create" && sourceKind === "standard";
+	const showsModelConfiguration =
+		sourceKind === "standard" &&
+		(requiresModelConfiguration || configureModels);
 	const source: AgentApplicationCreateRequestV1Writable["source"] =
 		sourceKind === "standard"
 			? { kind: "standard", templateId: templateId.trim() }
@@ -249,7 +261,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		}
 		const activeModels = models.filter(hasAnyValue);
 		if (
-			configureModels &&
+			showsModelConfiguration &&
 			(!defaultModelOptionId.trim() ||
 				!defaultReasoningLevel.trim() ||
 				activeModels.length === 0 ||
@@ -267,22 +279,21 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return;
 		}
 		setFormError(null);
-		const modelConfiguration =
-			configureModels && sourceKind === "standard"
-				? {
-						options: activeModels.map((model) => ({
-							optionId: model.optionId.trim(),
-							endpointId: model.endpointId.trim(),
-							modelId: model.modelId.trim(),
-							reasoningLevels: splitValues(model.reasoningLevels),
-							...(model.credentialValue.length > 0
-								? { credentialValue: model.credentialValue }
-								: {}),
-						})),
-						defaultOptionId: defaultModelOptionId.trim(),
-						defaultReasoningLevel: defaultReasoningLevel.trim(),
-					}
-				: undefined;
+		const modelConfiguration = showsModelConfiguration
+			? {
+					options: activeModels.map((model) => ({
+						optionId: model.optionId.trim(),
+						endpointId: model.endpointId.trim(),
+						modelId: model.modelId.trim(),
+						reasoningLevels: splitValues(model.reasoningLevels),
+						...(model.credentialValue.length > 0
+							? { credentialValue: model.credentialValue }
+							: {}),
+					})),
+					defaultOptionId: defaultModelOptionId.trim(),
+					defaultReasoningLevel: defaultReasoningLevel.trim(),
+				}
+			: undefined;
 		const secretValues = activeSecrets.map((secret) => ({
 			name: secret.name.trim(),
 			value: secret.value,
@@ -389,6 +400,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							onChange={(event) => {
 								const kind = event.target.value as SourceKind;
 								setSourceKind(kind);
+								if (kind === "standard" && models.length === 0) {
+									setModels([blankModel()]);
+								}
 								if (kind !== "standard") setConfigureModels(false);
 							}}
 							value={sourceKind}
@@ -615,20 +629,22 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<legend className="font-semibold text-slate-950 text-sm">
 						Models
 					</legend>
-					<label className="flex min-h-11 items-center gap-3 text-slate-800 text-sm">
-						<input
-							checked={configureModels}
-							onChange={(event) => {
-								setConfigureModels(event.target.checked);
-								if (event.target.checked && models.length === 0) {
-									setModels([blankModel()]);
-								}
-							}}
-							type="checkbox"
-						/>
-						Configure models
-					</label>
-					{configureModels ? (
+					{props.mode === "update" ? (
+						<label className="flex min-h-11 items-center gap-3 text-slate-800 text-sm">
+							<input
+								checked={configureModels}
+								onChange={(event) => {
+									setConfigureModels(event.target.checked);
+									if (event.target.checked && models.length === 0) {
+										setModels([blankModel()]);
+									}
+								}}
+								type="checkbox"
+							/>
+							Configure models
+						</label>
+					) : null}
+					{showsModelConfiguration ? (
 						<>
 							<DraftRows
 								fields={[
@@ -715,11 +731,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			>
 				{props.submitting
 					? "Submitting..."
-					: props.mode === "update" && application?.status === "rejected"
-						? "Resubmit application"
-						: props.mode === "update"
-							? "Save application"
-							: "Create application"}
+					: props.mode === "update"
+						? agentApplicationEditActionLabels[props.action]
+						: "Create application"}
 			</button>
 		</form>
 	);

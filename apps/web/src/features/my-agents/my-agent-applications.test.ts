@@ -13,6 +13,7 @@ import type {
 } from "../../pilot/generated/types.gen.js";
 import {
 	createMyAgentApplication,
+	getAgentApplicationEditAction,
 	loadMyAgentApplication,
 	loadMyAgentApplications,
 	updateMyAgentApplication,
@@ -97,6 +98,28 @@ function createApplicationClient(
 }
 
 describe("My Agents generated-client consumer", () => {
+	it("maps only server-projected editable application states to UI actions", () => {
+		expect(getAgentApplicationEditAction(pendingApplication)).toBe("edit");
+		expect(
+			getAgentApplicationEditAction(
+				AgentApplicationProjectionV1Schema.parse({
+					...pendingApplication,
+					status: "rejected",
+					decision: {
+						decidedAt: "2026-09-04T00:00:00Z",
+						reason: "Capacity unavailable.",
+					},
+				}),
+			),
+		).toBe("resubmit");
+		expect(
+			getAgentApplicationEditAction({
+				...pendingApplication,
+				status: "withdrawn",
+			}),
+		).toBeUndefined();
+	});
+
 	it("submits create and update commands through generated writable operations", async () => {
 		const updatedApplication = AgentApplicationProjectionV1Schema.parse({
 			...pendingApplication,
@@ -114,6 +137,18 @@ describe("My Agents generated-client consumer", () => {
 			source: pendingApplication.source,
 			coOwnerIds: [],
 			availability: [],
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "model-option-1",
+						endpointId: "model-endpoint-1",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultOptionId: "model-option-1",
+				defaultReasoningLevel: "medium",
+			},
 			actions: [],
 			environment: [],
 			secrets: [],
@@ -171,6 +206,18 @@ describe("My Agents generated-client consumer", () => {
 			source: pendingApplication.source,
 			coOwnerIds: [],
 			availability: [],
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "model-option-1",
+						endpointId: "model-endpoint-1",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultOptionId: "model-option-1",
+				defaultReasoningLevel: "medium",
+			},
 			actions: [],
 			environment: [],
 			secrets: [],

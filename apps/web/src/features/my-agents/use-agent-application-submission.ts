@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLayoutEffect, useRef } from "react";
 
 import type {
 	AgentApplicationCreateRequestV1Writable,
@@ -22,8 +23,9 @@ type SubmissionAttempt =
 			kind: "update";
 	  };
 
-export function useAgentApplicationSubmission() {
+export function useAgentApplicationSubmission(applicationId?: string) {
 	const queryClient = useQueryClient();
+	const currentApplicationId = useRef(applicationId);
 	const submission = useMutation({
 		mutationKey: ["my-agents", "application-submission"],
 		mutationFn: (attempt: SubmissionAttempt) =>
@@ -40,6 +42,12 @@ export function useAgentApplicationSubmission() {
 				queryClient.invalidateQueries({ queryKey: ["agents"] }),
 			]),
 	});
+
+	useLayoutEffect(() => {
+		if (currentApplicationId.current === applicationId) return;
+		currentApplicationId.current = applicationId;
+		submission.reset();
+	}, [applicationId, submission.reset]);
 
 	return {
 		...submission,

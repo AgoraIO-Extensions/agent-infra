@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
+import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 
@@ -11,7 +12,7 @@ export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 function EditAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
-	const submission = useAgentApplicationSubmission();
+	const submission = useAgentApplicationSubmission(applicationId);
 	if (query.isPending) {
 		return <p aria-live="polite">Loading application...</p>;
 	}
@@ -36,10 +37,8 @@ function EditAgentApplicationRoute() {
 		);
 	}
 	const application = query.data.application;
-	if (
-		application.status !== "pending_approval" &&
-		application.status !== "rejected"
-	) {
+	const action = getAgentApplicationEditAction(application);
+	if (!action) {
 		return (
 			<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
 				<section
@@ -71,6 +70,7 @@ function EditAgentApplicationRoute() {
 	return (
 		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
 			<AgentApplicationSubmissionScreen
+				action={action}
 				application={application}
 				error={error}
 				mode="update"
