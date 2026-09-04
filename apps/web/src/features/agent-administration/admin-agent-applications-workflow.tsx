@@ -10,7 +10,7 @@ export function AdminAgentApplicationsWorkflow() {
 
 	return (
 		<AdminAgentApplicationsScreen
-			decisionError={decision.isError}
+			decisionError={decision.error}
 			decisionResult={decision.data}
 			onDecision={(applicationId, nextDecision) =>
 				decision.mutate(applicationId, nextDecision)

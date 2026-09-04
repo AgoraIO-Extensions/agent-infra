@@ -14,7 +14,7 @@ export function AgentLifecycleWorkflow({ agent }: AgentLifecycleWorkflowProps) {
 	return (
 		<AgentLifecycleControls
 			agent={agent}
-			commandError={lifecycle.isError}
+			commandError={lifecycle.error}
 			commandResult={lifecycle.data}
 			onCommand={(command) => lifecycle.mutate(command)}
 			pendingCommand={lifecycle.isPending ? lifecycle.variables : undefined}

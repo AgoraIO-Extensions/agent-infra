@@ -13,9 +13,11 @@ type PendingLifecycleCommand = {
 	readonly command: AgentLifecycleCommand;
 };
 
+type RequestError = Error & { readonly retryable?: boolean };
+
 type AgentLifecycleControlsProps = {
 	agent: AgentProjectionV1;
-	commandError?: boolean;
+	commandError?: RequestError | null;
 	commandResult?: AgentProjectionV1;
 	onCommand: (command: AgentLifecycleCommand) => void;
 	pendingCommand?: PendingLifecycleCommand;
@@ -65,7 +67,12 @@ function visibleLifecycleCommands(
 
 	// These projections only select visible controls. The Platform still authorizes every command.
 	if (isOwner && agent.managementStatus === "available") {
-		commands.push("stop", "restart");
+		if (agent.serviceAvailability === "ready") {
+			commands.push("stop", "restart");
+		}
+		if (agent.serviceAvailability === "unavailable") {
+			commands.push("restart");
+		}
 	}
 	if (isOwner && agent.managementStatus === "stopped") {
 		commands.push("restart");
@@ -90,7 +97,7 @@ function visibleLifecycleCommands(
 
 export function AgentLifecycleControls({
 	agent,
-	commandError = false,
+	commandError = null,
 	commandResult,
 	onCommand,
 	pendingCommand,
@@ -140,7 +147,9 @@ export function AgentLifecycleControls({
 				) : null}
 				{commandError ? (
 					<p className="text-slate-600 text-sm" role="alert">
-						Unable to submit the lifecycle command.
+						{commandError.retryable === false
+							? "Your permission or this Agent changed. Refresh the page."
+							: "Unable to submit the lifecycle command. Please try again shortly."}
 					</p>
 				) : null}
 			</div>

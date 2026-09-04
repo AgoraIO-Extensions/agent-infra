@@ -119,11 +119,38 @@ describe("AdminAgentApplicationsScreen", () => {
 				decisionResult={approvedApplication}
 				onDecision={vi.fn()}
 				session={{ kind: "ready", session: administratorSession }}
-				state={{ kind: "ready", applications: [pendingApplication] }}
+				state={{ kind: "ready", applications: [] }}
 			/>,
 		);
 		expect(screen.getByRole("status").textContent).toBe(
-			"Decision submitted: Creating.",
+			"Decision submitted for Release assistant request: Creating.",
+		);
+	});
+
+	it("distinguishes retryable and permission-lost decision failures", () => {
+		const { rerender } = render(
+			<AdminAgentApplicationsScreen
+				decisionError={Object.assign(new Error(), { retryable: false })}
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [] }}
+			/>,
+		);
+
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Your permission or this application changed. Refresh the page.",
+		);
+
+		rerender(
+			<AdminAgentApplicationsScreen
+				decisionError={Object.assign(new Error(), { retryable: true })}
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [] }}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Unable to submit the application decision. Please try again shortly.",
 		);
 	});
 });
