@@ -846,6 +846,76 @@ describe("Codex Runtime Driver", () => {
 		expect(await iterator.next()).toEqual({ done: true, value: undefined });
 	});
 
+	it("wakes a live stream when polling persists a terminal status", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const abort = new AbortController();
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			undefined,
+			abort.signal,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		try {
+			await iterator.next();
+			const terminal = iterator.next();
+			bridge.setTurnStatus("completed");
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("completed");
+			expect(
+				await Promise.race([
+					terminal,
+					new Promise((resolve) => {
+						setTimeout(() => resolve("timed out"), 100);
+					}),
+				]),
+			).toMatchObject({
+				done: false,
+				value: { type: "completed", payload: { status: "completed" } },
+			});
+		} finally {
+			abort.abort();
+			await iterator.next();
+		}
+	});
+
+	it("ends a live stream after its terminal event", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const stream = await driver.subscribeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+
+		await iterator.next();
+		const terminal = iterator.next();
+		await bridge.emitTurnCompleted("completed");
+		expect(await terminal).toMatchObject({
+			done: false,
+			value: { type: "completed", payload: { status: "completed" } },
+		});
+		expect(
+			await Promise.race([
+				iterator.next(),
+				new Promise((resolve) => {
+					setTimeout(() => resolve("timed out"), 100);
+				}),
+			]),
+		).toEqual({ done: true, value: undefined });
+	});
+
 	it("persists a terminal Turn notification and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();

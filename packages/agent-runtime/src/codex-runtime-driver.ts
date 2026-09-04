@@ -970,26 +970,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				for (const event of pending) {
 					cursor = event.cursor;
 					yield event;
+					if (event.type === "completed") return;
 				}
 				const waiter = driver.waitForEvent(
 					driver.eventStreamKey(nativeSessionRef, executionId),
 					signal,
 				);
-				pending = await driver.replayEvents(
-					nativeSessionRef,
-					executionId,
-					cursor,
-				);
-				if (pending.length > 0) {
+				try {
+					pending = await driver.replayEvents(
+						nativeSessionRef,
+						executionId,
+						cursor,
+					);
+					if (pending.length === 0) {
+						await waiter.promise;
+						if (signal?.aborted) return;
+						pending = await driver.replayEvents(
+							nativeSessionRef,
+							executionId,
+							cursor,
+						);
+					}
+				} finally {
 					waiter.cancel();
-					continue;
 				}
-				await waiter.promise;
-				pending = await driver.replayEvents(
-					nativeSessionRef,
-					executionId,
-					cursor,
-				);
 			}
 		})();
 	}
@@ -1471,15 +1475,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeTurnId: string,
 		status: PersistedTurnStatus,
 	) {
-		return this.update((state) =>
-			this.setExecutionStatus(
+		const result = await this.update((state) => {
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			if (!session) stateInvalid();
+			const before = ownRecordValue(session.journals ?? {}, nativeTurnId)
+				?.events.length;
+			const persistedStatus = this.setExecutionStatus(
 				state,
 				nativeSessionRef,
 				executionId,
 				nativeTurnId,
 				status,
-			),
-		);
+			);
+			const after = ownRecordValue(session.journals ?? {}, nativeTurnId)?.events
+				.length;
+			return {
+				persistedStatus,
+				appended: after !== undefined && after !== before,
+			};
+		});
+		if (result.appended) {
+			this.notifyEventStream(
+				this.eventStreamKey(nativeSessionRef, executionId),
+			);
+		}
+		return result.persistedStatus;
 	}
 
 	private setExecutionStatus(
