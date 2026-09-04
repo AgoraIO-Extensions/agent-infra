@@ -201,7 +201,36 @@ function isCodexOperation(
 	}
 	const session = sessions[value.nativeSessionRef];
 	if (!session) return false;
-	if (value.state === "prepared") return value.record === undefined;
+	if (value.state === "prepared") {
+		if (value.record !== undefined) return false;
+		let identity: unknown;
+		try {
+			identity = JSON.parse(key);
+		} catch {
+			return false;
+		}
+		if (!Array.isArray(identity) || identity.length !== 5) return false;
+		const [agentId, conversationId, sessionGeneration, kind, operationId] =
+			identity;
+		if (
+			agentId !== session.agentId ||
+			conversationId !== session.conversationId ||
+			sessionGeneration !== session.sessionGeneration ||
+			kind !== "submit-turn" ||
+			!nonEmptyString(operationId)
+		) {
+			return false;
+		}
+		return (
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId,
+			}) === key
+		);
+	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = RuntimeDriverOperationRecordV1Schema.safeParse(value.record);
 	if (
@@ -923,12 +952,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			) {
 				protocolInvalid();
 			}
-			session.executions[command.executionId] = {
-				executionId: command.executionId,
-				turnId: command.turnId,
-				nativeTurnId,
-				status: result.status,
-			};
+			Object.defineProperty(session.executions, command.executionId, {
+				value: {
+					executionId: command.executionId,
+					turnId: command.turnId,
+					nativeTurnId,
+					status: result.status,
+				},
+				enumerable: true,
+				writable: true,
+				configurable: true,
+			});
 			session.activeExecutionId =
 				result.status === "running" ? command.executionId : undefined;
 		});

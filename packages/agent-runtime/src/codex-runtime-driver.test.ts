@@ -475,6 +475,36 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(0);
 	});
 
+	it("persists a prototype-like Execution identity across Driver restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand({
+			operationId: "__proto__",
+			executionId: "__proto__",
+			turnId: "turn-codex-prototype",
+		});
+		const first = await firstDriver.execute(command);
+		await firstDriver.close();
+		const resumedBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		expect(
+			await resumedDriver.getStatus(
+				first.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("running");
+		expect(resumedBridge.requests.map(({ method }) => method)).toEqual([
+			"initialize",
+			"thread/resume",
+			"thread/turns/list",
+		]);
+	});
+
 	it("rejects a duplicate native thread response across Sessions", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -1025,6 +1055,28 @@ describe("Codex Runtime Driver", () => {
 								nativeSessionRef: "opaque-session",
 								result: { outcome: "accepted", status: "running" },
 							},
+						},
+				},
+			},
+		],
+		[
+			"unbound prepared operation key",
+			{
+				schemaVersion: 1,
+				sessions: {
+					"opaque-session": {
+						nativeSessionRef: "opaque-session",
+						agentId: "agent-codex",
+						conversationId: "conversation-codex",
+						sessionGeneration: 1,
+						executions: {},
+					},
+				},
+				operations: {
+					'["agent-other","conversation-other",1,"submit-turn","operation-other"]':
+						{
+							state: "prepared",
+							nativeSessionRef: "opaque-session",
 						},
 				},
 			},
