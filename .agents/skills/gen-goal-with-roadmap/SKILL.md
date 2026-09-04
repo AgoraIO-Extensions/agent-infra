@@ -46,14 +46,16 @@ Acceptance criteria、Validation 和 Blocked by 契约。排除 planning、grill
 准备、closed、not-planned、malformed、blocked、cross-Map、重复或已有可观察执行的工作。
 
 Discovery 优先未分配任务。已分配给当前操作者的 Issue 只有在不存在 active PR、branch、
-worktree 或可靠关联的执行时才可入选；其他 assignee 表示已有所有权。环境无法把跨会话 Goal
-可靠关联到 Issue 时，明确披露该残余风险，不宣称不存在重复 Goal。
+worktree 或可靠关联的执行时才可入选；其他 assignee 表示已有所有权。父级或 sibling worktree
+本身不占用候选 Issue；只有其 Issue scope 或当前 diff 与候选 deliverable 的文件/module ownership
+重叠时才排除，并展示证据。环境无法把跨会话 Goal 可靠关联到 Issue 时，明确披露该残余风险，
+不宣称不存在重复 Goal。
 
 按以下顺序确定性排序：
 
-1. 当前对话明确关注的 Map；
+1. 本次会话中用户最近一次明确引用的 Map；没有明确引用时跳过；
 2. 已逾期或临近的 Milestone；
-3. 能解锁的下游 Issue 数；
+3. 该候选完成后全部 blockers 都满足、因而新进入 frontier 的下游 Issue 数；
 4. 外部人工依赖风险；
 5. Target date；
 6. Issue number。
