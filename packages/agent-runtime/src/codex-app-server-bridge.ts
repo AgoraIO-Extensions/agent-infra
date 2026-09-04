@@ -21,6 +21,7 @@ const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const codexExecutableName = "codex";
 const schemaArtifactName = "codex_app_server_protocol.v2.schemas.json";
+const isolatedRuntimeDirectoryPrefix = "agent-runtime-codex-home-";
 
 export interface CodexAppServerProvenanceV2 {
 	readonly protocolVersion: 2;
@@ -78,6 +79,11 @@ interface ValidatedOptions {
 	reasoningEffort: string;
 	startupTimeoutMs: number;
 	shutdownTimeoutMs: number;
+}
+
+interface IsolatedLaunchPolicy {
+	directory: string;
+	environment: NodeJS.ProcessEnv;
 }
 
 interface QueueWaiter {
@@ -319,6 +325,34 @@ async function resolveCodexExecutable() {
 	throw unavailable();
 }
 
+async function createIsolatedLaunchPolicy(): Promise<IsolatedLaunchPolicy> {
+	const path = process.env.PATH;
+	if (!path) throw unavailable();
+	try {
+		const directory = await mkdtemp(
+			join(tmpdir(), isolatedRuntimeDirectoryPrefix),
+		);
+		return {
+			directory,
+			environment: {
+				CODEX_HOME: directory,
+				HOME: directory,
+				PATH: path,
+			},
+		};
+	} catch {
+		throw unavailable();
+	}
+}
+
+async function removeIsolatedDirectory(directory: string) {
+	try {
+		await rm(directory, { recursive: true, force: true });
+	} catch {
+		// The private runtime directory contains no durable Driver state.
+	}
+}
+
 interface CommandOutput {
 	stdout: string;
 	stdoutTooLarge: boolean;
@@ -333,11 +367,14 @@ async function runCodexCommand(
 	args: readonly string[],
 	timeoutMs: number,
 	captureStdout: boolean,
+	launchPolicy: IsolatedLaunchPolicy,
 ): Promise<CommandOutput> {
 	let process: ChildProcess;
 	try {
 		process = spawn(executable, args, {
 			stdio: ["ignore", captureStdout ? "pipe" : "ignore", "ignore"],
+			cwd: launchPolicy.directory,
+			env: launchPolicy.environment,
 		});
 	} catch {
 		throw unavailable();
@@ -379,12 +416,17 @@ async function runCodexCommand(
 	return { stdout, stdoutTooLarge };
 }
 
-async function probeVersion(executable: string, timeoutMs: number) {
+async function probeVersion(
+	executable: string,
+	timeoutMs: number,
+	launchPolicy: IsolatedLaunchPolicy,
+) {
 	const output = await runCodexCommand(
 		executable,
 		["--version"],
 		timeoutMs,
 		true,
+		launchPolicy,
 	);
 	if (
 		output.stdoutTooLarge ||
@@ -395,7 +437,11 @@ async function probeVersion(executable: string, timeoutMs: number) {
 	}
 }
 
-async function verifySchema(executable: string, timeoutMs: number) {
+async function verifySchema(
+	executable: string,
+	timeoutMs: number,
+	launchPolicy: IsolatedLaunchPolicy,
+) {
 	let directory: string;
 	try {
 		directory = await mkdtemp(join(tmpdir(), "agent-runtime-codex-schema-"));
@@ -409,6 +455,7 @@ async function verifySchema(executable: string, timeoutMs: number) {
 			["app-server", "generate-json-schema", "--out", directory],
 			timeoutMs,
 			false,
+			launchPolicy,
 		);
 		const schema = await readFile(join(directory, schemaArtifactName));
 		const digest = `sha256:${createHash("sha256").update(schema).digest("hex")}`;
@@ -445,12 +492,14 @@ export class CodexAppServerBridge {
 	#closing = false;
 	#isClosed = false;
 	#reaping?: Promise<void>;
+	#cleaning?: Promise<void>;
 	#process: ChildProcessWithoutNullStreams;
 	#shutdownTimeoutMs: number;
 
 	private constructor(
 		process: ChildProcessWithoutNullStreams,
 		shutdownTimeoutMs: number,
+		private readonly isolatedDirectory: string,
 	) {
 		this.#process = process;
 		this.#shutdownTimeoutMs = shutdownTimeoutMs;
@@ -466,14 +515,21 @@ export class CodexAppServerBridge {
 			this.#resolveExit();
 			if (this.#closing) this.#queue.finish();
 			else this.fail(exited());
+			void this.cleanIsolatedDirectory();
 		});
 	}
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
 		const executable = await resolveCodexExecutable();
-		await probeVersion(executable, validated.startupTimeoutMs);
-		await verifySchema(executable, validated.startupTimeoutMs);
+		const launchPolicy = await createIsolatedLaunchPolicy();
+		try {
+			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
+			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
+		} catch (error) {
+			await removeIsolatedDirectory(launchPolicy.directory);
+			throw error;
+		}
 		let process: ChildProcessWithoutNullStreams;
 		try {
 			process = spawn(
@@ -486,18 +542,33 @@ export class CodexAppServerBridge {
 					`model=${JSON.stringify(validated.model)}`,
 					"--config",
 					`model_reasoning_effort=${JSON.stringify(validated.reasoningEffort)}`,
+					"--config",
+					"mcp_servers={}",
+					"--config",
+					"features.plugins=false",
 				],
-				{ stdio: ["pipe", "pipe", "pipe"] },
+				{
+					stdio: ["pipe", "pipe", "pipe"],
+					cwd: launchPolicy.directory,
+					env: launchPolicy.environment,
+				},
 			);
 		} catch {
+			await removeIsolatedDirectory(launchPolicy.directory);
 			throw unavailable();
 		}
 		const bridge = new CodexAppServerBridge(
 			process,
 			validated.shutdownTimeoutMs,
+			launchPolicy.directory,
 		);
-		await bridge.waitForSpawn(validated.startupTimeoutMs);
-		return bridge;
+		try {
+			await bridge.waitForSpawn(validated.startupTimeoutMs);
+			return bridge;
+		} catch (error) {
+			await bridge.close().catch(() => {});
+			throw error;
+		}
 	}
 
 	provenance(): CodexAppServerProvenanceV2 {
@@ -551,9 +622,16 @@ export class CodexAppServerBridge {
 	}
 
 	async close() {
-		if (this.#isClosed) return;
+		if (this.#isClosed) {
+			await this.cleanIsolatedDirectory();
+			return;
+		}
 		if (this.#reaping) return this.#reaping;
-		if (this.#closing) return this.#exit;
+		if (this.#closing) {
+			await this.#exit;
+			await this.cleanIsolatedDirectory();
+			return;
+		}
 		this.#closing = true;
 		try {
 			this.#process.stdin.end();
@@ -565,6 +643,8 @@ export class CodexAppServerBridge {
 		} catch {
 			await this.reapOwnedChild();
 			throw timedOut();
+		} finally {
+			await this.cleanIsolatedDirectory();
 		}
 	}
 
@@ -658,19 +738,28 @@ export class CodexAppServerBridge {
 		if (this.#reaping) return this.#reaping;
 		this.#closing = true;
 		this.#reaping = (async () => {
-			kill(this.#process);
 			try {
-				await this.waitForExit(this.#shutdownTimeoutMs);
-				return;
-			} catch {
-				kill(this.#process, "SIGKILL");
+				kill(this.#process);
 				try {
 					await this.waitForExit(this.#shutdownTimeoutMs);
+					return;
 				} catch {
-					// The process could not be reaped within the bounded cleanup window.
+					kill(this.#process, "SIGKILL");
+					try {
+						await this.waitForExit(this.#shutdownTimeoutMs);
+					} catch {
+						// The process could not be reaped within the bounded cleanup window.
+					}
 				}
+			} finally {
+				await this.cleanIsolatedDirectory();
 			}
 		})();
 		return this.#reaping;
+	}
+
+	private cleanIsolatedDirectory() {
+		this.#cleaning ??= removeIsolatedDirectory(this.isolatedDirectory);
+		return this.#cleaning;
 	}
 }

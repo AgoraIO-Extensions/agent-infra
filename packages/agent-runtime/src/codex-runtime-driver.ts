@@ -80,6 +80,14 @@ const capabilities: RuntimeCapabilitiesV1 = {
 const turnsListPageSize = 100;
 const maximumTurnsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
+const containedServerRequestMethods = new Set([
+	"item/tool/call",
+	"mcpServer/elicitation/request",
+]);
+const delegatedToolUnavailableJsonRpcError = Object.freeze({
+	code: -32_001,
+	message: "Platform delegated tools are unavailable",
+});
 
 const persistedTurnStatuses = [
 	"running",
@@ -124,6 +132,13 @@ function nonEmptyString(value: unknown): value is string {
 
 function ownRecordValue<T>(record: Record<string, T>, key: string) {
 	return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+function isJsonRpcRequestId(value: unknown): value is string | number {
+	return (
+		typeof value === "string" ||
+		(typeof value === "number" && Number.isSafeInteger(value))
+	);
 }
 
 function isPersistedTurnStatus(value: unknown): value is PersistedTurnStatus {
@@ -436,6 +451,18 @@ class CodexRpc {
 			this.fail(protocolInvalidError());
 			return;
 		}
+		if ("method" in frame) {
+			if (
+				typeof frame.method !== "string" ||
+				!isJsonRpcRequestId(frame.id) ||
+				!containedServerRequestMethods.has(frame.method)
+			) {
+				this.fail(protocolInvalidError());
+				return;
+			}
+			this.denyDelegatedToolRequest(frame.id);
+			return;
+		}
 		if (typeof frame.id !== "number" || !Number.isSafeInteger(frame.id)) {
 			this.fail(protocolInvalidError());
 			return;
@@ -456,6 +483,13 @@ class CodexRpc {
 			return;
 		}
 		this.pending.delete(frame.id);
+	}
+
+	private denyDelegatedToolRequest(id: string | number) {
+		// #186 owns the only delegated Tool route; native request parameters stay opaque here.
+		void this.bridge
+			.send({ id, error: delegatedToolUnavailableJsonRpcError })
+			.catch(() => this.fail(unavailableError()));
 	}
 
 	private fail(error = unavailableError()) {

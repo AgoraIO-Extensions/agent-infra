@@ -101,6 +101,7 @@ function openDriver(
 
 class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
+	readonly responses: CodexAppServerFrame[] = [];
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
@@ -124,6 +125,15 @@ class TestCodexBridge {
 
 	async send(frame: CodexAppServerFrame) {
 		const { id, method, params } = frame;
+		if (
+			(typeof id === "string" ||
+				(typeof id === "number" && Number.isSafeInteger(id))) &&
+			!("method" in frame) &&
+			"error" in frame
+		) {
+			this.responses.push(frame);
+			return;
+		}
 		if (
 			typeof id !== "number" ||
 			!Number.isSafeInteger(id) ||
@@ -252,6 +262,14 @@ class TestCodexBridge {
 					turnId: this.nativeTurnId,
 				},
 			});
+		});
+	}
+
+	emitServerRequest(method: string, params: Record<string, unknown>) {
+		this.push({
+			id: "native-tool-request-private",
+			method,
+			params,
 		});
 	}
 
@@ -1011,6 +1029,46 @@ describe("Codex Runtime Driver", () => {
 			).toBe("running");
 		});
 	});
+
+	it.each([
+		["dynamic delegated Tool", "item/tool/call"],
+		["MCP elicitation", "mcpServer/elicitation/request"],
+	] as const)(
+		"contains a native %s request without calling a provider or exposing its parameters",
+		async (_name, method) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+
+			bridge.emitServerRequest(method, {
+				connectionCredential: "connection-credential-private",
+			});
+			await vi.waitFor(() => {
+				expect(bridge.responses).toContainEqual({
+					id: "native-tool-request-private",
+					error: {
+						code: -32_001,
+						message: "Platform delegated tools are unavailable",
+					},
+				});
+			});
+
+			expect(bridge.isClosed()).toBe(false);
+			expect(
+				bridge.requests.map(({ method: requestMethod }) => requestMethod),
+			).toEqual(["initialize"]);
+			expect(JSON.stringify(bridge.responses)).not.toContain(
+				"connection-credential-private",
+			);
+			expect(
+				await readFile(join(directory, "driver.json"), "utf8"),
+			).not.toContain("connection-credential-private");
+			expect(await driver.getCapabilities()).toMatchObject({
+				connection: false,
+			});
+		},
+	);
 
 	it.each([
 		[
