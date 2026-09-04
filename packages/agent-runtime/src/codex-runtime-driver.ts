@@ -93,6 +93,11 @@ const isolatedConfigurationKeys = [
 	"plugins",
 	"marketplaces",
 ] as const;
+const requiredConfigurationOriginKeys = [
+	"model",
+	"model_reasoning_effort",
+	"features.plugins.enabled",
+] as const;
 
 const persistedTurnStatuses = [
 	"running",
@@ -150,18 +155,25 @@ function isEmptyRecord(value: unknown) {
 	return isPlainRecord(value) && Object.keys(value).length === 0;
 }
 
-function assertOnlySessionFlagOrigins(value: Record<string, unknown>) {
-	for (const origin of Object.values(value)) {
-		if (
-			!isPlainRecord(origin) ||
-			!isPlainRecord(origin.name) ||
-			typeof origin.name.type !== "string" ||
-			typeof origin.version !== "string"
-		) {
-			protocolInvalid();
-		}
-		if (origin.name.type !== "sessionFlags") configurationInvalid();
+function assertSessionFlagOrigin(origin: unknown) {
+	if (
+		!isPlainRecord(origin) ||
+		!isPlainRecord(origin.name) ||
+		typeof origin.name.type !== "string" ||
+		typeof origin.version !== "string"
+	) {
+		protocolInvalid();
 	}
+	if (origin.name.type !== "sessionFlags") configurationInvalid();
+}
+
+function assertOnlySessionFlagOrigins(value: Record<string, unknown>) {
+	for (const key of requiredConfigurationOriginKeys) {
+		const origin = ownRecordValue(value, key);
+		if (origin === undefined) configurationInvalid();
+		assertSessionFlagOrigin(origin);
+	}
+	for (const origin of Object.values(value)) assertSessionFlagOrigin(origin);
 }
 
 function isPersistedTurnStatus(value: unknown): value is PersistedTurnStatus {

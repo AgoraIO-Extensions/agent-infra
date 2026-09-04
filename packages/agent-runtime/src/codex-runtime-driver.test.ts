@@ -118,10 +118,10 @@ function configReadResult(
 		origins: {
 			model: { name: { type: "sessionFlags" }, version: "1" },
 			model_reasoning_effort: { name: { type: "sessionFlags" }, version: "1" },
-			mcp_servers: { name: { type: "sessionFlags" }, version: "1" },
-			plugins: { name: { type: "sessionFlags" }, version: "1" },
-			marketplaces: { name: { type: "sessionFlags" }, version: "1" },
-			"features.plugins": { name: { type: "sessionFlags" }, version: "1" },
+			"features.plugins.enabled": {
+				name: { type: "sessionFlags" },
+				version: "1",
+			},
 			...overrides.origins,
 		},
 	};
@@ -520,6 +520,54 @@ describe("Codex Runtime Driver", () => {
 				{ method: "config/read", params: { includeLayers: false } },
 			]);
 			expect(await readFile(path, "utf8")).not.toContain("private");
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it.each([
+		"model",
+		"model_reasoning_effort",
+		"features.plugins.enabled",
+	] as const)(
+		"fails closed when the required %s configuration origin is absent",
+		async (originKey) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const configuration = configReadResult();
+			delete configuration.origins[originKey];
+			bridge.setConfigReadResult(configuration);
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it.each([
+		"model",
+		"model_reasoning_effort",
+		"features.plugins.enabled",
+	] as const)(
+		"fails closed when the required %s configuration origin is not a session flag",
+		async (originKey) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.setConfigReadResult(
+				configReadResult({
+					origins: {
+						[originKey]: { name: { type: "system" }, version: "1" },
+					},
+				}),
+			);
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
 			expect(bridge.isClosed()).toBe(true);
 		},
 	);
