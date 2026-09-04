@@ -306,9 +306,14 @@ function executionState(
 	};
 }
 
-function eventState(row: EventRow | undefined): ConversationEventStateV1["existingEvent"] {
+function eventState(
+	row: EventRow | undefined,
+): ConversationEventStateV1["existingEvent"] {
 	if (!row) return undefined;
-	if (typeof row.event_digest !== "string" || !/^[a-f0-9]{64}$/.test(row.event_digest)) {
+	if (
+		typeof row.event_digest !== "string" ||
+		!/^[a-f0-9]{64}$/.test(row.event_digest)
+	) {
 		return unavailable();
 	}
 	return { event: persistedEvent(row), eventDigest: row.event_digest };
@@ -354,8 +359,10 @@ function validatePlan(
 		state.conversation.conversationId !== requestValue.command.conversationId ||
 		state.execution.executionId !== requestValue.command.executionId ||
 		state.execution.conversationId !== requestValue.command.conversationId ||
-		state.conversation.sessionGeneration !== requestValue.command.sessionGeneration ||
-		state.execution.sessionGeneration !== requestValue.command.sessionGeneration ||
+		state.conversation.sessionGeneration !==
+			requestValue.command.sessionGeneration ||
+		state.execution.sessionGeneration !==
+			requestValue.command.sessionGeneration ||
 		state.execution.deliveryFence !== requestValue.command.deliveryFence
 	) {
 		return unavailable();
@@ -385,7 +392,8 @@ function validatePlan(
 		event.conversationId !== requestValue.command.conversationId ||
 		event.executionId !== requestValue.command.executionId ||
 		event.sequence !== state.execution.lastSequence + 1 ||
-		event.conversationCursor !== state.conversation.lastConversationCursor + 1 ||
+		event.conversationCursor !==
+			state.conversation.lastConversationCursor + 1 ||
 		event.occurredAt !== requestValue.command.occurredAt ||
 		!sameEvent(event.event, requestValue.command.event)
 	) {
@@ -410,7 +418,8 @@ function validateDecision(
 	if (input.outcome === "stale" && input.event === undefined) {
 		return { outcome: "stale" };
 	}
-	if (input.outcome !== "replayed" || !state.existingEvent) return unavailable();
+	if (input.outcome !== "replayed" || !state.existingEvent)
+		return unavailable();
 	const replayed = exactRecord(input.event, [
 		"schemaVersion",
 		"eventId",
@@ -576,7 +585,9 @@ export class PostgresConversationEventTransactionV1
 		}
 	}
 
-	async #transaction<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
+	async #transaction<T>(
+		work: (transaction: Transaction) => Promise<T>,
+	): Promise<T> {
 		try {
 			return (await this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;

@@ -775,7 +775,10 @@ export const conversationEvents = platformSchema.table(
 			foreignColumns: [conversationExecutions.executionId],
 			name: "conversation_event_execution_fk",
 		}),
-		check("conversation_event_id_non_empty", sql`char_length(${table.eventId}) > 0`),
+		check(
+			"conversation_event_id_non_empty",
+			sql`char_length(${table.eventId}) > 0`,
+		),
 		check(
 			"conversation_event_adapter_key_non_empty",
 			sql`char_length(${table.adapterEventKey}) > 0`,
