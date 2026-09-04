@@ -135,7 +135,7 @@ export function MyAgentApplicationDetailScreen({
 			</div>
 			{withdrawalError ? (
 				<p className="text-slate-600" role="alert">
-					Unable to withdraw application. Please try again.
+					Unable to withdraw application.
 				</p>
 			) : null}
 		</section>

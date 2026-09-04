@@ -93,7 +93,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(screen.queryByText("Decision reason")).toBeNull();
 	});
 
-	it("keeps unavailable details opaque and reports a withdrawal error", async () => {
+	it("keeps unavailable details opaque and does not direct a withdrawal error to retry", async () => {
 		const unavailable = await renderWithMyAgentsRouter(
 			<MyAgentApplicationDetailScreen
 				onWithdraw={vi.fn()}
@@ -120,8 +120,9 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 		expect(screen.getByRole("alert").textContent).toBe(
-			"Unable to withdraw application. Please try again.",
+			"Unable to withdraw application.",
 		);
+		expect(screen.queryByText(/try again/i)).toBeNull();
 	});
 
 	it("renders a retryable detail failure without a stale application", async () => {

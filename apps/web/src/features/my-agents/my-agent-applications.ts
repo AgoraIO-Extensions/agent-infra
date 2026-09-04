@@ -30,8 +30,13 @@ export type MyAgentApplicationState =
 	| { kind: "ready"; application: AgentApplicationProjectionV1 }
 	| UnavailableState;
 
-const retryableError = () =>
-	new Error("My Agent data is temporarily unavailable");
+function requestError(retryable: boolean) {
+	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
+		retryable,
+	});
+}
+
+const retryableError = () => requestError(true);
 const maximumMyAgentApplicationPages = 100;
 
 function unavailable(error: { retryable?: boolean } | undefined) {
@@ -103,7 +108,7 @@ export async function withdrawMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw retryableError();
+	if (!result.data) throw requestError(result.error?.retryable !== false);
 
 	return result.data;
 }
