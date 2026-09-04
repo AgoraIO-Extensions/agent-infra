@@ -44,6 +44,10 @@ export {
 	PostgresConversationExecutionTransactionV1,
 } from "./conversation-execution.ts";
 export {
+	type PostgresConversationEventOptionsV1,
+	PostgresConversationEventTransactionV1,
+} from "./conversation-events.ts";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
