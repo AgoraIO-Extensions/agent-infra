@@ -88,6 +88,11 @@ const delegatedToolUnavailableJsonRpcError = Object.freeze({
 	code: -32_001,
 	message: "Platform delegated tools are unavailable",
 });
+const isolatedConfigurationKeys = [
+	"mcp_servers",
+	"plugins",
+	"marketplaces",
+] as const;
 
 const persistedTurnStatuses = [
 	"running",
@@ -139,6 +144,24 @@ function isJsonRpcRequestId(value: unknown): value is string | number {
 		typeof value === "string" ||
 		(typeof value === "number" && Number.isSafeInteger(value))
 	);
+}
+
+function isEmptyRecord(value: unknown) {
+	return isPlainRecord(value) && Object.keys(value).length === 0;
+}
+
+function assertOnlySessionFlagOrigins(value: Record<string, unknown>) {
+	for (const origin of Object.values(value)) {
+		if (
+			!isPlainRecord(origin) ||
+			!isPlainRecord(origin.name) ||
+			typeof origin.name.type !== "string" ||
+			typeof origin.version !== "string"
+		) {
+			protocolInvalid();
+		}
+		if (origin.name.type !== "sessionFlags") configurationInvalid();
+	}
 }
 
 function isPersistedTurnStatus(value: unknown): value is PersistedTurnStatus {
@@ -357,6 +380,14 @@ function protocolInvalid(): never {
 	throw protocolInvalidError();
 }
 
+function configurationInvalid(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_CODEX_CONFIGURATION_INVALID",
+		"Codex Runtime configuration is unavailable",
+		503,
+	);
+}
+
 function stateInvalid(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_CODEX_STATE_INVALID",
@@ -373,6 +404,32 @@ function statusForTurn(
 	if (value === "failed") return "failed";
 	if (value === "interrupted") return "cancelled";
 	protocolInvalid();
+}
+
+function assertContainedConfiguration(
+	value: unknown,
+	expected: Pick<CodexRuntimeDriverOptions, "model" | "reasoningEffort">,
+) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["config", "origins"]) ||
+		!isPlainRecord(value.config) ||
+		!isPlainRecord(value.origins)
+	) {
+		protocolInvalid();
+	}
+	if (
+		value.config.model !== expected.model ||
+		value.config.model_reasoning_effort !== expected.reasoningEffort ||
+		!isPlainRecord(value.config.features) ||
+		value.config.features.plugins !== false
+	) {
+		configurationInvalid();
+	}
+	assertOnlySessionFlagOrigins(value.origins);
+	for (const key of isolatedConfigurationKeys) {
+		if (!isEmptyRecord(value.config[key])) configurationInvalid();
+	}
 }
 
 class CodexRpc {
@@ -478,8 +535,10 @@ class CodexRpc {
 		}
 		try {
 			pending.resolve(frame.result);
-		} catch {
-			this.fail(protocolInvalidError());
+		} catch (error) {
+			this.fail(
+				error instanceof RuntimeHostError ? error : protocolInvalidError(),
+			);
 			return;
 		}
 		this.pending.delete(frame.id);
@@ -545,6 +604,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (!isPlainRecord(value)) protocolInvalid();
 				},
 			);
+			await rpc.request("config/read", { includeLayers: false }, (value) => {
+				assertContainedConfiguration(value, options);
+			});
 			return new CodexRuntimeDriver(file, rpc);
 		} catch (error) {
 			await rpc.close();

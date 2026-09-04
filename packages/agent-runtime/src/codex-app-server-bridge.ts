@@ -325,45 +325,6 @@ async function resolveCodexExecutable() {
 	throw unavailable();
 }
 
-function isMissingPath(error: unknown) {
-	return (
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		((error as NodeJS.ErrnoException).code === "ENOENT" ||
-			(error as NodeJS.ErrnoException).code === "ENOTDIR")
-	);
-}
-
-function hostCodexConfigurationPaths() {
-	// The pinned release reads macOS managed preferences outside the process filesystem boundary.
-	if (process.platform === "darwin") configurationInvalid();
-	if (process.platform === "win32") {
-		return [
-			"C:\\ProgramData\\OpenAI\\Codex\\config.toml",
-			"C:\\ProgramData\\OpenAI\\Codex\\requirements.toml",
-		];
-	}
-	return [
-		"/etc/codex/config.toml",
-		"/etc/codex/managed_config.toml",
-		"/etc/codex/requirements.toml",
-	];
-}
-
-async function assertNoHostCodexConfiguration() {
-	// The pinned loader merges system config and applies legacy managed config after CLI flags.
-	for (const path of hostCodexConfigurationPaths()) {
-		try {
-			await access(path, constants.F_OK);
-		} catch (error) {
-			if (isMissingPath(error)) continue;
-			configurationInvalid();
-		}
-		configurationInvalid();
-	}
-}
-
 async function createIsolatedLaunchPolicy(): Promise<IsolatedLaunchPolicy> {
 	const path = process.env.PATH;
 	if (!path) throw unavailable();
@@ -560,7 +521,6 @@ export class CodexAppServerBridge {
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
-		await assertNoHostCodexConfiguration();
 		const executable = await resolveCodexExecutable();
 		const launchPolicy = await createIsolatedLaunchPolicy();
 		try {
