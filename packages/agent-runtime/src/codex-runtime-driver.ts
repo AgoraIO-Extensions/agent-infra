@@ -432,11 +432,8 @@ class CodexRpc {
 			return;
 		}
 		if (!("id" in frame)) {
-			this.fail(
-				typeof frame.method === "string"
-					? unavailableError()
-					: protocolInvalidError(),
-			);
+			if (typeof frame.method === "string") return;
+			this.fail(protocolInvalidError());
 			return;
 		}
 		if (typeof frame.id !== "number" || !Number.isSafeInteger(frame.id)) {

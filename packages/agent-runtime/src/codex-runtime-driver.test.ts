@@ -105,6 +105,7 @@ class TestCodexBridge {
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
 	private wake?: () => void;
+	private notificationRead?: () => void;
 	private closed = false;
 	private turnStatus: CodexTurnStatus = "inProgress";
 	private holdTurnsListResponses = false;
@@ -242,12 +243,15 @@ class TestCodexBridge {
 	}
 
 	emitNotification() {
-		this.push({
-			method: "turn/started",
-			params: {
-				threadId: this.nativeThreadId,
-				turnId: this.nativeTurnId,
-			},
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push({
+				method: "turn/started",
+				params: {
+					threadId: this.nativeThreadId,
+					turnId: this.nativeTurnId,
+				},
+			});
 		});
 	}
 
@@ -308,7 +312,12 @@ class TestCodexBridge {
 	private async nextFrame() {
 		while (true) {
 			const frame = this.queuedFrames.shift();
-			if (frame) return frame;
+			if (frame) {
+				const notificationRead = this.notificationRead;
+				this.notificationRead = undefined;
+				notificationRead?.();
+				return frame;
+			}
 			if (this.closed) return undefined;
 			await new Promise<void>((resolve) => {
 				this.wake = resolve;
@@ -944,7 +953,7 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
-	it("fails closed for events and app-server notifications until #344 owns recovery", async () => {
+	it("keeps polling after app-server notifications until #344 owns event recovery", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -959,11 +968,11 @@ describe("Codex Runtime Driver", () => {
 			driver.subscribeEvents(accepted.nativeSessionRef, command.executionId),
 		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 
-		bridge.emitNotification();
+		await bridge.emitNotification();
 		await vi.waitFor(async () => {
-			await expect(
-				driver.getStatus(accepted.nativeSessionRef, command.executionId),
-			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("running");
 		});
 	});
 
