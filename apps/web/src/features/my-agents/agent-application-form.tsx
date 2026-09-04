@@ -6,6 +6,15 @@ import type {
 	AgentApplicationUpdateRequestV1Writable,
 } from "../../pilot/generated/types.gen.js";
 import {
+	type AgentApplicationActionDraft,
+	type AgentApplicationEnvironmentDraft,
+	type AgentApplicationModelDraft,
+	type AgentApplicationSourceKind,
+	buildAgentApplicationRequest,
+	showsModelConfiguration,
+	sourceKindFor,
+} from "./agent-application-draft.js";
+import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
@@ -24,33 +33,19 @@ type AgentApplicationFormProps =
 			submitting: boolean;
 	  };
 
-type SourceKind =
-	| "standard"
-	| "custom-platform-adapter"
-	| "custom-self-managed";
-
-type ActionKey = "providerId" | "actionId" | "actionVersion";
-type EnvironmentKey = "name" | "value";
-type ModelKey =
-	| "optionId"
-	| "endpointId"
-	| "modelId"
-	| "reasoningLevels"
-	| "credentialValue";
-type ActionDraft = Record<ActionKey, string>;
-type EnvironmentDraft = Record<EnvironmentKey, string>;
-type ModelDraft = Record<ModelKey, string>;
-
 type DraftField<T extends string> = {
 	key: T;
 	label: string;
 	multiline?: boolean;
+	required?: boolean;
 	type?: "password" | "text";
 };
 
 type DraftRowsProps<T extends string> = {
 	fields: readonly DraftField<T>[];
+	idPrefix: string;
 	label: string;
+	minimumRows?: number;
 	onChange: (index: number, key: T, value: string) => void;
 	onRemove: (index: number) => void;
 	rows: readonly Record<T, string>[];
@@ -59,31 +54,15 @@ type DraftRowsProps<T extends string> = {
 const inputClassName =
 	"min-h-11 w-full border border-slate-400 bg-white px-3 text-slate-950";
 
-function splitValues(value: string) {
-	return value
-		.split(/[\n,]/)
-		.map((item) => item.trim())
-		.filter((item) => item.length > 0);
-}
-
-function sourceKindFor(
-	source: AgentApplicationProjectionV1["source"] | undefined,
-): SourceKind {
-	if (!source || source.kind === "standard") return "standard";
-	return source.interactionMode === "platform-adapter"
-		? "custom-platform-adapter"
-		: "custom-self-managed";
-}
-
-function blankAction(): ActionDraft {
+function blankAction(): AgentApplicationActionDraft {
 	return { providerId: "", actionId: "", actionVersion: "" };
 }
 
-function blankEnvironment(): EnvironmentDraft {
+function blankEnvironment(): AgentApplicationEnvironmentDraft {
 	return { name: "", value: "" };
 }
 
-function blankModel(): ModelDraft {
+function blankModel(): AgentApplicationModelDraft {
 	return {
 		optionId: "",
 		endpointId: "",
@@ -93,22 +72,11 @@ function blankModel(): ModelDraft {
 	};
 }
 
-function hasAnyValue(row: object) {
-	return Object.values(row).some(
-		(value) => typeof value === "string" && value.length > 0,
-	);
-}
-
-function hasEveryValue<T extends string>(
-	row: Record<T, string>,
-	keys: readonly T[],
-) {
-	return keys.every((key) => row[key].trim().length > 0);
-}
-
 function DraftRows<T extends string>({
 	fields,
+	idPrefix,
 	label,
+	minimumRows = 0,
 	onChange,
 	onRemove,
 	rows,
@@ -121,17 +89,18 @@ function DraftRows<T extends string>({
 						<div className="space-y-2" key={field.key}>
 							<label
 								className="font-medium text-slate-800 text-sm"
-								htmlFor={`application-${label}-${field.key}-${index}`}
+								htmlFor={`application-${idPrefix}-${field.key}-${index}`}
 							>
 								{field.label}
 							</label>
 							{field.multiline ? (
 								<textarea
 									className="min-h-20 w-full border border-slate-400 bg-white px-3 py-2 text-slate-950"
-									id={`application-${label}-${field.key}-${index}`}
+									id={`application-${idPrefix}-${field.key}-${index}`}
 									onChange={(event) =>
 										onChange(index, field.key, event.target.value)
 									}
+									required={field.required}
 									value={row[field.key]}
 								/>
 							) : (
@@ -140,23 +109,26 @@ function DraftRows<T extends string>({
 										field.type === "password" ? "new-password" : undefined
 									}
 									className={inputClassName}
-									id={`application-${label}-${field.key}-${index}`}
+									id={`application-${idPrefix}-${field.key}-${index}`}
 									onChange={(event) =>
 										onChange(index, field.key, event.target.value)
 									}
+									required={field.required}
 									type={field.type ?? "text"}
 									value={row[field.key]}
 								/>
 							)}
 						</div>
 					))}
-					<button
-						className="min-h-11 self-end border border-slate-400 px-3 font-medium text-slate-800 text-sm hover:bg-slate-100"
-						onClick={() => onRemove(index)}
-						type="button"
-					>
-						Remove {label}
-					</button>
+					{rows.length > minimumRows ? (
+						<button
+							className="min-h-11 self-end border border-slate-400 px-3 font-medium text-slate-800 text-sm hover:bg-slate-100"
+							onClick={() => onRemove(index)}
+							type="button"
+						>
+							Remove {label}
+						</button>
+					) : null}
 				</div>
 			))}
 		</>
@@ -175,7 +147,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? application.source.templateId
 			: "",
 	);
-	const [sourceKind, setSourceKind] = useState<SourceKind>(() =>
+	const [sourceKind, setSourceKind] = useState<AgentApplicationSourceKind>(() =>
 		sourceKindFor(application?.source),
 	);
 	const [imageReference, setImageReference] = useState(
@@ -207,136 +179,55 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				.map((target) => target.organizationId)
 				.join("\n") ?? "",
 		);
-	const [actions, setActions] = useState<ActionDraft[]>(
+	const [actions, setActions] = useState<AgentApplicationActionDraft[]>(
 		configuration?.actions.map((action) => ({ ...action })) ?? [],
 	);
-	const [environment, setEnvironment] = useState<EnvironmentDraft[]>(
-		configuration?.environment.map((value) => ({ ...value })) ?? [],
+	const [environment, setEnvironment] = useState<
+		AgentApplicationEnvironmentDraft[]
+	>(configuration?.environment.map((value) => ({ ...value })) ?? []);
+	const [secrets, setSecrets] = useState<AgentApplicationEnvironmentDraft[]>(
+		[],
 	);
-	const [secrets, setSecrets] = useState<EnvironmentDraft[]>([]);
 	const [configureModels, setConfigureModels] = useState(false);
-	const [models, setModels] = useState<ModelDraft[]>(() =>
+	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() =>
 		props.mode === "create" ? [blankModel()] : [],
 	);
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState("");
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState("");
-	const [formError, setFormError] = useState<string | null>(null);
-	const requiresModelConfiguration =
-		props.mode === "create" && sourceKind === "standard";
-	const showsModelConfiguration =
-		sourceKind === "standard" &&
-		(requiresModelConfiguration || configureModels);
-	const source: AgentApplicationCreateRequestV1Writable["source"] =
-		sourceKind === "standard"
-			? { kind: "standard", templateId: templateId.trim() }
-			: sourceKind === "custom-platform-adapter"
-				? {
-						kind: "custom",
-						imageReference: imageReference.trim(),
-						interactionMode: "platform-adapter",
-					}
-				: {
-						kind: "custom",
-						imageReference: imageReference.trim(),
-						interactionMode: "self-managed",
-						identityResponsibility,
-					};
+	const modelConfigurationVisible = showsModelConfiguration(
+		props.mode,
+		sourceKind,
+		configureModels,
+	);
 
 	const submit = () => {
-		const activeActions = actions.filter(hasAnyValue);
-		const activeEnvironment = environment.filter(hasAnyValue);
-		const activeSecrets = secrets.filter(hasAnyValue);
-		if (
-			activeActions.some(
-				(row) =>
-					!hasEveryValue(row, ["providerId", "actionId", "actionVersion"]),
-			) ||
-			activeEnvironment.some((row) => !hasEveryValue(row, ["name", "value"])) ||
-			activeSecrets.some((row) => !hasEveryValue(row, ["name", "value"]))
-		) {
-			setFormError(
-				"Complete every configured Action, environment value, and Secret.",
-			);
-			return;
-		}
-		const activeModels = models.filter(hasAnyValue);
-		if (
-			showsModelConfiguration &&
-			(!defaultModelOptionId.trim() ||
-				!defaultReasoningLevel.trim() ||
-				activeModels.length === 0 ||
-				activeModels.some(
-					(row) =>
-						!hasEveryValue(row, [
-							"optionId",
-							"endpointId",
-							"modelId",
-							"reasoningLevels",
-						]),
-				))
-		) {
-			setFormError("Complete the default and every configured model option.");
-			return;
-		}
-		setFormError(null);
-		const modelConfiguration = showsModelConfiguration
-			? {
-					options: activeModels.map((model) => ({
-						optionId: model.optionId.trim(),
-						endpointId: model.endpointId.trim(),
-						modelId: model.modelId.trim(),
-						reasoningLevels: splitValues(model.reasoningLevels),
-						...(model.credentialValue.length > 0
-							? { credentialValue: model.credentialValue }
-							: {}),
-					})),
-					defaultOptionId: defaultModelOptionId.trim(),
-					defaultReasoningLevel: defaultReasoningLevel.trim(),
-				}
-			: undefined;
-		const secretValues = activeSecrets.map((secret) => ({
-			name: secret.name.trim(),
-			value: secret.value,
-		}));
+		const draft = {
+			name,
+			description,
+			sourceKind,
+			templateId,
+			imageReference,
+			identityResponsibility,
+			coOwnerIds,
+			userAvailabilityIds,
+			organizationAvailabilityIds,
+			actions,
+			environment,
+			secrets,
+			configureModels,
+			models,
+			defaultModelOptionId,
+			defaultReasoningLevel,
+		};
 		setSecrets([]);
 		setModels((current) =>
 			current.map((model) => ({ ...model, credentialValue: "" })),
 		);
-		const body = {
-			schemaVersion: 1 as const,
-			name: name.trim(),
-			description: description.trim(),
-			source,
-			coOwnerIds: splitValues(coOwnerIds),
-			availability: [
-				...splitValues(userAvailabilityIds).map((userId) => ({
-					kind: "user" as const,
-					userId,
-				})),
-				...splitValues(organizationAvailabilityIds).map((organizationId) => ({
-					kind: "organization" as const,
-					organizationId,
-				})),
-			],
-			actions: activeActions.map((action) => ({
-				providerId: action.providerId.trim(),
-				actionId: action.actionId.trim(),
-				actionVersion: action.actionVersion.trim(),
-			})),
-			environment: activeEnvironment.map((value) => ({
-				name: value.name.trim(),
-				value: value.value,
-			})),
-			...(modelConfiguration === undefined ? {} : { modelConfiguration }),
-		};
 		if (props.mode === "create") {
-			props.onSubmit({ ...body, secrets: secretValues });
+			props.onSubmit(buildAgentApplicationRequest("create", draft));
 			return;
 		}
-		props.onSubmit({
-			...body,
-			...(secretValues.length === 0 ? {} : { secrets: secretValues }),
-		});
+		props.onSubmit(buildAgentApplicationRequest("update", draft));
 	};
 
 	return (
@@ -347,11 +238,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				submit();
 			}}
 		>
-			{formError ? (
-				<p className="text-slate-700 text-sm" role="alert">
-					{formError}
-				</p>
-			) : null}
 			<div className="grid gap-4 sm:grid-cols-2">
 				<div className="space-y-2">
 					<label
@@ -398,7 +284,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							className={inputClassName}
 							id="application-source-kind"
 							onChange={(event) => {
-								const kind = event.target.value as SourceKind;
+								const kind = event.target.value as AgentApplicationSourceKind;
 								setSourceKind(kind);
 								if (kind === "standard" && models.length === 0) {
 									setModels([blankModel()]);
@@ -529,10 +415,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				</legend>
 				<DraftRows
 					fields={[
-						{ key: "providerId", label: "Action provider ID" },
-						{ key: "actionId", label: "Action ID" },
-						{ key: "actionVersion", label: "Action version" },
+						{
+							key: "providerId",
+							label: "Action provider ID",
+							required: true,
+						},
+						{ key: "actionId", label: "Action ID", required: true },
+						{
+							key: "actionVersion",
+							label: "Action version",
+							required: true,
+						},
 					]}
+					idPrefix="action"
 					label="action"
 					onChange={(index, key, value) =>
 						setActions((current) =>
@@ -562,9 +457,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				</legend>
 				<DraftRows
 					fields={[
-						{ key: "name", label: "Environment name" },
-						{ key: "value", label: "Environment value" },
+						{ key: "name", label: "Environment name", required: true },
+						{ key: "value", label: "Environment value", required: true },
 					]}
+					idPrefix="environment"
 					label="environment value"
 					onChange={(index, key, value) =>
 						setEnvironment((current) =>
@@ -596,9 +492,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				</legend>
 				<DraftRows
 					fields={[
-						{ key: "name", label: "Secret name" },
-						{ key: "value", label: "Secret value", type: "password" },
+						{ key: "name", label: "Secret name", required: true },
+						{
+							key: "value",
+							label: "Secret value",
+							required: true,
+							type: "password",
+						},
 					]}
+					idPrefix="secret"
 					label="secret"
 					onChange={(index, key, value) =>
 						setSecrets((current) =>
@@ -644,17 +546,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							Configure models
 						</label>
 					) : null}
-					{showsModelConfiguration ? (
+					{modelConfigurationVisible ? (
 						<>
 							<DraftRows
 								fields={[
-									{ key: "optionId", label: "Model option ID" },
-									{ key: "endpointId", label: "Model endpoint ID" },
-									{ key: "modelId", label: "Model ID" },
+									{
+										key: "optionId",
+										label: "Model option ID",
+										required: true,
+									},
+									{
+										key: "endpointId",
+										label: "Model endpoint ID",
+										required: true,
+									},
+									{ key: "modelId", label: "Model ID", required: true },
 									{
 										key: "reasoningLevels",
 										label: "Reasoning levels",
 										multiline: true,
+										required: true,
 									},
 									{
 										key: "credentialValue",
@@ -662,7 +573,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										type: "password",
 									},
 								]}
+								idPrefix="model-option"
 								label="model option"
+								minimumRows={1}
 								onChange={(index, key, value) =>
 									setModels((current) =>
 										current.map((item, itemIndex) =>
@@ -691,6 +604,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										onChange={(event) =>
 											setDefaultModelOptionId(event.target.value)
 										}
+										required
 										value={defaultModelOptionId}
 									/>
 								</div>
@@ -707,6 +621,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										onChange={(event) =>
 											setDefaultReasoningLevel(event.target.value)
 										}
+										required
 										value={defaultReasoningLevel}
 									/>
 								</div>
