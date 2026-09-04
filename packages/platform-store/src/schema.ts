@@ -28,6 +28,17 @@ export const platformStatusValues = {
 	],
 	auditOutcome: ["succeeded", "rejected", "failed"],
 	idempotencyStatus: ["reserved", "completed"],
+	conversationStatus: ["ready", "active", "unavailable"],
+	conversationExecutionStatus: [
+		"submitted",
+		"processing",
+		"unknown",
+		"completed",
+		"failed",
+		"cancelled",
+	],
+	conversationMessageStatus: ["submitted"],
+	conversationStopStatus: ["submitted", "completed"],
 	agentManagementStatus: [
 		"pending_approval",
 		"withdrawn",
@@ -75,6 +86,21 @@ export const auditOutcome = platformSchema.enum("audit_outcome", [
 export const idempotencyStatus = platformSchema.enum("idempotency_status", [
 	...platformStatusValues.idempotencyStatus,
 ]);
+export const conversationStatus = platformSchema.enum("conversation_status", [
+	...platformStatusValues.conversationStatus,
+]);
+export const conversationExecutionStatus = platformSchema.enum(
+	"conversation_execution_status",
+	[...platformStatusValues.conversationExecutionStatus],
+);
+export const conversationMessageStatus = platformSchema.enum(
+	"conversation_message_status",
+	[...platformStatusValues.conversationMessageStatus],
+);
+export const conversationStopStatus = platformSchema.enum(
+	"conversation_stop_status",
+	[...platformStatusValues.conversationStopStatus],
+);
 export const agentManagementStatus = platformSchema.enum(
 	"agent_management_status",
 	[...platformStatusValues.agentManagementStatus],
@@ -450,6 +476,263 @@ export const agentManagementHistory = platformSchema.table(
 	],
 );
 
+export const conversations = platformSchema.table(
+	"conversations",
+	{
+		id: text("id").primaryKey(),
+		agentId: text("agent_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		channelId: text("channel_id").notNull(),
+		status: conversationStatus("status").notNull(),
+		sessionGeneration: bigint("session_generation", {
+			mode: "number",
+		}).notNull(),
+		hostSessionRef: text("host_session_ref"),
+		authorizationRevision: text("authorization_revision").notNull(),
+		lastConversationCursor: bigint("last_conversation_cursor", {
+			mode: "number",
+		})
+			.default(0)
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"conversation_agent_id_non_empty",
+			sql`char_length(${table.agentId}) > 0`,
+		),
+		check(
+			"conversation_actor_id_non_empty",
+			sql`char_length(${table.actorId}) > 0`,
+		),
+		check(
+			"conversation_channel_id_non_empty",
+			sql`char_length(${table.channelId}) > 0`,
+		),
+		check(
+			"conversation_session_generation_safe",
+			sql`${table.sessionGeneration} between 1 and 9007199254740991`,
+		),
+		check(
+			"conversation_host_session_ref_non_empty",
+			sql`${table.hostSessionRef} IS NULL OR char_length(${table.hostSessionRef}) > 0`,
+		),
+		check(
+			"conversation_authorization_revision_non_empty",
+			sql`char_length(${table.authorizationRevision}) > 0`,
+		),
+		check(
+			"conversation_cursor_non_negative",
+			sql`${table.lastConversationCursor} between 0 and 9007199254740991`,
+		),
+		index("conversation_actor_lookup_idx").on(
+			table.actorId,
+			table.agentId,
+			table.channelId,
+		),
+	],
+);
+
+export const conversationExecutions = platformSchema.table(
+	"conversation_executions",
+	{
+		executionId: text("execution_id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		agentId: text("agent_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		channelId: text("channel_id").notNull(),
+		turnId: text("turn_id").notNull(),
+		status: conversationExecutionStatus("status").notNull(),
+		sessionGeneration: bigint("session_generation", {
+			mode: "number",
+		}).notNull(),
+		deliveryFence: bigint("delivery_fence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "conversation_execution_conversation_fk",
+		}),
+		check(
+			"conversation_execution_id_non_empty",
+			sql`char_length(${table.executionId}) > 0`,
+		),
+		check(
+			"conversation_execution_agent_id_non_empty",
+			sql`char_length(${table.agentId}) > 0`,
+		),
+		check(
+			"conversation_execution_actor_id_non_empty",
+			sql`char_length(${table.actorId}) > 0`,
+		),
+		check(
+			"conversation_execution_channel_id_non_empty",
+			sql`char_length(${table.channelId}) > 0`,
+		),
+		check(
+			"conversation_execution_turn_id_non_empty",
+			sql`char_length(${table.turnId}) > 0`,
+		),
+		check(
+			"conversation_execution_session_generation_safe",
+			sql`${table.sessionGeneration} between 1 and 9007199254740991`,
+		),
+		check(
+			"conversation_execution_delivery_fence_safe",
+			sql`${table.deliveryFence} between 0 and 9007199254740991`,
+		),
+		check(
+			"conversation_execution_authorization_revision_non_empty",
+			sql`char_length(${table.authorizationRevision}) > 0`,
+		),
+		uniqueIndex("conversation_active_execution_unique")
+			.on(table.conversationId)
+			.where(sql`${table.status} in ('submitted', 'processing', 'unknown')`),
+		index("conversation_execution_conversation_idx").on(
+			table.conversationId,
+			table.createdAt,
+		),
+	],
+);
+
+export const conversationMessages = platformSchema.table(
+	"conversation_messages",
+	{
+		messageId: text("message_id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		role: varchar("role", { length: 16 }).notNull(),
+		text: text("text").notNull(),
+		executionId: text("execution_id").notNull(),
+		status: conversationMessageStatus("status").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "conversation_message_conversation_fk",
+		}),
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_message_execution_fk",
+		}),
+		check(
+			"conversation_message_id_non_empty",
+			sql`char_length(${table.messageId}) > 0`,
+		),
+		check(
+			"conversation_message_actor_id_non_empty",
+			sql`char_length(${table.actorId}) > 0`,
+		),
+		check("conversation_message_role_user", sql`${table.role} = 'user'`),
+		check(
+			"conversation_message_text_non_empty",
+			sql`char_length(${table.text}) > 0`,
+		),
+		index("conversation_message_conversation_idx").on(
+			table.conversationId,
+			table.createdAt,
+		),
+	],
+);
+
+export const conversationStops = platformSchema.table(
+	"conversation_stops",
+	{
+		executionId: text("execution_id").primaryKey(),
+		stopRequestId: text("stop_request_id").notNull(),
+		status: conversationStopStatus("status").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_stop_execution_fk",
+		}),
+		check(
+			"conversation_stop_request_id_non_empty",
+			sql`char_length(${table.stopRequestId}) > 0`,
+		),
+		uniqueIndex("conversation_stop_request_unique").on(table.stopRequestId),
+	],
+);
+
+export const conversationAuditEvents = platformSchema.table(
+	"conversation_audit_events",
+	{
+		id: text("id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		executionId: text("execution_id").notNull(),
+		agentId: text("agent_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		action: varchar("action", { length: 128 }).notNull(),
+		traceId: text("trace_id").notNull(),
+		requestId: text("request_id").notNull(),
+		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "conversation_audit_conversation_fk",
+		}),
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_audit_execution_fk",
+		}),
+		check("conversation_audit_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"conversation_audit_agent_id_non_empty",
+			sql`char_length(${table.agentId}) > 0`,
+		),
+		check(
+			"conversation_audit_actor_id_non_empty",
+			sql`char_length(${table.actorId}) > 0`,
+		),
+		check(
+			"conversation_audit_action_non_empty",
+			sql`char_length(${table.action}) > 0`,
+		),
+		check(
+			"conversation_audit_trace_id_non_empty",
+			sql`char_length(${table.traceId}) > 0`,
+		),
+		check(
+			"conversation_audit_request_id_non_empty",
+			sql`char_length(${table.requestId}) > 0`,
+		),
+		index("conversation_audit_trace_idx").on(table.traceId),
+		index("conversation_audit_conversation_idx").on(
+			table.conversationId,
+			table.occurredAt,
+		),
+	],
+);
+
 export const outboxItems = platformSchema.table(
 	"outbox_items",
 	{
@@ -672,6 +955,11 @@ export const platformInfrastructureTables = [
 	agentOwners,
 	agentAvailability,
 	agentManagementHistory,
+	conversations,
+	conversationExecutions,
+	conversationMessages,
+	conversationStops,
+	conversationAuditEvents,
 	outboxItems,
 	auditEvents,
 	idempotencyRecords,

@@ -40,6 +40,10 @@ export {
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
 export {
+	type PostgresConversationExecutionOptionsV1,
+	PostgresConversationExecutionTransactionV1,
+} from "./conversation-execution.ts";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
