@@ -570,6 +570,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									{
 										key: "credentialValue",
 										label: "Credential value",
+										required: props.mode === "create",
 										type: "password",
 									},
 								]}
