@@ -28,15 +28,25 @@ let client: ReturnType<typeof postgres>;
 let testDatabase: PostgresTestDatabase | undefined;
 
 const failureTable = {
+	conversation: "platform.conversations",
 	idempotency: "platform.idempotency_records",
 	execution: "platform.conversation_executions",
 	message: "platform.conversation_messages",
+	stop: "platform.conversation_stops",
 	outbox: "platform.outbox_items",
 	audit: "platform.conversation_audit_events",
 	commit: "platform.conversation_audit_events",
 } as const;
 
 type FailurePoint = keyof typeof failureTable;
+const initialMessageFailurePoints = [
+	"idempotency",
+	"execution",
+	"message",
+	"outbox",
+	"audit",
+	"commit",
+] as const;
 
 interface ConversationConformanceHarness {
 	readonly useCase: ConversationExecutionUseCaseV1;
@@ -189,6 +199,20 @@ async function disarmFailure(point: FailurePoint): Promise<void> {
 		`drop trigger if exists ${triggerName} on ${failureTable[point]}`,
 	);
 	await client.unsafe(`drop function if exists ${functionName}()`);
+}
+
+async function commandEffectCounts() {
+	const [counts] = await client`
+		select
+			(select count(*)::int from platform.conversations) as conversations,
+			(select count(*)::int from platform.conversation_messages) as messages,
+			(select count(*)::int from platform.conversation_executions) as executions,
+			(select count(*)::int from platform.conversation_stops) as stops,
+			(select count(*)::int from platform.outbox_items) as outbox,
+			(select count(*)::int from platform.conversation_audit_events) as audit,
+			(select count(*)::int from platform.idempotency_records) as idempotency
+	`;
+	return counts;
 }
 
 function conversationCommandConformance(
@@ -804,7 +828,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 				requestId: "request_create_rollback",
 				traceId: "trace_create_rollback",
 			});
-			for (const point of Object.keys(failureTable) as FailurePoint[]) {
+			for (const point of initialMessageFailurePoints) {
 				await armFailure(point);
 				try {
 					await expect(
@@ -848,6 +872,92 @@ describe("PostgreSQL Conversation command transaction", () => {
 			}
 		} finally {
 			await transaction.close();
+		}
+	});
+
+	it("rolls back conversation creation and stop insertion failures", async () => {
+		const createFailure = createConversation();
+		try {
+			await armFailure("conversation");
+			try {
+				await expect(
+					createFailure.useCase.createConversation({
+						schemaVersion: 1,
+						agentId: authority.agentId,
+						idempotencyKey: "create_insert_rollback",
+						requestId: "request_create_insert_rollback",
+						traceId: "trace_create_insert_rollback",
+					}),
+				).rejects.toMatchObject({
+					name: "ConversationExecutionError",
+					code: "unavailable",
+				});
+			} finally {
+				await disarmFailure("conversation");
+			}
+			expect(await commandEffectCounts()).toEqual({
+				conversations: 0,
+				messages: 0,
+				executions: 0,
+				stops: 0,
+				outbox: 0,
+				audit: 0,
+				idempotency: 0,
+			});
+		} finally {
+			await createFailure.transaction.close();
+		}
+
+		const stopFailure = createConversation();
+		try {
+			await stopFailure.useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_stop_insert_rollback",
+				requestId: "request_stop_insert_rollback",
+				traceId: "trace_stop_insert_rollback",
+			});
+			await stopFailure.useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "conversation_id_1",
+				text: "stop insert rollback",
+				idempotencyKey: "message_stop_insert_rollback",
+				requestId: "request_message_stop_insert_rollback",
+				traceId: "trace_message_stop_insert_rollback",
+			});
+			const before = await commandEffectCounts();
+			await armFailure("stop");
+			try {
+				await expect(
+					stopFailure.useCase.stop({
+						schemaVersion: 1,
+						command: "stop",
+						conversationId: "conversation_id_1",
+						targetExecutionId: "conversation_id_3",
+						idempotencyKey: "stop_insert_rollback",
+						requestId: "request_stop_insert_rollback",
+						traceId: "trace_stop_insert_rollback",
+					}),
+				).rejects.toMatchObject({
+					name: "ConversationExecutionError",
+					code: "unavailable",
+				});
+			} finally {
+				await disarmFailure("stop");
+			}
+			expect(await commandEffectCounts()).toEqual(before);
+			expect(before).toEqual({
+				conversations: 1,
+				messages: 1,
+				executions: 1,
+				stops: 0,
+				outbox: 1,
+				audit: 1,
+				idempotency: 2,
+			});
+		} finally {
+			await stopFailure.transaction.close();
 		}
 	});
 
