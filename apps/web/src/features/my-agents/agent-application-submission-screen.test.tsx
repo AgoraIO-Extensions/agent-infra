@@ -42,7 +42,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 			/>,
 		);
 		expect(screen.getByRole("alert").textContent).toBe(
-			"Unable to submit the application. Please try again shortly.",
+			"Unable to submit the application. Re-enter any Secret or model credential before trying again.",
 		);
 		expect(screen.queryByText("private transport detail")).toBeNull();
 		first.unmount();

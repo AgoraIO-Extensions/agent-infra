@@ -10,22 +10,23 @@ import {
 	updateMyAgentApplication,
 } from "./my-agent-applications.js";
 
-type SubmissionAttempt =
+type SubmissionCommand =
 	| {
 			body: AgentApplicationCreateRequestV1Writable;
-			idempotencyKey: string;
 			kind: "create";
 	  }
 	| {
 			applicationId: string;
 			body: AgentApplicationUpdateRequestV1Writable;
-			idempotencyKey: string;
 			kind: "update";
 	  };
+
+type SubmissionAttempt = SubmissionCommand & { idempotencyKey: string };
 
 export function useAgentApplicationSubmission(applicationId?: string) {
 	const queryClient = useQueryClient();
 	const currentApplicationId = useRef(applicationId);
+	const activeSubmission = useRef<string | undefined>(undefined);
 	const submission = useMutation({
 		mutationKey: ["my-agents", "application-submission"],
 		mutationFn: (attempt: SubmissionAttempt) =>
@@ -41,31 +42,45 @@ export function useAgentApplicationSubmission(applicationId?: string) {
 				queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
 				queryClient.invalidateQueries({ queryKey: ["agents"] }),
 			]),
+		onSettled: (_data, _error, attempt) => {
+			if (activeSubmission.current === attempt.idempotencyKey) {
+				activeSubmission.current = undefined;
+			}
+		},
 	});
 
 	useLayoutEffect(() => {
 		if (currentApplicationId.current === applicationId) return;
 		currentApplicationId.current = applicationId;
+		activeSubmission.current = undefined;
 		submission.reset();
 	}, [applicationId, submission.reset]);
+
+	const startSubmission = (command: SubmissionCommand) => {
+		if (activeSubmission.current !== undefined) return;
+		const attempt: SubmissionAttempt = {
+			...command,
+			idempotencyKey: crypto.randomUUID(),
+		};
+		activeSubmission.current = attempt.idempotencyKey;
+		submission.mutate(attempt);
+	};
 
 	return {
 		...submission,
 		create: (body: AgentApplicationCreateRequestV1Writable) =>
-			submission.mutate({
+			startSubmission({
 				kind: "create",
 				body,
-				idempotencyKey: crypto.randomUUID(),
 			}),
 		update: (
 			applicationId: string,
 			body: AgentApplicationUpdateRequestV1Writable,
 		) =>
-			submission.mutate({
+			startSubmission({
 				kind: "update",
 				applicationId,
 				body,
-				idempotencyKey: crypto.randomUUID(),
 			}),
 	};
 }

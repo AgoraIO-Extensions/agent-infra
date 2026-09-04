@@ -68,6 +68,12 @@ describe("useAgentApplicationSubmission", () => {
 
 		act(() => {
 			expect(result.current.create(createBody)).toBeUndefined();
+		});
+		await waitFor(() =>
+			expect(createMyAgentApplication).toHaveBeenCalledOnce(),
+		);
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		act(() => {
 			expect(
 				result.current.update(
 					pendingApplication.applicationId,
@@ -76,7 +82,6 @@ describe("useAgentApplicationSubmission", () => {
 			).toBeUndefined();
 		});
 		await waitFor(() => {
-			expect(createMyAgentApplication).toHaveBeenCalledOnce();
 			expect(updateMyAgentApplication).toHaveBeenCalledOnce();
 		});
 		expect(createMyAgentApplication).toHaveBeenCalledWith(
@@ -91,9 +96,49 @@ describe("useAgentApplicationSubmission", () => {
 		expect(vi.mocked(createMyAgentApplication).mock.calls[0]?.[1]).not.toBe(
 			vi.mocked(updateMyAgentApplication).mock.calls[0]?.[2],
 		);
-		expect(result.current.isSuccess).toBe(true);
 		rerender({ applicationId: "application-other" });
 		await waitFor(() => expect(result.current.isIdle).toBe(true));
+		queryClient.clear();
+	});
+
+	it("accepts only one command while a submission is in flight", async () => {
+		const queryClient = new QueryClient();
+		let resolveFirstSubmission: (value: typeof pendingApplication) => void =
+			() => undefined;
+		vi.mocked(createMyAgentApplication)
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveFirstSubmission = resolve;
+					}),
+			)
+			.mockResolvedValueOnce(pendingApplication);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useAgentApplicationSubmission(), {
+			wrapper,
+		});
+
+		act(() => {
+			result.current.create(createBody);
+			result.current.create(createBody);
+		});
+		await waitFor(() =>
+			expect(createMyAgentApplication).toHaveBeenCalledOnce(),
+		);
+
+		await act(async () => {
+			resolveFirstSubmission(pendingApplication);
+		});
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		act(() => result.current.create(createBody));
+		await waitFor(() =>
+			expect(createMyAgentApplication).toHaveBeenCalledTimes(2),
+		);
+		expect(vi.mocked(createMyAgentApplication).mock.calls[0]?.[1]).not.toBe(
+			vi.mocked(createMyAgentApplication).mock.calls[1]?.[1],
+		);
 		queryClient.clear();
 	});
 });

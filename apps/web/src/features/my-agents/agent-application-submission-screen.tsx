@@ -78,7 +78,7 @@ export function AgentApplicationSubmissionScreen(
 				<p className="text-slate-600 text-sm" role="alert">
 					{props.error.retryable === false
 						? "This application changed or is unavailable. Refresh the page."
-						: "Unable to submit the application. Please try again shortly."}
+						: "Unable to submit the application. Re-enter any Secret or model credential before trying again."}
 				</p>
 			) : null}
 		</section>
