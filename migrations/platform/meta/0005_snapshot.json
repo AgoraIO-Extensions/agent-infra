@@ -1278,19 +1278,6 @@
           "notNull": true,
           "default": 0
         },
-        "last_event_sequence": {
-          "name": "last_event_sequence",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "last_runtime_cursor": {
-          "name": "last_runtime_cursor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "authorization_revision": {
           "name": "authorization_revision",
           "type": "text",
@@ -1309,6 +1296,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "last_event_sequence": {
+          "name": "last_event_sequence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_runtime_cursor": {
+          "name": "last_runtime_cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
