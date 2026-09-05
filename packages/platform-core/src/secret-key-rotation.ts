@@ -58,14 +58,14 @@ export interface SecretKeyRotationAuditIntentV1 {
 	readonly traceId: string;
 	readonly actorType: "system";
 	readonly actorId: string;
-	readonly action: "secret.rewrap" | "secret.retire-key";
+	readonly action: "secret.decrypt" | "secret.rewrap" | "secret.retire-key";
 	readonly targetType: "secret" | "secret_key";
 	readonly targetId: string;
 	readonly agentId: string | null;
 	readonly outcome: "succeeded" | "rejected" | "failed";
 	readonly details: {
 		readonly wrappingKeyVersion: string;
-		readonly operation: "rewrap" | "retire-key";
+		readonly operation: "decrypt" | "rewrap" | "retire-key";
 		readonly result: "succeeded" | "rejected" | "failed";
 	};
 }
@@ -78,6 +78,7 @@ export type SecretKeyRotationCryptoFailureCodeV1 =
 
 export interface SecretKeyRotationCryptoPortV1 {
 	readonly activeWrappingKeyVersion: string;
+	readonly retiringWrappingKeyVersions: readonly string[];
 	reencrypt(input: {
 		readonly encryptedRecord: unknown;
 		readonly targetKeyVersion: string;
@@ -107,7 +108,7 @@ export interface SecretKeyRotationStorePortV1 {
 		readonly command: RotateSecretKeyCommandV1;
 		readonly candidate: SecretKeyRotationCandidateV1;
 		readonly encryptedRecord: unknown;
-		readonly auditEvent: SecretKeyRotationAuditIntentV1;
+		readonly auditEvents: readonly SecretKeyRotationAuditIntentV1[];
 	}): Promise<
 		| {
 				readonly outcome: "committed";
@@ -120,11 +121,13 @@ export interface SecretKeyRotationStorePortV1 {
 		readonly command: RotateSecretKeyCommandV1;
 		readonly candidate: SecretKeyRotationCandidateV1;
 		readonly failureCode: SecretKeyRotationCryptoFailureCodeV1;
-		readonly auditEvent: SecretKeyRotationAuditIntentV1;
+		readonly auditEvents: readonly SecretKeyRotationAuditIntentV1[];
 	}): Promise<boolean>;
 	retireKey(input: {
 		readonly command: RetireSecretKeyCommandV1;
-		readonly auditEvent: SecretKeyRotationAuditIntentV1;
+		readonly activeWrappingKeyVersion: string;
+		readonly retiredAuditEvent: SecretKeyRotationAuditIntentV1;
+		readonly rejectedAuditEvent: SecretKeyRotationAuditIntentV1;
 	}): Promise<"retired" | "referenced">;
 }
 
@@ -279,9 +282,10 @@ function validatedCandidate(
 	return input;
 }
 
-function rewrapAudit(
+function secretAudit(
 	command: RotateSecretKeyCommandV1,
 	candidate: SecretKeyRotationCandidateV1,
+	operation: "decrypt" | "rewrap",
 	outcome: "succeeded" | "rejected" | "failed",
 ): SecretKeyRotationAuditIntentV1 {
 	const identity = [
@@ -293,7 +297,7 @@ function rewrapAudit(
 		candidate.dekFingerprint,
 		command.workerId,
 		command.traceId,
-		"rewrap",
+		operation,
 		outcome,
 	].join("\0");
 	return Object.freeze({
@@ -302,14 +306,14 @@ function rewrapAudit(
 		traceId: command.traceId,
 		actorType: "system",
 		actorId: command.workerId,
-		action: "secret.rewrap",
+		action: operation === "decrypt" ? "secret.decrypt" : "secret.rewrap",
 		targetType: "secret",
 		targetId: candidate.secretId,
 		agentId: candidate.agentId,
 		outcome,
 		details: Object.freeze({
 			wrappingKeyVersion: candidate.wrappingKeyVersion,
-			operation: "rewrap",
+			operation,
 			result: outcome,
 		}),
 	});
@@ -345,12 +349,14 @@ function parseRetirementCommand(input: unknown): RetireSecretKeyCommandV1 {
 
 function retirementAudit(
 	command: RetireSecretKeyCommandV1,
+	outcome: "succeeded" | "rejected",
 ): SecretKeyRotationAuditIntentV1 {
 	const identity = [
 		command.keyVersion,
 		command.workerId,
 		command.traceId,
 		"retire-key",
+		outcome,
 	].join("\0");
 	return Object.freeze({
 		schemaVersion: 1,
@@ -362,11 +368,11 @@ function retirementAudit(
 		targetType: "secret_key",
 		targetId: command.keyVersion,
 		agentId: null,
-		outcome: "succeeded",
+		outcome,
 		details: Object.freeze({
 			wrappingKeyVersion: command.keyVersion,
 			operation: "retire-key",
-			result: "succeeded",
+			result: outcome,
 		}),
 	});
 }
@@ -378,10 +384,17 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 	return {
 		async rotate(input) {
 			const command = parseRotationCommand(input);
+			const retiringKeyVersions =
+				dependencies.crypto.retiringWrappingKeyVersions;
 			if (
 				!validText(dependencies.crypto.activeWrappingKeyVersion) ||
 				command.targetKeyVersion !==
-					dependencies.crypto.activeWrappingKeyVersion
+					dependencies.crypto.activeWrappingKeyVersion ||
+				!Array.isArray(retiringKeyVersions) ||
+				retiringKeyVersions.some((keyVersion) => !validText(keyVersion)) ||
+				command.sourceKeyVersions.some(
+					(keyVersion) => !retiringKeyVersions.includes(keyVersion),
+				)
 			) {
 				throw new SecretKeyRotationError("invalid_input");
 			}
@@ -414,7 +427,13 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 							command,
 							candidate,
 							failureCode: rotated.code,
-							auditEvent: rewrapAudit(command, candidate, outcome),
+							auditEvents:
+								rotated.code === "SECRET_ROTATION_FAILED"
+									? [
+											secretAudit(command, candidate, "decrypt", "succeeded"),
+											secretAudit(command, candidate, "rewrap", "failed"),
+										]
+									: [secretAudit(command, candidate, "decrypt", outcome)],
 						});
 						return recorded
 							? { schemaVersion: 1, outcome: "failed", code: rotated.code }
@@ -424,7 +443,10 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 						command,
 						candidate,
 						encryptedRecord: rotated.encryptedRecord,
-						auditEvent: rewrapAudit(command, candidate, "succeeded"),
+						auditEvents: [
+							secretAudit(command, candidate, "decrypt", "succeeded"),
+							secretAudit(command, candidate, "rewrap", "succeeded"),
+						],
 					});
 					if (committed.outcome === "stale") {
 						return { schemaVersion: 1, outcome: "stale" };
@@ -447,7 +469,10 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 					command,
 					candidate,
 					failureCode: "SECRET_ROTATION_FAILED",
-					auditEvent: rewrapAudit(command, candidate, "failed"),
+					auditEvents: [
+						secretAudit(command, candidate, "decrypt", "succeeded"),
+						secretAudit(command, candidate, "rewrap", "failed"),
+					],
 				});
 				return recorded
 					? {
@@ -463,16 +488,16 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 		},
 		async retire(input) {
 			const command = parseRetirementCommand(input);
-			if (
-				!validText(dependencies.crypto.activeWrappingKeyVersion) ||
-				command.keyVersion === dependencies.crypto.activeWrappingKeyVersion
-			) {
-				return { schemaVersion: 1, outcome: "referenced" };
+			if (!validText(dependencies.crypto.activeWrappingKeyVersion)) {
+				throw new SecretKeyRotationError("unavailable");
 			}
 			try {
 				const outcome = await dependencies.store.retireKey({
 					command,
-					auditEvent: retirementAudit(command),
+					activeWrappingKeyVersion:
+						dependencies.crypto.activeWrappingKeyVersion,
+					retiredAuditEvent: retirementAudit(command, "succeeded"),
+					rejectedAuditEvent: retirementAudit(command, "rejected"),
 				});
 				if (outcome !== "retired" && outcome !== "referenced") {
 					throw new Error();

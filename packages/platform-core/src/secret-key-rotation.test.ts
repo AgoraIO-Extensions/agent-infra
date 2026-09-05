@@ -67,7 +67,11 @@ describe("Secret key rotation", () => {
 		});
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store,
-			crypto: { activeWrappingKeyVersion: "key_02", reencrypt },
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
+				reencrypt,
+			},
 		});
 
 		await expect(useCase.rotate(command)).resolves.toMatchObject({
@@ -84,22 +88,29 @@ describe("Secret key rotation", () => {
 			command,
 			candidate,
 			encryptedRecord: { ciphertext: "rotated-opaque" },
-			auditEvent: expect.objectContaining({
-				traceId: "trace_01",
-				action: "secret.rewrap",
-				targetType: "secret",
-				targetId: "secret_01",
-				agentId: "agent_01",
-				outcome: "succeeded",
-				details: {
-					wrappingKeyVersion: "key_01",
-					operation: "rewrap",
-					result: "succeeded",
-				},
-			}),
+			auditEvents: [
+				expect.objectContaining({
+					action: "secret.decrypt",
+					outcome: "succeeded",
+					details: expect.objectContaining({ operation: "decrypt" }),
+				}),
+				expect.objectContaining({
+					traceId: "trace_01",
+					action: "secret.rewrap",
+					targetType: "secret",
+					targetId: "secret_01",
+					agentId: "agent_01",
+					outcome: "succeeded",
+					details: {
+						wrappingKeyVersion: "key_01",
+						operation: "rewrap",
+						result: "succeeded",
+					},
+				}),
+			],
 		});
 		expect(
-			JSON.stringify(commitReencryption.mock.calls[0]?.[0]?.auditEvent),
+			JSON.stringify(commitReencryption.mock.calls[0]?.[0]?.auditEvents),
 		).not.toContain("boundary-sensitive");
 	});
 
@@ -137,7 +148,11 @@ describe("Secret key rotation", () => {
 				recordRejection: vi.fn(),
 				retireKey: vi.fn(),
 			},
-			crypto: { activeWrappingKeyVersion: "key_02", reencrypt },
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
+				reencrypt,
+			},
 		});
 
 		await expect(useCase.rotate(command)).resolves.toMatchObject({
@@ -172,6 +187,7 @@ describe("Secret key rotation", () => {
 				},
 				crypto: {
 					activeWrappingKeyVersion: "key_02",
+					retiringWrappingKeyVersions: ["key_01"],
 					reencrypt: vi.fn().mockResolvedValue({ outcome: "failed", code }),
 				},
 			});
@@ -185,10 +201,13 @@ describe("Secret key rotation", () => {
 			expect(recordRejection).toHaveBeenCalledWith({
 				command,
 				candidate,
-				auditEvent: expect.objectContaining({
-					outcome: auditOutcome,
-					details: expect.objectContaining({ result: auditOutcome }),
-				}),
+				auditEvents: [
+					expect.objectContaining({
+						action: "secret.decrypt",
+						outcome: auditOutcome,
+						details: expect.objectContaining({ result: auditOutcome }),
+					}),
+				],
 				failureCode: code,
 			});
 			expect(JSON.stringify(recordRejection.mock.calls)).not.toContain(
@@ -196,6 +215,50 @@ describe("Secret key rotation", () => {
 			);
 		},
 	);
+
+	it("audits decrypt success before a re-encryption failure", async () => {
+		const recordRejection = vi.fn().mockResolvedValue(true);
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store: {
+				nextCandidate: vi.fn().mockResolvedValue({
+					outcome: "candidate",
+					progress: progress(),
+					candidate,
+				}),
+				commitReencryption: vi.fn(),
+				recordRejection,
+				retireKey: vi.fn(),
+			},
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
+				reencrypt: vi.fn().mockResolvedValue({
+					outcome: "failed",
+					code: "SECRET_ROTATION_FAILED",
+				}),
+			},
+		});
+
+		await expect(useCase.rotate(command)).resolves.toMatchObject({
+			outcome: "failed",
+			code: "SECRET_ROTATION_FAILED",
+		});
+		expect(recordRejection).toHaveBeenCalledWith({
+			command,
+			candidate,
+			failureCode: "SECRET_ROTATION_FAILED",
+			auditEvents: [
+				expect.objectContaining({
+					action: "secret.decrypt",
+					outcome: "succeeded",
+				}),
+				expect.objectContaining({
+					action: "secret.rewrap",
+					outcome: "failed",
+				}),
+			],
+		});
+	});
 
 	it("retires a key only through the no-reference Store decision", async () => {
 		const retireKey = vi
@@ -211,6 +274,7 @@ describe("Secret key rotation", () => {
 			},
 			crypto: {
 				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
 				reencrypt: vi.fn(),
 			},
 		});
@@ -231,7 +295,8 @@ describe("Secret key rotation", () => {
 		});
 		expect(retireKey).toHaveBeenLastCalledWith({
 			command: retirement,
-			auditEvent: expect.objectContaining({
+			activeWrappingKeyVersion: "key_02",
+			retiredAuditEvent: expect.objectContaining({
 				traceId: "trace_retire_01",
 				action: "secret.retire-key",
 				targetType: "secret_key",
@@ -244,6 +309,11 @@ describe("Secret key rotation", () => {
 					result: "succeeded",
 				},
 			}),
+			rejectedAuditEvent: expect.objectContaining({
+				action: "secret.retire-key",
+				outcome: "rejected",
+				details: expect.objectContaining({ result: "rejected" }),
+			}),
 		});
 		expect(JSON.stringify(retireKey.mock.calls)).not.toContain(
 			"boundary-sensitive",
@@ -252,7 +322,7 @@ describe("Secret key rotation", () => {
 
 	it("uses only the active target key and never retires it", async () => {
 		const nextCandidate = vi.fn();
-		const retireKey = vi.fn();
+		const retireKey = vi.fn().mockResolvedValue("referenced");
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store: {
 				nextCandidate,
@@ -262,6 +332,7 @@ describe("Secret key rotation", () => {
 			},
 			crypto: {
 				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
 				reencrypt: vi.fn(),
 			},
 		});
@@ -271,6 +342,21 @@ describe("Secret key rotation", () => {
 		).rejects.toMatchObject({ code: "invalid_input" });
 		expect(nextCandidate).not.toHaveBeenCalled();
 		await expect(
+			createSecretKeyRotationUseCaseV1({
+				store: {
+					nextCandidate,
+					commitReencryption: vi.fn(),
+					recordRejection: vi.fn(),
+					retireKey,
+				},
+				crypto: {
+					activeWrappingKeyVersion: "key_02",
+					retiringWrappingKeyVersions: [],
+					reencrypt: vi.fn(),
+				},
+			}).rotate(command),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
 			useCase.retire({
 				schemaVersion: 1,
 				keyVersion: "key_02",
@@ -278,6 +364,6 @@ describe("Secret key rotation", () => {
 				traceId: "trace_retire_active",
 			}),
 		).resolves.toEqual({ schemaVersion: 1, outcome: "referenced" });
-		expect(retireKey).not.toHaveBeenCalled();
+		expect(retireKey).toHaveBeenCalledOnce();
 	});
 });

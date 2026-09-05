@@ -35,7 +35,11 @@ import {
 	startPlatformWorker,
 } from "./index";
 
-const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const sourceKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const sourcePublicKey = sourceKeyPair.publicKey.export({
+	format: "der",
+	type: "spki",
+});
 const targetKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
 const targetPublicKey = targetKeyPair.publicKey.export({
 	format: "der",
@@ -44,7 +48,7 @@ const targetPublicKey = targetKeyPair.publicKey.export({
 const validKeys = [
 	{
 		keyVersion: "key_01",
-		privateKeyPkcs8DerBase64: privateKey
+		privateKeyPkcs8DerBase64: sourceKeyPair.privateKey
 			.export({ format: "der", type: "pkcs8" })
 			.toString("base64"),
 	},
@@ -78,7 +82,7 @@ describe("Secret activation worker assembly", () => {
 	});
 
 	it.each([
-		["keyring", [], 30_000, "Worker Secret keyring is invalid"],
+		["keyring", [], 30_000, "Secret keyring is invalid"],
 		["lease", validKeys, 0, "Invalid Secret activation command"],
 	] as const)(
 		"closes the Store when %s validation fails after opening it",
@@ -130,6 +134,17 @@ describe("Secret rotation worker assembly", () => {
 				keys: [
 					{
 						schemaVersion: 1,
+						keyVersion: "key_01",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: sourcePublicKey.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(sourcePublicKey)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "retiring",
+					},
+					{
+						schemaVersion: 1,
 						keyVersion: "key_02",
 						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 						publicKeySpkiDerBase64: targetPublicKey.toString("base64"),
@@ -160,7 +175,7 @@ describe("Secret rotation worker assembly", () => {
 				keys: validRotationKeys,
 				encryptionKeys: { schemaVersion: 1, keys: [] },
 			}),
-		).toThrow("Worker Secret rotation keys are invalid");
+		).toThrow("Secret rotation keys are invalid");
 		expect(storeMocks.rotationStore.close).toHaveBeenCalledOnce();
 	});
 });

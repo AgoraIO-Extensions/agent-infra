@@ -1,13 +1,12 @@
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import {
+	createSecretKeyRotationCryptoV1,
+	createSecretKeyringDecryptorV1,
+} from "@agent-infra/secret-store/worker";
 import { describe, expect, it } from "vitest";
 import { secretActivationDecryptorConformanceV1 } from "../../../packages/platform-core/src/secret-decryptor.conformance.js";
-
-import {
-	createWorkerSecretDecryptorV1,
-	createWorkerSecretRotationCryptoV1,
-} from "./secret-decryptor.js";
 
 function encryptedRecord() {
 	const { privateKey, publicKey } = generateKeyPairSync("rsa", {
@@ -50,8 +49,10 @@ function encryptedRecord() {
 	});
 	return {
 		keyVersion,
+		publicKeySpkiDerBase64: publicDer.toString("base64"),
+		publicKeyFingerprint: createHash("sha256").update(publicDer).digest("hex"),
 		privateKeyPkcs8DerBase64: privateDer.toString("base64"),
-		decryptor: createWorkerSecretDecryptorV1({
+		decryptor: createSecretKeyringDecryptorV1({
 			keys: [
 				{
 					keyVersion,
@@ -59,7 +60,7 @@ function encryptedRecord() {
 				},
 			],
 		}),
-		missingKeyDecryptor: createWorkerSecretDecryptorV1({
+		missingKeyDecryptor: createSecretKeyringDecryptorV1({
 			keys: [
 				{
 					keyVersion: "other_key",
@@ -194,7 +195,7 @@ describe("Worker Secret rotation crypto", () => {
 			plaintext: secretValue,
 			occurredAt: "2026-09-05T13:00:00.000Z",
 		});
-		const crypto = createWorkerSecretRotationCryptoV1({
+		const crypto = createSecretKeyRotationCryptoV1({
 			keys: [
 				{
 					keyVersion: "key_source",
@@ -211,6 +212,17 @@ describe("Worker Secret rotation crypto", () => {
 				keys: [
 					{
 						schemaVersion: 1,
+						keyVersion: "key_source",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: sourcePublic.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(sourcePublic)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "retiring",
+					},
+					{
+						schemaVersion: 1,
 						keyVersion: "key_target",
 						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 						publicKeySpkiDerBase64: targetPublic.toString("base64"),
@@ -224,6 +236,7 @@ describe("Worker Secret rotation crypto", () => {
 			},
 			now: () => new Date("2026-09-05T13:30:00.000Z"),
 		});
+		expect(crypto.retiringWrappingKeyVersions).toEqual(["key_source"]);
 
 		const decision = await crypto.reencrypt({
 			encryptedRecord: sourceRecord,
@@ -240,7 +253,7 @@ describe("Worker Secret rotation crypto", () => {
 		);
 		expect(rotated.updatedAt).toBe("2026-09-05T13:30:00.000Z");
 		expect(JSON.stringify(decision)).not.toContain(secretValue);
-		const decryption = await createWorkerSecretDecryptorV1({
+		const decryption = await createSecretKeyringDecryptorV1({
 			keys: [
 				{
 					keyVersion: "key_target",
@@ -277,6 +290,15 @@ describe("Worker Secret rotation crypto", () => {
 			keys: [
 				{
 					schemaVersion: 1 as const,
+					keyVersion: fixture.keyVersion,
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+					publicKeySpkiDerBase64: fixture.publicKeySpkiDerBase64,
+					publicKeyFingerprint: fixture.publicKeyFingerprint,
+					rsaModulusBits: 3072,
+					status: "retiring" as const,
+				},
+				{
+					schemaVersion: 1 as const,
 					keyVersion: "key_target",
 					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
 					publicKeySpkiDerBase64: targetPublic.toString("base64"),
@@ -288,7 +310,7 @@ describe("Worker Secret rotation crypto", () => {
 				},
 			],
 		};
-		const crypto = createWorkerSecretRotationCryptoV1({
+		const crypto = createSecretKeyRotationCryptoV1({
 			keys: [
 				{
 					keyVersion: fixture.keyVersion,
@@ -301,7 +323,7 @@ describe("Worker Secret rotation crypto", () => {
 			],
 			encryptionKeys,
 		});
-		const missingKeyCrypto = createWorkerSecretRotationCryptoV1({
+		const missingKeyCrypto = createSecretKeyRotationCryptoV1({
 			keys: [
 				{
 					keyVersion: "key_target",
@@ -345,7 +367,7 @@ describe("Worker Secret rotation crypto", () => {
 			});
 		}
 		expect(() =>
-			createWorkerSecretRotationCryptoV1({
+			createSecretKeyRotationCryptoV1({
 				keys: [
 					{
 						keyVersion: "key_target",
@@ -354,6 +376,6 @@ describe("Worker Secret rotation crypto", () => {
 				],
 				encryptionKeys,
 			}),
-		).toThrow("Worker Secret rotation keys are invalid");
+		).toThrow("Secret rotation keys are invalid");
 	});
 });

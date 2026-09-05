@@ -34,6 +34,7 @@ interface SecretRecordRow {
 	readonly configuration_revision: unknown;
 	readonly lifecycle_state: unknown;
 	readonly dek_fingerprint: unknown;
+	readonly wrapping_key_version: unknown;
 	readonly record: unknown;
 }
 
@@ -42,6 +43,13 @@ const rotationStates = new Set([
 	"rewrapping",
 	"verifying",
 	"completed",
+	"failed",
+]);
+const lifecycleStates = new Set([
+	"pending",
+	"applying",
+	"observed",
+	"active",
 	"failed",
 ]);
 
@@ -205,7 +213,8 @@ function parseRecord(row: SecretRecordRow): PlatformSecretRecordV1 {
 			record.secretVersion !== integer(row.secret_version) ||
 			record.configRevision !== integer(row.configuration_revision) ||
 			record.lifecycleState !== row.lifecycle_state ||
-			record.crypto.dekFingerprint !== row.dek_fingerprint
+			record.crypto.dekFingerprint !== row.dek_fingerprint ||
+			record.crypto.wrappingKeyVersion !== row.wrapping_key_version
 		) {
 			throw new Error();
 		}
@@ -217,18 +226,50 @@ function parseRecord(row: SecretRecordRow): PlatformSecretRecordV1 {
 }
 
 function candidate(row: SecretRecordRow): SecretKeyRotationCandidateV1 {
-	const record = parseRecord(row);
+	const lifecycleState = text(row.lifecycle_state);
+	const secretVersion = integer(row.secret_version);
+	const configRevision = integer(row.configuration_revision);
+	const dekFingerprint = text(row.dek_fingerprint);
+	if (
+		!lifecycleStates.has(lifecycleState) ||
+		secretVersion < 1 ||
+		configRevision < 1 ||
+		!/^[a-f0-9]{64}$/.test(dekFingerprint)
+	) {
+		throw new SecretKeyRotationStoreError();
+	}
 	return {
 		schemaVersion: 1,
-		agentId: record.agentId,
-		secretId: record.secretId,
-		secretVersion: record.secretVersion,
-		configRevision: record.configRevision,
-		lifecycleState: record.lifecycleState,
-		wrappingKeyVersion: record.crypto.wrappingKeyVersion,
-		dekFingerprint: record.crypto.dekFingerprint,
-		encryptedRecord: record,
+		agentId: text(row.agent_id),
+		secretId: text(row.secret_id),
+		secretVersion,
+		configRevision,
+		lifecycleState:
+			lifecycleState as SecretKeyRotationCandidateV1["lifecycleState"],
+		wrappingKeyVersion: text(row.wrapping_key_version),
+		dekFingerprint,
+		encryptedRecord: row.record,
 	};
+}
+
+function rowMatchesCandidate(
+	row: SecretRecordRow,
+	expected: SecretKeyRotationCandidateV1,
+): boolean {
+	try {
+		const current = candidate(row);
+		return (
+			current.agentId === expected.agentId &&
+			current.secretId === expected.secretId &&
+			current.secretVersion === expected.secretVersion &&
+			current.configRevision === expected.configRevision &&
+			current.lifecycleState === expected.lifecycleState &&
+			current.wrappingKeyVersion === expected.wrappingKeyVersion &&
+			current.dekFingerprint === expected.dekFingerprint
+		);
+	} catch {
+		return false;
+	}
 }
 
 function recordMatchesCandidate(
@@ -297,7 +338,7 @@ function validateAudit(
 	event: SecretKeyRotationAuditIntentV1,
 	input:
 		| {
-				readonly kind: "rewrap";
+				readonly kind: "decrypt" | "rewrap";
 				readonly candidate: SecretKeyRotationCandidateV1;
 		  }
 		| { readonly kind: "retire-key"; readonly keyVersion: string },
@@ -306,12 +347,13 @@ function validateAudit(
 	try {
 		const operation = input.kind;
 		const targetId =
-			input.kind === "rewrap" ? input.candidate.secretId : input.keyVersion;
-		const agentId = input.kind === "rewrap" ? input.candidate.agentId : null;
+			input.kind === "retire-key" ? input.keyVersion : input.candidate.secretId;
+		const agentId =
+			input.kind === "retire-key" ? null : input.candidate.agentId;
 		const keyVersion =
-			input.kind === "rewrap"
-				? input.candidate.wrappingKeyVersion
-				: input.keyVersion;
+			input.kind === "retire-key"
+				? input.keyVersion
+				: input.candidate.wrappingKeyVersion;
 		if (
 			event.schemaVersion !== 1 ||
 			![event.auditId, event.traceId, event.actorId].every((value) => {
@@ -326,7 +368,8 @@ function validateAudit(
 			event.actorId !== expected.workerId ||
 			event.traceId !== expected.traceId ||
 			event.action !== `secret.${operation}` ||
-			event.targetType !== (operation === "rewrap" ? "secret" : "secret_key") ||
+			event.targetType !==
+				(operation === "retire-key" ? "secret_key" : "secret") ||
 			event.targetId !== targetId ||
 			event.agentId !== agentId ||
 			(event.outcome !== "succeeded" &&
@@ -423,7 +466,9 @@ async function secretRow(
 ): Promise<SecretRecordRow | undefined> {
 	const rows = await sql<SecretRecordRow[]>`
 		select agent_id, secret_id, secret_version, configuration_revision,
-			lifecycle_state, dek_fingerprint, record
+			lifecycle_state, dek_fingerprint,
+			record -> 'crypto' ->> 'wrappingKeyVersion' as wrapping_key_version,
+			record
 		from platform.secret_records
 		where agent_id = ${identity.agentId}
 			and secret_id = ${identity.secretId}
@@ -552,7 +597,9 @@ export class PostgresSecretKeyRotationStoreV1
 				}
 				const candidates = await sql<SecretRecordRow[]>`
 					select agent_id, secret_id, secret_version, configuration_revision,
-						lifecycle_state, dek_fingerprint, record
+						lifecycle_state, dek_fingerprint,
+						record -> 'crypto' ->> 'wrappingKeyVersion' as wrapping_key_version,
+						record
 					from platform.secret_records
 					where record -> 'crypto' ->> 'wrappingKeyVersion'
 						= any(${sql.array([...command.sourceKeyVersions])})
@@ -582,15 +629,26 @@ export class PostgresSecretKeyRotationStoreV1
 	): ReturnType<SecretKeyRotationStorePortV1["commitReencryption"]> {
 		try {
 			const command = rotationCommand(input.command);
+			if (input.auditEvents.length !== 2) {
+				throw new SecretKeyRotationStoreError();
+			}
 			validateAudit(
-				input.auditEvent,
+				input.auditEvents[0] as SecretKeyRotationAuditIntentV1,
+				{
+					kind: "decrypt",
+					candidate: input.candidate,
+				},
+				command,
+			);
+			validateAudit(
+				input.auditEvents[1] as SecretKeyRotationAuditIntentV1,
 				{
 					kind: "rewrap",
 					candidate: input.candidate,
 				},
 				command,
 			);
-			if (input.auditEvent.outcome !== "succeeded") {
+			if (input.auditEvents.some(({ outcome }) => outcome !== "succeeded")) {
 				throw new SecretKeyRotationStoreError();
 			}
 			return await this.#client.begin(async (sql) => {
@@ -636,7 +694,9 @@ export class PostgresSecretKeyRotationStoreV1
 						and secret_version = ${current.secretVersion}
 						and configuration_revision = ${current.configRevision}
 				`;
-				await insertAudit(sql, input.auditEvent, now);
+				for (const auditEvent of input.auditEvents) {
+					await insertAudit(sql, auditEvent, now);
+				}
 				const remaining = await referenceCount(sql, command.sourceKeyVersions);
 				const processed = currentProgress.processedSecrets + 1;
 				if (!Number.isSafeInteger(processed)) {
@@ -670,17 +730,13 @@ export class PostgresSecretKeyRotationStoreV1
 	): Promise<boolean> {
 		try {
 			const command = rotationCommand(input.command);
-			validateAudit(
-				input.auditEvent,
-				{
-					kind: "rewrap",
-					candidate: input.candidate,
-				},
-				command,
-			);
 			const rejected =
 				input.failureCode === "SECRET_METADATA_INVALID" ||
 				input.failureCode === "SECRET_AUTHENTICATION_FAILED";
+			const rotationFailed = input.failureCode === "SECRET_ROTATION_FAILED";
+			const expectedAuditOutcomes = rotationFailed
+				? (["succeeded", "failed"] as const)
+				: ([rejected ? "rejected" : "failed"] as const);
 			if (
 				![
 					"SECRET_KEY_UNAVAILABLE",
@@ -688,24 +744,42 @@ export class PostgresSecretKeyRotationStoreV1
 					"SECRET_AUTHENTICATION_FAILED",
 					"SECRET_ROTATION_FAILED",
 				].includes(input.failureCode) ||
-				input.auditEvent.outcome !== (rejected ? "rejected" : "failed")
+				input.auditEvents.length !== expectedAuditOutcomes.length
 			) {
 				throw new SecretKeyRotationStoreError();
+			}
+			for (const [index, auditEvent] of input.auditEvents.entries()) {
+				validateAudit(
+					auditEvent,
+					{
+						kind: rotationFailed && index === 1 ? "rewrap" : "decrypt",
+						candidate: input.candidate,
+					},
+					command,
+				);
+				if (auditEvent.outcome !== expectedAuditOutcomes[index]) {
+					throw new SecretKeyRotationStoreError();
+				}
 			}
 			return await this.#client.begin(async (sql) => {
 				await lock(sql, "rotation", command.rotationId);
 				const rotation = await rotationRow(sql, command.rotationId);
 				if (!rotation) return false;
-				progress(rotation, command);
-				const row = await secretRow(sql, input.candidate);
+				const currentProgress = progress(rotation, command);
 				if (
-					!row ||
-					!recordMatchesCandidate(parseRecord(row), input.candidate)
+					currentProgress.state === "completed" ||
+					currentProgress.state === "failed"
 				) {
 					return false;
 				}
+				const row = await secretRow(sql, input.candidate);
+				if (!row || !rowMatchesCandidate(row, input.candidate)) {
+					return false;
+				}
 				const now = await decisionAt(sql);
-				await insertAudit(sql, input.auditEvent, now);
+				for (const auditEvent of input.auditEvents) {
+					await insertAudit(sql, auditEvent, now);
+				}
 				await sql`
 					update platform.secret_key_rotations
 					set state = ${rejected ? "failed" : "rewrapping"}, updated_at = ${now}
@@ -724,21 +798,38 @@ export class PostgresSecretKeyRotationStoreV1
 	): Promise<"retired" | "referenced"> {
 		try {
 			const command = retirementCommand(input.command);
+			const activeWrappingKeyVersion = text(input.activeWrappingKeyVersion);
 			validateAudit(
-				input.auditEvent,
+				input.retiredAuditEvent,
 				{
 					kind: "retire-key",
 					keyVersion: command.keyVersion,
 				},
 				command,
 			);
-			if (input.auditEvent.outcome !== "succeeded") {
+			validateAudit(
+				input.rejectedAuditEvent,
+				{
+					kind: "retire-key",
+					keyVersion: command.keyVersion,
+				},
+				command,
+			);
+			if (
+				input.retiredAuditEvent.outcome !== "succeeded" ||
+				input.rejectedAuditEvent.outcome !== "rejected"
+			) {
 				throw new SecretKeyRotationStoreError();
 			}
 			return await this.#client.begin(async (sql) => {
 				await lockKeys(sql, [command.keyVersion]);
 				if (await isRetired(sql, command.keyVersion)) return "retired" as const;
-				if ((await referenceCount(sql, [command.keyVersion])) !== 0) {
+				const now = await decisionAt(sql);
+				if (
+					command.keyVersion === activeWrappingKeyVersion ||
+					(await referenceCount(sql, [command.keyVersion])) !== 0
+				) {
+					await insertAudit(sql, input.rejectedAuditEvent, now);
 					return "referenced" as const;
 				}
 				const liveRotations = await sql<{ exists: boolean }[]>`
@@ -750,13 +841,15 @@ export class PostgresSecretKeyRotationStoreV1
 						)
 					) as exists
 				`;
-				if (liveRotations[0]?.exists === true) return "referenced" as const;
-				const now = await decisionAt(sql);
+				if (liveRotations[0]?.exists === true) {
+					await insertAudit(sql, input.rejectedAuditEvent, now);
+					return "referenced" as const;
+				}
 				await sql`
 					insert into platform.retired_secret_wrapping_keys (key_version, retired_at)
 					values (${command.keyVersion}, ${now})
 				`;
-				await insertAudit(sql, input.auditEvent, now);
+				await insertAudit(sql, input.retiredAuditEvent, now);
 				return "retired" as const;
 			});
 		} catch (error) {

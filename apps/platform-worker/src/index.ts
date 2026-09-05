@@ -8,11 +8,10 @@ import {
 	openPostgresSecretActivationStoreV1,
 	openPostgresSecretKeyRotationStoreV1,
 } from "@agent-infra/platform-store";
-
 import {
-	createWorkerSecretDecryptorV1,
-	createWorkerSecretRotationCryptoV1,
-} from "./secret-decryptor.js";
+	createSecretKeyRotationCryptoV1,
+	createSecretKeyringDecryptorV1,
+} from "@agent-infra/secret-store/worker";
 import {
 	createWorkerSecretActivationKubernetesPortV1,
 	type WorkerSecretKubernetesClientV1,
@@ -44,7 +43,7 @@ export function createPlatformSecretActivationWorkerV1(options: {
 				kubernetes: createWorkerSecretActivationKubernetesPortV1(
 					options.kubernetesClient,
 				),
-				decryptor: createWorkerSecretDecryptorV1({ keys: options.keys }),
+				decryptor: createSecretKeyringDecryptorV1({ keys: options.keys }),
 			},
 			{ leaseMs: options.leaseMs },
 		);
@@ -73,7 +72,7 @@ export function createPlatformSecretRotationWorkerV1(options: {
 	try {
 		const rotation = createSecretKeyRotationUseCaseV1({
 			store,
-			crypto: createWorkerSecretRotationCryptoV1({
+			crypto: createSecretKeyRotationCryptoV1({
 				keys: options.keys,
 				encryptionKeys: options.encryptionKeys,
 				now: options.now,
