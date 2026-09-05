@@ -17,11 +17,11 @@ const timeoutMs = {
 	probe: 60_000,
 };
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
-const injectedRuntimeProbe =
+const assertInjectedRuntime =
 	"const {access,readdir}=await import('node:fs/promises');" +
 	"await Promise.all([access('./package.json'),access('./dist/index.mjs')]);" +
 	"const visit=async(path)=>{for(const entry of await readdir(path,{withFileTypes:true})){const child=path+'/'+entry.name;if(entry.isDirectory())await visit(child);else if(entry.isFile()&&/\\.d\\.(?:[cm]?ts)(?:\\.map)?$/.test(entry.name))throw new Error('TypeScript declarations found')}};" +
-	"await visit('.');await import('./dist/index.mjs')";
+	"await visit('.');";
 const images = [
 	{
 		key: "web",
@@ -38,7 +38,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			injectedRuntimeProbe,
+			`${assertInjectedRuntime}await import('./dist/index.mjs')`,
 		],
 	},
 	{
@@ -49,7 +49,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			"const {startPlatformWorker}=await import('./dist/index.mjs');const worker=startPlatformWorker({log(){}});worker.stop()",
+			`${assertInjectedRuntime}const {startPlatformWorker}=await import('./dist/index.mjs');const worker=startPlatformWorker({log(){}});worker.stop()`,
 		],
 	},
 	{
@@ -60,7 +60,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			injectedRuntimeProbe,
+			`${assertInjectedRuntime}await import('./dist/index.mjs')`,
 		],
 	},
 ];
