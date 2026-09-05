@@ -51,7 +51,6 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	private terminalOnInterrupt?: Exclude<ConformanceTurnStatus, "inProgress">;
 	private holdTurnStartResponse = false;
 	private heldTurnStart?: { id: number; resolve: () => void };
-	private turnStartHeld?: Promise<void>;
 	private signalTurnStartHeld?: () => void;
 	private delegatedToolResult?: (result: boolean) => void;
 
@@ -186,21 +185,37 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 
 	async submitWithPreStartEvent<T>(submit: () => Promise<T>) {
 		this.holdTurnStartResponse = true;
-		this.turnStartHeld = new Promise<void>((resolve) => {
+		const turnStartHeld = new Promise<void>((resolve) => {
 			this.signalTurnStartHeld = resolve;
 		});
-		const result = submit();
-		await this.turnStartHeld;
-		this.emitRunningEvent();
-		const held = this.heldTurnStart;
-		if (!held) throw new Error("No held turn start");
-		this.heldTurnStart = undefined;
-		this.holdTurnStartResponse = false;
-		this.respond(held.id, {
-			turn: { id: "turn-opaque", status: "inProgress" },
-		});
-		held.resolve();
-		return result;
+		try {
+			const result = submit();
+			await Promise.race([
+				turnStartHeld,
+				result.then(
+					() => {
+						throw new Error("Submission completed before turn/start was held");
+					},
+					(error: unknown) => {
+						throw error;
+					},
+				),
+			]);
+			this.emitRunningEvent();
+			const held = this.heldTurnStart;
+			if (!held) throw new Error("No held turn start");
+			this.respond(held.id, {
+				turn: { id: "turn-opaque", status: "inProgress" },
+			});
+			held.resolve();
+			this.heldTurnStart = undefined;
+			return await result;
+		} finally {
+			this.signalTurnStartHeld = undefined;
+			this.holdTurnStartResponse = false;
+			this.heldTurnStart?.resolve();
+			this.heldTurnStart = undefined;
+		}
 	}
 
 	async delegatedToolWasDeniedAndRedacted(

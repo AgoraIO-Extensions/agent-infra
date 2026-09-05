@@ -617,6 +617,19 @@ describe("Runtime Driver shared conformance", () => {
 });
 
 describe("Codex Driver boundary conformance", () => {
+	it("propagates submission failure before turn/start is held", async () => {
+		const path = await directory();
+		const fixture = await openConformanceDriver(
+			"Codex",
+			join(path, "driver.json"),
+		);
+		await expect(
+			fixture.submitWithPreStartEvent(async () => {
+				throw new Error("synthetic pre-start rejection");
+			}),
+		).rejects.toThrow("synthetic pre-start rejection");
+	});
+
 	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
 		const fixture = await openConformanceDriver(
