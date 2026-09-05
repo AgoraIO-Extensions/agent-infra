@@ -1,9 +1,17 @@
 import { pathToFileURL } from "node:url";
 
-import { createSecretActivationUseCaseV1 } from "@agent-infra/platform-core";
-import { openPostgresSecretActivationStoreV1 } from "@agent-infra/platform-store";
-
-import { createWorkerSecretDecryptorV1 } from "./secret-decryptor.js";
+import {
+	createSecretActivationUseCaseV1,
+	createSecretKeyRotationUseCaseV1,
+} from "@agent-infra/platform-core";
+import {
+	openPostgresSecretActivationStoreV1,
+	openPostgresSecretKeyRotationStoreV1,
+} from "@agent-infra/platform-store";
+import {
+	createSecretKeyRotationCryptoV1,
+	createSecretKeyringDecryptorV1,
+} from "@agent-infra/secret-store/worker";
 import {
 	createWorkerSecretActivationKubernetesPortV1,
 	type WorkerSecretKubernetesClientV1,
@@ -35,12 +43,44 @@ export function createPlatformSecretActivationWorkerV1(options: {
 				kubernetes: createWorkerSecretActivationKubernetesPortV1(
 					options.kubernetesClient,
 				),
-				decryptor: createWorkerSecretDecryptorV1({ keys: options.keys }),
+				decryptor: createSecretKeyringDecryptorV1({ keys: options.keys }),
 			},
 			{ leaseMs: options.leaseMs },
 		);
 		return {
 			activate: activation.activate,
+			close: () => store.close(),
+		};
+	} catch (error) {
+		void store.close().catch(() => undefined);
+		throw error;
+	}
+}
+
+export function createPlatformSecretRotationWorkerV1(options: {
+	readonly databaseUrl: string;
+	readonly keys: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
+	readonly encryptionKeys: unknown;
+	readonly now?: () => Date;
+}) {
+	const store = openPostgresSecretKeyRotationStoreV1({
+		databaseUrl: options.databaseUrl,
+	});
+	try {
+		const rotation = createSecretKeyRotationUseCaseV1({
+			store,
+			crypto: createSecretKeyRotationCryptoV1({
+				keys: options.keys,
+				encryptionKeys: options.encryptionKeys,
+				now: options.now,
+			}),
+		});
+		return {
+			rotate: rotation.rotate,
+			retire: rotation.retire,
 			close: () => store.close(),
 		};
 	} catch (error) {

@@ -107,6 +107,16 @@ const platformAuditActionMetadata = {
 		subjectKind: "secret",
 		details: "secret",
 	},
+	"secret.rewrap": {
+		actorKind: "system",
+		subjectKind: "secret",
+		details: "secret",
+	},
+	"secret.retire-key": {
+		actorKind: "system",
+		subjectKind: "secret_key",
+		details: "secret",
+	},
 } as const;
 
 const configurationChangedFields = [
@@ -145,7 +155,7 @@ export interface PlatformAuditProjectionV1 {
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent" | "secret";
+		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -262,13 +272,24 @@ function changedFields(
 			throw new PlatformAuditQueryError("unavailable");
 		}
 		const value = details as Record<string, unknown>;
+		const expectedOperation = {
+			"secret.decrypt": "decrypt",
+			"secret.activate": "activate",
+			"secret.rewrap": "rewrap",
+			"secret.retire-key": "retire-key",
+		}[
+			action as
+				| "secret.decrypt"
+				| "secret.activate"
+				| "secret.rewrap"
+				| "secret.retire-key"
+		];
 		if (
 			!validText(value.wrappingKeyVersion) ||
-			(value.operation !== "decrypt" && value.operation !== "activate") ||
+			value.operation !== expectedOperation ||
 			(value.result !== "succeeded" &&
 				value.result !== "rejected" &&
-				value.result !== "failed") ||
-			(action === "secret.decrypt") !== (value.operation === "decrypt")
+				value.result !== "failed")
 		) {
 			throw new PlatformAuditQueryError("unavailable");
 		}
@@ -338,7 +359,11 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 		auditId: row.auditId,
 		actor: { kind: expectedActorType, actorId: row.actorId },
 		action,
-		subject: { kind: expectedTargetType, subjectId: row.targetId },
+		subject: {
+			kind: expectedTargetType,
+			subjectId:
+				expectedTargetType === "secret_key" ? "secret-key" : row.targetId,
+		},
 		result: row.outcome === "succeeded" ? "succeeded" : "failed",
 		summary: fields.length === 0 ? action : `${action}: ${fields.join(", ")}`,
 		occurredAt: new Date(Date.prototype.getTime.call(row.occurredAt)),

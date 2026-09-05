@@ -88,12 +88,28 @@ const configuration = {
 function transaction() {
 	const values = vi.fn().mockResolvedValue(undefined);
 	const insert = vi.fn().mockReturnValue({ values });
-	return { transaction: { insert } as never, insert, values };
+	const where = vi.fn().mockResolvedValue([]);
+	const from = vi.fn().mockReturnValue({ where });
+	const select = vi.fn().mockReturnValue({ from });
+	const execute = vi.fn().mockResolvedValue(undefined);
+	return {
+		transaction: { execute, insert, select } as never,
+		execute,
+		insert,
+		select,
+		values,
+	};
 }
 
 describe("pending Secret record Store sidecar", () => {
 	it("writes only a validated pending ciphertext record", async () => {
-		const { transaction: database, insert, values } = transaction();
+		const {
+			transaction: database,
+			execute,
+			insert,
+			select,
+			values,
+		} = transaction();
 		await insertPendingSecretRecordAttachments(
 			database,
 			attachments([record()]),
@@ -101,6 +117,8 @@ describe("pending Secret record Store sidecar", () => {
 		);
 
 		expect(insert).toHaveBeenCalledOnce();
+		expect(execute).toHaveBeenCalledOnce();
+		expect(select).toHaveBeenCalledOnce();
 		expect(values).toHaveBeenCalledWith([
 			expect.objectContaining({
 				secretId: "secret_01",

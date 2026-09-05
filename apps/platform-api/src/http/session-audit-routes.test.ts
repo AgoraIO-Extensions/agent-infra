@@ -212,6 +212,71 @@ describe("session and audit routes", () => {
 		expect(identityAdapter.hydrateUsers).toHaveBeenCalledWith(["actor-1"]);
 	});
 
+	it("maps internal Secret audit subjects to the stable v2 contract", async () => {
+		const { app, audit } = createApp();
+		const rawKeyVersion = "key-internal-raw-version-2026-09";
+		audit.listAudit.mockResolvedValue({
+			items: [
+				{
+					schemaVersion: 1,
+					auditId: "audit-secret-rewrap",
+					actor: { kind: "system", actorId: "platform-worker" },
+					action: "secret.rewrap",
+					subject: { kind: "secret", subjectId: "secret-1" },
+					result: "succeeded",
+					summary: "secret.rewrap",
+					occurredAt: new Date("2026-09-05T17:00:00.000Z"),
+					traceId: "trace-secret-rewrap",
+				},
+				{
+					schemaVersion: 1,
+					auditId: "audit-secret-key-retirement",
+					actor: { kind: "system", actorId: "platform-worker" },
+					action: "secret.retire-key",
+					subject: { kind: "secret_key", subjectId: rawKeyVersion },
+					result: "succeeded",
+					summary: "secret.retire-key",
+					occurredAt: new Date("2026-09-05T17:01:00.000Z"),
+					traceId: "trace-secret-retire",
+				},
+			],
+			nextCursor: null,
+		});
+
+		const response = await app.request("/api/v2/admin/audit");
+		const body = (await response.json()) as { items: unknown[] };
+
+		expect(response.status).toBe(200);
+		expect(
+			body.items.map((item) => {
+				const parsed = PlatformAuditProjectionV2Schema.parse(item);
+				return {
+					action: parsed.action,
+					subjectType: parsed.subjectType,
+					subjectId: parsed.subjectId,
+					result: parsed.result,
+					traceId: parsed.traceId,
+				};
+			}),
+		).toEqual([
+			{
+				action: "secret.rewrap",
+				subjectType: "configuration",
+				subjectId: "secret-1",
+				result: "succeeded",
+				traceId: "trace-secret-rewrap",
+			},
+			{
+				action: "secret.retire-key",
+				subjectType: "configuration",
+				subjectId: "secret-key",
+				result: "succeeded",
+				traceId: "trace-secret-retire",
+			},
+		]);
+		expect(JSON.stringify(body)).not.toContain(rawKeyVersion);
+	});
+
 	it("does not access the user directory for a system-only v2 page", async () => {
 		const { app, identityAdapter, audit } = createApp();
 		audit.listAudit.mockResolvedValue({
