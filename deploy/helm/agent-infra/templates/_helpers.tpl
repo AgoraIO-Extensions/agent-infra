@@ -25,4 +25,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (has .Values.keys.encryptionPublicKey.version .Values.keys.workerDecryptionKeyring.versions) -}}
 {{- fail "active encryption public key version must exist in the Worker decryption keyring" -}}
 {{- end -}}
+{{- if and .Values.workloadTopology.enabled (eq (int .Values.workloadTopology.service.runtimePort) (int .Values.workloadTopology.service.routePort)) -}}
+{{- fail "workload runtime and route ports must be different" -}}
+{{- end -}}
 {{- end -}}

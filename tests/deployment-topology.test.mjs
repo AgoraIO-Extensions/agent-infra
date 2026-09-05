@@ -156,6 +156,16 @@ test("deployment configuration fails closed before rendering unsafe values", () 
 			`unexpectedly accepted ${args.join(" ")}`,
 		);
 	}
+
+	const equalPorts = render(
+		"--set",
+		"workloadTopology.service.runtimePort=8080",
+	);
+	assert.notEqual(equalPorts.status, 0);
+	assert.match(
+		equalPorts.stderr,
+		/workload runtime and route ports must be different/,
+	);
 });
 
 test("Web and Platform API are rendered only for explicit in-cluster placement", () => {
