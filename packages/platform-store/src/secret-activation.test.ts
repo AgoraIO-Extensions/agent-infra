@@ -7,6 +7,7 @@ import type {
 	SecretActivationFenceV1,
 	SecretActivationTransitionPlanV1,
 } from "@agent-infra/platform-core";
+import { immutableSecretNameV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -203,7 +204,7 @@ function reference(candidate: SecretActivationCandidateV1) {
 		algorithmVersion: "aes-256-gcm:v1" as const,
 		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
 		wrappingKeyVersion: candidate.wrappingKeyVersion,
-		name: "agent-aaaaaaaaaaaaaaaa.secret-bbbbbbbbbbbbbbbb-v2-r7",
+		name: immutableSecretNameV1(candidate),
 	};
 }
 
@@ -305,6 +306,26 @@ describe("PostgreSQL Secret activation Store", () => {
 		).resolves.toBe(true);
 		const currentReference = reference(second.claim.candidate);
 		const currentFence = activationFence(second.claim);
+		const wrongReference = {
+			...currentReference,
+			name: "unrelated-v2-r7",
+		};
+		await expect(
+			store.commitTransition({
+				claim: second.claim,
+				plan: plan({
+					expectedLifecycleStates: ["pending"],
+					next: {
+						lifecycleState: "applying",
+						kubernetesSecretRef: wrongReference,
+						activationFence: {
+							...currentFence,
+							kubernetesSecretName: wrongReference.name,
+						},
+					},
+				}),
+			}),
+		).rejects.toBeInstanceOf(SecretActivationStoreError);
 		await expect(
 			store.commitTransition({
 				claim: second.claim,

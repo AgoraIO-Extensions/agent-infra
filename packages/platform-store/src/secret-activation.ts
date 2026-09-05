@@ -15,6 +15,7 @@ import type {
 	SecretActivationStorePortV1,
 	SecretActivationTransitionPlanV1,
 } from "@agent-infra/platform-core";
+import { immutableSecretNameV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 
@@ -251,9 +252,7 @@ function referenceMatchesCandidate(
 		reference.algorithmVersion === "aes-256-gcm:v1" &&
 		reference.wrappingAlgorithmVersion === "rsa-oaep-sha256:v1" &&
 		reference.wrappingKeyVersion === candidate.wrappingKeyVersion &&
-		reference.name.endsWith(
-			`-v${candidate.secretVersion}-r${candidate.configRevision}`,
-		)
+		reference.name === immutableSecretNameV1(candidate)
 	);
 }
 

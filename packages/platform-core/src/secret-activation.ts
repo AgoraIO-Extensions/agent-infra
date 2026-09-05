@@ -394,7 +394,9 @@ function validatedClaim(
 	}
 }
 
-function immutableSecretName(candidate: SecretActivationCandidateV1): string {
+export function immutableSecretNameV1(
+	candidate: SecretActivationCandidateV1,
+): string {
 	const agent = createHash("sha256")
 		.update(candidate.agentId)
 		.digest("hex")
@@ -420,7 +422,7 @@ function secretReference(
 		algorithmVersion: "aes-256-gcm:v1",
 		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
 		wrappingKeyVersion: candidate.wrappingKeyVersion,
-		name: immutableSecretName(candidate),
+		name: immutableSecretNameV1(candidate),
 	};
 }
 

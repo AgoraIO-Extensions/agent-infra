@@ -49,6 +49,7 @@ describe("platform-core package surface", () => {
 			"createConversationEventUseCaseV1",
 			"createConversationExecutionUseCaseV1",
 			"createSecretActivationUseCaseV1",
+			"immutableSecretNameV1",
 			"platformIdempotencyV1",
 			"snapshotAgentConfigurationWritePlanV1",
 			"snapshotAgentManagementWritePlanV1",
