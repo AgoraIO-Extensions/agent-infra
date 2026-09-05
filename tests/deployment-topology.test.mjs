@@ -631,14 +631,14 @@ test("kind down deletes only an owned topology cluster", async () => {
 		const kind = await executable(
 			fixture,
 			"kind",
-			'echo "$*" >> "$KIND_RECORD"; case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") [[ -n "$KIND_CLUSTERS" ]] && echo "$KIND_CLUSTERS" ;; esac',
+			'echo "$*" >> "$KIND_RECORD"; case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") [[ -n "$KIND_LIST_STATUS" ]] && exit "$KIND_LIST_STATUS"; [[ -n "$KIND_CLUSTERS" ]] && echo "$KIND_CLUSTERS"; exit 0 ;; esac',
 		);
 		const docker = await executable(
 			fixture,
 			"docker",
 			'echo "$KIND_NODE_IMAGE"',
 		);
-		const run = (clusters, image) =>
+		const run = (clusters, image, listStatus = "") =>
 			spawnSync("bash", ["deploy/kind/topology.sh", "down"], {
 				encoding: "utf8",
 				env: {
@@ -646,6 +646,7 @@ test("kind down deletes only an owned topology cluster", async () => {
 					DOCKER_BIN: docker,
 					KIND_BIN: kind,
 					KIND_CLUSTERS: clusters,
+					KIND_LIST_STATUS: listStatus,
 					KIND_NODE_IMAGE: image,
 					KIND_RECORD: record,
 				},
@@ -653,6 +654,12 @@ test("kind down deletes only an owned topology cluster", async () => {
 
 		let result = run("", "");
 		assert.equal(result.status, 0, result.stderr);
+		assert.doesNotMatch(await readFile(record, "utf8"), /delete cluster/);
+
+		await writeFile(record, "");
+		result = run("", "", "17");
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /failed to list kind clusters/);
 		assert.doesNotMatch(await readFile(record, "utf8"), /delete cluster/);
 
 		await writeFile(record, "");

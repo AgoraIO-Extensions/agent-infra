@@ -59,10 +59,15 @@ require_kind() {
 }
 
 cluster_exists() {
+	local clusters
+	if ! clusters=$("$kind_bin" get clusters); then
+		echo "failed to list kind clusters" >&2
+		exit 1
+	fi
 	local candidate
 	while IFS= read -r candidate; do
 		[[ "$candidate" == "$cluster_name" ]] && return 0
-	done < <("$kind_bin" get clusters)
+	done <<< "$clusters"
 	return 1
 }
 
