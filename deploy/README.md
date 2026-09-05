@@ -32,6 +32,31 @@ helm lint deploy/helm/agent-infra \
 deploy/kind/topology.sh render
 ```
 
+## 不可变镜像与 release 检查
+
+从 clean Git commit 构建四个 Platform 镜像并生成 image manifest：
+
+```bash
+PLATFORM=linux/amd64 node deploy/release/build-images.mjs /tmp/agent-infra-images.json
+```
+
+该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
+根文件系统运行最小 probe。只有全部检查通过后才写入 image manifest；`PLATFORM` 也可设为
+`linux/arm64`。
+
+release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
+检查：
+
+```bash
+node deploy/release/validate.mjs release /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs migration /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs rollback current-images.json target-images.json target-values.yaml
+```
+
+release 和 migration 要求启用 migration Job；rollback 要求目标是另一份不可变 image manifest，
+并关闭 migration Job。任一 image 引用与 manifest 不一致、配置无效或 migration 漂移都会在 Helm
+部署前失败。
+
 ## kind 拓扑验证
 
 安装 `kind v0.30.0`、Helm 3、kubectl 和 Docker 后运行：
