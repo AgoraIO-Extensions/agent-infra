@@ -46,6 +46,9 @@ async function openConformanceDriver(
 		const driver = await FakeRuntimeDriver.open(path);
 		const execute = driver.execute.bind(driver);
 		let preStartEventObserved = false;
+		let holdPreStartEvent = false;
+		let signalPreStartEvent: (() => void) | undefined;
+		let releaseDriverResult: (() => void) | undefined;
 		driver.execute = async (command) => {
 			const record = await execute(command);
 			if (command.kind === "submit-turn") {
@@ -55,6 +58,12 @@ async function openConformanceDriver(
 						command.executionId,
 					)
 				).some((event) => event.type === "status");
+				if (holdPreStartEvent) {
+					await new Promise<void>((resolve) => {
+						releaseDriverResult = resolve;
+						signalPreStartEvent?.();
+					});
+				}
 			}
 			return record;
 		};
@@ -62,9 +71,19 @@ async function openConformanceDriver(
 			driver,
 			emitRunningEvent: async () => undefined,
 			submitWithPreStartEvent: async (submit) => {
-				const result = await submit();
-				if (!preStartEventObserved) {
-					throw new Error("Fake Driver did not persist its pre-start event");
+				holdPreStartEvent = true;
+				const preStartEvent = new Promise<void>((resolve) => {
+					signalPreStartEvent = resolve;
+				});
+				const result = submit();
+				try {
+					await preStartEvent;
+					if (!preStartEventObserved) {
+						throw new Error("Fake Driver did not persist its pre-start event");
+					}
+				} finally {
+					holdPreStartEvent = false;
+					releaseDriverResult?.();
 				}
 				return result;
 			},
