@@ -1,7 +1,11 @@
 import { Link } from "@tanstack/react-router";
 
 import { agentManagementStatusLabels } from "../agent-management-status.js";
-import type { MyAgentApplicationState } from "./my-agent-applications.js";
+import {
+	agentApplicationEditActionLabels,
+	getAgentApplicationEditAction,
+	type MyAgentApplicationState,
+} from "./my-agent-applications.js";
 
 type MyAgentApplicationDetailScreenProps = {
 	onWithdraw: () => void;
@@ -47,6 +51,7 @@ export function MyAgentApplicationDetailScreen({
 	}
 
 	const { application } = state;
+	const editAction = getAgentApplicationEditAction(application);
 	return (
 		<section
 			aria-labelledby="my-agent-application-detail-heading"
@@ -120,6 +125,15 @@ export function MyAgentApplicationDetailScreen({
 						to="/agents/$agentId"
 					>
 						Open Agent
+					</Link>
+				) : null}
+				{editAction ? (
+					<Link
+						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						params={{ applicationId: application.applicationId }}
+						to="/my-agents/$applicationId/edit"
+					>
+						{agentApplicationEditActionLabels[editAction]}
 					</Link>
 				) : null}
 				{application.status === "pending_approval" ? (
