@@ -26,8 +26,12 @@ async function fakes(directory) {
 	const docker = join(directory, "docker.mjs");
 	await executable(
 		git,
-		`const args = process.argv.slice(2);
-if (args[0] === "status") process.exit(0);
+		`import { existsSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "status") {
+  if (existsSync(process.env.FAKE_GIT_DRIFT_MARKER)) console.log(" M source");
+  process.exit(0);
+}
 if (args[0] === "rev-parse") console.log("${commitSha}");
 else if (args[0] === "show") console.log("1700000000");
 else process.exit(1);`,
@@ -46,6 +50,7 @@ if (args[0] === "buildx" && args[1] === "build") {
   const state = JSON.parse(readFileSync(statePath, "utf8"));
   state[tag] = (state[tag] ?? 0) + 1;
   writeFileSync(statePath, JSON.stringify(state));
+  if (process.env.FAKE_GIT_DRIFT && Object.values(state).reduce((sum, count) => sum + count, 0) === 1) writeFileSync(process.env.FAKE_GIT_DRIFT_MARKER, "drift");
   const drift = process.env.FAKE_DOCKER_DRIFT && tag.includes(process.env.FAKE_DOCKER_DRIFT) && state[tag] === 2;
   const digest = createHash("sha256").update(tag + (drift ? ":drift" : ":stable")).digest("hex");
   writeFileSync(metadata, JSON.stringify({ "containerimage.digest": "sha256:" + digest }));
@@ -71,6 +76,7 @@ function build(manifestPath, directory, environment = {}) {
 			DOCKER_BIN: join(directory, "docker.mjs"),
 			FAKE_DOCKER_LOG: join(directory, "docker.log"),
 			FAKE_DOCKER_STATE: join(directory, "docker-state.json"),
+			FAKE_GIT_DRIFT_MARKER: join(directory, "git-drift"),
 			GIT_BIN: join(directory, "git.mjs"),
 			IMAGE_REPOSITORY_PREFIX: "registry.example/agent-infra",
 			PLATFORM: "linux/amd64",
@@ -159,6 +165,20 @@ test("image build validates reproducibility and read-only non-root execution", a
 				}
 			}
 		}
+
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const checkoutDrift = build(
+			join(directory, "checkout-drift.json"),
+			directory,
+			{ FAKE_GIT_DRIFT: "1" },
+		);
+		assert.notEqual(checkoutDrift.status, 0);
+		assert.match(
+			checkoutDrift.stderr,
+			/Git checkout changed during image build/,
+		);
+		await assert.rejects(access(join(directory, "checkout-drift.json")));
+		await rm(join(directory, "git-drift"), { force: true });
 
 		await writeFile(join(directory, "docker-state.json"), "{}");
 		const drifted = build(join(directory, "drifted.json"), directory, {

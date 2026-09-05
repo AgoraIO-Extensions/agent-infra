@@ -55,7 +55,9 @@ node deploy/release/validate.mjs rollback current-images.json target-images.json
 
 release 和 migration 要求启用 migration Job；rollback 要求目标是另一份不可变 image manifest，
 并关闭 migration Job。任一 image 引用与 manifest 不一致、配置无效或 migration 漂移都会在 Helm
-部署前失败。
+部署前失败。三种检查都必须在 clean checkout 中执行；release 和 migration 的 `HEAD` 必须等于
+image manifest 的 Commit，rollback 的 `HEAD` 必须等于 target image manifest 的 Commit，current
+image manifest 只标识当前已部署 release。
 
 ## kind 拓扑验证
 
