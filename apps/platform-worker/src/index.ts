@@ -28,20 +28,25 @@ export function createPlatformSecretActivationWorkerV1(options: {
 	const store = openPostgresSecretActivationStoreV1({
 		databaseUrl: options.databaseUrl,
 	});
-	const activation = createSecretActivationUseCaseV1(
-		{
-			store,
-			kubernetes: createWorkerSecretActivationKubernetesPortV1(
-				options.kubernetesClient,
-			),
-			decryptor: createWorkerSecretDecryptorV1({ keys: options.keys }),
-		},
-		{ leaseMs: options.leaseMs },
-	);
-	return {
-		activate: activation.activate,
-		close: () => store.close(),
-	};
+	try {
+		const activation = createSecretActivationUseCaseV1(
+			{
+				store,
+				kubernetes: createWorkerSecretActivationKubernetesPortV1(
+					options.kubernetesClient,
+				),
+				decryptor: createWorkerSecretDecryptorV1({ keys: options.keys }),
+			},
+			{ leaseMs: options.leaseMs },
+		);
+		return {
+			activate: activation.activate,
+			close: () => store.close(),
+		};
+	} catch (error) {
+		void store.close().catch(() => undefined);
+		throw error;
+	}
 }
 
 interface StartOptions {
