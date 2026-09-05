@@ -245,6 +245,23 @@ describe("Worker Secret rotation crypto", () => {
 				secretId: sourceRecord.secretId,
 				secretVersion: sourceRecord.secretVersion,
 				configRevision: sourceRecord.configRevision,
+				ownerType: sourceRecord.ownerType,
+				ownerId: sourceRecord.ownerId,
+				name: sourceRecord.name,
+			},
+			targetKeyVersion: "key_target",
+			traceId: "trace_rotation_01",
+		});
+		const retriedDecision = await crypto.reencrypt({
+			encryptedRecord: sourceRecord,
+			expectedBinding: {
+				agentId: sourceRecord.agentId,
+				secretId: sourceRecord.secretId,
+				secretVersion: sourceRecord.secretVersion,
+				configRevision: sourceRecord.configRevision,
+				ownerType: sourceRecord.ownerType,
+				ownerId: sourceRecord.ownerId,
+				name: sourceRecord.name,
 			},
 			targetKeyVersion: "key_target",
 			traceId: "trace_rotation_01",
@@ -252,6 +269,7 @@ describe("Worker Secret rotation crypto", () => {
 
 		expect(decision.outcome).toBe("reencrypted");
 		if (decision.outcome !== "reencrypted") throw new Error("Expected record");
+		expect(retriedDecision.attemptId).not.toBe(decision.attemptId);
 		const rotated = decision.encryptedRecord as typeof sourceRecord;
 		expect(rotated.crypto).toMatchObject({ wrappingKeyVersion: "key_target" });
 		expect(rotated.crypto.dekFingerprint).not.toBe(
@@ -358,12 +376,16 @@ describe("Worker Secret rotation crypto", () => {
 					secretId: fixture.record.secretId,
 					secretVersion: fixture.record.secretVersion,
 					configRevision: fixture.record.configRevision,
+					ownerType: fixture.record.ownerType,
+					ownerId: fixture.record.ownerId,
+					name: fixture.record.name,
 				},
 				targetKeyVersion: "key_target",
 				traceId: "trace_rotation_01",
 			}),
 		).resolves.toEqual({
 			outcome: "failed",
+			attemptId: expect.any(String),
 			code: "SECRET_KEY_UNAVAILABLE",
 		});
 		await expect(
@@ -374,12 +396,16 @@ describe("Worker Secret rotation crypto", () => {
 					secretId: fixture.record.secretId,
 					secretVersion: fixture.record.secretVersion,
 					configRevision: fixture.record.configRevision,
+					ownerType: fixture.record.ownerType,
+					ownerId: fixture.record.ownerId,
+					name: fixture.record.name,
 				},
 				targetKeyVersion: "key_target",
 				traceId: "trace_rotation_01",
 			}),
 		).resolves.toEqual({
 			outcome: "failed",
+			attemptId: expect.any(String),
 			code: "SECRET_AUTHENTICATION_FAILED",
 		});
 		await expect(
@@ -390,28 +416,36 @@ describe("Worker Secret rotation crypto", () => {
 					secretId: fixture.record.secretId,
 					secretVersion: fixture.record.secretVersion,
 					configRevision: fixture.record.configRevision,
+					ownerType: fixture.record.ownerType,
+					ownerId: fixture.record.ownerId,
+					name: fixture.record.name,
 				},
 				targetKeyVersion: "key_target",
 				traceId: "trace_rotation_01",
 			}),
 		).resolves.toEqual({
 			outcome: "failed",
+			attemptId: expect.any(String),
 			code: "SECRET_METADATA_INVALID",
 		});
 		await expect(
 			crypto.reencrypt({
 				encryptedRecord: fixture.record,
 				expectedBinding: {
-					agentId: "agent_02",
+					agentId: fixture.record.agentId,
 					secretId: fixture.record.secretId,
 					secretVersion: fixture.record.secretVersion,
 					configRevision: fixture.record.configRevision,
+					ownerType: fixture.record.ownerType,
+					ownerId: "owner_02",
+					name: "OTHER_KEY",
 				},
 				targetKeyVersion: "key_target",
 				traceId: "trace_rotation_01",
 			}),
 		).resolves.toEqual({
 			outcome: "failed",
+			attemptId: expect.any(String),
 			code: "SECRET_METADATA_INVALID",
 		});
 		expect(() =>

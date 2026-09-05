@@ -10,6 +10,7 @@ import {
 	privateDecrypt,
 	publicEncrypt,
 	randomBytes,
+	randomUUID,
 	timingSafeEqual,
 } from "node:crypto";
 
@@ -305,13 +306,21 @@ export interface SecretKeyRotationCryptoV1 {
 			readonly secretId: string;
 			readonly secretVersion: number;
 			readonly configRevision: number;
+			readonly ownerType: "agent-owner" | "platform";
+			readonly ownerId: string;
+			readonly name: string;
 		};
 		readonly targetKeyVersion: string;
 		readonly traceId: string;
 	}): Promise<
-		| { readonly outcome: "reencrypted"; readonly encryptedRecord: unknown }
+		| {
+				readonly outcome: "reencrypted";
+				readonly attemptId: string;
+				readonly encryptedRecord: unknown;
+		  }
 		| {
 				readonly outcome: "failed";
+				readonly attemptId: string;
 				readonly code:
 					| "SECRET_KEY_UNAVAILABLE"
 					| "SECRET_METADATA_INVALID"
@@ -380,8 +389,13 @@ export function createSecretKeyRotationCryptoV1(input: {
 			targetKeyVersion,
 			traceId,
 		}) {
+			const attemptId = randomUUID();
 			if (targetKeyVersion !== encryptionKeys.activeWrappingKeyVersion) {
-				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };
+				return {
+					outcome: "failed",
+					attemptId,
+					code: "SECRET_ROTATION_FAILED",
+				};
 			}
 			let record: ReturnType<typeof validatePlatformSecretRecordV1>;
 			try {
@@ -390,18 +404,25 @@ export function createSecretKeyRotationCryptoV1(input: {
 					record.agentId !== expectedBinding.agentId ||
 					record.secretId !== expectedBinding.secretId ||
 					record.secretVersion !== expectedBinding.secretVersion ||
-					record.configRevision !== expectedBinding.configRevision
+					record.configRevision !== expectedBinding.configRevision ||
+					record.ownerType !== expectedBinding.ownerType ||
+					record.ownerId !== expectedBinding.ownerId ||
+					record.name !== expectedBinding.name
 				) {
 					throw new Error();
 				}
 			} catch {
-				return { outcome: "failed", code: "SECRET_METADATA_INVALID" };
+				return {
+					outcome: "failed",
+					attemptId,
+					code: "SECRET_METADATA_INVALID",
+				};
 			}
 			const decrypted = await decryptor.decrypt({
 				encryptedRecord: record,
 				traceId,
 			});
-			if (decrypted.outcome === "failed") return decrypted;
+			if (decrypted.outcome === "failed") return { ...decrypted, attemptId };
 			try {
 				const occurredAt = now();
 				if (!Number.isFinite(Date.prototype.getTime.call(occurredAt))) {
@@ -409,6 +430,7 @@ export function createSecretKeyRotationCryptoV1(input: {
 				}
 				return {
 					outcome: "reencrypted",
+					attemptId,
 					encryptedRecord: reencryptSecretRecordV1({
 						encryptionKeys,
 						record: encryptedRecord,
@@ -417,7 +439,7 @@ export function createSecretKeyRotationCryptoV1(input: {
 					}),
 				};
 			} catch {
-				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };
+				return { outcome: "failed", attemptId, code: "SECRET_ROTATION_FAILED" };
 			} finally {
 				decrypted.plaintext.fill(0);
 			}

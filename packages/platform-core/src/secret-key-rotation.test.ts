@@ -20,6 +20,9 @@ const candidate = {
 	secretId: "secret_01",
 	secretVersion: 2,
 	configRevision: 7,
+	ownerType: "agent-owner" as const,
+	ownerId: "owner_01",
+	name: "MODEL_API_KEY",
 	lifecycleState: "active" as const,
 	wrappingKeyVersion: "key_01",
 	dekFingerprint: "a".repeat(64),
@@ -58,12 +61,12 @@ describe("Secret key rotation", () => {
 		const store = {
 			nextCandidate,
 			commitReencryption,
-			recordAttempt: vi.fn(),
 			recordRejection: vi.fn(),
 			retireKey: vi.fn(),
 		} satisfies SecretKeyRotationStorePortV1;
 		const reencrypt = vi.fn().mockResolvedValue({
 			outcome: "reencrypted",
+			attemptId: "attempt_01",
 			encryptedRecord: { ciphertext: "rotated-opaque" },
 		});
 		const useCase = createSecretKeyRotationUseCaseV1({
@@ -87,6 +90,9 @@ describe("Secret key rotation", () => {
 				secretId: candidate.secretId,
 				secretVersion: candidate.secretVersion,
 				configRevision: candidate.configRevision,
+				ownerType: candidate.ownerType,
+				ownerId: candidate.ownerId,
+				name: candidate.name,
 			},
 			targetKeyVersion: "key_02",
 			traceId: "trace_01",
@@ -113,6 +119,16 @@ describe("Secret key rotation", () => {
 						operation: "rewrap",
 						result: "succeeded",
 					},
+				}),
+			],
+			rejectedAuditEvents: [
+				expect.objectContaining({
+					action: "secret.decrypt",
+					outcome: "succeeded",
+				}),
+				expect.objectContaining({
+					action: "secret.rewrap",
+					outcome: "rejected",
 				}),
 			],
 		});
@@ -142,18 +158,18 @@ describe("Secret key rotation", () => {
 			.fn()
 			.mockResolvedValueOnce({
 				outcome: "reencrypted",
+				attemptId: "attempt_duplicate_01",
 				encryptedRecord: { crypto: { dekFingerprint: "b".repeat(64) } },
 			})
 			.mockResolvedValueOnce({
 				outcome: "reencrypted",
+				attemptId: "attempt_duplicate_02",
 				encryptedRecord: { crypto: { dekFingerprint: "c".repeat(64) } },
 			});
-		const recordAttempt = vi.fn().mockResolvedValue(true);
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store: {
 				nextCandidate,
 				commitReencryption,
-				recordAttempt,
 				recordRejection: vi.fn(),
 				retireKey: vi.fn(),
 			},
@@ -172,24 +188,20 @@ describe("Secret key rotation", () => {
 		expect(commitReencryption.mock.calls[1]?.[0].encryptedRecord).toEqual({
 			crypto: { dekFingerprint: "c".repeat(64) },
 		});
-		expect(recordAttempt).toHaveBeenCalledWith({
-			command,
-			candidate,
-			auditEvents: [
-				expect.objectContaining({
-					action: "secret.decrypt",
-					outcome: "succeeded",
-				}),
-				expect.objectContaining({
-					action: "secret.rewrap",
-					outcome: "rejected",
-				}),
-			],
-		});
+		expect(commitReencryption.mock.calls[0]?.[0].rejectedAuditEvents).toEqual([
+			expect.objectContaining({
+				action: "secret.decrypt",
+				outcome: "succeeded",
+			}),
+			expect.objectContaining({
+				action: "secret.rewrap",
+				outcome: "rejected",
+			}),
+		]);
 	});
 
 	it("audits a completed crypto attempt rejected by a stale Store fence", async () => {
-		const recordAttempt = vi.fn().mockResolvedValue(true);
+		const commitReencryption = vi.fn().mockResolvedValue({ outcome: "stale" });
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store: {
 				nextCandidate: vi.fn().mockResolvedValue({
@@ -197,8 +209,7 @@ describe("Secret key rotation", () => {
 					progress: progress(),
 					candidate,
 				}),
-				commitReencryption: vi.fn().mockResolvedValue({ outcome: "stale" }),
-				recordAttempt,
+				commitReencryption,
 				recordRejection: vi.fn(),
 				retireKey: vi.fn(),
 			},
@@ -207,6 +218,7 @@ describe("Secret key rotation", () => {
 				retiringWrappingKeyVersions: ["key_01"],
 				reencrypt: vi.fn().mockResolvedValue({
 					outcome: "reencrypted",
+					attemptId: "attempt_stale_01",
 					encryptedRecord: { ciphertext: "rotated-opaque" },
 				}),
 			},
@@ -216,8 +228,7 @@ describe("Secret key rotation", () => {
 			schemaVersion: 1,
 			outcome: "stale",
 		});
-		expect(recordAttempt).toHaveBeenCalledOnce();
-		expect(recordAttempt.mock.calls[0]?.[0].auditEvents).toEqual([
+		expect(commitReencryption.mock.calls[0]?.[0].rejectedAuditEvents).toEqual([
 			expect.objectContaining({
 				action: "secret.decrypt",
 				outcome: "succeeded",
@@ -243,14 +254,19 @@ describe("Secret key rotation", () => {
 						candidate,
 					}),
 					commitReencryption,
-					recordAttempt: vi.fn(),
 					recordRejection,
 					retireKey: vi.fn(),
 				},
 				crypto: {
 					activeWrappingKeyVersion: "key_02",
 					retiringWrappingKeyVersions: ["key_01"],
-					reencrypt: vi.fn().mockResolvedValue({ outcome: "failed", code }),
+					reencrypt: vi
+						.fn()
+						.mockResolvedValue({
+							outcome: "failed",
+							attemptId: "attempt_failure_01",
+							code,
+						}),
 				},
 			});
 
@@ -288,7 +304,6 @@ describe("Secret key rotation", () => {
 					candidate,
 				}),
 				commitReencryption: vi.fn(),
-				recordAttempt: vi.fn(),
 				recordRejection,
 				retireKey: vi.fn(),
 			},
@@ -297,6 +312,7 @@ describe("Secret key rotation", () => {
 				retiringWrappingKeyVersions: ["key_01"],
 				reencrypt: vi.fn().mockResolvedValue({
 					outcome: "failed",
+					attemptId: "attempt_rotation_failure_01",
 					code: "SECRET_ROTATION_FAILED",
 				}),
 			},
@@ -332,7 +348,6 @@ describe("Secret key rotation", () => {
 			store: {
 				nextCandidate: vi.fn(),
 				commitReencryption: vi.fn(),
-				recordAttempt: vi.fn(),
 				recordRejection: vi.fn(),
 				retireKey,
 			},
@@ -391,7 +406,6 @@ describe("Secret key rotation", () => {
 			store: {
 				nextCandidate,
 				commitReencryption: vi.fn(),
-				recordAttempt: vi.fn(),
 				recordRejection: vi.fn(),
 				retireKey,
 			},
@@ -411,7 +425,6 @@ describe("Secret key rotation", () => {
 				store: {
 					nextCandidate,
 					commitReencryption: vi.fn(),
-					recordAttempt: vi.fn(),
 					recordRejection: vi.fn(),
 					retireKey,
 				},

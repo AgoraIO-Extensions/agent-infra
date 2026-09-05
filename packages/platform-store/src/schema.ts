@@ -357,6 +357,7 @@ export const platformSecretRecords = platformSchema.table(
 		record: jsonb("record").$type<PlatformSecretRecordV1>().notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		wrappingKeyVersion: text("wrapping_key_version").notNull(),
 	},
 	(table) => [
 		primaryKey({
@@ -409,6 +410,10 @@ export const platformSecretRecords = platformSchema.table(
 			sql`${table.dekFingerprint} ~ '^[a-f0-9]{64}$'`,
 		),
 		check(
+			"secret_record_wrapping_key_version_non_empty",
+			sql`char_length(${table.wrappingKeyVersion}) > 0`,
+		),
+		check(
 			"secret_record_identity_matches",
 			sql`jsonb_typeof(${table.record}) = 'object' and ${table.record} @> jsonb_build_object(
 				'schemaVersion', 1,
@@ -420,7 +425,10 @@ export const platformSecretRecords = platformSchema.table(
 				'ownerId', ${table.ownerId},
 				'name', ${table.name},
 				'lifecycleState', ${table.lifecycleState},
-				'crypto', jsonb_build_object('dekFingerprint', ${table.dekFingerprint})
+				'crypto', jsonb_build_object(
+					'dekFingerprint', ${table.dekFingerprint},
+					'wrappingKeyVersion', ${table.wrappingKeyVersion}
+				)
 			)`,
 		),
 		uniqueIndex("secret_record_dek_fingerprint_unique").on(
@@ -430,6 +438,9 @@ export const platformSecretRecords = platformSchema.table(
 			table.agentId,
 			table.secretId,
 			table.secretVersion,
+		),
+		index("secret_record_wrapping_key_version_idx").on(
+			table.wrappingKeyVersion,
 		),
 	],
 );

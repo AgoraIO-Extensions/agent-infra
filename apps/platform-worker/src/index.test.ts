@@ -13,7 +13,6 @@ const storeMocks = vi.hoisted(() => {
 		nextCandidate: vi.fn(),
 		close: vi.fn<() => Promise<void>>(),
 		commitReencryption: vi.fn(),
-		recordAttempt: vi.fn(),
 		recordRejection: vi.fn(),
 		retireKey: vi.fn(),
 	};

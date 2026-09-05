@@ -32,6 +32,9 @@ interface SecretRecordRow {
 	readonly secret_id: unknown;
 	readonly secret_version: unknown;
 	readonly configuration_revision: unknown;
+	readonly owner_type: unknown;
+	readonly owner_id: unknown;
+	readonly name: unknown;
 	readonly lifecycle_state: unknown;
 	readonly dek_fingerprint: unknown;
 	readonly wrapping_key_version: unknown;
@@ -212,6 +215,9 @@ function parseRecord(row: SecretRecordRow): PlatformSecretRecordV1 {
 			record.secretId !== text(row.secret_id) ||
 			record.secretVersion !== integer(row.secret_version) ||
 			record.configRevision !== integer(row.configuration_revision) ||
+			record.ownerType !== row.owner_type ||
+			record.ownerId !== text(row.owner_id) ||
+			record.name !== text(row.name) ||
 			record.lifecycleState !== row.lifecycle_state ||
 			record.crypto.dekFingerprint !== row.dek_fingerprint ||
 			record.crypto.wrappingKeyVersion !== row.wrapping_key_version
@@ -230,8 +236,10 @@ function candidate(row: SecretRecordRow): SecretKeyRotationCandidateV1 {
 	const secretVersion = integer(row.secret_version);
 	const configRevision = integer(row.configuration_revision);
 	const dekFingerprint = text(row.dek_fingerprint);
+	const ownerType = text(row.owner_type);
 	if (
 		!lifecycleStates.has(lifecycleState) ||
+		(ownerType !== "agent-owner" && ownerType !== "platform") ||
 		secretVersion < 1 ||
 		configRevision < 1 ||
 		!/^[a-f0-9]{64}$/.test(dekFingerprint)
@@ -244,6 +252,9 @@ function candidate(row: SecretRecordRow): SecretKeyRotationCandidateV1 {
 		secretId: text(row.secret_id),
 		secretVersion,
 		configRevision,
+		ownerType,
+		ownerId: text(row.owner_id),
+		name: text(row.name),
 		lifecycleState:
 			lifecycleState as SecretKeyRotationCandidateV1["lifecycleState"],
 		wrappingKeyVersion: text(row.wrapping_key_version),
@@ -263,6 +274,9 @@ function rowMatchesCandidate(
 			current.secretId === expected.secretId &&
 			current.secretVersion === expected.secretVersion &&
 			current.configRevision === expected.configRevision &&
+			current.ownerType === expected.ownerType &&
+			current.ownerId === expected.ownerId &&
+			current.name === expected.name &&
 			current.lifecycleState === expected.lifecycleState &&
 			current.wrappingKeyVersion === expected.wrappingKeyVersion &&
 			current.dekFingerprint === expected.dekFingerprint
@@ -281,6 +295,9 @@ function recordMatchesCandidate(
 		record.secretId === expected.secretId &&
 		record.secretVersion === expected.secretVersion &&
 		record.configRevision === expected.configRevision &&
+		record.ownerType === expected.ownerType &&
+		record.ownerId === expected.ownerId &&
+		record.name === expected.name &&
 		record.lifecycleState === expected.lifecycleState &&
 		record.crypto.wrappingKeyVersion === expected.wrappingKeyVersion &&
 		record.crypto.dekFingerprint === expected.dekFingerprint
@@ -312,6 +329,9 @@ function rotatedRecord(
 				secretId: next.secretId,
 				secretVersion: next.secretVersion,
 				configRevision: next.configRevision,
+				ownerType: next.ownerType,
+				ownerId: next.ownerId,
+				name: next.name,
 				lifecycleState: next.lifecycleState,
 				wrappingKeyVersion: current.crypto.wrappingKeyVersion,
 				dekFingerprint: current.crypto.dekFingerprint,
@@ -437,8 +457,7 @@ async function referenceCount(
 ): Promise<number> {
 	const rows = await sql<{ count: string }[]>`
 		select count(*)::text as count from platform.secret_records
-		where record -> 'crypto' ->> 'wrappingKeyVersion'
-			= any(${sql.array([...keyVersions])})
+		where wrapping_key_version = any(${sql.array([...keyVersions])})
 	`;
 	return integer(rows[0]?.count);
 }
@@ -466,9 +485,8 @@ async function secretRow(
 ): Promise<SecretRecordRow | undefined> {
 	const rows = await sql<SecretRecordRow[]>`
 		select agent_id, secret_id, secret_version, configuration_revision,
-			lifecycle_state, dek_fingerprint,
-			record -> 'crypto' ->> 'wrappingKeyVersion' as wrapping_key_version,
-			record
+			owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
+			wrapping_key_version, record
 		from platform.secret_records
 		where agent_id = ${identity.agentId}
 			and secret_id = ${identity.secretId}
@@ -597,12 +615,10 @@ export class PostgresSecretKeyRotationStoreV1
 				}
 				const candidates = await sql<SecretRecordRow[]>`
 					select agent_id, secret_id, secret_version, configuration_revision,
-						lifecycle_state, dek_fingerprint,
-						record -> 'crypto' ->> 'wrappingKeyVersion' as wrapping_key_version,
-						record
+						owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
+						wrapping_key_version, record
 					from platform.secret_records
-					where record -> 'crypto' ->> 'wrappingKeyVersion'
-						= any(${sql.array([...command.sourceKeyVersions])})
+					where wrapping_key_version = any(${sql.array([...command.sourceKeyVersions])})
 					order by agent_id, secret_id, secret_version, configuration_revision
 					limit 1
 				`;
@@ -629,7 +645,10 @@ export class PostgresSecretKeyRotationStoreV1
 	): ReturnType<SecretKeyRotationStorePortV1["commitReencryption"]> {
 		try {
 			const command = rotationCommand(input.command);
-			if (input.auditEvents.length !== 2) {
+			if (
+				input.auditEvents.length !== 2 ||
+				input.rejectedAuditEvents.length !== 2
+			) {
 				throw new SecretKeyRotationStoreError();
 			}
 			validateAudit(
@@ -648,7 +667,21 @@ export class PostgresSecretKeyRotationStoreV1
 				},
 				command,
 			);
-			if (input.auditEvents.some(({ outcome }) => outcome !== "succeeded")) {
+			validateAudit(
+				input.rejectedAuditEvents[0] as SecretKeyRotationAuditIntentV1,
+				{ kind: "decrypt", candidate: input.candidate },
+				command,
+			);
+			validateAudit(
+				input.rejectedAuditEvents[1] as SecretKeyRotationAuditIntentV1,
+				{ kind: "rewrap", candidate: input.candidate },
+				command,
+			);
+			if (
+				input.auditEvents.some(({ outcome }) => outcome !== "succeeded") ||
+				input.rejectedAuditEvents[0]?.outcome !== "succeeded" ||
+				input.rejectedAuditEvents[1]?.outcome !== "rejected"
+			) {
 				throw new SecretKeyRotationStoreError();
 			}
 			return await this.#client.begin(async (sql) => {
@@ -657,23 +690,32 @@ export class PostgresSecretKeyRotationStoreV1
 					input.candidate.wrappingKeyVersion,
 					command.targetKeyVersion,
 				]);
+				const rejectAttempt = async (
+					outcome: "stale" | "duplicate-fingerprint",
+				) => {
+					const now = await decisionAt(sql);
+					for (const auditEvent of input.rejectedAuditEvents) {
+						await insertAudit(sql, auditEvent, now);
+					}
+					return { outcome } as const;
+				};
 				if (await isRetired(sql, command.targetKeyVersion)) {
-					throw new SecretKeyRotationStoreError();
+					return await rejectAttempt("stale");
 				}
 				const rotation = await rotationRow(sql, command.rotationId);
-				if (!rotation) return { outcome: "stale" as const };
+				if (!rotation) return await rejectAttempt("stale");
 				const currentProgress = progress(rotation, command);
 				if (
 					currentProgress.state === "completed" ||
 					currentProgress.state === "failed"
 				) {
-					return { outcome: "stale" as const };
+					return await rejectAttempt("stale");
 				}
 				const row = await secretRow(sql, input.candidate);
-				if (!row) return { outcome: "stale" as const };
+				if (!row) return await rejectAttempt("stale");
 				const current = parseRecord(row);
 				if (!recordMatchesCandidate(current, input.candidate)) {
-					return { outcome: "stale" as const };
+					return await rejectAttempt("stale");
 				}
 				const generated = rotatedRecord(
 					input.encryptedRecord,
@@ -685,15 +727,25 @@ export class PostgresSecretKeyRotationStoreV1
 					...generated,
 					updatedAt: now.toISOString(),
 				});
-				await sql`
-					update platform.secret_records
-					set dek_fingerprint = ${next.crypto.dekFingerprint},
-						record = ${sql.json(next)}, updated_at = ${now}
-					where agent_id = ${current.agentId}
-						and secret_id = ${current.secretId}
-						and secret_version = ${current.secretVersion}
-						and configuration_revision = ${current.configRevision}
-				`;
+				try {
+					await sql.savepoint(async (savepoint) => {
+						await savepoint`
+							update platform.secret_records
+							set dek_fingerprint = ${next.crypto.dekFingerprint},
+								wrapping_key_version = ${next.crypto.wrappingKeyVersion},
+								record = ${savepoint.json(next)}, updated_at = ${now}
+							where agent_id = ${current.agentId}
+								and secret_id = ${current.secretId}
+								and secret_version = ${current.secretVersion}
+								and configuration_revision = ${current.configRevision}
+						`;
+					});
+				} catch (error) {
+					if (isDuplicateFingerprint(error)) {
+						return await rejectAttempt("duplicate-fingerprint");
+					}
+					throw error;
+				}
 				for (const auditEvent of input.auditEvents) {
 					await insertAudit(sql, auditEvent, now);
 				}
@@ -717,9 +769,6 @@ export class PostgresSecretKeyRotationStoreV1
 				};
 			});
 		} catch (error) {
-			if (isDuplicateFingerprint(error)) {
-				return { outcome: "duplicate-fingerprint" };
-			}
 			if (error instanceof SecretKeyRotationStoreError) throw error;
 			throw new SecretKeyRotationStoreError();
 		}
@@ -793,47 +842,6 @@ export class PostgresSecretKeyRotationStoreV1
 		}
 	}
 
-	async recordAttempt(
-		input: Parameters<SecretKeyRotationStorePortV1["recordAttempt"]>[0],
-	): Promise<boolean> {
-		try {
-			const command = rotationCommand(input.command);
-			if (input.auditEvents.length !== 2) {
-				throw new SecretKeyRotationStoreError();
-			}
-			validateAudit(
-				input.auditEvents[0] as SecretKeyRotationAuditIntentV1,
-				{ kind: "decrypt", candidate: input.candidate },
-				command,
-			);
-			validateAudit(
-				input.auditEvents[1] as SecretKeyRotationAuditIntentV1,
-				{ kind: "rewrap", candidate: input.candidate },
-				command,
-			);
-			if (
-				input.auditEvents[0]?.outcome !== "succeeded" ||
-				input.auditEvents[1]?.outcome !== "rejected"
-			) {
-				throw new SecretKeyRotationStoreError();
-			}
-			return await this.#client.begin(async (sql) => {
-				await lock(sql, "rotation", command.rotationId);
-				const rotation = await rotationRow(sql, command.rotationId);
-				if (!rotation) return false;
-				progress(rotation, command);
-				const now = await decisionAt(sql);
-				for (const auditEvent of input.auditEvents) {
-					await insertAudit(sql, auditEvent, now);
-				}
-				return true;
-			});
-		} catch (error) {
-			if (error instanceof SecretKeyRotationStoreError) throw error;
-			throw new SecretKeyRotationStoreError();
-		}
-	}
-
 	async retireKey(
 		input: Parameters<SecretKeyRotationStorePortV1["retireKey"]>[0],
 	): Promise<"retired" | "referenced"> {
@@ -864,8 +872,11 @@ export class PostgresSecretKeyRotationStoreV1
 			}
 			return await this.#client.begin(async (sql) => {
 				await lockKeys(sql, [command.keyVersion]);
-				if (await isRetired(sql, command.keyVersion)) return "retired" as const;
 				const now = await decisionAt(sql);
+				if (await isRetired(sql, command.keyVersion)) {
+					await insertAudit(sql, input.retiredAuditEvent, now);
+					return "retired" as const;
+				}
 				if (
 					command.keyVersion === activeWrappingKeyVersion ||
 					(await referenceCount(sql, [command.keyVersion])) !== 0

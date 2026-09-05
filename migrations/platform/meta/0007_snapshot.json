@@ -1,5 +1,5 @@
 {
-  "id": "9e109ab8-9d6e-41a0-95c1-70185163dd57",
+  "id": "a395c3e6-5f1a-4731-993b-9b5f84a16dcd",
   "prevId": "6d598f0f-95c4-4142-9757-4dc92d68b0ff",
   "version": "7",
   "dialect": "postgresql",
@@ -2333,6 +2333,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "wrapping_key_version": {
+          "name": "wrapping_key_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "record": {
           "name": "record",
           "type": "jsonb",
@@ -2391,6 +2397,21 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "secret_record_wrapping_key_version_idx": {
+          "name": "secret_record_wrapping_key_version_idx",
+          "columns": [
+            {
+              "expression": "wrapping_key_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2464,9 +2485,13 @@
           "name": "secret_record_dek_fingerprint_format",
           "value": "\"platform\".\"secret_records\".\"dek_fingerprint\" ~ '^[a-f0-9]{64}$'"
         },
+        "secret_record_wrapping_key_version_non_empty": {
+          "name": "secret_record_wrapping_key_version_non_empty",
+          "value": "char_length(\"platform\".\"secret_records\".\"wrapping_key_version\") > 0"
+        },
         "secret_record_identity_matches": {
           "name": "secret_record_identity_matches",
-          "value": "jsonb_typeof(\"platform\".\"secret_records\".\"record\") = 'object' and \"platform\".\"secret_records\".\"record\" @> jsonb_build_object(\n\t\t\t\t'schemaVersion', 1,\n\t\t\t\t'agentId', \"platform\".\"secret_records\".\"agent_id\",\n\t\t\t\t'secretId', \"platform\".\"secret_records\".\"secret_id\",\n\t\t\t\t'secretVersion', \"platform\".\"secret_records\".\"secret_version\",\n\t\t\t\t'configRevision', \"platform\".\"secret_records\".\"configuration_revision\",\n\t\t\t\t'ownerType', \"platform\".\"secret_records\".\"owner_type\",\n\t\t\t\t'ownerId', \"platform\".\"secret_records\".\"owner_id\",\n\t\t\t\t'name', \"platform\".\"secret_records\".\"name\",\n\t\t\t\t'lifecycleState', \"platform\".\"secret_records\".\"lifecycle_state\",\n\t\t\t\t'crypto', jsonb_build_object('dekFingerprint', \"platform\".\"secret_records\".\"dek_fingerprint\")\n\t\t\t)"
+          "value": "jsonb_typeof(\"platform\".\"secret_records\".\"record\") = 'object' and \"platform\".\"secret_records\".\"record\" @> jsonb_build_object(\n\t\t\t\t'schemaVersion', 1,\n\t\t\t\t'agentId', \"platform\".\"secret_records\".\"agent_id\",\n\t\t\t\t'secretId', \"platform\".\"secret_records\".\"secret_id\",\n\t\t\t\t'secretVersion', \"platform\".\"secret_records\".\"secret_version\",\n\t\t\t\t'configRevision', \"platform\".\"secret_records\".\"configuration_revision\",\n\t\t\t\t'ownerType', \"platform\".\"secret_records\".\"owner_type\",\n\t\t\t\t'ownerId', \"platform\".\"secret_records\".\"owner_id\",\n\t\t\t\t'name', \"platform\".\"secret_records\".\"name\",\n\t\t\t\t'lifecycleState', \"platform\".\"secret_records\".\"lifecycle_state\",\n\t\t\t\t'crypto', jsonb_build_object(\n\t\t\t\t\t'dekFingerprint', \"platform\".\"secret_records\".\"dek_fingerprint\",\n\t\t\t\t\t'wrappingKeyVersion', \"platform\".\"secret_records\".\"wrapping_key_version\"\n\t\t\t\t)\n\t\t\t)"
         }
       },
       "isRLSEnabled": false

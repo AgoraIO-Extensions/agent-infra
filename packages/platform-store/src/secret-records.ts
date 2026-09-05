@@ -239,6 +239,7 @@ export async function insertPendingSecretRecordAttachments(
 				name: record.name,
 				lifecycleState: record.lifecycleState,
 				dekFingerprint: record.crypto.dekFingerprint,
+				wrappingKeyVersion: record.crypto.wrappingKeyVersion,
 				record,
 				createdAt: new Date(record.createdAt),
 				updatedAt: new Date(record.updatedAt),

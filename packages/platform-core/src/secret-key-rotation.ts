@@ -41,6 +41,9 @@ export interface SecretKeyRotationCandidateV1 {
 	readonly secretId: string;
 	readonly secretVersion: number;
 	readonly configRevision: number;
+	readonly ownerType: "agent-owner" | "platform";
+	readonly ownerId: string;
+	readonly name: string;
 	readonly lifecycleState:
 		| "pending"
 		| "applying"
@@ -86,13 +89,21 @@ export interface SecretKeyRotationCryptoPortV1 {
 			readonly secretId: string;
 			readonly secretVersion: number;
 			readonly configRevision: number;
+			readonly ownerType: "agent-owner" | "platform";
+			readonly ownerId: string;
+			readonly name: string;
 		};
 		readonly targetKeyVersion: string;
 		readonly traceId: string;
 	}): Promise<
-		| { readonly outcome: "reencrypted"; readonly encryptedRecord: unknown }
+		| {
+				readonly outcome: "reencrypted";
+				readonly attemptId: string;
+				readonly encryptedRecord: unknown;
+		  }
 		| {
 				readonly outcome: "failed";
+				readonly attemptId: string;
 				readonly code: SecretKeyRotationCryptoFailureCodeV1;
 		  }
 	>;
@@ -115,6 +126,7 @@ export interface SecretKeyRotationStorePortV1 {
 		readonly candidate: SecretKeyRotationCandidateV1;
 		readonly encryptedRecord: unknown;
 		readonly auditEvents: readonly SecretKeyRotationAuditIntentV1[];
+		readonly rejectedAuditEvents: readonly SecretKeyRotationAuditIntentV1[];
 	}): Promise<
 		| {
 				readonly outcome: "committed";
@@ -127,11 +139,6 @@ export interface SecretKeyRotationStorePortV1 {
 		readonly command: RotateSecretKeyCommandV1;
 		readonly candidate: SecretKeyRotationCandidateV1;
 		readonly failureCode: SecretKeyRotationCryptoFailureCodeV1;
-		readonly auditEvents: readonly SecretKeyRotationAuditIntentV1[];
-	}): Promise<boolean>;
-	recordAttempt(input: {
-		readonly command: RotateSecretKeyCommandV1;
-		readonly candidate: SecretKeyRotationCandidateV1;
 		readonly auditEvents: readonly SecretKeyRotationAuditIntentV1[];
 	}): Promise<boolean>;
 	retireKey(input: {
@@ -276,9 +283,14 @@ function validatedCandidate(
 ): SecretKeyRotationCandidateV1 {
 	if (
 		input.schemaVersion !== 1 ||
-		![input.agentId, input.secretId, input.wrappingKeyVersion].every(
-			validText,
-		) ||
+		![
+			input.agentId,
+			input.secretId,
+			input.ownerId,
+			input.name,
+			input.wrappingKeyVersion,
+		].every(validText) ||
+		(input.ownerType !== "agent-owner" && input.ownerType !== "platform") ||
 		![input.secretVersion, input.configRevision].every(
 			(value) => Number.isSafeInteger(value) && value >= 1,
 		) ||
@@ -298,7 +310,7 @@ function secretAudit(
 	candidate: SecretKeyRotationCandidateV1,
 	operation: "decrypt" | "rewrap",
 	outcome: "succeeded" | "rejected" | "failed",
-	attempt = 1,
+	attemptId: string,
 ): SecretKeyRotationAuditIntentV1 {
 	const identity = [
 		command.rotationId,
@@ -311,7 +323,7 @@ function secretAudit(
 		command.traceId,
 		operation,
 		outcome,
-		attempt,
+		attemptId,
 	].join("\0");
 	return Object.freeze({
 		schemaVersion: 1,
@@ -425,7 +437,6 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 				}
 				const candidate = validatedCandidate(next.candidate, command);
 				for (let attempt = 0; attempt < 3; attempt += 1) {
-					const attemptNumber = attempt + 1;
 					const rotated = await dependencies.crypto.reencrypt({
 						encryptedRecord: candidate.encryptedRecord,
 						expectedBinding: {
@@ -433,10 +444,16 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 							secretId: candidate.secretId,
 							secretVersion: candidate.secretVersion,
 							configRevision: candidate.configRevision,
+							ownerType: candidate.ownerType,
+							ownerId: candidate.ownerId,
+							name: candidate.name,
 						},
 						targetKeyVersion: command.targetKeyVersion,
 						traceId: command.traceId,
 					});
+					if (!validText(rotated.attemptId)) {
+						throw new SecretKeyRotationError("unavailable");
+					}
 					if (rotated.outcome === "failed") {
 						const outcome =
 							rotated.code === "SECRET_METADATA_INVALID" ||
@@ -451,14 +468,14 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 											candidate,
 											"decrypt",
 											"succeeded",
-											attemptNumber,
+											rotated.attemptId,
 										),
 										secretAudit(
 											command,
 											candidate,
 											"rewrap",
 											"failed",
-											attemptNumber,
+											rotated.attemptId,
 										),
 									]
 								: [
@@ -467,7 +484,7 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 											candidate,
 											"decrypt",
 											outcome,
-											attemptNumber,
+											rotated.attemptId,
 										),
 									];
 						const recorded = await dependencies.store.recordRejection({
@@ -486,14 +503,24 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 							candidate,
 							"decrypt",
 							"succeeded",
-							attemptNumber,
+							rotated.attemptId,
 						),
 						secretAudit(
 							command,
 							candidate,
 							"rewrap",
 							"succeeded",
-							attemptNumber,
+							rotated.attemptId,
+						),
+					];
+					const rejectedAudits = [
+						successAudits[0] as SecretKeyRotationAuditIntentV1,
+						secretAudit(
+							command,
+							candidate,
+							"rewrap",
+							"rejected",
+							rotated.attemptId,
 						),
 					];
 					const committed = await dependencies.store.commitReencryption({
@@ -501,28 +528,12 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 						candidate,
 						encryptedRecord: rotated.encryptedRecord,
 						auditEvents: successAudits,
+						rejectedAuditEvents: rejectedAudits,
 					});
-					if (committed.outcome !== "committed") {
-						const audited = await dependencies.store.recordAttempt({
-							command,
-							candidate,
-							auditEvents: [
-								successAudits[0] as SecretKeyRotationAuditIntentV1,
-								secretAudit(
-									command,
-									candidate,
-									"rewrap",
-									"rejected",
-									attemptNumber,
-								),
-							],
-						});
-						if (!audited) throw new SecretKeyRotationError("unavailable");
-						if (committed.outcome === "stale") {
-							return { schemaVersion: 1, outcome: "stale" };
-						}
-						continue;
+					if (committed.outcome === "stale") {
+						return { schemaVersion: 1, outcome: "stale" };
 					}
+					if (committed.outcome === "duplicate-fingerprint") continue;
 					const committedProgress = validatedProgress(
 						committed.progress,
 						command,
