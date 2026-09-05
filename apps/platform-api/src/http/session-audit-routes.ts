@@ -90,15 +90,16 @@ async function readAuditPage(
 }
 
 function publicAuditFields(item: PlatformAuditPageV1["items"][number]) {
+	const isSecretKey = item.subject.kind === "secret_key";
 	const subjectType =
-		item.subject.kind === "secret" || item.subject.kind === "secret_key"
+		item.subject.kind === "secret" || isSecretKey
 			? "configuration"
 			: item.subject.kind;
 	return {
 		auditId: item.auditId,
 		action: item.action,
 		subjectType,
-		subjectId: item.subject.subjectId,
+		subjectId: isSecretKey ? "secret-key" : item.subject.subjectId,
 		result: item.result,
 		summary: item.summary,
 		occurredAt: item.occurredAt.toISOString(),

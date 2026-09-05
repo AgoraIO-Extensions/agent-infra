@@ -214,6 +214,7 @@ describe("session and audit routes", () => {
 
 	it("maps internal Secret audit subjects to the stable v2 contract", async () => {
 		const { app, audit } = createApp();
+		const rawKeyVersion = "key-internal-raw-version-2026-09";
 		audit.listAudit.mockResolvedValue({
 			items: [
 				{
@@ -232,7 +233,7 @@ describe("session and audit routes", () => {
 					auditId: "audit-secret-key-retirement",
 					actor: { kind: "system", actorId: "platform-worker" },
 					action: "secret.retire-key",
-					subject: { kind: "secret_key", subjectId: "key-1" },
+					subject: { kind: "secret_key", subjectId: rawKeyVersion },
 					result: "succeeded",
 					summary: "secret.retire-key",
 					occurredAt: new Date("2026-09-05T17:01:00.000Z"),
@@ -247,10 +248,33 @@ describe("session and audit routes", () => {
 
 		expect(response.status).toBe(200);
 		expect(
-			body.items.map(
-				(item) => PlatformAuditProjectionV2Schema.parse(item).subjectType,
-			),
-		).toEqual(["configuration", "configuration"]);
+			body.items.map((item) => {
+				const parsed = PlatformAuditProjectionV2Schema.parse(item);
+				return {
+					action: parsed.action,
+					subjectType: parsed.subjectType,
+					subjectId: parsed.subjectId,
+					result: parsed.result,
+					traceId: parsed.traceId,
+				};
+			}),
+		).toEqual([
+			{
+				action: "secret.rewrap",
+				subjectType: "configuration",
+				subjectId: "secret-1",
+				result: "succeeded",
+				traceId: "trace-secret-rewrap",
+			},
+			{
+				action: "secret.retire-key",
+				subjectType: "configuration",
+				subjectId: "secret-key",
+				result: "succeeded",
+				traceId: "trace-secret-retire",
+			},
+		]);
+		expect(JSON.stringify(body)).not.toContain(rawKeyVersion);
 	});
 
 	it("does not access the user directory for a system-only v2 page", async () => {
