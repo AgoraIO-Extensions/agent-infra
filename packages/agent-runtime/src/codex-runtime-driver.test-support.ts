@@ -235,7 +235,12 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 			});
 		}
 		const denied = await result;
-		const state = await readFile(this.path, "utf8");
+		const state = await readFile(this.path, "utf8").catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return "";
+				throw error;
+			},
+		);
 		return denied && !state.includes("redacted-input");
 	}
 

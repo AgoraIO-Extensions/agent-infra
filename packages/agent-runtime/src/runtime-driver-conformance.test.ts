@@ -658,10 +658,10 @@ describe("Runtime Driver shared conformance", () => {
 describe("Codex Driver boundary conformance", () => {
 	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
-		const fixture = await openConformanceDriver(
-			"Codex",
-			join(path, "driver.json"),
-		);
+		const driverPath = join(path, "driver.json");
+		const fixture = await openConformanceDriver("Codex", driverPath);
+		expect(await fixture.delegatedToolWasDeniedAndRedacted()).toBe(true);
+		await rm(driverPath, { force: true });
 		expect(await fixture.delegatedToolWasDeniedAndRedacted()).toBe(true);
 		expect(
 			await fixture.delegatedToolWasDeniedAndRedacted("unexpected-success"),
