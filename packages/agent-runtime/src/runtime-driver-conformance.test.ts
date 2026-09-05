@@ -73,21 +73,39 @@ async function openConformanceDriver(
 			driver,
 			emitRunningEvent: async () => undefined,
 			submitWithPreStartEvent: async (submit) => {
+				preStartEventObserved = false;
 				holdPreStartEvent = true;
 				const preStartEvent = new Promise<void>((resolve) => {
 					signalPreStartEvent = resolve;
 				});
-				const result = submit();
 				try {
-					await preStartEvent;
+					const result = submit();
+					await Promise.race([
+						preStartEvent,
+						result.then(
+							() => {
+								throw new Error(
+									"Submission completed before pre-start event was observed",
+								);
+							},
+							(error: unknown) => {
+								throw error;
+							},
+						),
+					]);
 					if (!preStartEventObserved) {
 						throw new Error("Fake Driver did not persist its pre-start event");
 					}
-				} finally {
 					holdPreStartEvent = false;
 					releaseDriverResult?.();
+					releaseDriverResult = undefined;
+					return await result;
+				} finally {
+					holdPreStartEvent = false;
+					signalPreStartEvent = undefined;
+					releaseDriverResult?.();
+					releaseDriverResult = undefined;
 				}
-				return result;
 			},
 			completeStopAsCancelled: () => undefined,
 			completeStopAsCompleted: (operationId) =>
@@ -584,6 +602,22 @@ describe("Runtime Driver shared conformance", () => {
 	);
 
 	it.each(driverNames)(
+		"propagates submission failure before pre-start synchronization through %s",
+		async (name) => {
+			const path = await directory();
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			await expect(
+				fixture.submitWithPreStartEvent(async () => {
+					throw new Error("synthetic pre-start rejection");
+				}),
+			).rejects.toThrow("synthetic pre-start rejection");
+		},
+	);
+
+	it.each(driverNames)(
 		"preserves the actual terminal completion during a stop race through %s",
 		async (name) => {
 			const path = await directory();
@@ -617,19 +651,6 @@ describe("Runtime Driver shared conformance", () => {
 });
 
 describe("Codex Driver boundary conformance", () => {
-	it("propagates submission failure before turn/start is held", async () => {
-		const path = await directory();
-		const fixture = await openConformanceDriver(
-			"Codex",
-			join(path, "driver.json"),
-		);
-		await expect(
-			fixture.submitWithPreStartEvent(async () => {
-				throw new Error("synthetic pre-start rejection");
-			}),
-		).rejects.toThrow("synthetic pre-start rejection");
-	});
-
 	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
 		const fixture = await openConformanceDriver(
