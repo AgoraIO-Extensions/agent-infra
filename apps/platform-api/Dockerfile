@@ -14,6 +14,5 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/platform-api/ ./
 
-EXPOSE 3000
 USER node
 CMD ["node", "dist/index.mjs"]
