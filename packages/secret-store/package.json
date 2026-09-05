@@ -9,6 +9,10 @@
 		".": {
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
+		},
+		"./worker": {
+			"types": "./dist/worker.d.mts",
+			"import": "./dist/worker.mjs"
 		}
 	},
 	"files": [

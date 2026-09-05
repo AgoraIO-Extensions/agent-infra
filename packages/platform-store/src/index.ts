@@ -76,3 +76,9 @@ export {
 	PostgresSecretActivationStoreV1,
 	SecretActivationStoreError,
 } from "./secret-activation.ts";
+export {
+	openPostgresSecretKeyRotationStoreV1,
+	type PostgresSecretKeyRotationStoreOptionsV1,
+	PostgresSecretKeyRotationStoreV1,
+	SecretKeyRotationStoreError,
+} from "./secret-key-rotation.ts";

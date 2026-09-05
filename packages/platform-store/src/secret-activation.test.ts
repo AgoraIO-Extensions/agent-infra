@@ -144,12 +144,13 @@ beforeAll(async () => {
 			insert into platform.secret_records
 				(agent_id, secret_id, secret_version, configuration_revision,
 				 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
-				 record, created_at, updated_at)
+				 wrapping_key_version, record, created_at, updated_at)
 			values
 				(${record.agentId}, ${record.secretId}, ${record.secretVersion},
 				 ${record.configRevision}, ${record.ownerType}, ${record.ownerId},
 				 ${record.name}, ${record.lifecycleState},
-				 ${record.crypto.dekFingerprint}, ${client.json(record)},
+				 ${record.crypto.dekFingerprint}, ${record.crypto.wrappingKeyVersion},
+				 ${client.json(record)},
 				 ${new Date(record.createdAt)}, ${new Date(record.updatedAt)})
 		`;
 	}
@@ -480,12 +481,13 @@ describe("PostgreSQL Secret activation Store", () => {
 			insert into platform.secret_records
 				(agent_id, secret_id, secret_version, configuration_revision,
 				 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
-				 record, created_at, updated_at)
+				 wrapping_key_version, record, created_at, updated_at)
 			values
 				(${retryable.agentId}, ${retryable.secretId}, ${retryable.secretVersion},
 				 ${retryable.configRevision}, ${retryable.ownerType}, ${retryable.ownerId},
 				 ${retryable.name}, ${retryable.lifecycleState},
-				 ${retryable.crypto.dekFingerprint}, ${client.json(retryable)},
+				 ${retryable.crypto.dekFingerprint},
+				 ${retryable.crypto.wrappingKeyVersion}, ${client.json(retryable)},
 				 ${new Date(retryable.createdAt)}, ${new Date(retryable.updatedAt)})
 		`;
 		const first = await claim("worker_01", retryable);

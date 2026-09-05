@@ -45,6 +45,7 @@ export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
 export * from "./idempotency.js";
 export * from "./secret-activation.js";
+export * from "./secret-key-rotation.js";
 export type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,
