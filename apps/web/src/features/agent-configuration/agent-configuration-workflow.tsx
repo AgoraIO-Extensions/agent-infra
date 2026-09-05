@@ -22,6 +22,7 @@ export function AgentConfigurationWorkflow({
 			agent={agent}
 			commandError={commandError}
 			commandResult={submission.data}
+			key={agent.agentId}
 			onSave={submission.saveConfiguration}
 			onUpgradeImage={submission.upgradeImage}
 			session={session.state}
