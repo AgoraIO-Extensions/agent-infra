@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { parse } from "yaml";
 
@@ -139,10 +140,36 @@ async function readJson(path, name) {
 }
 
 async function readValues(path) {
+	const sourcePath = resolve(path);
 	try {
-		return parse(await readFile(resolve(path), "utf8"));
+		const bytes = await readFile(sourcePath);
+		return { bytes, sourcePath, value: parse(bytes.toString("utf8")) };
 	} catch {
 		fail("release values are invalid");
+	}
+}
+
+async function withFrozenValues(values, operation) {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-release-values-"));
+	const path = join(directory, "values.yaml");
+	try {
+		await writeFile(path, values.bytes, { flag: "wx" });
+		return await operation(path);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
+async function validateUnchanged(commitSha, values) {
+	validateCheckout(commitSha);
+	let current;
+	try {
+		current = await readFile(values.sourcePath);
+	} catch {
+		fail("release values changed during validation");
+	}
+	if (!current.equals(values.bytes)) {
+		fail("release values changed during validation");
 	}
 }
 
@@ -175,12 +202,15 @@ async function main() {
 		if (currentManifest.commitSha === targetManifest.commitSha) {
 			fail("rollback target must be a different release");
 		}
-		validateImageReferences(targetManifest, values);
-		if (values?.migration?.enabled !== false) {
+		validateImageReferences(targetManifest, values.value);
+		if (values.value?.migration?.enabled !== false) {
 			fail("rollback migration must be disabled");
 		}
-		validateHelm(resolve(valuesPath));
-		validateMigrations();
+		await withFrozenValues(values, async (frozenValuesPath) => {
+			validateHelm(frozenValuesPath);
+			validateMigrations();
+		});
+		await validateUnchanged(targetManifest.commitSha, values);
 		console.info("rollback validation passed");
 		return;
 	}
@@ -200,12 +230,15 @@ async function main() {
 	const values = await readValues(valuesPath);
 	validateManifest(manifest);
 	validateCheckout(manifest.commitSha);
-	validateImageReferences(manifest, values);
-	if (values?.migration?.enabled !== true) {
+	validateImageReferences(manifest, values.value);
+	if (values.value?.migration?.enabled !== true) {
 		fail(`${action} migration must be enabled`);
 	}
-	validateHelm(resolve(valuesPath));
-	validateMigrations();
+	await withFrozenValues(values, async (frozenValuesPath) => {
+		validateHelm(frozenValuesPath);
+		validateMigrations();
+	});
+	await validateUnchanged(manifest.commitSha, values);
 	console.info(`${action} validation passed`);
 }
 

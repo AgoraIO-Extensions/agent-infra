@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	chmod,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -46,6 +53,9 @@ async function fixture() {
 		images,
 	};
 	const git = join(directory, "git.mjs");
+	const gitDriftMarker = join(directory, "git-drift");
+	const helm = join(directory, "helm.mjs");
+	const helmMarker = join(directory, "helm.log");
 	const migrationCheck = join(directory, "migration-check.mjs");
 	const migrationCheckMarker = join(directory, "migration-check.log");
 	const manifestPath = join(directory, "images.json");
@@ -53,18 +63,33 @@ async function fixture() {
 	await writeFile(
 		git,
 		`#!/usr/bin/env node
+import { existsSync } from "node:fs";
 const command = process.argv[2];
-if (command === "status") process.exit(0);
+if (command === "status") {
+  if (existsSync(process.env.VALIDATION_GIT_DRIFT_MARKER)) console.log(" M source");
+  process.exit(0);
+}
 if (command === "rev-parse") console.log("${"1".repeat(40)}");
 else process.exit(1);
 `,
 	);
 	await chmod(git, 0o755);
 	await writeFile(
+		helm,
+		`#!/usr/bin/env node
+import { appendFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.HELM_MARKER, args[args.indexOf("--values") + 1] + "\\n");
+if (process.env.MUTATE_VALUES_PATH) writeFileSync(process.env.MUTATE_VALUES_PATH, "changed: true\\n");
+`,
+	);
+	await chmod(helm, 0o755);
+	await writeFile(
 		migrationCheck,
 		`#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 appendFileSync(process.env.MIGRATION_CHECK_MARKER, "checked\\n");
+if (process.env.MIGRATION_GIT_DRIFT_MARKER) writeFileSync(process.env.MIGRATION_GIT_DRIFT_MARKER, "drift");
 if (process.env.MIGRATION_CHECK_FAIL) process.exit(1);
 `,
 	);
@@ -74,6 +99,9 @@ if (process.env.MIGRATION_CHECK_FAIL) process.exit(1);
 	return {
 		directory,
 		git,
+		gitDriftMarker,
+		helm,
+		helmMarker,
 		manifest,
 		manifestPath,
 		migrationCheck,
@@ -104,6 +132,47 @@ test("release validation accepts only matching immutable image references", asyn
 		assert.match(mismatch.stderr, /platformWorker image does not match/);
 	} finally {
 		await rm(release.directory, { recursive: true, force: true });
+	}
+});
+
+test("validation freezes values and rejects input drift", async () => {
+	const valuesDrift = await fixture();
+	try {
+		const result = validate(
+			valuesDrift,
+			["release", valuesDrift.manifestPath, valuesDrift.valuesPath],
+			{
+				HELM_BIN: valuesDrift.helm,
+				HELM_MARKER: valuesDrift.helmMarker,
+				MUTATE_VALUES_PATH: valuesDrift.valuesPath,
+			},
+		);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /release values changed during validation/);
+		const frozenPaths = (await readFile(valuesDrift.helmMarker, "utf8"))
+			.trim()
+			.split("\n");
+		assert.equal(new Set(frozenPaths).size, 1);
+		assert.notEqual(frozenPaths[0], valuesDrift.valuesPath);
+		await assert.rejects(access(frozenPaths[0]));
+	} finally {
+		await rm(valuesDrift.directory, { recursive: true, force: true });
+	}
+
+	const checkoutDrift = await fixture();
+	try {
+		const result = validate(
+			checkoutDrift,
+			["migration", checkoutDrift.manifestPath, checkoutDrift.valuesPath],
+			{
+				MIGRATION_GIT_DRIFT_MARKER: checkoutDrift.gitDriftMarker,
+				VALIDATION_GIT_DRIFT_MARKER: checkoutDrift.gitDriftMarker,
+			},
+		);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /checkout does not match image manifest/);
+	} finally {
+		await rm(checkoutDrift.directory, { recursive: true, force: true });
 	}
 });
 
