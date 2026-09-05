@@ -92,6 +92,8 @@ export interface SecretKeyRotationCryptoPortV1 {
 			readonly ownerType: "agent-owner" | "platform";
 			readonly ownerId: string;
 			readonly name: string;
+			readonly wrappingKeyVersion: string;
+			readonly dekFingerprint: string;
 		};
 		readonly targetKeyVersion: string;
 		readonly traceId: string;
@@ -447,6 +449,8 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 							ownerType: candidate.ownerType,
 							ownerId: candidate.ownerId,
 							name: candidate.name,
+							wrappingKeyVersion: candidate.wrappingKeyVersion,
+							dekFingerprint: candidate.dekFingerprint,
 						},
 						targetKeyVersion: command.targetKeyVersion,
 						traceId: command.traceId,

@@ -93,6 +93,8 @@ describe("Secret key rotation", () => {
 				ownerType: candidate.ownerType,
 				ownerId: candidate.ownerId,
 				name: candidate.name,
+				wrappingKeyVersion: candidate.wrappingKeyVersion,
+				dekFingerprint: candidate.dekFingerprint,
 			},
 			targetKeyVersion: "key_02",
 			traceId: "trace_01",
@@ -260,13 +262,11 @@ describe("Secret key rotation", () => {
 				crypto: {
 					activeWrappingKeyVersion: "key_02",
 					retiringWrappingKeyVersions: ["key_01"],
-					reencrypt: vi
-						.fn()
-						.mockResolvedValue({
-							outcome: "failed",
-							attemptId: "attempt_failure_01",
-							code,
-						}),
+					reencrypt: vi.fn().mockResolvedValue({
+						outcome: "failed",
+						attemptId: "attempt_failure_01",
+						code,
+					}),
 				},
 			});
 

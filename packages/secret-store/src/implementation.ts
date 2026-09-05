@@ -309,6 +309,8 @@ export interface SecretKeyRotationCryptoV1 {
 			readonly ownerType: "agent-owner" | "platform";
 			readonly ownerId: string;
 			readonly name: string;
+			readonly wrappingKeyVersion: string;
+			readonly dekFingerprint: string;
 		};
 		readonly targetKeyVersion: string;
 		readonly traceId: string;
@@ -407,7 +409,10 @@ export function createSecretKeyRotationCryptoV1(input: {
 					record.configRevision !== expectedBinding.configRevision ||
 					record.ownerType !== expectedBinding.ownerType ||
 					record.ownerId !== expectedBinding.ownerId ||
-					record.name !== expectedBinding.name
+					record.name !== expectedBinding.name ||
+					record.crypto.wrappingKeyVersion !==
+						expectedBinding.wrappingKeyVersion ||
+					record.crypto.dekFingerprint !== expectedBinding.dekFingerprint
 				) {
 					throw new Error();
 				}

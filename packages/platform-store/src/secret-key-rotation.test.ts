@@ -829,6 +829,52 @@ describe("PostgreSQL Secret key rotation Store", () => {
 			where key_version = 'key_03'
 		`;
 		expect(tombstone?.count).toBe("0");
+
+		const rotation = {
+			...command,
+			rotationId: "rotation_corrupt_crypto_binding",
+			sourceKeyVersions: ["key_03"],
+			targetKeyVersion: "key_04",
+			traceId: "trace_corrupt_crypto_binding",
+		};
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store,
+			crypto: {
+				activeWrappingKeyVersion: "key_04",
+				retiringWrappingKeyVersions: ["key_03"],
+				async reencrypt({ encryptedRecord, expectedBinding }) {
+					const record = validatePlatformSecretRecordV1(encryptedRecord);
+					const matches =
+						record.agentId === expectedBinding.agentId &&
+						record.secretId === expectedBinding.secretId &&
+						record.secretVersion === expectedBinding.secretVersion &&
+						record.configRevision === expectedBinding.configRevision &&
+						record.ownerType === expectedBinding.ownerType &&
+						record.ownerId === expectedBinding.ownerId &&
+						record.name === expectedBinding.name &&
+						record.crypto.wrappingKeyVersion ===
+							expectedBinding.wrappingKeyVersion &&
+						record.crypto.dekFingerprint === expectedBinding.dekFingerprint;
+					return {
+						outcome: "failed" as const,
+						attemptId: "attempt_corrupt_crypto_binding",
+						code: matches
+							? ("SECRET_ROTATION_FAILED" as const)
+							: ("SECRET_METADATA_INVALID" as const),
+					};
+				},
+			},
+		});
+
+		await expect(useCase.rotate(rotation)).resolves.toMatchObject({
+			outcome: "failed",
+			code: "SECRET_METADATA_INVALID",
+		});
+		const [auditRow] = await client`
+			select action, outcome from platform.audit_events
+			where trace_id = ${rotation.traceId}
+		`;
+		expect(auditRow).toEqual({ action: "secret.decrypt", outcome: "rejected" });
 	});
 
 	it("audits a complete cross-Agent record swap before decrypt", async () => {
@@ -873,7 +919,13 @@ describe("PostgreSQL Secret key rotation Store", () => {
 						record.agentId !== expectedBinding.agentId ||
 						record.secretId !== expectedBinding.secretId ||
 						record.secretVersion !== expectedBinding.secretVersion ||
-						record.configRevision !== expectedBinding.configRevision
+						record.configRevision !== expectedBinding.configRevision ||
+						record.ownerType !== expectedBinding.ownerType ||
+						record.ownerId !== expectedBinding.ownerId ||
+						record.name !== expectedBinding.name ||
+						record.crypto.wrappingKeyVersion !==
+							expectedBinding.wrappingKeyVersion ||
+						record.crypto.dekFingerprint !== expectedBinding.dekFingerprint
 					) {
 						return {
 							outcome: "failed" as const,
