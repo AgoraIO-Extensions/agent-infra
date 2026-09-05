@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { runCommand } from "./run-command.mjs";
+
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
+const timeoutMs = {
+	build: 15 * 60_000,
+	git: 30_000,
+	inspect: 30_000,
+	load: 5 * 60_000,
+	probe: 60_000,
+};
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const injectedRuntimeProbe =
 	"const {access,readdir}=await import('node:fs/promises');" +
@@ -61,24 +69,32 @@ function fail(message) {
 	throw new Error(message);
 }
 
-function run(command, args, name, environment = process.env) {
-	const result = spawnSync(command, args, {
-		cwd: repositoryRoot,
-		encoding: "utf8",
-		env: environment,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	if (result.error) fail(`${name} could not start`);
-	if (result.status !== 0) fail(`${name} failed`);
-	return result.stdout.trim();
-}
-
 async function unavailable(path) {
 	try {
 		await access(path);
 		return false;
 	} catch {
 		return true;
+	}
+}
+
+function assertCheckout(git, commitSha) {
+	const head = runCommand(git, ["rev-parse", "HEAD"], {
+		cwd: repositoryRoot,
+		name: "Git HEAD check",
+		timeoutMs: timeoutMs.git,
+	});
+	const status = runCommand(
+		git,
+		["status", "--porcelain", "--untracked-files=all"],
+		{
+			cwd: repositoryRoot,
+			name: "Git status check",
+			timeoutMs: timeoutMs.git,
+		},
+	);
+	if (head !== commitSha || status) {
+		fail("Git checkout changed during image build");
 	}
 }
 
@@ -90,6 +106,7 @@ async function buildImage({
 	prefix,
 	temp,
 	buildIdentity,
+	git,
 }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
@@ -97,10 +114,11 @@ async function buildImage({
 	const digests = [];
 	let archivePath;
 	for (const pass of [1, 2]) {
+		assertCheckout(git, commitSha);
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
 		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
 		const storeDirectory = `/tmp/agent-infra-pnpm-store-${buildIdentity}-${image.name}-${pass}`;
-		run(
+		runCommand(
 			docker,
 			[
 				"buildx",
@@ -125,9 +143,14 @@ async function buildImage({
 				"--progress=quiet",
 				".",
 			],
-			`${image.key} image build ${pass}`,
-			{ ...process.env, BUILDX_GIT_INFO: "false" },
+			{
+				cwd: repositoryRoot,
+				env: { ...process.env, BUILDX_GIT_INFO: "false" },
+				name: `${image.key} image build ${pass}`,
+				timeoutMs: timeoutMs.build,
+			},
 		);
+		assertCheckout(git, commitSha);
 		let metadata;
 		try {
 			metadata = JSON.parse(await readFile(metadataPath, "utf8"));
@@ -143,21 +166,29 @@ async function buildImage({
 	if (digests[0] !== digests[1]) {
 		fail(`${image.key} image is not reproducible`);
 	}
-	run(
+	runCommand(
 		docker,
 		["load", "--input", archivePath],
-		`${image.key} image load`,
+		{
+			cwd: repositoryRoot,
+			name: `${image.key} image load`,
+			timeoutMs: timeoutMs.load,
+		},
 	);
-	const user = run(
+	const user = runCommand(
 		docker,
 		["image", "inspect", "--format", "{{.Config.User}}", reference],
-		`${image.key} image user inspection`,
+		{
+			cwd: repositoryRoot,
+			name: `${image.key} image user inspection`,
+			timeoutMs: timeoutMs.inspect,
+		},
 	);
 	const runtimeUser = user.split(":", 1)[0];
 	if (!runtimeUser || runtimeUser === "root" || /^0+$/.test(runtimeUser)) {
 		fail(`${image.key} image runtime user must be non-root`);
 	}
-	run(
+	runCommand(
 		docker,
 		[
 			"run",
@@ -167,7 +198,11 @@ async function buildImage({
 			reference,
 			...image.command,
 		],
-		`${image.key} read-only runtime probe`,
+		{
+			cwd: repositoryRoot,
+			name: `${image.key} read-only runtime probe`,
+			timeoutMs: timeoutMs.probe,
+		},
 	);
 	return { repository, digest: digests[0] };
 }
@@ -186,12 +221,26 @@ async function main() {
 	}
 
 	const git = process.env.GIT_BIN ?? "git";
-	if (run(git, ["status", "--porcelain", "--untracked-files=all"], "Git status")) {
+	if (
+		runCommand(git, ["status", "--porcelain", "--untracked-files=all"], {
+			cwd: repositoryRoot,
+			name: "Git status",
+			timeoutMs: timeoutMs.git,
+		})
+	) {
 		fail("image builds require a clean Git worktree");
 	}
-	const commitSha = run(git, ["rev-parse", "HEAD"], "Git HEAD");
+	const commitSha = runCommand(git, ["rev-parse", "HEAD"], {
+		cwd: repositoryRoot,
+		name: "Git HEAD",
+		timeoutMs: timeoutMs.git,
+	});
 	if (!/^[a-f0-9]{40}$/.test(commitSha)) fail("Git HEAD is invalid");
-	const epoch = run(git, ["show", "-s", "--format=%ct", "HEAD"], "Git epoch");
+	const epoch = runCommand(git, ["show", "-s", "--format=%ct", "HEAD"], {
+		cwd: repositoryRoot,
+		name: "Git epoch",
+		timeoutMs: timeoutMs.git,
+	});
 	if (!/^[1-9][0-9]*$/.test(epoch)) fail("Git commit epoch is invalid");
 
 	const platform = process.env.PLATFORM ?? "linux/amd64";
@@ -216,8 +265,10 @@ async function main() {
 				prefix,
 				temp,
 				buildIdentity,
+				git,
 			});
 		}
+		assertCheckout(git, commitSha);
 		await writeFile(
 			manifestPath,
 			`${JSON.stringify(

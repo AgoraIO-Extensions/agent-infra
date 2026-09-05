@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { parse } from "yaml";
+
+import { runCommand } from "./run-command.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const chart = resolve(repositoryRoot, "deploy/helm/agent-infra");
 const imageKeys = ["web", "platformApi", "platformWorker", "runtimeHost"];
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const placeholderDigest = `sha256:${"0".repeat(64)}`;
+const timeoutMs = {
+	git: 30_000,
+	helm: 2 * 60_000,
+	migration: 5 * 60_000,
+};
 
 function fail(message) {
 	throw new Error(message);
@@ -65,31 +71,62 @@ function validateImageReferences(manifest, values) {
 	}
 }
 
-function run(command, args, name) {
-	const result = spawnSync(command, args, {
+function validateCheckout(commitSha) {
+	const git = process.env.GIT_BIN ?? "git";
+	const head = runCommand(git, ["rev-parse", "HEAD"], {
 		cwd: repositoryRoot,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
+		name: "Git HEAD validation",
+		timeoutMs: timeoutMs.git,
 	});
-	if (result.error) fail(`${name} could not start`);
-	if (result.status !== 0) fail(`${name} failed`);
+	const status = runCommand(
+		git,
+		["status", "--porcelain", "--untracked-files=all"],
+		{
+			cwd: repositoryRoot,
+			name: "Git status validation",
+			timeoutMs: timeoutMs.git,
+		},
+	);
+	if (head !== commitSha || status) {
+		fail("checkout does not match image manifest");
+	}
 }
 
 function validateHelm(valuesPath) {
 	const helm = process.env.HELM_BIN ?? "helm";
-	run(helm, ["lint", chart, "--values", valuesPath, "--strict"], "Helm lint");
-	run(
+	runCommand(helm, ["lint", chart, "--values", valuesPath, "--strict"], {
+		cwd: repositoryRoot,
+		name: "Helm lint",
+		timeoutMs: timeoutMs.helm,
+	});
+	runCommand(
 		helm,
 		["template", "release-validation", chart, "--values", valuesPath],
-		"Helm render",
+		{
+			cwd: repositoryRoot,
+			name: "Helm render",
+			timeoutMs: timeoutMs.helm,
+		},
 	);
 }
 
 function validateMigrations() {
-	run(
-		process.execPath,
-		[resolve(repositoryRoot, "packages/platform-store/src/check-migrations.mjs")],
-		"Platform migration drift check",
+	const configured = process.env.MIGRATION_CHECK_BIN;
+	runCommand(
+		configured ?? process.execPath,
+		configured
+			? []
+			: [
+					resolve(
+						repositoryRoot,
+						"packages/platform-store/src/check-migrations.mjs",
+					),
+				],
+		{
+			cwd: repositoryRoot,
+			name: "Platform migration drift check",
+			timeoutMs: timeoutMs.migration,
+		},
 	);
 }
 
@@ -134,6 +171,7 @@ async function main() {
 		const values = await readValues(valuesPath);
 		validateManifest(currentManifest);
 		validateManifest(targetManifest);
+		validateCheckout(targetManifest.commitSha);
 		if (currentManifest.commitSha === targetManifest.commitSha) {
 			fail("rollback target must be a different release");
 		}
@@ -142,6 +180,7 @@ async function main() {
 			fail("rollback migration must be disabled");
 		}
 		validateHelm(resolve(valuesPath));
+		validateMigrations();
 		console.info("rollback validation passed");
 		return;
 	}
@@ -160,6 +199,7 @@ async function main() {
 	const manifest = await readJson(manifestPath, "image manifest");
 	const values = await readValues(valuesPath);
 	validateManifest(manifest);
+	validateCheckout(manifest.commitSha);
 	validateImageReferences(manifest, values);
 	if (values?.migration?.enabled !== true) {
 		fail(`${action} migration must be enabled`);
