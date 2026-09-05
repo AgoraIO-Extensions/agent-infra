@@ -37,6 +37,11 @@ describe("MyAgentsScreen", () => {
 		);
 
 		expect(screen.getByText("No Agent applications yet.")).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "Create application" })
+				.getAttribute("href"),
+		).toBe("/my-agents/new");
 	});
 
 	it("renders an unavailable history without stale or enumerating data", async () => {

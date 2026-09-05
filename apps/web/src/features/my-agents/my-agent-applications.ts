@@ -3,15 +3,23 @@ import type {
 	RequestResult,
 } from "../../pilot/generated/client/index.js";
 import {
+	createAgentApplication,
 	getAgentApplication,
 	listAgentApplications,
+	updateAgentApplication,
 	withdrawAgentApplication,
 } from "../../pilot/generated/sdk.gen.js";
 import type {
+	AgentApplicationCreateRequestV1Writable,
 	AgentApplicationProjectionV1,
+	AgentApplicationUpdateRequestV1Writable,
+	CreateAgentApplicationErrors,
+	CreateAgentApplicationResponses,
 	ListAgentApplicationsData,
 	ListAgentApplicationsErrors,
 	ListAgentApplicationsResponses,
+	UpdateAgentApplicationErrors,
+	UpdateAgentApplicationResponses,
 } from "../../pilot/generated/types.gen.js";
 
 type UnavailableState = {
@@ -29,6 +37,29 @@ export type MyAgentApplicationsState =
 export type MyAgentApplicationState =
 	| { kind: "ready"; application: AgentApplicationProjectionV1 }
 	| UnavailableState;
+
+export type AgentApplicationEditAction = "edit" | "resubmit";
+
+const agentApplicationEditActionByStatus: Partial<
+	Record<AgentApplicationProjectionV1["status"], AgentApplicationEditAction>
+> = {
+	pending_approval: "edit",
+	rejected: "resubmit",
+};
+
+export const agentApplicationEditActionLabels: Record<
+	AgentApplicationEditAction,
+	string
+> = {
+	edit: "Edit application",
+	resubmit: "Resubmit application",
+};
+
+export function getAgentApplicationEditAction(
+	application: AgentApplicationProjectionV1,
+) {
+	return agentApplicationEditActionByStatus[application.status];
+}
 
 function requestError(retryable: boolean) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
@@ -94,6 +125,55 @@ export async function loadMyAgentApplication(
 	return result.data
 		? { kind: "ready", application: result.data }
 		: unavailable(result.error);
+}
+
+export async function createMyAgentApplication(
+	body: AgentApplicationCreateRequestV1Writable,
+	idempotencyKey: string,
+	client?: Client,
+): Promise<AgentApplicationProjectionV1> {
+	const result: Awaited<
+		RequestResult<
+			CreateAgentApplicationResponses,
+			CreateAgentApplicationErrors,
+			false
+		>
+	> = await createAgentApplication<false>({
+		body,
+		client,
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (!result.data) throw requestError(result.error?.retryable !== false);
+
+	return result.data;
+}
+
+export async function updateMyAgentApplication(
+	applicationId: string,
+	body: AgentApplicationUpdateRequestV1Writable,
+	idempotencyKey: string,
+	client?: Client,
+): Promise<AgentApplicationProjectionV1> {
+	const result: Awaited<
+		RequestResult<
+			UpdateAgentApplicationResponses,
+			UpdateAgentApplicationErrors,
+			false
+		>
+	> = await updateAgentApplication<false>({
+		body,
+		client,
+		headers: { "Idempotency-Key": idempotencyKey },
+		path: { applicationId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (result.data.applicationId !== applicationId) throw requestError(false);
+
+	return result.data;
 }
 
 export async function withdrawMyAgentApplication(

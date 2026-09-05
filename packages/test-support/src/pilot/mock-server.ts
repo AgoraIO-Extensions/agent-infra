@@ -14,7 +14,11 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
+	readonly createAgentApplication?: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgentApplication?: PilotAgentMockResponderV1<[Request, string]>;
+	readonly updateAgentApplication?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
 	readonly withdrawAgentApplication?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
@@ -64,9 +68,15 @@ const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
 const listAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agent-applications"
 ].get as unknown as Operation;
+const createAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agent-applications"
+].post as unknown as Operation;
 const getAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agent-applications/{applicationId}"
 ].get as unknown as Operation;
+const updateAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agent-applications/{applicationId}"
+].put as unknown as Operation;
 const withdrawAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agent-applications/{applicationId}/withdraw"
 ].post as unknown as Operation;
@@ -107,14 +117,10 @@ function validateStaticResponse<TArgs extends readonly unknown[]>(
 
 async function validateJsonRequestBody(operation: Operation, request: Request) {
 	const schema = operation.requestBody?.content["application/json"].schema;
-	if (!schema) return;
-	let body: unknown;
-	try {
-		body = await request.clone().json();
-	} catch {
-		throw new TypeError("Pilot Agent Mock Server request body is invalid");
+	if (!schema) {
+		throw new TypeError("Pilot Agent Mock Server request body is not declared");
 	}
-	schema.parse(body);
+	schema.parse(await request.clone().json());
 }
 
 function jsonResponse(response: PilotAgentMockResponseV1) {
@@ -138,8 +144,16 @@ export function createPilotAgentMockServerV1(
 		listAgentApplicationsOperation,
 	);
 	validateStaticResponse(
+		scenario.createAgentApplication,
+		createAgentApplicationOperation,
+	);
+	validateStaticResponse(
 		scenario.getAgentApplication,
 		getAgentApplicationOperation,
+	);
+	validateStaticResponse(
+		scenario.updateAgentApplication,
+		updateAgentApplicationOperation,
 	);
 	validateStaticResponse(
 		scenario.withdrawAgentApplication,
@@ -185,6 +199,22 @@ export function createPilotAgentMockServerV1(
 					? scenario.listAgents(request)
 					: scenario.listAgents;
 			validateResponse(listAgentsOperation, response);
+			return jsonResponse(response);
+		}
+
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/v1/agent-applications" &&
+			scenario.createAgentApplication !== undefined
+		) {
+			createAgentApplicationOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			await validateJsonRequestBody(createAgentApplicationOperation, request);
+			const responder = scenario.createAgentApplication;
+			const response =
+				typeof responder === "function" ? responder(request) : responder;
+			validateResponse(createAgentApplicationOperation, response);
 			return jsonResponse(response);
 		}
 
@@ -295,6 +325,27 @@ export function createPilotAgentMockServerV1(
 		const applicationIdPath = /^\/api\/v1\/agent-applications\/([^/]+)$/.exec(
 			url.pathname,
 		)?.[1];
+		if (
+			request.method === "PUT" &&
+			applicationIdPath !== undefined &&
+			scenario.updateAgentApplication !== undefined
+		) {
+			const applicationId = decodeURIComponent(applicationIdPath);
+			updateAgentApplicationOperation.requestParams.path?.parse({
+				applicationId,
+			});
+			updateAgentApplicationOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			await validateJsonRequestBody(updateAgentApplicationOperation, request);
+			const responder = scenario.updateAgentApplication;
+			const response =
+				typeof responder === "function"
+					? responder(request, applicationId)
+					: responder;
+			validateResponse(updateAgentApplicationOperation, response);
+			return jsonResponse(response);
+		}
 		if (
 			request.method === "GET" &&
 			applicationIdPath !== undefined &&
