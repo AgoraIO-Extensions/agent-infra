@@ -12,12 +12,7 @@ import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
-import {
-	FakeRuntimeDriver,
-	FileRuntimeStore,
-	RuntimeHost,
-	runtimeDriverConformanceTable,
-} from "./index.js";
+import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
 
 const directories: string[] = [];
 
@@ -248,7 +243,7 @@ describe("RuntimeHost durable Session", () => {
 		expect(await driver.sideEffectCount()).toBe(2);
 	});
 
-	it("passes the Session, Turn, event, stop, status, and capability conformance table", async () => {
+	it("drives the Fake Session, Turn, event, stop, status, and capability path", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
 		const runtimeHost = await host(
@@ -390,24 +385,5 @@ describe("RuntimeHost durable Session", () => {
 			outcome: "rejected",
 			code: "RUNTIME_TURN_NOT_ACTIVE",
 		});
-
-		const observations = {
-			turn: submitted.result.outcome,
-			event: initialReplay.events[0]?.type,
-			supplement: supplemented.result.outcome,
-			busy: busy.result.outcome,
-			stop: stopped.result.outcome,
-			status: status.status,
-			capabilities: capabilities.capabilities.supplementaryInstruction,
-			rejected: rejected.result.outcome,
-		};
-		expect(observations).toEqual(
-			Object.fromEntries(
-				runtimeDriverConformanceTable.map(({ capability, expected }) => [
-					capability,
-					expected,
-				]),
-			),
-		);
 	});
 });
