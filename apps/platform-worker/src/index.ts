@@ -1,6 +1,40 @@
 import { pathToFileURL } from "node:url";
 
+import {
+	createSecretActivationUseCaseV1,
+	type SecretActivationKubernetesPortV1,
+} from "@agent-infra/platform-core";
+import { openPostgresSecretActivationStoreV1 } from "@agent-infra/platform-store";
+
+import { createWorkerSecretDecryptorV1 } from "./secret-decryptor.js";
+
 export const platformWorkerService = "platform-worker";
+
+export function createPlatformSecretActivationWorkerV1(options: {
+	readonly databaseUrl: string;
+	readonly kubernetes: SecretActivationKubernetesPortV1;
+	readonly keys: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
+	readonly leaseMs?: number;
+}) {
+	const store = openPostgresSecretActivationStoreV1({
+		databaseUrl: options.databaseUrl,
+	});
+	const activation = createSecretActivationUseCaseV1(
+		{
+			store,
+			kubernetes: options.kubernetes,
+			decryptor: createWorkerSecretDecryptorV1({ keys: options.keys }),
+		},
+		{ leaseMs: options.leaseMs },
+	);
+	return {
+		activate: activation.activate,
+		close: () => store.close(),
+	};
+}
 
 interface StartOptions {
 	heartbeatMs?: number;

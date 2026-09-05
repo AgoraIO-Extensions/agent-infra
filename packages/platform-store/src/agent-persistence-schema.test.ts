@@ -94,6 +94,9 @@ describe("Agent persistence schema contract", () => {
 			"record",
 			"created_at",
 			"updated_at",
+			"activation_fence",
+			"activation_owner",
+			"activation_lease_expires_at",
 		]);
 		expect(
 			getTableConfig(platformSecretRecords).indexes.map(
@@ -103,6 +106,7 @@ describe("Agent persistence schema contract", () => {
 			expect.arrayContaining([
 				"secret_record_dek_fingerprint_unique",
 				"secret_record_agent_secret_version_unique",
+				"secret_record_activation_idx",
 			]),
 		);
 		expect(columnNames(agentAvailability)).toEqual([

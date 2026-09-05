@@ -52,9 +52,12 @@ describe("platform-store package surface", () => {
 			"PostgresConversationEventTransactionV1",
 			"PostgresConversationExecutionTransactionV1",
 			"PostgresPlatformAuditQueryV1",
+			"PostgresSecretActivationStoreV1",
+			"SecretActivationStoreError",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
 			"openPostgresPlatformIdempotencyStore",
+			"openPostgresSecretActivationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
 		]);
 
@@ -75,12 +78,14 @@ describe("platform-store package surface", () => {
 				"dist/migrations/0003_secret_records.sql",
 				"dist/migrations/0004_conversation_execution.sql",
 				"dist/migrations/0005_conversation_events.sql",
+				"dist/migrations/0006_secret_candidate_activation.sql",
 				"dist/migrations/meta/0000_snapshot.json",
 				"dist/migrations/meta/0001_snapshot.json",
 				"dist/migrations/meta/0002_snapshot.json",
 				"dist/migrations/meta/0003_snapshot.json",
 				"dist/migrations/meta/0004_snapshot.json",
 				"dist/migrations/meta/0005_snapshot.json",
+				"dist/migrations/meta/0006_snapshot.json",
 				"dist/migrations/meta/_journal.json",
 			]),
 		);

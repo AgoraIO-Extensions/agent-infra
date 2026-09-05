@@ -6,6 +6,12 @@
 	"files": [
 		"dist"
 	],
+	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/platform-core": "workspace:*",
+		"@agent-infra/platform-store": "workspace:*",
+		"@agent-infra/secret-store": "workspace:*"
+	},
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",

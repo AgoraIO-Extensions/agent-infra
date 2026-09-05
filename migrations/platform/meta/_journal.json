@@ -43,6 +43,13 @@
       "when": 1788522609767,
       "tag": "0005_conversation_events",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788597842291,
+      "tag": "0006_secret_candidate_activation",
+      "breakpoints": true
     }
   ]
 }

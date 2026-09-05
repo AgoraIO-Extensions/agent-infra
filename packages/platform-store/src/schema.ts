@@ -323,6 +323,13 @@ export const platformSecretRecords = platformSchema.table(
 		record: jsonb("record").$type<PlatformSecretRecordV1>().notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		activationFence: bigint("activation_fence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		activationOwner: text("activation_owner"),
+		activationLeaseExpiresAt: timestamp("activation_lease_expires_at", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		primaryKey({
@@ -368,7 +375,22 @@ export const platformSecretRecords = platformSchema.table(
 		),
 		check(
 			"secret_record_lifecycle_state",
-			sql`${table.lifecycleState} = 'pending'`,
+			sql`${table.lifecycleState} in ('pending', 'applying', 'observed', 'active', 'failed')`,
+		),
+		check(
+			"secret_record_activation_fence_safe",
+			sql`${table.activationFence} between 0 and 9007199254740991`,
+		),
+		check(
+			"secret_record_activation_claim_valid",
+			sql`(
+				${table.activationOwner} is null
+				and ${table.activationLeaseExpiresAt} is null
+			) or (
+				char_length(${table.activationOwner}) > 0
+				and ${table.activationLeaseExpiresAt} is not null
+				and ${table.activationFence} >= 1
+			)`,
 		),
 		check(
 			"secret_record_dek_fingerprint_format",
@@ -396,6 +418,10 @@ export const platformSecretRecords = platformSchema.table(
 			table.agentId,
 			table.secretId,
 			table.secretVersion,
+		),
+		index("secret_record_activation_idx").on(
+			table.lifecycleState,
+			table.activationLeaseExpiresAt,
 		),
 	],
 );
