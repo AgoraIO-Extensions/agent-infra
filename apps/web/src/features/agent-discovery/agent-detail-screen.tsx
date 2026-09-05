@@ -6,6 +6,7 @@ import type { AgentDetailState } from "./agent-discovery.js";
 import { agentServiceAvailabilityLabel } from "./agent-discovery-screen.js";
 
 type AgentDetailScreenProps = {
+	ownerSettings?: { readonly agentId: string };
 	state: AgentDetailState | { kind: "loading" };
 };
 
@@ -45,7 +46,10 @@ function safeInteractionUrl(input: string | null) {
 	}
 }
 
-export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
+export function AgentDetailScreen({
+	ownerSettings,
+	state,
+}: AgentDetailScreenProps) {
 	if (state.kind === "loading") {
 		return <p aria-live="polite">Loading Agent...</p>;
 	}
@@ -174,6 +178,15 @@ export function AgentDetailScreen({ state }: AgentDetailScreenProps) {
 				>
 					Back to Agents
 				</Link>
+				{ownerSettings ? (
+					<Link
+						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						params={{ agentId: ownerSettings.agentId }}
+						to="/agents/$agentId/configuration"
+					>
+						Owner settings
+					</Link>
+				) : null}
 				{interactionUrl ? (
 					<a
 						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"

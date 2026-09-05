@@ -16,6 +16,9 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
 	readonly createAgentApplication?: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgentApplication?: PilotAgentMockResponderV1<[Request, string]>;
+	readonly updateAgentConfiguration?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
 	readonly updateAgentApplication?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
@@ -65,6 +68,9 @@ const getCurrentSessionOperation = pilotBrowserHttpOpenApiPathsV1[
 const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agents/{agentId}"
 ].get as unknown as Operation;
+const updateAgentConfigurationOperation = pilotBrowserHttpOpenApiPathsV1[
+	"/api/v1/agents/{agentId}/configuration"
+].put as unknown as Operation;
 const listAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
 	"/api/v1/agent-applications"
 ].get as unknown as Operation;
@@ -139,6 +145,10 @@ export function createPilotAgentMockServerV1(
 	);
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
+	validateStaticResponse(
+		scenario.updateAgentConfiguration,
+		updateAgentConfigurationOperation,
+	);
 	validateStaticResponse(
 		scenario.listAgentApplications,
 		listAgentApplicationsOperation,
@@ -215,6 +225,28 @@ export function createPilotAgentMockServerV1(
 			const response =
 				typeof responder === "function" ? responder(request) : responder;
 			validateResponse(createAgentApplicationOperation, response);
+			return jsonResponse(response);
+		}
+
+		const configurationAgentId =
+			/^\/api\/v1\/agents\/([^/]+)\/configuration$/.exec(url.pathname)?.[1];
+		if (
+			request.method === "PUT" &&
+			configurationAgentId !== undefined &&
+			scenario.updateAgentConfiguration !== undefined
+		) {
+			const agentId = decodeURIComponent(configurationAgentId);
+			updateAgentConfigurationOperation.requestParams.path?.parse({ agentId });
+			updateAgentConfigurationOperation.requestParams.header?.parse({
+				"Idempotency-Key": request.headers.get("Idempotency-Key"),
+			});
+			await validateJsonRequestBody(updateAgentConfigurationOperation, request);
+			const responder = scenario.updateAgentConfiguration;
+			const response =
+				typeof responder === "function"
+					? responder(request, agentId)
+					: responder;
+			validateResponse(updateAgentConfigurationOperation, response);
 			return jsonResponse(response);
 		}
 
