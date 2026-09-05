@@ -23,6 +23,7 @@ function sameDecision(
 
 export function useAgentApplicationDecision() {
 	const queryClient = useQueryClient();
+	const inFlight = useRef(false);
 	const pendingDecision = useRef<AgentApplicationDecisionAttempt | undefined>(
 		undefined,
 	);
@@ -79,14 +80,28 @@ export function useAgentApplicationDecision() {
 			]);
 		},
 	});
+	const runDecision = async (
+		applicationId: string,
+		nextDecision: AgentApplicationDecision,
+	) => {
+		if (inFlight.current) {
+			throw new Error("An application decision is already in progress");
+		}
+		inFlight.current = true;
+		try {
+			return await decision.mutateAsync(
+				startAttempt(applicationId, nextDecision),
+			);
+		} finally {
+			inFlight.current = false;
+		}
+	};
 
 	return {
 		...decision,
-		mutate: (applicationId: string, nextDecision: AgentApplicationDecision) =>
-			decision.mutate(startAttempt(applicationId, nextDecision)),
-		mutateAsync: (
-			applicationId: string,
-			nextDecision: AgentApplicationDecision,
-		) => decision.mutateAsync(startAttempt(applicationId, nextDecision)),
+		mutate: (applicationId: string, nextDecision: AgentApplicationDecision) => {
+			void runDecision(applicationId, nextDecision).catch(() => undefined);
+		},
+		mutateAsync: runDecision,
 	};
 }

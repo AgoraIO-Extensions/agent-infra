@@ -159,4 +159,41 @@ describe("useAgentLifecycleCommand", () => {
 		);
 		queryClient.clear();
 	});
+
+	it("rejects a second lifecycle command while one is in flight", async () => {
+		const queryClient = new QueryClient();
+		let resolveFirstCommand: (value: typeof lifecycleResult) => void = () =>
+			undefined;
+		vi.mocked(commandAgentLifecycle)
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveFirstCommand = resolve;
+					}),
+			)
+			.mockResolvedValueOnce(lifecycleResult);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() => useAgentLifecycleCommand(lifecycleResult.agentId),
+			{ wrapper },
+		);
+		let firstCommand: Promise<typeof lifecycleResult> | undefined;
+
+		await act(async () => {
+			firstCommand = result.current.mutateAsync("stop");
+			await Promise.resolve();
+			await expect(result.current.mutateAsync("restart")).rejects.toThrow(
+				"A lifecycle command is already in progress",
+			);
+		});
+		expect(commandAgentLifecycle).toHaveBeenCalledOnce();
+
+		await act(async () => {
+			resolveFirstCommand(lifecycleResult);
+		});
+		await expect(firstCommand).resolves.toEqual(lifecycleResult);
+		queryClient.clear();
+	});
 });

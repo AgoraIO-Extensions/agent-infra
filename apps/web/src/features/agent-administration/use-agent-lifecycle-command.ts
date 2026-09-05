@@ -14,6 +14,7 @@ type LifecycleAttempt = {
 
 export function useAgentLifecycleCommand(agentId: string) {
 	const queryClient = useQueryClient();
+	const inFlight = useRef(false);
 	const pendingCommand = useRef<{
 		agentId: string;
 		command?: AgentLifecycleCommand;
@@ -66,12 +67,23 @@ export function useAgentLifecycleCommand(agentId: string) {
 		pendingCommand.current = { agentId };
 		lifecycle.reset();
 	}, [agentId, lifecycle.reset]);
+	const runCommand = async (command: AgentLifecycleCommand) => {
+		if (inFlight.current) {
+			throw new Error("A lifecycle command is already in progress");
+		}
+		inFlight.current = true;
+		try {
+			return await lifecycle.mutateAsync(startAttempt(command));
+		} finally {
+			inFlight.current = false;
+		}
+	};
 
 	return {
 		...lifecycle,
-		mutate: (command: AgentLifecycleCommand) =>
-			lifecycle.mutate(startAttempt(command)),
-		mutateAsync: (command: AgentLifecycleCommand) =>
-			lifecycle.mutateAsync(startAttempt(command)),
+		mutate: (command: AgentLifecycleCommand) => {
+			void runCommand(command).catch(() => undefined);
+		},
+		mutateAsync: runCommand,
 	};
 }
