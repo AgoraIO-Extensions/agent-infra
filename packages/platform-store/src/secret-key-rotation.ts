@@ -793,6 +793,47 @@ export class PostgresSecretKeyRotationStoreV1
 		}
 	}
 
+	async recordAttempt(
+		input: Parameters<SecretKeyRotationStorePortV1["recordAttempt"]>[0],
+	): Promise<boolean> {
+		try {
+			const command = rotationCommand(input.command);
+			if (input.auditEvents.length !== 2) {
+				throw new SecretKeyRotationStoreError();
+			}
+			validateAudit(
+				input.auditEvents[0] as SecretKeyRotationAuditIntentV1,
+				{ kind: "decrypt", candidate: input.candidate },
+				command,
+			);
+			validateAudit(
+				input.auditEvents[1] as SecretKeyRotationAuditIntentV1,
+				{ kind: "rewrap", candidate: input.candidate },
+				command,
+			);
+			if (
+				input.auditEvents[0]?.outcome !== "succeeded" ||
+				input.auditEvents[1]?.outcome !== "rejected"
+			) {
+				throw new SecretKeyRotationStoreError();
+			}
+			return await this.#client.begin(async (sql) => {
+				await lock(sql, "rotation", command.rotationId);
+				const rotation = await rotationRow(sql, command.rotationId);
+				if (!rotation) return false;
+				progress(rotation, command);
+				const now = await decisionAt(sql);
+				for (const auditEvent of input.auditEvents) {
+					await insertAudit(sql, auditEvent, now);
+				}
+				return true;
+			});
+		} catch (error) {
+			if (error instanceof SecretKeyRotationStoreError) throw error;
+			throw new SecretKeyRotationStoreError();
+		}
+	}
+
 	async retireKey(
 		input: Parameters<SecretKeyRotationStorePortV1["retireKey"]>[0],
 	): Promise<"retired" | "referenced"> {

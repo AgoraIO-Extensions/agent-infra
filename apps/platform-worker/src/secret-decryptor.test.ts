@@ -240,6 +240,12 @@ describe("Worker Secret rotation crypto", () => {
 
 		const decision = await crypto.reencrypt({
 			encryptedRecord: sourceRecord,
+			expectedBinding: {
+				agentId: sourceRecord.agentId,
+				secretId: sourceRecord.secretId,
+				secretVersion: sourceRecord.secretVersion,
+				configRevision: sourceRecord.configRevision,
+			},
 			targetKeyVersion: "key_target",
 			traceId: "trace_rotation_01",
 		});
@@ -347,6 +353,12 @@ describe("Worker Secret rotation crypto", () => {
 		await expect(
 			missingKeyCrypto.reencrypt({
 				encryptedRecord: fixture.record,
+				expectedBinding: {
+					agentId: fixture.record.agentId,
+					secretId: fixture.record.secretId,
+					secretVersion: fixture.record.secretVersion,
+					configRevision: fixture.record.configRevision,
+				},
 				targetKeyVersion: "key_target",
 				traceId: "trace_rotation_01",
 			}),
@@ -354,18 +366,54 @@ describe("Worker Secret rotation crypto", () => {
 			outcome: "failed",
 			code: "SECRET_KEY_UNAVAILABLE",
 		});
-		for (const encryptedRecord of [fixture.tamperedRecord, swapped]) {
-			await expect(
-				crypto.reencrypt({
-					encryptedRecord,
-					targetKeyVersion: "key_target",
-					traceId: "trace_rotation_01",
-				}),
-			).resolves.toEqual({
-				outcome: "failed",
-				code: "SECRET_AUTHENTICATION_FAILED",
-			});
-		}
+		await expect(
+			crypto.reencrypt({
+				encryptedRecord: fixture.tamperedRecord,
+				expectedBinding: {
+					agentId: fixture.record.agentId,
+					secretId: fixture.record.secretId,
+					secretVersion: fixture.record.secretVersion,
+					configRevision: fixture.record.configRevision,
+				},
+				targetKeyVersion: "key_target",
+				traceId: "trace_rotation_01",
+			}),
+		).resolves.toEqual({
+			outcome: "failed",
+			code: "SECRET_AUTHENTICATION_FAILED",
+		});
+		await expect(
+			crypto.reencrypt({
+				encryptedRecord: swapped,
+				expectedBinding: {
+					agentId: fixture.record.agentId,
+					secretId: fixture.record.secretId,
+					secretVersion: fixture.record.secretVersion,
+					configRevision: fixture.record.configRevision,
+				},
+				targetKeyVersion: "key_target",
+				traceId: "trace_rotation_01",
+			}),
+		).resolves.toEqual({
+			outcome: "failed",
+			code: "SECRET_METADATA_INVALID",
+		});
+		await expect(
+			crypto.reencrypt({
+				encryptedRecord: fixture.record,
+				expectedBinding: {
+					agentId: "agent_02",
+					secretId: fixture.record.secretId,
+					secretVersion: fixture.record.secretVersion,
+					configRevision: fixture.record.configRevision,
+				},
+				targetKeyVersion: "key_target",
+				traceId: "trace_rotation_01",
+			}),
+		).resolves.toEqual({
+			outcome: "failed",
+			code: "SECRET_METADATA_INVALID",
+		});
 		expect(() =>
 			createSecretKeyRotationCryptoV1({
 				keys: [

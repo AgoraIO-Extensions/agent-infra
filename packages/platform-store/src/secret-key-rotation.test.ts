@@ -166,10 +166,11 @@ function audit(
 	rotation: RotateSecretKeyCommandV1 = command,
 	outcome: "succeeded" | "rejected" | "failed" = "succeeded",
 	operation: "decrypt" | "rewrap" = "rewrap",
+	attempt = 1,
 ) {
 	return {
 		schemaVersion: 1,
-		auditId: `audit-${rotation.rotationId}-${candidate.secretVersion}-${operation}-${outcome}`,
+		auditId: `audit-${rotation.rotationId}-${candidate.secretVersion}-${operation}-${outcome}-${attempt}`,
 		traceId: rotation.traceId,
 		actorType: "system",
 		actorId: rotation.workerId,
@@ -336,6 +337,16 @@ describe("PostgreSQL Secret key rotation Store", () => {
 		await expect(store.commitReencryption(secondCommit)).resolves.toEqual({
 			outcome: "stale",
 		});
+		const staleAttempt = {
+			command,
+			candidate: second.candidate,
+			auditEvents: [
+				audit(second.candidate, command, "succeeded", "decrypt", 2),
+				audit(second.candidate, command, "rejected", "rewrap", 2),
+			],
+		};
+		await expect(store.recordAttempt(staleAttempt)).resolves.toBe(true);
+		await expect(store.recordAttempt(staleAttempt)).resolves.toBe(true);
 		await expect(store.nextCandidate(command)).resolves.toMatchObject({
 			outcome: "completed",
 			progress: { state: "completed", remainingSecrets: 0 },
@@ -372,6 +383,8 @@ describe("PostgreSQL Secret key rotation Store", () => {
 			{ action: "secret.retire-key", outcome: "rejected" },
 			{ action: "secret.decrypt", outcome: "succeeded" },
 			{ action: "secret.rewrap", outcome: "succeeded" },
+			{ action: "secret.decrypt", outcome: "succeeded" },
+			{ action: "secret.rewrap", outcome: "rejected" },
 			{ action: "secret.retire-key", outcome: "succeeded" },
 			{ action: "secret.retire-key", outcome: "rejected" },
 		]);
@@ -481,6 +494,31 @@ describe("PostgreSQL Secret key rotation Store", () => {
 			where trace_id = ${collisionCommand.traceId}
 		`;
 		expect(auditCount?.count).toBe("0");
+		await expect(
+			store.recordAttempt({
+				command: collisionCommand,
+				candidate: next.candidate,
+				auditEvents: [
+					audit(next.candidate, collisionCommand, "succeeded", "decrypt"),
+					audit(next.candidate, collisionCommand, "rejected", "rewrap"),
+				],
+			}),
+		).resolves.toBe(true);
+		await expect(
+			store.recordAttempt({
+				command: collisionCommand,
+				candidate: next.candidate,
+				auditEvents: [
+					audit(next.candidate, collisionCommand, "succeeded", "decrypt"),
+					audit(next.candidate, collisionCommand, "rejected", "rewrap"),
+				],
+			}),
+		).resolves.toBe(true);
+		const [attemptAuditCount] = await client`
+			select count(*)::text as count from platform.audit_events
+			where trace_id = ${collisionCommand.traceId}
+		`;
+		expect(attemptAuditCount?.count).toBe("2");
 	});
 
 	it("rejects a new ciphertext that uses a retired wrapping key", async () => {
@@ -723,10 +761,32 @@ describe("PostgreSQL Secret key rotation Store", () => {
 		).rejects.toBeInstanceOf(Error);
 	});
 
-	it("audits malformed persisted AAD before terminating rotation", async () => {
+	it("audits a complete cross-Agent record swap before decrypt", async () => {
+		const [persisted] = await client`
+			select record from platform.secret_records
+			where agent_id = 'agent_collision'
+		`;
+		const source = validatePlatformSecretRecordV1(persisted?.record);
+		const swappedRecord = validatePlatformSecretRecordV1({
+			...source,
+			agentId: "agent_other",
+			secretId: "credential_other",
+			crypto: {
+				...source.crypto,
+				aadBinding: {
+					...source.crypto.aadBinding,
+					agentId: "agent_other",
+					secretId: "credential_other",
+				},
+			},
+		});
+		await client`
+			alter table platform.secret_records
+			drop constraint secret_record_identity_matches
+		`;
 		await client`
 			update platform.secret_records
-			set record = jsonb_set(record, '{crypto,aadBinding,agentId}', '"agent_swapped"')
+			set record = ${client.json(swappedRecord)}
 			where agent_id = 'agent_collision'
 		`;
 		const malformedCommand = {
@@ -741,19 +801,23 @@ describe("PostgreSQL Secret key rotation Store", () => {
 			crypto: {
 				activeWrappingKeyVersion: "key_04",
 				retiringWrappingKeyVersions: ["key_03"],
-				async reencrypt({ encryptedRecord }) {
-					try {
-						validatePlatformSecretRecordV1(encryptedRecord);
-						return {
-							outcome: "failed" as const,
-							code: "SECRET_ROTATION_FAILED" as const,
-						};
-					} catch {
+				async reencrypt({ encryptedRecord, expectedBinding }) {
+					const record = validatePlatformSecretRecordV1(encryptedRecord);
+					if (
+						record.agentId !== expectedBinding.agentId ||
+						record.secretId !== expectedBinding.secretId ||
+						record.secretVersion !== expectedBinding.secretVersion ||
+						record.configRevision !== expectedBinding.configRevision
+					) {
 						return {
 							outcome: "failed" as const,
 							code: "SECRET_METADATA_INVALID" as const,
 						};
 					}
+					return {
+						outcome: "failed" as const,
+						code: "SECRET_ROTATION_FAILED" as const,
+					};
 				},
 			},
 		});
@@ -779,7 +843,7 @@ describe("PostgreSQL Secret key rotation Store", () => {
 				},
 			},
 		]);
-		expect(JSON.stringify(audits)).not.toContain("agent_swapped");
+		expect(JSON.stringify(audits)).not.toContain("agent_other");
 		await expect(store.nextCandidate(malformedCommand)).resolves.toMatchObject({
 			outcome: "failed",
 			progress: { state: "failed" },

@@ -300,6 +300,12 @@ export interface SecretKeyRotationCryptoV1 {
 	readonly retiringWrappingKeyVersions: readonly string[];
 	reencrypt(input: {
 		readonly encryptedRecord: unknown;
+		readonly expectedBinding: {
+			readonly agentId: string;
+			readonly secretId: string;
+			readonly secretVersion: number;
+			readonly configRevision: number;
+		};
 		readonly targetKeyVersion: string;
 		readonly traceId: string;
 	}): Promise<
@@ -368,11 +374,33 @@ export function createSecretKeyRotationCryptoV1(input: {
 		retiringWrappingKeyVersions: encryptionKeys.keys
 			.filter(({ status }) => status === "retiring")
 			.map(({ keyVersion }) => keyVersion),
-		async reencrypt({ encryptedRecord, targetKeyVersion, traceId }) {
+		async reencrypt({
+			encryptedRecord,
+			expectedBinding,
+			targetKeyVersion,
+			traceId,
+		}) {
 			if (targetKeyVersion !== encryptionKeys.activeWrappingKeyVersion) {
 				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };
 			}
-			const decrypted = await decryptor.decrypt({ encryptedRecord, traceId });
+			let record: ReturnType<typeof validatePlatformSecretRecordV1>;
+			try {
+				record = validatePlatformSecretRecordV1(encryptedRecord);
+				if (
+					record.agentId !== expectedBinding.agentId ||
+					record.secretId !== expectedBinding.secretId ||
+					record.secretVersion !== expectedBinding.secretVersion ||
+					record.configRevision !== expectedBinding.configRevision
+				) {
+					throw new Error();
+				}
+			} catch {
+				return { outcome: "failed", code: "SECRET_METADATA_INVALID" };
+			}
+			const decrypted = await decryptor.decrypt({
+				encryptedRecord: record,
+				traceId,
+			});
 			if (decrypted.outcome === "failed") return decrypted;
 			try {
 				const occurredAt = now();
