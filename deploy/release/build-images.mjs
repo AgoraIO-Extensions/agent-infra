@@ -81,8 +81,10 @@ async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
 	const repository = `${prefix}/${image.name}`;
 	const reference = `${repository}:${commitSha}`;
 	const digests = [];
+	let archivePath;
 	for (const pass of [1, 2]) {
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
+		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
 		run(
 			docker,
 			[
@@ -99,7 +101,8 @@ async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
 				"--no-cache",
 				"--tag",
 				reference,
-				"--load",
+				"--output",
+				`type=oci,dest=${archivePath},rewrite-timestamp=true`,
 				"--metadata-file",
 				metadataPath,
 				"--progress=quiet",
@@ -123,6 +126,11 @@ async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
 	if (digests[0] !== digests[1]) {
 		fail(`${image.key} image is not reproducible`);
 	}
+	run(
+		docker,
+		["load", "--input", archivePath],
+		`${image.key} image load`,
+	);
 	const user = run(
 		docker,
 		["image", "inspect", "--format", "{{.Config.User}}", reference],

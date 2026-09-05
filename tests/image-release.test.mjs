@@ -48,6 +48,7 @@ if (args[0] === "image" && args[1] === "inspect") {
   console.log(args.at(-1).includes("/web:") ? "nginx" : "node");
   process.exit(0);
 }
+if (args[0] === "load" && args[1] === "--input") process.exit(0);
 if (args[0] === "run") process.exit(0);
 process.exit(1);`,
 	);
@@ -107,8 +108,16 @@ test("image build validates reproducibility and read-only non-root execution", a
 			assert.ok(args.includes("SOURCE_DATE_EPOCH=1700000000"));
 			assert.ok(args.includes("--provenance=false"));
 			assert.ok(args.includes("--sbom=false"));
-			assert.ok(args.includes("--load"));
+			assert.match(
+				args[args.indexOf("--output") + 1],
+				/^type=oci,dest=.+,rewrite-timestamp=true$/,
+			);
 		}
+		assert.equal(
+			calls.filter((args) => args[0] === "load" && args[1] === "--input")
+				.length,
+			4,
+		);
 		const probes = calls.filter((args) => args[0] === "run");
 		assert.equal(probes.length, 4);
 		for (const args of probes) {
