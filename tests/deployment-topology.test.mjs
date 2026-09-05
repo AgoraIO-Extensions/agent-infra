@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { parseAllDocuments } from "yaml";
@@ -137,6 +145,12 @@ test("deployment configuration fails closed before rendering unsafe values", () 
 		["--set-string", "database.url=postgresql://inline.invalid/database"],
 		["--set-string", "adapters.kubernetesRuntime=remote"],
 		["--set-string", "adapters.workloadRoute=load-balancer"],
+		["--set", "workloadTopology.service.runtimePort=80"],
+		["--set", "workloadTopology.service.routePort=443"],
+		[
+			"--set-string",
+			"workloadTopology.route.ingressNamespace=INVALID_NAMESPACE",
+		],
 		[
 			"--set-string",
 			"platformApi.externalBaseUrl=https://user:password@api.invalid",
@@ -396,7 +410,12 @@ test("disabling the controlled route also removes its network access", () => {
 });
 
 test("the Ingress route Adapter renders a GA TLS route", () => {
-	const result = render("--set-string", "adapters.workloadRoute=ingress");
+	const result = render(
+		"--set-string",
+		"adapters.workloadRoute=ingress",
+		"--set-string",
+		"workloadTopology.route.ingressNamespace=custom-ingress",
+	);
 	assert.equal(result.status, 0, result.stderr);
 	const ingress = resource(
 		objects(result.stdout),
@@ -408,6 +427,17 @@ test("the Ingress route Adapter renders a GA TLS route", () => {
 	assert.equal(
 		ingress.spec.rules[0].http.paths[0].backend.service.name,
 		"topology-agent-infra-workload",
+	);
+	const policy = resource(
+		objects(result.stdout),
+		"NetworkPolicy",
+		"topology-agent-infra-workload",
+	);
+	assert.equal(
+		policy.spec.ingress[1].from[0].namespaceSelector.matchLabels[
+			"kubernetes.io/metadata.name"
+		],
+		"custom-ingress",
 	);
 });
 
@@ -480,6 +510,59 @@ test("kind bootstrap rejects a stale same-named cluster", async () => {
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /kind node image does not match cluster.yaml/);
 		assert.notEqual(result.status, 97);
+	} finally {
+		await rm(fixture, { force: true, recursive: true });
+	}
+});
+
+test("kind verification uses and removes a private kubeconfig", async () => {
+	const fixture = await mkdtemp(join(tmpdir(), "agent-infra-kind-private-"));
+	const stateRoot = join(fixture, "shared-tmp");
+	const record = join(fixture, "record");
+	await mkdir(stateRoot, { mode: 0o777 });
+	await chmod(stateRoot, 0o777);
+	const tool = async (name, body) => {
+		const path = join(fixture, name);
+		await writeFile(path, `#!/usr/bin/env bash\n${body}\n`);
+		await chmod(path, 0o755);
+		return path;
+	};
+	try {
+		const kind = await tool(
+			"kind",
+			'echo "$*" >> "$KIND_RECORD"; case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") echo agent-infra-topology ;; "get kubeconfig") echo kubeconfig ;; esac',
+		);
+		const docker = await tool(
+			"docker",
+			"echo kindest/node:v1.33.4@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2",
+		);
+		const kubectl = await tool(
+			"kubectl",
+			'previous=""; for argument in "$@"; do if [[ "$previous" == "--kubeconfig" ]]; then directory=$(dirname "$argument"); mode=$(stat -f %Lp "$directory" 2>/dev/null || stat -c %a "$directory"); echo "$argument|$mode" >> "$STATE_RECORD"; fi; previous="$argument"; done; case "$*" in *"port-forward"*) while true; do sleep 1; done ;; *"auth can-i create statefulsets"*) echo yes ;; *"auth can-i get pods"*) echo no ;; *"get deployment/topology-agent-infra-web"*|*"get deployment/topology-agent-infra-platform-api"*) exit 1 ;; esac',
+		);
+		const curl = await tool("curl", "exit 0");
+		const result = spawnSync("bash", ["deploy/kind/topology.sh", "verify"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				CURL_BIN: curl,
+				DOCKER_BIN: docker,
+				KIND_BIN: kind,
+				KIND_RECORD: record,
+				KUBECTL_BIN: kubectl,
+				STATE_RECORD: record,
+				TMPDIR: stateRoot,
+			},
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const records = (await readFile(record, "utf8")).trim().split("\n");
+		assert.ok(records.some((line) => line.startsWith("get kubeconfig ")));
+		const [kubeconfig, mode] = records
+			.find((line) => line.includes("|"))
+			.split("|");
+		assert.equal(mode, "700");
+		assert.notEqual(dirname(kubeconfig), stateRoot);
+		await assert.rejects(access(dirname(kubeconfig)));
 	} finally {
 		await rm(fixture, { force: true, recursive: true });
 	}

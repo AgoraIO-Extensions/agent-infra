@@ -67,5 +67,6 @@ workloadTopology:
   route:
     enabled: false
     ingressClassName: nginx
+    ingressNamespace: ingress-nginx
     host: agent.example.invalid
     tlsSecretName: agent-infra-topology-tls

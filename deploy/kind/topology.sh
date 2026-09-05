@@ -7,7 +7,6 @@ values="$repository_root/deploy/environments/kind.values.yaml"
 cluster_config="$repository_root/deploy/kind/cluster.yaml"
 cluster_name=agent-infra-topology
 namespace=agent-infra
-kubeconfig="${TMPDIR:-/tmp}/agent-infra-kind-topology-${UID}.kubeconfig"
 kind_bin=${KIND_BIN:-kind}
 kubectl_bin=${KUBECTL_BIN:-kubectl}
 helm_bin=${HELM_BIN:-helm}
@@ -15,14 +14,31 @@ docker_bin=${DOCKER_BIN:-docker}
 curl_bin=${CURL_BIN:-curl}
 openssl_bin=${OPENSSL_BIN:-openssl}
 node_image=$(awk '/image: kindest\/node:/ { print $2 }' "$cluster_config")
+state_dir=
+kubeconfig=
 topology_temp=
 
 cleanup() {
 	if [[ -n "$topology_temp" && -d "$topology_temp" ]]; then
 		rm -r "$topology_temp"
 	fi
+	if [[ -n "$state_dir" && -d "$state_dir" ]]; then
+		rm -r "$state_dir"
+	fi
 }
 trap cleanup EXIT
+
+prepare_state() {
+	umask 077
+	state_dir=$(mktemp -d "${TMPDIR:-/tmp}/agent-infra-kind-topology.XXXXXX")
+	chmod 700 "$state_dir"
+	kubeconfig="$state_dir/kubeconfig"
+}
+
+write_kubeconfig() {
+	"$kind_bin" get kubeconfig --name "$cluster_name" > "$kubeconfig"
+	chmod 600 "$kubeconfig"
+}
 
 render() {
 	echo "kind v0.30.0"
@@ -89,6 +105,7 @@ apply_fixture_secrets() {
 up() {
 	require_kind
 	render
+	prepare_state
 	if ! cluster_exists; then
 		"$kind_bin" create cluster \
 			--name "$cluster_name" \
@@ -97,7 +114,7 @@ up() {
 			--wait 5m
 	fi
 	verify_cluster_image
-	"$kind_bin" get kubeconfig --name "$cluster_name" > "$kubeconfig"
+	write_kubeconfig
 	"$kubectl_bin" --kubeconfig "$kubeconfig" create namespace "$namespace" \
 		--dry-run=client -o yaml | \
 		"$kubectl_bin" --kubeconfig "$kubeconfig" apply -f - >/dev/null
@@ -108,10 +125,10 @@ up() {
 		--values "$values" \
 		--wait \
 		--timeout 5m
-	verify
+	verify_topology
 }
 
-verify() {
+verify_topology() {
 	"$kubectl_bin" --kubeconfig "$kubeconfig" -n "$namespace" \
 		rollout status deployment/topology-agent-infra-platform-worker --timeout=2m
 	"$kubectl_bin" --kubeconfig "$kubeconfig" -n "$namespace" \
@@ -164,10 +181,21 @@ verify() {
 	fi
 }
 
+verify() {
+	require_kind
+	if ! cluster_exists; then
+		echo "kind cluster agent-infra-topology does not exist" >&2
+		exit 1
+	fi
+	verify_cluster_image
+	prepare_state
+	write_kubeconfig
+	verify_topology
+}
+
 down() {
 	require_kind
 	"$kind_bin" delete cluster --name "$cluster_name"
-	rm -f "$kubeconfig"
 }
 
 case "${1:-}" in

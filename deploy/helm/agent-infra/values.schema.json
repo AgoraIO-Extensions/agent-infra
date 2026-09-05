@@ -157,10 +157,17 @@
         "route": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled", "ingressClassName", "host", "tlsSecretName"],
+          "required": [
+            "enabled",
+            "ingressClassName",
+            "ingressNamespace",
+            "host",
+            "tlsSecretName"
+          ],
           "properties": {
             "enabled": { "type": "boolean" },
             "ingressClassName": { "$ref": "#/$defs/binding" },
+            "ingressNamespace": { "$ref": "#/$defs/kubernetesName" },
             "host": {
               "type": "string",
               "format": "hostname"
@@ -234,7 +241,7 @@
     },
     "port": {
       "type": "integer",
-      "minimum": 1,
+      "minimum": 1024,
       "maximum": 65535
     }
   }
