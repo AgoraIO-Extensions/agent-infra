@@ -3,7 +3,8 @@ RUN npm install -g pnpm@11.20.0
 WORKDIR /app
 
 COPY . .
-RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store-dir /pnpm-store
+ARG PNPM_STORE_DIR=/pnpm-store
+RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store-dir "$PNPM_STORE_DIR"
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web build

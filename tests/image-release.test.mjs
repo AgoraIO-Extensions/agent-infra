@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	chmod,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -103,9 +110,18 @@ test("image build validates reproducibility and read-only non-root execution", a
 			(args) => args[0] === "buildx" && args[1] === "build",
 		);
 		assert.equal(builds.length, 8);
+		const storeDirectories = new Set();
 		for (const args of builds) {
 			assert.ok(args.includes("--no-cache"));
 			assert.ok(args.includes("SOURCE_DATE_EPOCH=1700000000"));
+			const store = args.find((argument) =>
+				argument.startsWith("PNPM_STORE_DIR="),
+			);
+			assert.match(
+				store,
+				/^PNPM_STORE_DIR=\/tmp\/agent-infra-pnpm-store-[a-f0-9-]+-[a-z-]+-[12]$/,
+			);
+			storeDirectories.add(store);
 			assert.ok(args.includes("--provenance=false"));
 			assert.ok(args.includes("--sbom=false"));
 			assert.match(
@@ -113,6 +129,9 @@ test("image build validates reproducibility and read-only non-root execution", a
 				/^type=oci,dest=.+,rewrite-timestamp=true$/,
 			);
 		}
+		assert.equal(storeDirectories.size, 8);
+		const firstMetadata = builds[0][builds[0].indexOf("--metadata-file") + 1];
+		await assert.rejects(access(resolve(firstMetadata, "..")));
 		assert.equal(
 			calls.filter((args) => args[0] === "load" && args[1] === "--input")
 				.length,
