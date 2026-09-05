@@ -127,7 +127,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 			);
 			assert.ok(referenceIndex > args.indexOf("--read-only"));
 			if (args[referenceIndex].includes("/web:")) {
-				assert.deepEqual(args.slice(referenceIndex + 1), ["nginx", "-t"]);
+				assert.deepEqual(args.slice(referenceIndex + 1), ["-t"]);
 			} else {
 				assert.equal(args[referenceIndex + 1], "node");
 			}

@@ -14,7 +14,7 @@ const images = [
 		name: "web",
 		dockerfile: "apps/web/Dockerfile",
 		runOptions: ["--tmpfs", "/tmp:size=16m,mode=1777"],
-		command: ["nginx", "-t"],
+		command: ["-t"],
 	},
 	{
 		key: "platformApi",
