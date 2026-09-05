@@ -54,6 +54,9 @@ describe("Agent persistence schema contract", () => {
 			"current_configuration_revision",
 			"created_at",
 			"authorization_revision",
+			"secret_activation_fence",
+			"secret_activation_owner",
+			"secret_activation_lease_expires_at",
 		]);
 		expect(columnNames(agentApplications)).toEqual([
 			"id",

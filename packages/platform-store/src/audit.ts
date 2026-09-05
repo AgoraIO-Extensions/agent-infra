@@ -97,6 +97,16 @@ const platformAuditActionMetadata = {
 		subjectKind: "agent",
 		details: true,
 	},
+	"secret.decrypt": {
+		actorKind: "system",
+		subjectKind: "secret",
+		details: "secret",
+	},
+	"secret.activate": {
+		actorKind: "system",
+		subjectKind: "secret",
+		details: "secret",
+	},
 } as const;
 
 const configurationChangedFields = [
@@ -135,7 +145,7 @@ export interface PlatformAuditProjectionV1 {
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent";
+		readonly kind: "agent_application" | "agent" | "secret";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -242,8 +252,26 @@ function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
 ): readonly PlatformAuditChangedFieldV1[] {
-	if (!platformAuditActionMetadata[action].details) {
+	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
+	if (detailKind === "secret") {
+		if (!exactObject(details, ["wrappingKeyVersion", "operation", "result"])) {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+		const value = details as Record<string, unknown>;
+		if (
+			!validText(value.wrappingKeyVersion) ||
+			(value.operation !== "decrypt" && value.operation !== "activate") ||
+			(value.result !== "succeeded" &&
+				value.result !== "rejected" &&
+				value.result !== "failed") ||
+			(action === "secret.decrypt") !== (value.operation === "decrypt")
+		) {
+			throw new PlatformAuditQueryError("unavailable");
+		}
 		return [];
 	}
 	if (!exactObject(details, ["changedFields"])) {
