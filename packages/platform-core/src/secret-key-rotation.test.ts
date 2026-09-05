@@ -339,10 +339,11 @@ describe("Secret key rotation", () => {
 		});
 	});
 
-	it("retires a key only through the no-reference Store decision", async () => {
+	it("retires a retiring key and preserves already-retired replay", async () => {
 		const retireKey = vi
 			.fn()
 			.mockResolvedValueOnce("referenced")
+			.mockResolvedValueOnce("retired")
 			.mockResolvedValueOnce("retired");
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store: {
@@ -367,6 +368,10 @@ describe("Secret key rotation", () => {
 		await expect(useCase.retire(retirement)).resolves.toEqual({
 			schemaVersion: 1,
 			outcome: "referenced",
+		});
+		await expect(useCase.retire(retirement)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "retired",
 		});
 		await expect(useCase.retire(retirement)).resolves.toEqual({
 			schemaVersion: 1,
@@ -398,6 +403,73 @@ describe("Secret key rotation", () => {
 			"boundary-sensitive",
 		);
 	});
+
+	it("rejects an arbitrary unused or future key before the Store", async () => {
+		const retireKey = vi.fn();
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store: {
+				nextCandidate: vi.fn(),
+				commitReencryption: vi.fn(),
+				recordRejection: vi.fn(),
+				retireKey,
+			},
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				retiringWrappingKeyVersions: ["key_01"],
+				reencrypt: vi.fn(),
+			},
+		});
+
+		await expect(
+			useCase.retire({
+				schemaVersion: 1,
+				keyVersion: "key_future",
+				workerId: "worker_01",
+				traceId: "trace_retire_future",
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(retireKey).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["missing active version", "", ["key_01"]],
+		[
+			"non-array retiring versions",
+			"key_02",
+			"key_01" as unknown as readonly string[],
+		],
+		["invalid retiring version", "key_02", [""]],
+		["duplicate retiring version", "key_02", ["key_01", "key_01"]],
+		["active version also retiring", "key_02", ["key_02"]],
+	] as const)(
+		"fails closed on a malformed crypto keyset: %s",
+		async (_case, activeWrappingKeyVersion, retiringWrappingKeyVersions) => {
+			const retireKey = vi.fn();
+			const useCase = createSecretKeyRotationUseCaseV1({
+				store: {
+					nextCandidate: vi.fn(),
+					commitReencryption: vi.fn(),
+					recordRejection: vi.fn(),
+					retireKey,
+				},
+				crypto: {
+					activeWrappingKeyVersion,
+					retiringWrappingKeyVersions,
+					reencrypt: vi.fn(),
+				},
+			});
+
+			await expect(
+				useCase.retire({
+					schemaVersion: 1,
+					keyVersion: "key_01",
+					workerId: "worker_01",
+					traceId: "trace_retire_malformed_keyset",
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(retireKey).not.toHaveBeenCalled();
+		},
+	);
 
 	it("uses only the active target key and never retires it", async () => {
 		const nextCandidate = vi.fn();

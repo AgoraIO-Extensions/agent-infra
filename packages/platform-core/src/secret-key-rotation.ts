@@ -198,6 +198,37 @@ function validText(value: unknown): value is string {
 	);
 }
 
+function validatedKeySet(crypto: SecretKeyRotationCryptoPortV1): {
+	readonly activeWrappingKeyVersion: string;
+	readonly retiringWrappingKeyVersions: readonly string[];
+} {
+	try {
+		const activeWrappingKeyVersion = crypto.activeWrappingKeyVersion;
+		const retiringWrappingKeyVersions = crypto.retiringWrappingKeyVersions;
+		if (
+			!validText(activeWrappingKeyVersion) ||
+			!Array.isArray(retiringWrappingKeyVersions) ||
+			types.isProxy(retiringWrappingKeyVersions)
+		) {
+			throw new Error();
+		}
+		const retiring = retiringWrappingKeyVersions.filter(validText);
+		if (
+			retiring.length !== retiringWrappingKeyVersions.length ||
+			new Set(retiring).size !== retiring.length ||
+			retiring.includes(activeWrappingKeyVersion)
+		) {
+			throw new Error();
+		}
+		return {
+			activeWrappingKeyVersion,
+			retiringWrappingKeyVersions: retiring,
+		};
+	} catch {
+		throw new SecretKeyRotationError("unavailable");
+	}
+}
+
 function plainObject(value: unknown): value is Record<string, unknown> {
 	return (
 		value !== null &&
@@ -411,16 +442,12 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 	return {
 		async rotate(input) {
 			const command = parseRotationCommand(input);
-			const retiringKeyVersions =
-				dependencies.crypto.retiringWrappingKeyVersions;
+			const keySet = validatedKeySet(dependencies.crypto);
 			if (
-				!validText(dependencies.crypto.activeWrappingKeyVersion) ||
-				command.targetKeyVersion !==
-					dependencies.crypto.activeWrappingKeyVersion ||
-				!Array.isArray(retiringKeyVersions) ||
-				retiringKeyVersions.some((keyVersion) => !validText(keyVersion)) ||
+				command.targetKeyVersion !== keySet.activeWrappingKeyVersion ||
 				command.sourceKeyVersions.some(
-					(keyVersion) => !retiringKeyVersions.includes(keyVersion),
+					(keyVersion) =>
+						!keySet.retiringWrappingKeyVersions.includes(keyVersion),
 				)
 			) {
 				throw new SecretKeyRotationError("invalid_input");
@@ -563,14 +590,17 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 		},
 		async retire(input) {
 			const command = parseRetirementCommand(input);
-			if (!validText(dependencies.crypto.activeWrappingKeyVersion)) {
-				throw new SecretKeyRotationError("unavailable");
+			const keySet = validatedKeySet(dependencies.crypto);
+			if (
+				command.keyVersion !== keySet.activeWrappingKeyVersion &&
+				!keySet.retiringWrappingKeyVersions.includes(command.keyVersion)
+			) {
+				throw new SecretKeyRotationError("invalid_input");
 			}
 			try {
 				const outcome = await dependencies.store.retireKey({
 					command,
-					activeWrappingKeyVersion:
-						dependencies.crypto.activeWrappingKeyVersion,
+					activeWrappingKeyVersion: keySet.activeWrappingKeyVersion,
 					retiredAuditEvent: retirementAudit(command, "succeeded"),
 					rejectedAuditEvent: retirementAudit(command, "rejected"),
 				});
