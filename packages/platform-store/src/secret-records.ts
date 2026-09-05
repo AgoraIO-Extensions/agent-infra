@@ -11,6 +11,7 @@ import { inArray, sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 
 import { platformSecretRecords, retiredSecretWrappingKeys } from "./schema.js";
+import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -252,7 +253,7 @@ export async function insertPendingSecretRecordAttachments(
 		for (const keyVersion of wrappingKeyVersions) {
 			await transaction.execute(sql`
 				select pg_catalog.pg_advisory_xact_lock(
-					pg_catalog.hashtextextended(${`agent-infra:secret-key:${keyVersion}`}, 0)
+					pg_catalog.hashtextextended(${secretKeyAdvisoryLockName(keyVersion)}, 0)
 				)
 			`);
 		}

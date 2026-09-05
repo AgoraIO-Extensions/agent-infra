@@ -1,4 +1,7 @@
-import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import {
+	type PlatformSecretRecordV1,
+	validatePlatformSecretRecordV1,
+} from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationRecordV1,
 	RetireSecretKeyCommandV1,
@@ -208,6 +211,62 @@ function retirementAudit(
 			result: outcome,
 		},
 	} satisfies SecretKeyRotationAuditIntentV1;
+}
+
+async function admitPendingRecord(secretRecord: PlatformSecretRecordV1) {
+	await client`
+		insert into platform.agents (id, current_configuration_revision)
+		values (${secretRecord.agentId}, ${secretRecord.configRevision})
+	`;
+	await client`
+		insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at)
+		values (${secretRecord.agentId}, ${secretRecord.configRevision},
+			${`configuration_${secretRecord.agentId}`}, now())
+	`;
+	const configuration = {
+		agentId: secretRecord.agentId,
+		revision: secretRecord.configRevision,
+		secrets: [
+			{
+				name: secretRecord.name,
+				secretId: secretRecord.secretId,
+				version: secretRecord.secretVersion,
+				isSet: true,
+			},
+		],
+		modelConfiguration: null,
+	} as unknown as AgentConfigurationRecordV1;
+	const attachments = {
+		schemaVersion: 1 as const,
+		expected: [
+			{
+				schemaVersion: 1 as const,
+				ownerType: "agent-owner" as const,
+				ownerId: secretRecord.ownerId,
+				agentId: secretRecord.agentId,
+				name: secretRecord.name,
+				secretId: secretRecord.secretId,
+				secretVersion: secretRecord.secretVersion,
+				configurationRevision: secretRecord.configRevision,
+				occurredAt: secretRecord.createdAt,
+			},
+		],
+		encryptedRecords: [secretRecord],
+	};
+	if (!database) throw new Error("Expected database");
+	const admissionClient = postgres(database.databaseUrl, { max: 1 });
+	try {
+		await drizzle(admissionClient).transaction((transaction) =>
+			insertPendingSecretRecordAttachments(
+				transaction,
+				attachments,
+				configuration,
+			),
+		);
+	} finally {
+		await admissionClient.end();
+	}
 }
 
 beforeAll(async () => {
@@ -546,65 +605,133 @@ describe("PostgreSQL Secret key rotation Store", () => {
 				},
 			},
 		});
-		await client`
-			insert into platform.agents (id, current_configuration_revision)
-			values (${retiredRecord.agentId}, ${retiredRecord.configRevision})
-		`;
-		await client`
-			insert into platform.agent_configuration_revisions
-				(agent_id, revision, source_reference, created_at)
-			values
-				(${retiredRecord.agentId}, ${retiredRecord.configRevision},
-				 'configuration_retired_key', now())
-		`;
-		const configuration = {
-			agentId: retiredRecord.agentId,
-			revision: retiredRecord.configRevision,
-			secrets: [
-				{
-					name: retiredRecord.name,
-					secretId: retiredRecord.secretId,
-					version: retiredRecord.secretVersion,
-					isSet: true,
-				},
-			],
-			modelConfiguration: null,
-		} as unknown as AgentConfigurationRecordV1;
-		const attachments = {
-			schemaVersion: 1 as const,
-			expected: [
-				{
-					schemaVersion: 1 as const,
-					ownerType: "agent-owner" as const,
-					ownerId: retiredRecord.ownerId,
-					agentId: retiredRecord.agentId,
-					name: retiredRecord.name,
-					secretId: retiredRecord.secretId,
-					secretVersion: retiredRecord.secretVersion,
-					configurationRevision: retiredRecord.configRevision,
-					occurredAt: retiredRecord.createdAt,
-				},
-			],
-			encryptedRecords: [retiredRecord],
-		};
-
-		if (!database) throw new Error("Expected database");
-		const admissionClient = postgres(database.databaseUrl, { max: 1 });
-		await expect(
-			drizzle(admissionClient).transaction((transaction) =>
-				insertPendingSecretRecordAttachments(
-					transaction,
-					attachments,
-					configuration,
-				),
-			),
-		).rejects.toBeInstanceOf(PendingSecretRecordStoreError);
-		await admissionClient.end();
+		await expect(admitPendingRecord(retiredRecord)).rejects.toBeInstanceOf(
+			PendingSecretRecordStoreError,
+		);
 		const [count] = await client`
 			select count(*)::text as count from platform.secret_records
 			where agent_id = ${retiredRecord.agentId}
 		`;
 		expect(count?.count).toBe("0");
+	});
+
+	it("resumes a completed rotation when stale admission adds a source-key record", async () => {
+		const sourceKeyVersion = "key_late_source";
+		const targetKeyVersion = "key_late_target";
+		const lateCommand = {
+			...command,
+			rotationId: "rotation_late_admission",
+			sourceKeyVersions: [sourceKeyVersion],
+			targetKeyVersion,
+			traceId: "trace_late_admission",
+		};
+		await expect(store.nextCandidate(lateCommand)).resolves.toMatchObject({
+			outcome: "completed",
+			progress: { processedSecrets: 0, remainingSecrets: 0 },
+		});
+		const lateRecord = validatePlatformSecretRecordV1({
+			...replacement,
+			agentId: "agent_late_admission",
+			secretId: "credential_late_admission",
+			crypto: {
+				...replacement.crypto,
+				wrappingKeyVersion: sourceKeyVersion,
+				dekFingerprint: "2".repeat(64),
+				aadBinding: {
+					...replacement.crypto.aadBinding,
+					agentId: "agent_late_admission",
+					secretId: "credential_late_admission",
+					wrappingKeyVersion: sourceKeyVersion,
+				},
+			},
+		});
+		await admitPendingRecord(lateRecord);
+
+		const retirement = {
+			schemaVersion: 1 as const,
+			keyVersion: sourceKeyVersion,
+			workerId: "worker_01",
+			traceId: "trace_retire_late_admission",
+		};
+		await expect(
+			store.retireKey({
+				command: retirement,
+				activeWrappingKeyVersion: targetKeyVersion,
+				retiredAuditEvent: retirementAudit(retirement, "succeeded"),
+				rejectedAuditEvent: retirementAudit(retirement, "rejected"),
+			}),
+		).resolves.toBe("referenced");
+		const resumed = await store.nextCandidate(lateCommand);
+		expect(resumed).toMatchObject({
+			outcome: "candidate",
+			progress: {
+				state: "rewrapping",
+				processedSecrets: 0,
+				remainingSecrets: 1,
+			},
+		});
+		if (resumed.outcome !== "candidate") throw new Error("Expected candidate");
+		await expect(
+			store.commitReencryption({
+				command: lateCommand,
+				candidate: resumed.candidate,
+				encryptedRecord: reencrypted(
+					resumed.candidate,
+					"3".repeat(64),
+					targetKeyVersion,
+				),
+				auditEvents: [
+					audit(resumed.candidate, lateCommand, "succeeded", "decrypt"),
+					audit(resumed.candidate, lateCommand),
+				],
+				rejectedAuditEvents: [
+					audit(resumed.candidate, lateCommand, "succeeded", "decrypt"),
+					audit(resumed.candidate, lateCommand, "rejected", "rewrap"),
+				],
+			}),
+		).resolves.toMatchObject({
+			outcome: "committed",
+			progress: {
+				state: "completed",
+				processedSecrets: 1,
+				remainingSecrets: 0,
+			},
+		});
+		await expect(
+			store.retireKey({
+				command: retirement,
+				activeWrappingKeyVersion: targetKeyVersion,
+				retiredAuditEvent: retirementAudit(retirement, "succeeded"),
+				rejectedAuditEvent: retirementAudit(retirement, "rejected"),
+			}),
+		).resolves.toBe("retired");
+	});
+
+	it("rejects an active key even when a stale tombstone exists", async () => {
+		const keyVersion = "key_reactivated";
+		await client`
+			insert into platform.retired_secret_wrapping_keys (key_version, retired_at)
+			values (${keyVersion}, now())
+		`;
+		const retirement = {
+			schemaVersion: 1 as const,
+			keyVersion,
+			workerId: "worker_01",
+			traceId: "trace_retire_reactivated",
+		};
+
+		await expect(
+			store.retireKey({
+				command: retirement,
+				activeWrappingKeyVersion: keyVersion,
+				retiredAuditEvent: retirementAudit(retirement, "succeeded"),
+				rejectedAuditEvent: retirementAudit(retirement, "rejected"),
+			}),
+		).resolves.toBe("referenced");
+		const [auditRow] = await client`
+			select outcome from platform.audit_events where trace_id = ${retirement.traceId}
+		`;
+		expect(auditRow?.outcome).toBe("rejected");
 	});
 
 	it("keeps a key-missing rotation retryable but terminates authenticated corruption", async () => {

@@ -212,6 +212,47 @@ describe("session and audit routes", () => {
 		expect(identityAdapter.hydrateUsers).toHaveBeenCalledWith(["actor-1"]);
 	});
 
+	it("maps internal Secret audit subjects to the stable v2 contract", async () => {
+		const { app, audit } = createApp();
+		audit.listAudit.mockResolvedValue({
+			items: [
+				{
+					schemaVersion: 1,
+					auditId: "audit-secret-rewrap",
+					actor: { kind: "system", actorId: "platform-worker" },
+					action: "secret.rewrap",
+					subject: { kind: "secret", subjectId: "secret-1" },
+					result: "succeeded",
+					summary: "secret.rewrap",
+					occurredAt: new Date("2026-09-05T17:00:00.000Z"),
+					traceId: "trace-secret-rewrap",
+				},
+				{
+					schemaVersion: 1,
+					auditId: "audit-secret-key-retirement",
+					actor: { kind: "system", actorId: "platform-worker" },
+					action: "secret.retire-key",
+					subject: { kind: "secret_key", subjectId: "key-1" },
+					result: "succeeded",
+					summary: "secret.retire-key",
+					occurredAt: new Date("2026-09-05T17:01:00.000Z"),
+					traceId: "trace-secret-retire",
+				},
+			],
+			nextCursor: null,
+		});
+
+		const response = await app.request("/api/v2/admin/audit");
+		const body = (await response.json()) as { items: unknown[] };
+
+		expect(response.status).toBe(200);
+		expect(
+			body.items.map(
+				(item) => PlatformAuditProjectionV2Schema.parse(item).subjectType,
+			),
+		).toEqual(["configuration", "configuration"]);
+	});
+
 	it("does not access the user directory for a system-only v2 page", async () => {
 		const { app, identityAdapter, audit } = createApp();
 		audit.listAudit.mockResolvedValue({

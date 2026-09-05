@@ -16,6 +16,7 @@ import type {
 import postgres from "postgres";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 
 interface RotationRow {
 	readonly rotation_id: unknown;
@@ -422,9 +423,13 @@ async function lock(
 	kind: "rotation" | "key",
 	value: string,
 ): Promise<void> {
+	const lockName =
+		kind === "key"
+			? secretKeyAdvisoryLockName(value)
+			: `agent-infra:secret-rotation:${value}`;
 	await sql`
 		select pg_catalog.pg_advisory_xact_lock(
-			pg_catalog.hashtextextended(${`agent-infra:secret-${kind}:${value}`}, 0)
+			pg_catalog.hashtextextended(${lockName}, 0)
 		)
 	`;
 }
@@ -594,14 +599,14 @@ export class PostgresSecretKeyRotationStoreV1
 				}
 				if (!row) throw new SecretKeyRotationStoreError();
 				let currentProgress = progress(row, command);
-				if (
-					currentProgress.state === "completed" ||
-					currentProgress.state === "failed"
-				) {
+				if (currentProgress.state === "failed") {
 					return { outcome: currentProgress.state, progress: currentProgress };
 				}
 				const remaining = await referenceCount(sql, command.sourceKeyVersions);
 				if (remaining === 0) {
+					if (currentProgress.state === "completed") {
+						return { outcome: "completed", progress: currentProgress };
+					}
 					const now = await decisionAt(sql);
 					const completed = await sql<RotationRow[]>`
 						update platform.secret_key_rotations
@@ -612,6 +617,18 @@ export class PostgresSecretKeyRotationStoreV1
 					`;
 					currentProgress = progress(completed[0] as RotationRow, command);
 					return { outcome: "completed", progress: currentProgress };
+				}
+				if (currentProgress.state === "completed") {
+					const now = await decisionAt(sql);
+					const resumed = await sql<RotationRow[]>`
+						update platform.secret_key_rotations
+						set state = 'rewrapping', remaining_secrets = ${remaining},
+							updated_at = ${now}
+						where rotation_id = ${command.rotationId}
+						returning rotation_id, source_key_versions, target_key_version, state,
+							processed_secrets, remaining_secrets, updated_at
+					`;
+					currentProgress = progress(resumed[0] as RotationRow, command);
 				}
 				const candidates = await sql<SecretRecordRow[]>`
 					select agent_id, secret_id, secret_version, configuration_revision,
@@ -882,14 +899,15 @@ export class PostgresSecretKeyRotationStoreV1
 			return await this.#client.begin(async (sql) => {
 				await lockKeys(sql, [command.keyVersion]);
 				const now = await decisionAt(sql);
+				if (command.keyVersion === activeWrappingKeyVersion) {
+					await insertAudit(sql, input.rejectedAuditEvent, now);
+					return "referenced" as const;
+				}
 				if (await isRetired(sql, command.keyVersion)) {
 					await insertAudit(sql, input.retiredAuditEvent, now);
 					return "retired" as const;
 				}
-				if (
-					command.keyVersion === activeWrappingKeyVersion ||
-					(await referenceCount(sql, [command.keyVersion])) !== 0
-				) {
+				if ((await referenceCount(sql, [command.keyVersion])) !== 0) {
 					await insertAudit(sql, input.rejectedAuditEvent, now);
 					return "referenced" as const;
 				}
