@@ -93,6 +93,8 @@ interface CodexSession {
 interface CodexOperation {
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
+	executionId?: string;
+	turnId?: string;
 	record?: RuntimeDriverOperationRecordV1;
 }
 
@@ -150,6 +152,11 @@ const persistedTurnStatuses = [
 
 type PersistedTurnStatus = (typeof persistedTurnStatuses)[number];
 
+type CodexInterruptionCommand = Extract<
+	RuntimeDriverCommandV1,
+	{ kind: "stop" | "generation-cancel" }
+>;
+
 function operationKey(
 	command: Pick<
 		RuntimeDriverCommandV1,
@@ -163,6 +170,39 @@ function operationKey(
 		command.kind,
 		command.operationId,
 	]);
+}
+
+function isCodexInterruptionCommand(
+	command: RuntimeDriverCommandV1,
+): command is CodexInterruptionCommand {
+	return command.kind === "stop" || command.kind === "generation-cancel";
+}
+
+function isCodexOperationKind(
+	value: unknown,
+): value is RuntimeDriverCommandV1["kind"] {
+	return (
+		value === "submit-turn" ||
+		value === "supplement" ||
+		value === "stop" ||
+		value === "generation-cancel"
+	);
+}
+
+function operationMatchesCommand(
+	operation: CodexOperation,
+	command: RuntimeDriverCommandV1,
+) {
+	if (!isCodexInterruptionCommand(command)) {
+		return (
+			operation.executionId === undefined && operation.turnId === undefined
+		);
+	}
+	return (
+		operation.nativeSessionRef === command.nativeSessionRef &&
+		operation.executionId === command.executionId &&
+		operation.turnId === command.turnId
+	);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -415,48 +455,62 @@ function isCodexOperation(
 ): value is CodexOperation {
 	if (
 		!isPlainRecord(value) ||
-		!hasOnlyKeys(value, ["state", "nativeSessionRef", "record"]) ||
+		!hasOnlyKeys(value, [
+			"state",
+			"nativeSessionRef",
+			"executionId",
+			"turnId",
+			"record",
+		]) ||
 		!nonEmptyString(value.nativeSessionRef)
 	) {
 		return false;
 	}
 	const session = ownRecordValue(sessions, value.nativeSessionRef);
 	if (!session) return false;
+	let identity: unknown;
+	try {
+		identity = JSON.parse(key);
+	} catch {
+		return false;
+	}
+	if (!Array.isArray(identity) || identity.length !== 5) return false;
+	const [agentId, conversationId, sessionGeneration, kind, operationId] =
+		identity;
+	if (
+		agentId !== session.agentId ||
+		conversationId !== session.conversationId ||
+		sessionGeneration !== session.sessionGeneration ||
+		!isCodexOperationKind(kind) ||
+		!nonEmptyString(operationId) ||
+		operationKey({
+			agentId: session.agentId,
+			conversationId: session.conversationId,
+			sessionGeneration: session.sessionGeneration,
+			kind,
+			operationId,
+		}) !== key
+	) {
+		return false;
+	}
+	const isInterruption = kind === "stop" || kind === "generation-cancel";
+	if (isInterruption) {
+		if (!nonEmptyString(value.executionId) || !nonEmptyString(value.turnId)) {
+			return false;
+		}
+		const execution = ownRecordValue(session.executions, value.executionId);
+		if (!execution || execution.turnId !== value.turnId) return false;
+	} else if (value.executionId !== undefined || value.turnId !== undefined) {
+		return false;
+	}
 	if (value.state === "prepared") {
-		if (value.record !== undefined) return false;
-		let identity: unknown;
-		try {
-			identity = JSON.parse(key);
-		} catch {
-			return false;
-		}
-		if (!Array.isArray(identity) || identity.length !== 5) return false;
-		const [agentId, conversationId, sessionGeneration, kind, operationId] =
-			identity;
-		if (
-			agentId !== session.agentId ||
-			conversationId !== session.conversationId ||
-			sessionGeneration !== session.sessionGeneration ||
-			kind !== "submit-turn" ||
-			!nonEmptyString(operationId)
-		) {
-			return false;
-		}
-		return (
-			operationKey({
-				agentId: session.agentId,
-				conversationId: session.conversationId,
-				sessionGeneration: session.sessionGeneration,
-				kind: "submit-turn",
-				operationId,
-			}) === key
-		);
+		return value.record === undefined;
 	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = RuntimeDriverOperationRecordV1Schema.safeParse(value.record);
 	if (
 		!record.success ||
-		record.data.kind !== "submit-turn" ||
+		record.data.kind !== kind ||
 		record.data.nativeSessionRef !== value.nativeSessionRef ||
 		record.data.agentId !== session.agentId ||
 		record.data.conversationId !== session.conversationId ||
@@ -468,6 +522,7 @@ function isCodexOperation(
 	if (record.data.result.outcome !== "accepted") {
 		return record.data.result.outcome !== "unknown";
 	}
+	if (isInterruption) return true;
 	const execution = ownRecordValue(session.executions, record.data.operationId);
 	return (
 		execution !== undefined && execution.status === record.data.result.status
@@ -576,6 +631,7 @@ function unavailableError() {
 		"Codex Runtime is unavailable",
 		503,
 		true,
+		"unavailable",
 	);
 }
 
@@ -853,7 +909,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
 	private readonly recoveredEventExecutions = new Set<string>();
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
-	private readonly inFlightExecutions = new Map<
+	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecordV1>
 	>();
@@ -931,33 +987,32 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async execute(command: RuntimeDriverCommandV1) {
-		if (
-			command.kind !== "submit-turn" ||
-			command.input.attachments.length > 0
-		) {
-			unavailable();
-		}
-		if (command.operationId !== command.executionId) stateInvalid();
-		const text = "text" in command.input ? command.input.text : undefined;
-		if (!text) unavailable();
 		const key = operationKey(command);
-		const inFlight = this.inFlightExecutions.get(key);
+		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
-		const execution = this.executeOnce(command, text);
-		this.inFlightExecutions.set(key, execution);
+		const execution =
+			command.kind === "submit-turn"
+				? this.executeSubmitTurn(command)
+				: isCodexInterruptionCommand(command)
+					? this.executeInterruption(command)
+					: Promise.reject(unavailableError());
+		this.inFlightOperations.set(key, execution);
 		try {
 			return await execution;
 		} finally {
-			if (this.inFlightExecutions.get(key) === execution) {
-				this.inFlightExecutions.delete(key);
+			if (this.inFlightOperations.get(key) === execution) {
+				this.inFlightOperations.delete(key);
 			}
 		}
 	}
 
-	private async executeOnce(
+	private async executeSubmitTurn(
 		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
-		text: string,
 	) {
+		if (command.input.attachments.length > 0) unavailable();
+		if (command.operationId !== command.executionId) stateInvalid();
+		const text = "text" in command.input ? command.input.text : undefined;
+		if (!text) unavailable();
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (!prepared.created) {
@@ -1025,6 +1080,45 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
+	private async executeInterruption(command: CodexInterruptionCommand) {
+		const prepared = await this.prepareInterruption(command);
+		if (prepared.operation.record) return prepared.operation.record;
+		if (!prepared.created) {
+			return this.unknown(command, prepared.operation.nativeSessionRef);
+		}
+		let status = await this.getStatus(
+			prepared.operation.nativeSessionRef,
+			command.executionId,
+		);
+		if (status === "running") {
+			const session = this.session(prepared.operation.nativeSessionRef);
+			const execution = ownRecordValue(session.executions, command.executionId);
+			if (
+				!session.threadId ||
+				!execution ||
+				execution.turnId !== command.turnId
+			) {
+				unavailable();
+			}
+			await this.rpc.request(
+				"turn/interrupt",
+				{ threadId: session.threadId, turnId: execution.nativeTurnId },
+				(value) => {
+					if (!isEmptyRecord(value)) protocolInvalid();
+				},
+			);
+			status = await this.getStatus(
+				prepared.operation.nativeSessionRef,
+				command.executionId,
+			);
+		}
+		return this.resolveInterruption(
+			command,
+			prepared.operation.nativeSessionRef,
+			status,
+		);
+	}
+
 	async lookupOperation(
 		command: RuntimeDriverCommandV1,
 	): Promise<RuntimeDriverLookup> {
@@ -1033,8 +1127,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operationKey(command),
 		);
 		if (!operation) return { state: "missing" };
-		if (!operation.record) return { state: "unknown" };
-		return { state: "found", record: operation.record };
+		if (!operationMatchesCommand(operation, command))
+			return { state: "unknown" };
+		if (operation.record) return { state: "found", record: operation.record };
+		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
+		const status = await this.getStatus(
+			operation.nativeSessionRef,
+			command.executionId,
+		);
+		if (status === "running") return { state: "unknown" };
+		return {
+			state: "found",
+			record: await this.resolveInterruption(
+				command,
+				operation.nativeSessionRef,
+				status,
+			),
+		};
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
@@ -1795,6 +1904,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
+	private async prepareInterruption(command: CodexInterruptionCommand) {
+		return this.update((state) => {
+			const key = operationKey(command);
+			const existing = ownRecordValue(state.operations, key);
+			if (existing) {
+				if (!operationMatchesCommand(existing, command)) stateInvalid();
+				return { operation: existing, created: false };
+			}
+			const session = ownRecordValue(state.sessions, command.nativeSessionRef);
+			if (
+				!session ||
+				session.agentId !== command.agentId ||
+				session.conversationId !== command.conversationId ||
+				session.sessionGeneration !== command.sessionGeneration ||
+				!session.threadId
+			) {
+				unavailable();
+			}
+			const execution = ownRecordValue(session.executions, command.executionId);
+			if (!execution || execution.turnId !== command.turnId) unavailable();
+			const operation: CodexOperation = {
+				state: "prepared",
+				nativeSessionRef: command.nativeSessionRef,
+				executionId: command.executionId,
+				turnId: command.turnId,
+			};
+			state.operations[key] = operation;
+			return { operation, created: true };
+		});
+	}
+
 	private async markAcceptanceUncertain(
 		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
 		nativeSessionRef: string,
@@ -1998,10 +2138,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return record;
 	}
 
-	private unknown(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+	private async resolveInterruption(
+		command: CodexInterruptionCommand,
 		nativeSessionRef: string,
+		status: PersistedTurnStatus,
 	) {
+		const record: RuntimeDriverOperationRecordV1 = {
+			schemaVersion: 1,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			kind: command.kind,
+			operationId: command.operationId,
+			nativeSessionRef,
+			result: { outcome: "accepted", status },
+		};
+		return this.update((state) => {
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			if (!operation || !operationMatchesCommand(operation, command)) {
+				stateInvalid();
+			}
+			if (operation.state === "resolved") {
+				if (!operation.record) stateInvalid();
+				return operation.record;
+			}
+			if (operation.state !== "prepared") stateInvalid();
+			operation.state = "resolved";
+			operation.record = record;
+			return record;
+		});
+	}
+
+	private unknown(command: RuntimeDriverCommandV1, nativeSessionRef: string) {
 		return {
 			schemaVersion: 1 as const,
 			agentId: command.agentId,
