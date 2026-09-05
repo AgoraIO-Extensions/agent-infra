@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -76,7 +77,15 @@ async function unavailable(path) {
 	}
 }
 
-async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
+async function buildImage({
+	image,
+	commitSha,
+	epoch,
+	platform,
+	prefix,
+	temp,
+	buildIdentity,
+}) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
 	const reference = `${repository}:${commitSha}`;
@@ -85,6 +94,7 @@ async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
 	for (const pass of [1, 2]) {
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
 		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
+		const storeDirectory = `/tmp/agent-infra-pnpm-store-${buildIdentity}-${image.name}-${pass}`;
 		run(
 			docker,
 			[
@@ -96,6 +106,8 @@ async function buildImage({ image, commitSha, epoch, platform, prefix, temp }) {
 				platform,
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
+				"--build-arg",
+				`PNPM_STORE_DIR=${storeDirectory}`,
 				"--provenance=false",
 				"--sbom=false",
 				"--no-cache",
@@ -187,6 +199,7 @@ async function main() {
 	}
 
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-image-build-"));
+	const buildIdentity = randomUUID();
 	try {
 		const builtImages = {};
 		for (const image of images) {
@@ -197,6 +210,7 @@ async function main() {
 				platform,
 				prefix,
 				temp,
+				buildIdentity,
 			});
 		}
 		await writeFile(
