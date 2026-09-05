@@ -602,13 +602,18 @@ describe("Runtime Driver shared conformance", () => {
 	);
 
 	it.each(driverNames)(
-		"propagates submission failure before pre-start synchronization through %s",
+		"propagates submission failures before pre-start synchronization through %s",
 		async (name) => {
 			const path = await directory();
 			const fixture = await openConformanceDriver(
 				name,
 				join(path, "driver.json"),
 			);
+			await expect(
+				fixture.submitWithPreStartEvent(() => {
+					throw new Error("synthetic synchronous pre-start failure");
+				}),
+			).rejects.toThrow("synthetic synchronous pre-start failure");
 			await expect(
 				fixture.submitWithPreStartEvent(async () => {
 					throw new Error("synthetic pre-start rejection");

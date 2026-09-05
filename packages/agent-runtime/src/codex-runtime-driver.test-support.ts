@@ -180,7 +180,8 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	}
 
 	completeStopAsCompleted() {
-		this.terminalOnInterrupt = "completed";
+		this.turnStatus = "completed";
+		this.terminalOnInterrupt = undefined;
 	}
 
 	async submitWithPreStartEvent<T>(submit: () => Promise<T>) {
