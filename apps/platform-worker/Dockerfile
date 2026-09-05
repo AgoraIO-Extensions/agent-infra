@@ -8,6 +8,7 @@ RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/platform-worker build
 RUN pnpm --filter @agent-infra/platform-worker deploy --prod --legacy /prod/platform-worker
+RUN rm /prod/platform-worker/node_modules/.modules.yaml
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
 ENV NODE_ENV=production
