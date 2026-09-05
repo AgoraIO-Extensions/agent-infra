@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "images",
+    "database",
+    "keys",
+    "adapters",
+    "web",
+    "platformApi",
+    "platformWorker",
+    "migration",
+    "workloadTopology"
+  ],
+  "properties": {
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["web", "platformApi", "platformWorker", "runtimeHost", "pullPolicy"],
+      "properties": {
+        "web": { "$ref": "#/$defs/image" },
+        "platformApi": { "$ref": "#/$defs/image" },
+        "platformWorker": { "$ref": "#/$defs/image" },
+        "runtimeHost": { "$ref": "#/$defs/image" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["IfNotPresent", "Never"]
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "majorVersion", "compatibility", "secretRef"],
+      "properties": {
+        "engine": { "const": "postgresql" },
+        "majorVersion": { "const": 16 },
+        "compatibility": { "const": "expand-contract-v1" },
+        "secretRef": { "$ref": "#/$defs/secretRef" }
+      }
+    },
+    "keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encryptionPublicKey", "workerDecryptionKeyring"],
+      "properties": {
+        "encryptionPublicKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "secretRef"],
+          "properties": {
+            "version": { "$ref": "#/$defs/binding" },
+            "secretRef": { "$ref": "#/$defs/secretRef" }
+          }
+        },
+        "workerDecryptionKeyring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["versions", "secretRef"],
+          "properties": {
+            "versions": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/binding" }
+            },
+            "secretRef": { "$ref": "#/$defs/secretRef" }
+          }
+        }
+      }
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "imageRegistry",
+        "modelCatalog",
+        "objectStorage",
+        "kubernetesRuntime",
+        "workloadRoute"
+      ],
+      "properties": {
+        "identity": { "$ref": "#/$defs/binding" },
+        "imageRegistry": { "$ref": "#/$defs/binding" },
+        "modelCatalog": { "$ref": "#/$defs/binding" },
+        "objectStorage": { "$ref": "#/$defs/binding" },
+        "kubernetesRuntime": { "const": "in-cluster" },
+        "workloadRoute": {
+          "type": "string",
+          "enum": ["ingress", "deployment-adapter"]
+        }
+      }
+    },
+    "web": { "$ref": "#/$defs/placement" },
+    "platformApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["placement", "externalBaseUrl", "deploymentModule"],
+      "properties": {
+        "placement": {
+          "type": "string",
+          "enum": ["external", "in-cluster"]
+        },
+        "externalBaseUrl": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?(?:/[^?#]*)?$"
+        },
+        "deploymentModule": { "$ref": "#/$defs/module" }
+      }
+    },
+    "platformWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas"],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "backoffLimit"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      }
+    },
+    "workloadTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "storageSize", "service", "route"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageSize": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtimePort", "routePort"],
+          "properties": {
+            "runtimePort": { "$ref": "#/$defs/port" },
+            "routePort": { "$ref": "#/$defs/port" }
+          }
+        },
+        "route": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "ingressClassName",
+            "ingressNamespace",
+            "host",
+            "tlsSecretName"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ingressClassName": { "$ref": "#/$defs/binding" },
+            "ingressNamespace": { "$ref": "#/$defs/kubernetesName" },
+            "host": {
+              "type": "string",
+              "format": "hostname"
+            },
+            "tlsSecretName": { "$ref": "#/$defs/kubernetesName" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$"
+    },
+    "module": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s]+$"
+    },
+    "kubernetesName": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$"
+    },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": { "$ref": "#/$defs/kubernetesName" },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["placement", "externalBaseUrl"],
+      "properties": {
+        "placement": {
+          "type": "string",
+          "enum": ["external", "in-cluster"]
+        },
+        "externalBaseUrl": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?(?:/[^?#]*)?$"
+        }
+      }
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535
+    }
+  }
+}

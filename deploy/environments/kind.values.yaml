@@ -1,0 +1,28 @@
+images:
+  platformWorker:
+    repository: node
+    digest: sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+  runtimeHost:
+    repository: node
+    digest: sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+
+web:
+  placement: external
+  externalBaseUrl: https://web.kind.example.invalid
+
+platformApi:
+  placement: external
+  externalBaseUrl: https://api.kind.example.invalid
+
+adapters:
+  workloadRoute: deployment-adapter
+
+migration:
+  enabled: false
+
+workloadTopology:
+  enabled: true
+  route:
+    enabled: true
+    host: agent.kind.example.invalid
+    tlsSecretName: agent-infra-kind-topology-tls
