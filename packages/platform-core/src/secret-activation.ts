@@ -685,7 +685,7 @@ export function createSecretActivationUseCaseV1(
 								lifecycleState: "failed",
 								kubernetesSecretRef: reference,
 								activationFence,
-								error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+								error: failure(observation.error.code, command.traceId),
 							},
 							auditEvents: [
 								audit(claim, command.traceId, "activate", "failed"),

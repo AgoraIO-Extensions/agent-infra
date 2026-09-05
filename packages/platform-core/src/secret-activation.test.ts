@@ -11,6 +11,7 @@ import {
 	type SecretActivationClaimStateV1,
 	type SecretActivationClaimV1,
 	SecretActivationError,
+	type SecretActivationFailureV1,
 	type SecretActivationFenceV1,
 	type SecretActivationKubernetesPortV1,
 	type SecretActivationStorePortV1,
@@ -44,6 +45,7 @@ class FakeActivationStore implements SecretActivationStorePortV1 {
 	readonly transitions: string[] = [];
 	readonly audits: SecretActivationAuditIntentV1[] = [];
 	currentConfigurationRevision = candidate.configRevision;
+	currentError?: SecretActivationFailureV1;
 	currentFence?: SecretActivationFenceV1;
 	currentCandidate: SecretActivationCandidateV1;
 	#claimFence = 0;
@@ -61,6 +63,10 @@ class FakeActivationStore implements SecretActivationStorePortV1 {
 		this.currentCandidate = structuredClone(options.candidate ?? candidate);
 		this.#crashStage = options.crashStage;
 		this.#staleWrites = options.staleWrites ?? false;
+	}
+
+	get claimCount(): number {
+		return this.#claimFence;
 	}
 
 	async claimCandidate(
@@ -126,6 +132,10 @@ class FakeActivationStore implements SecretActivationStorePortV1 {
 			failureRetryable:
 				nextState === "failed" ? input.plan.next.error.retryable : null,
 		};
+		this.currentError =
+			nextState === "failed"
+				? structuredClone(input.plan.next.error)
+				: undefined;
 		this.currentFence =
 			"activationFence" in input.plan.next
 				? input.plan.next.activationFence
@@ -405,6 +415,57 @@ describe("Secret candidate activation", () => {
 			action: "secret.activate",
 			outcome: "failed",
 		});
+		await expect(
+			scenario.activation.activate(command()),
+		).resolves.toMatchObject({
+			outcome: "active",
+		});
+		expect(scenario.store.claimCount).toBe(2);
+	});
+
+	it("keeps a permanent observation failure canonical and terminal", async () => {
+		const base = new FakeSecretActivationKubernetesV1({
+			activeSecretName: "agent-old.secret-old-v1-r6",
+		});
+		base.setNextObservation("failed");
+		let applyCount = 0;
+		const kubernetes: SecretActivationKubernetesPortV1 = {
+			async applyCandidate(input) {
+				applyCount += 1;
+				return base.applyCandidate(input);
+			},
+			async observeCandidate(input) {
+				const observation = await base.observeCandidate(input);
+				if (observation.status !== "failed") return observation;
+				return {
+					...observation,
+					error: {
+						schemaVersion: 1,
+						code: "SECRET_METADATA_INVALID",
+						message: "Secret activation failed",
+						retryable: true,
+						traceId: "observation_trace",
+					},
+				};
+			},
+		};
+		const scenario = useCase({ kubernetes });
+
+		await expect(
+			scenario.activation.activate(command()),
+		).resolves.toMatchObject({ outcome: "failed" });
+		expect(scenario.store.currentError).toEqual({
+			schemaVersion: 1,
+			code: "SECRET_METADATA_INVALID",
+			message: "Secret metadata is invalid",
+			retryable: false,
+			traceId: "trace_01",
+		});
+		await expect(
+			scenario.activation.activate({ ...command(), traceId: "trace_02" }),
+		).resolves.toMatchObject({ outcome: "failed" });
+		expect(scenario.store.claimCount).toBe(1);
+		expect(applyCount).toBe(1);
 	});
 
 	it.each([
