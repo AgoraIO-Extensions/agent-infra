@@ -88,7 +88,13 @@ async function openConformanceDriver(
 function wrapCodexFixture(
 	fixture: Awaited<ReturnType<typeof openCodexRuntimeDriverConformanceFixture>>,
 ): ConformanceDriverFixture {
-	driverClosers.push(() => fixture.close());
+	let closed = false;
+	const close = async () => {
+		if (closed) return;
+		closed = true;
+		await fixture.close();
+	};
+	driverClosers.push(close);
 	return {
 		driver: fixture.driver,
 		emitRunningEvent: () => fixture.emitRunningEvent(),
@@ -97,7 +103,10 @@ function wrapCodexFixture(
 		completeStopAsCancelled: () => fixture.completeStopAsCancelled(),
 		completeStopAsCompleted: async () => fixture.completeStopAsCompleted(),
 		createdTurnCount: async () => fixture.turnStartCount(),
-		restart: async () => wrapCodexFixture(await fixture.restart()),
+		restart: async () => {
+			await close();
+			return wrapCodexFixture(await fixture.restart());
+		},
 		makeOperationUnknown: async () => undefined,
 		delegatedToolWasDeniedAndRedacted: () =>
 			fixture.delegatedToolWasDeniedAndRedacted(),
@@ -280,7 +289,20 @@ describe("Runtime Driver shared conformance", () => {
 					grant: runtimeGrantFixture(context, ["turn.stop"]),
 				}),
 			).toMatchObject({ result: { outcome: "accepted", status: "cancelled" } });
-			expect(replay.events).not.toEqual([]);
+			await vi.waitFor(async () => {
+				const stoppedReplay = await host.replay({
+					...context,
+					requestId: "request-conformance-stopped-replay",
+					afterCursor: cursor,
+					grant: runtimeGrantFixture(context, ["events.replay"]),
+				});
+				expect(stoppedReplay.events).toContainEqual(
+					expect.objectContaining({
+						type: "completed",
+						payload: { status: "cancelled" },
+					}),
+				);
+			});
 		},
 	);
 
