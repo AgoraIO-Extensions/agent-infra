@@ -278,6 +278,51 @@ describe("Runtime Driver boundary", () => {
 		});
 	});
 
+	it.each(["lookup", "execute", "status"] as const)(
+		"keeps malformed %s output fail closed for a stop",
+		async (source) => {
+			const { driver, host } = await setup();
+			const original = request();
+			const submitted = await host.submitTurn(original);
+			const { input: _input, ...context } = original;
+			Object.assign(driver, {
+				...(source === "lookup"
+					? {
+							lookupOperation: async (command: RuntimeDriverCommandV1) => ({
+								state: "found" as const,
+								record: malformedRecord(command, {
+									conversationId: "conversation-other",
+								}),
+							}),
+						}
+					: {}),
+				...(source === "execute"
+					? {
+							execute: async (command: RuntimeDriverCommandV1) =>
+								malformedRecord(command, {
+									conversationId: "conversation-other",
+								}),
+						}
+					: {}),
+				...(source === "status"
+					? { getStatus: async () => "native-secret" }
+					: {}),
+			} as unknown as Partial<RuntimeDriver>);
+
+			await expect(
+				host.stop({
+					...context,
+					requestId: `request-stop-malformed-${source}`,
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+					hostSessionRef: submitted.hostSessionRef,
+					stopRequestId: `stop-malformed-${source}`,
+					grant: runtimeGrantFixture(context, ["turn.stop"]),
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_DRIVER_INVALID" });
+		},
+	);
+
 	it.each(["status", "capabilities", "replay", "stream"] as const)(
 		"rejects malformed %s output",
 		async (kind) => {
