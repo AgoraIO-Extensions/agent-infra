@@ -44,6 +44,20 @@ const createBody = {
 } satisfies AgentApplicationCreateRequestV1Writable;
 const { secrets: _secrets, ...updateBody } = createBody;
 
+const sensitiveCreateBody = {
+	...createBody,
+	secrets: [{ name: "MODEL_API_KEY", value: "test-secret-value" }],
+	modelConfiguration: {
+		...createBody.modelConfiguration,
+		options: [
+			{
+				...createBody.modelConfiguration.options[0],
+				credentialValue: "test-credential-value",
+			},
+		],
+	},
+} satisfies AgentApplicationCreateRequestV1Writable;
+
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
@@ -138,6 +152,38 @@ describe("useAgentApplicationSubmission", () => {
 		);
 		expect(vi.mocked(createMyAgentApplication).mock.calls[0]?.[1]).not.toBe(
 			vi.mocked(createMyAgentApplication).mock.calls[1]?.[1],
+		);
+		queryClient.clear();
+	});
+
+	it("does not retain sensitive command data in mutation variables", async () => {
+		const queryClient = new QueryClient();
+		vi.mocked(createMyAgentApplication).mockResolvedValue(pendingApplication);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useAgentApplicationSubmission(), {
+			wrapper,
+		});
+
+		act(() => result.current.create(sensitiveCreateBody));
+		await waitFor(() =>
+			expect(createMyAgentApplication).toHaveBeenCalledWith(
+				sensitiveCreateBody,
+				expect.any(String),
+			),
+		);
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		const mutationVariables = queryClient
+			.getMutationCache()
+			.getAll()
+			.map((mutation) => mutation.state.variables);
+		expect(JSON.stringify(mutationVariables)).not.toContain(
+			"test-secret-value",
+		);
+		expect(JSON.stringify(mutationVariables)).not.toContain(
+			"test-credential-value",
 		);
 		queryClient.clear();
 	});

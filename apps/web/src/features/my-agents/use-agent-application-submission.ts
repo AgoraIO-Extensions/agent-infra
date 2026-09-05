@@ -21,22 +21,32 @@ type SubmissionCommand =
 			kind: "update";
 	  };
 
-type SubmissionAttempt = SubmissionCommand & { idempotencyKey: string };
+type SubmissionAttempt = { idempotencyKey: string };
 
 export function useAgentApplicationSubmission(applicationId?: string) {
 	const queryClient = useQueryClient();
 	const currentApplicationId = useRef(applicationId);
 	const activeSubmission = useRef<string | undefined>(undefined);
+	const pendingCommands = useRef(new Map<string, SubmissionCommand>());
 	const submission = useMutation({
 		mutationKey: ["my-agents", "application-submission"],
-		mutationFn: (attempt: SubmissionAttempt) =>
-			attempt.kind === "create"
-				? createMyAgentApplication(attempt.body, attempt.idempotencyKey)
-				: updateMyAgentApplication(
-						attempt.applicationId,
-						attempt.body,
-						attempt.idempotencyKey,
-					),
+		mutationFn: async (attempt: SubmissionAttempt) => {
+			const command = pendingCommands.current.get(attempt.idempotencyKey);
+			if (!command) {
+				throw new Error("Submission command is unavailable");
+			}
+			try {
+				return command.kind === "create"
+					? await createMyAgentApplication(command.body, attempt.idempotencyKey)
+					: await updateMyAgentApplication(
+							command.applicationId,
+							command.body,
+							attempt.idempotencyKey,
+						);
+			} finally {
+				pendingCommands.current.delete(attempt.idempotencyKey);
+			}
+		},
 		onSuccess: () =>
 			Promise.all([
 				queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
@@ -58,10 +68,8 @@ export function useAgentApplicationSubmission(applicationId?: string) {
 
 	const startSubmission = (command: SubmissionCommand) => {
 		if (activeSubmission.current !== undefined) return;
-		const attempt: SubmissionAttempt = {
-			...command,
-			idempotencyKey: crypto.randomUUID(),
-		};
+		const attempt: SubmissionAttempt = { idempotencyKey: crypto.randomUUID() };
+		pendingCommands.current.set(attempt.idempotencyKey, command);
 		activeSubmission.current = attempt.idempotencyKey;
 		submission.mutate(attempt);
 	};
