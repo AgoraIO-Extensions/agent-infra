@@ -37,6 +37,19 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByText("Owner settings")).toBeNull();
 	});
 
+	it("renders an Owner settings entry only when the route supplies one", async () => {
+		await renderWithAgentRouter(
+			<AgentDetailScreen
+				ownerSettings={{ agentId: startingAgent.agentId }}
+				state={{ kind: "ready", agent: startingAgent }}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("link", { name: "Owner settings" }).getAttribute("href"),
+		).toBe(`/agents/${startingAgent.agentId}/configuration`);
+	});
+
 	it("renders a server-projected self-managed access entry", async () => {
 		const agent = AgentProjectionV1Schema.parse({
 			...startingAgent,
