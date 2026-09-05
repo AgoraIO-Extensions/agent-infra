@@ -19,6 +19,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "agent-infra.validate" -}}
+{{- $placeholderDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000" -}}
+{{- if eq .Values.images.platformWorker.digest $placeholderDigest -}}
+{{- fail "platform Worker image digest must be replaced" -}}
+{{- end -}}
+{{- if and (or .Values.migration.enabled (eq .Values.platformApi.placement "in-cluster")) (eq .Values.images.platformApi.digest $placeholderDigest) -}}
+{{- fail "Platform API image digest must be replaced" -}}
+{{- end -}}
+{{- if and (eq .Values.web.placement "in-cluster") (eq .Values.images.web.digest $placeholderDigest) -}}
+{{- fail "Web image digest must be replaced" -}}
+{{- end -}}
+{{- if and .Values.workloadTopology.enabled (eq .Values.images.runtimeHost.digest $placeholderDigest) -}}
+{{- fail "Runtime Host image digest must be replaced" -}}
+{{- end -}}
 {{- if eq .Values.keys.encryptionPublicKey.secretRef.name .Values.keys.workerDecryptionKeyring.secretRef.name -}}
 {{- fail "encryption public key and Worker decryption keyring must use different Secrets" -}}
 {{- end -}}

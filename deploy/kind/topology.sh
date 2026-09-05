@@ -195,6 +195,11 @@ verify() {
 
 down() {
 	require_kind
+	if ! cluster_exists; then
+		echo "kind cluster $cluster_name does not exist" >&2
+		return 0
+	fi
+	verify_cluster_image
 	"$kind_bin" delete cluster --name "$cluster_name"
 }
 

@@ -17,6 +17,10 @@ import { parseAllDocuments } from "yaml";
 
 const chart = "deploy/helm/agent-infra";
 const kindValues = "deploy/environments/kind.values.yaml";
+const validDigest =
+	"sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03";
+const placeholderDigest =
+	"sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 function render(...args) {
 	return spawnSync(
@@ -45,6 +49,13 @@ function resource(resources, kind, name) {
 	return resources.find(
 		(item) => item.kind === kind && item.metadata?.name === name,
 	);
+}
+
+async function executable(directory, name, body) {
+	const path = join(directory, name);
+	await writeFile(path, `#!/usr/bin/env bash\n${body}\n`);
+	await chmod(path, 0o755);
+	return path;
 }
 
 test("kind values render the reviewable Kubernetes workload-plane topology", () => {
@@ -141,6 +152,7 @@ test("deployment configuration fails closed before rendering unsafe values", () 
 			"--set-string",
 			"images.runtimeHost.repository=https://registry.invalid/runtime-host",
 		],
+		["--set-string", "images.runtimeHost.repository=node:5000"],
 		["--set", "database.majorVersion=15"],
 		["--set-string", "database.url=postgresql://inline.invalid/database"],
 		["--set-string", "adapters.kubernetesRuntime=remote"],
@@ -184,6 +196,10 @@ test("deployment configuration fails closed before rendering unsafe values", () 
 
 test("Web and Platform API are rendered only for explicit in-cluster placement", () => {
 	const result = render(
+		"--set-string",
+		`images.web.digest=${validDigest}`,
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
 		"--set-string",
 		"web.placement=in-cluster",
 		"--set-string",
@@ -234,6 +250,8 @@ test("Web and Platform API are rendered only for explicit in-cluster placement",
 
 test("migration and runtime units preserve database and key separation", () => {
 	const result = render(
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
 		"--set",
 		"migration.enabled=true",
 		"--set-string",
@@ -441,6 +459,47 @@ test("the Ingress route Adapter renders a GA TLS route", () => {
 	);
 });
 
+test("OCI repositories allow a registry port only before a repository path", () => {
+	const result = render(
+		"--set-string",
+		"images.runtimeHost.repository=registry.example:5000/team/runtime-host",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const workload = resource(
+		objects(result.stdout),
+		"StatefulSet",
+		"topology-agent-infra-workload",
+	);
+	assert.equal(
+		workload.spec.template.spec.containers[0].image,
+		`registry.example:5000/team/runtime-host@${validDigest}`,
+	);
+});
+
+test("enabled components reject placeholder image Digests", () => {
+	const cases = [
+		[
+			"platform Worker",
+			["--set-string", `images.platformWorker.digest=${placeholderDigest}`],
+		],
+		[
+			"Runtime Host",
+			["--set-string", `images.runtimeHost.digest=${placeholderDigest}`],
+		],
+		["Web", ["--set-string", "web.placement=in-cluster"]],
+		["Platform API", ["--set-string", "platformApi.placement=in-cluster"]],
+		["Platform API", ["--set", "migration.enabled=true"]],
+	];
+	for (const [component, args] of cases) {
+		const result = render(...args);
+		assert.notEqual(result.status, 0, `${component} placeholder was accepted`);
+		assert.match(
+			result.stderr,
+			new RegExp(`${component} image digest must be replaced`, "i"),
+		);
+	}
+});
+
 test("component names stay distinct and valid for the longest Helm release", () => {
 	const release = "a".repeat(53);
 	const result = spawnSync(
@@ -457,6 +516,10 @@ test("component names stay distinct and valid for the longest Helm release", () 
 			"web.placement=in-cluster",
 			"--set-string",
 			"platformApi.placement=in-cluster",
+			"--set-string",
+			`images.web.digest=${validDigest}`,
+			"--set-string",
+			`images.platformApi.digest=${validDigest}`,
 		],
 		{ encoding: "utf8" },
 	);
@@ -480,23 +543,19 @@ test("component names stay distinct and valid for the longest Helm release", () 
 
 test("kind bootstrap rejects a stale same-named cluster", async () => {
 	const fixture = await mkdtemp(join(tmpdir(), "agent-infra-kind-check-"));
-	const tool = async (name, body) => {
-		const path = join(fixture, name);
-		await writeFile(path, `#!/usr/bin/env bash\n${body}\n`);
-		await chmod(path, 0o755);
-		return path;
-	};
 	try {
-		const kind = await tool(
+		const kind = await executable(
+			fixture,
 			"kind",
 			'case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") echo agent-infra-topology ;; "get kubeconfig") echo kubeconfig ;; esac',
 		);
-		const docker = await tool(
+		const docker = await executable(
+			fixture,
 			"docker",
 			"echo kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1",
 		);
-		const helm = await tool("helm", "exit 0");
-		const kubectl = await tool("kubectl", "exit 97");
+		const helm = await executable(fixture, "helm", "exit 0");
+		const kubectl = await executable(fixture, "kubectl", "exit 97");
 		const result = spawnSync("bash", ["deploy/kind/topology.sh", "up"], {
 			encoding: "utf8",
 			env: {
@@ -521,26 +580,23 @@ test("kind verification uses and removes a private kubeconfig", async () => {
 	const record = join(fixture, "record");
 	await mkdir(stateRoot, { mode: 0o777 });
 	await chmod(stateRoot, 0o777);
-	const tool = async (name, body) => {
-		const path = join(fixture, name);
-		await writeFile(path, `#!/usr/bin/env bash\n${body}\n`);
-		await chmod(path, 0o755);
-		return path;
-	};
 	try {
-		const kind = await tool(
+		const kind = await executable(
+			fixture,
 			"kind",
 			'echo "$*" >> "$KIND_RECORD"; case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") echo agent-infra-topology ;; "get kubeconfig") echo kubeconfig ;; esac',
 		);
-		const docker = await tool(
+		const docker = await executable(
+			fixture,
 			"docker",
 			"echo kindest/node:v1.33.4@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2",
 		);
-		const kubectl = await tool(
+		const kubectl = await executable(
+			fixture,
 			"kubectl",
-			'previous=""; for argument in "$@"; do if [[ "$previous" == "--kubeconfig" ]]; then directory=$(dirname "$argument"); mode=$(stat -f %Lp "$directory" 2>/dev/null || stat -c %a "$directory"); echo "$argument|$mode" >> "$STATE_RECORD"; fi; previous="$argument"; done; case "$*" in *"port-forward"*) while true; do sleep 1; done ;; *"auth can-i create statefulsets"*) echo yes ;; *"auth can-i get pods"*) echo no ;; *"get deployment/topology-agent-infra-web"*|*"get deployment/topology-agent-infra-platform-api"*) exit 1 ;; esac',
+			'previous=""; for argument in "$@"; do if [[ "$previous" == "--kubeconfig" ]]; then directory=$(dirname "$argument"); if mode=$(stat -c %a "$directory" 2>/dev/null); then :; else mode=$(stat -f %Lp "$directory"); fi; echo "$argument|$mode" >> "$STATE_RECORD"; fi; previous="$argument"; done; case "$*" in *"port-forward"*) while true; do sleep 1; done ;; *"auth can-i create statefulsets"*) echo yes ;; *"auth can-i get pods"*) echo no ;; *"get deployment/topology-agent-infra-web"*|*"get deployment/topology-agent-infra-platform-api"*) exit 1 ;; esac',
 		);
-		const curl = await tool("curl", "exit 0");
+		const curl = await executable(fixture, "curl", "exit 0");
 		const result = spawnSync("bash", ["deploy/kind/topology.sh", "verify"], {
 			encoding: "utf8",
 			env: {
@@ -563,6 +619,61 @@ test("kind verification uses and removes a private kubeconfig", async () => {
 		assert.equal(mode, "700");
 		assert.notEqual(dirname(kubeconfig), stateRoot);
 		await assert.rejects(access(dirname(kubeconfig)));
+	} finally {
+		await rm(fixture, { force: true, recursive: true });
+	}
+});
+
+test("kind down deletes only an owned topology cluster", async () => {
+	const fixture = await mkdtemp(join(tmpdir(), "agent-infra-kind-down-"));
+	const record = join(fixture, "record");
+	try {
+		const kind = await executable(
+			fixture,
+			"kind",
+			'echo "$*" >> "$KIND_RECORD"; case "$1 $2" in "version ") echo "kind v0.30.0" ;; "get clusters") [[ -n "$KIND_CLUSTERS" ]] && echo "$KIND_CLUSTERS" ;; esac',
+		);
+		const docker = await executable(
+			fixture,
+			"docker",
+			'echo "$KIND_NODE_IMAGE"',
+		);
+		const run = (clusters, image) =>
+			spawnSync("bash", ["deploy/kind/topology.sh", "down"], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					DOCKER_BIN: docker,
+					KIND_BIN: kind,
+					KIND_CLUSTERS: clusters,
+					KIND_NODE_IMAGE: image,
+					KIND_RECORD: record,
+				},
+			});
+
+		let result = run("", "");
+		assert.equal(result.status, 0, result.stderr);
+		assert.doesNotMatch(await readFile(record, "utf8"), /delete cluster/);
+
+		await writeFile(record, "");
+		result = run(
+			"agent-infra-topology",
+			"kindest/node:v1.33.4@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2",
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(
+			await readFile(record, "utf8"),
+			/delete cluster --name agent-infra-topology/,
+		);
+
+		await writeFile(record, "");
+		result = run(
+			"agent-infra-topology",
+			"kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1",
+		);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /kind node image does not match cluster.yaml/);
+		assert.doesNotMatch(await readFile(record, "utf8"), /delete cluster/);
 	} finally {
 		await rm(fixture, { force: true, recursive: true });
 	}
