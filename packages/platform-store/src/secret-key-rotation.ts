@@ -420,7 +420,6 @@ async function secretRow(
 		SecretKeyRotationCandidateV1,
 		"agentId" | "secretId" | "secretVersion" | "configRevision"
 	>,
-	lockRow: boolean,
 ): Promise<SecretRecordRow | undefined> {
 	const rows = await sql<SecretRecordRow[]>`
 		select agent_id, secret_id, secret_version, configuration_revision,
@@ -430,7 +429,7 @@ async function secretRow(
 			and secret_id = ${identity.secretId}
 			and secret_version = ${identity.secretVersion}
 			and configuration_revision = ${identity.configRevision}
-		${lockRow ? sql`for update` : sql``}
+		for update
 	`;
 	return rows[0];
 }
@@ -612,7 +611,7 @@ export class PostgresSecretKeyRotationStoreV1
 				) {
 					return { outcome: "stale" as const };
 				}
-				const row = await secretRow(sql, input.candidate, true);
+				const row = await secretRow(sql, input.candidate);
 				if (!row) return { outcome: "stale" as const };
 				const current = parseRecord(row);
 				if (!recordMatchesCandidate(current, input.candidate)) {
@@ -698,7 +697,7 @@ export class PostgresSecretKeyRotationStoreV1
 				const rotation = await rotationRow(sql, command.rotationId);
 				if (!rotation) return false;
 				progress(rotation, command);
-				const row = await secretRow(sql, input.candidate, true);
+				const row = await secretRow(sql, input.candidate);
 				if (
 					!row ||
 					!recordMatchesCandidate(parseRecord(row), input.candidate)

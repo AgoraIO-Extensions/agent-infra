@@ -77,6 +77,7 @@ export type SecretKeyRotationCryptoFailureCodeV1 =
 	| "SECRET_ROTATION_FAILED";
 
 export interface SecretKeyRotationCryptoPortV1 {
+	readonly activeWrappingKeyVersion: string;
 	reencrypt(input: {
 		readonly encryptedRecord: unknown;
 		readonly targetKeyVersion: string;
@@ -377,6 +378,13 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 	return {
 		async rotate(input) {
 			const command = parseRotationCommand(input);
+			if (
+				!validText(dependencies.crypto.activeWrappingKeyVersion) ||
+				command.targetKeyVersion !==
+					dependencies.crypto.activeWrappingKeyVersion
+			) {
+				throw new SecretKeyRotationError("invalid_input");
+			}
 			try {
 				const next = await dependencies.store.nextCandidate(command);
 				const progress = validatedProgress(next.progress, command);
@@ -455,6 +463,12 @@ export function createSecretKeyRotationUseCaseV1(dependencies: {
 		},
 		async retire(input) {
 			const command = parseRetirementCommand(input);
+			if (
+				!validText(dependencies.crypto.activeWrappingKeyVersion) ||
+				command.keyVersion === dependencies.crypto.activeWrappingKeyVersion
+			) {
+				return { schemaVersion: 1, outcome: "referenced" };
+			}
 			try {
 				const outcome = await dependencies.store.retireKey({
 					command,

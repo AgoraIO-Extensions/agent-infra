@@ -76,6 +76,7 @@ export function createWorkerSecretRotationCryptoV1(input: {
 	}
 	const now = input.now ?? (() => new Date());
 	return {
+		activeWrappingKeyVersion: encryptionKeys.activeWrappingKeyVersion,
 		async reencrypt({ encryptedRecord, targetKeyVersion, traceId }) {
 			if (targetKeyVersion !== encryptionKeys.activeWrappingKeyVersion) {
 				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };

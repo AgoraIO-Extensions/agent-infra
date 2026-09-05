@@ -67,7 +67,7 @@ describe("Secret key rotation", () => {
 		});
 		const useCase = createSecretKeyRotationUseCaseV1({
 			store,
-			crypto: { reencrypt },
+			crypto: { activeWrappingKeyVersion: "key_02", reencrypt },
 		});
 
 		await expect(useCase.rotate(command)).resolves.toMatchObject({
@@ -137,7 +137,7 @@ describe("Secret key rotation", () => {
 				recordRejection: vi.fn(),
 				retireKey: vi.fn(),
 			},
-			crypto: { reencrypt },
+			crypto: { activeWrappingKeyVersion: "key_02", reencrypt },
 		});
 
 		await expect(useCase.rotate(command)).resolves.toMatchObject({
@@ -171,6 +171,7 @@ describe("Secret key rotation", () => {
 					retireKey: vi.fn(),
 				},
 				crypto: {
+					activeWrappingKeyVersion: "key_02",
 					reencrypt: vi.fn().mockResolvedValue({ outcome: "failed", code }),
 				},
 			});
@@ -208,7 +209,10 @@ describe("Secret key rotation", () => {
 				recordRejection: vi.fn(),
 				retireKey,
 			},
-			crypto: { reencrypt: vi.fn() },
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				reencrypt: vi.fn(),
+			},
 		});
 		const retirement = {
 			schemaVersion: 1 as const,
@@ -244,5 +248,36 @@ describe("Secret key rotation", () => {
 		expect(JSON.stringify(retireKey.mock.calls)).not.toContain(
 			"boundary-sensitive",
 		);
+	});
+
+	it("uses only the active target key and never retires it", async () => {
+		const nextCandidate = vi.fn();
+		const retireKey = vi.fn();
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store: {
+				nextCandidate,
+				commitReencryption: vi.fn(),
+				recordRejection: vi.fn(),
+				retireKey,
+			},
+			crypto: {
+				activeWrappingKeyVersion: "key_02",
+				reencrypt: vi.fn(),
+			},
+		});
+
+		await expect(
+			useCase.rotate({ ...command, targetKeyVersion: "key_03" }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(nextCandidate).not.toHaveBeenCalled();
+		await expect(
+			useCase.retire({
+				schemaVersion: 1,
+				keyVersion: "key_02",
+				workerId: "worker_01",
+				traceId: "trace_retire_active",
+			}),
+		).resolves.toEqual({ schemaVersion: 1, outcome: "referenced" });
+		expect(retireKey).not.toHaveBeenCalled();
 	});
 });
