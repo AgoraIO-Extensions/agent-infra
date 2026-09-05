@@ -621,4 +621,46 @@ describe("PostgreSQL Secret key rotation Store", () => {
 		]);
 		expect(JSON.stringify(audits)).not.toContain("YWJjZA==");
 	});
+
+	it("rejects audit attribution that is not bound to the rotation command", async () => {
+		const next = await store.nextCandidate({
+			...command,
+			rotationId: "rotation_collision",
+			sourceKeyVersions: ["key_03"],
+			targetKeyVersion: "key_04",
+			traceId: "trace_collision",
+		});
+		expect(next.outcome).toBe("candidate");
+		if (next.outcome !== "candidate") throw new Error("Expected candidate");
+		const mismatchedCommand = {
+			...command,
+			rotationId: "rotation_collision",
+			sourceKeyVersions: ["key_03"],
+			targetKeyVersion: "key_04",
+			traceId: "trace_collision",
+		};
+
+		await expect(
+			store.recordRejection({
+				command: mismatchedCommand,
+				candidate: next.candidate,
+				failureCode: "SECRET_KEY_UNAVAILABLE",
+				auditEvent: {
+					...audit(next.candidate, mismatchedCommand, "failed"),
+					actorId: "other_worker",
+				},
+			}),
+		).rejects.toBeInstanceOf(Error);
+		await expect(
+			store.recordRejection({
+				command: mismatchedCommand,
+				candidate: next.candidate,
+				failureCode: "SECRET_KEY_UNAVAILABLE",
+				auditEvent: {
+					...audit(next.candidate, mismatchedCommand, "failed"),
+					traceId: "other_trace",
+				},
+			}),
+		).rejects.toBeInstanceOf(Error);
+	});
 });

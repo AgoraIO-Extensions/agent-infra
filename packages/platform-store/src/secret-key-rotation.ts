@@ -301,6 +301,7 @@ function validateAudit(
 				readonly candidate: SecretKeyRotationCandidateV1;
 		  }
 		| { readonly kind: "retire-key"; readonly keyVersion: string },
+	expected: { readonly workerId: string; readonly traceId: string },
 ): void {
 	try {
 		const operation = input.kind;
@@ -322,6 +323,8 @@ function validateAudit(
 				}
 			}) ||
 			event.actorType !== "system" ||
+			event.actorId !== expected.workerId ||
+			event.traceId !== expected.traceId ||
 			event.action !== `secret.${operation}` ||
 			event.targetType !== (operation === "rewrap" ? "secret" : "secret_key") ||
 			event.targetId !== targetId ||
@@ -580,10 +583,17 @@ export class PostgresSecretKeyRotationStoreV1
 	): ReturnType<SecretKeyRotationStorePortV1["commitReencryption"]> {
 		try {
 			const command = rotationCommand(input.command);
-			validateAudit(input.auditEvent, {
-				kind: "rewrap",
-				candidate: input.candidate,
-			});
+			validateAudit(
+				input.auditEvent,
+				{
+					kind: "rewrap",
+					candidate: input.candidate,
+				},
+				command,
+			);
+			if (input.auditEvent.outcome !== "succeeded") {
+				throw new SecretKeyRotationStoreError();
+			}
 			return await this.#client.begin(async (sql) => {
 				await lock(sql, "rotation", command.rotationId);
 				await lockKeys(sql, [
@@ -661,10 +671,14 @@ export class PostgresSecretKeyRotationStoreV1
 	): Promise<boolean> {
 		try {
 			const command = rotationCommand(input.command);
-			validateAudit(input.auditEvent, {
-				kind: "rewrap",
-				candidate: input.candidate,
-			});
+			validateAudit(
+				input.auditEvent,
+				{
+					kind: "rewrap",
+					candidate: input.candidate,
+				},
+				command,
+			);
 			const rejected =
 				input.failureCode === "SECRET_METADATA_INVALID" ||
 				input.failureCode === "SECRET_AUTHENTICATION_FAILED";
@@ -711,10 +725,17 @@ export class PostgresSecretKeyRotationStoreV1
 	): Promise<"retired" | "referenced"> {
 		try {
 			const command = retirementCommand(input.command);
-			validateAudit(input.auditEvent, {
-				kind: "retire-key",
-				keyVersion: command.keyVersion,
-			});
+			validateAudit(
+				input.auditEvent,
+				{
+					kind: "retire-key",
+					keyVersion: command.keyVersion,
+				},
+				command,
+			);
+			if (input.auditEvent.outcome !== "succeeded") {
+				throw new SecretKeyRotationStoreError();
+			}
 			return await this.#client.begin(async (sql) => {
 				await lockKeys(sql, [command.keyVersion]);
 				if (await isRetired(sql, command.keyVersion)) return "retired" as const;
