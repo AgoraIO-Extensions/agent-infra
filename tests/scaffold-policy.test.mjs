@@ -64,6 +64,20 @@ test("deployment images select an explicit non-root runtime user", async () => {
 });
 
 test("Node runtime images contain only production deployment artifacts", async () => {
+	const deployCommands = new Map([
+		[
+			"platform-api",
+			"pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-api deploy --prod /prod/platform-api",
+		],
+		[
+			"platform-worker",
+			"pnpm --filter @agent-infra/platform-worker deploy --prod --legacy /prod/platform-worker",
+		],
+		[
+			"connection-api",
+			"pnpm --filter @agent-infra/connection-api deploy --prod --legacy /prod/connection-api",
+		],
+	]);
 	for (const service of ["platform-api", "platform-worker", "connection-api"]) {
 		const path = dockerfiles.get(service);
 		const dockerfile = await readFile(path, "utf8");
@@ -76,11 +90,8 @@ test("Node runtime images contain only production deployment artifacts", async (
 
 		assert.equal(manifest.main, "dist/index.mjs");
 		assert.deepEqual(manifest.files, ["dist"]);
-		assert.match(
-			dockerfile,
-			new RegExp(
-				`pnpm --filter @agent-infra/${service} deploy --prod --legacy /prod/${service}`,
-			),
+		assert.ok(
+			dockerfile.includes(deployCommands.get(service)),
 			`${service} must prepare a production-only deployment`,
 		);
 		assert.match(

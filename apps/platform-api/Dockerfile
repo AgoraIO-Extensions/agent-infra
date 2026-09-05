@@ -6,8 +6,8 @@ COPY . .
 RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store-dir /pnpm-store
 
 ENV NODE_ENV=production
-RUN pnpm --filter @agent-infra/platform-api build
-RUN pnpm --filter @agent-infra/platform-api deploy --prod --legacy /prod/platform-api
+RUN pnpm --filter @agent-infra/platform-api... build
+RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-api deploy --prod /prod/platform-api
 RUN rm /prod/platform-api/node_modules/.modules.yaml
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
