@@ -7,6 +7,7 @@ import type {
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusResponseV1,
+	RuntimeStatusV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSupplementRequestV1,
@@ -63,6 +64,12 @@ function nativeSessionRequired(): never {
 	);
 }
 
+function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
+	return (
+		status === "completed" || status === "failed" || status === "cancelled"
+	);
+}
+
 function driverInvalid(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_DRIVER_INVALID",
@@ -72,10 +79,52 @@ function driverInvalid(): never {
 	);
 }
 
+function acceptanceUnknown() {
+	return {
+		outcome: "unknown" as const,
+		code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+		message: "Runtime command acceptance could not be confirmed",
+	} as const;
+}
+
+function isInterruption(operation: Pick<StoredOperation, "kind">) {
+	return operation.kind === "stop" || operation.kind === "generation-cancel";
+}
+
+function unknownOperationResponse(
+	hostSessionRef: string,
+	operationId: string,
+): RuntimeOperationResponseV1 {
+	return {
+		schemaVersion: 1,
+		hostSessionRef,
+		operationId,
+		result: acceptanceUnknown(),
+	};
+}
+
+const driverUncertain = Symbol("driverUncertain");
+
+function isUncertainDriverFailure(error: unknown) {
+	return (
+		error instanceof RuntimeHostError &&
+		error.driverFailureKind === "unavailable"
+	);
+}
+
 async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch {
+		driverInvalid();
+	}
+}
+
+async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
+	try {
+		return await work();
+	} catch (error) {
+		if (isUncertainDriverFailure(error)) return driverUncertain;
 		driverInvalid();
 	}
 }
@@ -536,7 +585,10 @@ export class RuntimeHost {
 					request.hostSessionRef,
 					prepared.operation,
 				);
-				if (response.result.outcome === "accepted") {
+				if (
+					response.result.outcome === "accepted" &&
+					isTerminalRuntimeStatus(response.result.status)
+				) {
 					await this.options.store.confirmGenerationBarrier(
 						request.hostSessionRef,
 						request.tombstoneId,
@@ -553,27 +605,55 @@ export class RuntimeHost {
 		operation: StoredOperation,
 	): Promise<RuntimeOperationResponseV1> {
 		if (operation.state === "resolved" && operation.result) {
+			let result = operation.result;
+			if (result.outcome === "accepted" && result.status === "running") {
+				const nativeSessionRef =
+					this.options.store.nativeSessionRef(hostSessionRef) ??
+					nativeSessionRequired();
+				result = await this.currentDriverResult(
+					{ nativeSessionRef, result },
+					operation,
+				);
+				if (isInterruption(operation) && result.outcome === "unknown") {
+					return unknownOperationResponse(
+						hostSessionRef,
+						operation.operationId,
+					);
+				}
+				await this.options.store.resolveOperation(
+					hostSessionRef,
+					operation.operationId,
+					result,
+					nativeSessionRef,
+				);
+			}
 			return {
 				schemaVersion: 1,
 				hostSessionRef,
 				operationId: operation.operationId,
-				result: operation.result,
+				result,
 			};
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
+		const rawLookup = await callDriverWithUncertainty(() =>
+			this.options.driver.lookupOperation(operation.command),
+		);
+		if (rawLookup === driverUncertain) {
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
+			}
+			driverInvalid();
+		}
 		const lookup = parseDriverLookup(
-			await callDriver(() =>
-				this.options.driver.lookupOperation(operation.command),
-			),
+			rawLookup,
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		if (lookup.state === "unknown") {
-			const result = {
-				outcome: "unknown",
-				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-				message: "Runtime command acceptance could not be confirmed",
-			} as const;
+			if (isInterruption(operation)) {
+				return unknownOperationResponse(hostSessionRef, operation.operationId);
+			}
+			const result = acceptanceUnknown();
 			await this.options.store.resolveOperation(
 				hostSessionRef,
 				operation.operationId,
@@ -586,21 +666,34 @@ export class RuntimeHost {
 				result,
 			};
 		}
+		let rawDriverRecord: Awaited<ReturnType<RuntimeDriver["execute"]>>;
+		if (lookup.state === "found") {
+			rawDriverRecord = lookup.record;
+		} else {
+			const executed = await callDriverWithUncertainty(() =>
+				this.options.driver.execute(operation.command),
+			);
+			if (executed === driverUncertain) {
+				if (isInterruption(operation)) {
+					return unknownOperationResponse(
+						hostSessionRef,
+						operation.operationId,
+					);
+				}
+				driverInvalid();
+			}
+			rawDriverRecord = executed;
+		}
 		const driverRecord = parseDriverRecord(
-			lookup.state === "found"
-				? lookup.record
-				: await callDriver(() =>
-						this.options.driver.execute(operation.command),
-					),
+			rawDriverRecord,
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
-		const result = await this.currentDriverResult(
-			driverRecord,
-			operation.executionId,
-			operation.kind,
-		);
+		const result = await this.currentDriverResult(driverRecord, operation);
+		if (isInterruption(operation) && result.outcome === "unknown") {
+			return unknownOperationResponse(hostSessionRef, operation.operationId);
+		}
 		await this.options.store.resolveOperation(
 			hostSessionRef,
 			operation.operationId,
@@ -650,31 +743,34 @@ export class RuntimeHost {
 						if (lookup.state === "found") {
 							recoveredResult = await this.currentDriverResult(
 								lookup.record,
-								operation.executionId,
-								operation.kind,
+								operation,
 							);
-							await this.options.store.resolveOperation(
-								session.hostSessionRef,
-								operation.operationId,
-								recoveredResult,
-								lookup.record.nativeSessionRef,
-							);
+							if (
+								!isInterruption(operation) ||
+								recoveredResult.outcome !== "unknown"
+							) {
+								await this.options.store.resolveOperation(
+									session.hostSessionRef,
+									operation.operationId,
+									recoveredResult,
+									lookup.record.nativeSessionRef,
+								);
+							}
 						} else {
-							recoveredResult = {
-								outcome: "unknown",
-								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-								message: "Runtime command acceptance could not be confirmed",
-							} as const;
-							await this.options.store.resolveOperation(
-								session.hostSessionRef,
-								operation.operationId,
-								recoveredResult,
-							);
+							recoveredResult = acceptanceUnknown();
+							if (!isInterruption(operation)) {
+								await this.options.store.resolveOperation(
+									session.hostSessionRef,
+									operation.operationId,
+									recoveredResult,
+								);
+							}
 						}
 					}
 					if (
 						operation.kind === "generation-cancel" &&
-						recoveredResult.outcome === "accepted"
+						recoveredResult.outcome === "accepted" &&
+						isTerminalRuntimeStatus(recoveredResult.status)
 					) {
 						await this.options.store.confirmGenerationBarrier(
 							session.hostSessionRef,
@@ -698,21 +794,26 @@ export class RuntimeHost {
 	}
 
 	private async currentDriverResult(
-		record: Awaited<ReturnType<RuntimeDriver["execute"]>>,
-		executionId: string,
-		operationKind: StoredOperation["kind"],
+		record: Pick<
+			Awaited<ReturnType<RuntimeDriver["execute"]>>,
+			"nativeSessionRef" | "result"
+		>,
+		operation: Pick<StoredOperation, "executionId" | "kind">,
 	) {
-		if (
-			record.result.outcome !== "accepted" ||
-			["stop", "generation-cancel"].includes(operationKind)
-		) {
+		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
-		const status = RuntimeStatusV1Schema.safeParse(
-			await callDriver(() =>
-				this.options.driver.getStatus(record.nativeSessionRef, executionId),
+		const rawStatus = await callDriverWithUncertainty(() =>
+			this.options.driver.getStatus(
+				record.nativeSessionRef,
+				operation.executionId,
 			),
 		);
+		if (rawStatus === driverUncertain) {
+			if (isInterruption(operation)) return acceptanceUnknown();
+			driverInvalid();
+		}
+		const status = RuntimeStatusV1Schema.safeParse(rawStatus);
 		if (!status.success) driverInvalid();
 		return {
 			outcome: "accepted" as const,
