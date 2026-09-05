@@ -693,7 +693,7 @@ describe("PostgreSQL Secret key rotation Store", () => {
 				candidate: retried.candidate,
 				failureCode: "SECRET_KEY_UNAVAILABLE",
 				auditEvents: [
-					audit(retried.candidate, rejectionCommand, "failed", "decrypt"),
+					audit(retried.candidate, rejectionCommand, "failed", "decrypt", 2),
 				],
 			}),
 		).resolves.toBe(false);
@@ -720,6 +720,14 @@ describe("PostgreSQL Secret key rotation Store", () => {
 					wrappingKeyVersion: "key_05",
 					operation: "decrypt",
 					result: "rejected",
+				},
+			},
+			{
+				outcome: "failed",
+				details: {
+					wrappingKeyVersion: "key_05",
+					operation: "decrypt",
+					result: "failed",
 				},
 			},
 		]);

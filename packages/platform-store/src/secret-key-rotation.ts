@@ -812,23 +812,32 @@ export class PostgresSecretKeyRotationStoreV1
 			}
 			return await this.#client.begin(async (sql) => {
 				await lock(sql, "rotation", command.rotationId);
+				const recordAttempt = async () => {
+					const now = await decisionAt(sql);
+					for (const auditEvent of input.auditEvents) {
+						await insertAudit(sql, auditEvent, now);
+					}
+					return now;
+				};
 				const rotation = await rotationRow(sql, command.rotationId);
-				if (!rotation) return false;
+				if (!rotation) {
+					await recordAttempt();
+					return false;
+				}
 				const currentProgress = progress(rotation, command);
 				if (
 					currentProgress.state === "completed" ||
 					currentProgress.state === "failed"
 				) {
+					await recordAttempt();
 					return false;
 				}
 				const row = await secretRow(sql, input.candidate);
 				if (!row || !rowMatchesCandidate(row, input.candidate)) {
+					await recordAttempt();
 					return false;
 				}
-				const now = await decisionAt(sql);
-				for (const auditEvent of input.auditEvents) {
-					await insertAudit(sql, auditEvent, now);
-				}
+				const now = await recordAttempt();
 				await sql`
 					update platform.secret_key_rotations
 					set state = ${rejected ? "failed" : "rewrapping"}, updated_at = ${now}
