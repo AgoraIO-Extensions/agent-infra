@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +53,14 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	decision: null,
 });
 const cursor = "cursor:agent-pilot-1";
+const administratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-administrator-1",
+		displayName: "Administrator",
+		roles: ["system_admin"],
+	},
+});
 const applicationInput = {
 	schemaVersion: 1,
 	name: "Release assistant request",
@@ -165,6 +174,75 @@ describe("Pilot Agent Mock Server", () => {
 				new Request(
 					"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
 					{ method: "POST" },
+				),
+			),
+		).rejects.toThrow();
+	});
+
+	it("routes schema-validated administrator decisions and lifecycle commands", async () => {
+		const server = createPilotAgentMockServerV1({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgent },
+			getCurrentSession: { status: 200, body: administratorSession },
+			listPendingAgentApplications: {
+				status: 200,
+				body: { items: [pendingApplication], nextCursor: null },
+			},
+			decideAgentApplication: { status: 200, body: pendingApplication },
+			commandAgentLifecycle: { status: 202, body: startingAgent },
+		});
+
+		const session = await server.fetch(
+			new Request("https://platform.example.test/api/v1/session"),
+		);
+		const pending = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/admin/agent-applications",
+			),
+		);
+		const decision = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/admin/agent-applications/application-pilot-1/decision",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Idempotency-Key": "application-decision-1",
+					},
+					body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+				},
+			),
+		);
+		const lifecycle = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Idempotency-Key": "agent-lifecycle-1",
+					},
+					body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+				},
+			),
+		);
+
+		expect(await session.json()).toEqual(administratorSession);
+		expect(await pending.json()).toEqual({
+			items: [pendingApplication],
+			nextCursor: null,
+		});
+		expect(await decision.json()).toEqual(pendingApplication);
+		expect(await lifecycle.json()).toEqual(startingAgent);
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+					{
+						method: "POST",
+						headers: { "Idempotency-Key": "agent-lifecycle-invalid" },
+						body: JSON.stringify({ schemaVersion: 1, command: "unknown" }),
+					},
 				),
 			),
 		).rejects.toThrow();
