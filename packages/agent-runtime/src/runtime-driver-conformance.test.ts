@@ -34,7 +34,9 @@ interface ConformanceDriverFixture {
 	createdTurnCount(): Promise<number>;
 	restart(): Promise<ConformanceDriverFixture>;
 	makeOperationUnknown(operationId: string): Promise<void>;
-	delegatedToolWasDeniedAndRedacted(): Promise<boolean>;
+	delegatedToolWasDeniedAndRedacted(
+		response?: "driver" | "unexpected-success",
+	): Promise<boolean>;
 }
 
 async function openConformanceDriver(
@@ -127,8 +129,8 @@ function wrapCodexFixture(
 			return wrapCodexFixture(await fixture.restart());
 		},
 		makeOperationUnknown: async () => undefined,
-		delegatedToolWasDeniedAndRedacted: () =>
-			fixture.delegatedToolWasDeniedAndRedacted(),
+		delegatedToolWasDeniedAndRedacted: (response) =>
+			fixture.delegatedToolWasDeniedAndRedacted(response),
 	};
 }
 
@@ -622,6 +624,9 @@ describe("Codex Driver boundary conformance", () => {
 			join(path, "driver.json"),
 		);
 		expect(await fixture.delegatedToolWasDeniedAndRedacted()).toBe(true);
+		expect(
+			await fixture.delegatedToolWasDeniedAndRedacted("unexpected-success"),
+		).toBe(false);
 		expect(await fixture.driver.getCapabilities()).toMatchObject({
 			connection: false,
 		});

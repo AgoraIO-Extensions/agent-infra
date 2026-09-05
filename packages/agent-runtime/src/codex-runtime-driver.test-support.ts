@@ -36,7 +36,9 @@ interface CodexRuntimeDriverConformanceFixture {
 	completeStopAsCancelled(): void;
 	completeStopAsCompleted(): Promise<void>;
 	turnStartCount(): number;
-	delegatedToolWasDeniedAndRedacted(): Promise<boolean>;
+	delegatedToolWasDeniedAndRedacted(
+		response?: "driver" | "unexpected-success",
+	): Promise<boolean>;
 	close(): Promise<void>;
 	restart(): Promise<CodexRuntimeDriverConformanceFixture>;
 }
@@ -60,10 +62,14 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	) {}
 
 	async send(frame: CodexAppServerFrame) {
-		if (!("method" in frame) && "error" in frame) {
+		if (
+			!("method" in frame) &&
+			"id" in frame &&
+			frame.id === "request-opaque"
+		) {
 			const serialized = JSON.stringify(frame);
 			this.delegatedToolResult?.(
-				frame.id === "request-opaque" &&
+				"error" in frame &&
 					serialized.includes("Platform delegated tools are unavailable") &&
 					!serialized.includes("redacted-input"),
 			);
@@ -197,15 +203,21 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 		return result;
 	}
 
-	async delegatedToolWasDeniedAndRedacted() {
+	async delegatedToolWasDeniedAndRedacted(
+		response: "driver" | "unexpected-success" = "driver",
+	) {
 		const result = new Promise<boolean>((resolve) => {
 			this.delegatedToolResult = resolve;
 		});
-		this.push({
-			id: "request-opaque",
-			method: "item/tool/call",
-			params: { privateInput: "redacted-input" },
-		});
+		if (response === "unexpected-success") {
+			await this.send({ id: "request-opaque", result: {} });
+		} else {
+			this.push({
+				id: "request-opaque",
+				method: "item/tool/call",
+				params: { privateInput: "redacted-input" },
+			});
+		}
 		const denied = await result;
 		const state = await readFile(this.path, "utf8");
 		return denied && !state.includes("redacted-input");
@@ -276,8 +288,8 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 		completeStopAsCancelled: () => transport.completeStopAsCancelled(),
 		completeStopAsCompleted: async () => transport.completeStopAsCompleted(),
 		turnStartCount: () => state.turnStarts,
-		delegatedToolWasDeniedAndRedacted: () =>
-			transport.delegatedToolWasDeniedAndRedacted(),
+		delegatedToolWasDeniedAndRedacted: (response) =>
+			transport.delegatedToolWasDeniedAndRedacted(response),
 		close: async () => {
 			await driver.close();
 			await transport.close();
