@@ -652,8 +652,7 @@ export function createConversationEventUseCaseV1(
 					},
 				);
 				return normalizeDecision(decision, expected);
-			} catch (error) {
-				if (error instanceof ConversationEventError) throw error;
+			} catch {
 				return unavailable();
 			}
 		},

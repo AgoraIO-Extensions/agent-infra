@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	ConversationEventError,
 	type ConversationEventStateV1,
 	type ConversationEventTransactionPortV1,
 	createConversationEventUseCaseV1,
@@ -204,6 +205,19 @@ describe("Conversation event ingestion", () => {
 			{ transaction },
 			{ newId: () => "event_1" },
 		);
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("maps a transaction adapter failure to unavailable after command validation", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async () => {
+				throw new ConversationEventError("invalid_input");
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
 
 		await expect(events.persist(event)).rejects.toMatchObject({
 			code: "unavailable",
