@@ -10,6 +10,7 @@ ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
 RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
 RUN rm /prod/agent-runtime-host/node_modules/.modules.yaml /prod/agent-runtime-host/node_modules/.pnpm-workspace-state-v1.json
+RUN find /prod/agent-runtime-host -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.d.mts' -o -name '*.d.mts.map' -o -name '*.d.cts' -o -name '*.d.cts.map' \) -delete
 RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
     && rm -r /prod/agent-runtime-host \
     && mv /prod/agent-runtime-host-normalized /prod/agent-runtime-host

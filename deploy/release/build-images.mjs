@@ -9,6 +9,11 @@ import { dirname, join, resolve } from "node:path";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
+const injectedRuntimeProbe =
+	"const {access,readdir}=await import('node:fs/promises');" +
+	"await Promise.all([access('./package.json'),access('./dist/index.mjs')]);" +
+	"const visit=async(path)=>{for(const entry of await readdir(path,{withFileTypes:true})){const child=path+'/'+entry.name;if(entry.isDirectory())await visit(child);else if(entry.isFile()&&/\\.d\\.(?:[cm]?ts)(?:\\.map)?$/.test(entry.name))throw new Error('TypeScript declarations found')}};" +
+	"await visit('.');await import('./dist/index.mjs')";
 const images = [
 	{
 		key: "web",
@@ -25,7 +30,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			"await import('./dist/index.mjs')",
+			injectedRuntimeProbe,
 		],
 	},
 	{
@@ -47,7 +52,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			"await import('./dist/index.mjs')",
+			injectedRuntimeProbe,
 		],
 	},
 ];

@@ -106,6 +106,17 @@ test("Node runtime images contain only production deployment artifacts", async (
 	}
 });
 
+test("injected Platform runtime images discard compile-time declarations", async () => {
+	for (const service of ["platform-api", "agent-runtime-host"]) {
+		const dockerfile = await readFile(`apps/${service}/Dockerfile`, "utf8");
+		assert.match(
+			dockerfile,
+			new RegExp(`find /prod/${service} -type f .+ -delete`),
+			`${service} must remove TypeScript declarations from its runtime deployment`,
+		);
+	}
+});
+
 test("Compose runs every deployment image with a read-only root filesystem", async () => {
 	const compose = parse(await readFile("docker-compose.yml", "utf8"));
 

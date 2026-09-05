@@ -10,6 +10,7 @@ ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/platform-api... build
 RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-api deploy --prod /prod/platform-api
 RUN rm /prod/platform-api/node_modules/.modules.yaml /prod/platform-api/node_modules/.pnpm-workspace-state-v1.json
+RUN find /prod/platform-api -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.d.mts' -o -name '*.d.mts.map' -o -name '*.d.cts' -o -name '*.d.cts.map' \) -delete
 RUN cp -R /prod/platform-api /prod/platform-api-normalized \
     && rm -r /prod/platform-api \
     && mv /prod/platform-api-normalized /prod/platform-api

@@ -149,6 +149,14 @@ test("image build validates reproducibility and read-only non-root execution", a
 				assert.deepEqual(args.slice(referenceIndex + 1), ["-t"]);
 			} else {
 				assert.equal(args[referenceIndex + 1], "node");
+				if (
+					args[referenceIndex].includes("/platform-api:") ||
+					args[referenceIndex].includes("/agent-runtime-host:")
+				) {
+					assert.match(args.at(-1), /package\.json/);
+					assert.match(args.at(-1), /dist\/index\.mjs/);
+					assert.match(args.at(-1), /TypeScript declarations found/);
+				}
 			}
 		}
 
