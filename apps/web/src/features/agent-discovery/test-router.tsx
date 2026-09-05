@@ -28,12 +28,18 @@ export async function renderWithAgentRouter(content: ReactNode) {
 		path: "/agents/$agentId",
 		component: () => null,
 	});
+	const agentConfigurationRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/agents/$agentId/configuration",
+		component: () => null,
+	});
 	const router = createRouter({
 		history: createMemoryHistory({ initialEntries: ["/"] }),
 		routeTree: rootRoute.addChildren([
 			contentRoute,
 			agentsRoute,
 			agentDetailRoute,
+			agentConfigurationRoute,
 		]),
 	});
 	await router.load();
