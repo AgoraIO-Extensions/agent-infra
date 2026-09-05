@@ -7,9 +7,10 @@ import type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "@agent-infra/platform-core";
+import { inArray, sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 
-import { platformSecretRecords } from "./schema.js";
+import { platformSecretRecords, retiredSecretWrappingKeys } from "./schema.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -244,6 +245,23 @@ export async function insertPendingSecretRecordAttachments(
 			};
 		});
 		if (expectedByKey.size !== 0) throw new Error();
+		const wrappingKeyVersions = [
+			...new Set(rows.map(({ record }) => record.crypto.wrappingKeyVersion)),
+		].toSorted();
+		for (const keyVersion of wrappingKeyVersions) {
+			await transaction.execute(sql`
+				select pg_catalog.pg_advisory_xact_lock(
+					pg_catalog.hashtextextended(${`agent-infra:secret-key:${keyVersion}`}, 0)
+				)
+			`);
+		}
+		const retired = await transaction
+			.select({ keyVersion: retiredSecretWrappingKeys.keyVersion })
+			.from(retiredSecretWrappingKeys)
+			.where(
+				inArray(retiredSecretWrappingKeys.keyVersion, wrappingKeyVersions),
+			);
+		if (retired.length !== 0) throw new Error();
 		await transaction.insert(platformSecretRecords).values(rows);
 	} catch (error) {
 		if (error instanceof PendingSecretRecordStoreError) throw error;

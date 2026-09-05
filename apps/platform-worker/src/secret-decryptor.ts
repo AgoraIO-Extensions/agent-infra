@@ -4,14 +4,24 @@ import {
 	createDecipheriv,
 	createHash,
 	createPrivateKey,
+	createPublicKey,
 	type KeyObject,
 	privateDecrypt,
 	timingSafeEqual,
 } from "node:crypto";
 
-import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
-import type { SecretActivationDecryptorPortV1 } from "@agent-infra/platform-core";
-import { encodeSecretAadV1 } from "@agent-infra/secret-store";
+import {
+	validatePlatformSecretRecordV1,
+	validateSecretEncryptionKeySetV1,
+} from "@agent-infra/contracts/workload";
+import type {
+	SecretActivationDecryptorPortV1,
+	SecretKeyRotationCryptoPortV1,
+} from "@agent-infra/platform-core";
+import {
+	encodeSecretAadV1,
+	reencryptSecretRecordV1,
+} from "@agent-infra/secret-store";
 
 interface WorkerPrivateKeyV1 {
 	readonly keyVersion: string;
@@ -24,13 +34,88 @@ export function createWorkerSecretDecryptorV1(input: {
 		readonly privateKeyPkcs8DerBase64: string;
 	}[];
 }): SecretActivationDecryptorPortV1 {
-	const keys = parseKeyring(input);
+	return workerDecryptor(parseKeyring(input), false);
+}
+
+export function createWorkerSecretRotationCryptoV1(input: {
+	readonly keys: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
+	readonly encryptionKeys: unknown;
+	readonly now?: () => Date;
+}): SecretKeyRotationCryptoPortV1 {
+	let encryptionKeys: ReturnType<typeof validateSecretEncryptionKeySetV1>;
+	let decryptor: SecretActivationDecryptorPortV1;
+	try {
+		const keyring = parseKeyring(input);
+		encryptionKeys = validateSecretEncryptionKeySetV1(input.encryptionKeys);
+		const targetKey = keyring.get(encryptionKeys.activeWrappingKeyVersion);
+		const targetDescriptor = encryptionKeys.keys.find(
+			({ keyVersion }) =>
+				keyVersion === encryptionKeys.activeWrappingKeyVersion,
+		);
+		if (!targetKey || !targetDescriptor) throw new Error();
+		const derivedPublicKey = createPublicKey(targetKey).export({
+			format: "der",
+			type: "spki",
+		});
+		try {
+			if (
+				createHash("sha256").update(derivedPublicKey).digest("hex") !==
+				targetDescriptor.publicKeyFingerprint
+			) {
+				throw new Error();
+			}
+		} finally {
+			derivedPublicKey.fill(0);
+		}
+		decryptor = workerDecryptor(keyring, true);
+	} catch {
+		throw new TypeError("Worker Secret rotation keys are invalid");
+	}
+	const now = input.now ?? (() => new Date());
+	return {
+		async reencrypt({ encryptedRecord, targetKeyVersion, traceId }) {
+			if (targetKeyVersion !== encryptionKeys.activeWrappingKeyVersion) {
+				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };
+			}
+			const decrypted = await decryptor.decrypt({ encryptedRecord, traceId });
+			if (decrypted.outcome === "failed") return decrypted;
+			try {
+				const occurredAt = now();
+				if (!Number.isFinite(Date.prototype.getTime.call(occurredAt))) {
+					throw new Error();
+				}
+				return {
+					outcome: "reencrypted",
+					encryptedRecord: reencryptSecretRecordV1({
+						encryptionKeys,
+						record: encryptedRecord,
+						plaintext: decrypted.plaintext,
+						occurredAt: occurredAt.toISOString(),
+					}),
+				};
+			} catch {
+				return { outcome: "failed", code: "SECRET_ROTATION_FAILED" };
+			} finally {
+				decrypted.plaintext.fill(0);
+			}
+		},
+	};
+}
+
+function workerDecryptor(
+	keys: ReadonlyMap<string, KeyObject>,
+	allowActive: boolean,
+): SecretActivationDecryptorPortV1 {
 	return {
 		async decrypt({ encryptedRecord }) {
 			let record: ReturnType<typeof validatePlatformSecretRecordV1>;
 			try {
 				record = validatePlatformSecretRecordV1(encryptedRecord);
-				if (record.lifecycleState === "active") throw new Error();
+				if (!allowActive && record.lifecycleState === "active")
+					throw new Error();
 			} catch {
 				return { outcome: "failed", code: "SECRET_METADATA_INVALID" };
 			}

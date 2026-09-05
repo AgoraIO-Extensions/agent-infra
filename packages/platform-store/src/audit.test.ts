@@ -422,12 +422,64 @@ describe("PostgreSQL Platform audit query", () => {
 				result: "succeeded",
 			},
 		});
+		await seedAudit({
+			auditId: "audit_secret_rewrap",
+			occurredAt: new Date("2026-09-02T06:00:01.000Z"),
+			actorType: "system",
+			actorId: "platform-worker",
+			action: "secret.rewrap",
+			targetType: "secret",
+			targetId: "credential_01",
+			outcome: "succeeded",
+			details: {
+				wrappingKeyVersion: "key_01",
+				operation: "rewrap",
+				result: "succeeded",
+			},
+		});
+		await seedAudit({
+			auditId: "audit_secret_retire",
+			occurredAt: new Date("2026-09-02T06:00:02.000Z"),
+			actorType: "system",
+			actorId: "platform-worker",
+			action: "secret.retire-key",
+			targetType: "secret_key",
+			targetId: "key_01",
+			outcome: "succeeded",
+			details: {
+				wrappingKeyVersion: "key_01",
+				operation: "retire-key",
+				result: "succeeded",
+			},
+		});
 
 		const page = await openAdapter().listAudit(administrator, {
 			schemaVersion: 1,
 			limit: 10,
 		});
 		expect(page.items).toEqual([
+			{
+				schemaVersion: 1,
+				auditId: "audit_secret_retire",
+				actor: { kind: "system", actorId: "platform-worker" },
+				action: "secret.retire-key",
+				subject: { kind: "secret_key", subjectId: "secret-key" },
+				result: "succeeded",
+				summary: "secret.retire-key",
+				occurredAt: new Date("2026-09-02T06:00:02.000Z"),
+				traceId: "trace_audit_secret_retire",
+			},
+			{
+				schemaVersion: 1,
+				auditId: "audit_secret_rewrap",
+				actor: { kind: "system", actorId: "platform-worker" },
+				action: "secret.rewrap",
+				subject: { kind: "secret", subjectId: "credential_01" },
+				result: "succeeded",
+				summary: "secret.rewrap",
+				occurredAt: new Date("2026-09-02T06:00:01.000Z"),
+				traceId: "trace_audit_secret_rewrap",
+			},
 			{
 				schemaVersion: 1,
 				auditId: "audit_secret_decrypt",

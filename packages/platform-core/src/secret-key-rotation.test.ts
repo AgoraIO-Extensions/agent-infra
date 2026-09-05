@@ -1,0 +1,248 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+	createSecretKeyRotationUseCaseV1,
+	type SecretKeyRotationStorePortV1,
+} from "./secret-key-rotation.js";
+
+const command = {
+	schemaVersion: 1 as const,
+	rotationId: "rotation_01",
+	sourceKeyVersions: ["key_01"],
+	targetKeyVersion: "key_02",
+	workerId: "worker_01",
+	traceId: "trace_01",
+};
+
+const candidate = {
+	schemaVersion: 1 as const,
+	agentId: "agent_01",
+	secretId: "secret_01",
+	secretVersion: 2,
+	configRevision: 7,
+	lifecycleState: "active" as const,
+	wrappingKeyVersion: "key_01",
+	dekFingerprint: "a".repeat(64),
+	encryptedRecord: { ciphertext: "boundary-sensitive" },
+};
+
+function progress(overrides: Record<string, unknown> = {}) {
+	return {
+		schemaVersion: 1 as const,
+		rotationId: command.rotationId,
+		sourceKeyVersions: command.sourceKeyVersions,
+		targetKeyVersion: command.targetKeyVersion,
+		state: "rewrapping" as const,
+		processedSecrets: 0,
+		remainingSecrets: 1,
+		updatedAt: new Date("2026-09-05T13:20:00.000Z"),
+		...overrides,
+	};
+}
+
+describe("Secret key rotation", () => {
+	it("re-encrypts one source-key record and commits a redacted audit", async () => {
+		const nextCandidate = vi.fn().mockResolvedValue({
+			outcome: "candidate",
+			progress: progress(),
+			candidate,
+		});
+		const commitReencryption = vi.fn().mockResolvedValue({
+			outcome: "committed",
+			progress: progress({
+				state: "completed",
+				processedSecrets: 1,
+				remainingSecrets: 0,
+			}),
+		});
+		const store = {
+			nextCandidate,
+			commitReencryption,
+			recordRejection: vi.fn(),
+			retireKey: vi.fn(),
+		} satisfies SecretKeyRotationStorePortV1;
+		const reencrypt = vi.fn().mockResolvedValue({
+			outcome: "reencrypted",
+			encryptedRecord: { ciphertext: "rotated-opaque" },
+		});
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store,
+			crypto: { reencrypt },
+		});
+
+		await expect(useCase.rotate(command)).resolves.toMatchObject({
+			schemaVersion: 1,
+			outcome: "completed",
+			progress: { processedSecrets: 1, remainingSecrets: 0 },
+		});
+		expect(reencrypt).toHaveBeenCalledWith({
+			encryptedRecord: candidate.encryptedRecord,
+			targetKeyVersion: "key_02",
+			traceId: "trace_01",
+		});
+		expect(commitReencryption).toHaveBeenCalledWith({
+			command,
+			candidate,
+			encryptedRecord: { ciphertext: "rotated-opaque" },
+			auditEvent: expect.objectContaining({
+				traceId: "trace_01",
+				action: "secret.rewrap",
+				targetType: "secret",
+				targetId: "secret_01",
+				agentId: "agent_01",
+				outcome: "succeeded",
+				details: {
+					wrappingKeyVersion: "key_01",
+					operation: "rewrap",
+					result: "succeeded",
+				},
+			}),
+		});
+		expect(
+			JSON.stringify(commitReencryption.mock.calls[0]?.[0]?.auditEvent),
+		).not.toContain("boundary-sensitive");
+	});
+
+	it("discards a duplicate DEK fingerprint and retries with fresh material", async () => {
+		const nextCandidate = vi.fn().mockResolvedValue({
+			outcome: "candidate",
+			progress: progress(),
+			candidate,
+		});
+		const commitReencryption = vi
+			.fn()
+			.mockResolvedValueOnce({ outcome: "duplicate-fingerprint" })
+			.mockResolvedValueOnce({
+				outcome: "committed",
+				progress: progress({
+					state: "completed",
+					processedSecrets: 1,
+					remainingSecrets: 0,
+				}),
+			});
+		const reencrypt = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "reencrypted",
+				encryptedRecord: { crypto: { dekFingerprint: "b".repeat(64) } },
+			})
+			.mockResolvedValueOnce({
+				outcome: "reencrypted",
+				encryptedRecord: { crypto: { dekFingerprint: "c".repeat(64) } },
+			});
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store: {
+				nextCandidate,
+				commitReencryption,
+				recordRejection: vi.fn(),
+				retireKey: vi.fn(),
+			},
+			crypto: { reencrypt },
+		});
+
+		await expect(useCase.rotate(command)).resolves.toMatchObject({
+			outcome: "completed",
+		});
+		expect(reencrypt).toHaveBeenCalledTimes(2);
+		expect(commitReencryption).toHaveBeenCalledTimes(2);
+		expect(commitReencryption.mock.calls[1]?.[0].encryptedRecord).toEqual({
+			crypto: { dekFingerprint: "c".repeat(64) },
+		});
+	});
+
+	it.each([
+		["SECRET_KEY_UNAVAILABLE", "failed"],
+		["SECRET_METADATA_INVALID", "rejected"],
+		["SECRET_AUTHENTICATION_FAILED", "rejected"],
+	] as const)(
+		"keeps the source record and audits a redacted %s failure",
+		async (code, auditOutcome) => {
+			const recordRejection = vi.fn().mockResolvedValue(true);
+			const commitReencryption = vi.fn();
+			const useCase = createSecretKeyRotationUseCaseV1({
+				store: {
+					nextCandidate: vi.fn().mockResolvedValue({
+						outcome: "candidate",
+						progress: progress(),
+						candidate,
+					}),
+					commitReencryption,
+					recordRejection,
+					retireKey: vi.fn(),
+				},
+				crypto: {
+					reencrypt: vi.fn().mockResolvedValue({ outcome: "failed", code }),
+				},
+			});
+
+			await expect(useCase.rotate(command)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "failed",
+				code,
+			});
+			expect(commitReencryption).not.toHaveBeenCalled();
+			expect(recordRejection).toHaveBeenCalledWith({
+				command,
+				candidate,
+				auditEvent: expect.objectContaining({
+					outcome: auditOutcome,
+					details: expect.objectContaining({ result: auditOutcome }),
+				}),
+				failureCode: code,
+			});
+			expect(JSON.stringify(recordRejection.mock.calls)).not.toContain(
+				"rotated-opaque",
+			);
+		},
+	);
+
+	it("retires a key only through the no-reference Store decision", async () => {
+		const retireKey = vi
+			.fn()
+			.mockResolvedValueOnce("referenced")
+			.mockResolvedValueOnce("retired");
+		const useCase = createSecretKeyRotationUseCaseV1({
+			store: {
+				nextCandidate: vi.fn(),
+				commitReencryption: vi.fn(),
+				recordRejection: vi.fn(),
+				retireKey,
+			},
+			crypto: { reencrypt: vi.fn() },
+		});
+		const retirement = {
+			schemaVersion: 1 as const,
+			keyVersion: "key_01",
+			workerId: "worker_01",
+			traceId: "trace_retire_01",
+		};
+
+		await expect(useCase.retire(retirement)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "referenced",
+		});
+		await expect(useCase.retire(retirement)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "retired",
+		});
+		expect(retireKey).toHaveBeenLastCalledWith({
+			command: retirement,
+			auditEvent: expect.objectContaining({
+				traceId: "trace_retire_01",
+				action: "secret.retire-key",
+				targetType: "secret_key",
+				targetId: "key_01",
+				agentId: null,
+				outcome: "succeeded",
+				details: {
+					wrappingKeyVersion: "key_01",
+					operation: "retire-key",
+					result: "succeeded",
+				},
+			}),
+		});
+		expect(JSON.stringify(retireKey.mock.calls)).not.toContain(
+			"boundary-sensitive",
+		);
+	});
+});

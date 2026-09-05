@@ -48,6 +48,13 @@ export interface SecretEncryptorV1 {
 	encrypt(input: SecretEncryptionInputV1): PlatformSecretRecordV1;
 }
 
+export interface SecretReencryptionInputV1 {
+	readonly encryptionKeys: unknown;
+	readonly record: unknown;
+	readonly plaintext: Uint8Array;
+	readonly occurredAt: string;
+}
+
 export function createSecretEncryptorV1(options: {
 	readonly encryptionKeys: unknown;
 }): SecretEncryptorV1 {
@@ -57,27 +64,7 @@ export function createSecretEncryptorV1(options: {
 		encrypt(input) {
 			const parsed = parseEncryptionInput(input, activeKey.keyVersion);
 			const plaintext = Buffer.from(parsed.plaintext, "utf8");
-			const dek = randomBytes(dekBytes);
 			try {
-				const nonce = randomBytes(nonceBytes);
-				const aad = encodeSecretAadV1(parsed.aadBinding);
-				const cipher = createCipheriv("aes-256-gcm", dek, nonce, {
-					authTagLength: authenticationTagBytes,
-				});
-				cipher.setAAD(aad, { plaintextLength: plaintext.byteLength });
-				const ciphertext = Buffer.concat([
-					cipher.update(plaintext),
-					cipher.final(),
-				]);
-				const authenticationTag = cipher.getAuthTag();
-				const wrappedDek = publicEncrypt(
-					{
-						key: activeKey.publicKey,
-						padding: constants.RSA_PKCS1_OAEP_PADDING,
-						oaepHash: "sha256",
-					},
-					dek,
-				);
 				return validatePlatformSecretRecordV1({
 					schemaVersion: 1,
 					secretId: parsed.aadBinding.secretId,
@@ -88,18 +75,7 @@ export function createSecretEncryptorV1(options: {
 					secretVersion: parsed.aadBinding.secretVersion,
 					configRevision: parsed.aadBinding.configRevision,
 					lifecycleState: "pending",
-					crypto: {
-						schemaVersion: 1,
-						algorithmVersion,
-						wrappingAlgorithmVersion,
-						wrappingKeyVersion: activeKey.keyVersion,
-						aadBinding: parsed.aadBinding,
-						dekFingerprint: createHash("sha256").update(dek).digest("hex"),
-						nonce: nonce.toString("base64"),
-						ciphertext: ciphertext.toString("base64"),
-						authenticationTag: authenticationTag.toString("base64"),
-						wrappedDek: wrappedDek.toString("base64"),
-					},
+					crypto: encryptBytes(parsed.aadBinding, plaintext, activeKey),
 					createdAt: parsed.occurredAt,
 					updatedAt: parsed.occurredAt,
 				});
@@ -107,10 +83,91 @@ export function createSecretEncryptorV1(options: {
 				throw new TypeError("Secret encryption failed");
 			} finally {
 				plaintext.fill(0);
-				dek.fill(0);
 			}
 		},
 	};
+}
+
+export function reencryptSecretRecordV1(
+	input: SecretReencryptionInputV1,
+): PlatformSecretRecordV1 {
+	let plaintext: Buffer | undefined;
+	try {
+		const record = validatePlatformSecretRecordV1(input.record);
+		const activeKey = parseActiveWrappingKey(input);
+		if (
+			!(input.plaintext instanceof Uint8Array) ||
+			!WorkloadTimestampV1Schema.safeParse(input.occurredAt).success
+		) {
+			throw new Error();
+		}
+		plaintext = Buffer.from(input.plaintext);
+		const aadBinding = SecretAadBindingV1Schema.parse({
+			...record.crypto.aadBinding,
+			wrappingKeyVersion: activeKey.keyVersion,
+		});
+		const kubernetesSecretRef =
+			"kubernetesSecretRef" in record && record.kubernetesSecretRef
+				? {
+						...record.kubernetesSecretRef,
+						wrappingKeyVersion: activeKey.keyVersion,
+					}
+				: undefined;
+		return validatePlatformSecretRecordV1({
+			...record,
+			crypto: encryptBytes(aadBinding, plaintext, activeKey),
+			...(kubernetesSecretRef === undefined ? {} : { kubernetesSecretRef }),
+			updatedAt: input.occurredAt,
+		});
+	} catch {
+		throw new TypeError("Secret re-encryption failed");
+	} finally {
+		plaintext?.fill(0);
+	}
+}
+
+function encryptBytes(
+	aadBinding: SecretAadBindingV1,
+	plaintext: Buffer,
+	activeKey: ActiveWrappingKeyV1,
+) {
+	const dek = randomBytes(dekBytes);
+	try {
+		const nonce = randomBytes(nonceBytes);
+		const cipher = createCipheriv("aes-256-gcm", dek, nonce, {
+			authTagLength: authenticationTagBytes,
+		});
+		cipher.setAAD(encodeSecretAadV1(aadBinding), {
+			plaintextLength: plaintext.byteLength,
+		});
+		const ciphertext = Buffer.concat([
+			cipher.update(plaintext),
+			cipher.final(),
+		]);
+		const authenticationTag = cipher.getAuthTag();
+		const wrappedDek = publicEncrypt(
+			{
+				key: activeKey.publicKey,
+				padding: constants.RSA_PKCS1_OAEP_PADDING,
+				oaepHash: "sha256",
+			},
+			dek,
+		);
+		return {
+			schemaVersion: 1 as const,
+			algorithmVersion,
+			wrappingAlgorithmVersion,
+			wrappingKeyVersion: activeKey.keyVersion,
+			aadBinding,
+			dekFingerprint: createHash("sha256").update(dek).digest("hex"),
+			nonce: nonce.toString("base64"),
+			ciphertext: ciphertext.toString("base64"),
+			authenticationTag: authenticationTag.toString("base64"),
+			wrappedDek: wrappedDek.toString("base64"),
+		};
+	} finally {
+		dek.fill(0);
+	}
 }
 
 export function encodeSecretAadV1(input: unknown): Buffer {

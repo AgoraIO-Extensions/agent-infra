@@ -242,6 +242,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 				],
 				idempotency_status: [...platformStatusValues.idempotencyStatus],
 				outbox_status: [...platformStatusValues.outboxStatus],
+				secret_key_rotation_state: [
+					...platformStatusValues.secretKeyRotationState,
+				],
 			});
 
 			const catalogBeforeReplay = await readPlatformCatalog(client);

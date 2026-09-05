@@ -1,34 +1,59 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeMocks = vi.hoisted(() => {
-	const store = {
+	const activationStore = {
 		claimCandidate: vi.fn(),
 		close: vi.fn<() => Promise<void>>(),
 		commitTransition: vi.fn(),
 		recordAudit: vi.fn(),
 	};
+	const rotationStore = {
+		nextCandidate: vi.fn(),
+		close: vi.fn<() => Promise<void>>(),
+		commitReencryption: vi.fn(),
+		recordRejection: vi.fn(),
+		retireKey: vi.fn(),
+	};
 	return {
-		open: vi.fn(() => store),
-		store,
+		openActivation: vi.fn(() => activationStore),
+		openRotation: vi.fn(() => rotationStore),
+		activationStore,
+		rotationStore,
 	};
 });
 
 vi.mock("@agent-infra/platform-store", () => ({
-	openPostgresSecretActivationStoreV1: storeMocks.open,
+	openPostgresSecretActivationStoreV1: storeMocks.openActivation,
+	openPostgresSecretKeyRotationStoreV1: storeMocks.openRotation,
 }));
 
 import {
 	createPlatformSecretActivationWorkerV1,
+	createPlatformSecretRotationWorkerV1,
 	startPlatformWorker,
 } from "./index";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const targetKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const targetPublicKey = targetKeyPair.publicKey.export({
+	format: "der",
+	type: "spki",
+});
 const validKeys = [
 	{
 		keyVersion: "key_01",
 		privateKeyPkcs8DerBase64: privateKey
+			.export({ format: "der", type: "pkcs8" })
+			.toString("base64"),
+	},
+] as const;
+const validRotationKeys = [
+	...validKeys,
+	{
+		keyVersion: "key_02",
+		privateKeyPkcs8DerBase64: targetKeyPair.privateKey
 			.export({ format: "der", type: "pkcs8" })
 			.toString("base64"),
 	},
@@ -47,9 +72,9 @@ const kubernetesClient = {
 
 describe("Secret activation worker assembly", () => {
 	beforeEach(() => {
-		storeMocks.open.mockClear();
-		storeMocks.store.close.mockReset();
-		storeMocks.store.close.mockResolvedValue();
+		storeMocks.openActivation.mockClear();
+		storeMocks.activationStore.close.mockReset();
+		storeMocks.activationStore.close.mockResolvedValue();
 	});
 
 	it.each([
@@ -58,7 +83,7 @@ describe("Secret activation worker assembly", () => {
 	] as const)(
 		"closes the Store when %s validation fails after opening it",
 		(_failure, keys, leaseMs, expectedMessage) => {
-			storeMocks.store.close.mockRejectedValueOnce(
+			storeMocks.activationStore.close.mockRejectedValueOnce(
 				new Error("cleanup failure must not replace startup failure"),
 			);
 
@@ -70,8 +95,8 @@ describe("Secret activation worker assembly", () => {
 					leaseMs,
 				}),
 			).toThrowError(expectedMessage);
-			expect(storeMocks.open).toHaveBeenCalledOnce();
-			expect(storeMocks.store.close).toHaveBeenCalledOnce();
+			expect(storeMocks.openActivation).toHaveBeenCalledOnce();
+			expect(storeMocks.activationStore.close).toHaveBeenCalledOnce();
 		},
 	);
 
@@ -84,7 +109,59 @@ describe("Secret activation worker assembly", () => {
 
 		await worker.close();
 
-		expect(storeMocks.store.close).toHaveBeenCalledOnce();
+		expect(storeMocks.activationStore.close).toHaveBeenCalledOnce();
+	});
+});
+
+describe("Secret rotation worker assembly", () => {
+	beforeEach(() => {
+		storeMocks.openRotation.mockClear();
+		storeMocks.rotationStore.close.mockReset();
+		storeMocks.rotationStore.close.mockResolvedValue();
+	});
+
+	it("returns a closable rotate/retire worker with Worker-only key material", async () => {
+		const worker = createPlatformSecretRotationWorkerV1({
+			databaseUrl: "postgres://test",
+			keys: validRotationKeys,
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: "key_02",
+				keys: [
+					{
+						schemaVersion: 1,
+						keyVersion: "key_02",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: targetPublicKey.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(targetPublicKey)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+		});
+
+		expect(Object.keys(worker).toSorted()).toEqual([
+			"close",
+			"retire",
+			"rotate",
+		]);
+		await worker.close();
+		expect(storeMocks.rotationStore.close).toHaveBeenCalledOnce();
+		expect(JSON.stringify(worker)).not.toContain("privateKeyPkcs8DerBase64");
+	});
+
+	it("closes the Store when rotation key validation fails", () => {
+		expect(() =>
+			createPlatformSecretRotationWorkerV1({
+				databaseUrl: "postgres://test",
+				keys: validRotationKeys,
+				encryptionKeys: { schemaVersion: 1, keys: [] },
+			}),
+		).toThrow("Worker Secret rotation keys are invalid");
+		expect(storeMocks.rotationStore.close).toHaveBeenCalledOnce();
 	});
 });
 
