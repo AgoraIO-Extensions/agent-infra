@@ -141,6 +141,14 @@ export const agents = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		authorizationRevision: text("authorization_revision"),
+		secretActivationFence: bigint("secret_activation_fence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		secretActivationOwner: text("secret_activation_owner"),
+		secretActivationLeaseExpiresAt: timestamp(
+			"secret_activation_lease_expires_at",
+			{ withTimezone: true },
+		),
 	},
 	(table) => [
 		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -151,6 +159,21 @@ export const agents = platformSchema.table(
 		check(
 			"agent_authorization_revision_non_empty",
 			sql`${table.authorizationRevision} IS NULL OR char_length(${table.authorizationRevision}) > 0`,
+		),
+		check(
+			"agent_secret_activation_fence_safe",
+			sql`${table.secretActivationFence} between 0 and 9007199254740991`,
+		),
+		check(
+			"agent_secret_activation_claim_valid",
+			sql`(
+				${table.secretActivationOwner} is null
+				and ${table.secretActivationLeaseExpiresAt} is null
+			) or (
+				char_length(${table.secretActivationOwner}) > 0
+				and ${table.secretActivationLeaseExpiresAt} is not null
+				and ${table.secretActivationFence} >= 1
+			)`,
 		),
 	],
 );
@@ -368,7 +391,7 @@ export const platformSecretRecords = platformSchema.table(
 		),
 		check(
 			"secret_record_lifecycle_state",
-			sql`${table.lifecycleState} = 'pending'`,
+			sql`${table.lifecycleState} in ('pending', 'applying', 'observed', 'active', 'failed')`,
 		),
 		check(
 			"secret_record_dek_fingerprint_format",

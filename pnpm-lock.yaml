@@ -184,6 +184,19 @@ importers:
         version: 4.1.10(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
   apps/platform-worker:
+    dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@agent-infra/platform-core':
+        specifier: workspace:*
+        version: link:../../packages/platform-core
+      '@agent-infra/platform-store':
+        specifier: workspace:*
+        version: link:../../packages/platform-store
+      '@agent-infra/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*

@@ -70,3 +70,9 @@ export {
 	type ScheduleOutboxRetryInput,
 	type SucceededOutboxItem,
 } from "./outbox.ts";
+export {
+	openPostgresSecretActivationStoreV1,
+	type PostgresSecretActivationStoreOptionsV1,
+	PostgresSecretActivationStoreV1,
+	SecretActivationStoreError,
+} from "./secret-activation.ts";
