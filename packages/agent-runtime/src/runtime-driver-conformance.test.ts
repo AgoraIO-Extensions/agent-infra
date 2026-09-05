@@ -1,12 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RuntimeSubmitTurnRequestV1 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CodexAppServerFrame } from "./codex-app-server-bridge.js";
-import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
 import {
 	ingressVerifiedRuntimeHost,
@@ -17,207 +16,6 @@ import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
 const directories: string[] = [];
 const driverClosers: (() => Promise<void>)[] = [];
 const driverNames = ["Fake", "Codex"] as const;
-
-interface ConformanceEffects {
-	codexTurnStarts: number;
-}
-
-interface ConformanceDriverOptions {
-	loseTurnStartResponse?: boolean;
-}
-
-type ConformanceTurnStatus =
-	| "inProgress"
-	| "completed"
-	| "failed"
-	| "interrupted";
-
-/** Narrow transport fixture for the shared Driver seam; protocol faults stay in Codex's own suite. */
-class ConformanceCodexBridge {
-	readonly nativeThreadId = "thread-opaque";
-	readonly nativeTurnId = "turn-opaque";
-	readonly responses: CodexAppServerFrame[] = [];
-	private readonly queuedFrames: CodexAppServerFrame[] = [];
-	private wake?: () => void;
-	private closed = false;
-	private turnStatus: ConformanceTurnStatus = "inProgress";
-	private terminalOnInterrupt?: Exclude<ConformanceTurnStatus, "inProgress">;
-	private holdTurnStartResponse = false;
-	private heldTurnStart?: { id: number; resolve: () => void };
-	private turnStartHeld?: Promise<void>;
-	private signalTurnStartHeld?: () => void;
-
-	constructor(
-		private readonly effects: ConformanceEffects,
-		private readonly options: ConformanceDriverOptions = {},
-	) {}
-
-	async send(frame: CodexAppServerFrame) {
-		if (!("method" in frame) && "error" in frame) {
-			this.responses.push(frame);
-			return;
-		}
-		if ("method" in frame && typeof frame.id === "number") {
-			switch (frame.method) {
-				case "initialize":
-					this.respond(frame.id, {});
-					return;
-				case "config/read":
-					this.respond(frame.id, {
-						config: {
-							model: "gpt-5.3-codex",
-							model_reasoning_effort: "high",
-							mcp_servers: {},
-							plugins: {},
-							marketplaces: {},
-							features: { plugins: false },
-						},
-						origins: {
-							model: { name: { type: "sessionFlags" }, version: "1" },
-							model_reasoning_effort: {
-								name: { type: "sessionFlags" },
-								version: "1",
-							},
-							"features.plugins": {
-								name: { type: "sessionFlags" },
-								version: "1",
-							},
-						},
-					});
-					return;
-				case "thread/start":
-				case "thread/resume":
-					this.respond(frame.id, { thread: { id: this.nativeThreadId } });
-					return;
-				case "turn/start":
-					this.effects.codexTurnStarts += 1;
-					if (this.options.loseTurnStartResponse) {
-						await this.close();
-						return;
-					}
-					if (this.holdTurnStartResponse) {
-						const id = frame.id;
-						this.signalTurnStartHeld?.();
-						this.signalTurnStartHeld = undefined;
-						await new Promise<void>((resolve) => {
-							this.heldTurnStart = { id, resolve };
-						});
-						return;
-					}
-					this.respond(frame.id, {
-						turn: { id: this.nativeTurnId, status: "inProgress" },
-					});
-					return;
-				case "turn/interrupt":
-					if (this.terminalOnInterrupt) {
-						this.turnStatus = this.terminalOnInterrupt;
-					}
-					this.respond(frame.id, {});
-					return;
-				case "thread/turns/list":
-					this.respond(frame.id, {
-						data: [
-							{ id: this.nativeTurnId, status: this.turnStatus, items: [] },
-						],
-					});
-					return;
-				case "thread/items/list":
-					this.respond(frame.id, { data: [] });
-					return;
-			}
-		}
-		throw new Error("Unexpected Codex conformance frame");
-	}
-
-	frames(): AsyncIterable<CodexAppServerFrame> {
-		const bridge = this;
-		return (async function* () {
-			while (true) {
-				const frame = await bridge.nextFrame();
-				if (!frame) return;
-				yield frame;
-			}
-		})();
-	}
-
-	async close() {
-		this.closed = true;
-		this.heldTurnStart?.resolve();
-		this.heldTurnStart = undefined;
-		this.wake?.();
-		this.wake = undefined;
-	}
-
-	holdTurnStart() {
-		this.holdTurnStartResponse = true;
-		this.turnStartHeld = new Promise<void>((resolve) => {
-			this.signalTurnStartHeld = resolve;
-		});
-	}
-
-	async waitForHeldTurnStart() {
-		if (!this.turnStartHeld) throw new Error("Turn start is not held");
-		await this.turnStartHeld;
-	}
-
-	releaseTurnStart() {
-		const held = this.heldTurnStart;
-		if (!held) throw new Error("No held turn start");
-		this.heldTurnStart = undefined;
-		this.holdTurnStartResponse = false;
-		this.respond(held.id, {
-			turn: { id: this.nativeTurnId, status: "inProgress" },
-		});
-		held.resolve();
-	}
-
-	emitRunningEvent() {
-		this.push({
-			method: "turn/started",
-			params: {
-				threadId: this.nativeThreadId,
-				turn: { id: this.nativeTurnId, status: "inProgress", items: [] },
-			},
-		});
-	}
-
-	emitDelegatedToolRequest() {
-		this.push({
-			id: "request-opaque",
-			method: "item/tool/call",
-			params: { privateInput: "redacted-input" },
-		});
-	}
-
-	completeStopAsCancelled() {
-		this.terminalOnInterrupt = "interrupted";
-	}
-
-	completeStopAsCompleted() {
-		this.terminalOnInterrupt = "completed";
-	}
-
-	private respond(id: number, result: unknown) {
-		this.push({ id, result });
-	}
-
-	private push(frame: CodexAppServerFrame) {
-		this.queuedFrames.push(frame);
-		this.wake?.();
-		this.wake = undefined;
-	}
-
-	private async nextFrame() {
-		while (true) {
-			const frame = this.queuedFrames.shift();
-			if (frame) return frame;
-			if (this.closed) return undefined;
-			await new Promise<void>((resolve) => {
-				this.wake = resolve;
-			});
-		}
-	}
-}
 
 async function directory() {
 	const path = await mkdtemp(
@@ -230,66 +28,131 @@ async function directory() {
 interface ConformanceDriverFixture {
 	driver: RuntimeDriver;
 	emitRunningEvent(): Promise<void>;
+	submitWithPreStartEvent<T>(submit: () => Promise<T>): Promise<T>;
 	completeStopAsCancelled(): void;
 	completeStopAsCompleted(operationId: string): Promise<void>;
 	createdTurnCount(): Promise<number>;
 	restart(): Promise<ConformanceDriverFixture>;
 	makeOperationUnknown(operationId: string): Promise<void>;
-	holdTurnStart(): void;
-	waitForHeldTurnStart(): Promise<void>;
-	releaseTurnStart(): void;
-	emitDelegatedToolRequest(): void;
-	delegatedToolResponses(): unknown[];
+	delegatedToolWasDeniedAndRedacted(): Promise<boolean>;
 }
 
 async function openConformanceDriver(
 	name: (typeof driverNames)[number],
 	path: string,
-	effects: ConformanceEffects = { codexTurnStarts: 0 },
-	options: ConformanceDriverOptions = {},
+	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
 	if (name === "Fake") {
 		const driver = await FakeRuntimeDriver.open(path);
+		const execute = driver.execute.bind(driver);
+		let preStartEventObserved = false;
+		driver.execute = async (command) => {
+			const record = await execute(command);
+			if (command.kind === "submit-turn") {
+				preStartEventObserved = (
+					await driver.replayEvents(
+						record.nativeSessionRef,
+						command.executionId,
+					)
+				).some((event) => event.type === "status");
+			}
+			return record;
+		};
 		return {
 			driver,
 			emitRunningEvent: async () => undefined,
+			submitWithPreStartEvent: async (submit) => {
+				const result = await submit();
+				if (!preStartEventObserved) {
+					throw new Error("Fake Driver did not persist its pre-start event");
+				}
+				return result;
+			},
 			completeStopAsCancelled: () => undefined,
 			completeStopAsCompleted: (operationId) =>
 				driver.setOperationStatus(operationId, "completed"),
 			createdTurnCount: () => driver.sideEffectCount(),
-			restart: () => openConformanceDriver(name, path, effects),
+			restart: () => openConformanceDriver(name, path),
 			makeOperationUnknown: (operationId) =>
 				driver.makeOperationUnknown(operationId),
-			holdTurnStart: () => undefined,
-			waitForHeldTurnStart: async () => undefined,
-			releaseTurnStart: () => undefined,
-			emitDelegatedToolRequest: () => undefined,
-			delegatedToolResponses: () => [],
+			delegatedToolWasDeniedAndRedacted: async () => false,
 		};
 	}
-	const bridge = new ConformanceCodexBridge(effects, options);
-	const driver = await openCodexRuntimeDriverForTest(
-		{
-			path,
-			model: "gpt-5.3-codex",
-			reasoningEffort: "high",
-		},
-		async () => bridge,
+	const fixture = await openCodexRuntimeDriverConformanceFixture(
+		path,
+		loseTurnStartResponse,
 	);
-	driverClosers.push(() => driver.close());
+	return wrapCodexFixture(fixture);
+}
+
+function wrapCodexFixture(
+	fixture: Awaited<ReturnType<typeof openCodexRuntimeDriverConformanceFixture>>,
+): ConformanceDriverFixture {
+	driverClosers.push(() => fixture.close());
 	return {
-		driver,
-		emitRunningEvent: async () => bridge.emitRunningEvent(),
-		completeStopAsCancelled: () => bridge.completeStopAsCancelled(),
-		completeStopAsCompleted: async () => bridge.completeStopAsCompleted(),
-		createdTurnCount: async () => effects.codexTurnStarts,
-		restart: () => openConformanceDriver(name, path, effects),
+		driver: fixture.driver,
+		emitRunningEvent: () => fixture.emitRunningEvent(),
+		submitWithPreStartEvent: (submit) =>
+			fixture.submitWithPreStartEvent(submit),
+		completeStopAsCancelled: () => fixture.completeStopAsCancelled(),
+		completeStopAsCompleted: async () => fixture.completeStopAsCompleted(),
+		createdTurnCount: async () => fixture.turnStartCount(),
+		restart: async () => wrapCodexFixture(await fixture.restart()),
 		makeOperationUnknown: async () => undefined,
-		holdTurnStart: () => bridge.holdTurnStart(),
-		waitForHeldTurnStart: () => bridge.waitForHeldTurnStart(),
-		releaseTurnStart: () => bridge.releaseTurnStart(),
-		emitDelegatedToolRequest: () => bridge.emitDelegatedToolRequest(),
-		delegatedToolResponses: () => bridge.responses,
+		delegatedToolWasDeniedAndRedacted: () =>
+			fixture.delegatedToolWasDeniedAndRedacted(),
+	};
+}
+
+type ConformanceHostHooks = Pick<
+	Parameters<typeof RuntimeHost.open>[0],
+	"afterOperationPrepared" | "afterDriverResult"
+>;
+
+async function openRawConformanceHost(
+	hostPath: string,
+	driver: RuntimeDriver,
+	hooks: ConformanceHostHooks = {},
+) {
+	return RuntimeHost.open({
+		store: await FileRuntimeStore.open(hostPath),
+		driver,
+		grantValidation: {
+			expectedIssuer: "agent-platform",
+			now: () => "2026-08-28T10:00:00Z",
+		},
+		...hooks,
+	});
+}
+
+async function openConformanceHost(
+	hostPath: string,
+	driver: RuntimeDriver,
+	hooks: ConformanceHostHooks = {},
+) {
+	return ingressVerifiedRuntimeHost(
+		await openRawConformanceHost(hostPath, driver, hooks),
+	);
+}
+
+function requestContext(
+	request: RuntimeSubmitTurnRequestV1,
+	hostSessionRef: string,
+	requestId: string,
+) {
+	return {
+		schemaVersion: 1 as const,
+		requestId,
+		actorId: request.actorId,
+		channelId: request.channelId,
+		traceId: request.traceId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		deliveryFence: 1,
+		hostSessionRef,
 	};
 }
 
@@ -330,15 +193,9 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const host = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(join(path, "host.json")),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
 			);
 
 			const request = submitRequest();
@@ -347,20 +204,11 @@ describe("Runtime Driver shared conformance", () => {
 				outcome: "accepted",
 				status: "running",
 			});
-			const context = {
-				schemaVersion: 1 as const,
-				requestId: "request-conformance-status",
-				actorId: request.actorId,
-				channelId: request.channelId,
-				traceId: request.traceId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				deliveryFence: 1,
-				hostSessionRef: submitted.hostSessionRef,
-			};
+			const context = requestContext(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-status",
+			);
 
 			expect(
 				await host.status({
@@ -393,6 +241,34 @@ describe("Runtime Driver shared conformance", () => {
 				);
 				return result;
 			});
+			const cursor = replay.events.at(-1)?.cursor;
+			expect(cursor).toEqual(expect.any(String));
+			const controller = new AbortController();
+			const stream = await host.streamEvents(
+				{
+					...context,
+					requestId: "request-conformance-stream",
+					grant: runtimeGrantFixture(context, ["events.replay"]),
+				},
+				controller.signal,
+			);
+			const iterator = stream[Symbol.asyncIterator]();
+			expect(await iterator.next()).toMatchObject({
+				done: false,
+				value: { type: "status", payload: { status: "running" } },
+			});
+			controller.abort();
+			await iterator.return?.();
+			expect(
+				(
+					await host.replay({
+						...context,
+						requestId: "request-conformance-confirmed-replay",
+						afterCursor: cursor,
+						grant: runtimeGrantFixture(context, ["events.replay"]),
+					})
+				).events,
+			).toEqual([]);
 
 			fixture.completeStopAsCancelled();
 			expect(
@@ -417,45 +293,21 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const firstHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: first.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
-			);
+			const firstHost = await openConformanceHost(hostPath, first.driver);
 			const request = submitRequest();
 			const submitted = await firstHost.submitTurn(request);
 			expect(await first.createdTurnCount()).toBe(1);
 
 			const restarted = await first.restart();
-			const restartedHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: restarted.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const restartedHost = await openConformanceHost(
+				hostPath,
+				restarted.driver,
 			);
-			const context = {
-				schemaVersion: 1 as const,
-				requestId: "request-conformance-recovered-status",
-				actorId: request.actorId,
-				channelId: request.channelId,
-				traceId: request.traceId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				deliveryFence: 1,
-				hostSessionRef: submitted.hostSessionRef,
-			};
+			const context = requestContext(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-recovered-status",
+			);
 			expect(
 				await restartedHost.status({
 					...context,
@@ -474,15 +326,9 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const host = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(join(path, "host.json")),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
 			);
 			const request = submitRequest();
 			const accepted = await host.submitTurn(request);
@@ -504,6 +350,56 @@ describe("Runtime Driver shared conformance", () => {
 	);
 
 	it.each(driverNames)(
+		"converges competing Worker fence takeover without a second Turn through %s",
+		async (name) => {
+			const path = await directory();
+			const hostPath = join(path, "host.json");
+			const firstFixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			let releaseFirst: () => void = () => undefined;
+			const firstReleased = new Promise<void>((resolve) => {
+				releaseFirst = resolve;
+			});
+			let firstPrepared: () => void = () => undefined;
+			const firstPreparedPromise = new Promise<void>((resolve) => {
+				firstPrepared = resolve;
+			});
+			// Workers meet the single RuntimeHost process in the Agent Pod.
+			const runtimeHost = await openRawConformanceHost(
+				hostPath,
+				firstFixture.driver,
+				{
+					afterOperationPrepared: async (operationId) => {
+						if (operationId !== "execution-conformance") return;
+						firstPrepared();
+						await firstReleased;
+					},
+				},
+			);
+			const firstHost = ingressVerifiedRuntimeHost(runtimeHost);
+			const secondHost = ingressVerifiedRuntimeHost(runtimeHost);
+			const request = submitRequest();
+			const first = firstHost.submitTurn(request);
+			await firstPreparedPromise;
+			const takeover = secondHost.submitTurn({
+				...request,
+				requestId: "request-conformance-concurrent-takeover",
+				deliveryFence: 2,
+			});
+
+			releaseFirst();
+			const [firstResult, takeoverResult] = await Promise.all([
+				first,
+				takeover,
+			]);
+			expect(takeoverResult).toEqual(firstResult);
+			expect(await firstFixture.createdTurnCount()).toBe(1);
+		},
+	);
+
+	it.each(driverNames)(
 		"recovers a crash after durable prepare through %s",
 		async (name) => {
 			const path = await directory();
@@ -512,19 +408,11 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const crashingHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-					afterOperationPrepared: () => {
-						throw new Error("simulated crash after durable prepare");
-					},
-				}),
-			);
+			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
+				afterOperationPrepared: () => {
+					throw new Error("simulated crash after durable prepare");
+				},
+			});
 
 			const request = submitRequest();
 			await expect(crashingHost.submitTurn(request)).rejects.toThrow(
@@ -533,15 +421,9 @@ describe("Runtime Driver shared conformance", () => {
 			expect(await fixture.createdTurnCount()).toBe(0);
 
 			const restarted = await fixture.restart();
-			const recoveredHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: restarted.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const recoveredHost = await openConformanceHost(
+				hostPath,
+				restarted.driver,
 			);
 			expect((await recoveredHost.submitTurn(request)).result).toEqual({
 				outcome: "accepted",
@@ -560,19 +442,11 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const crashingHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-					afterDriverResult: () => {
-						throw new Error("simulated crash after Driver acceptance");
-					},
-				}),
-			);
+			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
+				afterDriverResult: () => {
+					throw new Error("simulated crash after Driver acceptance");
+				},
+			});
 
 			const request = submitRequest();
 			await expect(crashingHost.submitTurn(request)).rejects.toThrow(
@@ -581,15 +455,9 @@ describe("Runtime Driver shared conformance", () => {
 			expect(await fixture.createdTurnCount()).toBe(1);
 
 			const restarted = await fixture.restart();
-			const recoveredHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: restarted.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const recoveredHost = await openConformanceHost(
+				hostPath,
+				restarted.driver,
 			);
 			expect((await recoveredHost.submitTurn(request)).result).toEqual({
 				outcome: "accepted",
@@ -607,39 +475,24 @@ describe("Runtime Driver shared conformance", () => {
 			const fixture = await openConformanceDriver(
 				name,
 				join(path, "driver.json"),
-				undefined,
-				{ loseTurnStartResponse: name === "Codex" },
+				name === "Codex",
 			);
-			const crashingHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-					afterDriverResult: () => {
-						if (name === "Fake") {
-							throw new Error("simulated lost Driver response");
-						}
-					},
-				}),
-			);
+			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
+				afterDriverResult: () => {
+					if (name === "Fake") {
+						throw new Error("simulated lost Driver response");
+					}
+				},
+			});
 			const request = submitRequest();
 
 			await expect(crashingHost.submitTurn(request)).rejects.toThrow();
 			await fixture.makeOperationUnknown(request.executionId);
 
 			const restarted = await fixture.restart();
-			const recoveredHost = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(hostPath),
-					driver: restarted.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const recoveredHost = await openConformanceHost(
+				hostPath,
+				restarted.driver,
 			);
 			expect((await recoveredHost.submitTurn(request)).result).toMatchObject({
 				outcome: "unknown",
@@ -657,37 +510,19 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const host = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(join(path, "host.json")),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
 			);
 			const request = submitRequest();
-			fixture.holdTurnStart();
-			const submission = host.submitTurn(request);
-			await fixture.waitForHeldTurnStart();
-			await fixture.emitRunningEvent();
-			fixture.releaseTurnStart();
-			const submitted = await submission;
-			const context = {
-				schemaVersion: 1 as const,
-				requestId: "request-conformance-pre-start-replay",
-				actorId: request.actorId,
-				channelId: request.channelId,
-				traceId: request.traceId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				deliveryFence: 1,
-				hostSessionRef: submitted.hostSessionRef,
-			};
+			const submitted = await fixture.submitWithPreStartEvent(() =>
+				host.submitTurn(request),
+			);
+			const context = requestContext(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-pre-start-replay",
+			);
 			expect(
 				(
 					await host.replay({
@@ -713,33 +548,18 @@ describe("Runtime Driver shared conformance", () => {
 				name,
 				join(path, "driver.json"),
 			);
-			const host = ingressVerifiedRuntimeHost(
-				await RuntimeHost.open({
-					store: await FileRuntimeStore.open(join(path, "host.json")),
-					driver: fixture.driver,
-					grantValidation: {
-						expectedIssuer: "agent-platform",
-						now: () => "2026-08-28T10:00:00Z",
-					},
-				}),
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
 			);
 			const request = submitRequest();
 			const submitted = await host.submitTurn(request);
 			await fixture.completeStopAsCompleted(request.executionId);
-			const context = {
-				schemaVersion: 1 as const,
-				requestId: "request-conformance-terminal-stop",
-				actorId: request.actorId,
-				channelId: request.channelId,
-				traceId: request.traceId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId: request.executionId,
-				turnId: request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				deliveryFence: 1,
-				hostSessionRef: submitted.hostSessionRef,
-			};
+			const context = requestContext(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-terminal-stop",
+			);
 			expect(
 				await host.stop({
 					...context,
@@ -751,26 +571,16 @@ describe("Runtime Driver shared conformance", () => {
 			expect(await fixture.createdTurnCount()).toBe(1);
 		},
 	);
+});
 
-	it("denies a Codex delegated Tool request without retaining its parameters", async () => {
+describe("Codex Driver boundary conformance", () => {
+	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
-		const driverPath = join(path, "driver.json");
-		const fixture = await openConformanceDriver("Codex", driverPath);
-		fixture.emitDelegatedToolRequest();
-
-		await vi.waitFor(() => {
-			expect(fixture.delegatedToolResponses()).toContainEqual({
-				id: "request-opaque",
-				error: {
-					code: -32_001,
-					message: "Platform delegated tools are unavailable",
-				},
-			});
-		});
-		expect(JSON.stringify(fixture.delegatedToolResponses())).not.toContain(
-			"redacted-input",
+		const fixture = await openConformanceDriver(
+			"Codex",
+			join(path, "driver.json"),
 		);
-		expect(await readFile(driverPath, "utf8")).not.toContain("redacted-input");
+		expect(await fixture.delegatedToolWasDeniedAndRedacted()).toBe(true);
 		expect(await fixture.driver.getCapabilities()).toMatchObject({
 			connection: false,
 		});
