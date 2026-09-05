@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
 RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
-RUN rm /prod/agent-runtime-host/node_modules/.modules.yaml
+RUN rm /prod/agent-runtime-host/node_modules/.modules.yaml /prod/agent-runtime-host/node_modules/.pnpm-workspace-state-v1.json
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
 ENV NODE_ENV=production
