@@ -75,6 +75,13 @@ export const platformStatusValues = {
 		"observe_service_updating",
 		"observe_service_unavailable",
 	],
+	secretKeyRotationState: [
+		"pending",
+		"rewrapping",
+		"verifying",
+		"completed",
+		"failed",
+	],
 } as const;
 
 export const outboxStatus = platformSchema.enum("outbox_status", [
@@ -126,6 +133,10 @@ export const agentManagementSubjectType = platformSchema.enum(
 export const agentManagementOperation = platformSchema.enum(
 	"agent_management_operation",
 	[...platformStatusValues.agentManagementOperation],
+);
+export const secretKeyRotationState = platformSchema.enum(
+	"secret_key_rotation_state",
+	[...platformStatusValues.secretKeyRotationState],
 );
 
 export const agents = platformSchema.table(
@@ -346,6 +357,7 @@ export const platformSecretRecords = platformSchema.table(
 		record: jsonb("record").$type<PlatformSecretRecordV1>().notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		wrappingKeyVersion: text("wrapping_key_version").notNull(),
 	},
 	(table) => [
 		primaryKey({
@@ -398,6 +410,10 @@ export const platformSecretRecords = platformSchema.table(
 			sql`${table.dekFingerprint} ~ '^[a-f0-9]{64}$'`,
 		),
 		check(
+			"secret_record_wrapping_key_version_non_empty",
+			sql`char_length(${table.wrappingKeyVersion}) > 0`,
+		),
+		check(
 			"secret_record_identity_matches",
 			sql`jsonb_typeof(${table.record}) = 'object' and ${table.record} @> jsonb_build_object(
 				'schemaVersion', 1,
@@ -409,7 +425,10 @@ export const platformSecretRecords = platformSchema.table(
 				'ownerId', ${table.ownerId},
 				'name', ${table.name},
 				'lifecycleState', ${table.lifecycleState},
-				'crypto', jsonb_build_object('dekFingerprint', ${table.dekFingerprint})
+				'crypto', jsonb_build_object(
+					'dekFingerprint', ${table.dekFingerprint},
+					'wrappingKeyVersion', ${table.wrappingKeyVersion}
+				)
 			)`,
 		),
 		uniqueIndex("secret_record_dek_fingerprint_unique").on(
@@ -419,6 +438,69 @@ export const platformSecretRecords = platformSchema.table(
 			table.agentId,
 			table.secretId,
 			table.secretVersion,
+		),
+		index("secret_record_wrapping_key_version_idx").on(
+			table.wrappingKeyVersion,
+		),
+	],
+);
+
+export const secretKeyRotations = platformSchema.table(
+	"secret_key_rotations",
+	{
+		rotationId: text("rotation_id").primaryKey(),
+		sourceKeyVersions: text("source_key_versions").array().notNull(),
+		targetKeyVersion: text("target_key_version").notNull(),
+		state: secretKeyRotationState("state").default("pending").notNull(),
+		processedSecrets: bigint("processed_secrets", { mode: "number" })
+			.default(0)
+			.notNull(),
+		remainingSecrets: bigint("remaining_secrets", { mode: "number" })
+			.default(0)
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"secret_key_rotation_id_non_empty",
+			sql`char_length(${table.rotationId}) > 0`,
+		),
+		check(
+			"secret_key_rotation_sources_non_empty",
+			sql`cardinality(${table.sourceKeyVersions}) > 0`,
+		),
+		check(
+			"secret_key_rotation_target_non_empty",
+			sql`char_length(${table.targetKeyVersion}) > 0`,
+		),
+		check(
+			"secret_key_rotation_counts_safe",
+			sql`${table.processedSecrets} between 0 and 9007199254740991 and ${table.remainingSecrets} between 0 and 9007199254740991`,
+		),
+		check(
+			"secret_key_rotation_completed_empty",
+			sql`${table.state} <> 'completed' or ${table.remainingSecrets} = 0`,
+		),
+	],
+);
+
+export const retiredSecretWrappingKeys = platformSchema.table(
+	"retired_secret_wrapping_keys",
+	{
+		keyVersion: text("key_version").primaryKey(),
+		retiredAt: timestamp("retired_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"retired_secret_wrapping_key_non_empty",
+			sql`char_length(${table.keyVersion}) > 0`,
 		),
 	],
 );
@@ -1066,6 +1148,8 @@ export const platformInfrastructureTables = [
 	agentApplications,
 	agentConfigurationRevisions,
 	platformSecretRecords,
+	secretKeyRotations,
+	retiredSecretWrappingKeys,
 	agentOwners,
 	agentAvailability,
 	agentManagementHistory,

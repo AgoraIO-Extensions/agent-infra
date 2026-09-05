@@ -11,6 +11,8 @@ import {
 	platformInfrastructureTables,
 	platformSecretRecords,
 	platformStatusValues,
+	retiredSecretWrappingKeys,
+	secretKeyRotations,
 } from "./schema.ts";
 
 function columnNames(table: Parameters<typeof getTableConfig>[0]): string[] {
@@ -45,6 +47,13 @@ describe("Agent persistence schema contract", () => {
 			],
 			agentAvailabilityTargetType: ["user", "organization"],
 			agentManagementSubjectType: ["agent_application", "agent"],
+			secretKeyRotationState: [
+				"pending",
+				"rewrapping",
+				"verifying",
+				"completed",
+				"failed",
+			],
 		});
 	});
 
@@ -97,6 +106,7 @@ describe("Agent persistence schema contract", () => {
 			"record",
 			"created_at",
 			"updated_at",
+			"wrapping_key_version",
 		]);
 		expect(
 			getTableConfig(platformSecretRecords).indexes.map(
@@ -106,6 +116,7 @@ describe("Agent persistence schema contract", () => {
 			expect.arrayContaining([
 				"secret_record_dek_fingerprint_unique",
 				"secret_record_agent_secret_version_unique",
+				"secret_record_wrapping_key_version_idx",
 			]),
 		);
 		expect(columnNames(agentAvailability)).toEqual([
@@ -124,9 +135,25 @@ describe("Agent persistence schema contract", () => {
 			"to_status",
 			"occurred_at",
 		]);
+		expect(columnNames(secretKeyRotations)).toEqual([
+			"rotation_id",
+			"source_key_versions",
+			"target_key_version",
+			"state",
+			"processed_secrets",
+			"remaining_secrets",
+			"created_at",
+			"updated_at",
+		]);
+		expect(columnNames(retiredSecretWrappingKeys)).toEqual([
+			"key_version",
+			"retired_at",
+		]);
 		expect(columnNames(auditEvents)).toContain("details");
 		expect(platformInfrastructureTables).toContain(agentAvailability);
 		expect(platformInfrastructureTables).toContain(agentManagementHistory);
 		expect(platformInfrastructureTables).toContain(platformSecretRecords);
+		expect(platformInfrastructureTables).toContain(secretKeyRotations);
+		expect(platformInfrastructureTables).toContain(retiredSecretWrappingKeys);
 	});
 });

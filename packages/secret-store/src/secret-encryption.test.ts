@@ -10,7 +10,11 @@ import {
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { describe, expect, it } from "vitest";
 import * as secretStore from "./index.js";
-import { createSecretEncryptorV1, encodeSecretAadV1 } from "./index.js";
+import {
+	createSecretEncryptorV1,
+	encodeSecretAadV1,
+	reencryptSecretRecordV1,
+} from "./index.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 	modulusLength: 3072,
@@ -19,6 +23,13 @@ const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
 const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
 const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" });
 const plaintext = "v1 secret value must never persist";
+
+const { privateKey: replacementPrivateKey, publicKey: replacementPublicKey } =
+	generateKeyPairSync("rsa", { modulusLength: 3072 });
+const replacementPublicKeyDer = replacementPublicKey.export({
+	format: "der",
+	type: "spki",
+});
 
 const encryptor = createSecretEncryptorV1({
 	encryptionKeys: {
@@ -163,6 +174,105 @@ describe("Secret encryptor V1", () => {
 		).toThrow("Secret AAD binding is invalid");
 	});
 
+	it("re-encrypts an active record with fresh material and preserves its activation", () => {
+		const pending = encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "secret_01",
+			ownerType: "agent-owner",
+			ownerId: "user_01",
+			agentId: "agent_01",
+			name: "MODEL_API_KEY",
+			secretVersion: 2,
+			configRevision: 7,
+			plaintext,
+			occurredAt: "2026-09-03T09:00:00Z",
+		});
+		const kubernetesSecretRef = {
+			schemaVersion: 1 as const,
+			ownerType: pending.ownerType,
+			ownerId: pending.ownerId,
+			agentId: pending.agentId,
+			secretId: pending.secretId,
+			secretVersion: pending.secretVersion,
+			configRevision: pending.configRevision,
+			algorithmVersion: pending.crypto.algorithmVersion,
+			wrappingAlgorithmVersion: pending.crypto.wrappingAlgorithmVersion,
+			wrappingKeyVersion: pending.crypto.wrappingKeyVersion,
+			name: "agent-secret-v2-r7",
+		};
+		const active = validatePlatformSecretRecordV1({
+			...pending,
+			lifecycleState: "active",
+			kubernetesSecretRef,
+			activationFence: {
+				schemaVersion: 1,
+				agentId: pending.agentId,
+				secretId: pending.secretId,
+				secretVersion: pending.secretVersion,
+				configRevision: pending.configRevision,
+				kubernetesSecretName: kubernetesSecretRef.name,
+				workloadUid: "workload_01",
+				workloadGeneration: 3,
+				fence: 5,
+			},
+		});
+		if (active.lifecycleState !== "active") throw new Error("Expected active");
+		const plaintextBytes = Buffer.from(plaintext);
+
+		const rotated = reencryptSecretRecordV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: "key-2026-10",
+				keys: [
+					{
+						schemaVersion: 1,
+						keyVersion: "key-2026-10",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: replacementPublicKeyDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(replacementPublicKeyDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+			record: active,
+			plaintext: plaintextBytes,
+			occurredAt: "2026-09-05T13:15:00Z",
+		});
+
+		expect(rotated).toMatchObject({
+			secretId: active.secretId,
+			agentId: active.agentId,
+			secretVersion: active.secretVersion,
+			configRevision: active.configRevision,
+			lifecycleState: "active",
+			kubernetesSecretRef: {
+				...kubernetesSecretRef,
+				wrappingKeyVersion: "key-2026-10",
+			},
+			activationFence: active.activationFence,
+			crypto: { wrappingKeyVersion: "key-2026-10" },
+			updatedAt: "2026-09-05T13:15:00Z",
+		});
+		expect(rotated.crypto.dekFingerprint).not.toBe(
+			active.crypto.dekFingerprint,
+		);
+		expect(rotated.crypto.nonce).not.toBe(active.crypto.nonce);
+		const replacementDek = privateDecrypt(
+			{
+				key: replacementPrivateKey,
+				padding: constants.RSA_PKCS1_OAEP_PADDING,
+				oaepHash: "sha256",
+			},
+			Buffer.from(rotated.crypto.wrappedDek, "base64"),
+		);
+		expect(decrypt(rotated, replacementDek)).toBe(plaintext);
+		expect(plaintextBytes.toString()).toBe(plaintext);
+		expect(JSON.stringify(rotated)).not.toContain(plaintext);
+	});
+
 	it("fails closed for invalid inputs and exposes no decrypt operation", () => {
 		expect(() =>
 			createSecretEncryptorV1({
@@ -209,6 +319,7 @@ describe("Secret encryptor V1", () => {
 		expect(Object.keys(secretStore).toSorted()).toEqual([
 			"createSecretEncryptorV1",
 			"encodeSecretAadV1",
+			"reencryptSecretRecordV1",
 		]);
 	});
 });
