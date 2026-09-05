@@ -405,4 +405,41 @@ describe("PostgreSQL Platform audit query", () => {
 			/secretValue|credential|conversation|runtime|kubernetes|deployment/,
 		);
 	});
+
+	it("projects Secret lifecycle audits without exposing key metadata", async () => {
+		await seedAudit({
+			auditId: "audit_secret_decrypt",
+			occurredAt: new Date("2026-09-02T06:00:00.000Z"),
+			actorType: "system",
+			actorId: "platform-worker",
+			action: "secret.decrypt",
+			targetType: "secret",
+			targetId: "credential_01",
+			outcome: "succeeded",
+			details: {
+				wrappingKeyVersion: "key_01",
+				operation: "decrypt",
+				result: "succeeded",
+			},
+		});
+
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items).toEqual([
+			{
+				schemaVersion: 1,
+				auditId: "audit_secret_decrypt",
+				actor: { kind: "system", actorId: "platform-worker" },
+				action: "secret.decrypt",
+				subject: { kind: "secret", subjectId: "credential_01" },
+				result: "succeeded",
+				summary: "secret.decrypt",
+				occurredAt: new Date("2026-09-02T06:00:00.000Z"),
+				traceId: "trace_audit_secret_decrypt",
+			},
+		]);
+		expect(JSON.stringify(page)).not.toContain("key_01");
+	});
 });

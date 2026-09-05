@@ -5,6 +5,7 @@ export type SecretActivationLifecycleStateV1 =
 	| "pending"
 	| "applying"
 	| "observed"
+	| "active"
 	| "failed";
 
 export interface SecretActivationCandidateV1 {
@@ -18,8 +19,19 @@ export interface SecretActivationCandidateV1 {
 	readonly name: string;
 	readonly wrappingKeyVersion: string;
 	readonly lifecycleState: SecretActivationLifecycleStateV1;
+	readonly failureRetryable: boolean | null;
 	readonly encryptedRecord: unknown;
 }
+
+export interface SecretActivationClaimStateV1 {
+	readonly schemaVersion: 1;
+	readonly currentConfigurationRevision: number;
+	readonly candidate: SecretActivationCandidateV1;
+}
+
+export type SecretActivationClaimPlanV1 =
+	| { readonly outcome: "claim" }
+	| { readonly outcome: "stale" | "active" | "failed" };
 
 export interface SecretActivationClaimV1 {
 	readonly schemaVersion: 1;
@@ -27,6 +39,20 @@ export interface SecretActivationClaimV1 {
 	readonly fence: number;
 	readonly leaseExpiresAt: Date;
 	readonly candidate: SecretActivationCandidateV1;
+}
+
+export interface SecretActivationReferenceV1 {
+	readonly schemaVersion: 1;
+	readonly ownerType: "agent-owner" | "platform";
+	readonly ownerId: string;
+	readonly agentId: string;
+	readonly secretId: string;
+	readonly secretVersion: number;
+	readonly configRevision: number;
+	readonly algorithmVersion: "aes-256-gcm:v1";
+	readonly wrappingAlgorithmVersion: "rsa-oaep-sha256:v1";
+	readonly wrappingKeyVersion: string;
+	readonly name: string;
 }
 
 export interface SecretActivationFenceV1 {
@@ -59,39 +85,70 @@ export interface SecretActivationFailureV1 {
 	readonly traceId: string;
 }
 
+export interface SecretActivationAuditIntentV1 {
+	readonly schemaVersion: 1;
+	readonly auditId: string;
+	readonly traceId: string;
+	readonly actorType: "system";
+	readonly actorId: string;
+	readonly action: "secret.decrypt" | "secret.activate";
+	readonly targetType: "secret";
+	readonly targetId: string;
+	readonly agentId: string;
+	readonly outcome: "succeeded" | "rejected" | "failed";
+	readonly details: {
+		readonly wrappingKeyVersion: string;
+		readonly operation: "decrypt" | "activate";
+		readonly result: "succeeded" | "rejected" | "failed";
+	};
+}
+
+export type SecretActivationNextStateV1 =
+	| {
+			readonly lifecycleState: "applying" | "observed" | "active";
+			readonly kubernetesSecretRef: SecretActivationReferenceV1;
+			readonly activationFence: SecretActivationFenceV1;
+	  }
+	| {
+			readonly lifecycleState: "failed";
+			readonly kubernetesSecretRef?: SecretActivationReferenceV1;
+			readonly activationFence?: SecretActivationFenceV1;
+			readonly error: SecretActivationFailureV1;
+	  };
+
+export interface SecretActivationTransitionPlanV1 {
+	readonly schemaVersion: 1;
+	readonly expectedLifecycleStates: readonly SecretActivationLifecycleStateV1[];
+	readonly expectedActivationFence?: SecretActivationFenceV1;
+	readonly next: SecretActivationNextStateV1;
+	readonly auditEvents: readonly SecretActivationAuditIntentV1[];
+}
+
 export interface SecretActivationStorePortV1 {
-	claimCandidate(input: {
-		readonly schemaVersion: 1;
-		readonly agentId: string;
-		readonly secretId: string;
-		readonly secretVersion: number;
-		readonly configRevision: number;
-		readonly workerId: string;
-		readonly leaseDurationMs: number;
-	}): Promise<
+	claimCandidate(
+		input: {
+			readonly schemaVersion: 1;
+			readonly agentId: string;
+			readonly secretId: string;
+			readonly secretVersion: number;
+			readonly configRevision: number;
+			readonly workerId: string;
+			readonly leaseDurationMs: number;
+		},
+		decide: (
+			state: SecretActivationClaimStateV1,
+		) => SecretActivationClaimPlanV1,
+	): Promise<
 		| { readonly outcome: "claimed"; readonly claim: SecretActivationClaimV1 }
 		| { readonly outcome: "busy" | "stale" | "active" | "failed" }
 	>;
-	markApplying(input: {
+	recordAudit(input: {
 		readonly claim: SecretActivationClaimV1;
-		readonly kubernetesSecretName: string;
-		readonly activationFence: SecretActivationFenceV1;
+		readonly auditEvent: SecretActivationAuditIntentV1;
 	}): Promise<boolean>;
-	markObserved(input: {
+	commitTransition(input: {
 		readonly claim: SecretActivationClaimV1;
-		readonly kubernetesSecretName: string;
-		readonly activationFence: SecretActivationFenceV1;
-	}): Promise<boolean>;
-	markActive(input: {
-		readonly claim: SecretActivationClaimV1;
-		readonly kubernetesSecretName: string;
-		readonly activationFence: SecretActivationFenceV1;
-	}): Promise<boolean>;
-	markFailed(input: {
-		readonly claim: SecretActivationClaimV1;
-		readonly kubernetesSecretName?: string;
-		readonly activationFence?: SecretActivationFenceV1;
-		readonly error: SecretActivationFailureV1;
+		readonly plan: SecretActivationTransitionPlanV1;
 	}): Promise<boolean>;
 }
 
@@ -111,20 +168,31 @@ export interface SecretActivationDecryptorPortV1 {
 	>;
 }
 
-interface SecretActivationApplyInputV1 {
+export interface SecretActivationApplyInputV1 {
 	readonly schemaVersion: 1;
-	readonly agentId: string;
-	readonly secretId: string;
-	readonly secretVersion: number;
-	readonly configRevision: number;
-	readonly ownerType: "agent-owner" | "platform";
-	readonly ownerId: string;
-	readonly name: string;
-	readonly wrappingKeyVersion: string;
-	readonly kubernetesSecretName: string;
+	readonly kubernetesSecretRef: SecretActivationReferenceV1;
+	readonly secretKey: string;
 	readonly fence: number;
 	readonly plaintext: Uint8Array;
 }
+
+export type SecretActivationObservationV1 =
+	| { readonly status: "pending" }
+	| {
+			readonly schemaVersion: 1;
+			readonly status: "observed";
+			readonly kubernetesSecretRef: SecretActivationReferenceV1;
+			readonly activationFence: SecretActivationFenceV1;
+			readonly health: "healthy";
+	  }
+	| {
+			readonly schemaVersion: 1;
+			readonly status: "failed";
+			readonly kubernetesSecretRef?: SecretActivationReferenceV1;
+			readonly activationFence: SecretActivationFenceV1;
+			readonly health: "unknown" | "unhealthy";
+			readonly error: SecretActivationFailureV1;
+	  };
 
 export interface SecretActivationKubernetesPortV1 {
 	applyCandidate(input: SecretActivationApplyInputV1): Promise<
@@ -137,12 +205,9 @@ export interface SecretActivationKubernetesPortV1 {
 	>;
 	observeCandidate(input: {
 		readonly schemaVersion: 1;
+		readonly kubernetesSecretRef: SecretActivationReferenceV1;
 		readonly activationFence: SecretActivationFenceV1;
-	}): Promise<
-		| ({ readonly outcome: "observed" } & SecretActivationFenceV1)
-		| ({ readonly outcome: "failed" } & SecretActivationFenceV1)
-		| { readonly outcome: "pending" }
-	>;
+	}): Promise<SecretActivationObservationV1>;
 }
 
 export interface ActivateSecretCandidateCommandV1 {
@@ -185,6 +250,25 @@ export class SecretActivationError extends Error {
 		this.code = code;
 	}
 }
+
+const failureDetails = {
+	SECRET_KEY_UNAVAILABLE: {
+		message: "Secret key is unavailable",
+		retryable: true,
+	},
+	SECRET_METADATA_INVALID: {
+		message: "Secret metadata is invalid",
+		retryable: false,
+	},
+	SECRET_AUTHENTICATION_FAILED: {
+		message: "Secret authentication failed",
+		retryable: false,
+	},
+	SECRET_ACTIVATION_FAILED: {
+		message: "Secret activation failed",
+		retryable: true,
+	},
+} as const;
 
 function validText(value: unknown): value is string {
 	return (
@@ -257,6 +341,25 @@ function parseCommand(input: unknown): ActivateSecretCandidateCommandV1 {
 	}
 }
 
+function decideClaim(
+	command: ActivateSecretCandidateCommandV1,
+	state: SecretActivationClaimStateV1,
+): SecretActivationClaimPlanV1 {
+	if (state.currentConfigurationRevision !== command.configRevision) {
+		return { outcome: "stale" };
+	}
+	if (state.candidate.lifecycleState === "active") {
+		return { outcome: "active" };
+	}
+	if (
+		state.candidate.lifecycleState === "failed" &&
+		state.candidate.failureRetryable === false
+	) {
+		return { outcome: "failed" };
+	}
+	return { outcome: "claim" };
+}
+
 function validatedClaim(
 	claim: SecretActivationClaimV1,
 	command: ActivateSecretCandidateCommandV1,
@@ -274,13 +377,13 @@ function validatedClaim(
 			candidate.secretId !== command.secretId ||
 			candidate.secretVersion !== command.secretVersion ||
 			candidate.configRevision !== command.configRevision ||
+			candidate.lifecycleState === "active" ||
+			(candidate.lifecycleState === "failed") !==
+				(candidate.failureRetryable !== null) ||
 			(candidate.ownerType !== "agent-owner" &&
 				candidate.ownerType !== "platform") ||
 			![candidate.ownerId, candidate.name, candidate.wrappingKeyVersion].every(
 				validText,
-			) ||
-			!(["pending", "applying", "observed", "failed"] as const).includes(
-				candidate.lifecycleState,
 			)
 		) {
 			throw new Error();
@@ -290,25 +393,6 @@ function validatedClaim(
 		throw new SecretActivationError("unavailable");
 	}
 }
-
-const failureDetails = {
-	SECRET_KEY_UNAVAILABLE: {
-		message: "Secret key is unavailable",
-		retryable: true,
-	},
-	SECRET_METADATA_INVALID: {
-		message: "Secret metadata is invalid",
-		retryable: false,
-	},
-	SECRET_AUTHENTICATION_FAILED: {
-		message: "Secret authentication failed",
-		retryable: false,
-	},
-	SECRET_ACTIVATION_FAILED: {
-		message: "Secret activation failed",
-		retryable: true,
-	},
-} as const;
 
 function immutableSecretName(candidate: SecretActivationCandidateV1): string {
 	const agent = createHash("sha256")
@@ -322,11 +406,116 @@ function immutableSecretName(candidate: SecretActivationCandidateV1): string {
 	return `agent-${agent}.secret-${secret}-v${candidate.secretVersion}-r${candidate.configRevision}`;
 }
 
+function secretReference(
+	candidate: SecretActivationCandidateV1,
+): SecretActivationReferenceV1 {
+	return {
+		schemaVersion: 1,
+		ownerType: candidate.ownerType,
+		ownerId: candidate.ownerId,
+		agentId: candidate.agentId,
+		secretId: candidate.secretId,
+		secretVersion: candidate.secretVersion,
+		configRevision: candidate.configRevision,
+		algorithmVersion: "aes-256-gcm:v1",
+		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+		wrappingKeyVersion: candidate.wrappingKeyVersion,
+		name: immutableSecretName(candidate),
+	};
+}
+
 function failure(
 	code: SecretActivationFailureCodeV1,
 	traceId: string,
 ): SecretActivationFailureV1 {
 	return { schemaVersion: 1, code, ...failureDetails[code], traceId };
+}
+
+function audit(
+	claim: SecretActivationClaimV1,
+	traceId: string,
+	operation: "decrypt" | "activate",
+	result: "succeeded" | "rejected" | "failed",
+): SecretActivationAuditIntentV1 {
+	const identity = [
+		claim.candidate.agentId,
+		claim.candidate.secretId,
+		claim.candidate.secretVersion,
+		claim.candidate.configRevision,
+		claim.fence,
+		operation,
+		result,
+	].join("\0");
+	return {
+		schemaVersion: 1,
+		auditId: `secret-audit-${createHash("sha256").update(identity).digest("hex")}`,
+		traceId,
+		actorType: "system",
+		actorId: claim.workerId,
+		action: operation === "decrypt" ? "secret.decrypt" : "secret.activate",
+		targetType: "secret",
+		targetId: claim.candidate.secretId,
+		agentId: claim.candidate.agentId,
+		outcome: result,
+		details: {
+			wrappingKeyVersion: claim.candidate.wrappingKeyVersion,
+			operation,
+			result,
+		},
+	};
+}
+
+function transitionPlan(input: {
+	readonly expectedLifecycleStates: readonly SecretActivationLifecycleStateV1[];
+	readonly expectedActivationFence?: SecretActivationFenceV1;
+	readonly next: SecretActivationNextStateV1;
+	readonly auditEvents?: readonly SecretActivationAuditIntentV1[];
+}): SecretActivationTransitionPlanV1 {
+	return {
+		schemaVersion: 1,
+		expectedLifecycleStates: input.expectedLifecycleStates,
+		...(input.expectedActivationFence
+			? { expectedActivationFence: input.expectedActivationFence }
+			: {}),
+		next: input.next,
+		auditEvents: input.auditEvents ?? [],
+	};
+}
+
+function referenceMatches(
+	expected: SecretActivationReferenceV1,
+	actual: SecretActivationReferenceV1,
+): boolean {
+	return (
+		expected.schemaVersion === actual.schemaVersion &&
+		expected.ownerType === actual.ownerType &&
+		expected.ownerId === actual.ownerId &&
+		expected.agentId === actual.agentId &&
+		expected.secretId === actual.secretId &&
+		expected.secretVersion === actual.secretVersion &&
+		expected.configRevision === actual.configRevision &&
+		expected.algorithmVersion === actual.algorithmVersion &&
+		expected.wrappingAlgorithmVersion === actual.wrappingAlgorithmVersion &&
+		expected.wrappingKeyVersion === actual.wrappingKeyVersion &&
+		expected.name === actual.name
+	);
+}
+
+function fenceMatches(
+	expected: SecretActivationFenceV1,
+	actual: SecretActivationFenceV1,
+): boolean {
+	return (
+		expected.schemaVersion === actual.schemaVersion &&
+		expected.agentId === actual.agentId &&
+		expected.secretId === actual.secretId &&
+		expected.secretVersion === actual.secretVersion &&
+		expected.configRevision === actual.configRevision &&
+		expected.kubernetesSecretName === actual.kubernetesSecretName &&
+		expected.workloadUid === actual.workloadUid &&
+		expected.workloadGeneration === actual.workloadGeneration &&
+		expected.fence === actual.fence
+	);
 }
 
 function result(
@@ -341,24 +530,6 @@ function result(
 		secretVersion: command.secretVersion,
 		configRevision: command.configRevision,
 	};
-}
-
-function observedFenceMatches(
-	expected: SecretActivationFenceV1,
-	observation: {
-		readonly outcome: "observed" | "failed";
-	} & SecretActivationFenceV1,
-): boolean {
-	return (
-		expected.agentId === observation.agentId &&
-		expected.secretId === observation.secretId &&
-		expected.secretVersion === observation.secretVersion &&
-		expected.configRevision === observation.configRevision &&
-		expected.kubernetesSecretName === observation.kubernetesSecretName &&
-		expected.workloadUid === observation.workloadUid &&
-		expected.workloadGeneration === observation.workloadGeneration &&
-		expected.fence === observation.fence
-	);
 }
 
 export function createSecretActivationUseCaseV1(
@@ -377,10 +548,10 @@ export function createSecretActivationUseCaseV1(
 		async activate(input) {
 			const command = parseCommand(input);
 			try {
-				const claimDecision = await dependencies.store.claimCandidate({
-					...command,
-					leaseDurationMs: leaseMs,
-				});
+				const claimDecision = await dependencies.store.claimCandidate(
+					{ ...command, leaseDurationMs: leaseMs },
+					(state) => decideClaim(command, state),
+				);
 				if (claimDecision.outcome !== "claimed") {
 					if (claimDecision.outcome === "active")
 						return result(command, "active");
@@ -389,15 +560,24 @@ export function createSecretActivationUseCaseV1(
 					return { schemaVersion: 1, outcome: claimDecision.outcome };
 				}
 				const claim = validatedClaim(claimDecision.claim, command);
-				const kubernetesSecretName = immutableSecretName(claim.candidate);
+				const reference = secretReference(claim.candidate);
 				const decryption = await dependencies.decryptor.decrypt({
 					encryptedRecord: claim.candidate.encryptedRecord,
 					traceId: command.traceId,
 				});
 				if (decryption.outcome === "failed") {
-					const saved = await dependencies.store.markFailed({
+					const saved = await dependencies.store.commitTransition({
 						claim,
-						error: failure(decryption.code, command.traceId),
+						plan: transitionPlan({
+							expectedLifecycleStates: [claim.candidate.lifecycleState],
+							next: {
+								lifecycleState: "failed",
+								error: failure(decryption.code, command.traceId),
+							},
+							auditEvents: [
+								audit(claim, command.traceId, "decrypt", "rejected"),
+							],
+						}),
 					});
 					return saved
 						? result(command, "failed")
@@ -410,17 +590,15 @@ export function createSecretActivationUseCaseV1(
 					ReturnType<SecretActivationKubernetesPortV1["applyCandidate"]>
 				>;
 				try {
+					const audited = await dependencies.store.recordAudit({
+						claim,
+						auditEvent: audit(claim, command.traceId, "decrypt", "succeeded"),
+					});
+					if (!audited) return { schemaVersion: 1, outcome: "stale" };
 					applied = await dependencies.kubernetes.applyCandidate({
 						schemaVersion: 1,
-						agentId: claim.candidate.agentId,
-						secretId: claim.candidate.secretId,
-						secretVersion: claim.candidate.secretVersion,
-						configRevision: claim.candidate.configRevision,
-						ownerType: claim.candidate.ownerType,
-						ownerId: claim.candidate.ownerId,
-						name: claim.candidate.name,
-						wrappingKeyVersion: claim.candidate.wrappingKeyVersion,
-						kubernetesSecretName,
+						kubernetesSecretRef: reference,
+						secretKey: claim.candidate.name,
 						fence: claim.fence,
 						plaintext: decryption.plaintext,
 					});
@@ -428,10 +606,19 @@ export function createSecretActivationUseCaseV1(
 					decryption.plaintext.fill(0);
 				}
 				if (applied.outcome === "failed") {
-					const saved = await dependencies.store.markFailed({
+					const saved = await dependencies.store.commitTransition({
 						claim,
-						kubernetesSecretName,
-						error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+						plan: transitionPlan({
+							expectedLifecycleStates: [claim.candidate.lifecycleState],
+							next: {
+								lifecycleState: "failed",
+								kubernetesSecretRef: reference,
+								error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+							},
+							auditEvents: [
+								audit(claim, command.traceId, "activate", "failed"),
+							],
+						}),
 					});
 					return saved
 						? result(command, "failed")
@@ -450,52 +637,97 @@ export function createSecretActivationUseCaseV1(
 					secretId: claim.candidate.secretId,
 					secretVersion: claim.candidate.secretVersion,
 					configRevision: claim.candidate.configRevision,
-					kubernetesSecretName,
+					kubernetesSecretName: reference.name,
 					workloadUid: applied.workloadUid,
 					workloadGeneration: applied.workloadGeneration,
 					fence: claim.fence,
 				};
+				const applying = await dependencies.store.commitTransition({
+					claim,
+					plan: transitionPlan({
+						expectedLifecycleStates: [claim.candidate.lifecycleState],
+						next: {
+							lifecycleState: "applying",
+							kubernetesSecretRef: reference,
+							activationFence,
+						},
+					}),
+				});
+				if (!applying) return { schemaVersion: 1, outcome: "stale" };
+				const observation = await dependencies.kubernetes.observeCandidate({
+					schemaVersion: 1,
+					kubernetesSecretRef: reference,
+					activationFence,
+				});
+				if (observation.status === "pending") {
+					return result(command, "applying");
+				}
 				if (
-					!(await dependencies.store.markApplying({
-						claim,
-						kubernetesSecretName,
-						activationFence,
-					}))
+					!fenceMatches(activationFence, observation.activationFence) ||
+					(observation.status === "observed" &&
+						(!observation.kubernetesSecretRef ||
+							!referenceMatches(reference, observation.kubernetesSecretRef))) ||
+					(observation.status === "failed" &&
+						observation.kubernetesSecretRef !== undefined &&
+						!referenceMatches(reference, observation.kubernetesSecretRef))
 				) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}
-				const observation = await dependencies.kubernetes.observeCandidate({
-					schemaVersion: 1,
-					activationFence,
-				});
-				if (observation.outcome === "pending")
-					return result(command, "applying");
-				if (!observedFenceMatches(activationFence, observation)) {
-					return { schemaVersion: 1, outcome: "stale" };
-				}
-				if (observation.outcome === "failed") {
-					const saved = await dependencies.store.markFailed({
+				if (observation.status === "failed") {
+					const saved = await dependencies.store.commitTransition({
 						claim,
-						kubernetesSecretName,
-						activationFence,
-						error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+						plan: transitionPlan({
+							expectedLifecycleStates: ["applying"],
+							expectedActivationFence: activationFence,
+							next: {
+								lifecycleState: "failed",
+								kubernetesSecretRef: reference,
+								activationFence,
+								error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+							},
+							auditEvents: [
+								audit(claim, command.traceId, "activate", "failed"),
+							],
+						}),
 					});
 					return saved
 						? result(command, "failed")
 						: { schemaVersion: 1, outcome: "stale" };
 				}
-				const transition = {
+				if (observation.health !== "healthy") {
+					return { schemaVersion: 1, outcome: "stale" };
+				}
+				const observed = await dependencies.store.commitTransition({
 					claim,
-					kubernetesSecretName,
-					activationFence,
-				};
-				if (!(await dependencies.store.markObserved(transition))) {
-					return { schemaVersion: 1, outcome: "stale" };
-				}
-				if (!(await dependencies.store.markActive(transition))) {
-					return { schemaVersion: 1, outcome: "stale" };
-				}
-				return result(command, "active");
+					plan: transitionPlan({
+						expectedLifecycleStates: ["applying"],
+						expectedActivationFence: activationFence,
+						next: {
+							lifecycleState: "observed",
+							kubernetesSecretRef: reference,
+							activationFence,
+						},
+					}),
+				});
+				if (!observed) return { schemaVersion: 1, outcome: "stale" };
+				const active = await dependencies.store.commitTransition({
+					claim,
+					plan: transitionPlan({
+						expectedLifecycleStates: ["observed"],
+						expectedActivationFence: activationFence,
+						next: {
+							lifecycleState: "active",
+							kubernetesSecretRef: reference,
+							activationFence,
+						},
+						auditEvents: [
+							audit(claim, command.traceId, "activate", "succeeded"),
+						],
+					}),
+				});
+				return active
+					? result(command, "active")
+					: { schemaVersion: 1, outcome: "stale" };
 			} catch {
 				throw new SecretActivationError("unavailable");
 			}

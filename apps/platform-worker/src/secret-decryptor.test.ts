@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { describe, expect, it } from "vitest";
+import { secretActivationDecryptorConformanceV1 } from "../../../packages/platform-core/src/secret-decryptor.conformance.js";
 
 import { createWorkerSecretDecryptorV1 } from "./secret-decryptor.js";
 
@@ -32,6 +33,18 @@ function encryptedRecord() {
 			],
 		},
 	});
+	const record = encryptor.encrypt({
+		schemaVersion: 1,
+		secretId: "credential_01",
+		ownerType: "agent-owner",
+		ownerId: "owner_01",
+		agentId: "agent_01",
+		name: "MODEL_API_KEY",
+		secretVersion: 2,
+		configRevision: 7,
+		plaintext,
+		occurredAt: "2026-09-05T08:00:00.000Z",
+	});
 	return {
 		decryptor: createWorkerSecretDecryptorV1({
 			keys: [
@@ -50,20 +63,39 @@ function encryptedRecord() {
 			],
 		}),
 		plaintextDigest: createHash("sha256").update(plaintext).digest("hex"),
-		record: encryptor.encrypt({
-			schemaVersion: 1,
-			secretId: "credential_01",
-			ownerType: "agent-owner",
-			ownerId: "owner_01",
-			agentId: "agent_01",
-			name: "MODEL_API_KEY",
-			secretVersion: 2,
-			configRevision: 7,
-			plaintext,
-			occurredAt: "2026-09-05T08:00:00.000Z",
-		}),
+		record,
+		tamperedRecord: {
+			...record,
+			crypto: {
+				...record.crypto,
+				ciphertext: `${record.crypto.ciphertext.slice(0, -4)}AAAA`,
+			},
+		},
 	};
 }
+
+secretActivationDecryptorConformanceV1("Worker", () => {
+	const fixture = encryptedRecord();
+	return {
+		valid: {
+			port: fixture.decryptor,
+			encryptedRecord: fixture.record,
+			expectedDigest: fixture.plaintextDigest,
+		},
+		unavailableKey: {
+			port: fixture.missingKeyDecryptor,
+			encryptedRecord: fixture.record,
+		},
+		malformed: {
+			port: fixture.decryptor,
+			encryptedRecord: { detail: "boundary-sensitive" },
+		},
+		tampered: {
+			port: fixture.decryptor,
+			encryptedRecord: fixture.tamperedRecord,
+		},
+	};
+});
 
 describe("Worker Secret decryptor", () => {
 	it("decrypts an authenticated record only with the matching private key", async () => {
@@ -94,16 +126,9 @@ describe("Worker Secret decryptor", () => {
 			code: "SECRET_KEY_UNAVAILABLE",
 		});
 
-		const tampered = {
-			...fixture.record,
-			crypto: {
-				...fixture.record.crypto,
-				ciphertext: `${fixture.record.crypto.ciphertext.slice(0, -4)}AAAA`,
-			},
-		};
 		await expect(
 			fixture.decryptor.decrypt({
-				encryptedRecord: tampered,
+				encryptedRecord: fixture.tamperedRecord,
 				traceId: "trace_01",
 			}),
 		).resolves.toEqual({

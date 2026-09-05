@@ -67,6 +67,8 @@ describe("platform-core package surface", () => {
 			"FakeConversationEventsV1",
 			"FakeConversationExecutionV1",
 			"FakePlatformIdempotencyDatabaseV1",
+			"FakeSecretActivationDecryptorV1",
+			"FakeSecretActivationKubernetesV1",
 			"applicationRevisionFailurePoints",
 		]);
 		expect(

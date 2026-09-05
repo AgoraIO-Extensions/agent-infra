@@ -141,6 +141,14 @@ export const agents = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		authorizationRevision: text("authorization_revision"),
+		secretActivationFence: bigint("secret_activation_fence", { mode: "number" })
+			.default(0)
+			.notNull(),
+		secretActivationOwner: text("secret_activation_owner"),
+		secretActivationLeaseExpiresAt: timestamp(
+			"secret_activation_lease_expires_at",
+			{ withTimezone: true },
+		),
 	},
 	(table) => [
 		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -151,6 +159,21 @@ export const agents = platformSchema.table(
 		check(
 			"agent_authorization_revision_non_empty",
 			sql`${table.authorizationRevision} IS NULL OR char_length(${table.authorizationRevision}) > 0`,
+		),
+		check(
+			"agent_secret_activation_fence_safe",
+			sql`${table.secretActivationFence} between 0 and 9007199254740991`,
+		),
+		check(
+			"agent_secret_activation_claim_valid",
+			sql`(
+				${table.secretActivationOwner} is null
+				and ${table.secretActivationLeaseExpiresAt} is null
+			) or (
+				char_length(${table.secretActivationOwner}) > 0
+				and ${table.secretActivationLeaseExpiresAt} is not null
+				and ${table.secretActivationFence} >= 1
+			)`,
 		),
 	],
 );
@@ -323,13 +346,6 @@ export const platformSecretRecords = platformSchema.table(
 		record: jsonb("record").$type<PlatformSecretRecordV1>().notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-		activationFence: bigint("activation_fence", { mode: "number" })
-			.default(0)
-			.notNull(),
-		activationOwner: text("activation_owner"),
-		activationLeaseExpiresAt: timestamp("activation_lease_expires_at", {
-			withTimezone: true,
-		}),
 	},
 	(table) => [
 		primaryKey({
@@ -378,21 +394,6 @@ export const platformSecretRecords = platformSchema.table(
 			sql`${table.lifecycleState} in ('pending', 'applying', 'observed', 'active', 'failed')`,
 		),
 		check(
-			"secret_record_activation_fence_safe",
-			sql`${table.activationFence} between 0 and 9007199254740991`,
-		),
-		check(
-			"secret_record_activation_claim_valid",
-			sql`(
-				${table.activationOwner} is null
-				and ${table.activationLeaseExpiresAt} is null
-			) or (
-				char_length(${table.activationOwner}) > 0
-				and ${table.activationLeaseExpiresAt} is not null
-				and ${table.activationFence} >= 1
-			)`,
-		),
-		check(
 			"secret_record_dek_fingerprint_format",
 			sql`${table.dekFingerprint} ~ '^[a-f0-9]{64}$'`,
 		),
@@ -418,10 +419,6 @@ export const platformSecretRecords = platformSchema.table(
 			table.agentId,
 			table.secretId,
 			table.secretVersion,
-		),
-		index("secret_record_activation_idx").on(
-			table.lifecycleState,
-			table.activationLeaseExpiresAt,
 		),
 	],
 );

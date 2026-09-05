@@ -1,5 +1,5 @@
 {
-  "id": "1b28b279-e05e-49ef-ac45-44de5a8ce230",
+  "id": "6d598f0f-95c4-4142-9757-4dc92d68b0ff",
   "prevId": "53c8fe03-4288-42e4-8889-72a12f53c2a6",
   "version": "7",
   "dialect": "postgresql",
@@ -675,6 +675,25 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "secret_activation_fence": {
+          "name": "secret_activation_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "secret_activation_owner": {
+          "name": "secret_activation_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "secret_activation_lease_expires_at": {
+          "name": "secret_activation_lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -694,6 +713,14 @@
         "agent_authorization_revision_non_empty": {
           "name": "agent_authorization_revision_non_empty",
           "value": "\"platform\".\"agents\".\"authorization_revision\" IS NULL OR char_length(\"platform\".\"agents\".\"authorization_revision\") > 0"
+        },
+        "agent_secret_activation_fence_safe": {
+          "name": "agent_secret_activation_fence_safe",
+          "value": "\"platform\".\"agents\".\"secret_activation_fence\" between 0 and 9007199254740991"
+        },
+        "agent_secret_activation_claim_valid": {
+          "name": "agent_secret_activation_claim_valid",
+          "value": "(\n\t\t\t\t\"platform\".\"agents\".\"secret_activation_owner\" is null\n\t\t\t\tand \"platform\".\"agents\".\"secret_activation_lease_expires_at\" is null\n\t\t\t) or (\n\t\t\t\tchar_length(\"platform\".\"agents\".\"secret_activation_owner\") > 0\n\t\t\t\tand \"platform\".\"agents\".\"secret_activation_lease_expires_at\" is not null\n\t\t\t\tand \"platform\".\"agents\".\"secret_activation_fence\" >= 1\n\t\t\t)"
         }
       },
       "isRLSEnabled": false
@@ -2300,25 +2327,6 @@
           "notNull": true,
           "default": "'pending'"
         },
-        "activation_fence": {
-          "name": "activation_fence",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "activation_owner": {
-          "name": "activation_owner",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "activation_lease_expires_at": {
-          "name": "activation_lease_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "dek_fingerprint": {
           "name": "dek_fingerprint",
           "type": "varchar(64)",
@@ -2383,27 +2391,6 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "secret_record_activation_idx": {
-          "name": "secret_record_activation_idx",
-          "columns": [
-            {
-              "expression": "lifecycle_state",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "activation_lease_expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2472,14 +2459,6 @@
         "secret_record_lifecycle_state": {
           "name": "secret_record_lifecycle_state",
           "value": "\"platform\".\"secret_records\".\"lifecycle_state\" in ('pending', 'applying', 'observed', 'active', 'failed')"
-        },
-        "secret_record_activation_fence_safe": {
-          "name": "secret_record_activation_fence_safe",
-          "value": "\"platform\".\"secret_records\".\"activation_fence\" between 0 and 9007199254740991"
-        },
-        "secret_record_activation_claim_valid": {
-          "name": "secret_record_activation_claim_valid",
-          "value": "(\n\t\t\t\t\"platform\".\"secret_records\".\"activation_owner\" is null\n\t\t\t\tand \"platform\".\"secret_records\".\"activation_lease_expires_at\" is null\n\t\t\t) or (\n\t\t\t\tchar_length(\"platform\".\"secret_records\".\"activation_owner\") > 0\n\t\t\t\tand \"platform\".\"secret_records\".\"activation_lease_expires_at\" is not null\n\t\t\t\tand \"platform\".\"secret_records\".\"activation_fence\" >= 1\n\t\t\t)"
         },
         "secret_record_dek_fingerprint_format": {
           "name": "secret_record_dek_fingerprint_format",
