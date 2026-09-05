@@ -1,0 +1,71 @@
+images:
+  web:
+    repository: ghcr.io/agoraio-extensions/agent-infra/web
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  platformApi:
+    repository: ghcr.io/agoraio-extensions/agent-infra/platform-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  platformWorker:
+    repository: ghcr.io/agoraio-extensions/agent-infra/platform-worker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  runtimeHost:
+    repository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  pullPolicy: IfNotPresent
+
+database:
+  engine: postgresql
+  majorVersion: 16
+  compatibility: expand-contract-v1
+  secretRef:
+    name: agent-infra-platform-database
+    key: url
+
+keys:
+  encryptionPublicKey:
+    version: key-v1
+    secretRef:
+      name: agent-infra-platform-encryption-public-key
+      key: public.pem
+  workerDecryptionKeyring:
+    versions:
+      - key-v1
+    secretRef:
+      name: agent-infra-worker-decryption-keyring
+      key: keyring.pem
+
+adapters:
+  identity: deployment-identity
+  imageRegistry: deployment-image-registry
+  modelCatalog: deployment-model-catalog
+  objectStorage: deployment-object-storage
+  kubernetesRuntime: in-cluster
+  workloadRoute: ingress
+
+web:
+  placement: external
+  externalBaseUrl: https://web.example.invalid
+
+platformApi:
+  placement: external
+  externalBaseUrl: https://api.example.invalid
+  deploymentModule: deployment-platform-api
+
+platformWorker:
+  replicas: 1
+
+migration:
+  enabled: true
+  backoffLimit: 1
+
+workloadTopology:
+  enabled: false
+  storageSize: 1Gi
+  service:
+    runtimePort: 3003
+    routePort: 8080
+  route:
+    enabled: false
+    ingressClassName: nginx
+    host: agent.example.invalid
+    tlsSecretName: agent-infra-topology-tls

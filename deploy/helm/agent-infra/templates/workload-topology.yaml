@@ -1,0 +1,250 @@
+{{- if .Values.workloadTopology.enabled -}}
+{{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "workload") -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workload
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workload
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: agent-workload
+  ports:
+    - name: runtime-host
+      port: {{ .Values.workloadTopology.service.runtimePort }}
+      targetPort: runtime-host
+    - name: route
+      port: {{ .Values.workloadTopology.service.routePort }}
+      targetPort: route
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workload
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent-workload
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: agent-workload
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runtime-host-topology
+          image: {{ include "agent-infra.image" .Values.images.runtimeHost }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "-e"]
+          args:
+            - >-
+              const http=require('node:http');
+              const serve=(port)=>http.createServer((_,res)=>{res.end('ok')}).listen(port);
+              serve({{ .Values.workloadTopology.service.runtimePort }});
+              serve({{ .Values.workloadTopology.service.routePort }});
+          ports:
+            - name: runtime-host
+              containerPort: {{ .Values.workloadTopology.service.runtimePort }}
+            - name: route
+              containerPort: {{ .Values.workloadTopology.service.routePort }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: runtime-host
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: runtime-data
+              mountPath: /var/lib/agent-runtime
+  volumeClaimTemplates:
+    - metadata:
+        name: runtime-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.workloadTopology.storageSize }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workload
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent-workload
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadTopology.service.runtimePort }}
+    {{- if and .Values.workloadTopology.route.enabled (eq .Values.adapters.workloadRoute "ingress") }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadTopology.service.routePort }}
+    {{- end }}
+    {{- if and .Values.workloadTopology.route.enabled (eq .Values.adapters.workloadRoute "deployment-adapter") }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: workload-route
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadTopology.service.routePort }}
+    {{- end }}
+  egress: []
+{{- if and .Values.workloadTopology.route.enabled (eq .Values.adapters.workloadRoute "ingress") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-workload
+spec:
+  ingressClassName: {{ .Values.workloadTopology.route.ingressClassName }}
+  tls:
+    - hosts:
+        - {{ .Values.workloadTopology.route.host }}
+      secretName: {{ .Values.workloadTopology.route.tlsSecretName }}
+  rules:
+    - host: {{ .Values.workloadTopology.route.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: route
+{{- end }}
+{{- if and .Values.workloadTopology.route.enabled (eq .Values.adapters.workloadRoute "deployment-adapter") }}
+{{- $routeName := include "agent-infra.componentName" (dict "root" . "suffix" "route") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $routeName }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workload-route
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: workload-route
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $routeName }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workload-route
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: workload-route
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: workload-route
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: route
+          image: {{ include "agent-infra.image" .Values.images.runtimeHost }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "-e"]
+          args:
+            - >-
+              const fs=require('node:fs'),http=require('node:http'),https=require('node:https');
+              https.createServer({key:fs.readFileSync('/tls/tls.key'),cert:fs.readFileSync('/tls/tls.crt')},(req,res)=>{
+              const upstream=http.request({hostname:'{{ $name }}',port:{{ .Values.workloadTopology.service.routePort }},path:req.url,method:req.method,headers:req.headers},response=>{
+              res.writeHead(response.statusCode??502,response.headers);response.pipe(res)});
+              upstream.on('error',()=>{res.writeHead(502);res.end()});req.pipe(upstream)}).listen(8443);
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: https
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.workloadTopology.route.tlsSecretName }}
+{{- end }}
+{{- end }}

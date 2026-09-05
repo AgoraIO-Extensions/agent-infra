@@ -1,0 +1,14 @@
+{{- include "agent-infra.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+data:
+  AGENT_INFRA_IDENTITY_ADAPTER_BINDING: {{ .Values.adapters.identity | quote }}
+  AGENT_INFRA_IMAGE_REGISTRY_ADAPTER_BINDING: {{ .Values.adapters.imageRegistry | quote }}
+  AGENT_INFRA_MODEL_CATALOG_ADAPTER_BINDING: {{ .Values.adapters.modelCatalog | quote }}
+  AGENT_INFRA_OBJECT_STORAGE_ADAPTER_BINDING: {{ .Values.adapters.objectStorage | quote }}
+  AGENT_INFRA_KUBERNETES_RUNTIME_ADAPTER_BINDING: {{ .Values.adapters.kubernetesRuntime | quote }}
+  AGENT_INFRA_WORKLOAD_ROUTE_ADAPTER_BINDING: {{ .Values.adapters.workloadRoute | quote }}
