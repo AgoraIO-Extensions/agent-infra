@@ -209,6 +209,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				"RUNTIME_DRIVER_RECOVERY_FAILED",
 				"Runtime operation recovery failed",
 				503,
+				false,
+				"unavailable",
 			);
 		}
 		const key = operationKey(command);
@@ -281,6 +283,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				"RUNTIME_DRIVER_RECOVERY_FAILED",
 				"Runtime status recovery failed",
 				503,
+				false,
+				"unavailable",
 			);
 		}
 		const session = this.session(nativeSessionRef);

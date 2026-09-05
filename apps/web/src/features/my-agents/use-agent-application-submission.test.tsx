@@ -57,7 +57,6 @@ const sensitiveCreateBody = {
 		],
 	},
 } satisfies AgentApplicationCreateRequestV1Writable;
-
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
