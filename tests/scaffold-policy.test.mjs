@@ -60,7 +60,7 @@ test("Node runtime images contain only production deployment artifacts", async (
 		],
 		[
 			"platform-worker",
-			"pnpm --filter @agent-infra/platform-worker deploy --prod --legacy /prod/platform-worker",
+			"pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-worker deploy --prod /prod/platform-worker",
 		],
 		[
 			"connection-api",
@@ -96,7 +96,11 @@ test("Node runtime images contain only production deployment artifacts", async (
 });
 
 test("injected Platform runtime images discard compile-time declarations", async () => {
-	for (const service of ["platform-api", "agent-runtime-host"]) {
+	for (const service of [
+		"platform-api",
+		"platform-worker",
+		"agent-runtime-host",
+	]) {
 		const dockerfile = await readFile(`apps/${service}/Dockerfile`, "utf8");
 		assert.match(
 			dockerfile,

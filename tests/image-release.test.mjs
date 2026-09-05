@@ -157,6 +157,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 				assert.equal(args[referenceIndex + 1], "node");
 				if (
 					args[referenceIndex].includes("/platform-api:") ||
+					args[referenceIndex].includes("/platform-worker:") ||
 					args[referenceIndex].includes("/agent-runtime-host:")
 				) {
 					assert.match(args.at(-1), /package\.json/);
