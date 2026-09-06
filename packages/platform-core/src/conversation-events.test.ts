@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-
+import { conversationEventConformanceV1 } from "./conversation.conformance.ts";
 import {
 	ConversationEventError,
 	type ConversationEventStateV1,
 	type ConversationEventTransactionPortV1,
+	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
 } from "./conversation-events.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
@@ -19,6 +20,47 @@ const event = {
 	occurredAt: "2026-09-04T00:00:00.000Z",
 	event: { type: "text.delta" as const, text: "Hello" },
 };
+
+conversationEventConformanceV1("Fake", async () => {
+	let nextEventId = 1;
+	const fake = new FakeConversationEventsV1({
+		conversationId: "conversation_event_fixture",
+		executionId: "execution_event_fixture",
+		sessionGeneration: 3,
+		deliveryFence: 5,
+		newId: () => `event_fixture_${nextEventId++}`,
+	});
+	let loseNextResponse = false;
+	const events: ConversationEventUseCaseV1 = {
+		async persist(command) {
+			const decision = await fake.persist(command);
+			if (loseNextResponse) {
+				loseNextResponse = false;
+				throw new Error("Injected response loss");
+			}
+			return decision;
+		},
+	};
+	return {
+		events,
+		failNextCommit() {
+			fake.failNextCommit();
+		},
+		loseNextResponseAfterCommit() {
+			loseNextResponse = true;
+		},
+		async snapshot() {
+			const snapshot = fake.snapshot();
+			return {
+				events: snapshot.events.length,
+				conversationCursor: snapshot.lastConversationCursor,
+				executionSequence: fake.executionSequence(),
+				runtimeCursor: fake.runtimeCursor(),
+			};
+		},
+		async close() {},
+	};
+});
 
 function activeState(): ConversationEventStateV1 {
 	return {

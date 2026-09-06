@@ -138,6 +138,7 @@ function isCurrentConversationBinding(
 export class FakeConversationExecutionV1
 	implements ConversationExecutionUseCaseV1
 {
+	#failNextCommit = false;
 	readonly #conversations = new Map<
 		string,
 		ConversationExecutionStateV1["conversation"]
@@ -242,6 +243,10 @@ export class FakeConversationExecutionV1
 					return decision;
 				}
 				const plan: ConversationMessageWritePlanV1 = decision;
+				if (this.#failNextCommit) {
+					this.#failNextCommit = false;
+					throw new Error("Injected Fake Conversation commit failure");
+				}
 				this.#conversations.set(
 					plan.conversation.conversationId,
 					structuredClone(plan.conversation),
@@ -462,6 +467,10 @@ export class FakeConversationExecutionV1
 	stop: ConversationExecutionUseCaseV1["stop"] = (command) =>
 		this.#interface.stop(command);
 
+	failNextCommit() {
+		this.#failNextCommit = true;
+	}
+
 	completeExecution(executionId: string) {
 		const execution = this.#executions.find(
 			(candidate) => candidate.executionId === executionId,
@@ -481,6 +490,14 @@ export class FakeConversationExecutionV1
 			outbox: this.#outbox,
 			audit: this.#audit,
 		});
+	}
+
+	idempotencyCount() {
+		return (
+			this.#createIdempotency.size +
+			this.#commandIdempotency.size +
+			this.#stopIdempotency.size
+		);
 	}
 
 	#state(

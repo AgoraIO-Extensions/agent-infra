@@ -1,9 +1,14 @@
 import {
 	type ConversationExecutionAuthorityV1,
+	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseV1,
 	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
-import { FakeConversationExecutionV1 } from "@agent-infra/platform-core/testing";
+import {
+	type ConversationCommandConformanceSnapshotV1,
+	conversationCommandConformanceV1,
+	conversationConformanceAuthorityV1,
+} from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -48,13 +53,6 @@ const initialMessageFailurePoints = [
 	"commit",
 ] as const;
 
-interface ConversationConformanceHarness {
-	readonly useCase: ConversationExecutionUseCaseV1;
-	setAuthority(next: ConversationExecutionAuthorityV1): void;
-	completeExecution(executionId: string): Promise<void>;
-	close(): Promise<void>;
-}
-
 beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("conversation-execution");
 	databaseUrl = testDatabase.databaseUrl;
@@ -71,77 +69,97 @@ afterEach(async () => {
 		platform.conversations`;
 });
 
-conversationCommandConformance(
-	"Fake Conversation command conformance",
-	async () => {
-		let effectiveAuthority = authority;
-		let nextId = 1;
-		const fake = new FakeConversationExecutionV1({
+conversationCommandConformanceV1("PostgreSQL", async () => {
+	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
+		conversationConformanceAuthorityV1;
+	let nextId = 1;
+	let failureCleanupRequired = false;
+	let loseNextResponse = false;
+	const adapter = new PostgresConversationExecutionTransactionV1({
+		databaseUrl,
+	});
+	const transaction: ConversationExecutionTransactionPortV1 = {
+		createConversation: (request, decide) =>
+			adapter.createConversation(request, decide),
+		async executeMessage(request, decide) {
+			try {
+				return await adapter.executeMessage(request, decide);
+			} finally {
+				if (failureCleanupRequired) {
+					try {
+						await disarmFailure("message");
+					} finally {
+						failureCleanupRequired = false;
+					}
+				}
+			}
+		},
+		executeRegeneration: (request, decide) =>
+			adapter.executeRegeneration(request, decide),
+		executeStop: (request, decide) => adapter.executeStop(request, decide),
+	};
+	const inner = createConversationExecutionUseCaseV1(
+		{
 			authorization: {
 				async authorize() {
-					return {
-						outcome: "allowed",
-						authority: structuredClone(effectiveAuthority),
-					};
+					return effectiveAuthority
+						? {
+								outcome: "allowed",
+								authority: structuredClone(effectiveAuthority),
+							}
+						: { outcome: "denied" };
 				},
 			},
+			transaction,
+		},
+		{
 			now: () => new Date("2026-09-04T00:00:00.000Z"),
-			newId: () => `conformance_${nextId++}`,
-		});
-		return {
-			useCase: fake,
-			setAuthority(next) {
-				effectiveAuthority = structuredClone(next);
-			},
-			async completeExecution(executionId) {
-				fake.completeExecution(executionId);
-			},
-			async close() {},
-		};
-	},
-);
-
-conversationCommandConformance(
-	"PostgreSQL Conversation command conformance",
-	async () => {
-		let effectiveAuthority = authority;
-		let nextId = 1;
-		const transaction = new PostgresConversationExecutionTransactionV1({
-			databaseUrl,
-		});
-		const useCase = createConversationExecutionUseCaseV1(
-			{
-				authorization: {
-					async authorize() {
-						return {
-							outcome: "allowed",
-							authority: structuredClone(effectiveAuthority),
-						};
-					},
-				},
-				transaction,
-			},
-			{
-				now: () => new Date("2026-09-04T00:00:00.000Z"),
-				newId: () => `conformance_${nextId++}`,
-			},
-		);
-		return {
-			useCase,
-			setAuthority(next) {
-				effectiveAuthority = structuredClone(next);
-			},
-			async completeExecution(executionId) {
-				await client`
-					update platform.conversation_executions
-					set status = 'completed'
-					where execution_id = ${executionId}
-				`;
-			},
-			close: () => transaction.close(),
-		};
-	},
-);
+			newId: () => `conversation_fixture_${nextId++}`,
+		},
+	);
+	const useCase: ConversationExecutionUseCaseV1 = {
+		createConversation: (command) => inner.createConversation(command),
+		async accept(command) {
+			const decision = await inner.accept(command);
+			if (loseNextResponse) {
+				loseNextResponse = false;
+				throw new Error("Injected response loss");
+			}
+			return decision;
+		},
+		regenerate: (command) => inner.regenerate(command),
+		stop: (command) => inner.stop(command),
+	};
+	return {
+		useCase,
+		setAuthority(next) {
+			effectiveAuthority = next;
+		},
+		async failNextCommit() {
+			failureCleanupRequired = true;
+			await armFailure("message");
+		},
+		loseNextResponseAfterCommit() {
+			loseNextResponse = true;
+		},
+		async completeExecution(executionId) {
+			const updated = await client`
+				update platform.conversation_executions
+				set status = 'completed'
+				where execution_id = ${executionId}
+			`;
+			if (updated.count !== 1) throw new Error("Expected one Execution");
+		},
+		snapshot: commandEffectCounts,
+		async close() {
+			try {
+				await disarmFailure("message");
+			} finally {
+				await adapter.close();
+			}
+		},
+	};
+});
 
 afterAll(async () => {
 	await client?.end();
@@ -203,7 +221,7 @@ async function disarmFailure(point: FailurePoint): Promise<void> {
 }
 
 async function commandEffectCounts() {
-	const [counts] = await client`
+	const [counts] = await client<ConversationCommandConformanceSnapshotV1[]>`
 		select
 			(select count(*)::int from platform.conversations) as conversations,
 			(select count(*)::int from platform.conversation_messages) as messages,
@@ -213,152 +231,8 @@ async function commandEffectCounts() {
 			(select count(*)::int from platform.conversation_audit_events) as audit,
 			(select count(*)::int from platform.idempotency_records) as idempotency
 	`;
+	if (!counts) throw new Error("Expected Conversation effect counts");
 	return counts;
-}
-
-function conversationCommandConformance(
-	name: string,
-	open: () => Promise<ConversationConformanceHarness>,
-): void {
-	describe(name, () => {
-		it("accepts, replays, conflicts, fences busy, regenerates, and stops identically", async () => {
-			const harness = await open();
-			try {
-				const create = {
-					schemaVersion: 1 as const,
-					agentId: authority.agentId,
-					idempotencyKey: "conformance_create",
-					requestId: "conformance_request_create",
-					traceId: "conformance_trace_create",
-				};
-				expect(await harness.useCase.createConversation(create)).toMatchObject({
-					outcome: "accepted",
-				});
-				expect(await harness.useCase.createConversation(create)).toMatchObject({
-					outcome: "replayed",
-				});
-
-				const initial = await harness.useCase.accept({
-					schemaVersion: 1,
-					command: "message",
-					conversationId: "conformance_1",
-					text: "initial",
-					idempotencyKey: "conformance_message",
-					requestId: "conformance_request_message",
-					traceId: "conformance_trace_message",
-				});
-				if (
-					initial.outcome !== "accepted" ||
-					initial.result.messageId === null
-				) {
-					throw new Error("Expected an accepted initial message");
-				}
-				expect(await harness.useCase.createConversation(create)).toMatchObject({
-					outcome: "replayed",
-				});
-				expect(
-					await harness.useCase.accept({
-						schemaVersion: 1,
-						command: "message",
-						conversationId: "conformance_1",
-						text: "initial",
-						idempotencyKey: "conformance_message",
-						requestId: "conformance_request_message_retry",
-						traceId: "conformance_trace_message_retry",
-					}),
-				).toEqual({ outcome: "replayed", result: initial.result });
-				expect(
-					await harness.useCase.accept({
-						schemaVersion: 1,
-						command: "message",
-						conversationId: "conformance_1",
-						text: "changed",
-						idempotencyKey: "conformance_message",
-						requestId: "conformance_request_message_conflict",
-						traceId: "conformance_trace_message_conflict",
-					}),
-				).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
-
-				harness.setAuthority({
-					...authority,
-					supportsSupplementaryInstruction: false,
-				});
-				expect(
-					await harness.useCase.accept({
-						schemaVersion: 1,
-						command: "message",
-						conversationId: "conformance_1",
-						text: "busy",
-						idempotencyKey: "conformance_busy",
-						requestId: "conformance_request_busy",
-						traceId: "conformance_trace_busy",
-					}),
-				).toEqual({ outcome: "busy" });
-				harness.setAuthority({ ...authority, actorId: "foreign_actor" });
-				expect(
-					await harness.useCase.accept({
-						schemaVersion: 1,
-						command: "message",
-						conversationId: "conformance_1",
-						text: "foreign",
-						idempotencyKey: "conformance_foreign",
-						requestId: "conformance_request_foreign",
-						traceId: "conformance_trace_foreign",
-					}),
-				).toEqual({ outcome: "denied" });
-				harness.setAuthority(authority);
-
-				const stopped = await harness.useCase.stop({
-					schemaVersion: 1,
-					command: "stop",
-					conversationId: "conformance_1",
-					targetExecutionId: initial.result.executionId,
-					idempotencyKey: "conformance_stop",
-					requestId: "conformance_request_stop",
-					traceId: "conformance_trace_stop",
-				});
-				expect(stopped).toMatchObject({ outcome: "accepted" });
-				expect(
-					await harness.useCase.stop({
-						schemaVersion: 1,
-						command: "stop",
-						conversationId: "conformance_1",
-						targetExecutionId: initial.result.executionId,
-						idempotencyKey: "conformance_stop_second_key",
-						requestId: "conformance_request_stop_retry",
-						traceId: "conformance_trace_stop_retry",
-					}),
-				).toMatchObject({ outcome: "replayed" });
-
-				await harness.completeExecution(initial.result.executionId);
-				const regenerated = await harness.useCase.regenerate({
-					schemaVersion: 1,
-					command: "regenerate",
-					conversationId: "conformance_1",
-					sourceMessageId: initial.result.messageId,
-					idempotencyKey: "conformance_regenerate",
-					requestId: "conformance_request_regenerate",
-					traceId: "conformance_trace_regenerate",
-				});
-				if (regenerated.outcome !== "accepted") {
-					throw new Error("Expected an accepted regeneration");
-				}
-				expect(
-					await harness.useCase.regenerate({
-						schemaVersion: 1,
-						command: "regenerate",
-						conversationId: "conformance_1",
-						sourceMessageId: initial.result.messageId,
-						idempotencyKey: "conformance_regenerate",
-						requestId: "conformance_request_regenerate_retry",
-						traceId: "conformance_trace_regenerate_retry",
-					}),
-				).toEqual({ outcome: "replayed", result: regenerated.result });
-			} finally {
-				await harness.close();
-			}
-		});
-	});
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
