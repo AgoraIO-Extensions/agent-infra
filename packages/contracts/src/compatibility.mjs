@@ -70,9 +70,35 @@ function literalValues(schema) {
 	return Array.isArray(schema.enum) ? schema.enum : undefined;
 }
 
-function literalSchemasAreDisjoint(left, right) {
-	const leftValues = literalValues(left);
-	const rightValues = literalValues(right);
+function resolveLocalComponentSchema(schema, components, seen = new Set()) {
+	if (!schema || typeof schema !== "object" || !Object.hasOwn(schema, "$ref")) {
+		return schema;
+	}
+	if (Object.keys(schema).length !== 1 || typeof schema.$ref !== "string") {
+		return undefined;
+	}
+	const match = /^#\/components\/schemas\/([^/]+)$/.exec(schema.$ref);
+	const segment = match?.[1];
+	if (!segment || /~(?![01])/.test(segment) || seen.has(schema.$ref)) {
+		return undefined;
+	}
+	const name = segment.replaceAll("~1", "/").replaceAll("~0", "~");
+	if (!Object.hasOwn(components, name)) return undefined;
+	return resolveLocalComponentSchema(
+		components[name],
+		components,
+		new Set([...seen, schema.$ref]),
+	);
+}
+
+function literalSchemasAreDisjoint(left, right, resolveLiteralSchema) {
+	const resolvedLeft = resolveLiteralSchema ? resolveLiteralSchema(left) : left;
+	const resolvedRight = resolveLiteralSchema
+		? resolveLiteralSchema(right)
+		: right;
+	if (resolvedLeft === undefined || resolvedRight === undefined) return false;
+	const leftValues = literalValues(resolvedLeft);
+	const rightValues = literalValues(resolvedRight);
 	if (leftValues !== undefined || rightValues !== undefined) {
 		return (
 			leftValues !== undefined &&
@@ -84,33 +110,35 @@ function literalSchemasAreDisjoint(left, right) {
 		);
 	}
 	if (
-		!left ||
-		!right ||
-		typeof left !== "object" ||
-		typeof right !== "object" ||
-		!sameValue(valueSet(left.type), ["object"]) ||
-		!sameValue(valueSet(right.type), ["object"])
+		!resolvedLeft ||
+		!resolvedRight ||
+		typeof resolvedLeft !== "object" ||
+		typeof resolvedRight !== "object" ||
+		!sameValue(valueSet(resolvedLeft.type), ["object"]) ||
+		!sameValue(valueSet(resolvedRight.type), ["object"])
 	) {
 		return false;
 	}
-	const leftRequired = new Set(left.required ?? []);
-	const rightRequired = new Set(right.required ?? []);
-	return Object.entries(left.properties ?? {}).some(([name, leftProperty]) => {
-		if (!leftRequired.has(name) || !rightRequired.has(name)) return false;
-		const rightProperty = right.properties?.[name];
-		const leftPropertyValues = literalValues(leftProperty);
-		const rightPropertyValues = literalValues(rightProperty);
-		return (
-			leftPropertyValues !== undefined &&
-			rightPropertyValues !== undefined &&
-			leftPropertyValues.every(
-				(leftValue) =>
-					!rightPropertyValues.some((rightValue) =>
-						sameValue(leftValue, rightValue),
-					),
-			)
-		);
-	});
+	const leftRequired = new Set(resolvedLeft.required ?? []);
+	const rightRequired = new Set(resolvedRight.required ?? []);
+	return Object.entries(resolvedLeft.properties ?? {}).some(
+		([name, leftProperty]) => {
+			if (!leftRequired.has(name) || !rightRequired.has(name)) return false;
+			const rightProperty = resolvedRight.properties?.[name];
+			const leftPropertyValues = literalValues(leftProperty);
+			const rightPropertyValues = literalValues(rightProperty);
+			return (
+				leftPropertyValues !== undefined &&
+				rightPropertyValues !== undefined &&
+				leftPropertyValues.every(
+					(leftValue) =>
+						!rightPropertyValues.some((rightValue) =>
+							sameValue(leftValue, rightValue),
+						),
+				)
+			);
+		},
+	);
 }
 
 function hasSchemaConstraints(value) {
@@ -122,7 +150,14 @@ function hasSchemaConstraints(value) {
 	);
 }
 
-function compareSubschemaConstraint(previous, current, path, keyword, changes) {
+function compareSubschemaConstraint(
+	previous,
+	current,
+	path,
+	keyword,
+	changes,
+	resolveLiteralSchema,
+) {
 	const previousSchema = previous ?? true;
 	const currentSchema = current ?? true;
 	if (previousSchema === true) {
@@ -135,17 +170,23 @@ function compareSubschemaConstraint(previous, current, path, keyword, changes) {
 	if (currentSchema === false) {
 		changes.push(`narrowed ${path} ${keyword}`);
 	} else if (typeof currentSchema === "object" && currentSchema !== null) {
-		compareSchema(previousSchema, currentSchema, `${path} ${keyword}`, changes);
+		compareSchema(
+			previousSchema,
+			currentSchema,
+			`${path} ${keyword}`,
+			changes,
+			resolveLiteralSchema,
+		);
 	}
 }
 
-function schemaIsWidening(previous, current) {
+function schemaIsWidening(previous, current, resolveLiteralSchema) {
 	const changes = [];
-	compareSchema(previous, current, "$option", changes);
+	compareSchema(previous, current, "$option", changes, resolveLiteralSchema);
 	return changes.length === 0;
 }
 
-function compareSchema(previous, current, path, changes) {
+function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 	if (previous === false || current === true) return;
 	if (current === false) {
 		changes.push(`narrowed ${path} schema`);
@@ -217,13 +258,25 @@ function compareSchema(previous, current, path, changes) {
 			for (let index = removedOptions.length - 1; index >= 0; index -= 1) {
 				const previousOption = removedOptions[index];
 				const match = addedOptions.findIndex((currentOption) => {
-					if (!schemaIsWidening(previousOption, currentOption)) return false;
+					if (
+						!schemaIsWidening(
+							previousOption,
+							currentOption,
+							resolveLiteralSchema,
+						)
+					) {
+						return false;
+					}
 					if (keyword !== "oneOf" || currentOptions.length === 1) return true;
 					const currentIndex = currentOptions.indexOf(currentOption);
 					return currentOptions.every(
 						(other, otherIndex) =>
 							otherIndex === currentIndex ||
-							literalSchemasAreDisjoint(currentOption, other),
+							literalSchemasAreDisjoint(
+								currentOption,
+								other,
+								resolveLiteralSchema,
+							),
 					);
 				});
 				if (match !== -1) {
@@ -239,11 +292,16 @@ function compareSchema(previous, current, path, changes) {
 			const disjointAdditions = addedOptions.every(
 				(option, index) =>
 					previousOptions.every((previousOption) =>
-						literalSchemasAreDisjoint(option, previousOption),
+						literalSchemasAreDisjoint(
+							option,
+							previousOption,
+							resolveLiteralSchema,
+						),
 					) &&
 					addedOptions.every(
 						(other, otherIndex) =>
-							index === otherIndex || literalSchemasAreDisjoint(option, other),
+							index === otherIndex ||
+							literalSchemasAreDisjoint(option, other, resolveLiteralSchema),
 					),
 			);
 			if (
@@ -397,6 +455,7 @@ function compareSchema(previous, current, path, changes) {
 		path,
 		"additionalProperties",
 		changes,
+		resolveLiteralSchema,
 	);
 	compareSubschemaConstraint(
 		previous.propertyNames,
@@ -404,6 +463,7 @@ function compareSchema(previous, current, path, changes) {
 		path,
 		"propertyNames",
 		changes,
+		resolveLiteralSchema,
 	);
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
@@ -420,6 +480,7 @@ function compareSchema(previous, current, path, changes) {
 						`${path}.${name}`,
 						`patternProperties ${pattern}`,
 						changes,
+						resolveLiteralSchema,
 					);
 				}
 			} else {
@@ -429,11 +490,18 @@ function compareSchema(previous, current, path, changes) {
 					`${path}.${name}`,
 					"property",
 					changes,
+					resolveLiteralSchema,
 				);
 			}
 			continue;
 		}
-		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
+		compareSchema(
+			schema,
+			currentSchema,
+			`${path}.${name}`,
+			changes,
+			resolveLiteralSchema,
+		);
 	}
 	for (const [name, schema] of Object.entries(current.properties ?? {})) {
 		if (previous.properties?.[name] !== undefined) continue;
@@ -448,6 +516,7 @@ function compareSchema(previous, current, path, changes) {
 					`${path}.${name}`,
 					`property ${pattern}`,
 					changes,
+					resolveLiteralSchema,
 				);
 			}
 		} else {
@@ -457,6 +526,7 @@ function compareSchema(previous, current, path, changes) {
 				`${path}.${name}`,
 				"property",
 				changes,
+				resolveLiteralSchema,
 			);
 		}
 	}
@@ -470,6 +540,7 @@ function compareSchema(previous, current, path, changes) {
 			`${path}.${pattern}`,
 			"patternProperties",
 			changes,
+			resolveLiteralSchema,
 		);
 		if (previousPatternSchema === undefined) {
 			const expression = new RegExp(pattern);
@@ -483,6 +554,7 @@ function compareSchema(previous, current, path, changes) {
 					`${path}.${name}`,
 					`patternProperties ${pattern}`,
 					changes,
+					resolveLiteralSchema,
 				);
 			}
 		}
@@ -497,6 +569,7 @@ function compareSchema(previous, current, path, changes) {
 			`${path}.${pattern}`,
 			"patternProperties",
 			changes,
+			resolveLiteralSchema,
 		);
 	}
 	compareSubschemaConstraint(
@@ -505,6 +578,7 @@ function compareSchema(previous, current, path, changes) {
 		`${path}[]`,
 		"items",
 		changes,
+		resolveLiteralSchema,
 	);
 	const previousPrefixItems = Array.isArray(previous.prefixItems)
 		? previous.prefixItems
@@ -519,6 +593,7 @@ function compareSchema(previous, current, path, changes) {
 			`${path}[${index}]`,
 			"prefixItems",
 			changes,
+			resolveLiteralSchema,
 		);
 	}
 	for (
@@ -532,6 +607,7 @@ function compareSchema(previous, current, path, changes) {
 			`${path}[${index}]`,
 			"prefixItems",
 			changes,
+			resolveLiteralSchema,
 		);
 	}
 	const previousContains = previous.contains;
@@ -543,6 +619,7 @@ function compareSchema(previous, current, path, changes) {
 			path,
 			"contains",
 			changes,
+			resolveLiteralSchema,
 		);
 		const previousMinContains =
 			previousContains === undefined ? 0 : (previous.minContains ?? 1);
@@ -562,19 +639,58 @@ function compareSchema(previous, current, path, changes) {
 	for (const [name, schema] of Object.entries(previous.$defs ?? {})) {
 		const currentSchema = current.$defs?.[name];
 		if (currentSchema !== undefined) {
-			compareSchema(schema, currentSchema, `${path}.$defs.${name}`, changes);
+			compareSchema(
+				schema,
+				currentSchema,
+				`${path}.$defs.${name}`,
+				changes,
+				resolveLiteralSchema,
+			);
 		} else {
 			changes.push(`removed ${path}.$defs.${name}`);
 		}
 	}
 }
 
+function openApiIsCompatible(previous, current) {
+	const previousSchemas = previous.components?.schemas ?? {};
+	const currentSchemas = current.components?.schemas ?? {};
+	const changes = [];
+	const resolveLiteralSchema = (schema) =>
+		resolveLocalComponentSchema(schema, currentSchemas);
+	for (const [name, schema] of Object.entries(previousSchemas)) {
+		const currentSchema = currentSchemas[name];
+		if (currentSchema === undefined) return false;
+		compareSchema(
+			schema,
+			currentSchema,
+			`components.schemas.${name}`,
+			changes,
+			resolveLiteralSchema,
+		);
+	}
+	if (changes.length > 0) return false;
+
+	const normalized = structuredClone(current);
+	if (previous.components?.schemas === undefined) {
+		if (normalized.components) {
+			delete normalized.components.schemas;
+			if (Object.keys(normalized.components).length === 0) {
+				delete normalized.components;
+			}
+		}
+	} else {
+		if (!normalized.components) return false;
+		normalized.components.schemas = previous.components.schemas;
+	}
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
-		// ponytail: OpenAPI input/output variance is contextual. Fail closed until
-		// a real versioning need justifies a consumer-aware directional diff.
-		if (!sameValue(previous, current)) {
+		// ponytail: only component widening is proven; every operation byte stays exact.
+		if (!openApiIsCompatible(previous, current)) {
 			changes.push("changed OpenAPI contract");
 		}
 		return changes.sort();

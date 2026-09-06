@@ -5,6 +5,7 @@ import {
 	ConversationSseMessageV1Schema,
 	framePilotSseMessageV1,
 	HeartbeatSignalV1Schema,
+	ModelSelectionFallbackEventV1Schema,
 	PersistedConversationEventV1Schema,
 	pilotBrowserSseOpenApiPathsV1,
 	resolvePilotReplaySelectorV1,
@@ -70,6 +71,44 @@ describe("Pilot SSE contracts", () => {
 				schemaVersion: 2,
 			}).success,
 		).toBe(false);
+	});
+
+	it("persists a bounded model-selection fallback notice", () => {
+		const event = {
+			...baseEvent,
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+			},
+		} as const;
+
+		expect(ModelSelectionFallbackEventV1Schema.parse(event)).toEqual(event);
+		expect(PersistedConversationEventV1Schema.parse(event)).toEqual(event);
+		expect(framePilotSseMessageV1(event)).toEqual({
+			id: event.eventId,
+			data: event,
+		});
+
+		for (const payload of [
+			{ ...event.payload, modelOptionId: "" },
+			{ ...event.payload, reasoningLevel: "" },
+			{ ...event.payload, reason: "provider_failed" },
+			{ ...event.payload, previousModelOptionId: "model-removed" },
+			{ ...event.payload, previousReasoningLevel: "high" },
+			{ ...event.payload, credential: "credential-ref" },
+			{ ...event.payload, apiKey: "not-a-secret" },
+			{ ...event.payload, nativeModelId: "provider-model" },
+			{ ...event.payload, runtimeSessionId: "runtime-session" },
+		]) {
+			expect(
+				ModelSelectionFallbackEventV1Schema.safeParse({
+					...event,
+					payload,
+				}).success,
+			).toBe(false);
+		}
 	});
 
 	it("defines heartbeat, reload, and authorization controls outside persisted events", () => {

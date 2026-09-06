@@ -21,6 +21,23 @@ const replayTextEvent = {
 	payload: { text: "Hello" },
 } as const;
 
+const replayModelSelectionFallbackEvent = {
+	schemaVersion: 1,
+	kind: "event",
+	eventId: "event-replay-2",
+	conversationId: "conversation-pilot-1",
+	executionId: "execution-pilot-1",
+	sequence: 2,
+	conversationCursor: "cursor-pilot-2",
+	occurredAt: "2026-08-28T10:00:01Z",
+	type: "model.selection.fell_back",
+	payload: {
+		modelOptionId: "model-primary",
+		reasoningLevel: "medium",
+		reason: "selection_unavailable",
+	},
+} as const;
+
 export const pilotFakeScenariosV1 = {
 	success: {
 		kind: "http",
@@ -239,15 +256,16 @@ export const pilotFakeScenariosV1 = {
 		messages: [
 			replayTextEvent,
 			replayTextEvent,
+			replayModelSelectionFallbackEvent,
 			{
 				schemaVersion: 1,
 				kind: "event",
-				eventId: "event-replay-2",
+				eventId: "event-replay-3",
 				conversationId: "conversation-pilot-1",
 				executionId: "execution-pilot-1",
-				sequence: 2,
-				conversationCursor: "cursor-pilot-2",
-				occurredAt: "2026-08-28T10:00:01Z",
+				sequence: 3,
+				conversationCursor: "cursor-pilot-3",
+				occurredAt: "2026-08-28T10:00:02Z",
 				type: "execution.status",
 				payload: { status: "completed" },
 			},
@@ -298,6 +316,10 @@ const pilotCursorPositionsV1: Record<string, PilotReplayPositionV1> = {
 		conversationId: "conversation-pilot-1",
 		afterSequence: 2,
 	},
+	"cursor-pilot-3": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 3,
+	},
 	"cursor-other-1": {
 		conversationId: "conversation-other-1",
 		afterSequence: 1,
@@ -315,6 +337,10 @@ const pilotEventPositionsV1: Record<string, PilotReplayPositionV1> = {
 	"event-replay-2": {
 		conversationId: "conversation-pilot-1",
 		afterSequence: 2,
+	},
+	"event-replay-3": {
+		conversationId: "conversation-pilot-1",
+		afterSequence: 3,
 	},
 	"event-other-1": {
 		conversationId: "conversation-other-1",
@@ -345,7 +371,7 @@ export function resolvePilotReplayV1(input: PilotReplayInputV1) {
 					: usesCursor
 						? "cursor_expired"
 						: "unknown_event_id",
-				resumeCursor: "cursor-pilot-2",
+				resumeCursor: "cursor-pilot-3",
 			},
 		] as const;
 	}

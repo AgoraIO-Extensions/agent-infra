@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -8,18 +10,16 @@ const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const fixturePath = (name: string) =>
 	fileURLToPath(new URL(`../test/compatibility/${name}.json`, import.meta.url));
 
-function compare(current: string, previous = "base") {
+function comparePaths(current: string, previous: string) {
 	return spawnSync(
 		process.execPath,
-		[
-			cliPath,
-			"--previous",
-			fixturePath(previous),
-			"--current",
-			fixturePath(current),
-		],
+		[cliPath, "--previous", previous, "--current", current],
 		{ encoding: "utf8" },
 	);
+}
+
+function compare(current: string, previous = "base") {
+	return comparePaths(fixturePath(current), fixturePath(previous));
 }
 
 describe("contract compatibility command", () => {
@@ -37,6 +37,68 @@ describe("contract compatibility command", () => {
 		const result = compare("additive");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("accepts a disjoint OpenAPI component added through a local ref", () => {
+		const result = compare(
+			"openapi-component-ref-additive",
+			"openapi-component-ref-base",
+		);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
+	});
+
+	it("fails closed for unprovable OpenAPI component refs", async () => {
+		const previous = fixturePath("openapi-component-ref-base");
+		const additive = JSON.parse(
+			await readFile(fixturePath("openapi-component-ref-additive"), "utf8"),
+		);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-openapi-ref-"),
+		);
+		const expectRejected = async (name: string, current: unknown) => {
+			const path = resolve(directory, `${name}.json`);
+			await writeFile(path, JSON.stringify(current), "utf8");
+			const result = comparePaths(path, previous);
+			expect(result.status, name).toBe(1);
+			expect(result.stderr, name).toContain("changed OpenAPI contract");
+		};
+
+		try {
+			for (const [name, ref] of [
+				["malformed", "#/components/schemas/Fallback~2EventV1"],
+				["external", "https://example.invalid/FallbackEventV1"],
+				["missing", "#/components/schemas/MissingEventV1"],
+			] as const) {
+				const current = structuredClone(additive);
+				current.components.schemas.EventV1.oneOf[1].$ref = ref;
+				await expectRejected(name, current);
+			}
+
+			const cyclic = structuredClone(additive);
+			cyclic.components.schemas.FallbackEventV1 = {
+				$ref: "#/components/schemas/CycleEventV1",
+			};
+			cyclic.components.schemas.CycleEventV1 = {
+				$ref: "#/components/schemas/FallbackEventV1",
+			};
+			await expectRejected("cyclic", cyclic);
+
+			const sibling = structuredClone(additive);
+			sibling.components.schemas.EventV1.oneOf[1].description = "Ref sibling";
+			await expectRejected("sibling", sibling);
+
+			const operationChange = structuredClone(additive);
+			operationChange.paths["/events"].get.operationId = "streamEventsV2";
+			await expectRejected("operation", operationChange);
+
+			const discriminatorDrift = structuredClone(additive);
+			discriminatorDrift.components.schemas.TextEventV1.properties.type.const =
+				"message.delta";
+			await expectRejected("existing-discriminator", discriminatorDrift);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it.each([

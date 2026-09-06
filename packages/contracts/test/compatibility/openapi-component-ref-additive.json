@@ -1,0 +1,58 @@
+{
+	"openapi": "3.1.0",
+	"paths": {
+		"/events": {
+			"get": {
+				"operationId": "streamEvents",
+				"responses": {
+					"200": {
+						"content": {
+							"text/event-stream": {
+								"schema": {
+									"$ref": "#/components/schemas/EventV1"
+								}
+							}
+						},
+						"description": "Events"
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"schemas": {
+			"EventV1": {
+				"oneOf": [
+					{
+						"$ref": "#/components/schemas/TextEventV1"
+					},
+					{
+						"$ref": "#/components/schemas/FallbackEventV1"
+					}
+				]
+			},
+			"FallbackEventV1": {
+				"additionalProperties": false,
+				"properties": {
+					"type": {
+						"const": "model.selection.fell_back",
+						"type": "string"
+					}
+				},
+				"required": ["type"],
+				"type": "object"
+			},
+			"TextEventV1": {
+				"additionalProperties": false,
+				"properties": {
+					"type": {
+						"const": "text.delta",
+						"type": "string"
+					}
+				},
+				"required": ["type"],
+				"type": "object"
+			}
+		}
+	}
+}

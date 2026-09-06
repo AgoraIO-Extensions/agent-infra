@@ -1,0 +1,44 @@
+{
+	"openapi": "3.1.0",
+	"paths": {
+		"/events": {
+			"get": {
+				"operationId": "streamEvents",
+				"responses": {
+					"200": {
+						"content": {
+							"text/event-stream": {
+								"schema": {
+									"$ref": "#/components/schemas/EventV1"
+								}
+							}
+						},
+						"description": "Events"
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"schemas": {
+			"EventV1": {
+				"oneOf": [
+					{
+						"$ref": "#/components/schemas/TextEventV1"
+					}
+				]
+			},
+			"TextEventV1": {
+				"additionalProperties": false,
+				"properties": {
+					"type": {
+						"const": "text.delta",
+						"type": "string"
+					}
+				},
+				"required": ["type"],
+				"type": "object"
+			}
+		}
+	}
+}

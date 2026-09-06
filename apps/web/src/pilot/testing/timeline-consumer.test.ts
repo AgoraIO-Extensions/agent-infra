@@ -16,8 +16,30 @@ describe("Pilot Web SSE consumer", () => {
 		]);
 		expect(result.events.map((event) => event.eventId)).toEqual([
 			"event-replay-2",
+			"event-replay-3",
 		]);
-		expect(result.events.map((event) => event.sequence)).toEqual([2]);
+		expect(result.events.map((event) => event.sequence)).toEqual([2, 3]);
+	});
+
+	it("consumes one generated fallback event across live delivery and replay", () => {
+		const consumer = createPilotSseMessageConsumer();
+		const fallback = pilotFakeScenariosV1.replay.messages.find(
+			(message) => message.type === "model.selection.fell_back",
+		) as Extract<
+			ConversationSseMessageV1,
+			{ type: "model.selection.fell_back" }
+		>;
+
+		const live = consumer.consume([fallback]);
+		const replay = consumer.consume([fallback]);
+
+		expect(live.events).toEqual([fallback]);
+		expect(live.events[0]?.payload).toEqual({
+			modelOptionId: "model-primary",
+			reasoningLevel: "medium",
+			reason: "selection_unavailable",
+		});
+		expect(replay.events).toEqual([]);
 	});
 
 	it("keeps stale-authorization control outside the persisted timeline", () => {
