@@ -13,6 +13,17 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
+test("Platform Worker typecheck builds its dist-backed Secret Store dependency", async () => {
+	const manifest = JSON.parse(
+		await readFile("apps/platform-worker/package.json", "utf8"),
+	);
+
+	assert.match(
+		manifest.scripts["check-types"],
+		/pnpm --filter @agent-infra\/secret-store build && tsc --noEmit/,
+	);
+});
+
 test("deployment images pin every base image by digest", async () => {
 	for (const [service, path] of dockerfiles) {
 		const dockerfile = await readFile(path, "utf8");
