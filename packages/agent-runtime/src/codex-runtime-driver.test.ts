@@ -340,6 +340,7 @@ class TestCodexBridge {
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
 	private dropInterruptResponse = false;
+	private rejectNextTurnSelection = false;
 	private interruptTerminalStatus?: Exclude<CodexTurnStatus, "inProgress">;
 	private configReadResult: Record<string, unknown> = configReadResult();
 
@@ -406,6 +407,17 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "turn/start") {
+			if (this.rejectNextTurnSelection) {
+				this.rejectNextTurnSelection = false;
+				this.push({
+					id,
+					error: {
+						code: -32_602,
+						message: "synthetic native selection refusal",
+					},
+				});
+				return;
+			}
 			if (this.closeOnTurnStart) {
 				await this.close();
 				return;
@@ -469,6 +481,10 @@ class TestCodexBridge {
 
 	dropNextInterruptResponse() {
 		this.dropInterruptResponse = true;
+	}
+
+	rejectNextSelectedTurn() {
+		this.rejectNextTurnSelection = true;
 	}
 
 	completeOnInterrupt(status: Exclude<CodexTurnStatus, "inProgress">) {
@@ -809,6 +825,96 @@ describe("Codex Runtime Driver", () => {
 			"config/read",
 		]);
 		expect(JSON.stringify(result)).not.toContain("gpt-5.3-codex");
+	});
+
+	it("resets a legacy V1 Turn to configured defaults after a V2 override", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const selected = await driver.execute(
+			submitCommandV2({
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-alternate",
+					reasoningLevel: "low",
+				},
+			}),
+		);
+		bridge.setTurnStatus("completed");
+		await driver.getStatus(selected.nativeSessionRef, "execution-codex");
+
+		await driver.execute(
+			submitCommand({
+				operationId: "execution-codex-v1-after-v2",
+				executionId: "execution-codex-v1-after-v2",
+				turnId: "turn-codex-v1-after-v2",
+				nativeSessionRef: selected.nativeSessionRef,
+			}),
+		);
+
+		expect(
+			bridge.requests
+				.filter(({ method }) => method === "turn/start")
+				.map(({ params }) => params),
+		).toEqual([
+			{
+				threadId: bridge.nativeThreadId,
+				clientUserMessageId: "execution-codex",
+				input: [{ type: "text", text: "synthetic-input" }],
+				model: "gpt-5.2-codex",
+				effort: "low",
+			},
+			{
+				threadId: bridge.nativeThreadId,
+				clientUserMessageId: "execution-codex-v1-after-v2",
+				input: [{ type: "text", text: "synthetic-input" }],
+				model: "gpt-5.3-codex",
+				effort: "high",
+			},
+		]);
+	});
+
+	it("persists a redacted unsupported result for a native V2 refusal", async () => {
+		const directory = await runtimeDirectory();
+		const driverPath = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		bridge.rejectNextSelectedTurn();
+		const driver = await openDriver(driverPath, bridge);
+		drivers.push(driver);
+		const runtimeHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(join(directory, "host.json")),
+				driver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		const request = submitRequestV2();
+
+		const rejected = await runtimeHost.submitTurnV2(request);
+		expect(rejected.result).toEqual({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+			message: "Runtime model selection is unsupported",
+			retryable: false,
+		});
+		expect(
+			await runtimeHost.submitTurnV2({
+				...request,
+				requestId: "request-codex-native-refusal-replay",
+			}),
+		).toEqual(rejected);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+		const state = await readFile(driverPath, "utf8");
+		expect(state).not.toContain("acceptanceUncertainOperationKey");
+		expect(JSON.stringify(rejected)).not.toContain(
+			"synthetic native selection refusal",
+		);
 	});
 
 	it("waits for a durable terminal Turn before confirming generation cancellation", async () => {

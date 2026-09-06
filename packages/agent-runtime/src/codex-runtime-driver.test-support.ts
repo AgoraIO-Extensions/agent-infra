@@ -38,6 +38,7 @@ interface CodexRuntimeDriverConformanceFixture {
 	completeStopAsCompleted(): Promise<void>;
 	turnStartCount(): number;
 	turnSelections(): readonly { model: string; effort: string }[];
+	rejectNextSelectedTurn(): void;
 	delegatedToolWasDeniedAndRedacted(
 		response?: "driver" | "unexpected-success",
 	): Promise<boolean>;
@@ -55,6 +56,7 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	private heldTurnStart?: { id: number; resolve: () => void };
 	private signalTurnStartHeld?: () => void;
 	private delegatedToolResult?: (result: boolean) => void;
+	private rejectNextSelection = false;
 
 	constructor(
 		private readonly path: string,
@@ -124,6 +126,17 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 						model: params.model,
 						effort: params.effort,
 					});
+				}
+				if (this.rejectNextSelection) {
+					this.rejectNextSelection = false;
+					this.push({
+						id: frame.id,
+						error: {
+							code: -32_602,
+							message: "synthetic native selection refusal",
+						},
+					});
+					return;
 				}
 				if (this.loseTurnStartResponse) {
 					await this.close();
@@ -202,6 +215,10 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	completeStopAsCompleted() {
 		this.turnStatus = "completed";
 		this.terminalOnInterrupt = undefined;
+	}
+
+	rejectNextSelectedTurn() {
+		this.rejectNextSelection = true;
 	}
 
 	private currentTurnId() {
@@ -348,6 +365,7 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 		completeStopAsCompleted: async () => transport.completeStopAsCompleted(),
 		turnStartCount: () => state.turnStarts,
 		turnSelections: () => structuredClone(state.turnSelections),
+		rejectNextSelectedTurn: () => transport.rejectNextSelectedTurn(),
 		delegatedToolWasDeniedAndRedacted: (response) =>
 			transport.delegatedToolWasDeniedAndRedacted(response),
 		close: async () => {

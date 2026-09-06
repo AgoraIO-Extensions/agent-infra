@@ -110,7 +110,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
-RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，新接受的 Execution 必须使用 V2；V1 退役需要独立的 breaking-change 决策。
+RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，并在每次原生执行入口显式应用已配置的默认模型和 reasoning；新接受的 Execution 必须使用 V2。取舍见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)，V1 退役需要独立的 breaking-change 决策。
 
 固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
 

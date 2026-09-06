@@ -37,6 +37,7 @@ interface ConformanceDriverFixture {
 	completeStopAsCompleted(operationId: string): Promise<void>;
 	createdTurnCount(): Promise<number>;
 	turnSelections(): readonly RuntimeSelectionV1[];
+	rejectNextSelectedTurn(): void;
 	restart(): Promise<ConformanceDriverFixture>;
 	makeOperationUnknown(operationId: string): Promise<void>;
 	delegatedToolWasDeniedAndRedacted(
@@ -121,6 +122,7 @@ async function openConformanceDriver(
 				driver.setOperationStatus(operationId, "completed"),
 			createdTurnCount: () => driver.sideEffectCount(),
 			turnSelections: () => structuredClone(turnSelections),
+			rejectNextSelectedTurn: () => undefined,
 			restart: () => openConformanceDriver(name, path),
 			makeOperationUnknown: (operationId) =>
 				driver.makeOperationUnknown(operationId),
@@ -161,6 +163,7 @@ function wrapCodexFixture(
 						: "model-option-alternate",
 				reasoningLevel: effort,
 			})),
+		rejectNextSelectedTurn: () => fixture.rejectNextSelectedTurn(),
 		restart: async () => {
 			await close();
 			return wrapCodexFixture(await fixture.restart());
@@ -784,6 +787,36 @@ describe("Runtime Driver shared conformance", () => {
 });
 
 describe("Codex Driver boundary conformance", () => {
+	it("maps a native selected-Turn refusal to one stable redacted rejection", async () => {
+		const path = await directory();
+		const fixture = await openConformanceDriver(
+			"Codex",
+			join(path, "driver.json"),
+		);
+		const host = await openConformanceHost(
+			join(path, "host.json"),
+			fixture.driver,
+		);
+		const request = submitRequestV2();
+		fixture.rejectNextSelectedTurn();
+
+		const rejected = await host.submitTurnV2(request);
+		expect(rejected.result).toMatchObject({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		});
+		expect(
+			await host.submitTurnV2({
+				...request,
+				requestId: "request-conformance-native-refusal-replay",
+			}),
+		).toEqual(rejected);
+		expect(await fixture.createdTurnCount()).toBe(1);
+		expect(JSON.stringify(rejected)).not.toContain(
+			"synthetic native selection refusal",
+		);
+	});
+
 	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
 		const driverPath = join(path, "driver.json");

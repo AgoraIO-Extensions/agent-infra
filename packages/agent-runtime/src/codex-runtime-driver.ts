@@ -122,7 +122,8 @@ interface CodexDriverState {
 
 interface PendingRequest {
 	resolve: (value: unknown) => void;
-	reject: (error: RuntimeHostError) => void;
+	reject: (error: Error) => void;
+	nativeSelectionRejection: boolean;
 }
 
 type CodexNotificationHandler = (frame: CodexAppServerFrame) => Promise<void>;
@@ -254,6 +255,16 @@ function isJsonRpcRequestId(value: unknown): value is string | number {
 	return (
 		typeof value === "string" ||
 		(typeof value === "number" && Number.isSafeInteger(value))
+	);
+}
+
+function isJsonRpcError(value: unknown) {
+	return (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, ["code", "message", "data"]) &&
+		typeof value.code === "number" &&
+		Number.isSafeInteger(value.code) &&
+		nonEmptyString(value.message)
 	);
 }
 
@@ -700,6 +711,13 @@ function stateInvalid(): never {
 	);
 }
 
+class CodexModelSelectionRejectedError extends Error {
+	constructor() {
+		super("Codex Runtime rejected the selected model");
+		this.name = "CodexModelSelectionRejectedError";
+	}
+}
+
 function driverRecord(
 	command: RuntimeDriverCommand,
 	value: unknown,
@@ -844,6 +862,7 @@ class CodexRpc {
 		method: string,
 		params: Record<string, unknown>,
 		parse: (value: unknown) => T,
+		nativeSelectionRejection = false,
 	) {
 		if (this.failed) unavailable();
 		const id = this.nextRequestId++;
@@ -851,6 +870,7 @@ class CodexRpc {
 			this.pending.set(id, {
 				resolve: (value) => resolve(parse(value)),
 				reject,
+				nativeSelectionRejection,
 			});
 		});
 		void response.catch(() => {});
@@ -867,6 +887,7 @@ class CodexRpc {
 			return await Promise.race([response, deadline]);
 		} catch (error) {
 			this.pending.delete(id);
+			if (error instanceof CodexModelSelectionRejectedError) throw error;
 			const failure =
 				error instanceof RuntimeHostError ? error : unavailableError();
 			this.fail(failure);
@@ -937,7 +958,16 @@ class CodexRpc {
 			this.fail(protocolInvalidError());
 			return;
 		}
-		if ("error" in frame || !("result" in frame)) {
+		if ("error" in frame) {
+			if (pending.nativeSelectionRejection && isJsonRpcError(frame.error)) {
+				pending.reject(new CodexModelSelectionRejectedError());
+				this.pending.delete(frame.id);
+				return;
+			}
+			this.fail(protocolInvalidError());
+			return;
+		}
+		if (!("result" in frame)) {
 			this.fail(protocolInvalidError());
 			return;
 		}
@@ -983,6 +1013,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly file: DurableJsonFile<CodexDriverState>,
 		bridge: CodexAppServerTransport,
 		private readonly modelOptions: ReadonlyMap<string, CodexRuntimeModelOption>,
+		private readonly defaultSelection: { model: string; effort: string },
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
 	}
@@ -1012,7 +1043,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} catch {
 			unavailable();
 		}
-		const driver = new CodexRuntimeDriver(file, bridge, modelOptions);
+		const driver = new CodexRuntimeDriver(file, bridge, modelOptions, {
+			model: options.model,
+			effort: options.reasoningEffort,
+		});
 		try {
 			await driver.rpc.request(
 				"initialize",
@@ -1089,7 +1123,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const nativeSelection =
 			command.schemaVersion === 2
 				? this.nativeSelection(command.selection)
-				: undefined;
+				: this.defaultSelection;
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (command.schemaVersion === 2 && !nativeSelection) {
@@ -1153,6 +1187,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						status: statusForTurn(started.status),
 					};
 				},
+				command.schemaVersion === 2,
 			);
 			return await this.resolve(
 				command,
@@ -1161,6 +1196,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				turn.id,
 			);
 		} catch (error) {
+			if (error instanceof CodexModelSelectionRejectedError) {
+				return this.resolve(command, session.nativeSessionRef, {
+					outcome: "rejected",
+					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+					message: "Runtime model selection is unsupported",
+					retryable: false,
+				});
+			}
 			await this.markAcceptanceUncertain(command, session.nativeSessionRef);
 			throw error;
 		}
