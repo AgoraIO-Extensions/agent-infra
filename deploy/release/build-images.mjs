@@ -226,6 +226,7 @@ async function buildImage({
 	commitSha,
 	epoch,
 	platform,
+	platformTag,
 	prefix,
 	temp,
 	contextPath,
@@ -233,7 +234,7 @@ async function buildImage({
 }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
-	const reference = `${repository}:${commitSha}`;
+	const reference = `${repository}:${commitSha}-${platformTag}`;
 	const digests = [];
 	let archivePath;
 	for (const pass of [1, 2]) {
@@ -431,6 +432,7 @@ async function main() {
 
 	const platform = process.env.PLATFORM ?? "linux/amd64";
 	if (!/^linux\/(?:amd64|arm64)$/.test(platform)) fail("PLATFORM is invalid");
+	const platformTag = platform.replace("/", "-");
 	const prefix = process.env.IMAGE_REPOSITORY_PREFIX;
 	if (!prefix) fail("image repository prefix is required");
 	if (!repositoryPattern.test(prefix)) {
@@ -455,6 +457,7 @@ async function main() {
 				commitSha,
 				epoch,
 				platform,
+				platformTag,
 				prefix,
 				temp,
 				contextPath,

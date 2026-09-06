@@ -158,7 +158,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 			assert.equal(
 				image.digest,
 				`sha256:${createHash("sha256")
-					.update(`${image.repository}:${commitSha}:stable`)
+					.update(`${image.repository}:${commitSha}-linux-amd64:stable`)
 					.digest("hex")}`,
 			);
 		}
@@ -303,6 +303,66 @@ test("image publication requires an explicit repository prefix", async () => {
 		await assert.rejects(access(manifestPath));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image publication isolates mutable tags by platform", async () => {
+	const amd64 = await mkdtemp(join(tmpdir(), "agent-infra-images-amd64-"));
+	const arm64 = await mkdtemp(join(tmpdir(), "agent-infra-images-arm64-"));
+	try {
+		for (const directory of [amd64, arm64]) {
+			await fakes(directory);
+			await writeFile(join(directory, "docker-state.json"), "{}");
+		}
+		const amd64ManifestPath = join(amd64, "images.json");
+		const arm64ManifestPath = join(arm64, "images.json");
+		const amd64Result = build(amd64ManifestPath, amd64);
+		const arm64Result = build(arm64ManifestPath, arm64, {
+			PLATFORM: "linux/arm64",
+		});
+		assert.equal(amd64Result.status, 0, amd64Result.stderr);
+		assert.equal(arm64Result.status, 0, arm64Result.stderr);
+
+		const publishedReferences = async (directory) =>
+			(await readFile(join(directory, "docker.log"), "utf8"))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line))
+				.filter((args) => args[0] === "push")
+				.map((args) => args[1]);
+		const amd64References = await publishedReferences(amd64);
+		const arm64References = await publishedReferences(arm64);
+		assert.equal(amd64References.length, 4);
+		assert.equal(arm64References.length, 4);
+		assert.ok(
+			amd64References.every((reference) =>
+				reference.endsWith(`:${commitSha}-linux-amd64`),
+			),
+		);
+		assert.ok(
+			arm64References.every((reference) =>
+				reference.endsWith(`:${commitSha}-linux-arm64`),
+			),
+		);
+		assert.deepEqual(
+			amd64References.filter((reference) =>
+				arm64References.includes(reference),
+			),
+			[],
+		);
+
+		for (const manifestPath of [amd64ManifestPath, arm64ManifestPath]) {
+			const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+			for (const image of Object.values(manifest.images)) {
+				assert.deepEqual(Object.keys(image).toSorted(), [
+					"digest",
+					"repository",
+				]);
+			}
+		}
+	} finally {
+		await rm(amd64, { recursive: true, force: true });
+		await rm(arm64, { recursive: true, force: true });
 	}
 });
 
