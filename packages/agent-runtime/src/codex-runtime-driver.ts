@@ -40,7 +40,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly path: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
-	readonly modelOptions?: readonly CodexRuntimeModelOption[];
+	readonly modelOptions: readonly CodexRuntimeModelOption[];
 }
 
 export interface CodexRuntimeModelOption {
@@ -258,13 +258,13 @@ function isJsonRpcRequestId(value: unknown): value is string | number {
 	);
 }
 
-function isJsonRpcError(value: unknown) {
+function isNativeSelectionRejection(value: unknown) {
 	return (
 		isPlainRecord(value) &&
 		hasOnlyKeys(value, ["code", "message", "data"]) &&
-		typeof value.code === "number" &&
-		Number.isSafeInteger(value.code) &&
-		nonEmptyString(value.message)
+		value.code === -32_600 &&
+		nonEmptyString(value.message) &&
+		value.message.startsWith("invalid thread settings override:")
 	);
 }
 
@@ -769,20 +769,40 @@ function assertContainedConfiguration(
 
 function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	const configured = new Map<string, CodexRuntimeModelOption>();
-	for (const option of options.modelOptions ?? []) {
+	const values: unknown = options.modelOptions;
+	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
+	for (const value of values) {
 		if (
-			!nonEmptyString(option.modelOptionId) ||
-			!codexModelPattern.test(option.model) ||
-			option.reasoningLevels.length === 0 ||
-			option.reasoningLevels.some(
-				(level) => !codexReasoningPattern.test(level),
+			!isPlainRecord(value) ||
+			!hasOnlyKeys(value, ["modelOptionId", "model", "reasoningLevels"]) ||
+			!nonEmptyString(value.modelOptionId) ||
+			typeof value.model !== "string" ||
+			!codexModelPattern.test(value.model) ||
+			!Array.isArray(value.reasoningLevels) ||
+			value.reasoningLevels.length === 0 ||
+			value.reasoningLevels.some(
+				(level) =>
+					typeof level !== "string" || !codexReasoningPattern.test(level),
 			) ||
-			new Set(option.reasoningLevels).size !== option.reasoningLevels.length ||
-			configured.has(option.modelOptionId)
+			new Set(value.reasoningLevels).size !== value.reasoningLevels.length ||
+			configured.has(value.modelOptionId)
 		) {
 			configurationInvalid();
 		}
-		configured.set(option.modelOptionId, option);
+		configured.set(value.modelOptionId, {
+			modelOptionId: value.modelOptionId,
+			model: value.model,
+			reasoningLevels: [...value.reasoningLevels],
+		});
+	}
+	if (
+		![...configured.values()].some(
+			(option) =>
+				option.model === options.model &&
+				option.reasoningLevels.includes(options.reasoningEffort),
+		)
+	) {
+		configurationInvalid();
 	}
 	return configured;
 }
@@ -959,7 +979,10 @@ class CodexRpc {
 			return;
 		}
 		if ("error" in frame) {
-			if (pending.nativeSelectionRejection && isJsonRpcError(frame.error)) {
+			if (
+				pending.nativeSelectionRejection &&
+				isNativeSelectionRejection(frame.error)
+			) {
 				pending.reject(new CodexModelSelectionRejectedError());
 				this.pending.delete(frame.id);
 				return;

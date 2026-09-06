@@ -17,7 +17,10 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
-import type { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import type {
+	CodexRuntimeDriver,
+	CodexRuntimeDriverOptions,
+} from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import {
@@ -340,7 +343,7 @@ class TestCodexBridge {
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
 	private dropInterruptResponse = false;
-	private rejectNextTurnSelection = false;
+	private nextTurnStartError?: { code: number; message: string };
 	private interruptTerminalStatus?: Exclude<CodexTurnStatus, "inProgress">;
 	private configReadResult: Record<string, unknown> = configReadResult();
 
@@ -407,14 +410,12 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "turn/start") {
-			if (this.rejectNextTurnSelection) {
-				this.rejectNextTurnSelection = false;
+			if (this.nextTurnStartError) {
+				const error = this.nextTurnStartError;
+				this.nextTurnStartError = undefined;
 				this.push({
 					id,
-					error: {
-						code: -32_602,
-						message: "synthetic native selection refusal",
-					},
+					error,
 				});
 				return;
 			}
@@ -483,8 +484,13 @@ class TestCodexBridge {
 		this.dropInterruptResponse = true;
 	}
 
-	rejectNextSelectedTurn() {
-		this.rejectNextTurnSelection = true;
+	rejectNextSelectedTurn(
+		error = {
+			code: -32_600,
+			message: "invalid thread settings override: synthetic selection",
+		},
+	) {
+		this.nextTurnStartError = error;
 	}
 
 	completeOnInterrupt(status: Exclude<CodexTurnStatus, "inProgress">) {
@@ -704,6 +710,52 @@ afterEach(async () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it.each([
+		["missing options", undefined],
+		["empty options", []],
+		[
+			"missing default model",
+			[
+				{
+					modelOptionId: "model-option-alternate",
+					model: "gpt-5.2-codex",
+					reasoningLevels: ["low"],
+				},
+			],
+		],
+		[
+			"missing default reasoning",
+			[
+				{
+					modelOptionId: "model-option-primary",
+					model: "gpt-5.3-codex",
+					reasoningLevels: ["low"],
+				},
+			],
+		],
+	] as const)(
+		"rejects %s before opening Codex",
+		async (_name, modelOptions) => {
+			const directory = await runtimeDirectory();
+			const options = {
+				...driverOptions(join(directory, "driver.json")),
+				modelOptions,
+			} as unknown as CodexRuntimeDriverOptions;
+			let opened = false;
+
+			await expect(
+				openCodexRuntimeDriverForTest(options, async () => {
+					opened = true;
+					return new TestCodexBridge();
+				}),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+				message: "Codex Runtime configuration is unavailable",
+			});
+			expect(opened).toBe(false);
+		},
+	);
+
 	it("initializes one bounded Codex Session and Turn without leaking native references", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -913,9 +965,33 @@ describe("Codex Runtime Driver", () => {
 		const state = await readFile(driverPath, "utf8");
 		expect(state).not.toContain("acceptanceUncertainOperationKey");
 		expect(JSON.stringify(rejected)).not.toContain(
-			"synthetic native selection refusal",
+			"invalid thread settings override",
 		);
 	});
+
+	it.each([
+		[-32_600, "other native request failure"],
+		[-32_602, "invalid thread settings override: generic invalid params"],
+		[-32_603, "invalid thread settings override: internal failure"],
+		[-32_001, "invalid thread settings override: overloaded"],
+	] as const)(
+		"keeps non-selection JSON-RPC error %i on the uncertain path",
+		async (code, message) => {
+			const directory = await runtimeDirectory();
+			const driverPath = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			bridge.rejectNextSelectedTurn({ code, message });
+			const driver = await openDriver(driverPath, bridge);
+			drivers.push(driver);
+
+			await expect(driver.execute(submitCommandV2())).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+			const state = await readFile(driverPath, "utf8");
+			expect(state).toContain("acceptanceUncertainOperationKey");
+			expect(state).not.toContain(message);
+		},
+	);
 
 	it("waits for a durable terminal Turn before confirming generation cancellation", async () => {
 		const directory = await runtimeDirectory();

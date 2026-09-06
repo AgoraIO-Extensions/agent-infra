@@ -813,7 +813,7 @@ describe("Codex Driver boundary conformance", () => {
 		).toEqual(rejected);
 		expect(await fixture.createdTurnCount()).toBe(1);
 		expect(JSON.stringify(rejected)).not.toContain(
-			"synthetic native selection refusal",
+			"invalid thread settings override",
 		);
 	});
 

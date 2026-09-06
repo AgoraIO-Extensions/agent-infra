@@ -132,8 +132,8 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 					this.push({
 						id: frame.id,
 						error: {
-							code: -32_602,
-							message: "synthetic native selection refusal",
+							code: -32_600,
+							message: "invalid thread settings override: synthetic selection",
 						},
 					});
 					return;
