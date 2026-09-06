@@ -3,13 +3,16 @@ RUN npm install -g pnpm@11.20.0
 WORKDIR /app
 
 COPY . .
-ARG PNPM_STORE_DIR=/pnpm-store
-RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store-dir "$PNPM_STORE_DIR"
+RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/platform-worker... build
 RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-worker deploy --prod /prod/platform-worker
-RUN rm /prod/platform-worker/node_modules/.modules.yaml /prod/platform-worker/node_modules/.pnpm-workspace-state-v1.json
+RUN rm /prod/platform-worker/pnpm-lock.yaml \
+    /prod/platform-worker/pnpm-workspace.yaml \
+    /prod/platform-worker/node_modules/.modules.yaml \
+    /prod/platform-worker/node_modules/.package-map.json \
+    /prod/platform-worker/node_modules/.pnpm-workspace-state-v1.json
 RUN find /prod/platform-worker -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.d.mts' -o -name '*.d.mts.map' -o -name '*.d.cts' -o -name '*.d.cts.map' \) -delete
 RUN cp -R /prod/platform-worker /prod/platform-worker-normalized \
     && rm -r /prod/platform-worker \

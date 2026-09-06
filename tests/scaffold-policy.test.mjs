@@ -106,7 +106,7 @@ test("Node runtime images contain only production deployment artifacts", async (
 	}
 });
 
-test("injected Platform runtime images discard compile-time declarations", async () => {
+test("injected Platform runtime images discard compile-time metadata", async () => {
 	for (const service of [
 		"platform-api",
 		"platform-worker",
@@ -118,6 +118,16 @@ test("injected Platform runtime images discard compile-time declarations", async
 			new RegExp(`find /prod/${service} -type f .+ -delete`),
 			`${service} must remove TypeScript declarations from its runtime deployment`,
 		);
+		for (const path of [
+			`/prod/${service}/pnpm-lock.yaml`,
+			`/prod/${service}/pnpm-workspace.yaml`,
+			`/prod/${service}/node_modules/.package-map.json`,
+		]) {
+			assert.ok(
+				dockerfile.includes(path),
+				`${service} must remove ${path} from its runtime deployment`,
+			);
+		}
 	}
 });
 

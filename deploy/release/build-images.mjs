@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,11 +14,14 @@ const timeoutMs = {
 	inspect: 30_000,
 	load: 5 * 60_000,
 	probe: 60_000,
+	publish: 10 * 60_000,
 };
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const assertInjectedRuntime =
 	"const {access,readdir}=await import('node:fs/promises');" +
 	"await Promise.all([access('./package.json'),access('./dist/index.mjs')]);" +
+	"const reject=async(path)=>{try{await access(path)}catch(error){if(error?.code==='ENOENT')return;throw error}throw new Error('Build metadata found')};" +
+	"await Promise.all(['./pnpm-lock.yaml','./pnpm-workspace.yaml','./node_modules/.package-map.json'].map(reject));" +
 	"const visit=async(path)=>{for(const entry of await readdir(path,{withFileTypes:true})){const child=path+'/'+entry.name;if(entry.isDirectory())await visit(child);else if(entry.isFile()&&/\\.d\\.(?:[cm]?ts)(?:\\.map)?$/.test(entry.name))throw new Error('TypeScript declarations found')}};" +
 	"await visit('.');";
 const images = [
@@ -105,7 +107,6 @@ async function buildImage({
 	platform,
 	prefix,
 	temp,
-	buildIdentity,
 	git,
 }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
@@ -117,7 +118,6 @@ async function buildImage({
 		assertCheckout(git, commitSha);
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
 		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
-		const storeDirectory = `/tmp/agent-infra-pnpm-store-${buildIdentity}-${image.name}-${pass}`;
 		runCommand(
 			docker,
 			[
@@ -129,8 +129,6 @@ async function buildImage({
 				platform,
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
-				"--build-arg",
-				`PNPM_STORE_DIR=${storeDirectory}`,
 				"--provenance=false",
 				"--sbom=false",
 				"--no-cache",
@@ -188,6 +186,27 @@ async function buildImage({
 	if (!runtimeUser || runtimeUser === "root" || /^0+$/.test(runtimeUser)) {
 		fail(`${image.key} image runtime user must be non-root`);
 	}
+	const effectiveUid = runCommand(
+		docker,
+		[
+			"run",
+			"--rm",
+			"--read-only",
+			...(image.runOptions ?? []),
+			"--entrypoint",
+			"id",
+			reference,
+			"-u",
+		],
+		{
+			cwd: repositoryRoot,
+			name: `${image.key} image effective user probe`,
+			timeoutMs: timeoutMs.probe,
+		},
+	);
+	if (!/^[0-9]+$/.test(effectiveUid) || /^0+$/.test(effectiveUid)) {
+		fail(`${image.key} image effective UID must be non-root`);
+	}
 	runCommand(
 		docker,
 		[
@@ -204,7 +223,43 @@ async function buildImage({
 			timeoutMs: timeoutMs.probe,
 		},
 	);
-	return { repository, digest: digests[0] };
+	return { repository, reference };
+}
+
+function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
+	const docker = process.env.DOCKER_BIN ?? "docker";
+	assertCheckout(git, commitSha);
+	runCommand(docker, ["push", builtImage.reference], {
+		cwd: repositoryRoot,
+		name: `${image.key} image publication`,
+		timeoutMs: timeoutMs.publish,
+	});
+	assertCheckout(git, commitSha);
+	const output = runCommand(
+		docker,
+		[
+			"manifest",
+			"inspect",
+			...(registryInsecure ? ["--insecure"] : []),
+			"--verbose",
+			builtImage.reference,
+		],
+		{
+			cwd: repositoryRoot,
+			name: `${image.key} published image inspection`,
+			timeoutMs: timeoutMs.inspect,
+		},
+	);
+	let digest;
+	try {
+		digest = JSON.parse(output)?.Descriptor?.digest;
+	} catch {
+		fail(`${image.key} published image metadata is invalid`);
+	}
+	if (!digestPattern.test(digest)) {
+		fail(`${image.key} published image digest is invalid`);
+	}
+	return { repository: builtImage.repository, digest };
 }
 
 async function main() {
@@ -245,27 +300,42 @@ async function main() {
 
 	const platform = process.env.PLATFORM ?? "linux/amd64";
 	if (!/^linux\/(?:amd64|arm64)$/.test(platform)) fail("PLATFORM is invalid");
-	const prefix =
-		process.env.IMAGE_REPOSITORY_PREFIX ??
-		"ghcr.io/agoraio-extensions/agent-infra";
+	const prefix = process.env.IMAGE_REPOSITORY_PREFIX;
+	if (!prefix) fail("image repository prefix is required");
 	if (!repositoryPattern.test(prefix)) {
 		fail("IMAGE_REPOSITORY_PREFIX is invalid");
 	}
+	const registryInsecureValue = process.env.IMAGE_REGISTRY_INSECURE;
+	if (
+		registryInsecureValue !== undefined &&
+		!["true", "false"].includes(registryInsecureValue)
+	) {
+		fail("IMAGE_REGISTRY_INSECURE is invalid");
+	}
+	const registryInsecure = registryInsecureValue === "true";
 
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-image-build-"));
-	const buildIdentity = randomUUID();
 	try {
-		const builtImages = {};
+		const buildResults = {};
 		for (const image of images) {
-			builtImages[image.key] = await buildImage({
+			buildResults[image.key] = await buildImage({
 				image,
 				commitSha,
 				epoch,
 				platform,
 				prefix,
 				temp,
-				buildIdentity,
 				git,
+			});
+		}
+		const builtImages = {};
+		for (const image of images) {
+			builtImages[image.key] = publishImage({
+				image,
+				builtImage: buildResults[image.key],
+				registryInsecure,
+				git,
+				commitSha,
 			});
 		}
 		assertCheckout(git, commitSha);

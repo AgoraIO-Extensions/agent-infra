@@ -37,12 +37,16 @@ deploy/kind/topology.sh render
 从 clean Git commit 构建四个 Platform 镜像并生成 image manifest：
 
 ```bash
-PLATFORM=linux/amd64 node deploy/release/build-images.mjs /tmp/agent-infra-images.json
+IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
+  PLATFORM=linux/amd64 \
+  node deploy/release/build-images.mjs /tmp/agent-infra-images.json
 ```
 
 该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
-根文件系统运行最小 probe。只有全部检查通过后才写入 image manifest；`PLATFORM` 也可设为
-`linux/arm64`。
+根文件系统运行最小 probe。全部镜像通过后，入口使用现有 Docker 登录态发布唯一一份已验证
+artifact，并回读 Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
+`IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
+`IMAGE_REGISTRY_INSECURE=true`，生产 Registry 必须使用 HTTPS。
 
 release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
 检查：

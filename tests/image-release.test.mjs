@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	access,
 	chmod,
@@ -61,27 +62,45 @@ if (args[0] === "image" && args[1] === "inspect") {
   process.exit(0);
 }
 if (args[0] === "load" && args[1] === "--input") process.exit(0);
-if (args[0] === "run") process.exit(0);
+if (args[0] === "push") process.exit(0);
+if (args[0] === "manifest" && args[1] === "inspect") {
+  const digest = process.env.FAKE_REMOTE_DIGEST ?? "sha256:" + createHash("sha256").update(args.at(-1) + ":published").digest("hex");
+  console.log(JSON.stringify({ Descriptor: { digest } }));
+  process.exit(0);
+}
+if (args[0] === "run") {
+  if (args.includes("--entrypoint")) console.log(process.env.FAKE_RUNTIME_UID ?? "1000");
+  process.exit(0);
+}
 process.exit(1);`,
 	);
 	return { docker, git };
 }
 
-function build(manifestPath, directory, environment = {}) {
+function build(
+	manifestPath,
+	directory,
+	environment = {},
+	repositoryPrefix = "registry.example/agent-infra",
+) {
+	const childEnvironment = {
+		...process.env,
+		DOCKER_BIN: join(directory, "docker.mjs"),
+		FAKE_DOCKER_LOG: join(directory, "docker.log"),
+		FAKE_DOCKER_STATE: join(directory, "docker-state.json"),
+		FAKE_GIT_DRIFT_MARKER: join(directory, "git-drift"),
+		GIT_BIN: join(directory, "git.mjs"),
+		PLATFORM: "linux/amd64",
+		...environment,
+	};
+	delete childEnvironment.IMAGE_REPOSITORY_PREFIX;
+	if (repositoryPrefix !== null) {
+		childEnvironment.IMAGE_REPOSITORY_PREFIX = repositoryPrefix;
+	}
 	return spawnSync(process.execPath, [builder, manifestPath], {
 		cwd: repositoryRoot,
 		encoding: "utf8",
-		env: {
-			...process.env,
-			DOCKER_BIN: join(directory, "docker.mjs"),
-			FAKE_DOCKER_LOG: join(directory, "docker.log"),
-			FAKE_DOCKER_STATE: join(directory, "docker-state.json"),
-			FAKE_GIT_DRIFT_MARKER: join(directory, "git-drift"),
-			GIT_BIN: join(directory, "git.mjs"),
-			IMAGE_REPOSITORY_PREFIX: "registry.example/agent-infra",
-			PLATFORM: "linux/amd64",
-			...environment,
-		},
+		env: childEnvironment,
 	});
 }
 
@@ -105,7 +124,12 @@ test("image build validates reproducibility and read-only non-root execution", a
 			"runtimeHost",
 		]);
 		for (const image of Object.values(manifest.images)) {
-			assert.match(image.digest, /^sha256:[a-f0-9]{64}$/);
+			assert.equal(
+				image.digest,
+				`sha256:${createHash("sha256")
+					.update(`${image.repository}:${commitSha}:published`)
+					.digest("hex")}`,
+			);
 		}
 
 		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
@@ -116,18 +140,14 @@ test("image build validates reproducibility and read-only non-root execution", a
 			(args) => args[0] === "buildx" && args[1] === "build",
 		);
 		assert.equal(builds.length, 8);
-		const storeDirectories = new Set();
 		for (const args of builds) {
 			assert.ok(args.includes("--no-cache"));
-			assert.ok(args.includes("SOURCE_DATE_EPOCH=1700000000"));
-			const store = args.find((argument) =>
-				argument.startsWith("PNPM_STORE_DIR="),
+			assert.deepEqual(
+				args.flatMap((argument, index) =>
+					argument === "--build-arg" ? [args[index + 1]] : [],
+				),
+				["SOURCE_DATE_EPOCH=1700000000"],
 			);
-			assert.match(
-				store,
-				/^PNPM_STORE_DIR=\/tmp\/agent-infra-pnpm-store-[a-f0-9-]+-[a-z-]+-[12]$/,
-			);
-			storeDirectories.add(store);
 			assert.ok(args.includes("--provenance=false"));
 			assert.ok(args.includes("--sbom=false"));
 			assert.match(
@@ -135,7 +155,6 @@ test("image build validates reproducibility and read-only non-root execution", a
 				/^type=oci,dest=.+,rewrite-timestamp=true$/,
 			);
 		}
-		assert.equal(storeDirectories.size, 8);
 		const firstMetadata = builds[0][builds[0].indexOf("--metadata-file") + 1];
 		await assert.rejects(access(resolve(firstMetadata, "..")));
 		assert.equal(
@@ -143,8 +162,36 @@ test("image build validates reproducibility and read-only non-root execution", a
 				.length,
 			4,
 		);
-		const probes = calls.filter((args) => args[0] === "run");
+		const pushes = calls.filter((args) => args[0] === "push");
+		const readbacks = calls.filter(
+			(args) => args[0] === "manifest" && args[1] === "inspect",
+		);
+		assert.equal(pushes.length, 4);
+		assert.equal(readbacks.length, 4);
+		assert.ok(
+			calls.indexOf(pushes[0]) >
+				calls.findLastIndex(
+					(args) => args[0] === "buildx" && args[1] === "build",
+				),
+			"publication must start only after every reproducibility build passes",
+		);
+		const probes = calls.filter(
+			(args) => args[0] === "run" && !args.includes("--entrypoint"),
+		);
+		const userProbes = calls.filter(
+			(args) => args[0] === "run" && args.includes("--entrypoint"),
+		);
 		assert.equal(probes.length, 4);
+		assert.equal(userProbes.length, 4);
+		for (const args of userProbes) {
+			assert.ok(args.includes("--read-only"));
+			assert.deepEqual(args.slice(args.indexOf("--entrypoint")), [
+				"--entrypoint",
+				"id",
+				args.at(-2),
+				"-u",
+			]);
+		}
 		for (const args of probes) {
 			assert.ok(args.includes("--read-only"));
 			const referenceIndex = args.findIndex((argument) =>
@@ -163,9 +210,17 @@ test("image build validates reproducibility and read-only non-root execution", a
 					assert.match(args.at(-1), /package\.json/);
 					assert.match(args.at(-1), /dist\/index\.mjs/);
 					assert.match(args.at(-1), /TypeScript declarations found/);
+					assert.match(args.at(-1), /pnpm-lock\.yaml/);
+					assert.match(args.at(-1), /pnpm-workspace\.yaml/);
+					assert.match(args.at(-1), /\.package-map\.json/);
 				}
 			}
 		}
+		assert.ok(
+			calls.indexOf(pushes[0]) >
+				calls.findLastIndex((args) => args[0] === "run"),
+			"publication must start only after every runtime probe passes",
+		);
 
 		await writeFile(join(directory, "docker-state.json"), "{}");
 		const checkoutDrift = build(
@@ -182,11 +237,68 @@ test("image build validates reproducibility and read-only non-root execution", a
 		await rm(join(directory, "git-drift"), { force: true });
 
 		await writeFile(join(directory, "docker-state.json"), "{}");
+		await writeFile(join(directory, "docker.log"), "");
 		const drifted = build(join(directory, "drifted.json"), directory, {
 			FAKE_DOCKER_DRIFT: "platform-worker",
 		});
 		assert.notEqual(drifted.status, 0);
 		assert.match(drifted.stderr, /platformWorker image is not reproducible/);
+		const driftCalls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
+		assert.equal(driftCalls.filter((args) => args[0] === "push").length, 0);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image publication requires an explicit repository prefix", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-prefix-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {}, null);
+
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /image repository prefix is required/);
+		await assert.rejects(access(manifestPath));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image publication rejects an invalid remote digest", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-remote-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {
+			FAKE_REMOTE_DIGEST: "mutable-tag",
+		});
+
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /published image digest is invalid/);
+		await assert.rejects(access(manifestPath));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image build rejects an effective root runtime user", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-root-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, { FAKE_RUNTIME_UID: "0" });
+
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /effective UID must be non-root/);
+		await assert.rejects(access(manifestPath));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
