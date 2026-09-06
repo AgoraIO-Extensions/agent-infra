@@ -7,6 +7,9 @@ import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverSubmitTurnCommandV2Schema,
+	RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 } from "./driver.ts";
 import {
 	RuntimeCapabilitiesV1Schema,
@@ -24,13 +27,17 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1Schema,
 	RuntimeOperationResponseV1Schema,
+	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResultV1Schema,
+	RuntimeOperationResultV2Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeReplayResponseV1Schema,
+	RuntimeSelectionV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusResponseV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "./host.ts";
 
@@ -63,4 +70,18 @@ export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverCommandV1: RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1: RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
+};
+
+export const RuntimeHostV2SchemaDefinitions = {
+	RuntimeOperationResponseV2: RuntimeOperationResponseV2Schema,
+	RuntimeOperationResultV2: RuntimeOperationResultV2Schema,
+	RuntimeSelectionV1: RuntimeSelectionV1Schema,
+	RuntimeSubmitTurnRequestV2: RuntimeSubmitTurnRequestV2Schema,
+};
+
+export const RuntimeDriverV2SchemaDefinitions = {
+	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
+	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2:
+		RuntimeDriverSubmitTurnOperationRecordV2Schema,
 };

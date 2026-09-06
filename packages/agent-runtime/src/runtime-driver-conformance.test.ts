@@ -2,7 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { RuntimeSubmitTurnRequestV1 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeSelectionV1,
+	RuntimeSubmitTurnRequestV1,
+	RuntimeSubmitTurnRequestV2,
+} from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
@@ -32,6 +36,8 @@ interface ConformanceDriverFixture {
 	completeStopAsCancelled(): void;
 	completeStopAsCompleted(operationId: string): Promise<void>;
 	createdTurnCount(): Promise<number>;
+	turnSelections(): readonly RuntimeSelectionV1[];
+	rejectNextSelectedTurn(): void;
 	restart(): Promise<ConformanceDriverFixture>;
 	makeOperationUnknown(operationId: string): Promise<void>;
 	delegatedToolWasDeniedAndRedacted(
@@ -51,8 +57,12 @@ async function openConformanceDriver(
 		let holdPreStartEvent = false;
 		let signalPreStartEvent: (() => void) | undefined;
 		let releaseDriverResult: (() => void) | undefined;
+		const turnSelections: RuntimeSelectionV1[] = [];
 		driver.execute = async (command) => {
 			const record = await execute(command);
+			if (command.schemaVersion === 2 && record.result.outcome === "accepted") {
+				turnSelections.push(command.selection);
+			}
 			if (command.kind === "submit-turn") {
 				preStartEventObserved = (
 					await driver.replayEvents(
@@ -111,6 +121,8 @@ async function openConformanceDriver(
 			completeStopAsCompleted: (operationId) =>
 				driver.setOperationStatus(operationId, "completed"),
 			createdTurnCount: () => driver.sideEffectCount(),
+			turnSelections: () => structuredClone(turnSelections),
+			rejectNextSelectedTurn: () => undefined,
 			restart: () => openConformanceDriver(name, path),
 			makeOperationUnknown: (operationId) =>
 				driver.makeOperationUnknown(operationId),
@@ -142,6 +154,16 @@ function wrapCodexFixture(
 		completeStopAsCancelled: () => fixture.completeStopAsCancelled(),
 		completeStopAsCompleted: async () => fixture.completeStopAsCompleted(),
 		createdTurnCount: async () => fixture.turnStartCount(),
+		turnSelections: () =>
+			fixture.turnSelections().map(({ model, effort }) => ({
+				schemaVersion: 1,
+				modelOptionId:
+					model === "gpt-5.3-codex"
+						? "model-option-primary"
+						: "model-option-alternate",
+				reasoningLevel: effort,
+			})),
+		rejectNextSelectedTurn: () => fixture.rejectNextSelectedTurn(),
 		restart: async () => {
 			await close();
 			return wrapCodexFixture(await fixture.restart());
@@ -184,7 +206,7 @@ async function openConformanceHost(
 }
 
 function requestContext(
-	request: RuntimeSubmitTurnRequestV1,
+	request: RuntimeSubmitTurnRequestV1 | RuntimeSubmitTurnRequestV2,
 	hostSessionRef: string,
 	requestId: string,
 ) {
@@ -222,6 +244,21 @@ function submitRequest(): RuntimeSubmitTurnRequestV1 {
 		deliveryFence: 1,
 		grant: runtimeGrantFixture(binding, ["turn.submit"]),
 		input: { text: "synthetic-conformance", attachments: [] },
+	};
+}
+
+function submitRequestV2(
+	overrides: Partial<RuntimeSubmitTurnRequestV2> = {},
+): RuntimeSubmitTurnRequestV2 {
+	return {
+		...submitRequest(),
+		schemaVersion: 2,
+		selection: {
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+		},
+		...overrides,
 	};
 }
 
@@ -407,6 +444,100 @@ describe("Runtime Driver shared conformance", () => {
 			expect(duplicate).toEqual(accepted);
 			expect(takeover).toEqual(accepted);
 			expect(await fixture.createdTurnCount()).toBe(1);
+		},
+	);
+
+	it.each(driverNames)(
+		"binds, replays, rejects, and isolates V2 selection through %s",
+		async (name) => {
+			const path = await directory();
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
+			);
+			const first = submitRequestV2();
+			const accepted = await host.submitTurnV2(first);
+			expect(
+				await host.submitTurnV2({
+					...first,
+					requestId: "request-conformance-selection-replay",
+				}),
+			).toEqual(accepted);
+			await expect(
+				host.submitTurnV2({
+					...first,
+					requestId: "request-conformance-selection-mismatch",
+					selection: {
+						...first.selection,
+						reasoningLevel: "low",
+					},
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+			expect(fixture.turnSelections()).toEqual([first.selection]);
+
+			fixture.completeStopAsCancelled();
+			const context = requestContext(
+				first,
+				accepted.hostSessionRef,
+				"request-conformance-selection-stop",
+			);
+			await host.stop({
+				...context,
+				executionDeliveryFence: 1,
+				stopRequestId: "stop-conformance-selection",
+				grant: runtimeGrantFixture(context, ["turn.stop"]),
+			});
+
+			const secondBinding = {
+				...first,
+				executionId: "execution-conformance-selection-second",
+				turnId: "turn-conformance-selection-second",
+			};
+			const second = submitRequestV2({
+				...secondBinding,
+				requestId: "request-conformance-selection-second",
+				hostSessionRef: accepted.hostSessionRef,
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-alternate",
+					reasoningLevel: "low",
+				},
+				grant: runtimeGrantFixture(secondBinding, ["turn.submit"]),
+			});
+			expect((await host.submitTurnV2(second)).result).toMatchObject({
+				outcome: "accepted",
+			});
+			expect(fixture.turnSelections()).toEqual([
+				first.selection,
+				second.selection,
+			]);
+
+			const unsupportedBinding = {
+				...second,
+				executionId: "execution-conformance-selection-unsupported",
+				turnId: "turn-conformance-selection-unsupported",
+			};
+			const unsupported = await host.submitTurnV2(
+				submitRequestV2({
+					...unsupportedBinding,
+					requestId: "request-conformance-selection-unsupported",
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "model-option-unsupported",
+						reasoningLevel: "high",
+					},
+					grant: runtimeGrantFixture(unsupportedBinding, ["turn.submit"]),
+				}),
+			);
+			expect(unsupported.result).toMatchObject({
+				outcome: "rejected",
+				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+			});
+			expect(fixture.turnSelections()).toHaveLength(2);
 		},
 	);
 
@@ -656,6 +787,36 @@ describe("Runtime Driver shared conformance", () => {
 });
 
 describe("Codex Driver boundary conformance", () => {
+	it("maps a native selected-Turn refusal to one stable redacted rejection", async () => {
+		const path = await directory();
+		const fixture = await openConformanceDriver(
+			"Codex",
+			join(path, "driver.json"),
+		);
+		const host = await openConformanceHost(
+			join(path, "host.json"),
+			fixture.driver,
+		);
+		const request = submitRequestV2();
+		fixture.rejectNextSelectedTurn();
+
+		const rejected = await host.submitTurnV2(request);
+		expect(rejected.result).toMatchObject({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		});
+		expect(
+			await host.submitTurnV2({
+				...request,
+				requestId: "request-conformance-native-refusal-replay",
+			}),
+		).toEqual(rejected);
+		expect(await fixture.createdTurnCount()).toBe(1);
+		expect(JSON.stringify(rejected)).not.toContain(
+			"invalid thread settings override",
+		);
+	});
+
 	it("denies a delegated Tool request without retaining its parameters", async () => {
 		const path = await directory();
 		const driverPath = join(path, "driver.json");

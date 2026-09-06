@@ -13,6 +13,7 @@
 - [ADR: Platform 服务与 Kubernetes Workload Plane 分离](docs/adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)
 - [ADR: Platform Secret 使用项目内置密文存储](docs/adr/0002-store-platform-secrets-as-application-ciphertext.md)
 - [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](docs/adr/0003-zod-authored-wire-contracts.md)
+- [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](docs/adr/0004-bind-execution-model-selection-to-runtime-submit.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
 
 ## 当前状态

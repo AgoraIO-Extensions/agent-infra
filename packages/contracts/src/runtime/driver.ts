@@ -4,6 +4,8 @@ import { OpaqueIdV1Schema, SchemaVersionV1Schema } from "../index.ts";
 import {
 	RuntimeInputV1Schema,
 	RuntimeOperationResultV1Schema,
+	RuntimeOperationResultV2Schema,
+	RuntimeSelectionV1Schema,
 } from "./host.ts";
 
 const binding = {
@@ -71,6 +73,39 @@ export const RuntimeDriverLookupV1Schema = z.discriminatedUnion("state", [
 	z.strictObject({ state: z.literal("unknown") }),
 ]);
 
+export const RuntimeDriverSubmitTurnCommandV2Schema = z.strictObject({
+	...binding,
+	schemaVersion: z.literal(2),
+	kind: z.literal("submit-turn"),
+	operationId: OpaqueIdV1Schema,
+	nativeSessionRef: OpaqueIdV1Schema.optional(),
+	input: RuntimeInputV1Schema,
+	selection: RuntimeSelectionV1Schema,
+});
+
+export const RuntimeDriverSubmitTurnOperationRecordV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	agentId: operationBinding.agentId,
+	conversationId: operationBinding.conversationId,
+	sessionGeneration: operationBinding.sessionGeneration,
+	kind: z.literal("submit-turn"),
+	operationId: operationBinding.operationId,
+	nativeSessionRef: OpaqueIdV1Schema,
+	result: RuntimeOperationResultV2Schema,
+});
+
+export const RuntimeDriverSubmitTurnLookupV2Schema = z.discriminatedUnion(
+	"state",
+	[
+		z.strictObject({
+			state: z.literal("found"),
+			record: RuntimeDriverSubmitTurnOperationRecordV2Schema,
+		}),
+		z.strictObject({ state: z.literal("missing") }),
+		z.strictObject({ state: z.literal("unknown") }),
+	],
+);
+
 export type RuntimeDriverCommandV1 = z.infer<
 	typeof RuntimeDriverCommandV1Schema
 >;
@@ -78,3 +113,12 @@ export type RuntimeDriverOperationRecordV1 = z.infer<
 	typeof RuntimeDriverOperationRecordV1Schema
 >;
 export type RuntimeDriverLookupV1 = z.infer<typeof RuntimeDriverLookupV1Schema>;
+export type RuntimeDriverSubmitTurnCommandV2 = z.infer<
+	typeof RuntimeDriverSubmitTurnCommandV2Schema
+>;
+export type RuntimeDriverSubmitTurnOperationRecordV2 = z.infer<
+	typeof RuntimeDriverSubmitTurnOperationRecordV2Schema
+>;
+export type RuntimeDriverSubmitTurnLookupV2 = z.infer<
+	typeof RuntimeDriverSubmitTurnLookupV2Schema
+>;

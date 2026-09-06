@@ -9,6 +9,7 @@ import {
 	RuntimeStatusRequestV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 	type VerifiedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
@@ -84,6 +85,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		return context.json(
 			await options.host.submitTurn(
+				request,
+				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v2/turns", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSubmitTurnRequestV2Schema,
+		);
+		return context.json(
+			await options.host.submitTurnV2(
 				request,
 				await options.verifyGrant(request.grant),
 			),

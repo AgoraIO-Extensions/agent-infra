@@ -43,6 +43,20 @@ export const RuntimeSubmitTurnRequestV1Schema = z.strictObject({
 	input: RuntimeInputV1Schema,
 });
 
+export const RuntimeSelectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	modelOptionId: OpaqueIdV1Schema,
+	reasoningLevel: OpaqueIdV1Schema,
+});
+
+export const RuntimeSubmitTurnRequestV2Schema = z.strictObject({
+	...requestContext,
+	schemaVersion: z.literal(2),
+	hostSessionRef: OpaqueIdV1Schema.optional(),
+	input: RuntimeInputV1Schema,
+	selection: RuntimeSelectionV1Schema,
+});
+
 export const RuntimeSupplementRequestV1Schema = z.strictObject({
 	...requestContext,
 	hostSessionRef: OpaqueIdV1Schema,
@@ -99,11 +113,43 @@ export const RuntimeOperationResultV1Schema = z.discriminatedUnion("outcome", [
 	}),
 ]);
 
+export const RuntimeOperationResultV2Schema = z.union([
+	z.strictObject({
+		outcome: z.literal("accepted"),
+		status: RuntimeStatusV1Schema,
+	}),
+	z.strictObject({ outcome: z.literal("busy") }),
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_TURN_NOT_ACTIVE"),
+		message: z.literal("Runtime turn is no longer active"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_MODEL_SELECTION_UNSUPPORTED"),
+		message: z.literal("Runtime model selection is unsupported"),
+		retryable: z.literal(false),
+	}),
+	z.strictObject({
+		outcome: z.literal("unknown"),
+		code: z.literal("RUNTIME_ACCEPTANCE_UNKNOWN"),
+		message: z.literal("Runtime command acceptance could not be confirmed"),
+	}),
+]);
+
 export const RuntimeOperationResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	hostSessionRef: OpaqueIdV1Schema,
 	operationId: OpaqueIdV1Schema,
 	result: RuntimeOperationResultV1Schema,
+});
+
+export const RuntimeOperationResponseV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	hostSessionRef: OpaqueIdV1Schema,
+	operationId: OpaqueIdV1Schema,
+	result: RuntimeOperationResultV2Schema,
 });
 
 export const RuntimeStatusResponseV1Schema = z.strictObject({
@@ -124,8 +170,12 @@ export const RuntimeReplayResponseV1Schema = z.strictObject({
 });
 
 export type RuntimeInputV1 = z.infer<typeof RuntimeInputV1Schema>;
+export type RuntimeSelectionV1 = z.infer<typeof RuntimeSelectionV1Schema>;
 export type RuntimeSubmitTurnRequestV1 = z.infer<
 	typeof RuntimeSubmitTurnRequestV1Schema
+>;
+export type RuntimeSubmitTurnRequestV2 = z.infer<
+	typeof RuntimeSubmitTurnRequestV2Schema
 >;
 export type RuntimeSupplementRequestV1 = z.infer<
 	typeof RuntimeSupplementRequestV1Schema
@@ -146,8 +196,14 @@ export type RuntimeGenerationCancelRequestV1 = z.infer<
 export type RuntimeOperationResultV1 = z.infer<
 	typeof RuntimeOperationResultV1Schema
 >;
+export type RuntimeOperationResultV2 = z.infer<
+	typeof RuntimeOperationResultV2Schema
+>;
 export type RuntimeOperationResponseV1 = z.infer<
 	typeof RuntimeOperationResponseV1Schema
+>;
+export type RuntimeOperationResponseV2 = z.infer<
+	typeof RuntimeOperationResponseV2Schema
 >;
 export type RuntimeStatusResponseV1 = z.infer<
 	typeof RuntimeStatusResponseV1Schema

@@ -5,10 +5,12 @@ import {
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeEventV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "../../src/runtime/index.js";
 
@@ -211,6 +213,65 @@ describe("RuntimeHost V1 wire schemas", () => {
 			ExecutionGrantV1Schema.safeParse({
 				...signedGrant,
 				format: "legacy-envelope",
+			}).success,
+		).toBe(false);
+	});
+});
+
+describe("RuntimeHost V2 model selection schemas", () => {
+	const selection = {
+		schemaVersion: 1,
+		modelOptionId: "model-option-primary",
+		reasoningLevel: "high",
+	} as const;
+
+	it("keeps one required selection outside RuntimeInputV1 through Host and Driver", () => {
+		const request = RuntimeSubmitTurnRequestV2Schema.parse({
+			...requestContext,
+			schemaVersion: 2,
+			input: { text: "synthetic-conformance-input", attachments: [] },
+			selection,
+		});
+		expect(request.selection).toEqual(selection);
+		expect(request.input).not.toHaveProperty("selection");
+		expect(
+			RuntimeDriverSubmitTurnCommandV2Schema.parse({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				operationId: request.executionId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				input: request.input,
+				selection: request.selection,
+			}),
+		).toMatchObject({ selection });
+	});
+
+	it.each([
+		undefined,
+		{},
+		{ schemaVersion: 1, modelOptionId: "", reasoningLevel: "high" },
+		{
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "",
+		},
+		{
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+			credential: "provider-secret",
+		},
+	])("rejects omitted, malformed, or expanded selection %j", (candidate) => {
+		expect(
+			RuntimeSubmitTurnRequestV2Schema.safeParse({
+				...requestContext,
+				schemaVersion: 2,
+				input: { text: "synthetic-conformance-input", attachments: [] },
+				...(candidate === undefined ? {} : { selection: candidate }),
 			}).success,
 		).toBe(false);
 	});

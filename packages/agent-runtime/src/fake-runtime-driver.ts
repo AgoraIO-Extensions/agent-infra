@@ -2,12 +2,20 @@ import { randomUUID } from "node:crypto";
 
 import type {
 	RuntimeCapabilitiesV1,
-	RuntimeDriverCommandV1,
-	RuntimeDriverOperationRecordV1,
 	RuntimeEventV1,
+	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeDriver, RuntimeDriverLookup } from "./driver.js";
+import {
+	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+} from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeDriver,
+	RuntimeDriverCommand,
+	RuntimeDriverLookup,
+	RuntimeDriverOperationRecord,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 
@@ -19,13 +27,14 @@ interface FakeSession {
 	activeExecutionId?: string;
 	status: RuntimeStatusV1;
 	events: RuntimeEventV1[];
+	selections?: Record<string, RuntimeSelectionV1>;
 	cancelledGeneration?: number;
 }
 
 interface FakeDriverState {
 	schemaVersion: 1;
 	sessions: Record<string, FakeSession>;
-	operations: Record<string, RuntimeDriverOperationRecordV1>;
+	operations: Record<string, RuntimeDriverOperationRecord>;
 	unknownOperations: string[];
 	lookupFailures: string[];
 	statusFailures: string[];
@@ -40,11 +49,24 @@ const capabilities: RuntimeCapabilitiesV1 = {
 	supplementaryInstruction: true,
 };
 
+const defaultSelections: readonly RuntimeSelectionV1[] = [
+	{
+		schemaVersion: 1,
+		modelOptionId: "model-option-primary",
+		reasoningLevel: "high",
+	},
+	{
+		schemaVersion: 1,
+		modelOptionId: "model-option-alternate",
+		reasoningLevel: "low",
+	},
+];
+
 function timestamp() {
 	return "2026-08-28T10:00:00Z";
 }
 
-function operationKey(command: RuntimeDriverCommandV1) {
+function operationKey(command: RuntimeDriverCommand) {
 	return JSON.stringify([
 		command.agentId,
 		command.conversationId,
@@ -54,14 +76,41 @@ function operationKey(command: RuntimeDriverCommandV1) {
 	]);
 }
 
+function selectionKey(selection: RuntimeSelectionV1) {
+	return JSON.stringify([selection.modelOptionId, selection.reasoningLevel]);
+}
+
+function driverRecord(
+	command: RuntimeDriverCommand,
+	value: unknown,
+): RuntimeDriverOperationRecord {
+	const parsed = (
+		command.schemaVersion === 2
+			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			: RuntimeDriverOperationRecordV1Schema
+	).safeParse(value);
+	if (!parsed.success) {
+		throw new RuntimeHostError(
+			"RUNTIME_FAKE_STATE_INVALID",
+			"Fake Runtime session state is unavailable",
+			503,
+		);
+	}
+	return parsed.data;
+}
+
 export class FakeRuntimeDriver implements RuntimeDriver {
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
 
 	private constructor(
 		private readonly file: DurableJsonFile<FakeDriverState>,
+		private readonly supportedSelections: ReadonlySet<string>,
 	) {}
 
-	static async open(path: string) {
+	static async open(
+		path: string,
+		selections: readonly RuntimeSelectionV1[] = defaultSelections,
+	) {
 		return new FakeRuntimeDriver(
 			await DurableJsonFile.open(path, {
 				schemaVersion: 1,
@@ -72,15 +121,25 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				statusFailures: [],
 				sideEffects: 0,
 			}),
+			new Set(selections.map(selectionKey)),
 		);
 	}
 
-	async execute(command: RuntimeDriverCommandV1) {
+	async execute(command: RuntimeDriverCommand) {
 		let eventStreamKey: string | undefined;
 		const record = await this.file.update((state) => {
 			const key = operationKey(command);
 			const previous = state.operations[key];
-			if (previous) return structuredClone(previous);
+			if (previous) {
+				if (previous.schemaVersion !== command.schemaVersion) {
+					throw new RuntimeHostError(
+						"RUNTIME_FAKE_STATE_INVALID",
+						"Fake Runtime session state is unavailable",
+						503,
+					);
+				}
+				return structuredClone(previous);
+			}
 			const nativeSessionRef =
 				command.nativeSessionRef ?? `native-${randomUUID()}`;
 			let session = state.sessions[nativeSessionRef];
@@ -116,14 +175,28 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				);
 			}
 
-			let result: RuntimeDriverOperationRecordV1["result"];
+			let result: RuntimeDriverOperationRecord["result"];
 			if (command.kind === "submit-turn") {
 				if (
+					command.schemaVersion === 2 &&
+					!this.supportedSelections.has(selectionKey(command.selection))
+				) {
+					result = {
+						outcome: "rejected",
+						code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+						message: "Runtime model selection is unsupported",
+						retryable: false,
+					};
+				} else if (
 					session.activeExecutionId &&
 					session.activeExecutionId !== command.executionId
 				) {
 					result = { outcome: "busy" };
 				} else {
+					if (command.schemaVersion === 2) {
+						session.selections ??= {};
+						session.selections[command.executionId] = command.selection;
+					}
 					session.activeExecutionId = command.executionId;
 					session.status = "running";
 					this.appendEvent(session, command.executionId, "status", {
@@ -183,8 +256,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				result = { outcome: "accepted", status: "cancelled" };
 			}
 
-			const record: RuntimeDriverOperationRecordV1 = {
-				schemaVersion: 1,
+			const record = driverRecord(command, {
+				schemaVersion: command.schemaVersion,
 				agentId: command.agentId,
 				conversationId: command.conversationId,
 				sessionGeneration: command.sessionGeneration,
@@ -192,7 +265,7 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				operationId: command.operationId,
 				nativeSessionRef,
 				result,
-			};
+			});
 			state.operations[key] = record;
 			return structuredClone(record);
 		});
@@ -201,7 +274,7 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 	}
 
 	async lookupOperation(
-		command: RuntimeDriverCommandV1,
+		command: RuntimeDriverCommand,
 	): Promise<RuntimeDriverLookup> {
 		const state = this.file.read();
 		if (state.lookupFailures.includes(command.operationId)) {
@@ -216,6 +289,9 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		const key = operationKey(command);
 		if (state.unknownOperations.includes(key)) return { state: "unknown" };
 		const record = state.operations[key];
+		if (record && record.schemaVersion !== command.schemaVersion) {
+			return { state: "unknown" };
+		}
 		return record ? { state: "found", record } : { state: "missing" };
 	}
 
@@ -362,6 +438,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 
 	async sideEffectCount() {
 		return this.file.read().sideEffects;
+	}
+
+	selectionForExecution(nativeSessionRef: string, executionId: string) {
+		return this.session(nativeSessionRef).selections?.[executionId];
 	}
 
 	private session(nativeSessionRef: string) {

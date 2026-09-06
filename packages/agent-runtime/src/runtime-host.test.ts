@@ -6,6 +6,7 @@ import type {
 	ExecutionGrantCommandV1,
 	ExecutionGrantV1,
 	RuntimeSubmitTurnRequestV1,
+	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -62,6 +63,18 @@ function submitRequest(): RuntimeSubmitTurnRequestV1 {
 	};
 }
 
+function submitRequestV2(): RuntimeSubmitTurnRequestV2 {
+	return {
+		...submitRequest(),
+		schemaVersion: 2,
+		selection: {
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+		},
+	};
+}
+
 function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
 	return RuntimeHost.open({
 		store,
@@ -82,6 +95,109 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost durable Session", () => {
+	it("binds V2 selection to replay and isolates consecutive Executions", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const store = await FileRuntimeStore.open(join(directory, "host.json"));
+		const runtimeHost = await host(store, driver);
+		const first = submitRequestV2();
+		const accepted = await runtimeHost.submitTurnV2(first);
+
+		expect(accepted).toMatchObject({
+			schemaVersion: 2,
+			result: { outcome: "accepted", status: "running" },
+		});
+		const nativeSessionRef = store.nativeSessionRef(accepted.hostSessionRef);
+		expect(
+			driver.selectionForExecution(
+				nativeSessionRef ?? "missing-native-session",
+				first.executionId,
+			),
+		).toEqual(first.selection);
+		expect(
+			await runtimeHost.submitTurnV2({
+				...first,
+				requestId: "request-conformance-v2-replay",
+			}),
+		).toEqual(accepted);
+		await expect(
+			runtimeHost.submitTurnV2({
+				...first,
+				requestId: "request-conformance-v2-conflict",
+				selection: {
+					...first.selection,
+					reasoningLevel: "low",
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		expect(await driver.sideEffectCount()).toBe(1);
+
+		await driver.setOperationStatus(first.executionId, "completed");
+		const secondBinding = {
+			...first,
+			executionId: "execution-conformance-2",
+			turnId: "turn-conformance-2",
+		};
+		const second = {
+			...secondBinding,
+			requestId: "request-conformance-v2-second",
+			hostSessionRef: accepted.hostSessionRef,
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-alternate",
+				reasoningLevel: "low",
+			},
+			grant: grant(secondBinding, ["turn.submit"]),
+		};
+		expect((await runtimeHost.submitTurnV2(second)).result).toMatchObject({
+			outcome: "accepted",
+		});
+		expect(
+			driver.selectionForExecution(
+				nativeSessionRef ?? "missing-native-session",
+				second.executionId,
+			),
+		).toEqual(second.selection);
+		expect(
+			driver.selectionForExecution(
+				nativeSessionRef ?? "missing-native-session",
+				first.executionId,
+			),
+		).toEqual(first.selection);
+	});
+
+	it("rejects unsupported V2 selection without a Runtime side effect", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+		);
+		const request = submitRequestV2();
+
+		const unsupported = {
+			...request,
+			selection: {
+				...request.selection,
+				modelOptionId: "model-option-unsupported",
+			},
+		};
+		const rejected = await runtimeHost.submitTurnV2(unsupported);
+		expect(rejected.result).toEqual({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+			message: "Runtime model selection is unsupported",
+			retryable: false,
+		});
+		expect(
+			await runtimeHost.submitTurnV2({
+				...unsupported,
+				requestId: "request-conformance-v2-unsupported-replay",
+			}),
+		).toEqual(rejected);
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
 	it("accepts only ingress-verified canonical Grants before Driver side effects", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));

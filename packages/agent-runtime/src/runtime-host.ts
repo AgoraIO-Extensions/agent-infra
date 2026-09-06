@@ -3,6 +3,7 @@ import type {
 	RuntimeCapabilitiesResponseV1,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeOperationResponseV1,
+	RuntimeOperationResponseV2,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
@@ -10,6 +11,7 @@ import type {
 	RuntimeStatusV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
+	RuntimeSubmitTurnRequestV2,
 	RuntimeSupplementRequestV1,
 } from "@agent-infra/contracts/runtime";
 import {
@@ -17,6 +19,8 @@ import {
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeEventV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -24,6 +28,7 @@ import {
 	RuntimeStatusV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 
@@ -91,16 +96,56 @@ function isInterruption(operation: Pick<StoredOperation, "kind">) {
 	return operation.kind === "stop" || operation.kind === "generation-cancel";
 }
 
-function unknownOperationResponse(
+type RuntimeOperationResponse =
+	| RuntimeOperationResponseV1
+	| RuntimeOperationResponseV2;
+
+function operationResponse(
 	hostSessionRef: string,
-	operationId: string,
-): RuntimeOperationResponseV1 {
+	operation: StoredOperation,
+	result: RuntimeOperationResponse["result"],
+): RuntimeOperationResponse {
+	if (operation.command.schemaVersion === 2) {
+		return {
+			schemaVersion: 2,
+			hostSessionRef,
+			operationId: operation.operationId,
+			result,
+		};
+	}
+	if (
+		result.outcome === "rejected" &&
+		result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
+	) {
+		driverInvalid();
+	}
 	return {
 		schemaVersion: 1,
 		hostSessionRef,
-		operationId,
-		result: acceptanceUnknown(),
+		operationId: operation.operationId,
+		result,
 	};
+}
+
+function unknownOperationResponse(
+	hostSessionRef: string,
+	operation: StoredOperation,
+) {
+	return operationResponse(hostSessionRef, operation, acceptanceUnknown());
+}
+
+function v1OperationResponse(
+	response: RuntimeOperationResponse,
+): RuntimeOperationResponseV1 {
+	if (response.schemaVersion !== 1) driverInvalid();
+	return response;
+}
+
+function v2OperationResponse(
+	response: RuntimeOperationResponse,
+): RuntimeOperationResponseV2 {
+	if (response.schemaVersion !== 2) driverInvalid();
+	return response;
 }
 
 const driverUncertain = Symbol("driverUncertain");
@@ -168,7 +213,11 @@ function parseDriverRecord(
 	operation: StoredOperation,
 	persistedNativeSessionRef?: string,
 ) {
-	const parsed = RuntimeDriverOperationRecordV1Schema.safeParse(value);
+	const parsed = (
+		operation.command.schemaVersion === 2
+			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			: RuntimeDriverOperationRecordV1Schema
+	).safeParse(value);
 	const expectedNativeSessionRef =
 		persistedNativeSessionRef ??
 		("nativeSessionRef" in operation.command
@@ -193,7 +242,11 @@ function parseDriverLookup(
 	operation: StoredOperation,
 	persistedNativeSessionRef?: string,
 ) {
-	const parsed = RuntimeDriverLookupV1Schema.safeParse(value);
+	const parsed = (
+		operation.command.schemaVersion === 2
+			? RuntimeDriverSubmitTurnLookupV2Schema
+			: RuntimeDriverLookupV1Schema
+	).safeParse(value);
 	if (!parsed.success) driverInvalid();
 	if (parsed.data.state === "found") {
 		return {
@@ -232,6 +285,28 @@ export class RuntimeHost {
 			verification,
 			this.options.grantValidation,
 		);
+		return v1OperationResponse(await this.submit(request));
+	}
+
+	async submitTurnV2(
+		value: RuntimeSubmitTurnRequestV2,
+		verification: unknown,
+	): Promise<RuntimeOperationResponseV2> {
+		const parsed = RuntimeSubmitTurnRequestV2Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		validateRuntimeExecutionGrant(
+			request,
+			"turn.submit",
+			verification,
+			this.options.grantValidation,
+		);
+		return v2OperationResponse(await this.submit(request));
+	}
+
+	private submit(
+		request: RuntimeSubmitTurnRequestV1 | RuntimeSubmitTurnRequestV2,
+	) {
 		return this.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
@@ -250,19 +325,30 @@ export class RuntimeHost {
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
 						input: request.input,
+						...(request.schemaVersion === 2
+							? { selection: request.selection }
+							: {}),
 					}),
-					command: (nativeSessionRef) => ({
-						schemaVersion: 1,
-						kind: "submit-turn",
-						operationId: request.executionId,
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						...(nativeSessionRef ? { nativeSessionRef } : {}),
-						input: request.input,
-					}),
+					command: (nativeSessionRef) => {
+						const command = {
+							kind: "submit-turn" as const,
+							operationId: request.executionId,
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							...(nativeSessionRef ? { nativeSessionRef } : {}),
+							input: request.input,
+						};
+						return request.schemaVersion === 2
+							? {
+									schemaVersion: 2 as const,
+									...command,
+									selection: request.selection,
+								}
+							: { schemaVersion: 1 as const, ...command };
+					},
 				});
 				return this.dispatch(
 					prepared.session.hostSessionRef,
@@ -477,7 +563,9 @@ export class RuntimeHost {
 						input: request.input,
 					}),
 				});
-				return this.dispatch(request.hostSessionRef, prepared.operation);
+				return v1OperationResponse(
+					await this.dispatch(request.hostSessionRef, prepared.operation),
+				);
 			},
 		);
 	}
@@ -527,7 +615,9 @@ export class RuntimeHost {
 						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
 					}),
 				});
-				return this.dispatch(request.hostSessionRef, prepared.operation);
+				return v1OperationResponse(
+					await this.dispatch(request.hostSessionRef, prepared.operation),
+				);
 			},
 		);
 	}
@@ -595,7 +685,7 @@ export class RuntimeHost {
 					);
 					await this.options.store.clearRecoveryBlocked(request.hostSessionRef);
 				}
-				return response;
+				return v1OperationResponse(response);
 			},
 		);
 	}
@@ -603,7 +693,7 @@ export class RuntimeHost {
 	private async dispatch(
 		hostSessionRef: string,
 		operation: StoredOperation,
-	): Promise<RuntimeOperationResponseV1> {
+	): Promise<RuntimeOperationResponse> {
 		if (operation.state === "resolved" && operation.result) {
 			let result = operation.result;
 			if (result.outcome === "accepted" && result.status === "running") {
@@ -615,10 +705,7 @@ export class RuntimeHost {
 					operation,
 				);
 				if (isInterruption(operation) && result.outcome === "unknown") {
-					return unknownOperationResponse(
-						hostSessionRef,
-						operation.operationId,
-					);
+					return unknownOperationResponse(hostSessionRef, operation);
 				}
 				await this.options.store.resolveOperation(
 					hostSessionRef,
@@ -627,12 +714,7 @@ export class RuntimeHost {
 					nativeSessionRef,
 				);
 			}
-			return {
-				schemaVersion: 1,
-				hostSessionRef,
-				operationId: operation.operationId,
-				result,
-			};
+			return operationResponse(hostSessionRef, operation, result);
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
 		const rawLookup = await callDriverWithUncertainty(() =>
@@ -640,7 +722,7 @@ export class RuntimeHost {
 		);
 		if (rawLookup === driverUncertain) {
 			if (isInterruption(operation)) {
-				return unknownOperationResponse(hostSessionRef, operation.operationId);
+				return unknownOperationResponse(hostSessionRef, operation);
 			}
 			driverInvalid();
 		}
@@ -651,7 +733,7 @@ export class RuntimeHost {
 		);
 		if (lookup.state === "unknown") {
 			if (isInterruption(operation)) {
-				return unknownOperationResponse(hostSessionRef, operation.operationId);
+				return unknownOperationResponse(hostSessionRef, operation);
 			}
 			const result = acceptanceUnknown();
 			await this.options.store.resolveOperation(
@@ -659,12 +741,7 @@ export class RuntimeHost {
 				operation.operationId,
 				result,
 			);
-			return {
-				schemaVersion: 1,
-				hostSessionRef,
-				operationId: operation.operationId,
-				result,
-			};
+			return operationResponse(hostSessionRef, operation, result);
 		}
 		let rawDriverRecord: Awaited<ReturnType<RuntimeDriver["execute"]>>;
 		if (lookup.state === "found") {
@@ -675,10 +752,7 @@ export class RuntimeHost {
 			);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
-					return unknownOperationResponse(
-						hostSessionRef,
-						operation.operationId,
-					);
+					return unknownOperationResponse(hostSessionRef, operation);
 				}
 				driverInvalid();
 			}
@@ -692,7 +766,7 @@ export class RuntimeHost {
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(driverRecord, operation);
 		if (isInterruption(operation) && result.outcome === "unknown") {
-			return unknownOperationResponse(hostSessionRef, operation.operationId);
+			return unknownOperationResponse(hostSessionRef, operation);
 		}
 		await this.options.store.resolveOperation(
 			hostSessionRef,
@@ -701,12 +775,7 @@ export class RuntimeHost {
 			driverRecord.nativeSessionRef,
 		);
 		await this.options.afterOperationResolved?.(operation.operationId);
-		return {
-			schemaVersion: 1,
-			hostSessionRef,
-			operationId: operation.operationId,
-			result,
-		};
+		return operationResponse(hostSessionRef, operation, result);
 	}
 
 	private async recoverOperations() {
@@ -720,7 +789,7 @@ export class RuntimeHost {
 			attemptedSessions.add(session.hostSessionRef);
 			try {
 				await this.serialize(session.hostSessionRef, async () => {
-					let recoveredResult: RuntimeOperationResponseV1["result"];
+					let recoveredResult: RuntimeOperationResponse["result"];
 					if (operation.kind === "generation-cancel") {
 						await this.options.store.activateGenerationBarrier(
 							session.hostSessionRef,
