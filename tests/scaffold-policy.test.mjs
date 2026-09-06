@@ -64,6 +64,20 @@ test("deployment images select an explicit non-root runtime user", async () => {
 });
 
 test("Node runtime images contain only production deployment artifacts", async () => {
+	const deployCommands = new Map([
+		[
+			"platform-api",
+			"pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-api deploy --prod /prod/platform-api",
+		],
+		[
+			"platform-worker",
+			"pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-worker deploy --prod /prod/platform-worker",
+		],
+		[
+			"connection-api",
+			"pnpm --filter @agent-infra/connection-api deploy --prod --legacy /prod/connection-api",
+		],
+	]);
 	for (const service of ["platform-api", "platform-worker", "connection-api"]) {
 		const path = dockerfiles.get(service);
 		const dockerfile = await readFile(path, "utf8");
@@ -76,11 +90,8 @@ test("Node runtime images contain only production deployment artifacts", async (
 
 		assert.equal(manifest.main, "dist/index.mjs");
 		assert.deepEqual(manifest.files, ["dist"]);
-		assert.match(
-			dockerfile,
-			new RegExp(
-				`pnpm --filter @agent-infra/${service} deploy --prod --legacy /prod/${service}`,
-			),
+		assert.ok(
+			dockerfile.includes(deployCommands.get(service)),
 			`${service} must prepare a production-only deployment`,
 		);
 		assert.match(
@@ -92,6 +103,31 @@ test("Node runtime images contain only production deployment artifacts", async (
 			`${service} must copy only its deployment into the runtime stage`,
 		);
 		assert.doesNotMatch(runtimeStage, /^COPY \. \.$/m);
+	}
+});
+
+test("injected Platform runtime images discard compile-time metadata", async () => {
+	for (const service of [
+		"platform-api",
+		"platform-worker",
+		"agent-runtime-host",
+	]) {
+		const dockerfile = await readFile(`apps/${service}/Dockerfile`, "utf8");
+		assert.match(
+			dockerfile,
+			new RegExp(`find /prod/${service} -type f .+ -delete`),
+			`${service} must remove TypeScript declarations from its runtime deployment`,
+		);
+		for (const path of [
+			`/prod/${service}/pnpm-lock.yaml`,
+			`/prod/${service}/pnpm-workspace.yaml`,
+			`/prod/${service}/node_modules/.package-map.json`,
+		]) {
+			assert.ok(
+				dockerfile.includes(path),
+				`${service} must remove ${path} from its runtime deployment`,
+			);
+		}
 	}
 });
 

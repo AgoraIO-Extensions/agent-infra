@@ -3,7 +3,7 @@ RUN npm install -g pnpm@11.20.0
 WORKDIR /app
 
 COPY . .
-RUN --mount=type=cache,target=/pnpm-store pnpm install --frozen-lockfile --store-dir /pnpm-store
+RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web build
@@ -13,6 +13,5 @@ COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 USER nginx
-EXPOSE 8080
 ENTRYPOINT ["nginx"]
 CMD ["-g", "daemon off;"]
