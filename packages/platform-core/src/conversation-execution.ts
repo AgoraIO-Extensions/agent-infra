@@ -19,6 +19,7 @@ export interface ConversationExecutionAuthorizationPortV1 {
 	authorize(input: {
 		readonly schemaVersion: 1;
 		readonly operation:
+			| "conversation.read"
 			| "conversation.create"
 			| "message"
 			| "model.select"
@@ -84,6 +85,11 @@ export interface ConversationModelSelectionCommandV1 {
 	readonly traceId: string;
 }
 
+export interface ConversationStateQueryV1 {
+	readonly schemaVersion: 1;
+	readonly conversationId: string;
+}
+
 export interface ConversationModelConfigurationV1 {
 	readonly configurationRevision: number;
 	readonly options: readonly {
@@ -107,6 +113,16 @@ export interface ConversationExecutionConversationStateV1 {
 	readonly lastConversationCursor: number;
 	readonly selectedModelOptionId: string | null;
 	readonly selectedReasoningLevel: string | null;
+	readonly createdAt: Date;
+	readonly updatedAt: Date;
+}
+
+export interface ConversationModelSelectionFallbackV1 {
+	readonly previousModelOptionId: string;
+	readonly previousReasoningLevel: string;
+	readonly modelConfigurationRevision: number;
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
 }
 
 export interface ConversationExecutionStateV1 {
@@ -184,8 +200,12 @@ export interface ConversationStopResultV1 {
 export interface ConversationModelSelectionResultV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
-	readonly modelOptionId: string;
-	readonly reasoningLevel: string;
+}
+
+export interface ConversationStateResultV1 {
+	readonly schemaVersion: 1;
+	readonly conversation: ConversationExecutionConversationStateV1;
+	readonly modelSelectionFallback: ConversationModelSelectionFallbackV1 | null;
 }
 
 export type CreateConversationDecisionV1 =
@@ -220,6 +240,10 @@ export type ConversationModelSelectionDecisionV1 =
 	  }
 	| { readonly outcome: "denied" }
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
+
+export type ConversationStateDecisionV1 =
+	| { readonly outcome: "found"; readonly result: ConversationStateResultV1 }
+	| { readonly outcome: "denied" };
 
 export interface CreateConversationWritePlanV1 {
 	readonly schemaVersion: 1;
@@ -293,6 +317,7 @@ export interface ConversationMessageWritePlanV1 {
 		readonly requestId: string;
 		readonly occurredAt: Date;
 	};
+	readonly modelSelectionFallback: ConversationModelSelectionFallbackWriteV1 | null;
 	readonly result: ConversationCommandResultV1;
 	readonly idempotency: {
 		readonly scopeType: "conversation";
@@ -348,6 +373,7 @@ export interface ConversationRegenerationWritePlanV1 {
 		readonly requestId: string;
 		readonly occurredAt: Date;
 	};
+	readonly modelSelectionFallback: ConversationModelSelectionFallbackWriteV1 | null;
 	readonly result: ConversationCommandResultV1;
 	readonly idempotency: {
 		readonly scopeType: "conversation";
@@ -409,6 +435,9 @@ export interface ConversationModelSelectionWritePlanV1 {
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly occurredAt: Date;
+		readonly modelConfigurationRevision: number;
+		readonly modelOptionId: string;
+		readonly reasoningLevel: string;
 	};
 	readonly result: ConversationModelSelectionResultV1;
 	readonly idempotency: {
@@ -418,6 +447,19 @@ export interface ConversationModelSelectionWritePlanV1 {
 		readonly commandType: "model.select";
 		readonly key: string;
 		readonly requestDigest: string;
+	};
+}
+
+export interface ConversationModelSelectionFallbackWriteV1
+	extends ConversationModelSelectionFallbackV1 {
+	readonly auditEvent: {
+		readonly action: "conversation.model_selection.fell_back";
+		readonly actorId: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
 	};
 }
 
@@ -434,6 +476,15 @@ export interface ConversationExecutionTransactionPortV1 {
 		},
 		decide: () => CreateConversationWritePlanV1,
 	): Promise<CreateConversationDecisionV1>;
+	readConversation(
+		request: {
+			readonly query: ConversationStateQueryV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+		},
+		project: (
+			state: ConversationExecutionStateV1,
+		) => ConversationStateDecisionV1,
+	): Promise<ConversationStateDecisionV1>;
 	executeMessage(
 		request: {
 			readonly command: ConversationMessageCommandV1;
@@ -486,6 +537,9 @@ export interface ConversationExecutionTransactionPortV1 {
 }
 
 export interface ConversationExecutionUseCaseV1 {
+	readConversation(
+		query: ConversationStateQueryV1,
+	): Promise<ConversationStateDecisionV1>;
 	createConversation(
 		command: CreateConversationCommandV1,
 	): Promise<CreateConversationDecisionV1>;
@@ -757,6 +811,14 @@ function parseModelSelectionCommand(
 	};
 }
 
+function parseConversationStateQuery(input: unknown): ConversationStateQueryV1 {
+	const values = snapshotObject(input, ["schemaVersion", "conversationId"]);
+	if (values.schemaVersion !== 1 || !isText(values.conversationId)) {
+		invalidInput();
+	}
+	return { schemaVersion: 1, conversationId: values.conversationId };
+}
+
 function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
@@ -819,6 +881,16 @@ function safeNow(now: () => Date): Date {
 	}
 }
 
+function snapshotDate(value: unknown): Date {
+	try {
+		const milliseconds = Date.prototype.getTime.call(value);
+		if (!Number.isFinite(milliseconds)) throw new Error();
+		return new Date(milliseconds);
+	} catch {
+		return unavailable();
+	}
+}
+
 function nextOpaqueId(newId: () => string): string {
 	try {
 		const value = newId();
@@ -873,6 +945,8 @@ function parseState(
 			"lastConversationCursor",
 			"selectedModelOptionId",
 			"selectedReasoningLevel",
+			"createdAt",
+			"updatedAt",
 		]);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -899,6 +973,9 @@ function parseState(
 		) {
 			unavailable();
 		}
+		const createdAt = snapshotDate(conversation.createdAt);
+		const updatedAt = snapshotDate(conversation.updatedAt);
+		if (updatedAt.getTime() < createdAt.getTime()) unavailable();
 		const modelConfiguration = (() => {
 			if (values.modelConfiguration === undefined) return undefined;
 			const configuration = snapshotObject(values.modelConfiguration, [
@@ -1139,6 +1216,8 @@ function parseState(
 				lastConversationCursor,
 				selectedModelOptionId: conversation.selectedModelOptionId,
 				selectedReasoningLevel: conversation.selectedReasoningLevel,
+				createdAt,
+				updatedAt,
 			},
 			modelConfiguration,
 			sourceMessage,
@@ -1280,26 +1359,78 @@ function parseModelSelectionResult(
 	input: unknown,
 	expectedConversationId: string,
 ): ConversationModelSelectionResultV1 {
-	const values = transactionObject(input, [
-		"schemaVersion",
-		"conversationId",
-		"modelOptionId",
-		"reasoningLevel",
-	]);
+	const values = transactionObject(input, ["schemaVersion", "conversationId"]);
 	if (
 		values.schemaVersion !== 1 ||
-		values.conversationId !== expectedConversationId ||
-		!isText(values.modelOptionId) ||
-		!isText(values.reasoningLevel)
+		values.conversationId !== expectedConversationId
 	) {
 		return unavailable();
 	}
 	return {
 		schemaVersion: 1,
 		conversationId: expectedConversationId,
-		modelOptionId: values.modelOptionId,
-		reasoningLevel: values.reasoningLevel,
 	};
+}
+
+function parseConversationStateResult(
+	input: unknown,
+	expectedConversationId: string,
+	expectedAuthority: ConversationExecutionAuthorityV1,
+): ConversationStateResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"conversation",
+		"modelSelectionFallback",
+	]);
+	if (values.schemaVersion !== 1) unavailable();
+	const state = parseState({
+		conversation:
+			values.conversation as ConversationExecutionConversationStateV1,
+		modelConfiguration: undefined,
+		sourceMessage: undefined,
+		targetExecution: undefined,
+		existingStop: undefined,
+		activeExecution: undefined,
+	});
+	const conversation = state.conversation;
+	if (
+		!conversation ||
+		conversation.conversationId !== expectedConversationId ||
+		conversation.actorId !== expectedAuthority.actorId ||
+		conversation.agentId !== expectedAuthority.agentId ||
+		conversation.channelId !== expectedAuthority.channelId
+	) {
+		unavailable();
+	}
+	const modelSelectionFallback = (() => {
+		if (values.modelSelectionFallback === null) return null;
+		const fallback = transactionObject(values.modelSelectionFallback, [
+			"previousModelOptionId",
+			"previousReasoningLevel",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+		]);
+		if (
+			!isText(fallback.previousModelOptionId) ||
+			!isText(fallback.previousReasoningLevel) ||
+			!isPositiveSafeInteger(fallback.modelConfigurationRevision) ||
+			!isText(fallback.modelOptionId) ||
+			!isText(fallback.reasoningLevel) ||
+			fallback.modelOptionId !== conversation.selectedModelOptionId ||
+			fallback.reasoningLevel !== conversation.selectedReasoningLevel
+		) {
+			unavailable();
+		}
+		return {
+			previousModelOptionId: fallback.previousModelOptionId,
+			previousReasoningLevel: fallback.previousReasoningLevel,
+			modelConfigurationRevision: fallback.modelConfigurationRevision,
+			modelOptionId: conversation.selectedModelOptionId,
+			reasoningLevel: conversation.selectedReasoningLevel,
+		};
+	})();
+	return { schemaVersion: 1, conversation, modelSelectionFallback };
 }
 
 function effectiveModelSelection(
@@ -1309,12 +1440,14 @@ function effectiveModelSelection(
 	readonly modelConfigurationRevision: number | null;
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
+	readonly fallback: ConversationModelSelectionFallbackV1 | null;
 } {
 	if (!configuration) {
 		return {
 			modelConfigurationRevision: null,
 			modelOptionId: null,
 			reasoningLevel: null,
+			fallback: null,
 		};
 	}
 	const selected = configuration.options.find(
@@ -1329,7 +1462,43 @@ function effectiveModelSelection(
 		reasoningLevel: selected
 			? conversation.selectedReasoningLevel
 			: configuration.defaultReasoningLevel,
+		fallback:
+			!selected &&
+			conversation.selectedModelOptionId !== null &&
+			conversation.selectedReasoningLevel !== null
+				? {
+						previousModelOptionId: conversation.selectedModelOptionId,
+						previousReasoningLevel: conversation.selectedReasoningLevel,
+						modelConfigurationRevision: configuration.configurationRevision,
+						modelOptionId: configuration.defaultOptionId,
+						reasoningLevel: configuration.defaultReasoningLevel,
+					}
+				: null,
 	};
+}
+
+function modelSelectionFallbackWrite(
+	fallback: ConversationModelSelectionFallbackV1 | null,
+	authority: ConversationExecutionAuthorityV1,
+	conversationId: string,
+	requestId: string,
+	traceId: string,
+	occurredAt: Date,
+): ConversationModelSelectionFallbackWriteV1 | null {
+	return fallback
+		? {
+				...fallback,
+				auditEvent: {
+					action: "conversation.model_selection.fell_back",
+					actorId: authority.actorId,
+					agentId: authority.agentId,
+					conversationId,
+					traceId,
+					requestId,
+					occurredAt,
+				},
+			}
+		: null;
 }
 
 function parseAcceptedOrReplayedDecision<T>(
@@ -1428,6 +1597,28 @@ function normalizeModelSelectionDecision(
 	return parseConflictDecision(input) ?? unavailable();
 }
 
+function normalizeConversationStateDecision(
+	input: unknown,
+	expectedConversationId: string,
+	expectedAuthority: ConversationExecutionAuthorityV1,
+): ConversationStateDecisionV1 {
+	const found = trySnapshotObject(input, ["outcome", "result"]);
+	if (found) {
+		if (found.outcome !== "found") unavailable();
+		return {
+			outcome: "found",
+			result: parseConversationStateResult(
+				found.result,
+				expectedConversationId,
+				expectedAuthority,
+			),
+		};
+	}
+	const denied = trySnapshotObject(input, ["outcome"]);
+	if (denied?.outcome === "denied") return { outcome: "denied" };
+	return unavailable();
+}
+
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
 	options: ConversationExecutionUseCaseOptionsV1 = {},
@@ -1435,6 +1626,55 @@ export function createConversationExecutionUseCaseV1(
 	const now = options.now ?? (() => new Date());
 	const newId = options.newId ?? randomUUID;
 	return {
+		async readConversation(queryInput) {
+			const query = parseConversationStateQuery(queryInput);
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "conversation.read",
+				conversationId: query.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			try {
+				return normalizeConversationStateDecision(
+					await dependencies.transaction.readConversation(
+						{ query, authority },
+						(stateInput) => {
+							const state = parseState(stateInput);
+							const conversation = state.conversation;
+							if (
+								!conversation ||
+								conversation.conversationId !== query.conversationId ||
+								conversation.actorId !== authority.actorId ||
+								conversation.agentId !== authority.agentId ||
+								conversation.channelId !== authority.channelId
+							) {
+								return { outcome: "denied" };
+							}
+							const selection = effectiveModelSelection(
+								conversation,
+								state.modelConfiguration,
+							);
+							return {
+								outcome: "found",
+								result: {
+									schemaVersion: 1,
+									conversation: {
+										...conversation,
+										selectedModelOptionId: selection.modelOptionId,
+										selectedReasoningLevel: selection.reasoningLevel,
+									},
+									modelSelectionFallback: selection.fallback,
+								},
+							};
+						},
+					),
+					query.conversationId,
+					authority,
+				);
+			} catch {
+				return unavailable();
+			}
+		},
 		async createConversation(commandInput) {
 			const command = parseCreateCommand(commandInput);
 			const authority = await authorize(dependencies.authorization, {
@@ -1454,6 +1694,7 @@ export function createConversationExecutionUseCaseV1(
 					await dependencies.transaction.createConversation(
 						{ command, authority, requestDigest },
 						() => {
+							const occurredAt = safeNow(now);
 							const conversationId = nextOpaqueId(newId);
 							const result: ConversationCreatedResultV1 = {
 								schemaVersion: 1,
@@ -1476,6 +1717,8 @@ export function createConversationExecutionUseCaseV1(
 									lastConversationCursor: 0,
 									selectedModelOptionId: null,
 									selectedReasoningLevel: null,
+									createdAt: occurredAt,
+									updatedAt: occurredAt,
 								},
 								result,
 								idempotency: {
@@ -1559,6 +1802,7 @@ export function createConversationExecutionUseCaseV1(
 									conversation: {
 										...selectedConversation,
 										authorizationRevision: authority.authorizationRevision,
+										updatedAt: occurredAt,
 									},
 									message: {
 										messageId,
@@ -1594,6 +1838,14 @@ export function createConversationExecutionUseCaseV1(
 										requestId: command.requestId,
 										occurredAt,
 									},
+									modelSelectionFallback: modelSelectionFallbackWrite(
+										modelSelection.fallback,
+										authority,
+										conversation.conversationId,
+										command.requestId,
+										command.traceId,
+										occurredAt,
+									),
 									result,
 									idempotency: {
 										scopeType: "conversation",
@@ -1622,6 +1874,7 @@ export function createConversationExecutionUseCaseV1(
 									...selectedConversation,
 									status: "active",
 									authorizationRevision: authority.authorizationRevision,
+									updatedAt: occurredAt,
 								},
 								message: {
 									messageId,
@@ -1674,6 +1927,14 @@ export function createConversationExecutionUseCaseV1(
 									requestId: command.requestId,
 									occurredAt,
 								},
+								modelSelectionFallback: modelSelectionFallbackWrite(
+									modelSelection.fallback,
+									authority,
+									conversation.conversationId,
+									command.requestId,
+									command.traceId,
+									occurredAt,
+								),
 								result,
 								idempotency: {
 									scopeType: "conversation",
@@ -1714,11 +1975,13 @@ export function createConversationExecutionUseCaseV1(
 						(stateInput) => {
 							const state = parseState(stateInput);
 							const conversation = state.conversation;
-							const selected = state.modelConfiguration?.options.find(
+							const configuration = state.modelConfiguration;
+							const selected = configuration?.options.find(
 								({ optionId }) => optionId === command.modelOptionId,
 							);
 							if (
 								!conversation ||
+								!configuration ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
 								conversation.agentId !== authority.agentId ||
@@ -1732,8 +1995,6 @@ export function createConversationExecutionUseCaseV1(
 							const result: ConversationModelSelectionResultV1 = {
 								schemaVersion: 1,
 								conversationId: conversation.conversationId,
-								modelOptionId: selected.optionId,
-								reasoningLevel: command.reasoningLevel,
 							};
 							return {
 								schemaVersion: 1,
@@ -1742,6 +2003,7 @@ export function createConversationExecutionUseCaseV1(
 									authorizationRevision: authority.authorizationRevision,
 									selectedModelOptionId: selected.optionId,
 									selectedReasoningLevel: command.reasoningLevel,
+									updatedAt: occurredAt,
 								},
 								auditEvent: {
 									action: "conversation.model_selection.updated",
@@ -1751,6 +2013,10 @@ export function createConversationExecutionUseCaseV1(
 									traceId: command.traceId,
 									requestId: command.requestId,
 									occurredAt,
+									modelConfigurationRevision:
+										configuration.configurationRevision,
+									modelOptionId: selected.optionId,
+									reasoningLevel: command.reasoningLevel,
 								},
 								result,
 								idempotency: {
@@ -1829,6 +2095,7 @@ export function createConversationExecutionUseCaseV1(
 									authorizationRevision: authority.authorizationRevision,
 									selectedModelOptionId: modelSelection.modelOptionId,
 									selectedReasoningLevel: modelSelection.reasoningLevel,
+									updatedAt: occurredAt,
 								},
 								execution: {
 									executionId,
@@ -1872,6 +2139,14 @@ export function createConversationExecutionUseCaseV1(
 									requestId: command.requestId,
 									occurredAt,
 								},
+								modelSelectionFallback: modelSelectionFallbackWrite(
+									modelSelection.fallback,
+									authority,
+									conversation.conversationId,
+									command.requestId,
+									command.traceId,
+									occurredAt,
+								),
 								result,
 								idempotency: {
 									scopeType: "conversation",

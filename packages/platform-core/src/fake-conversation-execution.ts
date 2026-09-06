@@ -78,6 +78,7 @@ interface StoredAudit {
 	readonly actorId: string;
 	readonly traceId: string;
 	readonly requestId: string;
+	readonly details?: Record<string, unknown>;
 }
 
 function key(parts: readonly string[]): string {
@@ -194,6 +195,21 @@ export class FakeConversationExecutionV1
 			options.authority?.authorizationRevision;
 		this.#modelConfiguration = structuredClone(options.modelConfiguration);
 		const transaction: ConversationExecutionTransactionPortV1 = {
+			readConversation: async (request, project) => {
+				if (
+					!isCurrentConversationBinding(
+						this.#conversations.get(request.query.conversationId),
+						request.authority,
+						request.query.conversationId,
+					) ||
+					(this.#currentAuthorizationRevision !== undefined &&
+						request.authority.authorizationRevision !==
+							this.#currentAuthorizationRevision)
+				) {
+					return { outcome: "denied" };
+				}
+				return project(this.#state(request.query.conversationId));
+			},
 			createConversation: async (request, decide) => {
 				const idempotencyKey = key([
 					request.authority.agentId,
@@ -316,6 +332,24 @@ export class FakeConversationExecutionV1
 					traceId: plan.auditEvent.traceId,
 					requestId: plan.auditEvent.requestId,
 				});
+				if (plan.modelSelectionFallback) {
+					this.#audit.push({
+						action: plan.modelSelectionFallback.auditEvent.action,
+						actorId: plan.modelSelectionFallback.auditEvent.actorId,
+						traceId: plan.modelSelectionFallback.auditEvent.traceId,
+						requestId: plan.modelSelectionFallback.auditEvent.requestId,
+						details: {
+							previousModelOptionId:
+								plan.modelSelectionFallback.previousModelOptionId,
+							previousReasoningLevel:
+								plan.modelSelectionFallback.previousReasoningLevel,
+							modelConfigurationRevision:
+								plan.modelSelectionFallback.modelConfigurationRevision,
+							modelOptionId: plan.modelSelectionFallback.modelOptionId,
+							reasoningLevel: plan.modelSelectionFallback.reasoningLevel,
+						},
+					});
+				}
 				const accepted = {
 					outcome: "accepted",
 					result: structuredClone(plan.result),
@@ -377,6 +411,12 @@ export class FakeConversationExecutionV1
 					actorId: decision.auditEvent.actorId,
 					traceId: decision.auditEvent.traceId,
 					requestId: decision.auditEvent.requestId,
+					details: {
+						modelConfigurationRevision:
+							decision.auditEvent.modelConfigurationRevision,
+						modelOptionId: decision.auditEvent.modelOptionId,
+						reasoningLevel: decision.auditEvent.reasoningLevel,
+					},
 				});
 				const accepted = {
 					outcome: "accepted",
@@ -465,6 +505,24 @@ export class FakeConversationExecutionV1
 					traceId: plan.auditEvent.traceId,
 					requestId: plan.auditEvent.requestId,
 				});
+				if (plan.modelSelectionFallback) {
+					this.#audit.push({
+						action: plan.modelSelectionFallback.auditEvent.action,
+						actorId: plan.modelSelectionFallback.auditEvent.actorId,
+						traceId: plan.modelSelectionFallback.auditEvent.traceId,
+						requestId: plan.modelSelectionFallback.auditEvent.requestId,
+						details: {
+							previousModelOptionId:
+								plan.modelSelectionFallback.previousModelOptionId,
+							previousReasoningLevel:
+								plan.modelSelectionFallback.previousReasoningLevel,
+							modelConfigurationRevision:
+								plan.modelSelectionFallback.modelConfigurationRevision,
+							modelOptionId: plan.modelSelectionFallback.modelOptionId,
+							reasoningLevel: plan.modelSelectionFallback.reasoningLevel,
+						},
+					});
+				}
 				const accepted = {
 					outcome: "accepted",
 					result: structuredClone(plan.result),
@@ -561,6 +619,10 @@ export class FakeConversationExecutionV1
 	createConversation: ConversationExecutionUseCaseV1["createConversation"] = (
 		command,
 	) => this.#interface.createConversation(command);
+
+	readConversation: ConversationExecutionUseCaseV1["readConversation"] = (
+		query,
+	) => this.#interface.readConversation(query);
 
 	accept: ConversationExecutionUseCaseV1["accept"] = (command) =>
 		this.#interface.accept(command);

@@ -51,6 +51,7 @@ conversationCommandConformanceV1("Fake", async () => {
 	});
 	let loseNextResponse = false;
 	const useCase: ConversationExecutionUseCaseV1 = {
+		readConversation: (query) => fake.readConversation(query),
 		createConversation: (command) => fake.createConversation(command),
 		async accept(command) {
 			const decision = await fake.accept(command);
@@ -127,6 +128,20 @@ conversationCommandConformanceV1("Fake", async () => {
 							reasoningLevel: reasoningLevel ?? null,
 						}),
 					),
+				auditActions: snapshot.audit.map(({ action }) => action).toSorted(),
+				fallbackFacts: snapshot.audit
+					.filter(
+						({ action }) => action === "conversation.model_selection.fell_back",
+					)
+					.map(({ details }) => ({
+						previousModelOptionId: String(details?.previousModelOptionId),
+						previousReasoningLevel: String(details?.previousReasoningLevel),
+						modelConfigurationRevision: Number(
+							details?.modelConfigurationRevision,
+						),
+						modelOptionId: String(details?.modelOptionId),
+						reasoningLevel: String(details?.reasoningLevel),
+					})),
 			};
 		},
 		async snapshot() {
@@ -278,6 +293,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when transaction results are malformed", async () => {
 		const transaction = {
+			async readConversation() {
+				return { outcome: "found", result: {} } as never;
+			},
 			async createConversation() {
 				return {
 					outcome: "accepted",
@@ -344,6 +362,12 @@ describe("Conversation execution use case", () => {
 		});
 
 		await expect(
+			conversation.readConversation({
+				schemaVersion: 1,
+				conversationId: "conversation_01",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
 			conversation.createConversation({
 				schemaVersion: 1,
 				agentId: authority.agentId,
@@ -401,6 +425,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when authorization results are malformed", async () => {
 		const transaction = {
+			async readConversation() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
 			async createConversation() {
 				throw new Error("Authorization must resolve before a transaction");
 			},
@@ -442,6 +469,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when a transaction throws an internal validation error", async () => {
 		const transaction = {
+			async readConversation() {
+				throw new ConversationExecutionError("invalid_input");
+			},
 			async createConversation() {
 				throw new ConversationExecutionError("invalid_input");
 			},
@@ -527,6 +557,8 @@ describe("Conversation execution use case", () => {
 			lastConversationCursor: 0,
 			selectedModelOptionId: null,
 			selectedReasoningLevel: null,
+			createdAt: new Date("2026-09-03T00:00:00.000Z"),
+			updatedAt: new Date("2026-09-03T00:00:00.000Z"),
 		} as const;
 		const supplementState = {
 			conversation,
@@ -565,6 +597,9 @@ describe("Conversation execution use case", () => {
 			activeExecution: undefined,
 		} satisfies ConversationExecutionStateV1;
 		const transaction = {
+			async readConversation() {
+				throw new Error("Not used by this test");
+			},
 			async createConversation() {
 				throw new Error("Not used by this test");
 			},

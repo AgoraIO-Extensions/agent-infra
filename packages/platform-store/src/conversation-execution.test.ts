@@ -170,6 +170,8 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		databaseUrl,
 	});
 	const transaction: ConversationExecutionTransactionPortV1 = {
+		readConversation: (request, project) =>
+			adapter.readConversation(request, project),
 		createConversation: (request, decide) =>
 			adapter.createConversation(request, decide),
 		async executeMessage(request, decide) {
@@ -222,6 +224,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		},
 	);
 	const useCase: ConversationExecutionUseCaseV1 = {
+		readConversation: (query) => inner.readConversation(query),
 		createConversation: (command) => inner.createConversation(command),
 		async accept(command) {
 			const decision = await inner.accept(command);
@@ -294,6 +297,22 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 						'conversation.turn.regenerate.v1')
 				order by created_at, id
 			`;
+			const auditRows = await client<
+				{
+					readonly action: string;
+					readonly details: {
+						readonly previousModelOptionId: string;
+						readonly previousReasoningLevel: string;
+						readonly modelConfigurationRevision: number;
+						readonly modelOptionId: string;
+						readonly reasoningLevel: string;
+					} | null;
+				}[]
+			>`
+			select action, details from platform.conversation_audit_events
+				where conversation_id = ${conversationId}
+				order by action
+			`;
 			return {
 				selectedModelOptionId: conversation.selected_model_option_id,
 				selectedReasoningLevel: conversation.selected_reasoning_level,
@@ -321,6 +340,12 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 							? null
 							: String(payload.reasoningLevel),
 				})),
+				auditActions: auditRows.map(({ action }) => action),
+				fallbackFacts: auditRows.flatMap(({ action, details }) =>
+					action === "conversation.model_selection.fell_back" && details
+						? [details]
+						: [],
+				),
 			};
 		},
 		snapshot: commandEffectCounts,
@@ -472,6 +497,46 @@ describe("PostgreSQL Conversation command transaction", () => {
 			`,
 		).rejects.toMatchObject({
 			constraint_name: "conversation_execution_model_selection",
+		});
+		await expect(
+			client`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at)
+				values
+					('audit_missing_execution', 'conversation_legacy', null, 'agent_legacy',
+					 'actor_legacy', 'conversation.message.accepted', 'trace_legacy',
+					 'request_legacy', now())
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_audit_execution_binding",
+		});
+		await expect(
+			client`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at, details)
+				values
+					('audit_unexpected_execution', 'conversation_legacy', 'execution_legacy',
+					 'agent_legacy', 'actor_legacy',
+					 'conversation.model_selection.updated', 'trace_legacy',
+					 'request_legacy', now(), '{}'::jsonb)
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_audit_execution_binding",
+		});
+		await expect(
+			client`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at)
+				values
+					('audit_missing_details', 'conversation_legacy', null, 'agent_legacy',
+					 'actor_legacy', 'conversation.model_selection.updated', 'trace_legacy',
+					 'request_legacy', now())
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_audit_details_binding",
 		});
 	});
 
@@ -1111,6 +1176,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 							lastConversationCursor: 0,
 							selectedModelOptionId: null,
 							selectedReasoningLevel: null,
+							createdAt: new Date("2026-09-04T00:00:00.000Z"),
+							updatedAt: new Date("2026-09-04T00:00:00.000Z"),
 						},
 						result: {
 							schemaVersion: 1,

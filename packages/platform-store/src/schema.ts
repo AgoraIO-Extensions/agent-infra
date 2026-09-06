@@ -843,6 +843,7 @@ export const conversationAuditEvents = platformSchema.table(
 		traceId: text("trace_id").notNull(),
 		requestId: text("request_id").notNull(),
 		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+		details: jsonb("details").$type<Record<string, unknown>>(),
 	},
 	(table) => [
 		foreignKey({
@@ -867,6 +868,31 @@ export const conversationAuditEvents = platformSchema.table(
 		check(
 			"conversation_audit_action_non_empty",
 			sql`char_length(${table.action}) > 0`,
+		),
+		check(
+			"conversation_audit_execution_binding",
+			sql`(
+				${table.executionId} IS NULL
+				AND ${table.action} in (
+					'conversation.model_selection.updated',
+					'conversation.model_selection.fell_back'
+				)
+			) OR (
+				${table.executionId} IS NOT NULL
+				AND ${table.action} not in (
+					'conversation.model_selection.updated',
+					'conversation.model_selection.fell_back'
+				)
+			)`,
+		),
+		check(
+			"conversation_audit_details_binding",
+			sql`(
+				${table.action} in (
+					'conversation.model_selection.updated',
+					'conversation.model_selection.fell_back'
+				)
+			) = (${table.details} IS NOT NULL)`,
 		),
 		check(
 			"conversation_audit_trace_id_non_empty",

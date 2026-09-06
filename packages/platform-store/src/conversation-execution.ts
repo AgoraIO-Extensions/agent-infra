@@ -11,8 +11,10 @@ import {
 	type ConversationMessageWritePlanV1,
 	type ConversationModelConfigurationV1,
 	type ConversationModelSelectionDecisionV1,
+	type ConversationModelSelectionFallbackWriteV1,
 	type ConversationModelSelectionWritePlanV1,
 	type ConversationRegenerationWritePlanV1,
+	type ConversationStateDecisionV1,
 	type ConversationStopDecisionV1,
 	type ConversationStopWritePlanV1,
 	type CreateConversationDecisionV1,
@@ -33,6 +35,12 @@ type CreateRequest = Parameters<
 >[0];
 type CreateDecide = Parameters<
 	ConversationExecutionTransactionPortV1["createConversation"]
+>[1];
+type ConversationQueryRequest = Parameters<
+	ConversationExecutionTransactionPortV1["readConversation"]
+>[0];
+type ConversationQueryProject = Parameters<
+	ConversationExecutionTransactionPortV1["readConversation"]
 >[1];
 type MessageRequest = Parameters<
 	ConversationExecutionTransactionPortV1["executeMessage"]
@@ -77,6 +85,8 @@ interface ConversationRow {
 	readonly last_conversation_cursor: string | number;
 	readonly selected_model_option_id: string | null;
 	readonly selected_reasoning_level: string | null;
+	readonly created_at: Date;
+	readonly updated_at: Date;
 }
 
 interface ExecutionRow {
@@ -223,6 +233,8 @@ function parseConversation(
 		"lastConversationCursor",
 		"selectedModelOptionId",
 		"selectedReasoningLevel",
+		"createdAt",
+		"updatedAt",
 	]);
 	if (
 		input.schemaVersion !== 1 ||
@@ -240,6 +252,9 @@ function parseConversation(
 	) {
 		return unavailable();
 	}
+	const createdAt = date(input.createdAt);
+	const updatedAt = date(input.updatedAt);
+	if (updatedAt.getTime() < createdAt.getTime()) unavailable();
 	return {
 		schemaVersion: 1,
 		conversationId: text(input.conversationId),
@@ -260,6 +275,8 @@ function parseConversation(
 			input.selectedReasoningLevel === null
 				? null
 				: text(input.selectedReasoningLevel),
+		createdAt,
+		updatedAt,
 	};
 }
 
@@ -279,6 +296,8 @@ function conversationFromRow(
 		lastConversationCursor: row.last_conversation_cursor,
 		selectedModelOptionId: row.selected_model_option_id,
 		selectedReasoningLevel: row.selected_reasoning_level,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
 	});
 }
 
@@ -427,48 +446,41 @@ function parseStopResult(value: unknown) {
 }
 
 function parseModelSelectionResult(value: unknown) {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversationId",
-		"modelOptionId",
-		"reasoningLevel",
-	]);
+	const input = exactRecord(value, ["schemaVersion", "conversationId"]);
 	if (input.schemaVersion !== 1) unavailable();
 	return {
 		schemaVersion: 1 as const,
 		conversationId: text(input.conversationId),
-		modelOptionId: text(input.modelOptionId),
-		reasoningLevel: text(input.reasoningLevel),
 	};
 }
 
-function effectiveModelSelection(state: ConversationExecutionStateV1): {
-	readonly modelConfigurationRevision: number | null;
-	readonly modelOptionId: string | null;
-	readonly reasoningLevel: string | null;
-} {
-	const conversation = state.conversation;
-	const configuration = state.modelConfiguration;
-	if (!conversation || !configuration) {
-		return {
-			modelConfigurationRevision: null,
-			modelOptionId: null,
-			reasoningLevel: null,
-		};
-	}
-	const selected = configuration.options.find(
-		({ optionId, reasoningLevels }) =>
-			optionId === conversation.selectedModelOptionId &&
-			conversation.selectedReasoningLevel !== null &&
-			reasoningLevels.includes(conversation.selectedReasoningLevel),
-	);
-	return {
-		modelConfigurationRevision: configuration.configurationRevision,
-		modelOptionId: selected?.optionId ?? configuration.defaultOptionId,
-		reasoningLevel: selected
-			? conversation.selectedReasoningLevel
-			: configuration.defaultReasoningLevel,
-	};
+function modelSelectionMatchesConfigurationRevision(
+	selection: {
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
+	},
+	configuration: ConversationModelConfigurationV1 | undefined,
+): boolean {
+	return configuration
+		? selection.modelConfigurationRevision ===
+				configuration.configurationRevision &&
+				selection.modelOptionId !== null &&
+				selection.reasoningLevel !== null
+		: selection.modelConfigurationRevision === null &&
+				selection.modelOptionId === null &&
+				selection.reasoningLevel === null;
+}
+
+function conversationSelectionMatchesConfigurationShape(
+	conversation: ConversationExecutionConversationStateV1,
+	configuration: ConversationModelConfigurationV1 | undefined,
+): boolean {
+	return configuration
+		? conversation.selectedModelOptionId !== null &&
+				conversation.selectedReasoningLevel !== null
+		: conversation.selectedModelOptionId === null &&
+				conversation.selectedReasoningLevel === null;
 }
 
 function sameModelSelection(
@@ -805,6 +817,9 @@ function parseModelSelectionAudit(value: unknown) {
 		"traceId",
 		"requestId",
 		"occurredAt",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
 	]);
 	if (input.action !== "conversation.model_selection.updated") unavailable();
 	return {
@@ -815,7 +830,90 @@ function parseModelSelectionAudit(value: unknown) {
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
+		modelConfigurationRevision: safeInteger(
+			input.modelConfigurationRevision,
+			1,
+		),
+		modelOptionId: text(input.modelOptionId),
+		reasoningLevel: text(input.reasoningLevel),
 	};
+}
+
+function parseModelSelectionFallback(
+	value: unknown,
+): ConversationModelSelectionFallbackWriteV1 | null {
+	if (value === null) return null;
+	const input = exactRecord(value, [
+		"previousModelOptionId",
+		"previousReasoningLevel",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
+		"auditEvent",
+	]);
+	const audit = exactRecord(input.auditEvent, [
+		"action",
+		"actorId",
+		"agentId",
+		"conversationId",
+		"traceId",
+		"requestId",
+		"occurredAt",
+	]);
+	if (audit.action !== "conversation.model_selection.fell_back") unavailable();
+	return {
+		previousModelOptionId: text(input.previousModelOptionId),
+		previousReasoningLevel: text(input.previousReasoningLevel),
+		modelConfigurationRevision: safeInteger(
+			input.modelConfigurationRevision,
+			1,
+		),
+		modelOptionId: text(input.modelOptionId),
+		reasoningLevel: text(input.reasoningLevel),
+		auditEvent: {
+			action: "conversation.model_selection.fell_back",
+			actorId: text(audit.actorId),
+			agentId: text(audit.agentId),
+			conversationId: text(audit.conversationId),
+			traceId: text(audit.traceId),
+			requestId: text(audit.requestId),
+			occurredAt: date(audit.occurredAt),
+		},
+	};
+}
+
+function validateModelSelectionFallback(
+	fallback: ConversationModelSelectionFallbackWriteV1 | null,
+	input: {
+		readonly state: ConversationExecutionStateV1;
+		readonly conversation: ConversationExecutionConversationStateV1;
+		readonly authority: ConversationExecutionAuthorityV1;
+		readonly requestId: string;
+		readonly traceId: string;
+		readonly occurredAt: Date;
+	},
+): void {
+	if (!fallback) return;
+	const current = input.state.conversation;
+	const configuration = input.state.modelConfiguration;
+	if (
+		!current ||
+		!configuration ||
+		fallback.previousModelOptionId !== current.selectedModelOptionId ||
+		fallback.previousReasoningLevel !== current.selectedReasoningLevel ||
+		fallback.modelConfigurationRevision !==
+			configuration.configurationRevision ||
+		fallback.modelOptionId !== input.conversation.selectedModelOptionId ||
+		fallback.reasoningLevel !== input.conversation.selectedReasoningLevel ||
+		fallback.auditEvent.actorId !== input.authority.actorId ||
+		fallback.auditEvent.agentId !== input.authority.agentId ||
+		fallback.auditEvent.conversationId !== current.conversationId ||
+		fallback.auditEvent.requestId !== input.requestId ||
+		fallback.auditEvent.traceId !== input.traceId ||
+		!sameDate(fallback.auditEvent.occurredAt, input.occurredAt)
+	) {
+		unavailable();
+	}
 }
 
 function validateCreatePlan(
@@ -846,6 +944,7 @@ function validateCreatePlan(
 		conversation.lastConversationCursor !== 0 ||
 		conversation.selectedModelOptionId !== null ||
 		conversation.selectedReasoningLevel !== null ||
+		!sameDate(conversation.createdAt, conversation.updatedAt) ||
 		result.agentId !== authority.agentId ||
 		idempotency.scopeType !== "agent" ||
 		idempotency.scopeId !== authority.agentId ||
@@ -877,6 +976,7 @@ function validateMessagePlan(
 					"execution",
 					"outboxIntent",
 					"auditEvent",
+					"modelSelectionFallback",
 					"result",
 					"idempotency",
 				]
@@ -887,6 +987,7 @@ function validateMessagePlan(
 					"message",
 					"outboxIntent",
 					"auditEvent",
+					"modelSelectionFallback",
 					"result",
 					"idempotency",
 				],
@@ -896,10 +997,12 @@ function validateMessagePlan(
 	const message = parseMessage(input.message);
 	const outbox = parseMessageOutbox(input.outboxIntent);
 	const audit = parseMessageAudit(input.auditEvent);
+	const modelSelectionFallback = parseModelSelectionFallback(
+		input.modelSelectionFallback,
+	);
 	const result = parseMessageResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
 	const current = state.conversation;
-	const modelSelection = effectiveModelSelection(state);
 	if (
 		current.status === "unavailable" ||
 		conversation.conversationId !== current.conversationId ||
@@ -910,8 +1013,12 @@ function validateMessagePlan(
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.lastConversationCursor !== current.lastConversationCursor ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
-		conversation.selectedModelOptionId !== modelSelection.modelOptionId ||
-		conversation.selectedReasoningLevel !== modelSelection.reasoningLevel ||
+		!sameDate(conversation.createdAt, current.createdAt) ||
+		!sameDate(conversation.updatedAt, message.createdAt) ||
+		!conversationSelectionMatchesConfigurationShape(
+			conversation,
+			state.modelConfiguration,
+		) ||
 		message.conversationId !== current.conversationId ||
 		message.actorId !== authority.actorId ||
 		message.text !== request.command.text ||
@@ -938,6 +1045,14 @@ function validateMessagePlan(
 	) {
 		return unavailable();
 	}
+	validateModelSelectionFallback(modelSelectionFallback, {
+		state,
+		conversation,
+		authority,
+		requestId: request.command.requestId,
+		traceId: request.command.traceId,
+		occurredAt: message.createdAt,
+	});
 	if (input.kind === "initial") {
 		if (state.activeExecution || conversation.status !== "active")
 			unavailable();
@@ -952,8 +1067,13 @@ function validateMessagePlan(
 			execution.sessionGeneration !== current.sessionGeneration ||
 			execution.deliveryFence !== 0 ||
 			execution.authorizationRevision !== authority.authorizationRevision ||
-			!sameModelSelection(execution, modelSelection) ||
-			!sameModelSelection(outbox, modelSelection) ||
+			!modelSelectionMatchesConfigurationRevision(
+				execution,
+				state.modelConfiguration,
+			) ||
+			conversation.selectedModelOptionId !== execution.modelOptionId ||
+			conversation.selectedReasoningLevel !== execution.reasoningLevel ||
+			!sameModelSelection(outbox, execution) ||
 			outbox.operation !== "conversation.turn.submit.v1" ||
 			outbox.executionId !== execution.executionId ||
 			outbox.turnId !== execution.turnId ||
@@ -1005,12 +1125,9 @@ function validateModelSelectionPlan(
 	const audit = parseModelSelectionAudit(input.auditEvent);
 	const result = parseModelSelectionResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
-	const selected = configuration?.options.find(
-		({ optionId }) => optionId === request.command.modelOptionId,
-	);
 	if (
 		current.status === "unavailable" ||
-		!selected?.reasoningLevels.includes(request.command.reasoningLevel) ||
+		!configuration ||
 		conversation.conversationId !== current.conversationId ||
 		conversation.agentId !== current.agentId ||
 		conversation.actorId !== current.actorId ||
@@ -1020,16 +1137,19 @@ function validateModelSelectionPlan(
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.lastConversationCursor !== current.lastConversationCursor ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
-		conversation.selectedModelOptionId !== selected.optionId ||
+		!sameDate(conversation.createdAt, current.createdAt) ||
+		!sameDate(conversation.updatedAt, audit.occurredAt) ||
+		conversation.selectedModelOptionId !== request.command.modelOptionId ||
 		conversation.selectedReasoningLevel !== request.command.reasoningLevel ||
 		result.conversationId !== current.conversationId ||
-		result.modelOptionId !== selected.optionId ||
-		result.reasoningLevel !== request.command.reasoningLevel ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
 		audit.conversationId !== current.conversationId ||
 		audit.traceId !== request.command.traceId ||
 		audit.requestId !== request.command.requestId ||
+		audit.modelConfigurationRevision !== configuration.configurationRevision ||
+		audit.modelOptionId !== request.command.modelOptionId ||
+		audit.reasoningLevel !== request.command.reasoningLevel ||
 		idempotency.scopeType !== "conversation" ||
 		idempotency.scopeId !== current.conversationId ||
 		idempotency.actorId !== authority.actorId ||
@@ -1055,6 +1175,7 @@ function validateRegenerationPlan(
 		"execution",
 		"outboxIntent",
 		"auditEvent",
+		"modelSelectionFallback",
 		"result",
 		"idempotency",
 	]);
@@ -1072,9 +1193,11 @@ function validateRegenerationPlan(
 	const execution = parseExecution(input.execution);
 	const outbox = parseRegenerationOutbox(input.outboxIntent);
 	const audit = parseRegenerationAudit(input.auditEvent);
+	const modelSelectionFallback = parseModelSelectionFallback(
+		input.modelSelectionFallback,
+	);
 	const result = parseRegenerationResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
-	const modelSelection = effectiveModelSelection(state);
 	if (
 		conversation.conversationId !== current.conversationId ||
 		conversation.agentId !== current.agentId ||
@@ -1086,8 +1209,12 @@ function validateRegenerationPlan(
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
 		conversation.lastConversationCursor !== current.lastConversationCursor ||
-		conversation.selectedModelOptionId !== modelSelection.modelOptionId ||
-		conversation.selectedReasoningLevel !== modelSelection.reasoningLevel ||
+		!sameDate(conversation.createdAt, current.createdAt) ||
+		!sameDate(conversation.updatedAt, execution.createdAt) ||
+		!conversationSelectionMatchesConfigurationShape(
+			conversation,
+			state.modelConfiguration,
+		) ||
 		execution.executionId !== result.executionId ||
 		execution.conversationId !== current.conversationId ||
 		execution.agentId !== authority.agentId ||
@@ -1096,8 +1223,13 @@ function validateRegenerationPlan(
 		execution.sessionGeneration !== current.sessionGeneration ||
 		execution.deliveryFence !== 0 ||
 		execution.authorizationRevision !== authority.authorizationRevision ||
-		!sameModelSelection(execution, modelSelection) ||
-		!sameModelSelection(outbox, modelSelection) ||
+		!modelSelectionMatchesConfigurationRevision(
+			execution,
+			state.modelConfiguration,
+		) ||
+		conversation.selectedModelOptionId !== execution.modelOptionId ||
+		conversation.selectedReasoningLevel !== execution.reasoningLevel ||
+		!sameModelSelection(outbox, execution) ||
 		outbox.conversationId !== current.conversationId ||
 		outbox.executionId !== execution.executionId ||
 		outbox.messageId !== state.sourceMessage.messageId ||
@@ -1122,6 +1254,14 @@ function validateRegenerationPlan(
 	) {
 		return unavailable();
 	}
+	validateModelSelectionFallback(modelSelectionFallback, {
+		state,
+		conversation,
+		authority,
+		requestId: request.command.requestId,
+		traceId: request.command.traceId,
+		occurredAt: execution.createdAt,
+	});
 	return value as ConversationRegenerationWritePlanV1;
 }
 
@@ -1357,8 +1497,21 @@ async function lockConversation(
 	const rows = await transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
-			selected_model_option_id, selected_reasoning_level
+			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${conversationId} for update
+	`;
+	return rows[0] ? conversationFromRow(rows[0]) : undefined;
+}
+
+async function lockConversationForRead(
+	transaction: Transaction,
+	conversationId: string,
+): Promise<ConversationExecutionConversationStateV1 | undefined> {
+	const rows = await transaction<ConversationRow[]>`
+		select id, agent_id, actor_id, channel_id, status, session_generation,
+			host_session_ref, authorization_revision, last_conversation_cursor,
+			selected_model_option_id, selected_reasoning_level, created_at, updated_at
+		from platform.conversations where id = ${conversationId} for share
 	`;
 	return rows[0] ? conversationFromRow(rows[0]) : undefined;
 }
@@ -1563,7 +1716,7 @@ async function requireCreateReplay(
 	const rows = await transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
-			selected_model_option_id, selected_reasoning_level
+			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${result.conversationId} limit 1
 	`;
 	const conversation = rows[0] && conversationFromRow(rows[0]);
@@ -1679,6 +1832,30 @@ async function requireStopReplay(
 	}
 }
 
+async function insertModelSelectionFallbackAudit(
+	transaction: Transaction,
+	fallback: ConversationModelSelectionFallbackWriteV1 | null,
+): Promise<void> {
+	if (!fallback) return;
+	await transaction`
+		insert into platform.conversation_audit_events
+			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
+			 request_id, occurred_at, details)
+		values
+			(${randomUUID()}, ${fallback.auditEvent.conversationId}, null,
+			 ${fallback.auditEvent.agentId}, ${fallback.auditEvent.actorId},
+			 ${fallback.auditEvent.action}, ${fallback.auditEvent.traceId},
+			 ${fallback.auditEvent.requestId}, ${fallback.auditEvent.occurredAt},
+			 ${transaction.json({
+					previousModelOptionId: fallback.previousModelOptionId,
+					previousReasoningLevel: fallback.previousReasoningLevel,
+					modelConfigurationRevision: fallback.modelConfigurationRevision,
+					modelOptionId: fallback.modelOptionId,
+					reasoningLevel: fallback.reasoningLevel,
+				} as JsonValue)})
+	`;
+}
+
 export class PostgresConversationExecutionTransactionV1
 	implements ConversationExecutionTransactionPortV1
 {
@@ -1695,6 +1872,34 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async readConversation(
+		request: ConversationQueryRequest,
+		project: ConversationQueryProject,
+	): Promise<ConversationStateDecisionV1> {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			const conversation = await lockConversationForRead(
+				transaction,
+				text(request.query.conversationId),
+			);
+			if (!conversation || !matchesBinding(conversation, authority)) {
+				return { outcome: "denied" };
+			}
+			const selectionState = await readModelSelectionState(
+				transaction,
+				conversation,
+			);
+			const { currentAuthorizationRevision, ...state } = selectionState;
+			if (
+				currentAuthorizationRevision !== undefined &&
+				currentAuthorizationRevision !== authority.authorizationRevision
+			) {
+				return { outcome: "denied" };
+			}
+			return project(state);
+		});
 	}
 
 	async createConversation(
@@ -1727,7 +1932,7 @@ export class PostgresConversationExecutionTransactionV1
 				return { outcome: "replayed", result };
 			}
 			const plan = validateCreatePlan(decide(), request);
-			const occurredAt = new Date();
+			const occurredAt = plan.conversation.createdAt;
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -1894,6 +2099,10 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.auditEvent.traceId}, ${plan.auditEvent.requestId},
 					 ${plan.auditEvent.occurredAt})
 			`;
+			await insertModelSelectionFallbackAudit(
+				transaction,
+				plan.modelSelectionFallback,
+			);
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -1965,12 +2174,18 @@ export class PostgresConversationExecutionTransactionV1
 			await transaction`
 				insert into platform.conversation_audit_events
 					(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
-					 request_id, occurred_at)
+					 request_id, occurred_at, details)
 				values
 					(${randomUUID()}, ${plan.auditEvent.conversationId}, null,
 					 ${plan.auditEvent.agentId}, ${plan.auditEvent.actorId},
 					 ${plan.auditEvent.action}, ${plan.auditEvent.traceId},
-					 ${plan.auditEvent.requestId}, ${plan.auditEvent.occurredAt})
+					 ${plan.auditEvent.requestId}, ${plan.auditEvent.occurredAt},
+					 ${transaction.json({
+							modelConfigurationRevision:
+								plan.auditEvent.modelConfigurationRevision,
+							modelOptionId: plan.auditEvent.modelOptionId,
+							reasoningLevel: plan.auditEvent.reasoningLevel,
+						} as JsonValue)})
 			`;
 			await completeIdempotency(
 				transaction,
@@ -2093,6 +2308,10 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.auditEvent.traceId}, ${plan.auditEvent.requestId},
 					 ${plan.auditEvent.occurredAt})
 			`;
+			await insertModelSelectionFallbackAudit(
+				transaction,
+				plan.modelSelectionFallback,
+			);
 			await completeIdempotency(
 				transaction,
 				reservationId,

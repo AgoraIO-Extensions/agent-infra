@@ -9,6 +9,7 @@ import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionUseCaseV1,
 	ConversationModelConfigurationV1,
+	ConversationModelSelectionFallbackV1,
 } from "./conversation-execution.ts";
 
 export const conversationConformanceAuthorityV1: ConversationExecutionAuthorityV1 =
@@ -66,6 +67,8 @@ export interface ConversationCommandConformanceHarnessV1 {
 			readonly modelOptionId: string | null;
 			readonly reasoningLevel: string | null;
 		}[];
+		readonly auditActions: readonly string[];
+		readonly fallbackFacts: readonly ConversationModelSelectionFallbackV1[];
 	}>;
 	snapshot(): Promise<ConversationCommandConformanceSnapshotV1>;
 	close(): Promise<void>;
@@ -481,6 +484,10 @@ export function conversationCommandConformanceV1(
 				if (replayedSelection?.outcome !== "replayed") {
 					throw new Error("Expected one replayed model selection");
 				}
+				expect(acceptedSelection.result).toEqual({
+					schemaVersion: 1,
+					conversationId,
+				});
 				expect(replayedSelection.result).toEqual(acceptedSelection.result);
 
 				const first = await acceptMessageFixture(
@@ -509,6 +516,30 @@ export function conversationCommandConformanceV1(
 				).resolves.toEqual({
 					outcome: "conflict",
 					reason: "idempotency_conflict",
+				});
+				await expect(
+					harness.useCase.readConversation({
+						schemaVersion: 1,
+						conversationId,
+					}),
+				).resolves.toMatchObject({
+					outcome: "found",
+					result: {
+						conversation: {
+							conversationId,
+							selectedModelOptionId: "model_primary",
+							selectedReasoningLevel: "medium",
+							createdAt: expect.any(Date),
+							updatedAt: expect.any(Date),
+						},
+						modelSelectionFallback: {
+							previousModelOptionId: "model_alternate",
+							previousReasoningLevel: "high",
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						},
+					},
 				});
 				const second = await acceptMessageFixture(
 					harness,
@@ -547,6 +578,36 @@ export function conversationCommandConformanceV1(
 							reasoningLevel: "medium",
 						},
 					],
+					auditActions: [
+						"conversation.message.accepted",
+						"conversation.message.accepted",
+						"conversation.model_selection.fell_back",
+						"conversation.model_selection.updated",
+					],
+					fallbackFacts: [
+						{
+							previousModelOptionId: "model_alternate",
+							previousReasoningLevel: "high",
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						},
+					],
+				});
+				await expect(
+					harness.useCase.readConversation({
+						schemaVersion: 1,
+						conversationId,
+					}),
+				).resolves.toMatchObject({
+					outcome: "found",
+					result: {
+						conversation: {
+							selectedModelOptionId: "model_primary",
+							selectedReasoningLevel: "medium",
+						},
+						modelSelectionFallback: null,
+					},
 				});
 				expect(await harness.snapshot()).toEqual({
 					conversations: 1,
@@ -554,7 +615,7 @@ export function conversationCommandConformanceV1(
 					executions: 2,
 					stops: 0,
 					outbox: 2,
-					audit: 3,
+					audit: 4,
 					idempotency: 4,
 				});
 			} finally {

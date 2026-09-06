@@ -1,5 +1,5 @@
 {
-  "id": "7b0c97f4-377a-4c92-88af-aac398bdaf30",
+  "id": "d1e29142-ac9b-4b21-81a0-048108f2435a",
   "prevId": "a395c3e6-5f1a-4731-993b-9b5f84a16dcd",
   "version": "7",
   "dialect": "postgresql",
@@ -922,6 +922,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "details": {
+          "name": "details",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1011,6 +1017,14 @@
         "conversation_audit_action_non_empty": {
           "name": "conversation_audit_action_non_empty",
           "value": "char_length(\"platform\".\"conversation_audit_events\".\"action\") > 0"
+        },
+        "conversation_audit_execution_binding": {
+          "name": "conversation_audit_execution_binding",
+          "value": "(\n\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" in (\n\t\t\t\t\t'conversation.model_selection.updated',\n\t\t\t\t\t'conversation.model_selection.fell_back'\n\t\t\t\t)\n\t\t\t) OR (\n\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" not in (\n\t\t\t\t\t'conversation.model_selection.updated',\n\t\t\t\t\t'conversation.model_selection.fell_back'\n\t\t\t\t)\n\t\t\t)"
+        },
+        "conversation_audit_details_binding": {
+          "name": "conversation_audit_details_binding",
+          "value": "(\n\t\t\t\t\"platform\".\"conversation_audit_events\".\"action\" in (\n\t\t\t\t\t'conversation.model_selection.updated',\n\t\t\t\t\t'conversation.model_selection.fell_back'\n\t\t\t\t)\n\t\t\t) = (\"platform\".\"conversation_audit_events\".\"details\" IS NOT NULL)"
         },
         "conversation_audit_trace_id_non_empty": {
           "name": "conversation_audit_trace_id_non_empty",
