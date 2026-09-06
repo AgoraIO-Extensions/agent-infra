@@ -223,7 +223,7 @@ async function buildImage({
 			timeoutMs: timeoutMs.probe,
 		},
 	);
-	return { archivePath, repository, reference };
+	return { archivePath, digest: digests[1], repository, reference };
 }
 
 function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
@@ -264,6 +264,9 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 	}
 	if (!digestPattern.test(digest)) {
 		fail(`${image.key} published image digest is invalid`);
+	}
+	if (digest !== builtImage.digest) {
+		fail(`${image.key} published image digest does not match verified build`);
 	}
 	return { repository: builtImage.repository, digest };
 }

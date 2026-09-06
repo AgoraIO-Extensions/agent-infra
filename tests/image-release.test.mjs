@@ -64,7 +64,7 @@ if (args[0] === "image" && args[1] === "inspect") {
 if (args[0] === "load" && args[1] === "--input") process.exit(0);
 if (args[0] === "push") process.exit(0);
 if (args[0] === "manifest" && args[1] === "inspect") {
-  const digest = process.env.FAKE_REMOTE_DIGEST ?? "sha256:" + createHash("sha256").update(args.at(-1) + ":published").digest("hex");
+  const digest = process.env.FAKE_REMOTE_DIGEST ?? "sha256:" + createHash("sha256").update(args.at(-1) + ":stable").digest("hex");
   console.log(JSON.stringify({ Descriptor: { digest } }));
   process.exit(0);
 }
@@ -127,7 +127,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 			assert.equal(
 				image.digest,
 				`sha256:${createHash("sha256")
-					.update(`${image.repository}:${commitSha}:published`)
+					.update(`${image.repository}:${commitSha}:stable`)
 					.digest("hex")}`,
 			);
 		}
@@ -282,6 +282,26 @@ test("image publication rejects an invalid remote digest", async () => {
 
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /published image digest is invalid/);
+		await assert.rejects(access(manifestPath));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image publication rejects a valid but mismatching remote digest", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-infra-images-mismatch-"),
+	);
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {
+			FAKE_REMOTE_DIGEST: `sha256:${"f".repeat(64)}`,
+		});
+
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /published image digest does not match/);
 		await assert.rejects(access(manifestPath));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
