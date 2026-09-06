@@ -20,6 +20,7 @@ export interface FakeConversationEventsOptionsV1
 interface StoredEvent {
 	readonly adapterEventKey: string;
 	readonly eventDigest: string;
+	readonly runtimeCursor: string;
 	readonly event: PersistedConversationEventV1;
 }
 
@@ -32,6 +33,7 @@ function isWritePlan(
 export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 	readonly #events: StoredEvent[] = [];
 	readonly #interface: ConversationEventUseCaseV1;
+	#failNextCommit = false;
 	#lastConversationCursor = 0;
 	#lastSequence = 0;
 
@@ -44,9 +46,14 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 				);
 				const decision = decide(this.#state(existing));
 				if (!isWritePlan(decision)) return decision;
+				if (this.#failNextCommit) {
+					this.#failNextCommit = false;
+					throw new Error("Injected Fake Conversation event commit failure");
+				}
 				this.#events.push({
 					adapterEventKey: decision.adapterEventKey,
 					eventDigest: decision.eventDigest,
+					runtimeCursor: decision.runtimeCursor,
 					event: structuredClone(decision.event),
 				});
 				this.#lastConversationCursor = decision.event.conversationCursor;
@@ -65,11 +72,23 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 	persist: ConversationEventUseCaseV1["persist"] = (command) =>
 		this.#interface.persist(command);
 
+	failNextCommit() {
+		this.#failNextCommit = true;
+	}
+
 	snapshot() {
 		return structuredClone({
 			events: this.#events.map(({ event }) => event),
 			lastConversationCursor: this.#lastConversationCursor,
 		});
+	}
+
+	executionSequence() {
+		return this.#lastSequence;
+	}
+
+	runtimeCursor() {
+		return this.#events.at(-1)?.runtimeCursor ?? null;
 	}
 
 	#state(existing: StoredEvent | undefined): ConversationEventStateV1 {
