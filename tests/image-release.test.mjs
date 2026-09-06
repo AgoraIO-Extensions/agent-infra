@@ -160,7 +160,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 		assert.equal(
 			calls.filter((args) => args[0] === "load" && args[1] === "--input")
 				.length,
-			4,
+			8,
 		);
 		const pushes = calls.filter((args) => args[0] === "push");
 		const readbacks = calls.filter(

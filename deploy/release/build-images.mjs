@@ -223,11 +223,17 @@ async function buildImage({
 			timeoutMs: timeoutMs.probe,
 		},
 	);
-	return { repository, reference };
+	return { archivePath, repository, reference };
 }
 
 function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
+	assertCheckout(git, commitSha);
+	runCommand(docker, ["load", "--input", builtImage.archivePath], {
+		cwd: repositoryRoot,
+		name: `${image.key} publication image load`,
+		timeoutMs: timeoutMs.load,
+	});
 	assertCheckout(git, commitSha);
 	runCommand(docker, ["push", builtImage.reference], {
 		cwd: repositoryRoot,
