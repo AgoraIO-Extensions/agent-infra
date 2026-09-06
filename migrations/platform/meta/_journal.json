@@ -57,6 +57,13 @@
       "when": 1788624140845,
       "tag": "0007_secret_key_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788671305002,
+      "tag": "0008_conversation_model_selection",
+      "breakpoints": true
     }
   ]
 }
