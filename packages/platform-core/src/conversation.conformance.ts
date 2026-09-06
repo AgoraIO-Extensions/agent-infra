@@ -670,6 +670,12 @@ export function conversationCommandConformanceV1(
 				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
 					outcome: "denied",
 				});
+				await expect(
+					harness.useCase.readConversation({
+						schemaVersion: 1,
+						conversationId,
+					}),
+				).resolves.toEqual({ outcome: "denied" });
 				harness.setAuthority({
 					...conversationConformanceAuthorityV1,
 					agentId: "agent_foreign",
@@ -677,6 +683,12 @@ export function conversationCommandConformanceV1(
 				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
 					outcome: "denied",
 				});
+				await expect(
+					harness.useCase.readConversation({
+						schemaVersion: 1,
+						conversationId,
+					}),
+				).resolves.toEqual({ outcome: "denied" });
 				harness.setAuthority(conversationConformanceAuthorityV1);
 				await harness.setModelConfiguration({
 					configurationRevision: 2,
