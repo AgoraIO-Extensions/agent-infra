@@ -7,6 +7,9 @@ import {
 	type ConversationExecutionUseCaseOptionsV1,
 	type ConversationExecutionUseCaseV1,
 	type ConversationMessageWritePlanV1,
+	type ConversationModelConfigurationV1,
+	type ConversationModelSelectionDecisionV1,
+	type ConversationModelSelectionWritePlanV1,
 	type ConversationRegenerationWritePlanV1,
 	type ConversationStopDecisionV1,
 	type ConversationStopWritePlanV1,
@@ -18,6 +21,7 @@ export interface FakeConversationExecutionOptionsV1
 	extends ConversationExecutionUseCaseOptionsV1 {
 	readonly authority?: ConversationExecutionAuthorityV1;
 	readonly authorization?: ConversationExecutionAuthorizationPortV1;
+	readonly modelConfiguration?: ConversationModelConfigurationV1;
 }
 
 interface StoredIdempotency<T> {
@@ -40,6 +44,9 @@ interface StoredExecution {
 	readonly actorId: string;
 	readonly turnId: string;
 	readonly sessionGeneration: number;
+	readonly modelConfigurationRevision: number | null;
+	readonly modelOptionId: string | null;
+	readonly reasoningLevel: string | null;
 	status:
 		| "submitted"
 		| "processing"
@@ -53,6 +60,9 @@ interface StoredOutbox {
 	readonly operation: string;
 	readonly executionId: string;
 	readonly sessionGeneration: number;
+	readonly modelConfigurationRevision?: number | null;
+	readonly modelOptionId?: string | null;
+	readonly reasoningLevel?: string | null;
 	readonly messageId?: string;
 	readonly stopRequestId?: string;
 }
@@ -102,6 +112,14 @@ function isRegenerationWritePlan(
 	return !Object.hasOwn(decision, "outcome");
 }
 
+function isModelSelectionWritePlan(
+	decision:
+		| ConversationModelSelectionWritePlanV1
+		| { readonly outcome: "denied" },
+): decision is ConversationModelSelectionWritePlanV1 {
+	return !Object.hasOwn(decision, "outcome");
+}
+
 function isStopWritePlan(
 	decision:
 		| ConversationStopWritePlanV1
@@ -148,6 +166,8 @@ export class FakeConversationExecutionV1
 	readonly #stops: StoredStop[] = [];
 	readonly #outbox: StoredOutbox[] = [];
 	readonly #audit: StoredAudit[] = [];
+	readonly #currentAuthorizationRevision: string | undefined;
+	#modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly #createIdempotency = new Map<
 		string,
 		StoredIdempotency<CreateConversationDecisionV1>
@@ -160,12 +180,19 @@ export class FakeConversationExecutionV1
 		string,
 		StoredIdempotency<ConversationStopDecisionV1>
 	>();
+	readonly #modelSelectionIdempotency = new Map<
+		string,
+		StoredIdempotency<ConversationModelSelectionDecisionV1>
+	>();
 	readonly #interface: ConversationExecutionUseCaseV1;
 
 	constructor(options: FakeConversationExecutionOptionsV1 = {}) {
 		let nextId = 1;
 		const now = options.now ?? (() => new Date(0));
 		const newId = options.newId ?? (() => `fake_conversation_${nextId++}`);
+		this.#currentAuthorizationRevision =
+			options.authority?.authorizationRevision;
+		this.#modelConfiguration = structuredClone(options.modelConfiguration);
 		const transaction: ConversationExecutionTransactionPortV1 = {
 			createConversation: async (request, decide) => {
 				const idempotencyKey = key([
@@ -266,6 +293,10 @@ export class FakeConversationExecutionV1
 						actorId: plan.execution.actorId,
 						turnId: plan.execution.turnId,
 						sessionGeneration: plan.execution.sessionGeneration,
+						modelConfigurationRevision:
+							plan.execution.modelConfigurationRevision,
+						modelOptionId: plan.execution.modelOptionId,
+						reasoningLevel: plan.execution.reasoningLevel,
 						status: plan.execution.status,
 					});
 				}
@@ -273,6 +304,10 @@ export class FakeConversationExecutionV1
 					operation: plan.outboxIntent.operation,
 					executionId: plan.outboxIntent.executionId,
 					sessionGeneration: plan.outboxIntent.sessionGeneration,
+					modelConfigurationRevision:
+						plan.outboxIntent.modelConfigurationRevision,
+					modelOptionId: plan.outboxIntent.modelOptionId,
+					reasoningLevel: plan.outboxIntent.reasoningLevel,
 					messageId: plan.outboxIntent.messageId,
 				});
 				this.#audit.push({
@@ -286,6 +321,68 @@ export class FakeConversationExecutionV1
 					result: structuredClone(plan.result),
 				} as const;
 				this.#commandIdempotency.set(idempotencyKey, {
+					requestDigest: request.requestDigest,
+					decision: accepted,
+				});
+				return accepted;
+			},
+			executeModelSelection: async (request, decide) => {
+				if (
+					!isCurrentConversationBinding(
+						this.#conversations.get(request.command.conversationId),
+						request.authority,
+						request.command.conversationId,
+					)
+				) {
+					return { outcome: "denied" };
+				}
+				if (
+					this.#currentAuthorizationRevision !== undefined &&
+					request.authority.authorizationRevision !==
+						this.#currentAuthorizationRevision
+				) {
+					return { outcome: "denied" };
+				}
+				const idempotencyKey = key([
+					request.command.conversationId,
+					request.authority.actorId,
+					request.command.command,
+					request.command.idempotencyKey,
+				]);
+				const existing = this.#modelSelectionIdempotency.get(idempotencyKey);
+				if (existing) {
+					if (existing.requestDigest !== request.requestDigest) {
+						return { outcome: "conflict", reason: "idempotency_conflict" };
+					}
+					if (existing.decision.outcome !== "accepted") {
+						throw new Error("Invalid Fake model selection idempotency state");
+					}
+					return {
+						outcome: "replayed",
+						result: structuredClone(existing.decision.result),
+					};
+				}
+				const decision = decide(this.#state(request.command.conversationId));
+				if (!isModelSelectionWritePlan(decision)) return decision;
+				if (this.#failNextCommit) {
+					this.#failNextCommit = false;
+					throw new Error("Injected Fake Conversation commit failure");
+				}
+				this.#conversations.set(
+					decision.conversation.conversationId,
+					structuredClone(decision.conversation),
+				);
+				this.#audit.push({
+					action: decision.auditEvent.action,
+					actorId: decision.auditEvent.actorId,
+					traceId: decision.auditEvent.traceId,
+					requestId: decision.auditEvent.requestId,
+				});
+				const accepted = {
+					outcome: "accepted",
+					result: structuredClone(decision.result),
+				} as const;
+				this.#modelSelectionIdempotency.set(idempotencyKey, {
 					requestDigest: request.requestDigest,
 					decision: accepted,
 				});
@@ -347,12 +444,19 @@ export class FakeConversationExecutionV1
 					actorId: plan.execution.actorId,
 					turnId: plan.execution.turnId,
 					sessionGeneration: plan.execution.sessionGeneration,
+					modelConfigurationRevision: plan.execution.modelConfigurationRevision,
+					modelOptionId: plan.execution.modelOptionId,
+					reasoningLevel: plan.execution.reasoningLevel,
 					status: plan.execution.status,
 				});
 				this.#outbox.push({
 					operation: plan.outboxIntent.operation,
 					executionId: plan.outboxIntent.executionId,
 					sessionGeneration: plan.outboxIntent.sessionGeneration,
+					modelConfigurationRevision:
+						plan.outboxIntent.modelConfigurationRevision,
+					modelOptionId: plan.outboxIntent.modelOptionId,
+					reasoningLevel: plan.outboxIntent.reasoningLevel,
 					messageId: plan.outboxIntent.messageId,
 				});
 				this.#audit.push({
@@ -461,6 +565,9 @@ export class FakeConversationExecutionV1
 	accept: ConversationExecutionUseCaseV1["accept"] = (command) =>
 		this.#interface.accept(command);
 
+	selectModel: ConversationExecutionUseCaseV1["selectModel"] = (command) =>
+		this.#interface.selectModel(command);
+
 	regenerate: ConversationExecutionUseCaseV1["regenerate"] = (command) =>
 		this.#interface.regenerate(command);
 
@@ -469,6 +576,12 @@ export class FakeConversationExecutionV1
 
 	failNextCommit() {
 		this.#failNextCommit = true;
+	}
+
+	setModelConfiguration(
+		configuration: ConversationModelConfigurationV1 | undefined,
+	) {
+		this.#modelConfiguration = structuredClone(configuration);
 	}
 
 	completeExecution(executionId: string) {
@@ -496,7 +609,8 @@ export class FakeConversationExecutionV1
 		return (
 			this.#createIdempotency.size +
 			this.#commandIdempotency.size +
-			this.#stopIdempotency.size
+			this.#stopIdempotency.size +
+			this.#modelSelectionIdempotency.size
 		);
 	}
 
@@ -538,6 +652,7 @@ export class FakeConversationExecutionV1
 			: false;
 		return {
 			conversation: structuredClone(this.#conversations.get(conversationId)),
+			modelConfiguration: structuredClone(this.#modelConfiguration),
 			sourceMessage: source
 				? {
 						messageId: source.messageId,
@@ -552,6 +667,9 @@ export class FakeConversationExecutionV1
 						conversationId: target.conversationId,
 						actorId: target.actorId,
 						sessionGeneration: target.sessionGeneration,
+						modelConfigurationRevision: target.modelConfigurationRevision,
+						modelOptionId: target.modelOptionId,
+						reasoningLevel: target.reasoningLevel,
 						status: target.status,
 					}
 				: undefined,
@@ -569,6 +687,9 @@ export class FakeConversationExecutionV1
 						actorId: active.actorId,
 						turnId: active.turnId,
 						sessionGeneration: active.sessionGeneration,
+						modelConfigurationRevision: active.modelConfigurationRevision,
+						modelOptionId: active.modelOptionId,
+						reasoningLevel: active.reasoningLevel,
 						stopPending: activeStopPending,
 						status: active.status as "submitted" | "processing" | "unknown",
 					}

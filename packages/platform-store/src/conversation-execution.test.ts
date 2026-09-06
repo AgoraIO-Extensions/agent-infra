@@ -2,6 +2,7 @@ import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseV1,
+	type ConversationModelConfigurationV1,
 	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
 import {
@@ -27,6 +28,16 @@ const authority: ConversationExecutionAuthorityV1 = {
 	authorizationRevision: "authorization_01",
 	supportsSupplementaryInstruction: true,
 };
+
+const conformanceModelConfiguration = {
+	configurationRevision: 1,
+	options: [
+		{ optionId: "model_primary", reasoningLevels: ["low", "medium"] },
+		{ optionId: "model_alternate", reasoningLevels: ["high"] },
+	],
+	defaultOptionId: "model_primary",
+	defaultReasoningLevel: "low",
+} as const satisfies ConversationModelConfigurationV1;
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -69,11 +80,91 @@ afterEach(async () => {
 		platform.conversations`;
 });
 
+async function persistConformanceModelConfiguration(
+	modelConfiguration: ConversationModelConfigurationV1 | undefined,
+): Promise<void> {
+	const revision = modelConfiguration?.configurationRevision ?? 1;
+	const record = {
+		schemaVersion: 1,
+		agentId: conversationConformanceAuthorityV1.agentId,
+		revision,
+		source: modelConfiguration
+			? {
+					kind: "standard",
+					templateId: "template_fixture",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					admissionRevision: "admission_fixture",
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					platformManagedKeys: [],
+					connectionEnabled: false,
+				}
+			: {
+					kind: "custom",
+					imageDigest: `sha256:${"b".repeat(64)}`,
+					admissionRevision: "admission_fixture",
+					interactionMode: "platform-adapter",
+					connectionEnabled: false,
+				},
+		modelConfiguration: modelConfiguration
+			? {
+					catalogRevision: `catalog_fixture_${revision}`,
+					options: modelConfiguration.options.map(
+						({ optionId, reasoningLevels }, index) => ({
+							optionId,
+							endpointId: `endpoint_fixture_${index}`,
+							modelId: `model_fixture_${index}`,
+							reasoningLevels,
+							credential: {
+								secretId: `secret_fixture_${index}`,
+								version: 1,
+								isSet: true,
+							},
+						}),
+					),
+					defaultOptionId: modelConfiguration.defaultOptionId,
+					defaultReasoningLevel: modelConfiguration.defaultReasoningLevel,
+				}
+			: null,
+		actions: [],
+		actionSetRevision: "actions_fixture",
+		environment: [],
+		secrets: [],
+		channels: [],
+		channelRevision: "channels_fixture",
+	};
+	await client`
+		insert into platform.agents
+			(id, current_configuration_revision, authorization_revision)
+		values
+			(${conversationConformanceAuthorityV1.agentId}, ${revision},
+			 ${conversationConformanceAuthorityV1.authorizationRevision})
+		on conflict (id) do update
+		set authorization_revision = excluded.authorization_revision
+	`;
+	await client`
+		insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+		values
+			(${conversationConformanceAuthorityV1.agentId}, ${revision},
+			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
+		on conflict (agent_id, revision) do update
+		set configuration = excluded.configuration
+	`;
+	await client`
+		update platform.agents
+		set current_configuration_revision = ${revision}
+		where id = ${conversationConformanceAuthorityV1.agentId}
+	`;
+}
+
 conversationCommandConformanceV1("PostgreSQL", async () => {
+	await persistConformanceModelConfiguration(conformanceModelConfiguration);
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
 		conversationConformanceAuthorityV1;
 	let nextId = 1;
 	let failureCleanupRequired = false;
+	let modelSelectionFailureCleanupRequired = false;
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
@@ -90,6 +181,19 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 						await disarmFailure("message");
 					} finally {
 						failureCleanupRequired = false;
+					}
+				}
+			}
+		},
+		async executeModelSelection(request, decide) {
+			try {
+				return await adapter.executeModelSelection(request, decide);
+			} finally {
+				if (modelSelectionFailureCleanupRequired) {
+					try {
+						await disarmFailure("audit");
+					} finally {
+						modelSelectionFailureCleanupRequired = false;
 					}
 				}
 			}
@@ -128,6 +232,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			return decision;
 		},
 		regenerate: (command) => inner.regenerate(command),
+		selectModel: (command) => inner.selectModel(command),
 		stop: (command) => inner.stop(command),
 	};
 	return {
@@ -138,6 +243,10 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		async failNextCommit() {
 			failureCleanupRequired = true;
 			await armFailure("message");
+		},
+		async failNextModelSelectionCommit() {
+			modelSelectionFailureCleanupRequired = true;
+			await armFailure("audit");
 		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
@@ -150,12 +259,80 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			`;
 			if (updated.count !== 1) throw new Error("Expected one Execution");
 		},
+		setModelConfiguration: persistConformanceModelConfiguration,
+		async modelSnapshot(conversationId) {
+			const [conversation] = await client<
+				{
+					readonly selected_model_option_id: string | null;
+					readonly selected_reasoning_level: string | null;
+				}[]
+			>`
+				select selected_model_option_id, selected_reasoning_level
+				from platform.conversations where id = ${conversationId}
+			`;
+			if (!conversation) throw new Error("Expected Conversation");
+			const executions = await client<
+				{
+					readonly execution_id: string;
+					readonly model_configuration_revision: string | number | null;
+					readonly model_option_id: string | null;
+					readonly reasoning_level: string | null;
+				}[]
+			>`
+				select execution_id, model_configuration_revision, model_option_id,
+					reasoning_level
+				from platform.conversation_executions
+				where conversation_id = ${conversationId}
+				order by created_at, execution_id
+			`;
+			const outboxRows = await client<
+				{ readonly payload: Record<string, unknown> }[]
+			>`
+				select payload from platform.outbox_items
+				where scope_type = 'conversation' and scope_id = ${conversationId}
+					and operation in ('conversation.turn.submit.v1',
+						'conversation.turn.regenerate.v1')
+				order by created_at, id
+			`;
+			return {
+				selectedModelOptionId: conversation.selected_model_option_id,
+				selectedReasoningLevel: conversation.selected_reasoning_level,
+				executions: executions.map((execution) => ({
+					executionId: execution.execution_id,
+					modelConfigurationRevision:
+						execution.model_configuration_revision === null
+							? null
+							: Number(execution.model_configuration_revision),
+					modelOptionId: execution.model_option_id,
+					reasoningLevel: execution.reasoning_level,
+				})),
+				outbox: outboxRows.map(({ payload }) => ({
+					executionId: String(payload.executionId),
+					modelConfigurationRevision:
+						payload.modelConfigurationRevision === null
+							? null
+							: Number(payload.modelConfigurationRevision),
+					modelOptionId:
+						payload.modelOptionId === null
+							? null
+							: String(payload.modelOptionId),
+					reasoningLevel:
+						payload.reasoningLevel === null
+							? null
+							: String(payload.reasoningLevel),
+				})),
+			};
+		},
 		snapshot: commandEffectCounts,
 		async close() {
 			try {
 				await disarmFailure("message");
 			} finally {
-				await adapter.close();
+				try {
+					await disarmFailure("audit");
+				} finally {
+					await adapter.close();
+				}
 			}
 		},
 	};
@@ -236,6 +413,68 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("keeps legacy rows valid while enforcing complete model selections", async () => {
+		await client`
+			insert into platform.conversations
+				(id, agent_id, actor_id, channel_id, status, session_generation,
+				 authorization_revision)
+			values
+				('conversation_legacy', 'agent_legacy', 'actor_legacy', 'web', 'ready', 1,
+				 'authorization_legacy')
+		`;
+		await client`
+			insert into platform.conversation_executions
+				(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+				 status, session_generation, authorization_revision, created_at)
+			values
+				('execution_legacy', 'conversation_legacy', 'agent_legacy', 'actor_legacy',
+				 'web', 'turn_legacy', 'completed', 1, 'authorization_legacy', now())
+		`;
+		const [legacy] = await client<
+			{
+				readonly selected_model_option_id: string | null;
+				readonly selected_reasoning_level: string | null;
+				readonly model_configuration_revision: string | null;
+				readonly model_option_id: string | null;
+				readonly reasoning_level: string | null;
+			}[]
+		>`
+			select conversation.selected_model_option_id,
+				conversation.selected_reasoning_level,
+				execution.model_configuration_revision,
+				execution.model_option_id, execution.reasoning_level
+			from platform.conversations as conversation
+			join platform.conversation_executions as execution
+				on execution.conversation_id = conversation.id
+			where conversation.id = 'conversation_legacy'
+		`;
+		expect(legacy).toEqual({
+			selected_model_option_id: null,
+			selected_reasoning_level: null,
+			model_configuration_revision: null,
+			model_option_id: null,
+			reasoning_level: null,
+		});
+		await expect(
+			client`
+				update platform.conversations
+				set selected_model_option_id = 'model_incomplete'
+				where id = 'conversation_legacy'
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_model_selection_pair",
+		});
+		await expect(
+			client`
+				update platform.conversation_executions
+				set model_option_id = 'model_incomplete'
+				where execution_id = 'execution_legacy'
+			`,
+		).rejects.toMatchObject({
+			constraint_name: "conversation_execution_model_selection",
+		});
+	});
+
 	it("atomically accepts an initial message through the Core transaction seam", async () => {
 		const { transaction, useCase } = createConversation();
 		try {
@@ -412,6 +651,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 						messageId: "conversation_id_2",
 						turnId: "conversation_id_6",
 						sessionGeneration: 1,
+						modelConfigurationRevision: null,
+						modelOptionId: null,
+						reasoningLevel: null,
 					},
 				},
 			]);
@@ -867,6 +1109,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 							hostSessionRef: null,
 							authorizationRevision: authority.authorizationRevision,
 							lastConversationCursor: 0,
+							selectedModelOptionId: null,
+							selectedReasoningLevel: null,
 						},
 						result: {
 							schemaVersion: 1,

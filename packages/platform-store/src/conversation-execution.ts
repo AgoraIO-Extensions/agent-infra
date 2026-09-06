@@ -9,6 +9,9 @@ import {
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationMessageWritePlanV1,
+	type ConversationModelConfigurationV1,
+	type ConversationModelSelectionDecisionV1,
+	type ConversationModelSelectionWritePlanV1,
 	type ConversationRegenerationWritePlanV1,
 	type ConversationStopDecisionV1,
 	type ConversationStopWritePlanV1,
@@ -16,7 +19,7 @@ import {
 	type CreateConversationWritePlanV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-
+import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
@@ -36,6 +39,12 @@ type MessageRequest = Parameters<
 >[0];
 type MessageDecide = Parameters<
 	ConversationExecutionTransactionPortV1["executeMessage"]
+>[1];
+type ModelSelectionRequest = Parameters<
+	ConversationExecutionTransactionPortV1["executeModelSelection"]
+>[0];
+type ModelSelectionDecide = Parameters<
+	ConversationExecutionTransactionPortV1["executeModelSelection"]
 >[1];
 type RegenerationRequest = Parameters<
 	ConversationExecutionTransactionPortV1["executeRegeneration"]
@@ -66,6 +75,8 @@ interface ConversationRow {
 	readonly host_session_ref: string | null;
 	readonly authorization_revision: string;
 	readonly last_conversation_cursor: string | number;
+	readonly selected_model_option_id: string | null;
+	readonly selected_reasoning_level: string | null;
 }
 
 interface ExecutionRow {
@@ -74,7 +85,16 @@ interface ExecutionRow {
 	readonly actor_id: string;
 	readonly turn_id: string;
 	readonly session_generation: string | number;
+	readonly model_configuration_revision: string | number | null;
+	readonly model_option_id: string | null;
+	readonly reasoning_level: string | null;
 	readonly status: string;
+}
+
+interface AgentConfigurationRow {
+	readonly current_configuration_revision: string | number;
+	readonly authorization_revision: string | null;
+	readonly configuration: unknown;
 }
 
 interface StopRow {
@@ -201,13 +221,22 @@ function parseConversation(
 		"hostSessionRef",
 		"authorizationRevision",
 		"lastConversationCursor",
+		"selectedModelOptionId",
+		"selectedReasoningLevel",
 	]);
 	if (
 		input.schemaVersion !== 1 ||
 		(input.status !== "ready" &&
 			input.status !== "active" &&
 			input.status !== "unavailable") ||
-		(input.hostSessionRef !== null && typeof input.hostSessionRef !== "string")
+		(input.hostSessionRef !== null &&
+			typeof input.hostSessionRef !== "string") ||
+		(input.selectedModelOptionId !== null &&
+			typeof input.selectedModelOptionId !== "string") ||
+		(input.selectedReasoningLevel !== null &&
+			typeof input.selectedReasoningLevel !== "string") ||
+		(input.selectedModelOptionId === null) !==
+			(input.selectedReasoningLevel === null)
 	) {
 		return unavailable();
 	}
@@ -223,6 +252,14 @@ function parseConversation(
 			input.hostSessionRef === null ? null : text(input.hostSessionRef),
 		authorizationRevision: text(input.authorizationRevision),
 		lastConversationCursor: safeInteger(input.lastConversationCursor, 0),
+		selectedModelOptionId:
+			input.selectedModelOptionId === null
+				? null
+				: text(input.selectedModelOptionId),
+		selectedReasoningLevel:
+			input.selectedReasoningLevel === null
+				? null
+				: text(input.selectedReasoningLevel),
 	};
 }
 
@@ -240,6 +277,8 @@ function conversationFromRow(
 		hostSessionRef: row.host_session_ref,
 		authorizationRevision: row.authorization_revision,
 		lastConversationCursor: row.last_conversation_cursor,
+		selectedModelOptionId: row.selected_model_option_id,
+		selectedReasoningLevel: row.selected_reasoning_level,
 	});
 }
 
@@ -252,6 +291,64 @@ function matchesBinding(
 		conversation.actorId === authority.actorId &&
 		conversation.channelId === authority.channelId
 	);
+}
+
+async function lockAgentConfiguration(
+	transaction: Transaction,
+	agentId: string,
+): Promise<
+	| {
+			readonly authorizationRevision: string | null;
+			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
+	  }
+	| undefined
+> {
+	const rows = await transaction<AgentConfigurationRow[]>`
+		select agent.current_configuration_revision, agent.authorization_revision,
+			configuration.configuration
+		from platform.agents as agent
+		left join platform.agent_configuration_revisions as configuration
+			on configuration.agent_id = agent.id
+			and configuration.revision = agent.current_configuration_revision
+		where agent.id = ${agentId}
+		limit 1
+		for share of agent
+	`;
+	const row = rows[0];
+	if (!row) return undefined;
+	if (row.configuration === null) {
+		return {
+			authorizationRevision: row.authorization_revision,
+			modelConfiguration: undefined,
+		};
+	}
+	try {
+		const revision = safeInteger(row.current_configuration_revision, 1);
+		const configuration = decodeAgentConfigurationRecord(row.configuration);
+		if (
+			configuration.agentId !== agentId ||
+			configuration.revision !== revision
+		) {
+			return unavailable();
+		}
+		const model = configuration.modelConfiguration;
+		return {
+			authorizationRevision: row.authorization_revision,
+			modelConfiguration: model
+				? {
+						configurationRevision: revision,
+						options: model.options.map(({ optionId, reasoningLevels }) => ({
+							optionId,
+							reasoningLevels,
+						})),
+						defaultOptionId: model.defaultOptionId,
+						defaultReasoningLevel: model.defaultReasoningLevel,
+					}
+				: undefined,
+		};
+	} catch {
+		return unavailable();
+	}
 }
 
 function parseCreatedResult(value: unknown) {
@@ -329,6 +426,70 @@ function parseStopResult(value: unknown) {
 	};
 }
 
+function parseModelSelectionResult(value: unknown) {
+	const input = exactRecord(value, [
+		"schemaVersion",
+		"conversationId",
+		"modelOptionId",
+		"reasoningLevel",
+	]);
+	if (input.schemaVersion !== 1) unavailable();
+	return {
+		schemaVersion: 1 as const,
+		conversationId: text(input.conversationId),
+		modelOptionId: text(input.modelOptionId),
+		reasoningLevel: text(input.reasoningLevel),
+	};
+}
+
+function effectiveModelSelection(state: ConversationExecutionStateV1): {
+	readonly modelConfigurationRevision: number | null;
+	readonly modelOptionId: string | null;
+	readonly reasoningLevel: string | null;
+} {
+	const conversation = state.conversation;
+	const configuration = state.modelConfiguration;
+	if (!conversation || !configuration) {
+		return {
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+		};
+	}
+	const selected = configuration.options.find(
+		({ optionId, reasoningLevels }) =>
+			optionId === conversation.selectedModelOptionId &&
+			conversation.selectedReasoningLevel !== null &&
+			reasoningLevels.includes(conversation.selectedReasoningLevel),
+	);
+	return {
+		modelConfigurationRevision: configuration.configurationRevision,
+		modelOptionId: selected?.optionId ?? configuration.defaultOptionId,
+		reasoningLevel: selected
+			? conversation.selectedReasoningLevel
+			: configuration.defaultReasoningLevel,
+	};
+}
+
+function sameModelSelection(
+	left: {
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
+	},
+	right: {
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
+	},
+): boolean {
+	return (
+		left.modelConfigurationRevision === right.modelConfigurationRevision &&
+		left.modelOptionId === right.modelOptionId &&
+		left.reasoningLevel === right.reasoningLevel
+	);
+}
+
 function parseIdempotency(
 	value: unknown,
 	includeChannel: boolean,
@@ -340,6 +501,7 @@ function parseIdempotency(
 	readonly commandType:
 		| "conversation.create"
 		| "message"
+		| "model.select"
 		| "regenerate"
 		| "stop";
 	readonly key: string;
@@ -370,6 +532,7 @@ function parseIdempotency(
 		(input.scopeType !== "agent" && input.scopeType !== "conversation") ||
 		(input.commandType !== "conversation.create" &&
 			input.commandType !== "message" &&
+			input.commandType !== "model.select" &&
 			input.commandType !== "regenerate" &&
 			input.commandType !== "stop") ||
 		typeof input.key !== "string" ||
@@ -402,6 +565,9 @@ function parseExecution(value: unknown) {
 		"sessionGeneration",
 		"deliveryFence",
 		"authorizationRevision",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
 		"createdAt",
 	]);
 	if (input.status !== "submitted") unavailable();
@@ -416,6 +582,14 @@ function parseExecution(value: unknown) {
 		sessionGeneration: safeInteger(input.sessionGeneration, 1),
 		deliveryFence: safeInteger(input.deliveryFence, 0),
 		authorizationRevision: text(input.authorizationRevision),
+		modelConfigurationRevision:
+			input.modelConfigurationRevision === null
+				? null
+				: safeInteger(input.modelConfigurationRevision, 1),
+		modelOptionId:
+			input.modelOptionId === null ? null : text(input.modelOptionId),
+		reasoningLevel:
+			input.reasoningLevel === null ? null : text(input.reasoningLevel),
 		createdAt: date(input.createdAt),
 	};
 }
@@ -450,6 +624,9 @@ function parseMessageOutbox(value: unknown) {
 		"messageId",
 		"turnId",
 		"sessionGeneration",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
 		"traceId",
 		"requestId",
 		"occurredAt",
@@ -467,6 +644,14 @@ function parseMessageOutbox(value: unknown) {
 		messageId: text(input.messageId),
 		turnId: text(input.turnId),
 		sessionGeneration: safeInteger(input.sessionGeneration, 1),
+		modelConfigurationRevision:
+			input.modelConfigurationRevision === null
+				? null
+				: safeInteger(input.modelConfigurationRevision, 1),
+		modelOptionId:
+			input.modelOptionId === null ? null : text(input.modelOptionId),
+		reasoningLevel:
+			input.reasoningLevel === null ? null : text(input.reasoningLevel),
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
@@ -510,6 +695,9 @@ function parseRegenerationOutbox(value: unknown) {
 		"messageId",
 		"turnId",
 		"sessionGeneration",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
 		"traceId",
 		"requestId",
 		"occurredAt",
@@ -522,6 +710,14 @@ function parseRegenerationOutbox(value: unknown) {
 		messageId: text(input.messageId),
 		turnId: text(input.turnId),
 		sessionGeneration: safeInteger(input.sessionGeneration, 1),
+		modelConfigurationRevision:
+			input.modelConfigurationRevision === null
+				? null
+				: safeInteger(input.modelConfigurationRevision, 1),
+		modelOptionId:
+			input.modelOptionId === null ? null : text(input.modelOptionId),
+		reasoningLevel:
+			input.reasoningLevel === null ? null : text(input.reasoningLevel),
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
@@ -600,6 +796,28 @@ function parseStopAudit(value: unknown) {
 	};
 }
 
+function parseModelSelectionAudit(value: unknown) {
+	const input = exactRecord(value, [
+		"action",
+		"actorId",
+		"agentId",
+		"conversationId",
+		"traceId",
+		"requestId",
+		"occurredAt",
+	]);
+	if (input.action !== "conversation.model_selection.updated") unavailable();
+	return {
+		action: "conversation.model_selection.updated" as const,
+		actorId: text(input.actorId),
+		agentId: text(input.agentId),
+		conversationId: text(input.conversationId),
+		traceId: text(input.traceId),
+		requestId: text(input.requestId),
+		occurredAt: date(input.occurredAt),
+	};
+}
+
 function validateCreatePlan(
 	value: unknown,
 	request: CreateRequest,
@@ -626,6 +844,8 @@ function validateCreatePlan(
 		conversation.hostSessionRef !== null ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
 		conversation.lastConversationCursor !== 0 ||
+		conversation.selectedModelOptionId !== null ||
+		conversation.selectedReasoningLevel !== null ||
 		result.agentId !== authority.agentId ||
 		idempotency.scopeType !== "agent" ||
 		idempotency.scopeId !== authority.agentId ||
@@ -679,6 +899,7 @@ function validateMessagePlan(
 	const result = parseMessageResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
 	const current = state.conversation;
+	const modelSelection = effectiveModelSelection(state);
 	if (
 		current.status === "unavailable" ||
 		conversation.conversationId !== current.conversationId ||
@@ -689,6 +910,8 @@ function validateMessagePlan(
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.lastConversationCursor !== current.lastConversationCursor ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
+		conversation.selectedModelOptionId !== modelSelection.modelOptionId ||
+		conversation.selectedReasoningLevel !== modelSelection.reasoningLevel ||
 		message.conversationId !== current.conversationId ||
 		message.actorId !== authority.actorId ||
 		message.text !== request.command.text ||
@@ -729,6 +952,8 @@ function validateMessagePlan(
 			execution.sessionGeneration !== current.sessionGeneration ||
 			execution.deliveryFence !== 0 ||
 			execution.authorizationRevision !== authority.authorizationRevision ||
+			!sameModelSelection(execution, modelSelection) ||
+			!sameModelSelection(outbox, modelSelection) ||
 			outbox.operation !== "conversation.turn.submit.v1" ||
 			outbox.executionId !== execution.executionId ||
 			outbox.turnId !== execution.turnId ||
@@ -749,6 +974,7 @@ function validateMessagePlan(
 			outbox.operation !== "conversation.turn.supplement.v1" ||
 			outbox.turnId !== active.turnId ||
 			outbox.sessionGeneration !== active.sessionGeneration ||
+			!sameModelSelection(outbox, active) ||
 			audit.action !== "conversation.message.supplemented"
 		) {
 			return unavailable();
@@ -757,6 +983,63 @@ function validateMessagePlan(
 		return unavailable();
 	}
 	return value as ConversationMessageWritePlanV1;
+}
+
+function validateModelSelectionPlan(
+	value: unknown,
+	request: ModelSelectionRequest,
+	state: ConversationExecutionStateV1,
+): ConversationModelSelectionWritePlanV1 {
+	const authority = parseAuthority(request.authority);
+	const input = exactRecord(value, [
+		"schemaVersion",
+		"conversation",
+		"auditEvent",
+		"result",
+		"idempotency",
+	]);
+	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
+	const current = state.conversation;
+	const configuration = state.modelConfiguration;
+	const conversation = parseConversation(input.conversation);
+	const audit = parseModelSelectionAudit(input.auditEvent);
+	const result = parseModelSelectionResult(input.result);
+	const idempotency = parseIdempotency(input.idempotency, false);
+	const selected = configuration?.options.find(
+		({ optionId }) => optionId === request.command.modelOptionId,
+	);
+	if (
+		current.status === "unavailable" ||
+		!selected?.reasoningLevels.includes(request.command.reasoningLevel) ||
+		conversation.conversationId !== current.conversationId ||
+		conversation.agentId !== current.agentId ||
+		conversation.actorId !== current.actorId ||
+		conversation.channelId !== current.channelId ||
+		conversation.status !== current.status ||
+		conversation.sessionGeneration !== current.sessionGeneration ||
+		conversation.hostSessionRef !== current.hostSessionRef ||
+		conversation.lastConversationCursor !== current.lastConversationCursor ||
+		conversation.authorizationRevision !== authority.authorizationRevision ||
+		conversation.selectedModelOptionId !== selected.optionId ||
+		conversation.selectedReasoningLevel !== request.command.reasoningLevel ||
+		result.conversationId !== current.conversationId ||
+		result.modelOptionId !== selected.optionId ||
+		result.reasoningLevel !== request.command.reasoningLevel ||
+		audit.actorId !== authority.actorId ||
+		audit.agentId !== authority.agentId ||
+		audit.conversationId !== current.conversationId ||
+		audit.traceId !== request.command.traceId ||
+		audit.requestId !== request.command.requestId ||
+		idempotency.scopeType !== "conversation" ||
+		idempotency.scopeId !== current.conversationId ||
+		idempotency.actorId !== authority.actorId ||
+		idempotency.commandType !== "model.select" ||
+		idempotency.key !== request.command.idempotencyKey ||
+		idempotency.requestDigest !== request.requestDigest
+	) {
+		return unavailable();
+	}
+	return value as ConversationModelSelectionWritePlanV1;
 }
 
 function validateRegenerationPlan(
@@ -791,6 +1074,7 @@ function validateRegenerationPlan(
 	const audit = parseRegenerationAudit(input.auditEvent);
 	const result = parseRegenerationResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
+	const modelSelection = effectiveModelSelection(state);
 	if (
 		conversation.conversationId !== current.conversationId ||
 		conversation.agentId !== current.agentId ||
@@ -802,6 +1086,8 @@ function validateRegenerationPlan(
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
 		conversation.lastConversationCursor !== current.lastConversationCursor ||
+		conversation.selectedModelOptionId !== modelSelection.modelOptionId ||
+		conversation.selectedReasoningLevel !== modelSelection.reasoningLevel ||
 		execution.executionId !== result.executionId ||
 		execution.conversationId !== current.conversationId ||
 		execution.agentId !== authority.agentId ||
@@ -810,6 +1096,8 @@ function validateRegenerationPlan(
 		execution.sessionGeneration !== current.sessionGeneration ||
 		execution.deliveryFence !== 0 ||
 		execution.authorizationRevision !== authority.authorizationRevision ||
+		!sameModelSelection(execution, modelSelection) ||
+		!sameModelSelection(outbox, modelSelection) ||
 		outbox.conversationId !== current.conversationId ||
 		outbox.executionId !== execution.executionId ||
 		outbox.messageId !== state.sourceMessage.messageId ||
@@ -977,6 +1265,12 @@ function isMessagePlan(
 	return !Object.hasOwn(decision, "outcome");
 }
 
+function isModelSelectionPlan(
+	decision: Awaited<ReturnType<ModelSelectionDecide>>,
+): decision is ConversationModelSelectionWritePlanV1 {
+	return !Object.hasOwn(decision, "outcome");
+}
+
 function isRegenerationPlan(
 	decision: Awaited<ReturnType<RegenerationDecide>>,
 ): decision is ConversationRegenerationWritePlanV1 {
@@ -1062,7 +1356,8 @@ async function lockConversation(
 ): Promise<ConversationExecutionConversationStateV1 | undefined> {
 	const rows = await transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, status, session_generation,
-			host_session_ref, authorization_revision, last_conversation_cursor
+			host_session_ref, authorization_revision, last_conversation_cursor,
+			selected_model_option_id, selected_reasoning_level
 		from platform.conversations where id = ${conversationId} for update
 	`;
 	return rows[0] ? conversationFromRow(rows[0]) : undefined;
@@ -1072,9 +1367,10 @@ async function readMessageState(
 	transaction: Transaction,
 	conversation: ConversationExecutionConversationStateV1,
 ): Promise<ConversationExecutionStateV1> {
+	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
 	const activeRows = await transaction<ExecutionRow[]>`
 		select execution_id, conversation_id, actor_id, turn_id, session_generation,
-			status
+			model_configuration_revision, model_option_id, reasoning_level, status
 		from platform.conversation_executions
 		where conversation_id = ${conversation.conversationId}
 			and status in ('submitted', 'processing', 'unknown')
@@ -1086,6 +1382,7 @@ async function readMessageState(
 	if (!active) {
 		return {
 			conversation,
+			modelConfiguration: agent?.modelConfiguration,
 			sourceMessage: undefined,
 			targetExecution: undefined,
 			existingStop: undefined,
@@ -1105,6 +1402,7 @@ async function readMessageState(
 		unavailable();
 	return {
 		conversation,
+		modelConfiguration: agent?.modelConfiguration,
 		sourceMessage: undefined,
 		targetExecution: undefined,
 		existingStop: undefined,
@@ -1114,9 +1412,37 @@ async function readMessageState(
 			actorId: text(active.actor_id),
 			turnId: text(active.turn_id),
 			sessionGeneration: safeInteger(active.session_generation, 1),
+			modelConfigurationRevision:
+				active.model_configuration_revision === null
+					? null
+					: safeInteger(active.model_configuration_revision, 1),
+			modelOptionId:
+				active.model_option_id === null ? null : text(active.model_option_id),
+			reasoningLevel:
+				active.reasoning_level === null ? null : text(active.reasoning_level),
 			stopPending: stop?.status === "submitted",
 			status: status as "submitted" | "processing" | "unknown",
 		},
+	};
+}
+
+async function readModelSelectionState(
+	transaction: Transaction,
+	conversation: ConversationExecutionConversationStateV1,
+): Promise<
+	ConversationExecutionStateV1 & {
+		readonly currentAuthorizationRevision: string | null | undefined;
+	}
+> {
+	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
+	return {
+		conversation,
+		modelConfiguration: agent?.modelConfiguration,
+		sourceMessage: undefined,
+		targetExecution: undefined,
+		existingStop: undefined,
+		activeExecution: undefined,
+		currentAuthorizationRevision: agent?.authorizationRevision,
 	};
 }
 
@@ -1166,10 +1492,14 @@ async function readStopState(
 			readonly conversation_id: string;
 			readonly actor_id: string;
 			readonly session_generation: string | number;
+			readonly model_configuration_revision: string | number | null;
+			readonly model_option_id: string | null;
+			readonly reasoning_level: string | null;
 			readonly status: string;
 		}[]
 	>`
-		select execution_id, conversation_id, actor_id, session_generation, status
+		select execution_id, conversation_id, actor_id, session_generation,
+			model_configuration_revision, model_option_id, reasoning_level, status
 		from platform.conversation_executions
 		where conversation_id = ${conversation.conversationId}
 			and execution_id = ${targetExecutionId}
@@ -1199,6 +1529,14 @@ async function readStopState(
 			conversationId: text(target.conversation_id),
 			actorId: text(target.actor_id),
 			sessionGeneration: safeInteger(target.session_generation, 1),
+			modelConfigurationRevision:
+				target.model_configuration_revision === null
+					? null
+					: safeInteger(target.model_configuration_revision, 1),
+			modelOptionId:
+				target.model_option_id === null ? null : text(target.model_option_id),
+			reasoningLevel:
+				target.reasoning_level === null ? null : text(target.reasoning_level),
 			status: status as
 				| "submitted"
 				| "processing"
@@ -1224,7 +1562,8 @@ async function requireCreateReplay(
 ): Promise<void> {
 	const rows = await transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, status, session_generation,
-			host_session_ref, authorization_revision, last_conversation_cursor
+			host_session_ref, authorization_revision, last_conversation_cursor,
+			selected_model_option_id, selected_reasoning_level
 		from platform.conversations where id = ${result.conversationId} limit 1
 	`;
 	const conversation = rows[0] && conversationFromRow(rows[0]);
@@ -1406,17 +1745,20 @@ export class PostgresConversationExecutionTransactionV1
 				return { outcome: "replayed", result };
 			}
 			await transaction`
-				insert into platform.conversations
-					(id, agent_id, actor_id, channel_id, status, session_generation,
-					 host_session_ref, authorization_revision, last_conversation_cursor,
-					 created_at, updated_at)
+					insert into platform.conversations
+						(id, agent_id, actor_id, channel_id, status, session_generation,
+						 host_session_ref, authorization_revision, last_conversation_cursor,
+						 selected_model_option_id, selected_reasoning_level,
+						 created_at, updated_at)
 				values
 					(${plan.conversation.conversationId}, ${plan.conversation.agentId},
 					 ${plan.conversation.actorId}, ${plan.conversation.channelId},
 					 ${plan.conversation.status}, ${plan.conversation.sessionGeneration},
 					 ${plan.conversation.hostSessionRef},
-					 ${plan.conversation.authorizationRevision},
-					 ${plan.conversation.lastConversationCursor}, ${occurredAt}, ${occurredAt})
+						 ${plan.conversation.authorizationRevision},
+						 ${plan.conversation.lastConversationCursor},
+						 ${plan.conversation.selectedModelOptionId},
+						 ${plan.conversation.selectedReasoningLevel}, ${occurredAt}, ${occurredAt})
 			`;
 			await completeIdempotency(
 				transaction,
@@ -1479,6 +1821,8 @@ export class PostgresConversationExecutionTransactionV1
 				update platform.conversations
 				set status = ${plan.conversation.status},
 					authorization_revision = ${plan.conversation.authorizationRevision},
+					selected_model_option_id = ${plan.conversation.selectedModelOptionId},
+					selected_reasoning_level = ${plan.conversation.selectedReasoningLevel},
 					updated_at = ${plan.message.createdAt}
 				where id = ${conversation.conversationId}
 				returning id
@@ -1489,14 +1833,18 @@ export class PostgresConversationExecutionTransactionV1
 					insert into platform.conversation_executions
 						(execution_id, conversation_id, agent_id, actor_id, channel_id,
 						 turn_id, status, session_generation, delivery_fence,
-						 authorization_revision, created_at, updated_at)
+						 authorization_revision, model_configuration_revision,
+						 model_option_id, reasoning_level, created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId},
 						 ${plan.execution.agentId}, ${plan.execution.actorId},
 						 ${plan.execution.channelId}, ${plan.execution.turnId},
 						 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 						 ${plan.execution.deliveryFence},
-						 ${plan.execution.authorizationRevision}, ${plan.execution.createdAt},
+						 ${plan.execution.authorizationRevision},
+						 ${plan.execution.modelConfigurationRevision},
+						 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
 			}
@@ -1527,6 +1875,10 @@ export class PostgresConversationExecutionTransactionV1
 							messageId: plan.outboxIntent.messageId,
 							turnId: plan.outboxIntent.turnId,
 							sessionGeneration: plan.outboxIntent.sessionGeneration,
+							modelConfigurationRevision:
+								plan.outboxIntent.modelConfigurationRevision,
+							modelOptionId: plan.outboxIntent.modelOptionId,
+							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
 					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
@@ -1547,6 +1899,84 @@ export class PostgresConversationExecutionTransactionV1
 				reservationId,
 				plan.result,
 				plan.message.createdAt,
+			);
+			return { outcome: "accepted", result: plan.result };
+		});
+	}
+
+	async executeModelSelection(
+		request: ModelSelectionRequest,
+		decide: ModelSelectionDecide,
+	): Promise<ConversationModelSelectionDecisionV1> {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			const conversation = await lockConversation(
+				transaction,
+				text(request.command.conversationId),
+			);
+			if (!conversation || !matchesBinding(conversation, authority)) {
+				return { outcome: "denied" };
+			}
+			const selectionState = await readModelSelectionState(
+				transaction,
+				conversation,
+			);
+			const { currentAuthorizationRevision, ...state } = selectionState;
+			if (currentAuthorizationRevision !== authority.authorizationRevision) {
+				return { outcome: "denied" };
+			}
+			const scope = {
+				scopeType: "conversation",
+				scopeId: conversation.conversationId,
+				actorId: authority.actorId,
+				commandType: "model.select",
+				key: text(request.command.idempotencyKey, 128),
+			};
+			const existing = await readIdempotency(transaction, scope);
+			if (existing) {
+				if (existing.request_digest !== request.requestDigest) {
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				}
+				if (existing.status !== "completed") unavailable();
+				const result = parseModelSelectionResult(existing.result);
+				if (result.conversationId !== conversation.conversationId)
+					unavailable();
+				return { outcome: "replayed", result };
+			}
+			const decision = decide(state);
+			if (!isModelSelectionPlan(decision)) return decision;
+			const plan = validateModelSelectionPlan(decision, request, state);
+			const reservationId = await reserveIdempotency(transaction, {
+				...scope,
+				requestDigest: request.requestDigest,
+				occurredAt: plan.auditEvent.occurredAt,
+			});
+			if (!reservationId) unavailable();
+			const updated = await transaction<{ id: string }[]>`
+				update platform.conversations
+				set authorization_revision = ${plan.conversation.authorizationRevision},
+					selected_model_option_id = ${plan.conversation.selectedModelOptionId},
+					selected_reasoning_level = ${plan.conversation.selectedReasoningLevel},
+					updated_at = ${plan.auditEvent.occurredAt}
+				where id = ${conversation.conversationId}
+				returning id
+			`;
+			if (updated.length !== 1) unavailable();
+			await transaction`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
+					 request_id, occurred_at)
+				values
+					(${randomUUID()}, ${plan.auditEvent.conversationId}, null,
+					 ${plan.auditEvent.agentId}, ${plan.auditEvent.actorId},
+					 ${plan.auditEvent.action}, ${plan.auditEvent.traceId},
+					 ${plan.auditEvent.requestId}, ${plan.auditEvent.occurredAt})
+			`;
+			await completeIdempotency(
+				transaction,
+				reservationId,
+				plan.result,
+				plan.auditEvent.occurredAt,
 			);
 			return { outcome: "accepted", result: plan.result };
 		});
@@ -1605,6 +2035,8 @@ export class PostgresConversationExecutionTransactionV1
 				update platform.conversations
 				set status = ${plan.conversation.status},
 					authorization_revision = ${plan.conversation.authorizationRevision},
+					selected_model_option_id = ${plan.conversation.selectedModelOptionId},
+					selected_reasoning_level = ${plan.conversation.selectedReasoningLevel},
 					updated_at = ${plan.execution.createdAt}
 				where id = ${conversation.conversationId}
 				returning id
@@ -1614,14 +2046,18 @@ export class PostgresConversationExecutionTransactionV1
 				insert into platform.conversation_executions
 					(execution_id, conversation_id, agent_id, actor_id, channel_id,
 					 turn_id, status, session_generation, delivery_fence,
-					 authorization_revision, created_at, updated_at)
+					 authorization_revision, model_configuration_revision,
+					 model_option_id, reasoning_level, created_at, updated_at)
 				values
 					(${plan.execution.executionId}, ${plan.execution.conversationId},
 					 ${plan.execution.agentId}, ${plan.execution.actorId},
 					 ${plan.execution.channelId}, ${plan.execution.turnId},
 					 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 					 ${plan.execution.deliveryFence},
-					 ${plan.execution.authorizationRevision}, ${plan.execution.createdAt},
+					 ${plan.execution.authorizationRevision},
+					 ${plan.execution.modelConfigurationRevision},
+					 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+					 ${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
 			await transaction`
@@ -1638,6 +2074,10 @@ export class PostgresConversationExecutionTransactionV1
 							messageId: plan.outboxIntent.messageId,
 							turnId: plan.outboxIntent.turnId,
 							sessionGeneration: plan.outboxIntent.sessionGeneration,
+							modelConfigurationRevision:
+								plan.outboxIntent.modelConfigurationRevision,
+							modelOptionId: plan.outboxIntent.modelOptionId,
+							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
 					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})

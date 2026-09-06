@@ -21,6 +21,7 @@ export interface ConversationExecutionAuthorizationPortV1 {
 		readonly operation:
 			| "conversation.create"
 			| "message"
+			| "model.select"
 			| "regenerate"
 			| "stop";
 		readonly agentId?: string;
@@ -72,6 +73,27 @@ export interface ConversationStopCommandV1 {
 	readonly traceId: string;
 }
 
+export interface ConversationModelSelectionCommandV1 {
+	readonly schemaVersion: 1;
+	readonly command: "model.select";
+	readonly conversationId: string;
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
+export interface ConversationModelConfigurationV1 {
+	readonly configurationRevision: number;
+	readonly options: readonly {
+		readonly optionId: string;
+		readonly reasoningLevels: readonly string[];
+	}[];
+	readonly defaultOptionId: string;
+	readonly defaultReasoningLevel: string;
+}
+
 export interface ConversationExecutionConversationStateV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
@@ -83,10 +105,13 @@ export interface ConversationExecutionConversationStateV1 {
 	readonly hostSessionRef: string | null;
 	readonly authorizationRevision: string;
 	readonly lastConversationCursor: number;
+	readonly selectedModelOptionId: string | null;
+	readonly selectedReasoningLevel: string | null;
 }
 
 export interface ConversationExecutionStateV1 {
 	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
+	readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly sourceMessage:
 		| {
 				readonly messageId: string;
@@ -101,6 +126,9 @@ export interface ConversationExecutionStateV1 {
 				readonly conversationId: string;
 				readonly actorId: string;
 				readonly sessionGeneration: number;
+				readonly modelConfigurationRevision: number | null;
+				readonly modelOptionId: string | null;
+				readonly reasoningLevel: string | null;
 				readonly status:
 					| "submitted"
 					| "processing"
@@ -124,6 +152,9 @@ export interface ConversationExecutionStateV1 {
 				readonly actorId: string;
 				readonly turnId: string;
 				readonly sessionGeneration: number;
+				readonly modelConfigurationRevision: number | null;
+				readonly modelOptionId: string | null;
+				readonly reasoningLevel: string | null;
 				readonly stopPending: boolean;
 				readonly status: "submitted" | "processing" | "unknown";
 		  }
@@ -150,6 +181,13 @@ export interface ConversationStopResultV1 {
 	readonly executionId: string;
 }
 
+export interface ConversationModelSelectionResultV1 {
+	readonly schemaVersion: 1;
+	readonly conversationId: string;
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
+}
+
 export type CreateConversationDecisionV1 =
 	| {
 			readonly outcome: "accepted" | "replayed";
@@ -171,6 +209,14 @@ export type ConversationStopDecisionV1 =
 	| {
 			readonly outcome: "accepted" | "replayed";
 			readonly result: ConversationStopResultV1;
+	  }
+	| { readonly outcome: "denied" }
+	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
+
+export type ConversationModelSelectionDecisionV1 =
+	| {
+			readonly outcome: "accepted" | "replayed";
+			readonly result: ConversationModelSelectionResultV1;
 	  }
 	| { readonly outcome: "denied" }
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
@@ -214,6 +260,9 @@ export interface ConversationMessageWritePlanV1 {
 		readonly sessionGeneration: number;
 		readonly deliveryFence: number;
 		readonly authorizationRevision: string;
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
 		readonly createdAt: Date;
 	};
 	readonly outboxIntent: {
@@ -225,6 +274,9 @@ export interface ConversationMessageWritePlanV1 {
 		readonly messageId: string;
 		readonly turnId: string;
 		readonly sessionGeneration: number;
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly occurredAt: Date;
@@ -267,6 +319,9 @@ export interface ConversationRegenerationWritePlanV1 {
 		readonly sessionGeneration: number;
 		readonly deliveryFence: number;
 		readonly authorizationRevision: string;
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
 		readonly createdAt: Date;
 	};
 	readonly outboxIntent: {
@@ -276,6 +331,9 @@ export interface ConversationRegenerationWritePlanV1 {
 		readonly messageId: string;
 		readonly turnId: string;
 		readonly sessionGeneration: number;
+		readonly modelConfigurationRevision: number | null;
+		readonly modelOptionId: string | null;
+		readonly reasoningLevel: string | null;
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly occurredAt: Date;
@@ -340,6 +398,29 @@ export interface ConversationStopWritePlanV1 {
 	};
 }
 
+export interface ConversationModelSelectionWritePlanV1 {
+	readonly schemaVersion: 1;
+	readonly conversation: ConversationExecutionConversationStateV1;
+	readonly auditEvent: {
+		readonly action: "conversation.model_selection.updated";
+		readonly actorId: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	};
+	readonly result: ConversationModelSelectionResultV1;
+	readonly idempotency: {
+		readonly scopeType: "conversation";
+		readonly scopeId: string;
+		readonly actorId: string;
+		readonly commandType: "model.select";
+		readonly key: string;
+		readonly requestDigest: string;
+	};
+}
+
 export interface ConversationExecutionTransactionPortV1 {
 	/**
 	 * Existing Conversation commands validate the persisted authority binding
@@ -365,6 +446,16 @@ export interface ConversationExecutionTransactionPortV1 {
 			| ConversationMessageWritePlanV1
 			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
 	): Promise<ConversationCommandDecisionV1>;
+	executeModelSelection(
+		request: {
+			readonly command: ConversationModelSelectionCommandV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+			readonly requestDigest: string;
+		},
+		decide: (
+			state: ConversationExecutionStateV1,
+		) => ConversationModelSelectionWritePlanV1 | { readonly outcome: "denied" },
+	): Promise<ConversationModelSelectionDecisionV1>;
 	executeRegeneration(
 		request: {
 			readonly command: ConversationRegenerateCommandV1;
@@ -401,6 +492,9 @@ export interface ConversationExecutionUseCaseV1 {
 	accept(
 		command: ConversationMessageCommandV1,
 	): Promise<ConversationCommandDecisionV1>;
+	selectModel(
+		command: ConversationModelSelectionCommandV1,
+	): Promise<ConversationModelSelectionDecisionV1>;
 	regenerate(
 		command: ConversationRegenerateCommandV1,
 	): Promise<ConversationCommandDecisionV1>;
@@ -625,6 +719,44 @@ function parseStopCommand(input: unknown): ConversationStopCommandV1 {
 	};
 }
 
+function parseModelSelectionCommand(
+	input: unknown,
+): ConversationModelSelectionCommandV1 {
+	const values = snapshotObject(input, [
+		"schemaVersion",
+		"command",
+		"conversationId",
+		"modelOptionId",
+		"reasoningLevel",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.command !== "model.select" ||
+		!isText(values.conversationId) ||
+		!isText(values.modelOptionId) ||
+		!isText(values.reasoningLevel) ||
+		typeof values.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(values.idempotencyKey) ||
+		!isText(values.requestId) ||
+		!isText(values.traceId)
+	) {
+		invalidInput();
+	}
+	return {
+		schemaVersion: 1,
+		command: "model.select",
+		conversationId: values.conversationId,
+		modelOptionId: values.modelOptionId,
+		reasoningLevel: values.reasoningLevel,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+	};
+}
+
 function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
@@ -703,6 +835,7 @@ function parseState(
 	try {
 		const values = snapshotObject(input, [
 			"conversation",
+			"modelConfiguration",
 			"sourceMessage",
 			"targetExecution",
 			"existingStop",
@@ -710,6 +843,7 @@ function parseState(
 		]);
 		if (values.conversation === undefined) {
 			if (
+				values.modelConfiguration !== undefined ||
 				values.sourceMessage !== undefined ||
 				values.targetExecution !== undefined ||
 				values.existingStop !== undefined ||
@@ -719,6 +853,7 @@ function parseState(
 			}
 			return {
 				conversation: undefined,
+				modelConfiguration: undefined,
 				sourceMessage: undefined,
 				targetExecution: undefined,
 				existingStop: undefined,
@@ -736,6 +871,8 @@ function parseState(
 			"hostSessionRef",
 			"authorizationRevision",
 			"lastConversationCursor",
+			"selectedModelOptionId",
+			"selectedReasoningLevel",
 		]);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -752,10 +889,66 @@ function parseState(
 			(conversation.hostSessionRef !== null &&
 				!isText(conversation.hostSessionRef)) ||
 			!isText(conversation.authorizationRevision) ||
-			!isNonNegativeSafeInteger(lastConversationCursorInput)
+			!isNonNegativeSafeInteger(lastConversationCursorInput) ||
+			(conversation.selectedModelOptionId !== null &&
+				!isText(conversation.selectedModelOptionId)) ||
+			(conversation.selectedReasoningLevel !== null &&
+				!isText(conversation.selectedReasoningLevel)) ||
+			(conversation.selectedModelOptionId === null) !==
+				(conversation.selectedReasoningLevel === null)
 		) {
 			unavailable();
 		}
+		const modelConfiguration = (() => {
+			if (values.modelConfiguration === undefined) return undefined;
+			const configuration = snapshotObject(values.modelConfiguration, [
+				"configurationRevision",
+				"options",
+				"defaultOptionId",
+				"defaultReasoningLevel",
+			]);
+			if (
+				!isPositiveSafeInteger(configuration.configurationRevision) ||
+				!Array.isArray(configuration.options) ||
+				configuration.options.length === 0 ||
+				!isText(configuration.defaultOptionId) ||
+				!isText(configuration.defaultReasoningLevel)
+			) {
+				unavailable();
+			}
+			const seen = new Set<string>();
+			const options = configuration.options.map((input) => {
+				const option = snapshotObject(input, ["optionId", "reasoningLevels"]);
+				if (
+					!isText(option.optionId) ||
+					seen.has(option.optionId) ||
+					!Array.isArray(option.reasoningLevels) ||
+					option.reasoningLevels.length === 0 ||
+					!option.reasoningLevels.every((level) => isText(level)) ||
+					new Set(option.reasoningLevels).size !== option.reasoningLevels.length
+				) {
+					unavailable();
+				}
+				seen.add(option.optionId);
+				return {
+					optionId: option.optionId,
+					reasoningLevels: [...option.reasoningLevels] as string[],
+				};
+			});
+			if (
+				!options
+					.find(({ optionId }) => optionId === configuration.defaultOptionId)
+					?.reasoningLevels.includes(configuration.defaultReasoningLevel)
+			) {
+				unavailable();
+			}
+			return {
+				configurationRevision: configuration.configurationRevision,
+				options,
+				defaultOptionId: configuration.defaultOptionId,
+				defaultReasoningLevel: configuration.defaultReasoningLevel,
+			};
+		})();
 		const sourceMessage = (() => {
 			if (values.sourceMessage === undefined) return undefined;
 			const message = snapshotObject(values.sourceMessage, [
@@ -786,6 +979,9 @@ function parseState(
 				"conversationId",
 				"actorId",
 				"sessionGeneration",
+				"modelConfigurationRevision",
+				"modelOptionId",
+				"reasoningLevel",
 				"status",
 			]);
 			const status = execution.status;
@@ -794,6 +990,17 @@ function parseState(
 				!isText(execution.conversationId) ||
 				!isText(execution.actorId) ||
 				!isPositiveSafeInteger(execution.sessionGeneration) ||
+				(execution.modelConfigurationRevision !== null &&
+					!isPositiveSafeInteger(execution.modelConfigurationRevision)) ||
+				(execution.modelOptionId !== null &&
+					!isText(execution.modelOptionId)) ||
+				(execution.reasoningLevel !== null &&
+					!isText(execution.reasoningLevel)) ||
+				new Set([
+					execution.modelConfigurationRevision === null,
+					execution.modelOptionId === null,
+					execution.reasoningLevel === null,
+				]).size !== 1 ||
 				(status !== "submitted" &&
 					status !== "processing" &&
 					status !== "unknown" &&
@@ -808,6 +1015,9 @@ function parseState(
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
 				sessionGeneration: execution.sessionGeneration,
+				modelConfigurationRevision: execution.modelConfigurationRevision,
+				modelOptionId: execution.modelOptionId,
+				reasoningLevel: execution.reasoningLevel,
 				status: status as NonNullable<
 					ConversationExecutionStateV1["targetExecution"]
 				>["status"],
@@ -841,6 +1051,9 @@ function parseState(
 				"actorId",
 				"turnId",
 				"sessionGeneration",
+				"modelConfigurationRevision",
+				"modelOptionId",
+				"reasoningLevel",
 				"stopPending",
 				"status",
 			]);
@@ -851,6 +1064,17 @@ function parseState(
 				!isText(execution.actorId) ||
 				!isText(execution.turnId) ||
 				!isPositiveSafeInteger(execution.sessionGeneration) ||
+				(execution.modelConfigurationRevision !== null &&
+					!isPositiveSafeInteger(execution.modelConfigurationRevision)) ||
+				(execution.modelOptionId !== null &&
+					!isText(execution.modelOptionId)) ||
+				(execution.reasoningLevel !== null &&
+					!isText(execution.reasoningLevel)) ||
+				new Set([
+					execution.modelConfigurationRevision === null,
+					execution.modelOptionId === null,
+					execution.reasoningLevel === null,
+				]).size !== 1 ||
 				typeof execution.stopPending !== "boolean" ||
 				(executionStatus !== "submitted" &&
 					executionStatus !== "processing" &&
@@ -864,6 +1088,9 @@ function parseState(
 				actorId: execution.actorId,
 				turnId: execution.turnId,
 				sessionGeneration: execution.sessionGeneration,
+				modelConfigurationRevision: execution.modelConfigurationRevision,
+				modelOptionId: execution.modelOptionId,
+				reasoningLevel: execution.reasoningLevel,
 				stopPending: execution.stopPending,
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
@@ -910,7 +1137,10 @@ function parseState(
 				hostSessionRef: conversation.hostSessionRef,
 				authorizationRevision: conversation.authorizationRevision,
 				lastConversationCursor,
+				selectedModelOptionId: conversation.selectedModelOptionId,
+				selectedReasoningLevel: conversation.selectedReasoningLevel,
 			},
+			modelConfiguration,
 			sourceMessage,
 			targetExecution,
 			existingStop,
@@ -1046,6 +1276,62 @@ function parseStopCommandResult(
 	};
 }
 
+function parseModelSelectionResult(
+	input: unknown,
+	expectedConversationId: string,
+): ConversationModelSelectionResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"conversationId",
+		"modelOptionId",
+		"reasoningLevel",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		values.conversationId !== expectedConversationId ||
+		!isText(values.modelOptionId) ||
+		!isText(values.reasoningLevel)
+	) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 1,
+		conversationId: expectedConversationId,
+		modelOptionId: values.modelOptionId,
+		reasoningLevel: values.reasoningLevel,
+	};
+}
+
+function effectiveModelSelection(
+	conversation: ConversationExecutionConversationStateV1,
+	configuration: ConversationModelConfigurationV1 | undefined,
+): {
+	readonly modelConfigurationRevision: number | null;
+	readonly modelOptionId: string | null;
+	readonly reasoningLevel: string | null;
+} {
+	if (!configuration) {
+		return {
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+		};
+	}
+	const selected = configuration.options.find(
+		({ optionId, reasoningLevels }) =>
+			optionId === conversation.selectedModelOptionId &&
+			conversation.selectedReasoningLevel !== null &&
+			reasoningLevels.includes(conversation.selectedReasoningLevel),
+	);
+	return {
+		modelConfigurationRevision: configuration.configurationRevision,
+		modelOptionId: selected?.optionId ?? configuration.defaultOptionId,
+		reasoningLevel: selected
+			? conversation.selectedReasoningLevel
+			: configuration.defaultReasoningLevel,
+	};
+}
+
 function parseAcceptedOrReplayedDecision<T>(
 	input: unknown,
 	parseResult: (input: unknown) => T,
@@ -1126,6 +1412,22 @@ function normalizeStopDecision(
 	return parseConflictDecision(input) ?? unavailable();
 }
 
+function normalizeModelSelectionDecision(
+	input: unknown,
+	expectedConversationId: string,
+): ConversationModelSelectionDecisionV1 {
+	const resultDecision = parseAcceptedOrReplayedDecision(input, (result) =>
+		parseModelSelectionResult(result, expectedConversationId),
+	);
+	if (resultDecision) return resultDecision;
+	const bare = trySnapshotObject(input, ["outcome"]);
+	if (bare) {
+		if (bare.outcome === "denied") return { outcome: "denied" };
+		return unavailable();
+	}
+	return parseConflictDecision(input) ?? unavailable();
+}
+
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
 	options: ConversationExecutionUseCaseOptionsV1 = {},
@@ -1172,6 +1474,8 @@ export function createConversationExecutionUseCaseV1(
 									hostSessionRef: null,
 									authorizationRevision: authority.authorizationRevision,
 									lastConversationCursor: 0,
+									selectedModelOptionId: null,
+									selectedReasoningLevel: null,
 								},
 								result,
 								idempotency: {
@@ -1224,6 +1528,15 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (conversation.status === "unavailable")
 								return { outcome: "denied" };
+							const modelSelection = effectiveModelSelection(
+								conversation,
+								state.modelConfiguration,
+							);
+							const selectedConversation = {
+								...conversation,
+								selectedModelOptionId: modelSelection.modelOptionId,
+								selectedReasoningLevel: modelSelection.reasoningLevel,
+							};
 							if (state.activeExecution) {
 								if (
 									state.activeExecution.stopPending ||
@@ -1244,7 +1557,7 @@ export function createConversationExecutionUseCaseV1(
 									schemaVersion: 1,
 									kind: "supplement",
 									conversation: {
-										...conversation,
+										...selectedConversation,
 										authorizationRevision: authority.authorizationRevision,
 									},
 									message: {
@@ -1263,6 +1576,10 @@ export function createConversationExecutionUseCaseV1(
 										messageId,
 										turnId: state.activeExecution.turnId,
 										sessionGeneration: state.activeExecution.sessionGeneration,
+										modelConfigurationRevision:
+											state.activeExecution.modelConfigurationRevision,
+										modelOptionId: state.activeExecution.modelOptionId,
+										reasoningLevel: state.activeExecution.reasoningLevel,
 										traceId: command.traceId,
 										requestId: command.requestId,
 										occurredAt,
@@ -1302,7 +1619,7 @@ export function createConversationExecutionUseCaseV1(
 								schemaVersion: 1,
 								kind: "initial",
 								conversation: {
-									...conversation,
+									...selectedConversation,
 									status: "active",
 									authorizationRevision: authority.authorizationRevision,
 								},
@@ -1326,6 +1643,10 @@ export function createConversationExecutionUseCaseV1(
 									sessionGeneration: conversation.sessionGeneration,
 									deliveryFence: 0,
 									authorizationRevision: authority.authorizationRevision,
+									modelConfigurationRevision:
+										modelSelection.modelConfigurationRevision,
+									modelOptionId: modelSelection.modelOptionId,
+									reasoningLevel: modelSelection.reasoningLevel,
 									createdAt: occurredAt,
 								},
 								outboxIntent: {
@@ -1335,6 +1656,10 @@ export function createConversationExecutionUseCaseV1(
 									messageId,
 									turnId,
 									sessionGeneration: conversation.sessionGeneration,
+									modelConfigurationRevision:
+										modelSelection.modelConfigurationRevision,
+									modelOptionId: modelSelection.modelOptionId,
+									reasoningLevel: modelSelection.reasoningLevel,
 									traceId: command.traceId,
 									requestId: command.requestId,
 									occurredAt,
@@ -1362,6 +1687,84 @@ export function createConversationExecutionUseCaseV1(
 						},
 					),
 					parseMessageCommandResult,
+				);
+			} catch {
+				return unavailable();
+			}
+		},
+		async selectModel(commandInput) {
+			const command = parseModelSelectionCommand(commandInput);
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "model.select",
+				conversationId: command.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: command.command,
+				conversationId: command.conversationId,
+				modelOptionId: command.modelOptionId,
+				reasoningLevel: command.reasoningLevel,
+			});
+			try {
+				return normalizeModelSelectionDecision(
+					await dependencies.transaction.executeModelSelection(
+						{ command, authority, requestDigest },
+						(stateInput) => {
+							const state = parseState(stateInput);
+							const conversation = state.conversation;
+							const selected = state.modelConfiguration?.options.find(
+								({ optionId }) => optionId === command.modelOptionId,
+							);
+							if (
+								!conversation ||
+								conversation.conversationId !== command.conversationId ||
+								conversation.actorId !== authority.actorId ||
+								conversation.agentId !== authority.agentId ||
+								conversation.channelId !== authority.channelId ||
+								conversation.status === "unavailable" ||
+								!selected?.reasoningLevels.includes(command.reasoningLevel)
+							) {
+								return { outcome: "denied" };
+							}
+							const occurredAt = safeNow(now);
+							const result: ConversationModelSelectionResultV1 = {
+								schemaVersion: 1,
+								conversationId: conversation.conversationId,
+								modelOptionId: selected.optionId,
+								reasoningLevel: command.reasoningLevel,
+							};
+							return {
+								schemaVersion: 1,
+								conversation: {
+									...conversation,
+									authorizationRevision: authority.authorizationRevision,
+									selectedModelOptionId: selected.optionId,
+									selectedReasoningLevel: command.reasoningLevel,
+								},
+								auditEvent: {
+									action: "conversation.model_selection.updated",
+									actorId: authority.actorId,
+									agentId: authority.agentId,
+									conversationId: conversation.conversationId,
+									traceId: command.traceId,
+									requestId: command.requestId,
+									occurredAt,
+								},
+								result,
+								idempotency: {
+									scopeType: "conversation",
+									scopeId: conversation.conversationId,
+									actorId: authority.actorId,
+									commandType: "model.select",
+									key: command.idempotencyKey,
+									requestDigest,
+								},
+							};
+						},
+					),
+					command.conversationId,
 				);
 			} catch {
 				return unavailable();
@@ -1404,6 +1807,10 @@ export function createConversationExecutionUseCaseV1(
 							if (conversation.status === "unavailable")
 								return { outcome: "denied" };
 							if (state.activeExecution) return { outcome: "busy" };
+							const modelSelection = effectiveModelSelection(
+								conversation,
+								state.modelConfiguration,
+							);
 							const occurredAt = safeNow(now);
 							const executionId = nextOpaqueId(newId);
 							const turnId = nextOpaqueId(newId);
@@ -1420,6 +1827,8 @@ export function createConversationExecutionUseCaseV1(
 									...conversation,
 									status: "active",
 									authorizationRevision: authority.authorizationRevision,
+									selectedModelOptionId: modelSelection.modelOptionId,
+									selectedReasoningLevel: modelSelection.reasoningLevel,
 								},
 								execution: {
 									executionId,
@@ -1432,6 +1841,10 @@ export function createConversationExecutionUseCaseV1(
 									sessionGeneration: conversation.sessionGeneration,
 									deliveryFence: 0,
 									authorizationRevision: authority.authorizationRevision,
+									modelConfigurationRevision:
+										modelSelection.modelConfigurationRevision,
+									modelOptionId: modelSelection.modelOptionId,
+									reasoningLevel: modelSelection.reasoningLevel,
 									createdAt: occurredAt,
 								},
 								outboxIntent: {
@@ -1441,6 +1854,10 @@ export function createConversationExecutionUseCaseV1(
 									messageId: sourceMessage.messageId,
 									turnId,
 									sessionGeneration: conversation.sessionGeneration,
+									modelConfigurationRevision:
+										modelSelection.modelConfigurationRevision,
+									modelOptionId: modelSelection.modelOptionId,
+									reasoningLevel: modelSelection.reasoningLevel,
 									traceId: command.traceId,
 									requestId: command.requestId,
 									occurredAt,

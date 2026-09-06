@@ -22,11 +22,22 @@ const authority = {
 	supportsSupplementaryInstruction: true,
 };
 
+const conformanceModelConfiguration = {
+	configurationRevision: 1,
+	options: [
+		{ optionId: "model_primary", reasoningLevels: ["low", "medium"] },
+		{ optionId: "model_alternate", reasoningLevels: ["high"] },
+	],
+	defaultOptionId: "model_primary",
+	defaultReasoningLevel: "low",
+} as const;
+
 conversationCommandConformanceV1("Fake", async () => {
 	let nextId = 1;
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
 		conversationConformanceAuthorityV1;
 	const fake = new FakeConversationExecutionV1({
+		authority: conversationConformanceAuthorityV1,
 		authorization: {
 			async authorize() {
 				return effectiveAuthority
@@ -34,6 +45,7 @@ conversationCommandConformanceV1("Fake", async () => {
 					: { outcome: "denied" };
 			},
 		},
+		modelConfiguration: conformanceModelConfiguration,
 		now: () => new Date("2026-09-04T00:00:00.000Z"),
 		newId: () => `conversation_fixture_${nextId++}`,
 	});
@@ -49,6 +61,7 @@ conversationCommandConformanceV1("Fake", async () => {
 			return decision;
 		},
 		regenerate: (command) => fake.regenerate(command),
+		selectModel: (command) => fake.selectModel(command),
 		stop: (command) => fake.stop(command),
 	};
 	return {
@@ -59,11 +72,62 @@ conversationCommandConformanceV1("Fake", async () => {
 		failNextCommit() {
 			fake.failNextCommit();
 		},
+		failNextModelSelectionCommit() {
+			fake.failNextCommit();
+		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
 		},
 		completeExecution(executionId) {
 			fake.completeExecution(executionId);
+		},
+		setModelConfiguration(configuration) {
+			fake.setModelConfiguration(configuration);
+		},
+		async modelSnapshot(conversationId) {
+			const snapshot = fake.snapshot();
+			const conversation = snapshot.conversations.find(
+				(candidate) => candidate?.conversationId === conversationId,
+			);
+			if (!conversation) throw new Error("Expected Conversation");
+			return {
+				selectedModelOptionId: conversation.selectedModelOptionId,
+				selectedReasoningLevel: conversation.selectedReasoningLevel,
+				executions: snapshot.executions
+					.filter((execution) => execution.conversationId === conversationId)
+					.map(
+						({
+							executionId,
+							modelConfigurationRevision,
+							modelOptionId,
+							reasoningLevel,
+						}) => ({
+							executionId,
+							modelConfigurationRevision,
+							modelOptionId,
+							reasoningLevel,
+						}),
+					),
+				outbox: snapshot.outbox
+					.filter(
+						(item) =>
+							item.operation === "conversation.turn.submit.v1" ||
+							item.operation === "conversation.turn.regenerate.v1",
+					)
+					.map(
+						({
+							executionId,
+							modelConfigurationRevision,
+							modelOptionId,
+							reasoningLevel,
+						}) => ({
+							executionId,
+							modelConfigurationRevision: modelConfigurationRevision ?? null,
+							modelOptionId: modelOptionId ?? null,
+							reasoningLevel: reasoningLevel ?? null,
+						}),
+					),
+			};
 		},
 		async snapshot() {
 			const snapshot = fake.snapshot();
@@ -237,6 +301,17 @@ describe("Conversation execution use case", () => {
 					},
 				} as never;
 			},
+			async executeModelSelection() {
+				return {
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						conversationId: "conversation_other",
+						modelOptionId: "model_other",
+						reasoningLevel: "other",
+					},
+				} as never;
+			},
 			async executeRegeneration() {
 				return {
 					outcome: "accepted",
@@ -275,6 +350,18 @@ describe("Conversation execution use case", () => {
 				idempotencyKey: "create_malformed",
 				requestId: "request_create_malformed",
 				traceId: "trace_create_malformed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			conversation.selectModel({
+				schemaVersion: 1,
+				command: "model.select",
+				conversationId: "conversation_01",
+				modelOptionId: "model_01",
+				reasoningLevel: "medium",
+				idempotencyKey: "model_selection_malformed",
+				requestId: "request_model_selection_malformed",
+				traceId: "trace_model_selection_malformed",
 			}),
 		).rejects.toMatchObject({ code: "unavailable" });
 		await expect(
@@ -320,6 +407,9 @@ describe("Conversation execution use case", () => {
 			async executeMessage() {
 				throw new Error("Authorization must resolve before a transaction");
 			},
+			async executeModelSelection() {
+				throw new Error("Authorization must resolve before a transaction");
+			},
 			async executeRegeneration() {
 				throw new Error("Authorization must resolve before a transaction");
 			},
@@ -356,6 +446,9 @@ describe("Conversation execution use case", () => {
 				throw new ConversationExecutionError("invalid_input");
 			},
 			async executeMessage() {
+				throw new ConversationExecutionError("invalid_input");
+			},
+			async executeModelSelection() {
 				throw new ConversationExecutionError("invalid_input");
 			},
 			async executeRegeneration() {
@@ -432,9 +525,12 @@ describe("Conversation execution use case", () => {
 			hostSessionRef: "host_session_2",
 			authorizationRevision: authority.authorizationRevision,
 			lastConversationCursor: 0,
+			selectedModelOptionId: null,
+			selectedReasoningLevel: null,
 		} as const;
 		const supplementState = {
 			conversation,
+			modelConfiguration: undefined,
 			sourceMessage: undefined,
 			targetExecution: undefined,
 			existingStop: undefined,
@@ -444,18 +540,25 @@ describe("Conversation execution use case", () => {
 				actorId: authority.actorId,
 				turnId: "turn_generation",
 				sessionGeneration: 1,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
 				stopPending: false,
 				status: "submitted",
 			},
 		} satisfies ConversationExecutionStateV1;
 		const stopState = {
 			conversation,
+			modelConfiguration: undefined,
 			sourceMessage: undefined,
 			targetExecution: {
 				executionId: "execution_generation",
 				conversationId: conversation.conversationId,
 				actorId: authority.actorId,
 				sessionGeneration: 1,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
 				status: "submitted",
 			},
 			existingStop: undefined,
@@ -472,6 +575,9 @@ describe("Conversation execution use case", () => {
 				}
 				supplementGeneration = decision.outboxIntent.sessionGeneration;
 				return { outcome: "accepted", result: decision.result };
+			},
+			async executeModelSelection() {
+				throw new Error("Not used by this test");
 			},
 			async executeRegeneration() {
 				throw new Error("Not used by this test");

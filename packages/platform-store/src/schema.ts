@@ -605,6 +605,8 @@ export const conversations = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		selectedModelOptionId: text("selected_model_option_id"),
+		selectedReasoningLevel: text("selected_reasoning_level"),
 	},
 	(table) => [
 		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -635,6 +637,14 @@ export const conversations = platformSchema.table(
 		check(
 			"conversation_cursor_non_negative",
 			sql`${table.lastConversationCursor} between 0 and 9007199254740991`,
+		),
+		check(
+			"conversation_model_selection_pair",
+			sql`(${table.selectedModelOptionId} IS NULL AND ${table.selectedReasoningLevel} IS NULL)
+				OR (${table.selectedModelOptionId} IS NOT NULL
+					AND ${table.selectedReasoningLevel} IS NOT NULL
+					AND char_length(${table.selectedModelOptionId}) > 0
+					AND char_length(${table.selectedReasoningLevel}) > 0)`,
 		),
 		index("conversation_actor_lookup_idx").on(
 			table.actorId,
@@ -669,6 +679,11 @@ export const conversationExecutions = platformSchema.table(
 			.default(0)
 			.notNull(),
 		lastRuntimeCursor: text("last_runtime_cursor"),
+		modelConfigurationRevision: bigint("model_configuration_revision", {
+			mode: "number",
+		}),
+		modelOptionId: text("model_option_id"),
+		reasoningLevel: text("reasoning_level"),
 	},
 	(table) => [
 		foreignKey({
@@ -715,6 +730,21 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_authorization_revision_non_empty",
 			sql`char_length(${table.authorizationRevision}) > 0`,
+		),
+		check(
+			"conversation_execution_model_selection",
+			sql`(
+				${table.modelConfigurationRevision} IS NULL
+				AND ${table.modelOptionId} IS NULL
+				AND ${table.reasoningLevel} IS NULL
+			) OR (
+				${table.modelConfigurationRevision} IS NOT NULL
+				AND ${table.modelOptionId} IS NOT NULL
+				AND ${table.reasoningLevel} IS NOT NULL
+				AND ${table.modelConfigurationRevision} between 1 and 9007199254740991
+				AND char_length(${table.modelOptionId}) > 0
+				AND char_length(${table.reasoningLevel}) > 0
+			)`,
 		),
 		uniqueIndex("conversation_execution_id_conversation_unique").on(
 			table.executionId,
@@ -806,7 +836,7 @@ export const conversationAuditEvents = platformSchema.table(
 	{
 		id: text("id").primaryKey(),
 		conversationId: text("conversation_id").notNull(),
-		executionId: text("execution_id").notNull(),
+		executionId: text("execution_id"),
 		agentId: text("agent_id").notNull(),
 		actorId: text("actor_id").notNull(),
 		action: varchar("action", { length: 128 }).notNull(),

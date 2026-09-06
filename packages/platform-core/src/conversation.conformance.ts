@@ -8,6 +8,7 @@ import type {
 	ConversationCommandResultV1,
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionUseCaseV1,
+	ConversationModelConfigurationV1,
 } from "./conversation-execution.ts";
 
 export const conversationConformanceAuthorityV1: ConversationExecutionAuthorityV1 =
@@ -19,6 +20,16 @@ export const conversationConformanceAuthorityV1: ConversationExecutionAuthorityV
 		authorizationRevision: "authorization_fixture_1",
 		supportsSupplementaryInstruction: true,
 	};
+
+const conversationConformanceModelConfigurationV1 = {
+	configurationRevision: 1,
+	options: [
+		{ optionId: "model_primary", reasoningLevels: ["low", "medium"] },
+		{ optionId: "model_alternate", reasoningLevels: ["high"] },
+	],
+	defaultOptionId: "model_primary",
+	defaultReasoningLevel: "low",
+} as const satisfies ConversationModelConfigurationV1;
 
 export interface ConversationCommandConformanceSnapshotV1 {
 	readonly conversations: number;
@@ -34,10 +45,43 @@ export interface ConversationCommandConformanceHarnessV1 {
 	readonly useCase: ConversationExecutionUseCaseV1;
 	setAuthority(authority: ConversationExecutionAuthorityV1 | undefined): void;
 	failNextCommit(): Promise<void> | void;
+	failNextModelSelectionCommit(): Promise<void> | void;
 	loseNextResponseAfterCommit(): void;
 	completeExecution(executionId: string): Promise<void> | void;
+	setModelConfiguration(
+		configuration: ConversationModelConfigurationV1 | undefined,
+	): Promise<void> | void;
+	modelSnapshot(conversationId: string): Promise<{
+		readonly selectedModelOptionId: string | null;
+		readonly selectedReasoningLevel: string | null;
+		readonly executions: readonly {
+			readonly executionId: string;
+			readonly modelConfigurationRevision: number | null;
+			readonly modelOptionId: string | null;
+			readonly reasoningLevel: string | null;
+		}[];
+		readonly outbox: readonly {
+			readonly executionId: string;
+			readonly modelConfigurationRevision: number | null;
+			readonly modelOptionId: string | null;
+			readonly reasoningLevel: string | null;
+		}[];
+	}>;
 	snapshot(): Promise<ConversationCommandConformanceSnapshotV1>;
 	close(): Promise<void>;
+}
+
+function modelSelectionFixture(conversationId: string, fixture: string) {
+	return {
+		schemaVersion: 1 as const,
+		command: "model.select" as const,
+		conversationId,
+		modelOptionId: "model_alternate",
+		reasoningLevel: "high",
+		idempotencyKey: `model_selection_${fixture}`,
+		requestId: `request_model_selection_${fixture}`,
+		traceId: `trace_model_selection_${fixture}`,
+	};
 }
 
 async function createConversationFixture(
@@ -401,6 +445,257 @@ export function conversationCommandConformanceV1(
 					outcome: "replayed",
 				});
 				expect(await harness.snapshot()).toEqual(committed);
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("persists one model selection, snapshots executions, and falls back to the current default", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"model_selection_fixture",
+				);
+				const selection = modelSelectionFixture(
+					conversationId,
+					"model_selection_fixture",
+				);
+				const decisions = await Promise.all([
+					harness.useCase.selectModel(selection),
+					harness.useCase.selectModel(selection),
+				]);
+				expect(decisions.map(({ outcome }) => outcome).toSorted()).toEqual([
+					"accepted",
+					"replayed",
+				]);
+				const acceptedSelection = decisions.find(
+					(decision) => decision.outcome === "accepted",
+				);
+				const replayedSelection = decisions.find(
+					(decision) => decision.outcome === "replayed",
+				);
+				if (acceptedSelection?.outcome !== "accepted") {
+					throw new Error("Expected one accepted model selection");
+				}
+				if (replayedSelection?.outcome !== "replayed") {
+					throw new Error("Expected one replayed model selection");
+				}
+				expect(replayedSelection.result).toEqual(acceptedSelection.result);
+
+				const first = await acceptMessageFixture(
+					harness,
+					conversationId,
+					"selected_model_fixture",
+					"bounded selected model fixture",
+				);
+				await harness.completeExecution(first.executionId);
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
+					outcome: "replayed",
+					result: acceptedSelection.result,
+				});
+				await expect(
+					harness.useCase.selectModel({
+						...selection,
+						modelOptionId: "model_primary",
+						reasoningLevel: "medium",
+					}),
+				).resolves.toEqual({
+					outcome: "conflict",
+					reason: "idempotency_conflict",
+				});
+				const second = await acceptMessageFixture(
+					harness,
+					conversationId,
+					"fallback_model_fixture",
+					"bounded fallback model fixture",
+				);
+				expect(await harness.modelSnapshot(conversationId)).toEqual({
+					selectedModelOptionId: "model_primary",
+					selectedReasoningLevel: "medium",
+					executions: [
+						{
+							executionId: first.executionId,
+							modelConfigurationRevision: 1,
+							modelOptionId: "model_alternate",
+							reasoningLevel: "high",
+						},
+						{
+							executionId: second.executionId,
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						},
+					],
+					outbox: [
+						{
+							executionId: first.executionId,
+							modelConfigurationRevision: 1,
+							modelOptionId: "model_alternate",
+							reasoningLevel: "high",
+						},
+						{
+							executionId: second.executionId,
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						},
+					],
+				});
+				expect(await harness.snapshot()).toEqual({
+					conversations: 1,
+					messages: 2,
+					executions: 2,
+					stops: 0,
+					outbox: 2,
+					audit: 3,
+					idempotency: 4,
+				});
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("rejects invalid and stale model selection without partial effects", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"model_selection_denial_fixture",
+				);
+				const selection = modelSelectionFixture(
+					conversationId,
+					"model_selection_denial_fixture",
+				);
+				const before = await harness.snapshot();
+				await expect(
+					harness.useCase.selectModel({
+						...selection,
+						modelOptionId: "model_missing",
+						idempotencyKey: "model_selection_missing",
+					}),
+				).resolves.toEqual({ outcome: "denied" });
+				await expect(
+					harness.useCase.selectModel({
+						...selection,
+						reasoningLevel: "medium",
+						idempotencyKey: "model_selection_reasoning_missing",
+					}),
+				).resolves.toEqual({ outcome: "denied" });
+				await expect(
+					harness.useCase.selectModel({
+						...selection,
+						actorId: conversationConformanceAuthorityV1.actorId,
+					} as never),
+				).rejects.toMatchObject({ code: "invalid_input" });
+
+				harness.setAuthority({
+					...conversationConformanceAuthorityV1,
+					authorizationRevision: "authorization_stale",
+				});
+				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
+					outcome: "denied",
+				});
+				harness.setAuthority({
+					...conversationConformanceAuthorityV1,
+					actorId: "actor_foreign",
+				});
+				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
+					outcome: "denied",
+				});
+				harness.setAuthority({
+					...conversationConformanceAuthorityV1,
+					agentId: "agent_foreign",
+				});
+				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
+					outcome: "denied",
+				});
+				harness.setAuthority(conversationConformanceAuthorityV1);
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				await expect(harness.useCase.selectModel(selection)).resolves.toEqual({
+					outcome: "denied",
+				});
+				expect(await harness.snapshot()).toEqual(before);
+
+				await harness.setModelConfiguration(
+					conversationConformanceModelConfigurationV1,
+				);
+				await harness.failNextModelSelectionCommit();
+				await expect(
+					harness.useCase.selectModel(selection),
+				).rejects.toMatchObject({
+					code: "unavailable",
+				});
+				expect(await harness.snapshot()).toEqual(before);
+				await expect(
+					harness.useCase.selectModel(selection),
+				).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(await harness.snapshot()).toEqual({
+					...before,
+					audit: 1,
+					idempotency: 2,
+				});
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("serializes model selection with message acceptance without rewriting an execution", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"model_selection_order_fixture",
+				);
+				const selection = modelSelectionFixture(
+					conversationId,
+					"model_selection_order_fixture",
+				);
+				const [selectionDecision, messageDecision] = await Promise.all([
+					harness.useCase.selectModel(selection),
+					harness.useCase.accept(
+						messageFixture(
+							conversationId,
+							"model_selection_order_fixture",
+							"bounded ordered model fixture",
+						),
+					),
+				]);
+				expect(selectionDecision.outcome).toBe("accepted");
+				if (messageDecision.outcome !== "accepted") {
+					throw new Error("Expected concurrent message acceptance");
+				}
+				const firstSnapshot = await harness.modelSnapshot(conversationId);
+				const firstExecution = firstSnapshot.executions[0];
+				if (!firstExecution) throw new Error("Expected first Execution");
+				await harness.completeExecution(messageDecision.result.executionId);
+				const second = await acceptMessageFixture(
+					harness,
+					conversationId,
+					"model_selection_order_next_fixture",
+					"bounded next ordered model fixture",
+				);
+				const finalSnapshot = await harness.modelSnapshot(conversationId);
+				expect(finalSnapshot.executions[0]).toEqual(firstExecution);
+				expect(finalSnapshot.executions[1]).toEqual({
+					executionId: second.executionId,
+					modelConfigurationRevision: 1,
+					modelOptionId: "model_alternate",
+					reasoningLevel: "high",
+				});
 			} finally {
 				await harness.close();
 			}
