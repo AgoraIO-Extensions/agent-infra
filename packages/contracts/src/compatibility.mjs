@@ -70,35 +70,9 @@ function literalValues(schema) {
 	return Array.isArray(schema.enum) ? schema.enum : undefined;
 }
 
-function resolveLocalComponentSchema(schema, components, seen = new Set()) {
-	if (!schema || typeof schema !== "object" || !Object.hasOwn(schema, "$ref")) {
-		return schema;
-	}
-	if (Object.keys(schema).length !== 1 || typeof schema.$ref !== "string") {
-		return undefined;
-	}
-	const match = /^#\/components\/schemas\/([^/]+)$/.exec(schema.$ref);
-	const segment = match?.[1];
-	if (!segment || /~(?![01])/.test(segment) || seen.has(schema.$ref)) {
-		return undefined;
-	}
-	const name = segment.replaceAll("~1", "/").replaceAll("~0", "~");
-	if (!Object.hasOwn(components, name)) return undefined;
-	return resolveLocalComponentSchema(
-		components[name],
-		components,
-		new Set([...seen, schema.$ref]),
-	);
-}
-
-function literalSchemasAreDisjoint(left, right, resolveLiteralSchema) {
-	const resolvedLeft = resolveLiteralSchema ? resolveLiteralSchema(left) : left;
-	const resolvedRight = resolveLiteralSchema
-		? resolveLiteralSchema(right)
-		: right;
-	if (resolvedLeft === undefined || resolvedRight === undefined) return false;
-	const leftValues = literalValues(resolvedLeft);
-	const rightValues = literalValues(resolvedRight);
+function literalSchemasAreDisjoint(left, right) {
+	const leftValues = literalValues(left);
+	const rightValues = literalValues(right);
 	if (leftValues !== undefined || rightValues !== undefined) {
 		return (
 			leftValues !== undefined &&
@@ -110,35 +84,33 @@ function literalSchemasAreDisjoint(left, right, resolveLiteralSchema) {
 		);
 	}
 	if (
-		!resolvedLeft ||
-		!resolvedRight ||
-		typeof resolvedLeft !== "object" ||
-		typeof resolvedRight !== "object" ||
-		!sameValue(valueSet(resolvedLeft.type), ["object"]) ||
-		!sameValue(valueSet(resolvedRight.type), ["object"])
+		!left ||
+		!right ||
+		typeof left !== "object" ||
+		typeof right !== "object" ||
+		!sameValue(valueSet(left.type), ["object"]) ||
+		!sameValue(valueSet(right.type), ["object"])
 	) {
 		return false;
 	}
-	const leftRequired = new Set(resolvedLeft.required ?? []);
-	const rightRequired = new Set(resolvedRight.required ?? []);
-	return Object.entries(resolvedLeft.properties ?? {}).some(
-		([name, leftProperty]) => {
-			if (!leftRequired.has(name) || !rightRequired.has(name)) return false;
-			const rightProperty = resolvedRight.properties?.[name];
-			const leftPropertyValues = literalValues(leftProperty);
-			const rightPropertyValues = literalValues(rightProperty);
-			return (
-				leftPropertyValues !== undefined &&
-				rightPropertyValues !== undefined &&
-				leftPropertyValues.every(
-					(leftValue) =>
-						!rightPropertyValues.some((rightValue) =>
-							sameValue(leftValue, rightValue),
-						),
-				)
-			);
-		},
-	);
+	const leftRequired = new Set(left.required ?? []);
+	const rightRequired = new Set(right.required ?? []);
+	return Object.entries(left.properties ?? {}).some(([name, leftProperty]) => {
+		if (!leftRequired.has(name) || !rightRequired.has(name)) return false;
+		const rightProperty = right.properties?.[name];
+		const leftPropertyValues = literalValues(leftProperty);
+		const rightPropertyValues = literalValues(rightProperty);
+		return (
+			leftPropertyValues !== undefined &&
+			rightPropertyValues !== undefined &&
+			leftPropertyValues.every(
+				(leftValue) =>
+					!rightPropertyValues.some((rightValue) =>
+						sameValue(leftValue, rightValue),
+					),
+			)
+		);
+	});
 }
 
 function hasSchemaConstraints(value) {
@@ -150,14 +122,7 @@ function hasSchemaConstraints(value) {
 	);
 }
 
-function compareSubschemaConstraint(
-	previous,
-	current,
-	path,
-	keyword,
-	changes,
-	resolveLiteralSchema,
-) {
+function compareSubschemaConstraint(previous, current, path, keyword, changes) {
 	const previousSchema = previous ?? true;
 	const currentSchema = current ?? true;
 	if (previousSchema === true) {
@@ -170,23 +135,17 @@ function compareSubschemaConstraint(
 	if (currentSchema === false) {
 		changes.push(`narrowed ${path} ${keyword}`);
 	} else if (typeof currentSchema === "object" && currentSchema !== null) {
-		compareSchema(
-			previousSchema,
-			currentSchema,
-			`${path} ${keyword}`,
-			changes,
-			resolveLiteralSchema,
-		);
+		compareSchema(previousSchema, currentSchema, `${path} ${keyword}`, changes);
 	}
 }
 
-function schemaIsWidening(previous, current, resolveLiteralSchema) {
+function schemaIsWidening(previous, current) {
 	const changes = [];
-	compareSchema(previous, current, "$option", changes, resolveLiteralSchema);
+	compareSchema(previous, current, "$option", changes);
 	return changes.length === 0;
 }
 
-function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
+function compareSchema(previous, current, path, changes) {
 	if (previous === false || current === true) return;
 	if (current === false) {
 		changes.push(`narrowed ${path} schema`);
@@ -258,25 +217,13 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			for (let index = removedOptions.length - 1; index >= 0; index -= 1) {
 				const previousOption = removedOptions[index];
 				const match = addedOptions.findIndex((currentOption) => {
-					if (
-						!schemaIsWidening(
-							previousOption,
-							currentOption,
-							resolveLiteralSchema,
-						)
-					) {
-						return false;
-					}
+					if (!schemaIsWidening(previousOption, currentOption)) return false;
 					if (keyword !== "oneOf" || currentOptions.length === 1) return true;
 					const currentIndex = currentOptions.indexOf(currentOption);
 					return currentOptions.every(
 						(other, otherIndex) =>
 							otherIndex === currentIndex ||
-							literalSchemasAreDisjoint(
-								currentOption,
-								other,
-								resolveLiteralSchema,
-							),
+							literalSchemasAreDisjoint(currentOption, other),
 					);
 				});
 				if (match !== -1) {
@@ -292,16 +239,11 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			const disjointAdditions = addedOptions.every(
 				(option, index) =>
 					previousOptions.every((previousOption) =>
-						literalSchemasAreDisjoint(
-							option,
-							previousOption,
-							resolveLiteralSchema,
-						),
+						literalSchemasAreDisjoint(option, previousOption),
 					) &&
 					addedOptions.every(
 						(other, otherIndex) =>
-							index === otherIndex ||
-							literalSchemasAreDisjoint(option, other, resolveLiteralSchema),
+							index === otherIndex || literalSchemasAreDisjoint(option, other),
 					),
 			);
 			if (
@@ -455,7 +397,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 		path,
 		"additionalProperties",
 		changes,
-		resolveLiteralSchema,
 	);
 	compareSubschemaConstraint(
 		previous.propertyNames,
@@ -463,7 +404,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 		path,
 		"propertyNames",
 		changes,
-		resolveLiteralSchema,
 	);
 
 	for (const [name, schema] of Object.entries(previous.properties ?? {})) {
@@ -480,7 +420,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 						`${path}.${name}`,
 						`patternProperties ${pattern}`,
 						changes,
-						resolveLiteralSchema,
 					);
 				}
 			} else {
@@ -490,18 +429,11 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 					`${path}.${name}`,
 					"property",
 					changes,
-					resolveLiteralSchema,
 				);
 			}
 			continue;
 		}
-		compareSchema(
-			schema,
-			currentSchema,
-			`${path}.${name}`,
-			changes,
-			resolveLiteralSchema,
-		);
+		compareSchema(schema, currentSchema, `${path}.${name}`, changes);
 	}
 	for (const [name, schema] of Object.entries(current.properties ?? {})) {
 		if (previous.properties?.[name] !== undefined) continue;
@@ -516,7 +448,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 					`${path}.${name}`,
 					`property ${pattern}`,
 					changes,
-					resolveLiteralSchema,
 				);
 			}
 		} else {
@@ -526,7 +457,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 				`${path}.${name}`,
 				"property",
 				changes,
-				resolveLiteralSchema,
 			);
 		}
 	}
@@ -540,7 +470,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			`${path}.${pattern}`,
 			"patternProperties",
 			changes,
-			resolveLiteralSchema,
 		);
 		if (previousPatternSchema === undefined) {
 			const expression = new RegExp(pattern);
@@ -554,7 +483,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 					`${path}.${name}`,
 					`patternProperties ${pattern}`,
 					changes,
-					resolveLiteralSchema,
 				);
 			}
 		}
@@ -569,7 +497,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			`${path}.${pattern}`,
 			"patternProperties",
 			changes,
-			resolveLiteralSchema,
 		);
 	}
 	compareSubschemaConstraint(
@@ -578,7 +505,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 		`${path}[]`,
 		"items",
 		changes,
-		resolveLiteralSchema,
 	);
 	const previousPrefixItems = Array.isArray(previous.prefixItems)
 		? previous.prefixItems
@@ -593,7 +519,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			`${path}[${index}]`,
 			"prefixItems",
 			changes,
-			resolveLiteralSchema,
 		);
 	}
 	for (
@@ -607,7 +532,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			`${path}[${index}]`,
 			"prefixItems",
 			changes,
-			resolveLiteralSchema,
 		);
 	}
 	const previousContains = previous.contains;
@@ -619,7 +543,6 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 			path,
 			"contains",
 			changes,
-			resolveLiteralSchema,
 		);
 		const previousMinContains =
 			previousContains === undefined ? 0 : (previous.minContains ?? 1);
@@ -639,58 +562,122 @@ function compareSchema(previous, current, path, changes, resolveLiteralSchema) {
 	for (const [name, schema] of Object.entries(previous.$defs ?? {})) {
 		const currentSchema = current.$defs?.[name];
 		if (currentSchema !== undefined) {
-			compareSchema(
-				schema,
-				currentSchema,
-				`${path}.$defs.${name}`,
-				changes,
-				resolveLiteralSchema,
-			);
+			compareSchema(schema, currentSchema, `${path}.$defs.${name}`, changes);
 		} else {
 			changes.push(`removed ${path}.$defs.${name}`);
 		}
 	}
 }
 
-function openApiIsCompatible(previous, current) {
+function hasExactObjectKeys(value, keys) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		sameValue(Object.keys(value).sort(), [...keys].sort())
+	);
+}
+
+function isModelSelectionFallbackOpenApiAddition(previous, current) {
+	const componentName = "ModelSelectionFallbackEventV1";
+	const persistedName = "PersistedConversationEventV1";
+	const fallbackRef = {
+		$ref: "#/components/schemas/ModelSelectionFallbackEventV1",
+	};
 	const previousSchemas = previous.components?.schemas ?? {};
 	const currentSchemas = current.components?.schemas ?? {};
-	const changes = [];
-	const resolveLiteralSchema = (schema) =>
-		resolveLocalComponentSchema(schema, currentSchemas);
-	for (const [name, schema] of Object.entries(previousSchemas)) {
-		const currentSchema = currentSchemas[name];
-		if (currentSchema === undefined) return false;
-		compareSchema(
-			schema,
-			currentSchema,
-			`components.schemas.${name}`,
-			changes,
-			resolveLiteralSchema,
-		);
+	if (
+		Object.hasOwn(previousSchemas, componentName) ||
+		!Object.hasOwn(currentSchemas, componentName) ||
+		!sameValue(
+			Object.keys(currentSchemas)
+				.filter((name) => !Object.hasOwn(previousSchemas, name))
+				.sort(),
+			[componentName],
+		)
+	) {
+		return false;
 	}
-	if (changes.length > 0) return false;
+
+	const previousOptions = previousSchemas[persistedName]?.oneOf;
+	const currentOptions = currentSchemas[persistedName]?.oneOf;
+	if (!Array.isArray(previousOptions) || !Array.isArray(currentOptions)) {
+		return false;
+	}
+	const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+	if (
+		unmatchedOptions(previousOptions, currentOptions).length !== 0 ||
+		addedOptions.length !== 1 ||
+		!sameValue(addedOptions[0], fallbackRef)
+	) {
+		return false;
+	}
+
+	const fallback = currentSchemas[componentName];
+	const payload = fallback?.properties?.payload;
+	const payloadFields = ["modelOptionId", "reasoningLevel", "reason"];
+	if (
+		fallback?.type !== "object" ||
+		fallback.additionalProperties !== false ||
+		!hasExactObjectKeys(payload, [
+			"additionalProperties",
+			"properties",
+			"required",
+			"type",
+		]) ||
+		payload.type !== "object" ||
+		payload.additionalProperties !== false ||
+		!hasExactObjectKeys(payload.properties, payloadFields) ||
+		!Array.isArray(payload.required) ||
+		!sameValue([...payload.required].sort(), [...payloadFields].sort()) ||
+		!sameValue(payload.properties.modelOptionId, {
+			minLength: 1,
+			type: "string",
+		}) ||
+		!sameValue(payload.properties.reasoningLevel, {
+			minLength: 1,
+			type: "string",
+		}) ||
+		!sameValue(payload.properties.reason, {
+			const: "selection_unavailable",
+			type: "string",
+		}) ||
+		!sameValue(fallback.properties.type, {
+			const: "model.selection.fell_back",
+			type: "string",
+		}) ||
+		!previousOptions.every((option) =>
+			literalSchemasAreDisjoint(fallback, option),
+		)
+	) {
+		return false;
+	}
+
+	const envelopeTemplate = previousOptions[0];
+	if (!envelopeTemplate?.properties) return false;
+	const normalizedFallback = structuredClone(fallback);
+	normalizedFallback.properties.type = envelopeTemplate.properties.type;
+	normalizedFallback.properties.payload = envelopeTemplate.properties.payload;
+	if (!sameValue(normalizedFallback, envelopeTemplate)) return false;
 
 	const normalized = structuredClone(current);
-	if (previous.components?.schemas === undefined) {
-		if (normalized.components) {
-			delete normalized.components.schemas;
-			if (Object.keys(normalized.components).length === 0) {
-				delete normalized.components;
-			}
-		}
-	} else {
-		if (!normalized.components) return false;
-		normalized.components.schemas = previous.components.schemas;
-	}
+	delete normalized.components.schemas[componentName];
+	const normalizedOptions = normalized.components.schemas[persistedName].oneOf;
+	const fallbackIndex = normalizedOptions.findIndex((option) =>
+		sameValue(option, fallbackRef),
+	);
+	if (fallbackIndex === -1) return false;
+	normalizedOptions.splice(fallbackIndex, 1);
 	return sameValue(previous, normalized);
 }
 
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
-		// ponytail: only component widening is proven; every operation byte stays exact.
-		if (!openApiIsCompatible(previous, current)) {
+		if (
+			!sameValue(previous, current) &&
+			!isModelSelectionFallbackOpenApiAddition(previous, current)
+		) {
 			changes.push("changed OpenAPI contract");
 		}
 		return changes.sort();

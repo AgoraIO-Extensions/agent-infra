@@ -39,7 +39,7 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
-	it("accepts a disjoint OpenAPI component added through a local ref", () => {
+	it("accepts only the model-selection fallback OpenAPI addition", () => {
 		const result = compare(
 			"openapi-component-ref-additive",
 			"openapi-component-ref-base",
@@ -48,7 +48,7 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
-	it("fails closed for unprovable OpenAPI component refs", async () => {
+	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(
 			await readFile(fixturePath("openapi-component-ref-additive"), "utf8"),
@@ -66,36 +66,54 @@ describe("contract compatibility command", () => {
 
 		try {
 			for (const [name, ref] of [
-				["malformed", "#/components/schemas/Fallback~2EventV1"],
+				["alternate", "#/components/schemas/OtherEventV1"],
 				["external", "https://example.invalid/FallbackEventV1"],
-				["missing", "#/components/schemas/MissingEventV1"],
 			] as const) {
 				const current = structuredClone(additive);
-				current.components.schemas.EventV1.oneOf[1].$ref = ref;
+				current.components.schemas.PersistedConversationEventV1.oneOf[1].$ref =
+					ref;
 				await expectRejected(name, current);
 			}
 
-			const cyclic = structuredClone(additive);
-			cyclic.components.schemas.FallbackEventV1 = {
-				$ref: "#/components/schemas/CycleEventV1",
-			};
-			cyclic.components.schemas.CycleEventV1 = {
-				$ref: "#/components/schemas/FallbackEventV1",
-			};
-			await expectRejected("cyclic", cyclic);
+			const missingRef = structuredClone(additive);
+			delete missingRef.components.schemas.PersistedConversationEventV1.oneOf[1]
+				.$ref;
+			await expectRejected("missing-ref", missingRef);
 
 			const sibling = structuredClone(additive);
-			sibling.components.schemas.EventV1.oneOf[1].description = "Ref sibling";
+			sibling.components.schemas.PersistedConversationEventV1.oneOf[1].description =
+				"Ref sibling";
 			await expectRejected("sibling", sibling);
+
+			const wrongReason = structuredClone(additive);
+			wrongReason.components.schemas.ModelSelectionFallbackEventV1.properties.payload.properties.reason.const =
+				"provider_failed";
+			await expectRejected("wrong-reason", wrongReason);
+
+			const extraPayload = structuredClone(additive);
+			const extra =
+				extraPayload.components.schemas.ModelSelectionFallbackEventV1.properties
+					.payload;
+			extra.properties.credential = { type: "string" };
+			extra.required.push("credential");
+			await expectRejected("extra-payload", extraPayload);
 
 			const operationChange = structuredClone(additive);
 			operationChange.paths["/events"].get.operationId = "streamEventsV2";
 			await expectRejected("operation", operationChange);
 
-			const discriminatorDrift = structuredClone(additive);
-			discriminatorDrift.components.schemas.TextEventV1.properties.type.const =
-				"message.delta";
-			await expectRejected("existing-discriminator", discriminatorDrift);
+			const discriminatorOverlap = structuredClone(additive);
+			const discriminator =
+				discriminatorOverlap.components.schemas.PersistedConversationEventV1
+					.oneOf[0].properties.type;
+			delete discriminator.const;
+			discriminator.enum = ["text.delta", "model.selection.fell_back"];
+			await expectRejected("existing-discriminator", discriminatorOverlap);
+
+			const removedRequired = structuredClone(additive);
+			removedRequired.components.schemas.PersistedConversationEventV1.oneOf[0].required =
+				["type"];
+			await expectRejected("existing-required", removedRequired);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

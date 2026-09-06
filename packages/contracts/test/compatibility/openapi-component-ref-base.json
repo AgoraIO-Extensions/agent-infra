@@ -9,7 +9,7 @@
 						"content": {
 							"text/event-stream": {
 								"schema": {
-									"$ref": "#/components/schemas/EventV1"
+									"$ref": "#/components/schemas/PersistedConversationEventV1"
 								}
 							}
 						},
@@ -21,23 +21,30 @@
 	},
 	"components": {
 		"schemas": {
-			"EventV1": {
+			"PersistedConversationEventV1": {
 				"oneOf": [
 					{
-						"$ref": "#/components/schemas/TextEventV1"
+						"additionalProperties": false,
+						"properties": {
+							"payload": {
+								"additionalProperties": false,
+								"properties": {
+									"text": {
+										"type": "string"
+									}
+								},
+								"required": ["text"],
+								"type": "object"
+							},
+							"type": {
+								"const": "text.delta",
+								"type": "string"
+							}
+						},
+						"required": ["type", "payload"],
+						"type": "object"
 					}
 				]
-			},
-			"TextEventV1": {
-				"additionalProperties": false,
-				"properties": {
-					"type": {
-						"const": "text.delta",
-						"type": "string"
-					}
-				},
-				"required": ["type"],
-				"type": "object"
 			}
 		}
 	}

@@ -9,7 +9,7 @@
 						"content": {
 							"text/event-stream": {
 								"schema": {
-									"$ref": "#/components/schemas/EventV1"
+									"$ref": "#/components/schemas/PersistedConversationEventV1"
 								}
 							}
 						},
@@ -21,36 +21,62 @@
 	},
 	"components": {
 		"schemas": {
-			"EventV1": {
+			"PersistedConversationEventV1": {
 				"oneOf": [
 					{
-						"$ref": "#/components/schemas/TextEventV1"
+						"additionalProperties": false,
+						"properties": {
+							"payload": {
+								"additionalProperties": false,
+								"properties": {
+									"text": {
+										"type": "string"
+									}
+								},
+								"required": ["text"],
+								"type": "object"
+							},
+							"type": {
+								"const": "text.delta",
+								"type": "string"
+							}
+						},
+						"required": ["type", "payload"],
+						"type": "object"
 					},
 					{
-						"$ref": "#/components/schemas/FallbackEventV1"
+						"$ref": "#/components/schemas/ModelSelectionFallbackEventV1"
 					}
 				]
 			},
-			"FallbackEventV1": {
+			"ModelSelectionFallbackEventV1": {
 				"additionalProperties": false,
 				"properties": {
+					"payload": {
+						"additionalProperties": false,
+						"properties": {
+							"modelOptionId": {
+								"minLength": 1,
+								"type": "string"
+							},
+							"reason": {
+								"const": "selection_unavailable",
+								"type": "string"
+							},
+							"reasoningLevel": {
+								"minLength": 1,
+								"type": "string"
+							}
+						},
+						"required": ["modelOptionId", "reasoningLevel", "reason"],
+						"type": "object"
+					},
 					"type": {
 						"const": "model.selection.fell_back",
 						"type": "string"
 					}
 				},
-				"required": ["type"],
-				"type": "object"
-			},
-			"TextEventV1": {
-				"additionalProperties": false,
-				"properties": {
-					"type": {
-						"const": "text.delta",
-						"type": "string"
-					}
-				},
-				"required": ["type"],
+				"required": ["type", "payload"],
 				"type": "object"
 			}
 		}
