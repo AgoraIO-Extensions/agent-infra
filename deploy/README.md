@@ -32,6 +32,38 @@ helm lint deploy/helm/agent-infra \
 deploy/kind/topology.sh render
 ```
 
+## 不可变镜像与 release 检查
+
+从 clean Git commit 构建四个 Platform 镜像并生成 image manifest：
+
+```bash
+IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
+  PLATFORM=linux/amd64 \
+  node deploy/release/build-images.mjs /tmp/agent-infra-images.json
+```
+
+该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
+根文件系统运行最小 probe。全部镜像通过后，入口使用现有 Docker 登录态发布唯一一份已验证
+artifact；发布 Tag 由 Commit SHA 与目标 Platform 共同限定，避免不同架构互相覆盖。入口回读
+Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
+`IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
+`IMAGE_REGISTRY_INSECURE=true`，生产 Registry 必须使用 HTTPS。
+
+release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
+检查：
+
+```bash
+node deploy/release/validate.mjs release /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs migration /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs rollback current-images.json target-images.json target-values.yaml
+```
+
+release 和 migration 要求启用 migration Job；rollback 要求目标是另一份不可变 image manifest，
+并关闭 migration Job。任一 image 引用与 manifest 不一致、配置无效或 migration 漂移都会在 Helm
+部署前失败。三种检查都必须在 clean checkout 中执行；release 和 migration 的 `HEAD` 必须等于
+image manifest 的 Commit，rollback 的 `HEAD` 必须等于 target image manifest 的 Commit，current
+image manifest 只标识当前已部署 release。
+
 ## kind 拓扑验证
 
 安装 `kind v0.30.0`、Helm 3、kubectl 和 Docker 后运行：
