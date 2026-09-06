@@ -73,6 +73,9 @@ describe("platform-core package surface", () => {
 			"FakeSecretActivationDecryptorV1",
 			"FakeSecretActivationKubernetesV1",
 			"applicationRevisionFailurePoints",
+			"conversationCommandConformanceV1",
+			"conversationConformanceAuthorityV1",
+			"conversationEventConformanceV1",
 		]);
 		expect(
 			Object.keys(new testingSurface.FakeAgentManagementV1()).toSorted(),

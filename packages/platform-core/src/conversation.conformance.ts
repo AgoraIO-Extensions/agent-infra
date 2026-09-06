@@ -303,6 +303,39 @@ export function conversationCommandConformanceV1(
 			}
 		});
 
+		it("denies a foreign actor authority without visible effects", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"foreign_actor_fixture",
+				);
+				await acceptMessageFixture(
+					harness,
+					conversationId,
+					"foreign_actor_initial_fixture",
+					"bounded foreign actor initial fixture",
+				);
+				const before = await harness.snapshot();
+				harness.setAuthority({
+					...conversationConformanceAuthorityV1,
+					actorId: "foreign_actor_fixture",
+				});
+				await expect(
+					harness.useCase.accept(
+						messageFixture(
+							conversationId,
+							"foreign_actor_fixture",
+							"bounded foreign actor fixture",
+						),
+					),
+				).resolves.toEqual({ outcome: "denied" });
+				expect(await harness.snapshot()).toEqual(before);
+			} finally {
+				await harness.close();
+			}
+		});
+
 		it("rolls back a failed command without exposing partial state", async () => {
 			const harness = await open();
 			try {

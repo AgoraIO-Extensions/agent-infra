@@ -4,14 +4,14 @@ import {
 	type ConversationExecutionUseCaseV1,
 	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-
 import {
 	type ConversationCommandConformanceSnapshotV1,
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
-} from "../../platform-core/src/conversation.conformance.ts";
+} from "@agent-infra/platform-core/testing";
+import postgres from "postgres";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -73,7 +73,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
 		conversationConformanceAuthorityV1;
 	let nextId = 1;
-	let failureArmed = false;
+	let failureCleanupRequired = false;
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
@@ -85,9 +85,12 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			try {
 				return await adapter.executeMessage(request, decide);
 			} finally {
-				if (failureArmed) {
-					await disarmFailure("message");
-					failureArmed = false;
+				if (failureCleanupRequired) {
+					try {
+						await disarmFailure("message");
+					} finally {
+						failureCleanupRequired = false;
+					}
 				}
 			}
 		},
@@ -133,8 +136,8 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			effectiveAuthority = next;
 		},
 		async failNextCommit() {
+			failureCleanupRequired = true;
 			await armFailure("message");
-			failureArmed = true;
 		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
@@ -149,8 +152,11 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		},
 		snapshot: commandEffectCounts,
 		async close() {
-			if (failureArmed) await disarmFailure("message");
-			await adapter.close();
+			try {
+				await disarmFailure("message");
+			} finally {
+				await adapter.close();
+			}
 		},
 	};
 });

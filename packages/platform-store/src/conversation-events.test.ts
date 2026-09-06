@@ -3,10 +3,10 @@ import {
 	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
 } from "@agent-infra/platform-core";
+import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { conversationEventConformanceV1 } from "../../platform-core/src/conversation.conformance.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -99,7 +99,7 @@ async function disarmEventCommitFailure(): Promise<void> {
 conversationEventConformanceV1("PostgreSQL", async () => {
 	await seedConformanceConversation();
 	let nextEventId = 1;
-	let failureArmed = false;
+	let failureCleanupRequired = false;
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationEventTransactionV1({ databaseUrl });
 	const transaction: ConversationEventTransactionPortV1 = {
@@ -107,9 +107,12 @@ conversationEventConformanceV1("PostgreSQL", async () => {
 			try {
 				return await adapter.persistEvent(request, decide);
 			} finally {
-				if (failureArmed) {
-					await disarmEventCommitFailure();
-					failureArmed = false;
+				if (failureCleanupRequired) {
+					try {
+						await disarmEventCommitFailure();
+					} finally {
+						failureCleanupRequired = false;
+					}
 				}
 			}
 		},
@@ -131,8 +134,8 @@ conversationEventConformanceV1("PostgreSQL", async () => {
 	return {
 		events,
 		async failNextCommit() {
+			failureCleanupRequired = true;
 			await armEventCommitFailure();
-			failureArmed = true;
 		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
@@ -160,8 +163,11 @@ conversationEventConformanceV1("PostgreSQL", async () => {
 			};
 		},
 		async close() {
-			if (failureArmed) await disarmEventCommitFailure();
-			await adapter.close();
+			try {
+				await disarmEventCommitFailure();
+			} finally {
+				await adapter.close();
+			}
 		},
 	};
 });
