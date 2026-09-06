@@ -13,18 +13,6 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
-test("Docker builds exclude the ignored generated Web route tree", async () => {
-	const generatedRouteTree = "apps/web/src/routeTree.gen.ts";
-	const gitignore = await readFile(".gitignore", "utf8");
-	const dockerignore = await readFile(".dockerignore", "utf8");
-
-	assert.ok(gitignore.split("\n").includes(`/${generatedRouteTree}`));
-	assert.ok(
-		dockerignore.split("\n").includes(generatedRouteTree),
-		"the generated route tree must not become an untracked Docker build input",
-	);
-});
-
 test("Platform Worker typecheck builds its dist-backed Secret Store dependency", async () => {
 	const manifest = JSON.parse(
 		await readFile("apps/platform-worker/package.json", "utf8"),

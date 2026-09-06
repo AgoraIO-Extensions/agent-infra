@@ -27,8 +27,17 @@ async function fakes(directory) {
 	const docker = join(directory, "docker.mjs");
 	await executable(
 		git,
-		`import { existsSync } from "node:fs";
+		`import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 const args = process.argv.slice(2);
+if (args[0] === "ls-tree" && process.env.FAKE_GIT_TREE_RECORD) {
+  process.stdout.write(process.env.FAKE_GIT_TREE_RECORD + "\0");
+  process.exit(0);
+}
+if (args[0] === "ls-tree" || args[0] === "archive") {
+  const result = spawnSync("git", args.map((arg) => arg === "${commitSha}" ? "HEAD" : arg), { cwd: process.cwd(), stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 if (args[0] === "status") {
   if (existsSync(process.env.FAKE_GIT_DRIFT_MARKER)) console.log(" M source");
   process.exit(0);
@@ -40,11 +49,18 @@ else process.exit(1);`,
 	await executable(
 		docker,
 		`import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const args = process.argv.slice(2);
 const log = process.env.FAKE_DOCKER_LOG;
 writeFileSync(log, JSON.stringify(args) + "\\n", { flag: "a" });
 if (args[0] === "buildx" && args[1] === "build") {
+  const context = args.at(-1);
+  if (process.env.FAKE_FORBIDDEN_CONTEXT_PATH && existsSync(join(context, process.env.FAKE_FORBIDDEN_CONTEXT_PATH))) process.exit(91);
+  for (const path of JSON.parse(process.env.FAKE_REQUIRED_CONTEXT_PATHS ?? "[]")) {
+    if (!existsSync(join(context, path))) process.exit(92);
+  }
+  if (!existsSync(args[args.indexOf("--file") + 1])) process.exit(93);
   const metadata = args[args.indexOf("--metadata-file") + 1];
   const tag = args[args.indexOf("--tag") + 1];
   const statePath = process.env.FAKE_DOCKER_STATE;
@@ -106,11 +122,26 @@ function build(
 
 test("image build validates reproducibility and read-only non-root execution", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-"));
+	const ignoredContextPath = resolve(
+		repositoryRoot,
+		`.agent-infra-build-input-${process.pid}.local`,
+	);
 	try {
 		await fakes(directory);
 		await writeFile(join(directory, "docker-state.json"), "{}");
+		await writeFile(ignoredContextPath, "must not enter Docker context\n");
 		const manifestPath = join(directory, "images.json");
-		const result = build(manifestPath, directory);
+		const result = build(manifestPath, directory, {
+			FAKE_FORBIDDEN_CONTEXT_PATH: ignoredContextPath.split("/").at(-1),
+			FAKE_REQUIRED_CONTEXT_PATHS: JSON.stringify([
+				"package.json",
+				"pnpm-lock.yaml",
+				"apps/web/Dockerfile",
+				"apps/platform-api/Dockerfile",
+				"apps/platform-worker/Dockerfile",
+				"apps/agent-runtime-host/Dockerfile",
+			]),
+		});
 		assert.equal(result.status, 0, result.stderr);
 
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -140,6 +171,9 @@ test("image build validates reproducibility and read-only non-root execution", a
 			(args) => args[0] === "buildx" && args[1] === "build",
 		);
 		assert.equal(builds.length, 8);
+		const contexts = new Set(builds.map((args) => args.at(-1)));
+		assert.equal(contexts.size, 1);
+		assert.notEqual(resolve([...contexts][0]), repositoryRoot);
 		for (const args of builds) {
 			assert.ok(args.includes("--no-cache"));
 			assert.deepEqual(
@@ -157,6 +191,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 		}
 		const firstMetadata = builds[0][builds[0].indexOf("--metadata-file") + 1];
 		await assert.rejects(access(resolve(firstMetadata, "..")));
+		await assert.rejects(access([...contexts][0]));
 		assert.equal(
 			calls.filter((args) => args[0] === "load" && args[1] === "--input")
 				.length,
@@ -250,6 +285,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 			.map((line) => JSON.parse(line));
 		assert.equal(driftCalls.filter((args) => args[0] === "push").length, 0);
 	} finally {
+		await rm(ignoredContextPath, { force: true });
 		await rm(directory, { recursive: true, force: true });
 	}
 });
@@ -267,6 +303,31 @@ test("image publication requires an explicit repository prefix", async () => {
 		await assert.rejects(access(manifestPath));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image build rejects unsafe tracked context entries", async () => {
+	for (const [record, message] of [
+		[`120000 blob ${"a".repeat(40)} 4\tunsafe-link`, /unsupported entry/],
+		[`100644 blob ${"b".repeat(40)} 4\t../escape`, /unsafe path/],
+	]) {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-infra-images-context-"),
+		);
+		try {
+			await fakes(directory);
+			await writeFile(join(directory, "docker-state.json"), "{}");
+			const manifestPath = join(directory, "images.json");
+			const result = build(manifestPath, directory, {
+				FAKE_GIT_TREE_RECORD: record,
+			});
+
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, message);
+			await assert.rejects(access(manifestPath));
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	}
 });
 

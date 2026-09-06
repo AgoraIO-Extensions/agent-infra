@@ -10,7 +10,6 @@
 **/.astro
 **/.turbo
 .turbo
-apps/web/src/routeTree.gen.ts
 
 **/.wrangler
 **/.alchemy

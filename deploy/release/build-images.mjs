@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -9,6 +18,7 @@ import { runCommand } from "./run-command.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const timeoutMs = {
+	archive: 60_000,
 	build: 15 * 60_000,
 	git: 30_000,
 	inspect: 30_000,
@@ -16,6 +26,7 @@ const timeoutMs = {
 	probe: 60_000,
 	publish: 10 * 60_000,
 };
+const contextLimit = { bytes: 256 * 1024 * 1024, files: 20_000 };
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const assertInjectedRuntime =
 	"const {access,readdir}=await import('node:fs/promises');" +
@@ -100,6 +111,116 @@ function assertCheckout(git, commitSha) {
 	}
 }
 
+function trackedFiles(git, commitSha) {
+	const records = runCommand(
+		git,
+		["ls-tree", "-r", "-l", "-z", "--full-tree", commitSha],
+		{
+			cwd: repositoryRoot,
+			name: "Git build context listing",
+			timeoutMs: timeoutMs.git,
+		},
+	)
+		.split("\0")
+		.filter(Boolean);
+	if (records.length === 0 || records.length > contextLimit.files) {
+		fail("Git build context file count is invalid");
+	}
+	let bytes = 0;
+	const paths = records.map((record) => {
+		const separator = record.indexOf("\t");
+		const header = record.slice(0, separator);
+		const match = /^(100644|100755) blob [a-f0-9]{40,64} +([0-9]+)$/.exec(
+			header,
+		);
+		if (separator < 0 || !match) {
+			fail("Git build context contains an unsupported entry");
+		}
+		bytes += Number(match[2]);
+		if (!Number.isSafeInteger(bytes) || bytes > contextLimit.bytes) {
+			fail("Git build context exceeds its limit");
+		}
+		const path = record.slice(separator + 1);
+		const segments = path.split("/");
+		if (
+			path.startsWith("/") ||
+			/[\u0000-\u001f\u007f]/.test(path) ||
+			segments.some(
+				(segment) => segment === "" || segment === "." || segment === "..",
+			)
+		) {
+			fail("Git build context contains an unsafe path");
+		}
+		return path;
+	});
+	if (new Set(paths).size !== paths.length) {
+		fail("Git build context contains duplicate paths");
+	}
+	return paths.toSorted();
+}
+
+async function extractedFiles(root) {
+	const paths = [];
+	let bytes = 0;
+	async function visit(directory, prefix = "") {
+		for (const entry of await readdir(directory, { withFileTypes: true })) {
+			const path = join(directory, entry.name);
+			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) {
+				await visit(path, relativePath);
+			} else if (entry.isFile()) {
+				paths.push(relativePath);
+				bytes += (await stat(path)).size;
+				if (paths.length > contextLimit.files || bytes > contextLimit.bytes) {
+					fail("Extracted build context exceeds its limit");
+				}
+			} else {
+				fail("Extracted build context contains an unsupported entry");
+			}
+		}
+	}
+	await visit(root);
+	return paths.toSorted();
+}
+
+async function createBuildContext({ git, commitSha, temp }) {
+	assertCheckout(git, commitSha);
+	const expectedFiles = trackedFiles(git, commitSha);
+	assertCheckout(git, commitSha);
+	const archivePath = join(temp, "context.tar");
+	const contextPath = join(temp, "context");
+	await mkdir(contextPath);
+	runCommand(
+		git,
+		["archive", "--format=tar", `--output=${archivePath}`, commitSha],
+		{
+			cwd: repositoryRoot,
+			name: "Git build context archive",
+			timeoutMs: timeoutMs.archive,
+		},
+	);
+	assertCheckout(git, commitSha);
+	const archive = await stat(archivePath);
+	if (!archive.isFile() || archive.size > contextLimit.bytes) {
+		fail("Git build context archive exceeds its limit");
+	}
+	runCommand(
+		process.env.TAR_BIN ?? "tar",
+		["-xf", archivePath, "-C", contextPath],
+		{
+			cwd: repositoryRoot,
+			name: "Git build context extraction",
+			timeoutMs: timeoutMs.archive,
+		},
+	);
+	if (JSON.stringify(await extractedFiles(contextPath)) !== JSON.stringify(expectedFiles)) {
+		fail("Extracted build context does not match Git HEAD");
+	}
+	await rm(archivePath, { force: true });
+	assertCheckout(git, commitSha);
+	return contextPath;
+}
+
 async function buildImage({
 	image,
 	commitSha,
@@ -107,6 +228,7 @@ async function buildImage({
 	platform,
 	prefix,
 	temp,
+	contextPath,
 	git,
 }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
@@ -124,7 +246,7 @@ async function buildImage({
 				"buildx",
 				"build",
 				"--file",
-				image.dockerfile,
+				join(contextPath, image.dockerfile),
 				"--platform",
 				platform,
 				"--build-arg",
@@ -139,7 +261,7 @@ async function buildImage({
 				"--metadata-file",
 				metadataPath,
 				"--progress=quiet",
-				".",
+				contextPath,
 			],
 			{
 				cwd: repositoryRoot,
@@ -325,6 +447,7 @@ async function main() {
 
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-image-build-"));
 	try {
+		const contextPath = await createBuildContext({ git, commitSha, temp });
 		const buildResults = {};
 		for (const image of images) {
 			buildResults[image.key] = await buildImage({
@@ -334,6 +457,7 @@ async function main() {
 				platform,
 				prefix,
 				temp,
+				contextPath,
 				git,
 			});
 		}
