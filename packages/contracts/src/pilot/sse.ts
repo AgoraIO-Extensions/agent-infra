@@ -75,12 +75,23 @@ export const ConversationErrorEventV1Schema = z.strictObject({
 	payload: z.strictObject({ error: PilotProtocolErrorV1Schema }),
 });
 
+export const ModelSelectionFallbackEventV1Schema = z.strictObject({
+	...eventShape,
+	type: z.literal("model.selection.fell_back"),
+	payload: z.strictObject({
+		modelOptionId: OpaqueIdV1Schema,
+		reasoningLevel: nonEmptyString(),
+		reason: z.literal("selection_unavailable"),
+	}),
+});
+
 export const PersistedConversationEventV1Schema = z.discriminatedUnion("type", [
 	TextDeltaEventV1Schema,
 	ExecutionStatusEventV1Schema,
 	ExecutionDetailEventV1Schema,
 	ResultFileEventV1Schema,
 	ConversationErrorEventV1Schema,
+	ModelSelectionFallbackEventV1Schema,
 ]);
 
 export const TimelineReloadSignalV1Schema = z.strictObject({
@@ -200,6 +211,7 @@ export const pilotSseSchemasV1 = {
 	AuthorizationRevokedSignalV1: AuthorizationRevokedSignalV1Schema,
 	ConversationSseMessageV1: ConversationSseMessageV1Schema,
 	HeartbeatSignalV1: HeartbeatSignalV1Schema,
+	ModelSelectionFallbackEventV1: ModelSelectionFallbackEventV1Schema,
 	PersistedConversationEventV1: PersistedConversationEventV1Schema,
 	SseEventIdV1: SseEventIdV1Schema,
 	TimelineReloadSignalV1: TimelineReloadSignalV1Schema,

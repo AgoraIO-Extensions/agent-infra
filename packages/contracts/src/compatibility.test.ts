@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -8,18 +10,16 @@ const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const fixturePath = (name: string) =>
 	fileURLToPath(new URL(`../test/compatibility/${name}.json`, import.meta.url));
 
-function compare(current: string, previous = "base") {
+function comparePaths(current: string, previous: string) {
 	return spawnSync(
 		process.execPath,
-		[
-			cliPath,
-			"--previous",
-			fixturePath(previous),
-			"--current",
-			fixturePath(current),
-		],
+		[cliPath, "--previous", previous, "--current", current],
 		{ encoding: "utf8" },
 	);
+}
+
+function compare(current: string, previous = "base") {
+	return comparePaths(fixturePath(current), fixturePath(previous));
 }
 
 describe("contract compatibility command", () => {
@@ -37,6 +37,86 @@ describe("contract compatibility command", () => {
 		const result = compare("additive");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("accepts only the model-selection fallback OpenAPI addition", () => {
+		const result = compare(
+			"openapi-component-ref-additive",
+			"openapi-component-ref-base",
+		);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
+	});
+
+	it("rejects every deviation from the fallback OpenAPI addition", async () => {
+		const previous = fixturePath("openapi-component-ref-base");
+		const additive = JSON.parse(
+			await readFile(fixturePath("openapi-component-ref-additive"), "utf8"),
+		);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-openapi-ref-"),
+		);
+		const expectRejected = async (name: string, current: unknown) => {
+			const path = resolve(directory, `${name}.json`);
+			await writeFile(path, JSON.stringify(current), "utf8");
+			const result = comparePaths(path, previous);
+			expect(result.status, name).toBe(1);
+			expect(result.stderr, name).toContain("changed OpenAPI contract");
+		};
+
+		try {
+			for (const [name, ref] of [
+				["alternate", "#/components/schemas/OtherEventV1"],
+				["external", "https://example.invalid/FallbackEventV1"],
+			] as const) {
+				const current = structuredClone(additive);
+				current.components.schemas.PersistedConversationEventV1.oneOf[1].$ref =
+					ref;
+				await expectRejected(name, current);
+			}
+
+			const missingRef = structuredClone(additive);
+			delete missingRef.components.schemas.PersistedConversationEventV1.oneOf[1]
+				.$ref;
+			await expectRejected("missing-ref", missingRef);
+
+			const sibling = structuredClone(additive);
+			sibling.components.schemas.PersistedConversationEventV1.oneOf[1].description =
+				"Ref sibling";
+			await expectRejected("sibling", sibling);
+
+			const wrongReason = structuredClone(additive);
+			wrongReason.components.schemas.ModelSelectionFallbackEventV1.properties.payload.properties.reason.const =
+				"provider_failed";
+			await expectRejected("wrong-reason", wrongReason);
+
+			const extraPayload = structuredClone(additive);
+			const extra =
+				extraPayload.components.schemas.ModelSelectionFallbackEventV1.properties
+					.payload;
+			extra.properties.credential = { type: "string" };
+			extra.required.push("credential");
+			await expectRejected("extra-payload", extraPayload);
+
+			const operationChange = structuredClone(additive);
+			operationChange.paths["/events"].get.operationId = "streamEventsV2";
+			await expectRejected("operation", operationChange);
+
+			const discriminatorOverlap = structuredClone(additive);
+			const discriminator =
+				discriminatorOverlap.components.schemas.PersistedConversationEventV1
+					.oneOf[0].properties.type;
+			delete discriminator.const;
+			discriminator.enum = ["text.delta", "model.selection.fell_back"];
+			await expectRejected("existing-discriminator", discriminatorOverlap);
+
+			const removedRequired = structuredClone(additive);
+			removedRequired.components.schemas.PersistedConversationEventV1.oneOf[0].required =
+				["type"];
+			await expectRejected("existing-required", removedRequired);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it.each([

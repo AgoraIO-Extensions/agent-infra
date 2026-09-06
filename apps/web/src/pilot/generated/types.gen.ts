@@ -396,6 +396,23 @@ export type MessageProjectionV1 = {
     text: string;
 };
 
+export type ModelSelectionFallbackEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'model.selection.fell_back';
+};
+
 export type ModelSelectionUpdateRequestV1 = {
     modelOptionId: string;
     reasoningLevel: string;
@@ -472,7 +489,7 @@ export type PersistedConversationEventV1 = {
     schemaVersion: 1;
     sequence: number;
     type: 'conversation.error';
-};
+} | ModelSelectionFallbackEventV1;
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';

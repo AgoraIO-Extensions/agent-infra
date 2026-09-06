@@ -98,6 +98,25 @@ describe("Pilot schema-driven Fake scenarios", () => {
 		expect(JSON.stringify(crossConversation)).not.toContain("event-replay-1");
 	});
 
+	it("replays one persisted fallback notice with the same event and cursor", () => {
+		const notices = resolvePilotReplayV1({
+			conversationId: "conversation-pilot-1",
+			lastEventId: "event-replay-1",
+		}).filter((message) => message.type === "model.selection.fell_back");
+
+		expect(notices).toEqual([
+			expect.objectContaining({
+				eventId: "event-replay-2",
+				conversationCursor: "cursor-pilot-2",
+				payload: {
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+				},
+			}),
+		]);
+	});
+
 	it("replays valid event IDs and rejects foreign or unknown event IDs", () => {
 		const valid = resolvePilotReplayV1({
 			conversationId: "conversation-pilot-1",
@@ -120,17 +139,17 @@ describe("Pilot schema-driven Fake scenarios", () => {
 			})
 				.filter((message) => message.kind === "event")
 				.map((message) => message.sequence),
-		).toEqual([2]);
+		).toEqual([2, 3]);
 		expect(
 			resolvePilotReplayV1({
 				conversationId: "conversation-pilot-1",
-				lastEventId: "event-replay-2",
+				lastEventId: "event-replay-3",
 			}),
 		).toEqual([]);
 		expect(
 			resolvePilotReplayV1({
 				conversationId: "conversation-pilot-1",
-				cursor: "cursor-pilot-2",
+				cursor: "cursor-pilot-3",
 			}),
 		).toEqual([]);
 		expect(

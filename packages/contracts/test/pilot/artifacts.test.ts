@@ -90,6 +90,18 @@ describe("Pilot standard artifacts", () => {
 			"properties.type.const",
 			"heartbeat",
 		);
+		expect(schemas.ModelSelectionFallbackEventV1).toHaveProperty(
+			"properties.type.const",
+			"model.selection.fell_back",
+		);
+		expect(schemas.ModelSelectionFallbackEventV1).toHaveProperty(
+			"properties.payload.properties.reason.const",
+			"selection_unavailable",
+		);
+		expect(schemas.ModelSelectionFallbackEventV1).toHaveProperty(
+			"properties.payload.additionalProperties",
+			false,
+		);
 		expect(delegated.ExecutionGrantClaimsV1).toHaveProperty(
 			"properties.sessionGeneration",
 		);

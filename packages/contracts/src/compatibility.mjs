@@ -569,12 +569,115 @@ function compareSchema(previous, current, path, changes) {
 	}
 }
 
+function hasExactObjectKeys(value, keys) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		sameValue(Object.keys(value).sort(), [...keys].sort())
+	);
+}
+
+function isModelSelectionFallbackOpenApiAddition(previous, current) {
+	const componentName = "ModelSelectionFallbackEventV1";
+	const persistedName = "PersistedConversationEventV1";
+	const fallbackRef = {
+		$ref: "#/components/schemas/ModelSelectionFallbackEventV1",
+	};
+	const previousSchemas = previous.components?.schemas ?? {};
+	const currentSchemas = current.components?.schemas ?? {};
+	if (
+		Object.hasOwn(previousSchemas, componentName) ||
+		!Object.hasOwn(currentSchemas, componentName) ||
+		!sameValue(
+			Object.keys(currentSchemas)
+				.filter((name) => !Object.hasOwn(previousSchemas, name))
+				.sort(),
+			[componentName],
+		)
+	) {
+		return false;
+	}
+
+	const previousOptions = previousSchemas[persistedName]?.oneOf;
+	const currentOptions = currentSchemas[persistedName]?.oneOf;
+	if (!Array.isArray(previousOptions) || !Array.isArray(currentOptions)) {
+		return false;
+	}
+	const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+	if (
+		unmatchedOptions(previousOptions, currentOptions).length !== 0 ||
+		addedOptions.length !== 1 ||
+		!sameValue(addedOptions[0], fallbackRef)
+	) {
+		return false;
+	}
+
+	const fallback = currentSchemas[componentName];
+	const payload = fallback?.properties?.payload;
+	const payloadFields = ["modelOptionId", "reasoningLevel", "reason"];
+	if (
+		fallback?.type !== "object" ||
+		fallback.additionalProperties !== false ||
+		!hasExactObjectKeys(payload, [
+			"additionalProperties",
+			"properties",
+			"required",
+			"type",
+		]) ||
+		payload.type !== "object" ||
+		payload.additionalProperties !== false ||
+		!hasExactObjectKeys(payload.properties, payloadFields) ||
+		!Array.isArray(payload.required) ||
+		!sameValue([...payload.required].sort(), [...payloadFields].sort()) ||
+		!sameValue(payload.properties.modelOptionId, {
+			minLength: 1,
+			type: "string",
+		}) ||
+		!sameValue(payload.properties.reasoningLevel, {
+			minLength: 1,
+			type: "string",
+		}) ||
+		!sameValue(payload.properties.reason, {
+			const: "selection_unavailable",
+			type: "string",
+		}) ||
+		!sameValue(fallback.properties.type, {
+			const: "model.selection.fell_back",
+			type: "string",
+		}) ||
+		!previousOptions.every((option) =>
+			literalSchemasAreDisjoint(fallback, option),
+		)
+	) {
+		return false;
+	}
+
+	const envelopeTemplate = previousOptions[0];
+	if (!envelopeTemplate?.properties) return false;
+	const normalizedFallback = structuredClone(fallback);
+	normalizedFallback.properties.type = envelopeTemplate.properties.type;
+	normalizedFallback.properties.payload = envelopeTemplate.properties.payload;
+	if (!sameValue(normalizedFallback, envelopeTemplate)) return false;
+
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[componentName];
+	const normalizedOptions = normalized.components.schemas[persistedName].oneOf;
+	const fallbackIndex = normalizedOptions.findIndex((option) =>
+		sameValue(option, fallbackRef),
+	);
+	if (fallbackIndex === -1) return false;
+	normalizedOptions.splice(fallbackIndex, 1);
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
-		// ponytail: OpenAPI input/output variance is contextual. Fail closed until
-		// a real versioning need justifies a consumer-aware directional diff.
-		if (!sameValue(previous, current)) {
+		if (
+			!sameValue(previous, current) &&
+			!isModelSelectionFallbackOpenApiAddition(previous, current)
+		) {
 			changes.push("changed OpenAPI contract");
 		}
 		return changes.sort();

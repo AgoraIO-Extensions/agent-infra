@@ -2323,6 +2323,84 @@
         ],
         "type": "object"
       },
+      "ModelSelectionFallbackEventV1": {
+        "additionalProperties": false,
+        "properties": {
+          "conversationCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/SseEventIdV1"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "const": "event",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "modelOptionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "const": "selection_unavailable",
+                "type": "string"
+              },
+              "reasoningLevel": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "modelOptionId",
+              "reasoningLevel",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "sequence": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "type": {
+            "const": "model.selection.fell_back",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "eventId",
+          "conversationId",
+          "executionId",
+          "sequence",
+          "conversationCursor",
+          "occurredAt",
+          "type",
+          "payload"
+        ],
+        "type": "object"
+      },
       "ModelSelectionUpdateRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -2721,6 +2799,9 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/ModelSelectionFallbackEventV1"
           }
         ],
         "type": "object"
