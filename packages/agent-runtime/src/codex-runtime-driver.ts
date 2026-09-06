@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type {
 	RuntimeCapabilitiesV1,
-	RuntimeDriverCommandV1,
 	RuntimeDriverOperationRecordV1,
 	RuntimeEventV1,
+	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
-import { RuntimeDriverOperationRecordV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+} from "@agent-infra/contracts/runtime";
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
@@ -14,7 +17,12 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
-import type { RuntimeDriver, RuntimeDriverLookup } from "./driver.js";
+import type {
+	RuntimeDriver,
+	RuntimeDriverCommand,
+	RuntimeDriverLookup,
+	RuntimeDriverOperationRecord,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 
@@ -32,6 +40,13 @@ export interface CodexRuntimeDriverOptions {
 	readonly path: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
+	readonly modelOptions?: readonly CodexRuntimeModelOption[];
+}
+
+export interface CodexRuntimeModelOption {
+	readonly modelOptionId: string;
+	readonly model: string;
+	readonly reasoningLevels: readonly string[];
 }
 
 interface CodexExecution {
@@ -91,11 +106,12 @@ interface CodexSession {
 }
 
 interface CodexOperation {
+	schemaVersion: 1 | 2;
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
 	executionId?: string;
 	turnId?: string;
-	record?: RuntimeDriverOperationRecordV1;
+	record?: RuntimeDriverOperationRecord;
 }
 
 interface CodexDriverState {
@@ -142,6 +158,8 @@ const requiredConfigurationOriginKeys = [
 	"model_reasoning_effort",
 	"features.plugins",
 ] as const;
+const codexModelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const codexReasoningPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const persistedTurnStatuses = [
 	"running",
@@ -153,13 +171,18 @@ const persistedTurnStatuses = [
 type PersistedTurnStatus = (typeof persistedTurnStatuses)[number];
 
 type CodexInterruptionCommand = Extract<
-	RuntimeDriverCommandV1,
+	RuntimeDriverCommand,
 	{ kind: "stop" | "generation-cancel" }
+>;
+
+type CodexSubmitTurnCommand = Extract<
+	RuntimeDriverCommand,
+	{ kind: "submit-turn" }
 >;
 
 function operationKey(
 	command: Pick<
-		RuntimeDriverCommandV1,
+		RuntimeDriverCommand,
 		"agentId" | "conversationId" | "sessionGeneration" | "kind" | "operationId"
 	>,
 ) {
@@ -173,14 +196,14 @@ function operationKey(
 }
 
 function isCodexInterruptionCommand(
-	command: RuntimeDriverCommandV1,
+	command: RuntimeDriverCommand,
 ): command is CodexInterruptionCommand {
 	return command.kind === "stop" || command.kind === "generation-cancel";
 }
 
 function isCodexOperationKind(
 	value: unknown,
-): value is RuntimeDriverCommandV1["kind"] {
+): value is RuntimeDriverCommand["kind"] {
 	return (
 		value === "submit-turn" ||
 		value === "supplement" ||
@@ -191,8 +214,9 @@ function isCodexOperationKind(
 
 function operationMatchesCommand(
 	operation: CodexOperation,
-	command: RuntimeDriverCommandV1,
+	command: RuntimeDriverCommand,
 ) {
+	if (operation.schemaVersion !== command.schemaVersion) return false;
 	if (!isCodexInterruptionCommand(command)) {
 		return (
 			operation.executionId === undefined && operation.turnId === undefined
@@ -456,13 +480,15 @@ function isCodexOperation(
 	if (
 		!isPlainRecord(value) ||
 		!hasOnlyKeys(value, [
+			"schemaVersion",
 			"state",
 			"nativeSessionRef",
 			"executionId",
 			"turnId",
 			"record",
 		]) ||
-		!nonEmptyString(value.nativeSessionRef)
+		!nonEmptyString(value.nativeSessionRef) ||
+		(value.schemaVersion !== 1 && value.schemaVersion !== 2)
 	) {
 		return false;
 	}
@@ -493,6 +519,7 @@ function isCodexOperation(
 	) {
 		return false;
 	}
+	if (value.schemaVersion === 2 && kind !== "submit-turn") return false;
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
 	if (isInterruption) {
 		if (!nonEmptyString(value.executionId) || !nonEmptyString(value.turnId)) {
@@ -507,9 +534,14 @@ function isCodexOperation(
 		return value.record === undefined;
 	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
-	const record = RuntimeDriverOperationRecordV1Schema.safeParse(value.record);
+	const record = (
+		value.schemaVersion === 2
+			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			: RuntimeDriverOperationRecordV1Schema
+	).safeParse(value.record);
 	if (
 		!record.success ||
+		record.data.schemaVersion !== value.schemaVersion ||
 		record.data.kind !== kind ||
 		record.data.nativeSessionRef !== value.nativeSessionRef ||
 		record.data.agentId !== session.agentId ||
@@ -668,6 +700,19 @@ function stateInvalid(): never {
 	);
 }
 
+function driverRecord(
+	command: RuntimeDriverCommand,
+	value: unknown,
+): RuntimeDriverOperationRecord {
+	const parsed = (
+		command.schemaVersion === 2
+			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			: RuntimeDriverOperationRecordV1Schema
+	).safeParse(value);
+	if (!parsed.success) stateInvalid();
+	return parsed.data;
+}
+
 function statusForTurn(
 	value: unknown,
 ): Extract<RuntimeStatusV1, "running" | "completed" | "failed" | "cancelled"> {
@@ -702,6 +747,26 @@ function assertContainedConfiguration(
 	for (const key of isolatedConfigurationKeys) {
 		if (!isEmptyRecord(value.config[key])) configurationInvalid();
 	}
+}
+
+function configuredModelOptions(options: CodexRuntimeDriverOptions) {
+	const configured = new Map<string, CodexRuntimeModelOption>();
+	for (const option of options.modelOptions ?? []) {
+		if (
+			!nonEmptyString(option.modelOptionId) ||
+			!codexModelPattern.test(option.model) ||
+			option.reasoningLevels.length === 0 ||
+			option.reasoningLevels.some(
+				(level) => !codexReasoningPattern.test(level),
+			) ||
+			new Set(option.reasoningLevels).size !== option.reasoningLevels.length ||
+			configured.has(option.modelOptionId)
+		) {
+			configurationInvalid();
+		}
+		configured.set(option.modelOptionId, option);
+	}
+	return configured;
 }
 
 function turnStartedNotification(frame: CodexAppServerFrame) {
@@ -911,12 +976,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
 	private readonly inFlightOperations = new Map<
 		string,
-		Promise<RuntimeDriverOperationRecordV1>
+		Promise<RuntimeDriverOperationRecord>
 	>();
 
 	protected constructor(
 		private readonly file: DurableJsonFile<CodexDriverState>,
 		bridge: CodexAppServerTransport,
+		private readonly modelOptions: ReadonlyMap<string, CodexRuntimeModelOption>,
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
 	}
@@ -934,6 +1000,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		const modelOptions = configuredModelOptions(options);
 		const file = await CodexRuntimeDriver.openState(options.path);
 		let bridge: CodexAppServerTransport;
 		try {
@@ -945,7 +1012,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} catch {
 			unavailable();
 		}
-		const driver = new CodexRuntimeDriver(file, bridge);
+		const driver = new CodexRuntimeDriver(file, bridge, modelOptions);
 		try {
 			await driver.rpc.request(
 				"initialize",
@@ -977,6 +1044,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				operations: {},
 			});
 			await file.update((state) => {
+				for (const operation of Object.values(state.operations)) {
+					if (
+						isPlainRecord(operation) &&
+						operation.schemaVersion === undefined
+					) {
+						operation.schemaVersion = 1;
+					}
+				}
 				assertDriverState(state);
 			});
 			return file;
@@ -986,7 +1061,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	async execute(command: RuntimeDriverCommandV1) {
+	async execute(command: RuntimeDriverCommand) {
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
@@ -1006,15 +1081,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	private async executeSubmitTurn(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
-	) {
+	private async executeSubmitTurn(command: CodexSubmitTurnCommand) {
 		if (command.input.attachments.length > 0) unavailable();
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		const nativeSelection =
+			command.schemaVersion === 2
+				? this.nativeSelection(command.selection)
+				: undefined;
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) return prepared.operation.record;
+		if (command.schemaVersion === 2 && !nativeSelection) {
+			return this.resolve(command, prepared.operation.nativeSessionRef, {
+				outcome: "rejected",
+				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				message: "Runtime model selection is unsupported",
+				retryable: false,
+			});
+		}
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
@@ -1052,6 +1137,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: session.threadId,
 					clientUserMessageId: command.operationId,
 					input: [{ type: "text", text }],
+					...(nativeSelection ?? {}),
 				},
 				(value) => {
 					const started = isPlainRecord(value) ? value.turn : undefined;
@@ -1078,6 +1164,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await this.markAcceptanceUncertain(command, session.nativeSessionRef);
 			throw error;
 		}
+	}
+
+	private nativeSelection(selection: RuntimeSelectionV1) {
+		const option = this.modelOptions.get(selection.modelOptionId);
+		if (!option?.reasoningLevels.includes(selection.reasoningLevel)) {
+			return undefined;
+		}
+		return { model: option.model, effort: selection.reasoningLevel };
 	}
 
 	private async executeInterruption(command: CodexInterruptionCommand) {
@@ -1120,7 +1214,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async lookupOperation(
-		command: RuntimeDriverCommandV1,
+		command: RuntimeDriverCommand,
 	): Promise<RuntimeDriverLookup> {
 		const operation = ownRecordValue(
 			this.readState().operations,
@@ -1847,13 +1941,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return execution.status;
 	}
 
-	private async prepare(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
-	) {
+	private async prepare(command: CodexSubmitTurnCommand) {
 		return this.update((state) => {
 			const key = operationKey(command);
 			const existing = ownRecordValue(state.operations, key);
-			if (existing) return { operation: existing, created: false };
+			if (existing) {
+				if (!operationMatchesCommand(existing, command)) stateInvalid();
+				return { operation: existing, created: false };
+			}
 			const matchingSessions = command.nativeSessionRef
 				? []
 				: Object.entries(state.sessions).filter(
@@ -1896,6 +1991,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				};
 			}
 			const operation: CodexOperation = {
+				schemaVersion: command.schemaVersion,
 				state: "prepared",
 				nativeSessionRef,
 			};
@@ -1925,6 +2021,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const execution = ownRecordValue(session.executions, command.executionId);
 			if (!execution || execution.turnId !== command.turnId) unavailable();
 			const operation: CodexOperation = {
+				schemaVersion: 1,
 				state: "prepared",
 				nativeSessionRef: command.nativeSessionRef,
 				executionId: command.executionId,
@@ -1936,7 +2033,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async markAcceptanceUncertain(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
 	) {
 		const key = operationKey(command);
@@ -1958,7 +2055,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async discardPreparedResume(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
 	) {
 		const key = operationKey(command);
@@ -2051,13 +2148,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async resolve(
-		command: Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
-		result: RuntimeDriverOperationRecordV1["result"],
+		result: RuntimeDriverOperationRecord["result"],
 		nativeTurnId?: string,
 	) {
-		let record: RuntimeDriverOperationRecordV1 = {
-			schemaVersion: 1,
+		let record = driverRecord(command, {
+			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,
 			conversationId: command.conversationId,
 			sessionGeneration: command.sessionGeneration,
@@ -2065,7 +2162,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operationId: command.operationId,
 			nativeSessionRef,
 			result,
-		};
+		});
 		await this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
 			const session = ownRecordValue(state.sessions, nativeSessionRef);
@@ -2169,9 +2266,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private unknown(command: RuntimeDriverCommandV1, nativeSessionRef: string) {
-		return {
-			schemaVersion: 1 as const,
+	private unknown(command: RuntimeDriverCommand, nativeSessionRef: string) {
+		return driverRecord(command, {
+			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,
 			conversationId: command.conversationId,
 			sessionGeneration: command.sessionGeneration,
@@ -2183,6 +2280,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN" as const,
 				message: "Runtime command acceptance could not be confirmed" as const,
 			},
-		};
+		});
 	}
 }

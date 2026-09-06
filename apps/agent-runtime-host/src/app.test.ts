@@ -138,6 +138,51 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost HTTP/SSE adapter", () => {
+	it("adds a selection-required V2 Turn route without removing V1", async () => {
+		const { app } = await setup();
+		const legacy = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(submitBody()),
+		});
+		expect(legacy.status).toBe(200);
+		const { app: v2App } = await setup();
+
+		const missingSelection = await v2App.request("/internal/runtime/v2/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({ ...submitBody(), schemaVersion: 2 }),
+		});
+		expect(missingSelection.status).toBe(400);
+
+		const body = submitBody();
+		const v2Binding = {
+			...body,
+			executionId: "execution-http-v2",
+			turnId: "turn-http-v2",
+		};
+		const selected = await v2App.request("/internal/runtime/v2/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...v2Binding,
+				schemaVersion: 2,
+				requestId: "request-http-v2",
+				grant: executionGrant(v2Binding, ["turn.submit"], "grant-http-v2"),
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			}),
+		});
+		expect(selected.status).toBe(200);
+		expect(await selected.json()).toMatchObject({
+			schemaVersion: 2,
+			result: { outcome: "accepted" },
+		});
+	});
+
 	it("rejects unauthenticated and malformed commands before Runtime side effects", async () => {
 		const { app, driver } = await setup();
 		const unauthorized = await app.request("/internal/runtime/v1/turns", {

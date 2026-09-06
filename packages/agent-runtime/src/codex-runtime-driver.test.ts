@@ -4,9 +4,11 @@ import { join } from "node:path";
 
 import type {
 	RuntimeDriverCommandV1,
+	RuntimeDriverSubmitTurnCommandV2,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
+	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -138,6 +140,21 @@ function submitRequest(): RuntimeSubmitTurnRequestV1 {
 	};
 }
 
+function submitRequestV2(
+	overrides: Partial<RuntimeSubmitTurnRequestV2> = {},
+): RuntimeSubmitTurnRequestV2 {
+	return {
+		...submitRequest(),
+		schemaVersion: 2,
+		selection: {
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+		},
+		...overrides,
+	};
+}
+
 function submitCommand(
 	overrides: Partial<
 		Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>
@@ -153,6 +170,21 @@ function submitCommand(
 		turnId: "turn-codex",
 		sessionGeneration: 1,
 		input: { text: "synthetic-input", attachments: [] },
+		...overrides,
+	};
+}
+
+function submitCommandV2(
+	overrides: Partial<RuntimeDriverSubmitTurnCommandV2> = {},
+): RuntimeDriverSubmitTurnCommandV2 {
+	return {
+		...submitCommand(),
+		schemaVersion: 2,
+		selection: {
+			schemaVersion: 1,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+		},
 		...overrides,
 	};
 }
@@ -233,6 +265,18 @@ function driverOptions(path: string) {
 		path,
 		model: "gpt-5.3-codex",
 		reasoningEffort: "high",
+		modelOptions: [
+			{
+				modelOptionId: "model-option-primary",
+				model: "gpt-5.3-codex",
+				reasoningLevels: ["high"],
+			},
+			{
+				modelOptionId: "model-option-alternate",
+				model: "gpt-5.2-codex",
+				reasoningLevels: ["low"],
+			},
+		],
 	};
 }
 
@@ -699,6 +743,72 @@ describe("Codex Runtime Driver", () => {
 			modelSelection: true,
 			connection: false,
 		});
+	});
+
+	it("maps V2 selection at turn/start while preserving opaque Host output", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const runtimeHost = ingressVerifiedRuntimeHost(
+			await RuntimeHost.open({
+				store: await FileRuntimeStore.open(join(directory, "host.json")),
+				driver,
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			}),
+		);
+		const request = submitRequestV2();
+
+		const response = await runtimeHost.submitTurnV2(request);
+
+		expect(
+			bridge.requests.find(({ method }) => method === "turn/start")?.params,
+		).toEqual({
+			threadId: bridge.nativeThreadId,
+			clientUserMessageId: request.executionId,
+			input: [{ type: "text", text: "synthetic-input" }],
+			model: "gpt-5.3-codex",
+			effort: "high",
+		});
+		expect(response).toMatchObject({
+			schemaVersion: 2,
+			result: { outcome: "accepted" },
+		});
+		expect(JSON.stringify(response)).not.toMatch(
+			/native|provider|credential|protocol/i,
+		);
+	});
+
+	it("rejects an unsupported V2 selection before starting a native Turn", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+
+		const result = await driver.execute(
+			submitCommandV2({
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-unsupported",
+					reasoningLevel: "high",
+				},
+			}),
+		);
+
+		expect(result.result).toEqual({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+			message: "Runtime model selection is unsupported",
+			retryable: false,
+		});
+		expect(bridge.requests.map(({ method }) => method)).toEqual([
+			"initialize",
+			"config/read",
+		]);
+		expect(JSON.stringify(result)).not.toContain("gpt-5.3-codex");
 	});
 
 	it("waits for a durable terminal Turn before confirming generation cancellation", async () => {

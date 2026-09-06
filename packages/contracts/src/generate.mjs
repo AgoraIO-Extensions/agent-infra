@@ -30,16 +30,20 @@ import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
+	RuntimeDriverV2SchemaDefinitions,
 	RuntimeEventV1Schema,
 	RuntimeEventV1SchemaDefinitions,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeHostV1SchemaDefinitions,
+	RuntimeHostV2SchemaDefinitions,
 	RuntimeOperationResponseV1Schema,
+	RuntimeOperationResponseV2Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusResponseV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
+	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "./runtime/index.ts";
 import {
@@ -102,7 +106,15 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/runtime.v1.schema.json",
 	),
+	runtimeJsonSchemaV2: resolve(
+		artifactRoot,
+		"json-schema/runtime.v2.schema.json",
+	),
 	runtimeOpenapi: resolve(artifactRoot, "openapi/runtime-host.v1.openapi.json"),
+	runtimeOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v2.openapi.json",
+	),
 };
 const schemas = {
 	IdempotencyKeyV1: IdempotencyKeyV1Schema,
@@ -242,6 +254,14 @@ function buildArtifacts() {
 		title: "Agent Infra Runtime Contracts V1",
 		definitions: runtimeDefinitions,
 	});
+	const runtimeJsonSchemaV2 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v2.schema.json",
+		title: "Agent Infra Runtime Contracts V2",
+		definitions: {
+			...RuntimeHostV2SchemaDefinitions,
+			...RuntimeDriverV2SchemaDefinitions,
+		},
+	});
 	const runtimeOpenapi = createDocument({
 		openapi: "3.1.0",
 		info: { title: "Agent Infra RuntimeHost Contract", version: "1.0.0" },
@@ -317,6 +337,30 @@ function buildArtifacts() {
 				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
 			},
 			schemas: runtimeOpenApiDefinitions,
+		},
+	});
+	const runtimeOpenapiV2 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "2.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v2/turns": {
+				post: postOperation(
+					"submitRuntimeTurnV2",
+					RuntimeSubmitTurnRequestV2Schema,
+					RuntimeOperationResponseV2Schema,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...RuntimeHostV2SchemaDefinitions,
+			},
 		},
 	});
 	const pilotBrowserOpenapi = createDocument({
@@ -398,7 +442,9 @@ function buildArtifacts() {
 		secretLifecycleJsonSchema,
 		workerResultJsonSchema,
 		runtimeJsonSchema,
+		runtimeJsonSchemaV2,
 		runtimeOpenapi,
+		runtimeOpenapiV2,
 	};
 }
 

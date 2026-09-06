@@ -102,13 +102,17 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime 协议：
 
 - 为 Platform Conversation 创建或恢复原 Runtime Session。
-- 为新消息或重新生成创建 Execution、提交一个 Turn，并接收已接受、繁忙或拒绝结果。
+- 为新消息或重新生成创建 Execution、提交一个带已固化有效模型选择的 Turn，并接收已接受、繁忙或拒绝结果。
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
 - 订阅并归一化文本、状态、工具、文件、完成和错误事件。
 - 探测模型、附件、结果文件、Connection 和补充指令 capability。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
+
+RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，新接受的 Execution 必须使用 V2；V1 退役需要独立的 breaking-change 决策。
+
+固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
 
 `platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；Owner 通过平台配置的相关 env/Secret 遵循工程 Spec 10.6 的通用规则，Adapter 不从 Runtime 的模型选项读取或保存凭证，也不把它们复制到标准模板模型配置。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
@@ -158,7 +162,7 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 
 - `platform-api` 先按服务端命令入口确定不依赖 Conversation 状态的 `commandType`，再在同一 Conversation 数据库锁内优先执行幂等查询；仅未命中时才查询活跃 Execution，完成普通消息/补充指令/重新生成/繁忙分支判定及对应写入，提交事务后才释放锁。stop 命令复用同一把锁。两个并发请求都不能基于“无活跃 Execution”的旧快照各自创建 Execution。
 - 所有会调用 Runtime 的 outbox 使用 Platform DB 中的 durable lease，至少保存 `leaseOwner`、`leaseExpiresAt` 和操作作用域内单调递增的 `deliveryFence`。初始 Turn 使用 `executionId` 作用域的 Execution fence，stop 使用 `stopRequestId` 作用域的独立 fence，每条补充指令使用 `messageId` 作用域的独立 fence。Worker 通过条件更新认领或续租；首次认领和租约到期后的重新认领只提升对应作用域的 fence。stop 认领不得提升 Execution fence；已被 Runtime 接受的 Turn 在停止确认前继续以当前 Execution fence 写入事件和真实终态。只有 Turn lease 接管或本地取消屏障可以提升 Execution fence；租约过期后旧 Worker 的 Runtime 调用、事件和状态写入必须被 Agent Service 与 Platform DB 拒绝，不能仅凭进程内“正在处理”状态判断所有权。
-- RuntimeHost 在调用 Driver 前，必须以 Host Session Ref 和 operation scope 为键，通过 PVC 上 durable store 的原子事务或 compare-and-set，在同一次 durable commit 中比较并提升当前最高 fence、插入或读取请求记录；同一 Session 的 Driver 命令分派通过串行执行器保持提交顺序。只有赢得原子更新且请求记录已持久化的调用才能进入 Driver，低 fence 或并发重复调用必须在任何 Driver 副作用前拒绝或返回已有结果。记录至少包含 Host Session Ref、`agentId`、`conversationId`、`sessionGeneration`、`executionId`、请求作用域的 `deliveryFence`、请求内容摘要，以及由初始 Turn 的 `executionId`、补充指令的 `messageId` 或停止命令的 `stopRequestId` 形成的稳定 `operationId`；浏览器 `Idempotency-Key` 不跨入 Host Contract。同一 `operationId` 和相同内容的重试返回已保存状态或结果，不同内容返回冲突。
+- RuntimeHost 在调用 Driver 前，必须以 Host Session Ref 和 operation scope 为键，通过 PVC 上 durable store 的原子事务或 compare-and-set，在同一次 durable commit 中比较并提升当前最高 fence、插入或读取请求记录；同一 Session 的 Driver 命令分派通过串行执行器保持提交顺序。只有赢得原子更新且请求记录已持久化的调用才能进入 Driver，低 fence 或并发重复调用必须在任何 Driver 副作用前拒绝或返回已有结果。记录至少包含 Host Session Ref、`agentId`、`conversationId`、`sessionGeneration`、`executionId`、请求作用域的 `deliveryFence`、请求内容摘要，以及由初始 Turn 的 `executionId`、补充指令的 `messageId` 或停止命令的 `stopRequestId` 形成的稳定 `operationId`；初始 Turn 的请求摘要还必须包含完整 `RuntimeSelectionV1`。浏览器 `Idempotency-Key` 不跨入 Host Contract。同一 `operationId` 和相同输入及选择的重试返回已保存状态或结果，任一输入或选择字段不同都返回冲突。
 - `durable commit` 必须由底层 store 完成数据和所需元数据的崩溃一致性确认，例如 fsync 或等价机制；内存状态或尚未确认稳定落盘的普通文件写入不满足该语义。请求记录提交后才能调用 Driver。RuntimeHost 只有在原生 Session/Turn 标识、恢复游标和 `accepted` 状态已持久化，或 Driver/Bridge 能按同一 `operationId` 持久查询原接受结果时，才能返回 `accepted`；`busy` 和 `rejected` 也必须持久化并在重试时返回原结果。RuntimeHost 启动时必须扫描非终态或状态不完整的记录，按 `operationId` 查询并收敛；进程在 Driver 调用前后崩溃或响应丢失而无法确认接受状态时保持 `unknown`，不能盲目再次产生 Runtime 副作用。损坏或无法恢复的记录使对应 Session fail closed，不能静默丢弃或创建新 Session。不能提供该恢复能力的 Driver 不通过 M1 Conformance。
 - 新消息和重新生成请求必须携带非空 `Idempotency-Key`，值只允许 `1..128` 个 ASCII 字母、数字、`.`、`_`、`~` 或 `-`，并作为区分大小写的不透明字符串处理。浏览器为一次逻辑提交生成 Key 并在传输重试时复用；Channel 层从可信渠道消息 ID 派生符合该格式的稳定 Key。`platform-api` 在任何写入前拒绝缺失或格式无效的 Key；新消息入口使用 `commandType = message`，重新生成入口使用 `commandType = regenerate`，并以非空字段建立 `(conversationId, actorId, commandType, Idempotency-Key)` 唯一约束。补充指令不是调用方选择的独立命令类型，而是 `message` 请求在锁内根据当前活跃 Execution 得出的处理结果。`actorId` 和 `commandType` 均由服务端生成，不能接受调用方提交或覆盖。
 - 幂等重放必须在查询活跃 Execution 和判定处理分支前，使用上述完整元组查找已保存结果。同一 `actorId` 和 `commandType` 下，同一 Key 和相同请求内容再次提交时，`message` 返回首次提交保存的 Message，以及原初始 Execution 或原补充指令绑定的 Execution；`regenerate` 返回原新建 Execution。重放不能根据已经变化的活跃状态重新判定分支。同一 Key 对应不同内容时返回冲突；不同 `actorId` 或 `commandType` 的 Key 独立生效。
@@ -205,11 +209,11 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 ## 11. 验证
 
-- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、Turn、流式事件与按已确认游标重放、停止、状态和 capability。
+- 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。
-- RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段或日志文本当作授权或恢复依据。
+- RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，缺失或非法模型选择、同一 Execution 选择重放与冲突、相邻 Execution 选择隔离、Driver 不支持的模型或 reasoning，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段、模型 endpoint/credential、原生协议帧或日志文本当作授权或恢复依据。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
 
@@ -220,7 +224,7 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 ### 12.1 Module、Interface 与依赖方向
 
 - `apps/agent-runtime-host` 保持薄入口，只处理进程启动、依赖装配、配置读取和 HTTP/SSE 协议接入；Runtime 生命周期、Session mapping、Driver 选择、事件归一化、fence、恢复和错误语义属于 `packages/agent-runtime`。
-- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、fence、capability、状态和规范化事件。Host 不通过引用回读 Platform DB 或 Connection DB；Grant 的权威结构和校验规则见工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，Host 必须在读取附件或产生 Runtime 副作用前验证其签名、签发方、audience、有效期，以及 Agent、Conversation、Execution、附件引用和操作绑定，不能信任单独提交的身份或对象 ID。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
+- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、Execution 已固化的版本化有效模型选择、fence、capability、状态和规范化事件。模型选择与用户消息输入分离，且不包含 endpoint、credential 或默认解析信息。Host 不通过引用回读 Platform DB 或 Connection DB；Grant 的权威结构和校验规则见工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，Host 必须在读取附件或产生 Runtime 副作用前验证其签名、签发方、audience、有效期，以及 Agent、Conversation、Execution、附件引用和操作绑定，不能信任单独提交的身份或对象 ID。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
 - Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；Driver 只能由已部署且校验通过的标准模板 Registry 或自定义 Agent Manifest 固定绑定，不能由请求方选择或覆盖。上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
 - `packages/agent-runtime` 只能依赖 Node.js/TypeScript 标准能力、经过批准且版本固定的 runtime/protocol library，以及 `packages/contracts` 中的 Host/Driver 契约。它不能依赖 `platform-core`、`platform-store`、`identity`、Connection Module、`kubernetes-runtime`、Web/Channel 或应用入口。
 - 平台身份和 Connection 授权在 RuntimeHost 外解析；Host 只消费当前调用附带的版本化短期 Grant 和已裁剪 capability，不能读取 IdentityAdapter、Platform DB、Connection DB、部署解密 keyring 或 Kubernetes API。

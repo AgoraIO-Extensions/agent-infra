@@ -3,8 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import {
 	type RuntimeDriverCommandV1,
 	RuntimeDriverCommandV1Schema,
+	type RuntimeDriverSubmitTurnCommandV2,
+	RuntimeDriverSubmitTurnCommandV2Schema,
 	type RuntimeOperationResultV1,
 	RuntimeOperationResultV1Schema,
+	type RuntimeOperationResultV2,
+	RuntimeOperationResultV2Schema,
 } from "@agent-infra/contracts/runtime";
 
 import { DurableJsonFile } from "./durable-json.js";
@@ -24,9 +28,9 @@ export interface StoredOperation {
 	scope: string;
 	deliveryFence: number;
 	requestDigest: string;
-	command: RuntimeDriverCommandV1;
+	command: RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
 	state: "prepared" | "resolved";
-	result?: RuntimeOperationResultV1;
+	result?: RuntimeOperationResultV1 | RuntimeOperationResultV2;
 }
 
 export interface StoredSession extends SessionBinding {
@@ -62,7 +66,9 @@ interface PrepareOperation {
 	deliveryFence: number;
 	requestDigest: string;
 	executionDeliveryFence?: number;
-	command: (nativeSessionRef?: string) => RuntimeDriverCommandV1;
+	command: (
+		nativeSessionRef?: string,
+	) => RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
 }
 
 function storeCorrupted(): never {
@@ -227,7 +233,11 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			!operation.turnId ||
 			!operation.scope ||
 			!operation.requestDigest ||
-			!RuntimeDriverCommandV1Schema.safeParse(operation.command).success ||
+			!(
+				operation.command.schemaVersion === 2
+					? RuntimeDriverSubmitTurnCommandV2Schema
+					: RuntimeDriverCommandV1Schema
+			).safeParse(operation.command).success ||
 			operation.command.operationId !== operation.operationId ||
 			operation.command.kind !== operation.kind ||
 			operation.command.agentId !== session.agentId ||
@@ -244,7 +254,11 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			operation.deliveryFence < 1 ||
 			(session.highestFences[operation.scope] ?? 0) < operation.deliveryFence ||
 			(operation.state === "resolved"
-				? !RuntimeOperationResultV1Schema.safeParse(operation.result).success
+				? !(
+						operation.command.schemaVersion === 2
+							? RuntimeOperationResultV2Schema
+							: RuntimeOperationResultV1Schema
+					).safeParse(operation.result).success
 				: operation.state !== "prepared" || operation.result !== undefined)
 		) {
 			storeCorrupted();
@@ -613,7 +627,7 @@ export class FileRuntimeStore {
 	resolveOperation(
 		hostSessionRef: string,
 		operationId: string,
-		result: RuntimeOperationResultV1,
+		result: RuntimeOperationResultV1 | RuntimeOperationResultV2,
 		nativeSessionRef?: string,
 	) {
 		return this.file.update((state) => {

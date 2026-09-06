@@ -27,6 +27,7 @@ type ConformanceTurnStatus =
 
 interface CodexRuntimeDriverConformanceState {
 	turnStarts: number;
+	turnSelections: { model: string; effort: string }[];
 }
 
 interface CodexRuntimeDriverConformanceFixture {
@@ -36,6 +37,7 @@ interface CodexRuntimeDriverConformanceFixture {
 	completeStopAsCancelled(): void;
 	completeStopAsCompleted(): Promise<void>;
 	turnStartCount(): number;
+	turnSelections(): readonly { model: string; effort: string }[];
 	delegatedToolWasDeniedAndRedacted(
 		response?: "driver" | "unexpected-success",
 	): Promise<boolean>;
@@ -109,8 +111,20 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 			case "thread/resume":
 				this.respond(frame.id, { thread: { id: "thread-opaque" } });
 				return;
-			case "turn/start":
+			case "turn/start": {
 				this.state.turnStarts += 1;
+				const params = frame.params as
+					| { model?: unknown; effort?: unknown }
+					| undefined;
+				if (
+					typeof params?.model === "string" &&
+					typeof params.effort === "string"
+				) {
+					this.state.turnSelections.push({
+						model: params.model,
+						effort: params.effort,
+					});
+				}
 				if (this.loseTurnStartResponse) {
 					await this.close();
 					return;
@@ -125,9 +139,13 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 					return;
 				}
 				this.respond(frame.id, {
-					turn: { id: "turn-opaque", status: "inProgress" },
+					turn: {
+						id: this.currentTurnId(),
+						status: "inProgress",
+					},
 				});
 				return;
+			}
 			case "turn/interrupt":
 				if (this.terminalOnInterrupt) {
 					this.turnStatus = this.terminalOnInterrupt;
@@ -136,7 +154,9 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 				return;
 			case "thread/turns/list":
 				this.respond(frame.id, {
-					data: [{ id: "turn-opaque", status: this.turnStatus, items: [] }],
+					data: [
+						{ id: this.currentTurnId(), status: this.turnStatus, items: [] },
+					],
 				});
 				return;
 			case "thread/items/list":
@@ -182,6 +202,12 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	completeStopAsCompleted() {
 		this.turnStatus = "completed";
 		this.terminalOnInterrupt = undefined;
+	}
+
+	private currentTurnId() {
+		return this.state.turnStarts <= 1
+			? "turn-opaque"
+			: `turn-opaque-${this.state.turnStarts}`;
 	}
 
 	async submitWithPreStartEvent<T>(submit: () => Promise<T>) {
@@ -298,6 +324,18 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 			path,
 			model: "gpt-5.3-codex",
 			reasoningEffort: "high",
+			modelOptions: [
+				{
+					modelOptionId: "model-option-primary",
+					model: "gpt-5.3-codex",
+					reasoningLevels: ["high"],
+				},
+				{
+					modelOptionId: "model-option-alternate",
+					model: "gpt-5.2-codex",
+					reasoningLevels: ["low"],
+				},
+			],
 		},
 		async () => transport,
 	);
@@ -309,6 +347,7 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 		completeStopAsCancelled: () => transport.completeStopAsCancelled(),
 		completeStopAsCompleted: async () => transport.completeStopAsCompleted(),
 		turnStartCount: () => state.turnStarts,
+		turnSelections: () => structuredClone(state.turnSelections),
 		delegatedToolWasDeniedAndRedacted: (response) =>
 			transport.delegatedToolWasDeniedAndRedacted(response),
 		close: async () => {
@@ -327,6 +366,6 @@ export function openCodexRuntimeDriverConformanceFixture(
 	return openCodexRuntimeDriverConformanceFixtureWithState(
 		path,
 		loseTurnStartResponse,
-		{ turnStarts: 0 },
+		{ turnStarts: 0, turnSelections: [] },
 	);
 }

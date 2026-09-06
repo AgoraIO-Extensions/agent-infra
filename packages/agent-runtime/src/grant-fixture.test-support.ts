@@ -8,6 +8,7 @@ import type {
 	RuntimeStatusRequestV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
+	RuntimeSubmitTurnRequestV2,
 	RuntimeSupplementRequestV1,
 	VerifiedExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
@@ -88,6 +89,12 @@ export function ingressVerifiedRuntimeHost(host: RuntimeHost) {
 	return {
 		submitTurn(request: RuntimeSubmitTurnRequestV1) {
 			return host.submitTurn(
+				request,
+				verificationForRuntimeGrant(request.grant),
+			);
+		},
+		submitTurnV2(request: RuntimeSubmitTurnRequestV2) {
+			return host.submitTurnV2(
 				request,
 				verificationForRuntimeGrant(request.grant),
 			);

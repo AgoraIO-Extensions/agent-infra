@@ -146,6 +146,17 @@ describe("standard contract artifacts", () => {
 			"/internal/runtime/v1/stops",
 			"/internal/runtime/v1/turns",
 		]);
+		expect(Object.keys(artifacts.runtimeOpenapiV2.paths)).toEqual([
+			"/internal/runtime/v2/turns",
+		]);
+		expect(
+			artifacts.runtimeOpenapiV2.components.schemas.RuntimeSubmitTurnRequestV2
+				.properties.selection,
+		).toBeDefined();
+		expect(
+			artifacts.runtimeOpenapiV2.components.schemas.RuntimeSubmitTurnRequestV2
+				.required,
+		).toContain("selection");
 		expect(JSON.stringify(artifacts.runtimeOpenapi)).not.toMatch(
 			/nativeSessionRef|RuntimeDriver/,
 		);
@@ -168,6 +179,13 @@ describe("standard contract artifacts", () => {
 				"RuntimeDriverCommandV1",
 				"RuntimeEventV1",
 				"RuntimeSubmitTurnRequestV1",
+			]),
+		);
+		expect(Object.keys(artifacts.runtimeJsonSchemaV2.$defs)).toEqual(
+			expect.arrayContaining([
+				"RuntimeDriverSubmitTurnCommandV2",
+				"RuntimeSelectionV1",
+				"RuntimeSubmitTurnRequestV2",
 			]),
 		);
 
@@ -279,6 +297,14 @@ describe("standard contract artifacts", () => {
 				payload: { status: "running" },
 			}),
 		).toBe(true);
+		ajv.addSchema(artifacts.runtimeJsonSchemaV2);
+		for (const name of Object.keys(artifacts.runtimeJsonSchemaV2.$defs)) {
+			expect(() =>
+				ajv.compile({
+					$ref: `${artifacts.runtimeJsonSchemaV2.$id}#/$defs/${name}`,
+				}),
+			).not.toThrow();
+		}
 	}, 15_000);
 
 	it("rejects deliberately stale committed artifacts", async () => {
@@ -305,6 +331,8 @@ describe("standard contract artifacts", () => {
 			expect(result.stderr).toContain("pilot-delegated.v1.openapi.json");
 			expect(result.stderr).toContain("pilot-browser.v2.openapi.json");
 			expect(result.stderr).toContain("registry-manifest.v1.schema.json");
+			expect(result.stderr).toContain("runtime.v2.schema.json");
+			expect(result.stderr).toContain("runtime-host.v2.openapi.json");
 		} finally {
 			await rm(root, { recursive: true });
 		}
