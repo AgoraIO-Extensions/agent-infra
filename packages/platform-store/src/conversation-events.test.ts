@@ -1,10 +1,12 @@
 import {
+	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { conversationEventConformanceV1 } from "../../platform-core/src/conversation.conformance.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -19,6 +21,11 @@ let databaseUrl = "";
 let testDatabase: PostgresTestDatabase | undefined;
 let nextFixture = 1;
 
+const conformanceConversationId = "conversation_event_fixture";
+const conformanceExecutionId = "execution_event_fixture";
+const eventFailureFunction = "platform.conversation_event_conformance_failure";
+const eventFailureTrigger = "conversation_event_conformance_failure";
+
 beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("conversation-events");
 	databaseUrl = testDatabase.databaseUrl;
@@ -29,6 +36,134 @@ beforeAll(async () => {
 afterAll(async () => {
 	await client?.end();
 	await testDatabase?.stop();
+});
+
+async function seedConformanceConversation(): Promise<void> {
+	await client`
+		delete from platform.conversation_events
+		where conversation_id = ${conformanceConversationId}
+	`;
+	await client`
+		delete from platform.conversation_executions
+		where conversation_id = ${conformanceConversationId}
+	`;
+	await client`
+		delete from platform.conversations where id = ${conformanceConversationId}
+	`;
+	await client`
+		insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation,
+			 host_session_ref, authorization_revision, last_conversation_cursor,
+			 created_at, updated_at)
+		values
+			(${conformanceConversationId}, 'agent_event_fixture',
+			 'actor_event_fixture', 'channel_event_fixture', 'active', 3,
+			 null, 'authorization_event_fixture', 0, now(), now())
+	`;
+	await client`
+		insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+			 status, session_generation, delivery_fence, authorization_revision,
+			 created_at, updated_at)
+		values
+			(${conformanceExecutionId}, ${conformanceConversationId},
+			 'agent_event_fixture', 'actor_event_fixture', 'channel_event_fixture',
+			 'turn_event_fixture', 'submitted', 3, 5,
+			 'authorization_event_fixture', now(), now())
+	`;
+}
+
+async function armEventCommitFailure(): Promise<void> {
+	await client.unsafe(`
+		create function ${eventFailureFunction}() returns trigger language plpgsql as $$
+		begin
+			raise exception 'injected conversation event conformance failure';
+		end
+		$$
+	`);
+	await client.unsafe(
+		`create trigger ${eventFailureTrigger}
+			before update on platform.conversation_executions
+			for each row execute function ${eventFailureFunction}()`,
+	);
+}
+
+async function disarmEventCommitFailure(): Promise<void> {
+	await client.unsafe(
+		`drop trigger if exists ${eventFailureTrigger}
+			on platform.conversation_executions`,
+	);
+	await client.unsafe(`drop function if exists ${eventFailureFunction}()`);
+}
+
+conversationEventConformanceV1("PostgreSQL", async () => {
+	await seedConformanceConversation();
+	let nextEventId = 1;
+	let failureArmed = false;
+	let loseNextResponse = false;
+	const adapter = new PostgresConversationEventTransactionV1({ databaseUrl });
+	const transaction: ConversationEventTransactionPortV1 = {
+		async persistEvent(request, decide) {
+			try {
+				return await adapter.persistEvent(request, decide);
+			} finally {
+				if (failureArmed) {
+					await disarmEventCommitFailure();
+					failureArmed = false;
+				}
+			}
+		},
+	};
+	const inner = createConversationEventUseCaseV1(
+		{ transaction },
+		{ newId: () => `event_fixture_${nextEventId++}` },
+	);
+	const events: ConversationEventUseCaseV1 = {
+		async persist(command) {
+			const decision = await inner.persist(command);
+			if (loseNextResponse) {
+				loseNextResponse = false;
+				throw new Error("Injected response loss");
+			}
+			return decision;
+		},
+	};
+	return {
+		events,
+		async failNextCommit() {
+			await armEventCommitFailure();
+			failureArmed = true;
+		},
+		loseNextResponseAfterCommit() {
+			loseNextResponse = true;
+		},
+		async snapshot() {
+			const [state] = await client`
+				select
+					(select count(*)::int from platform.conversation_events
+						where conversation_id = ${conformanceConversationId}) as events,
+					c.last_conversation_cursor::int as conversation_cursor,
+					e.last_event_sequence::int as execution_sequence,
+					e.last_runtime_cursor as runtime_cursor
+				from platform.conversations c
+				join platform.conversation_executions e
+					on e.conversation_id = c.id
+				where c.id = ${conformanceConversationId}
+					and e.execution_id = ${conformanceExecutionId}
+			`;
+			if (!state) throw new Error("Expected Conversation event fixture state");
+			return {
+				events: state.events as number,
+				conversationCursor: state.conversation_cursor as number,
+				executionSequence: state.execution_sequence as number,
+				runtimeCursor: state.runtime_cursor as string | null,
+			};
+		},
+		async close() {
+			if (failureArmed) await disarmEventCommitFailure();
+			await adapter.close();
+		},
+	};
 });
 
 async function seedConversation(): Promise<{

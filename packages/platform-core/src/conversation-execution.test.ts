@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-
 import {
+	conversationCommandConformanceV1,
+	conversationConformanceAuthorityV1,
+} from "./conversation.conformance.ts";
+import {
+	type ConversationExecutionAuthorityV1,
 	ConversationExecutionError,
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
+	type ConversationExecutionUseCaseV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.ts";
 import { FakeConversationExecutionV1 } from "./fake-conversation-execution.ts";
@@ -16,6 +21,65 @@ const authority = {
 	authorizationRevision: "authorization_01",
 	supportsSupplementaryInstruction: true,
 };
+
+conversationCommandConformanceV1("Fake", async () => {
+	let nextId = 1;
+	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
+		conversationConformanceAuthorityV1;
+	const fake = new FakeConversationExecutionV1({
+		authorization: {
+			async authorize() {
+				return effectiveAuthority
+					? { outcome: "allowed", authority: effectiveAuthority }
+					: { outcome: "denied" };
+			},
+		},
+		now: () => new Date("2026-09-04T00:00:00.000Z"),
+		newId: () => `conversation_fixture_${nextId++}`,
+	});
+	let loseNextResponse = false;
+	const useCase: ConversationExecutionUseCaseV1 = {
+		createConversation: (command) => fake.createConversation(command),
+		async accept(command) {
+			const decision = await fake.accept(command);
+			if (loseNextResponse) {
+				loseNextResponse = false;
+				throw new Error("Injected response loss");
+			}
+			return decision;
+		},
+		regenerate: (command) => fake.regenerate(command),
+		stop: (command) => fake.stop(command),
+	};
+	return {
+		useCase,
+		setAuthority(authority) {
+			effectiveAuthority = authority;
+		},
+		failNextCommit() {
+			fake.failNextCommit();
+		},
+		loseNextResponseAfterCommit() {
+			loseNextResponse = true;
+		},
+		completeExecution(executionId) {
+			fake.completeExecution(executionId);
+		},
+		async snapshot() {
+			const snapshot = fake.snapshot();
+			return {
+				conversations: snapshot.conversations.length,
+				messages: snapshot.messages.length,
+				executions: snapshot.executions.length,
+				stops: snapshot.stops.length,
+				outbox: snapshot.outbox.length,
+				audit: snapshot.audit.length,
+				idempotency: fake.idempotencyCount(),
+			};
+		},
+		async close() {},
+	};
+});
 
 describe("Conversation execution use case", () => {
 	it("uses deterministic Fake defaults when controls are omitted", async () => {
