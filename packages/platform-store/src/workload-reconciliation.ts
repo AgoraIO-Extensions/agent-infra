@@ -17,6 +17,8 @@ import {
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 
+const workloadLeaseMs = 300_000;
+
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
 	readonly retryDelayMs?: number;
@@ -56,7 +58,8 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 							or w.next_attempt_at <= clock_timestamp()
 							or exists (select 1 from platform.outbox_items o where o.scope_id = a.id
 								and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
-								and o.status in ('pending', 'retry_scheduled'))
+								and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
+									or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
 						) order by w.next_attempt_at nulls first, a.id
 						limit 1 for update of a skip locked
 					`;
@@ -92,13 +95,49 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 							!Number.isSafeInteger(state.revision))
 					)
 						throw new Error();
-					const [task] = await sql<
-						{ id: string; trace_id: string; request_id: string | null }[]
+					const [candidate] = await sql<
+						{ id: string; delivery_fence: string }[]
 					>`
-						select id, trace_id, request_id from platform.outbox_items where scope_id = ${agent.id}
-						and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
-						and status in ('pending', 'retry_scheduled', 'processing') order by created_at, id limit 1 for update
-					`;
+							select id, delivery_fence::text from platform.outbox_items where scope_id = ${agent.id}
+							and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+							and ((status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
+								or (status = 'processing' and lease_expires_at <= clock_timestamp()))
+							order by created_at, id limit 1 for update
+						`;
+					let task:
+						| {
+								id: string;
+								trace_id: string;
+								request_id: string | null;
+								delivery_fence: string;
+						  }
+						| undefined;
+					if (candidate) {
+						const [claimed] = await sql<
+							{
+								id: string;
+								trace_id: string;
+								request_id: string | null;
+								delivery_fence: string;
+							}[]
+						>`
+								with decision_time as materialized (
+									select clock_timestamp() as decision_at
+								)
+								update platform.outbox_items
+								set status = 'processing', attempt_count = attempt_count + 1,
+									lease_owner = ${workerId}, lease_expires_at = decision_time.decision_at +
+										${workloadLeaseMs} * interval '1 millisecond',
+									delivery_fence = delivery_fence + 1, updated_at = decision_time.decision_at
+								from decision_time
+								where id = ${candidate.id} and delivery_fence = ${candidate.delivery_fence}
+									and ((status in ('pending', 'retry_scheduled') and available_at <= decision_time.decision_at)
+										or (status = 'processing' and lease_expires_at <= decision_time.decision_at))
+								returning id, trace_id, request_id, delivery_fence::text
+							`;
+						if (!claimed) throw new Error();
+						task = claimed;
+					}
 					const requestId = task?.request_id ?? `workload-${agent.id}`;
 					const traceId = task?.trace_id ?? requestId;
 					const rows = await sql<
@@ -160,8 +199,24 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					// Outbox deliveries only wake reconciliation. The durable Workload
 					// row owns subsequent recovery steps and periodic observations.
 					if (task) {
-						await sql`update platform.outbox_items set status = 'succeeded', attempt_count = attempt_count + 1, delivery_fence = delivery_fence + 1, lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp() where id = ${task.id}`;
-						await sql`insert into platform.persisted_events (event_id, stream_id, sequence, stream_cursor, event_type, payload, trace_id) select concat('outbox:', id, ':', delivery_fence), concat('outbox:', id), delivery_fence, delivery_fence, 'outbox.succeeded', jsonb_build_object('attemptCount', attempt_count, 'deliveryFence', delivery_fence::text), trace_id from platform.outbox_items where id = ${task.id}`;
+						const [completed] = await sql<
+							{
+								id: string;
+								trace_id: string;
+								attempt_count: number;
+								delivery_fence: string;
+							}[]
+						>`
+								update platform.outbox_items
+								set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+									updated_at = clock_timestamp()
+								where id = ${task.id} and status = 'processing'
+									and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
+									and lease_expires_at > clock_timestamp()
+								returning id, trace_id, attempt_count, delivery_fence::text
+							`;
+						if (!completed) throw new Error();
+						await sql`insert into platform.persisted_events (event_id, stream_id, sequence, stream_cursor, event_type, payload, trace_id) values (${`outbox:${completed.id}:${completed.delivery_fence}`}, ${`outbox:${completed.id}`}, ${completed.delivery_fence}, ${completed.delivery_fence}, 'outbox.succeeded', ${sql.json({ attemptCount: completed.attempt_count, deliveryFence: completed.delivery_fence })}, ${completed.trace_id})`;
 					}
 					return "advanced" as const;
 				});

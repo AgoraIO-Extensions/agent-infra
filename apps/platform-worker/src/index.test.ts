@@ -57,6 +57,7 @@ import {
 	createPlatformSecretActivationWorkerV1,
 	createPlatformSecretRotationWorkerV1,
 	startPlatformWorker,
+	startPlatformWorkerFromDeploymentV1,
 } from "./index";
 
 const sourceKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -268,5 +269,37 @@ describe("platform worker lifecycle", () => {
 			{ service: "platform-worker", status: "ready" },
 			{ service: "platform-worker", status: "stopped" },
 		]);
+	});
+
+	it("starts and stops the existing and workload loops together", async () => {
+		const primary = { stop: vi.fn() };
+		const workload = { stop: vi.fn(async () => undefined) };
+		const startPrimary = vi.fn(() => primary);
+		const startWorkload = vi.fn(async () => workload);
+
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary,
+			startWorkload,
+		});
+		expect(startPrimary).toHaveBeenCalledOnce();
+		expect(startWorkload).toHaveBeenCalledOnce();
+		const stopping = worker.stop();
+		expect(worker.stop()).toBe(stopping);
+		await stopping;
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+	});
+
+	it("stops the existing loop when workload assembly fails", async () => {
+		const primary = { stop: vi.fn() };
+		await expect(
+			startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw new Error("deployment unavailable");
+				},
+			}),
+		).rejects.toThrow("deployment unavailable");
+		expect(primary.stop).toHaveBeenCalledOnce();
 	});
 });

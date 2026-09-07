@@ -170,9 +170,36 @@ export function startPlatformWorker(options: StartOptions = {}) {
 	};
 }
 
+export async function startPlatformWorkerFromDeploymentV1(
+	options: {
+		readonly startPrimary?: () => { stop(): void };
+		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
+	} = {},
+) {
+	const primary = (options.startPrimary ?? startPlatformWorker)();
+	try {
+		const workload = await (
+			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
+		)();
+		let stopping: Promise<void> | undefined;
+		return {
+			stop() {
+				stopping ??= Promise.all([
+					Promise.resolve(primary.stop()),
+					workload.stop(),
+				]).then(() => undefined);
+				return stopping;
+			},
+		};
+	} catch (error) {
+		primary.stop();
+		throw error;
+	}
+}
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	const worker = await startPlatformWorkloadWorkerFromDeploymentV1();
+	const worker = await startPlatformWorkerFromDeploymentV1();
 	process.once("SIGINT", () => {
 		void worker.stop();
 	});
