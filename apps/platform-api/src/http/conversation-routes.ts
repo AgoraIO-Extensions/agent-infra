@@ -234,8 +234,7 @@ function conversationProjection(
 ): ConversationProjection {
 	if (
 		effective.conversation.conversationId !== input.conversationId ||
-		effective.conversation.agentId !== input.agentId ||
-		effective.conversation.status !== input.status
+		effective.conversation.agentId !== input.agentId
 	) {
 		throw new Error("Conversation projection is inconsistent");
 	}
@@ -244,7 +243,7 @@ function conversationProjection(
 		conversationId: input.conversationId,
 		agentId: input.agentId,
 		title: null,
-		status: input.status,
+		status: effective.conversation.status,
 		selectedModelOptionId: effective.conversation.selectedModelOptionId,
 		selectedReasoningLevel: effective.conversation.selectedReasoningLevel,
 		lastConversationCursor: input.lastConversationCursor,
@@ -483,6 +482,12 @@ async function deniedCommand(
 	conversationId: string,
 	traceId: string,
 ): Promise<never> {
+	await authorize(
+		dependencies,
+		identity,
+		{ schemaVersion: 1, operation: "conversation.read", conversationId },
+		traceId,
+	);
 	const detail = await query(
 		() => dependencies.query.get(scope(identity), conversationId),
 		traceId,

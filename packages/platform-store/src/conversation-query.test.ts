@@ -227,7 +227,7 @@ describe("PostgreSQL Conversation query", () => {
 			}),
 		).resolves.toMatchObject({
 			outcome: "reload",
-			reason: "cross_conversation_event_id",
+			reason: "unknown_event_id",
 		});
 	});
 

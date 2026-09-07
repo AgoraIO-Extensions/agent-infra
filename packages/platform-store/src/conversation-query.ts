@@ -128,8 +128,13 @@ interface EventRow {
 }
 
 interface EventIdentityRow {
-	readonly conversation_id: string;
 	readonly conversation_cursor: string | number;
+}
+
+interface EventReadOptions {
+	readonly afterCursor?: number;
+	readonly executionId?: string;
+	readonly limit?: number;
 }
 
 export class ConversationQueryError extends Error {
@@ -442,8 +447,7 @@ async function readExecutions(
 async function readEvents(
 	database: Database,
 	conversationId: string,
-	afterCursor = 0,
-	limit?: number,
+	options: EventReadOptions = {},
 ): Promise<ConversationQueryEventV1[]> {
 	const rows = await database<EventRow[]>`
 		select e.event_id, e.conversation_id, e.execution_id, e.sequence,
@@ -457,9 +461,10 @@ async function readEvents(
 			) as trace_id
 		from platform.conversation_events e
 		where e.conversation_id = ${conversationId}
-			and e.conversation_cursor > ${afterCursor}
+			and e.conversation_cursor > ${options.afterCursor ?? 0}
+			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
 		order by e.conversation_cursor
-		${limit === undefined ? database`` : database`limit ${limit}`}
+		${options.limit === undefined ? database`` : database`limit ${options.limit}`}
 	`;
 	return rows.map(event);
 }
@@ -623,16 +628,9 @@ export class PostgresConversationQueryV1 {
 					readExecutions(transaction, conversationId, executionId).then(
 						(items) => items[0],
 					),
-					readEvents(transaction, conversationId),
+					readEvents(transaction, conversationId, { executionId }),
 				]);
-				return executionItem
-					? {
-							execution: executionItem,
-							events: events.filter(
-								(eventItem) => eventItem.executionId === executionId,
-							),
-						}
-					: undefined;
+				return executionItem ? { execution: executionItem, events } : undefined;
 			});
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
@@ -673,9 +671,10 @@ export class PostgresConversationQueryV1 {
 					after = decoded[2];
 				} else if (selector?.kind === "last-event-id") {
 					const rows = await transaction<EventIdentityRow[]>`
-						select conversation_id, conversation_cursor
+						select conversation_cursor
 						from platform.conversation_events
 						where event_id = ${selector.value}
+							and conversation_id = ${conversationId}
 						limit 1
 					`;
 					const identity = rows[0];
@@ -683,13 +682,6 @@ export class PostgresConversationQueryV1 {
 						return {
 							outcome: "reload",
 							reason: "unknown_event_id",
-							resumeCursor,
-						};
-					}
-					if (identity.conversation_id !== conversationId) {
-						return {
-							outcome: "reload",
-							reason: "cross_conversation_event_id",
 							resumeCursor,
 						};
 					}
@@ -707,12 +699,10 @@ export class PostgresConversationQueryV1 {
 				}
 				return {
 					outcome: "events",
-					events: await readEvents(
-						transaction,
-						conversationId,
-						after,
-						this.#replayWindow,
-					),
+					events: await readEvents(transaction, conversationId, {
+						afterCursor: after,
+						limit: this.#replayWindow,
+					}),
 					resumeCursor,
 				};
 			});

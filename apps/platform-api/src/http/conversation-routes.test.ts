@@ -364,6 +364,28 @@ describe("Conversation HTTP routes", () => {
 		);
 	});
 
+	it("uses the authoritative Core status across a normal read transition", async () => {
+		const input = dependencies();
+		const current = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+		);
+		if (!current) throw new Error("Expected Conversation fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...current,
+			conversation: { ...conversation, status: "ready" },
+		});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1",
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			conversation: { status: "active" },
+		});
+	});
+
 	it("maps an authorized unavailable Conversation without exposing internals", async () => {
 		const input = dependencies();
 		input.commands(identity).accept = vi
@@ -392,6 +414,39 @@ describe("Conversation HTTP routes", () => {
 			code: "CONVERSATION_UNAVAILABLE",
 			retryable: false,
 		});
+	});
+
+	it("does not inspect an actor-scoped row after Conversation access is revoked", async () => {
+		const input = dependencies({
+			authorization: {
+				authorize: vi.fn().mockResolvedValue({ outcome: "denied" }),
+			},
+		});
+		input.commands(identity).accept = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		const get = vi.fn().mockResolvedValue({
+			conversation: { ...conversation, status: "unavailable" },
+			messages: [],
+			executions: [],
+			events: [],
+		});
+		input.query.get = get;
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			},
+		);
+
+		expect(response.status).toBe(404);
+		expect(await response.json()).toMatchObject({
+			code: "RESOURCE_UNAVAILABLE",
+		});
+		expect(get).not.toHaveBeenCalled();
 	});
 
 	it("makes missing and forbidden conversations indistinguishable", async () => {
