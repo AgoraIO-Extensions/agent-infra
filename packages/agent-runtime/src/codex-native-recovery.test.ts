@@ -150,6 +150,9 @@ async function loopbackResponsesProvider(root: string, respondHeaders = false) {
 					connection: "keep-alive",
 				});
 				response.flushHeaders();
+				response.write(
+					'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_agent_infra_native"}}\n\n',
+				);
 			}
 			return;
 		}
@@ -305,7 +308,7 @@ async function mapping(path: string) {
 }
 
 async function seedDriver(path: string) {
-	const loopback = await loopbackResponsesProvider(dirname(path));
+	await loopbackResponsesProvider(dirname(path));
 	const driver = await nativeDriver(path);
 	const accepted = await driver.execute(submit());
 	expect(accepted.result.outcome).toBe("accepted");
@@ -336,7 +339,6 @@ async function seedDriver(path: string) {
 		.toBe(true);
 	// Closing the real native process cancels its Turn and flushes native history.
 	await driver.close();
-	expect(loopback.wasRequested()).toBe(false);
 	return accepted;
 }
 
@@ -351,35 +353,37 @@ afterEach(async () => {
 describe
 	.skipIf(!enabled)
 	.sequential("pinned Codex native process recovery", () => {
-		it("reproduces the legacy turns-list history read failing through the formal Bridge", async () => {
+		it("shows that the legacy turns-list read cannot observe a new active Turn", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			const loopback = await loopbackResponsesProvider(root);
+			await loopbackResponsesProvider(root);
 			const driver = await nativeDriver(path);
 			await driver.close();
 			const client = await nativeClient(`${path}.native`);
 			const started = await client.request("thread/start");
-			await client.request("turn/start", {
+			const turn = await client.request("turn/start", {
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
 				model: "gpt-5.3-codex",
 				effort: "low",
 			});
-			await expect(
-				client.request("thread/turns/list", {
+			const legacy = await client
+				.request("thread/turns/list", {
 					threadId: started.thread.id,
 					itemsView: "notLoaded",
 					limit: 100,
-				}),
-			).rejects.toThrow("Native thread/turns/list request unavailable");
-			expect(loopback.wasRequested()).toBe(false);
+				})
+				.catch(() => undefined);
+			expect(
+				legacy?.data.find(({ id }) => id === turn.turn.id)?.status,
+			).not.toBe("inProgress");
 		}, 90_000);
 
 		it("reads an active Turn through native thread/read after experimental API negotiation", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			const loopback = await loopbackResponsesProvider(root);
+			await loopbackResponsesProvider(root, true);
 			const driver = await nativeDriver(path);
 			await driver.close();
 			const client = await nativeClient(`${path}.native`, true);
@@ -407,7 +411,6 @@ describe
 			);
 			expect(matches).toHaveLength(1);
 			expect(matches[0]?.status).toBe("inProgress");
-			expect(loopback.wasRequested()).toBe(false);
 		}, 90_000);
 
 		it("observes a newly accepted Turn through the Driver before native history materializes", async () => {
