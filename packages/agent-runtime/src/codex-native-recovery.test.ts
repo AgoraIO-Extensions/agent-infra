@@ -373,10 +373,13 @@ async function mapping(path: string) {
 			{ threadId: string; executions: Record<string, { nativeTurnId: string }> }
 		>;
 	};
-	const sessions = Object.values(state.sessions);
+	const sessions = Object.entries(state.sessions);
 	if (sessions.length !== 1 || !sessions[0])
 		throw new Error("Expected one native session mapping");
-	return sessions[0];
+	const [nativeSessionRef, session] = sessions[0];
+	if (!nativeSessionRef || !session)
+		throw new Error("Expected one native session mapping");
+	return { nativeSessionRef, ...session };
 }
 
 async function seedDriver(path: string) {
@@ -633,15 +636,21 @@ describe
 			const path = join(root, "driver.json");
 			await loopbackResponsesProvider(root, "active");
 			const driver = await nativeDriver(path);
-			const syntheticHistoryInput = "x".repeat(9_000);
+			const syntheticHistoryInputs = Array.from(
+				{ length: 8 },
+				(_, index) => `synthetic-long-history-${index}-${"x".repeat(9_000)}`,
+			);
+			let nativeSessionRef: string | undefined;
 
 			for (let index = 0; index < 8; index += 1) {
 				const command = submit(
 					`synthetic-history-${index}`,
-					undefined,
-					syntheticHistoryInput,
+					nativeSessionRef,
+					syntheticHistoryInputs[index],
 				);
 				const accepted = await driver.execute(command);
+				nativeSessionRef ??= accepted.nativeSessionRef;
+				expect(accepted.nativeSessionRef).toBe(nativeSessionRef);
 				expect(
 					(
 						await driver.execute(
@@ -654,18 +663,49 @@ describe
 					).result,
 				).toEqual({ outcome: "accepted", status: "cancelled" });
 			}
+			if (!nativeSessionRef) throw new Error("Expected a native Session");
+			const session = await mapping(path);
+			expect(session.nativeSessionRef).toBe(nativeSessionRef);
+			expect(Object.keys(session.executions)).toHaveLength(8);
 
 			const home = `${path}.native/home`;
 			const historyFiles = (await readdir(home, { recursive: true })).filter(
 				(entry) => entry.endsWith(".jsonl"),
 			);
-			const historyBytes = (
-				await Promise.all(historyFiles.map((entry) => stat(join(home, entry))))
-			).reduce((total, entry) => total + entry.size, 0);
+			const history = await Promise.all(
+				historyFiles.map(async (entry) => {
+					const path = join(home, entry);
+					return {
+						contents: await readFile(path, "utf8"),
+						size: (await stat(path)).size,
+					};
+				}),
+			);
+			const relevantHistory = history.filter(({ contents }) =>
+				syntheticHistoryInputs.some((input) => contents.includes(input)),
+			);
+			for (const input of syntheticHistoryInputs) {
+				expect(
+					relevantHistory.some(({ contents }) => contents.includes(input)),
+				).toBe(true);
+			}
+			expect(
+				relevantHistory.every(({ contents }) =>
+					contents.includes(session.threadId),
+				),
+			).toBe(true);
+			const historyBytes = relevantHistory.reduce(
+				(total, entry) => total + entry.size,
+				0,
+			);
 			expect(historyBytes).toBeGreaterThan(65_536);
 
-			const command = submit("synthetic-active-after-long-history");
+			const command = submit(
+				"synthetic-active-after-long-history",
+				nativeSessionRef,
+			);
 			const active = await driver.execute(command);
+			expect(active.nativeSessionRef).toBe(nativeSessionRef);
 			expect(
 				await driver.getStatus(active.nativeSessionRef, command.executionId),
 			).toBe("running");
