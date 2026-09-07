@@ -21,9 +21,11 @@ CODEX_ISOLATION_BINARY=/absolute/path/to/pinned/codex \
 ```
 
 最终验收必须在包含 [#403](https://github.com/AgoraIO-Extensions/agent-infra/issues/403)
-修复的版本运行，并额外设置 `CODEX_ISOLATION_PERSISTENCE_COMMIT` 为该修复的完整 commit SHA。
-维护者从 #403 的实际交付记录取得 SHA；测试只验证该 SHA 是当前 HEAD 的祖先，不能自行判断
-任意祖先是否实现了 #403。缺少该证据时总结果保持 `unverified`。
+修复的版本运行，并额外设置 `CODEX_ISOLATION_PERSISTENCE_COMMIT` 为当前验收 HEAD 可达的
+完整交付 commit SHA。#403 的 source 是 `35d15abe187385672de3ac14bb2a48c37ea8e6bd`，其
+squash merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`；在包含该 merge 的 HEAD 上设置
+后者，并在报告同时记录 source。测试只验证所设置 SHA 是当前 HEAD 的祖先，不能自行判断任意
+祖先是否实现了 #403。缺少该证据时总结果保持 `unverified`。
 
 输出 JSON 包含仓库 commit、测试源码摘要、原生版本、有效线程配置、逐场景状态及总结果。
 退出码只有在所有场景通过且存在持久化版本证据时为 0。普通 `pnpm test` 未设置原生可执行
@@ -57,9 +59,12 @@ CODEX_ISOLATION_BINARY=/absolute/path/to/pinned/codex \
 | `fail` | 外来标记到达模型输入/结果，或他人文件被修改 | 保留 #404/#194 门禁并请求修复决策 |
 | `unverified` | 未执行、前置失败、正向对照失败或证据不足 | 保留 #404/#194 门禁 |
 
-前置 Host 正向对照失败时，报告保留后续所有场景的 `unverified`。例如 pinned 原生进程在
-`thread/turns/list` 返回 `-32601` 时，不得用固定历史回包代替原生实现继续宣称通过。
-该回包只证明本次存储查询不可用，不能单独判定该版本永久缺少接口。
+前置 Host 正向对照失败时，报告保留后续所有场景的 `unverified`。pinned Codex `0.153.0` 在
+active Turn 的 `thread/turns/list` 返回 `-32601` 是已知协议限制；#403 仅验证正常关闭后的
+`thread/resume`、`thread/turns/list`、`thread/items/list` 持久化恢复，不覆盖此 active-Turn 路径。
+`#404` 不得为此伪造历史回包、重发 Turn、关闭后把恢复结果当作 active status，或引入 fallback。
+除非 RuntimeHost/Driver 的 fail-closed 行为获独立确认，该回包使正向控制保持 `unverified`，不
+单独判定泄漏或永久缺少该接口。
 脱敏报告、完整检查结果与最终 HEAD 一起放在 #404 PR/Issue，不能以“调查完成”关闭 #404。
 
 已有回归入口为 `runtime-host.test.ts`、`runtime-driver-conformance.test.ts`、
