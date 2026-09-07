@@ -13,12 +13,16 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   ci:
     name: CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
+    env:
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      TRIVY_TOOL_DIR: .trivy-tool
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,7 +75,8 @@ jobs:
         run: pnpm smoke
 
       - name: Build deployment images
-        run: pnpm docker:build
+        id: images
+        run: node .github/scripts/vulnerability-scan.mjs build
 
       - name: Lint Markdown
         run: >-
@@ -103,6 +108,41 @@ jobs:
           else
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
+
+      - name: Install verified vulnerability scanner
+        run: node .github/scripts/install-trivy.mjs "$TRIVY_TOOL_DIR"
+
+      - name: Scan dependencies and built images
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
+        run: node .github/scripts/vulnerability-scan.mjs scan
+
+      - name: Upload vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .vulnerability-scan/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Download vulnerability evidence
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vulnerability-readback
+
+      - name: Verify downloaded evidence and enforce policy
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
+          VULNERABILITY_REPORT_DIR: ${{ runner.temp }}/vulnerability-readback
+        run: node .github/scripts/vulnerability-scan.mjs verify
 
   outcome:
     name: Publish terminal outcome

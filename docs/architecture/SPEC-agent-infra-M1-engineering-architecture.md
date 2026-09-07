@@ -802,6 +802,41 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - Docker image build
 - 依赖漏洞和镜像扫描
 
+PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
+
+- 对根 `pnpm-lock.yaml` 启用 `--include-dev-deps`，扫描根 workspace、`apps/*` 和
+  `packages/*` 的生产、开发/构建、可选及传递依赖；解析出的包清单必须覆盖 lockfile
+  的全部精确包版本，workspace 清单必须与 lockfile importers 一致。
+- 镜像清单为 `web`、`platform-api`、`platform-worker`、`connection-api`、
+  `agent-runtime-host`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
+  存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；不发布镜像。新增 Dockerfile
+  必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
+- 使用 Trivy 输出的 `Severity` 阻断所有 High/Critical，包括无修复版本；中低等级及
+  Unknown 保留报告。severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
+  advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
+  `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
+  选择规则以[固定版本的 Trivy 文档](https://github.com/aquasecurity/trivy/blob/v0.74.0/docs/guide/scanner/vulnerability.md#severity-selection)为依据。
+- 每次从漏洞库获取可用的当前快照，然后在本轮扫描中固定该快照。报告绑定源 commit、
+  lockfile SHA-256、CI run/attempt、workspace/镜像清单、image ID/rootfs layers、Trivy
+  版本、数据库 schema/更新时间/下次更新时间和数据库文件 SHA-256。工具/网络失败、
+  数据库不可用或过期、报告缺失/无效、覆盖不全、来源不一致均失败。
+- 原始 Trivy JSON、构建清单、扫描元数据、逐项可读摘要与最终判定作为同一 CI artifact
+  保存 30 天，失败时也上传；CI 下载同一 run 的 artifact 后重新校验来源和判定。
+  扫描只读取构建产物及外部漏洞数据，不扫描 Secret/用户数据、不使用仓库忽略文件。
+- 必要例外经过现有 CODEOWNERS 人工 review 后，由仓库管理员登记到 Actions repository
+  variable `VULNERABILITY_EXCEPTIONS`（JSON 数组，未配置等于空数组）。记录必须含
+  `scope`（`lockfile` 或精确镜像名）、`vulnerability`、`package`、`version`、镜像
+  `imageId`（lockfile 使用 `null`）、`reason`、UTC `expiresAt`、`approvalUrl`。
+  审批 Review 正文必须单独包含 `vulnerability-exception sha256:<摘要>`；摘要为以上
+  字段（不含 `approvalUrl`）按此顺序 JSON 编码的 SHA-256。CI 只读回查本仓库的
+  已合并 PR、当前 head 的 `APPROVED` Review 及审批人的实时 maintain/admin 权限；
+  仓库配置登记与可回读 Review 缺一不可，不能由 PR 文件自填审批人。
+  无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
+  普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
+
+首次真实扫描命中阻断项时保留失败证据，由维护者批准精确例外或另开修复 Issue；不得自动
+升级、修复或降低阈值。此检查是 readiness 的前置，不代表生产或完整人工安全审计完成。
+
 ### 21.2 发布
 
 - 每个部署单元生成独立镜像并推送部署批准的 OCI Registry；`connection-web` 与 `connection-api` 分别构建，但通过同一批准 origin 路由。
