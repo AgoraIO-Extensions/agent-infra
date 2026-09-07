@@ -37,6 +37,9 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
 - 模型端是仅监听 loopback 的确定性 Responses API 替身。测试 launcher 原样转发原生协议字节，
   只通过 CLI flags 指定无凭证的本地模型 Provider，旁路观察配置和生命周期回包；不改变
   sandbox、审批、HOME、cwd、文件工具或 Bridge。模型替身不直接读写合成用户文件。
+- #406 的部署侧 model-input 接口尚未形成验收依据，也不会由此入口读取 endpoint 或 credential。
+  待其最终 committed head 集成后，必须保留原生 sandbox/cwd/HOME、不得加入 status fallback 或替换
+  native 回包，并在该组合版本重跑全部 #404 原生验收；配置解析或 fixture 通过不能代替重跑。
 - #403 的正式装配由 `CodexRuntimeDriver.open` 从 `path` 派生 `dataDirectory: path + ".native"`，
   并传入已验证的 model、reasoning effort 和 pinned provenance。PVC 所属的 `dataDirectory/home`
   是 `CODEX_HOME`，`dataDirectory/workspace` 是 cwd；父进程 HOME 和 `TMPDIR` 仍是独立临时目录。
