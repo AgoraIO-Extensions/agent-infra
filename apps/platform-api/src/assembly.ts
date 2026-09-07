@@ -4,6 +4,7 @@ import {
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
+	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -12,11 +13,14 @@ import {
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresConversationExecutionTransactionV1,
+	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
 } from "@agent-infra/platform-store";
 
 import type { PlatformAppDependencies } from "./app.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
+import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 import {
@@ -65,6 +69,13 @@ export function assemblePlatformApi(
 	const auditQuery = new PostgresPlatformAuditQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const conversationTransaction =
+		new PostgresConversationExecutionTransactionV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const conversationQuery = new PostgresConversationQueryV1({
+		databaseUrl: input.databaseUrl,
+	});
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
 		...input.admissions,
@@ -84,6 +95,69 @@ export function assemblePlatformApi(
 		configurationQuery,
 		presentAgent: input.presentAgent,
 	});
+	const conversationAuthorization: ConversationAuthorization = {
+		async authorize(identity, request) {
+			let agentId = request.agentId;
+			if (request.conversationId !== undefined) {
+				const target = await conversationQuery.getAuthorizationTarget(
+					{ actorId: identity.userId, channelId: "web" },
+					request.conversationId,
+				);
+				if (!target || (agentId !== undefined && target.agentId !== agentId)) {
+					return { outcome: "denied" };
+				}
+				agentId = target.agentId;
+			}
+			if (!agentId) return { outcome: "denied" };
+			const agent = await managementQuery.getAgent(
+				{
+					kind: "user",
+					userId: identity.userId,
+					organizationIds: identity.organizationIds,
+				},
+				agentId,
+			);
+			if (!agent) return { outcome: "denied" };
+			if (
+				(request.operation === "conversation.create" ||
+					request.operation === "message" ||
+					request.operation === "regenerate") &&
+				(agent.management.status !== "available" ||
+					agent.management.serviceAvailability !== "ready")
+			) {
+				return { outcome: "denied" };
+			}
+			let supportsSupplementaryInstruction = false;
+			if (request.operation === "message") {
+				const configuration = await configurationQuery.read({
+					agentId,
+					actorId: identity.userId,
+					organizationIds: identity.organizationIds,
+					isAdministrator: identity.roles.includes("system_admin"),
+					intent: "discover",
+				});
+				if (configuration.outcome !== "found") return { outcome: "denied" };
+				supportsSupplementaryInstruction = (
+					await input.presentAgent({
+						agentId,
+						configuration: configuration.configuration,
+						management: agent.management,
+					})
+				).capabilities.supplementaryInstruction;
+			}
+			return {
+				outcome: "allowed",
+				authority: {
+					schemaVersion: 1,
+					actorId: identity.userId,
+					agentId,
+					channelId: "web",
+					authorizationRevision: identity.authorizationRevision,
+					supportsSupplementaryInstruction,
+				},
+			};
+		},
+	};
 	const dependencies: PlatformAppDependencies = {
 		management: {
 			identity: input.identity,
@@ -104,6 +178,19 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
+		conversation: {
+			identity: input.identity,
+			authorization: conversationAuthorization,
+			commands: (identity) =>
+				createConversationExecutionUseCaseV1({
+					transaction: conversationTransaction,
+					authorization: {
+						authorize: (request) =>
+							conversationAuthorization.authorize(identity, request),
+					},
+				}),
+			query: conversationQuery,
+		},
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
@@ -113,6 +200,8 @@ export function assemblePlatformApi(
 		managementQuery,
 		configurationTransaction,
 		configurationQuery,
+		conversationTransaction,
+		conversationQuery,
 		auditQuery,
 	];
 	return {

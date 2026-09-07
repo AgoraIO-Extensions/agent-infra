@@ -17,6 +17,13 @@ const protocolErrors = {
 		"Request conflicts with current state.",
 		false,
 	],
+	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
+	CONVERSATION_UNAVAILABLE: [
+		409,
+		"CONVERSATION_UNAVAILABLE",
+		"The conversation is unavailable.",
+		false,
+	],
 	FORBIDDEN: [403, "RESOURCE_UNAVAILABLE", "Request is not authorized.", false],
 	AUTHENTICATION_REQUIRED: [
 		401,
@@ -50,7 +57,7 @@ const protocolErrors = {
 	],
 } as const satisfies Partial<
 	Record<
-		ProtocolErrorCode | "CONFLICT" | "FORBIDDEN",
+		ProtocolErrorCode | "BUSY" | "CONFLICT" | "FORBIDDEN",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

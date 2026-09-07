@@ -175,6 +175,17 @@ describe("HTTP common boundary", () => {
 			traceId,
 		});
 
+		expect(new HttpProtocolError("BUSY", traceId).body).toMatchObject({
+			code: "AGENT_BUSY",
+			retryable: true,
+		});
+		expect(
+			new HttpProtocolError("CONVERSATION_UNAVAILABLE", traceId).body,
+		).toMatchObject({
+			code: "CONVERSATION_UNAVAILABLE",
+			retryable: false,
+		});
+
 		const forbidden = new HttpProtocolError("FORBIDDEN", traceId);
 		expect(forbidden.status).toBe(403);
 		expect(forbidden.body).toEqual({
