@@ -24,7 +24,6 @@ beforeAll(async () => {
 	query = new PostgresConversationQueryV1({
 		databaseUrl,
 		replayWindow: 2,
-		replayWindowMs: 7 * 24 * 60 * 60 * 1000,
 	});
 
 	for (const [conversationId, actorId] of [
@@ -100,7 +99,7 @@ beforeAll(async () => {
 				 ${`adapter-${cursor}`}, ${cursor}, ${cursor}, 'text.delta',
 				 ${client.json({ type: "text.delta", text: `part-${cursor}` })},
 				 ${String(cursor).repeat(64)}, ${`runtime-${cursor}`},
-				 ${`2026-09-06T00:00:0${cursor + 1}.000Z`}, 'runtime')
+				 now(), 'runtime')
 		`;
 	}
 	await client`
@@ -121,7 +120,7 @@ beforeAll(async () => {
 			('event-conversation-2', 'conversation-2', 'execution-conversation-2',
 			 'adapter-conversation-2', 1, 1, 'text.delta',
 			 ${client.json({ type: "text.delta", text: "other" })}, ${"a".repeat(64)},
-			 'runtime-conversation-2', '2026-09-06T00:00:02.000Z', 'runtime')
+			 'runtime-conversation-2', now(), 'runtime')
 	`;
 	await client`
 		update platform.conversations set last_conversation_cursor = 1
@@ -267,20 +266,34 @@ describe("PostgreSQL Conversation query", () => {
 	});
 
 	it("returns reload when a cursor exceeds the configured time window", async () => {
+		await client`
+			update platform.conversation_events
+			set occurred_at = now() - interval '1 hour'
+			where event_id = 'event-3'
+		`;
 		const timeBounded = new PostgresConversationQueryV1({
 			databaseUrl,
 			replayWindow: 2,
 			replayWindowMs: 1,
 		});
 		try {
-			await expect(
-				timeBounded.replay(actorOne, "conversation-1", {
-					kind: "last-event-id",
-					value: "event-2",
-				}),
-			).resolves.toMatchObject({
+			const expired = await timeBounded.replay(actorOne, "conversation-1", {
+				kind: "last-event-id",
+				value: "event-2",
+			});
+			expect(expired).toMatchObject({
 				outcome: "reload",
 				reason: "cursor_expired",
+			});
+			if (expired?.outcome !== "reload") throw new Error("Expected reload");
+			await expect(
+				timeBounded.replay(actorOne, "conversation-1", {
+					kind: "cursor",
+					value: expired.resumeCursor,
+				}),
+			).resolves.toMatchObject({
+				outcome: "events",
+				events: [],
 			});
 		} finally {
 			await timeBounded.close();

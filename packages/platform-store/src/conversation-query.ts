@@ -484,8 +484,8 @@ async function isWithinReplayTimeWindow(
 	latestCursor: number,
 	replayWindowMs: number,
 ): Promise<boolean> {
-	if (latestCursor === 0) return true;
-	const anchorCursor = afterCursor === 0 ? 1 : afterCursor;
+	if (afterCursor === latestCursor) return true;
+	const anchorCursor = afterCursor + 1;
 	const rows = await database<EventWindowRow[]>`
 		select occurred_at >= now() - (${replayWindowMs}::bigint * interval '1 millisecond')
 			as within_window
