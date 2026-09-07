@@ -2034,9 +2034,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					execution.nativeTurnId,
 				);
 			} catch (retryError) {
-				if (retryError instanceof CodexHistoryNotMaterializedError)
-					protocolInvalid();
-				throw retryError;
+				if (!(retryError instanceof CodexHistoryNotMaterializedError)) {
+					throw retryError;
+				}
+				const persistedSession = this.session(session.nativeSessionRef);
+				if (persistedSession.threadId !== session.threadId) stateInvalid();
+				const persistedExecution = ownRecordValue(
+					persistedSession.executions,
+					execution.executionId,
+				);
+				if (!persistedExecution) unavailable();
+				if (persistedExecution.nativeTurnId !== execution.nativeTurnId) {
+					stateInvalid();
+				}
+				if (persistedExecution.status === "running") protocolInvalid();
+				return persistedExecution.status;
 			}
 		}
 	}
