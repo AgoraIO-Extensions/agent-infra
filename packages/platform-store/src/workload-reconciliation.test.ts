@@ -1,8 +1,14 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import {
 	createWorkloadReconciliationV1,
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
+import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import {
+	createSecretKeyringDecryptorV1,
+	createSecretRevisionBindingCryptoV1,
+} from "@agent-infra/secret-store/worker";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -94,11 +100,55 @@ function runtime(): WorkloadRuntimePortV1 {
 	};
 }
 
+function secretCryptoFixture() {
+	const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+		modulusLength: 3072,
+	});
+	const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
+	const privateKeyPkcs8Der = privateKey.export({
+		format: "der",
+		type: "pkcs8",
+	});
+	const encryptionKeys = {
+		schemaVersion: 1 as const,
+		activeWrappingKeyVersion: "key-a",
+		keys: [
+			{
+				schemaVersion: 1 as const,
+				keyVersion: "key-a",
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
+				publicKeyFingerprint: createHash("sha256")
+					.update(publicKeySpkiDer)
+					.digest("hex"),
+				rsaModulusBits: 3072,
+				status: "active" as const,
+			},
+		],
+	};
+	const keys = [
+		{
+			keyVersion: "key-a",
+			privateKeyPkcs8DerBase64: privateKeyPkcs8Der.toString("base64"),
+		},
+	];
+	return {
+		encryptionKeys,
+		keys,
+		encryptor: createSecretEncryptorV1({ encryptionKeys }),
+		decryptor: createSecretKeyringDecryptorV1({ keys }),
+		revisionBinder: createSecretRevisionBindingCryptoV1({
+			keys,
+			encryptionKeys,
+		}),
+	};
+}
+
 describe("PostgreSQL Workload steps", () => {
-	it("recovers after immutable Secret creation and activates only observed references in the locked transaction", async () => {
-		const binding = {
+	it("binds unchanged Secrets to image and environment revisions without stale activation", async () => {
+		const crypto = secretCryptoFixture();
+		const record = crypto.encryptor.encrypt({
 			schemaVersion: 1,
-			aadVersion: "platform-secret-aad:v1",
 			secretId: "fixture-key",
 			ownerType: "agent-owner",
 			ownerId: "owner-a",
@@ -106,41 +156,15 @@ describe("PostgreSQL Workload steps", () => {
 			name: "FIXTURE_KEY",
 			secretVersion: 1,
 			configRevision: 1,
-			algorithmVersion: "aes-256-gcm:v1",
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-			wrappingKeyVersion: "key-a",
-		};
-		const record = validatePlatformSecretRecordV1({
-			schemaVersion: 1,
-			secretId: binding.secretId,
-			ownerType: binding.ownerType,
-			ownerId: binding.ownerId,
-			agentId: binding.agentId,
-			name: binding.name,
-			secretVersion: 1,
-			configRevision: 1,
-			lifecycleState: "pending",
-			crypto: {
-				schemaVersion: 1,
-				algorithmVersion: binding.algorithmVersion,
-				wrappingAlgorithmVersion: binding.wrappingAlgorithmVersion,
-				wrappingKeyVersion: binding.wrappingKeyVersion,
-				aadBinding: binding,
-				dekFingerprint: "a".repeat(64),
-				nonce: "AAAAAAAAAAAAAAAA",
-				ciphertext: "YWJjZA==",
-				authenticationTag: "AAAAAAAAAAAAAAAAAAAAAA==",
-				wrappedDek: "A".repeat(512),
-			},
-			createdAt: "2026-09-07T00:00:00Z",
-			updatedAt: "2026-09-07T00:00:00Z",
+			plaintext: "synthetic-fixture-value",
+			occurredAt: "2026-09-07T00:00:00Z",
 		});
 		await sql`update platform.agent_configuration_revisions set configuration = jsonb_set(configuration, '{secrets}', ${sql.json([{ secretId: record.secretId, name: record.name, version: 1, isSet: true }])}) where agent_id = 'agent-a'`;
 		await sql`insert into platform.secret_records(agent_id, secret_id, secret_version, configuration_revision, owner_type, owner_id, name, lifecycle_state, dek_fingerprint, wrapping_key_version, record, created_at, updated_at) values ('agent-a', ${record.secretId}, 1, 1, 'agent-owner', 'owner-a', ${record.name}, 'pending', ${record.crypto.dekFingerprint}, 'key-a', ${sql.json(record)}, now(), now())`;
 		const api = fakeKubernetesApi();
 		const buffers: Uint8Array[] = [];
 		api.failAfter(2);
-		async function advance() {
+		async function advance(revisionBinder = crypto.revisionBinder) {
 			for (let i = 0; i < 12; i++) {
 				const runtime = createWorkloadRuntimeV1({
 					workerId: `worker-${i}`,
@@ -149,13 +173,13 @@ describe("PostgreSQL Workload steps", () => {
 					registry: workloadRegistryFixture(),
 					admissionPolicyRef: "policy-a",
 					registrySubjectRef: "subject-a",
+					revisionBinder,
 					decryptor: {
-						async decrypt() {
-							const plaintext = new TextEncoder().encode(
-								"synthetic-fixture-value",
-							);
-							buffers.push(plaintext);
-							return { outcome: "decrypted", plaintext };
+						async decrypt(input) {
+							const result = await crypto.decryptor.decrypt(input);
+							if (result.outcome === "decrypted")
+								buffers.push(result.plaintext);
+							return result;
 						},
 					},
 					fetch: async () => new Response("ok"),
@@ -203,6 +227,41 @@ describe("PostgreSQL Workload steps", () => {
 		};
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${upgraded.source.imageDigest}, ${sql.json(upgraded)}, now())`;
 		await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+		await expect(
+			first.runNext("worker-binding-crash", async (input) => {
+				if (!input.secrets) throw new Error();
+				const source = validatePlatformSecretRecordV1(input.secrets.records[0]);
+				const binding = await crypto.revisionBinder.bind({
+					encryptedRecord: source,
+					expectedBinding: {
+						agentId: source.agentId,
+						secretId: source.secretId,
+						secretVersion: source.secretVersion,
+						configRevision: source.configRevision,
+						ownerType: source.ownerType,
+						ownerId: source.ownerId,
+						name: source.name,
+						wrappingKeyVersion: source.crypto.wrappingKeyVersion,
+						dekFingerprint: source.crypto.dekFingerprint,
+					},
+					targetConfigRevision: input.configuration.revision,
+					traceId: input.traceId,
+				});
+				if (binding.outcome !== "bound") throw new Error();
+				await input.secrets.persistCurrentRevisionRecord(
+					binding.encryptedRecord,
+				);
+				throw new Error("simulated transaction failure");
+			}),
+		).rejects.toThrow("Workload reconciliation persistence failed");
+		expect(
+			await sql`select * from platform.secret_records where configuration_revision = 2`,
+		).toHaveLength(0);
+		expect(
+			(
+				await sql`select record from platform.secret_records where configuration_revision = 1`
+			)[0]?.record.lifecycleState,
+		).toBe("active");
 		await advance();
 		expect(
 			(await sql`select state from platform.workload_reconciliations`)[0]
@@ -212,9 +271,162 @@ describe("PostgreSQL Workload steps", () => {
 			sourceConfigurationRevision: 2,
 			candidate: { configuration: { revision: 2 } },
 		});
+		const revisionTwo = await sql<
+			{
+				configuration_revision: string;
+				lifecycle_state: string;
+				record: { crypto: { aadBinding: { configRevision: number } } };
+			}[]
+		>`
+			select configuration_revision::text, lifecycle_state, record
+			from platform.secret_records order by configuration_revision
+		`;
+		expect(revisionTwo).toHaveLength(2);
+		expect(revisionTwo).toMatchObject([
+			{
+				configuration_revision: "1",
+				lifecycle_state: "active",
+				record: { crypto: { aadBinding: { configRevision: 1 } } },
+			},
+			{
+				configuration_revision: "2",
+				lifecycle_state: "active",
+				record: { crypto: { aadBinding: { configRevision: 2 } } },
+			},
+		]);
 		expect(
 			await sql`select * from platform.audit_events where action = 'secret.activate'`,
-		).toHaveLength(activationCount);
+		).toHaveLength(activationCount + 1);
+
+		const envOnlyUpgrade = {
+			...upgraded,
+			revision: 3,
+			environment: [{ name: "SYNTHETIC_FLAG", value: "enabled" }],
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 3, ${envOnlyUpgrade.source.imageDigest}, ${sql.json(envOnlyUpgrade)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
+		await Promise.all([
+			createWorkloadReconciliationV1({
+				store: first,
+				runtime: createWorkloadRuntimeV1({
+					workerId: "worker-r3-a",
+					client: api.client,
+					policy: workloadTestPolicy,
+					registry: workloadRegistryFixture(),
+					admissionPolicyRef: "policy-a",
+					registrySubjectRef: "subject-a",
+					revisionBinder: crypto.revisionBinder,
+					decryptor: crypto.decryptor,
+					fetch: async () => new Response("ok"),
+					probeRuntime: async () => ({ core: "passed", capabilities: {} }),
+				}),
+			}).tick("worker-r3-a"),
+			createWorkloadReconciliationV1({
+				store: second,
+				runtime: createWorkloadRuntimeV1({
+					workerId: "worker-r3-b",
+					client: api.client,
+					policy: workloadTestPolicy,
+					registry: workloadRegistryFixture(),
+					admissionPolicyRef: "policy-a",
+					registrySubjectRef: "subject-a",
+					revisionBinder: crypto.revisionBinder,
+					decryptor: crypto.decryptor,
+					fetch: async () => new Response("ok"),
+					probeRuntime: async () => ({ core: "passed", capabilities: {} }),
+				}),
+			}).tick("worker-r3-b"),
+		]);
+		await advance();
+		await advance();
+		const revisionThree = await sql<
+			{
+				configuration_revision: string;
+				lifecycle_state: string;
+				record: { crypto: { aadBinding: { configRevision: number } } };
+			}[]
+		>`
+			select configuration_revision::text, lifecycle_state, record
+			from platform.secret_records order by configuration_revision
+		`;
+		expect(revisionThree).toHaveLength(3);
+		expect(revisionThree[2]).toMatchObject({
+			configuration_revision: "3",
+			lifecycle_state: "active",
+			record: { crypto: { aadBinding: { configRevision: 3 } } },
+		});
+
+		const skippedRevision = {
+			...envOnlyUpgrade,
+			revision: 4,
+			source: {
+				...envOnlyUpgrade.source,
+				imageDigest: `sha256:${"d".repeat(64)}`,
+			},
+		};
+		const newestRevision = {
+			...skippedRevision,
+			revision: 5,
+			source: {
+				...skippedRevision.source,
+				imageDigest: `sha256:${"e".repeat(64)}`,
+			},
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 4, ${skippedRevision.source.imageDigest}, ${sql.json(skippedRevision)}, now()), ('agent-a', 5, ${newestRevision.source.imageDigest}, ${sql.json(newestRevision)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 5 where id = 'agent-a'`;
+		await advance();
+		const afterStaleRevision = await sql<
+			{
+				configuration_revision: string;
+				lifecycle_state: string;
+			}[]
+		>`
+			select configuration_revision::text, lifecycle_state
+			from platform.secret_records order by configuration_revision
+		`;
+		expect(afterStaleRevision).toEqual([
+			{ configuration_revision: "1", lifecycle_state: "active" },
+			{ configuration_revision: "2", lifecycle_state: "active" },
+			{ configuration_revision: "3", lifecycle_state: "active" },
+			{ configuration_revision: "5", lifecycle_state: "active" },
+		]);
+		expect(
+			(await sql`select state from platform.workload_reconciliations`)[0]
+				?.state,
+		).toMatchObject({ sourceConfigurationRevision: 5, phase: "ready" });
+
+		const rejectedRevision = {
+			...newestRevision,
+			revision: 6,
+			source: {
+				...newestRevision.source,
+				imageDigest: `sha256:${"f".repeat(64)}`,
+			},
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 6, ${rejectedRevision.source.imageDigest}, ${sql.json(rejectedRevision)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 6 where id = 'agent-a'`;
+		const failedBinder = createSecretRevisionBindingCryptoV1({
+			keys: crypto.keys,
+			encryptionKeys: crypto.encryptionKeys,
+			now: () => new Date(Number.NaN),
+		});
+		await advance(failedBinder);
+		await advance(failedBinder);
+		expect(
+			(await sql`select state from platform.workload_reconciliations`)[0]
+				?.state,
+		).toMatchObject({
+			phase: "rejected",
+			verified: { configuration: { revision: 5 } },
+		});
+		expect(
+			await sql`select * from platform.secret_records where configuration_revision = 6`,
+		).toHaveLength(0);
+		expect(
+			(
+				await sql`select record from platform.secret_records where configuration_revision = 5`
+			)[0]?.record.lifecycleState,
+		).toBe("active");
 	});
 	it("runs A-to-B, rejects C, recovers each step on another Worker and retains one PVC", async () => {
 		const api = fakeKubernetesApi();

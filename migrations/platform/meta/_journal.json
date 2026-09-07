@@ -92,6 +92,13 @@
       "when": 1788786782153,
       "tag": "0012_workload_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788799145221,
+      "tag": "0013_secret_revision_bindings",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ import {
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
+import type { SecretRevisionBindingCryptoV1 } from "@agent-infra/secret-store/worker";
 import type { V1StatefulSet } from "@kubernetes/client-node";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
@@ -32,6 +33,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly admissionPolicyRef: string;
 	readonly registrySubjectRef: string;
 	readonly decryptor: SecretActivationDecryptorPortV1;
+	/** Worker-only crypto for binding a verified Secret to a later revision. */
+	readonly revisionBinder?: SecretRevisionBindingCryptoV1;
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -68,25 +71,37 @@ function recordReference(
 	};
 }
 
-function recordsFor(
-	state: WorkloadReconciliationStateV1,
-	input: WorkloadReconciliationInputV1,
-): PlatformSecretRecordV1[] {
+function expectedSecrets(state: WorkloadReconciliationStateV1): readonly {
+	readonly secretId: string;
+	readonly version: number;
+	readonly name: string;
+}[] {
 	const configuration = state.candidate.configuration;
-	const expected = [
+	return [
 		...configuration.secrets.map((secret) => ({
 			secretId: secret.secretId,
 			version: secret.version,
 			name: secret.name,
 		})),
-		...(configuration.modelConfiguration?.options.map(
-			(option) => option.credential,
-		) ?? []),
+		...(configuration.modelConfiguration?.options.map((option) => ({
+			secretId: option.credential.secretId,
+			version: option.credential.version,
+			name: `model:${option.optionId}`,
+		})) ?? []),
 	];
+}
+
+function recordsFor(
+	state: WorkloadReconciliationStateV1,
+	input: WorkloadReconciliationInputV1,
+	additional: readonly PlatformSecretRecordV1[] = [],
+): PlatformSecretRecordV1[] {
+	const configuration = state.candidate.configuration;
+	const expected = expectedSecrets(state);
 	const records =
-		input.secrets?.records.map((record) =>
-			validatePlatformSecretRecordV1(record),
-		) ?? [];
+		input.secrets?.records
+			.map((record) => validatePlatformSecretRecordV1(record))
+			.concat(additional) ?? additional;
 	return [
 		...new Map(
 			expected.map((secret) => {
@@ -95,10 +110,14 @@ function recordsFor(
 						record.agentId === state.agentId &&
 						record.secretId === secret.secretId &&
 						record.secretVersion === secret.version &&
-						(!("name" in secret) || secret.name === record.name),
+						record.configRevision === configuration.revision &&
+						record.name === secret.name,
 				);
 				if (!record) throw new Error("Workload Secret is unavailable");
-				return [record.secretId, record] as const;
+				return [
+					`${record.secretId}:${record.secretVersion}:${record.name}`,
+					record,
+				] as const;
 			}),
 		).values(),
 	];
@@ -171,6 +190,83 @@ export function createWorkloadRuntimeV1(
 			return probe.core === "passed";
 		},
 	});
+	async function bindCurrentRevisionRecords(
+		state: WorkloadReconciliationStateV1,
+		input: WorkloadReconciliationInputV1,
+	): Promise<PlatformSecretRecordV1[]> {
+		const all =
+			input.secrets?.records.map((record) =>
+				validatePlatformSecretRecordV1(record),
+			) ?? [];
+		const additional: PlatformSecretRecordV1[] = [];
+		for (const secret of expectedSecrets(state)) {
+			if (
+				all.some(
+					(record) =>
+						record.agentId === state.agentId &&
+						record.secretId === secret.secretId &&
+						record.secretVersion === secret.version &&
+						record.configRevision === state.candidate.configuration.revision &&
+						record.name === secret.name,
+				)
+			)
+				continue;
+			if (!input.secrets || !options.revisionBinder)
+				throw new Error("Workload Secret is unavailable");
+			const source = all
+				.filter(
+					(record) =>
+						record.agentId === state.agentId &&
+						record.secretId === secret.secretId &&
+						record.secretVersion === secret.version &&
+						record.name === secret.name &&
+						record.configRevision < state.candidate.configuration.revision &&
+						record.lifecycleState === "active",
+				)
+				.toSorted(
+					(left, right) => right.configRevision - left.configRevision,
+				)[0];
+			if (!source) throw new Error("Workload Secret is unavailable");
+			const binding = await options.revisionBinder.bind({
+				encryptedRecord: source,
+				expectedBinding: {
+					agentId: source.agentId,
+					secretId: source.secretId,
+					secretVersion: source.secretVersion,
+					configRevision: source.configRevision,
+					ownerType: source.ownerType,
+					ownerId: source.ownerId,
+					name: source.name,
+					wrappingKeyVersion: source.crypto.wrappingKeyVersion,
+					dekFingerprint: source.crypto.dekFingerprint,
+				},
+				targetConfigRevision: state.candidate.configuration.revision,
+				traceId: input.traceId,
+			});
+			if (binding.outcome !== "bound") {
+				await input.secrets.auditDecryption(
+					source.secretId,
+					source.crypto.wrappingKeyVersion,
+					binding.code === "SECRET_REVISION_BINDING_FAILED"
+						? "succeeded"
+						: "rejected",
+				);
+				throw new Error("Workload Secret is unavailable");
+			}
+			await input.secrets.auditDecryption(
+				source.secretId,
+				source.crypto.wrappingKeyVersion,
+				"succeeded",
+			);
+			const rebound = validatePlatformSecretRecordV1(binding.encryptedRecord);
+			const persisted =
+				await input.secrets.persistCurrentRevisionRecord(rebound);
+			if (persisted.outcome !== "inserted" && persisted.outcome !== "exists")
+				throw new Error();
+			additional.push(validatePlatformSecretRecordV1(persisted.record));
+		}
+		return recordsFor(state, input, additional);
+	}
 	function desired(
 		state: WorkloadReconciliationStateV1,
 		stopped = false,
@@ -225,6 +321,7 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
+			const secretRecords = await bindCurrentRevisionRecords(state, input);
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
@@ -319,7 +416,7 @@ export function createWorkloadRuntimeV1(
 					decryptionKeyringAccess: false,
 				},
 				route: { name, exposure, tlsRequired: true },
-				secretRefs: recordsFor(state, input).map(recordReference),
+				secretRefs: secretRecords.map(recordReference),
 				desiredState: "running",
 				replicas: 1,
 			});
