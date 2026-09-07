@@ -344,7 +344,7 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 ### 7.2 Current-head Check Runs
 
-`CI` 由 GitHub Actions App 发布；branch protection 要求的三个自定义 Gate 由 check-only
+`CI` 由 GitHub Actions App 发布；branch protection 要求的四个自定义 Gate 由 check-only
 控制 App token 发布。
 所有 Check Run 都绑定精确 head SHA、由 branch protection 锁定来源：
 
