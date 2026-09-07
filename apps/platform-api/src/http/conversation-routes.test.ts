@@ -432,7 +432,47 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
-	it.todo("maps the #377 persisted model fallback notice without local policy");
+	it("maps the persisted model fallback notice without local policy", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventType: "model.selection.fell_back",
+						eventPayload: {
+							type: "model.selection.fell_back",
+							modelOptionId: "model-primary",
+							reasoningLevel: "medium",
+							reason: "selection_unavailable",
+						},
+					},
+				],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(body).toContain('"type":"model.selection.fell_back"');
+		expect(body).toContain(
+			'"payload":{"modelOptionId":"model-primary","reasoningLevel":"medium","reason":"selection_unavailable"}',
+		);
+		expect(body).not.toContain("previousModelOptionId");
+		expect(body).not.toContain("nativeModelId");
+		expect(body).not.toContain("credential");
+	});
+
 	it("resolves Last-Event-ID, rechecks authorization before each event, and emits reload", async () => {
 		const input = dependencies();
 		const response = await testApp(input).app.request(

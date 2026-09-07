@@ -390,6 +390,22 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				},
 			},
 		};
+	} else if (input.eventType === "model.selection.fell_back") {
+		persisted = exactRecord(persisted, [
+			"type",
+			"modelOptionId",
+			"reasoningLevel",
+			"reason",
+		]);
+		projected = {
+			...base,
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: persisted.modelOptionId,
+				reasoningLevel: persisted.reasoningLevel,
+				reason: persisted.reason,
+			},
+		};
 	} else {
 		throw new Error("Unsupported persisted event type");
 	}
