@@ -92,6 +92,34 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				url,
 			);
 		}
+		async function routeResponse(url: string) {
+			try {
+				return JSON.parse(await request("route-probe", url)) as {
+					version: string;
+					marker: string;
+					secretPresent: boolean;
+				};
+			} catch {
+				return null;
+			}
+		}
+		async function waitForRoute(
+			url: string,
+			version: string,
+		): Promise<{ version: string; marker: string; secretPresent: boolean }> {
+			const response = await eventually(
+				() => routeResponse(url),
+				(response) => response?.version === version,
+			);
+			if (!response) throw new Error("Kubernetes route did not converge");
+			return response;
+		}
+		async function waitForClosedRoute(url: string) {
+			await eventually(
+				() => routeResponse(url),
+				(response) => response === null,
+			);
+		}
 		async function connect(pod: string, host: string, port: string) {
 			return kubectl(
 				"exec",
@@ -284,9 +312,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				(value) => value === "healthy",
 			);
 			const url = `http://${a.service.name}:${a.service.port}`;
-			await expect(request("route-probe", url)).rejects.toThrow();
+			await waitForClosedRoute(url);
 			await adapter.promote(a, identityA);
-			expect(JSON.parse(await request("route-probe", url))).toMatchObject({
+			expect(await waitForRoute(url, "A")).toMatchObject({
 				version: "A",
 				marker: "retained",
 				secretPresent: true,
@@ -372,7 +400,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				(value) => value === "healthy",
 			);
 			await adapter.promote(b, identityB);
-			expect(JSON.parse(await request("route-probe", url)).version).toBe("B");
+			expect((await waitForRoute(url, "B")).version).toBe("B");
 			await expect(adapter.apply(a)).rejects.toThrow();
 			const badManifest = {
 				...b.runtimeManifest,
@@ -396,7 +424,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			);
 			if (!identityC || identityC === "pending") throw new Error();
 			await expect(adapter.promote(c, identityC)).rejects.toThrow();
-			await expect(request("route-probe", url)).rejects.toThrow();
+			await waitForClosedRoute(url);
 			const rollback = { ...b, workloadRevision: 5, fence: 5 };
 			const restored = await eventually(
 				() => adapter.apply(rollback),
@@ -408,7 +436,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				(value) => value === "healthy",
 			);
 			await adapter.promote(rollback, restored);
-			expect(JSON.parse(await request("route-probe", url))).toMatchObject({
+			expect(await waitForRoute(url, "B")).toMatchObject({
 				version: "B",
 				marker: "retained",
 				secretPresent: true,
