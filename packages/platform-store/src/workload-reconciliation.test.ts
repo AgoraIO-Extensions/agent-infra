@@ -323,6 +323,37 @@ describe("PostgreSQL Workload steps", () => {
 			await sql`select * from platform.persisted_events where stream_id = 'outbox:task-a'`,
 		).toHaveLength(1);
 	});
+	it("does not consume another Worker's live outbox lease and fences an expired lease", async () => {
+		await sql`update platform.outbox_items set status = 'processing', attempt_count = 4, delivery_fence = 7, lease_owner = 'worker-b', lease_expires_at = clock_timestamp() + interval '5 minutes' where id = 'task-a'`;
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime: runtime(),
+		});
+		await worker.tick("worker-a");
+		expect(
+			(
+				await sql`select status, attempt_count, delivery_fence::text, lease_owner from platform.outbox_items where id = 'task-a'`
+			)[0],
+		).toMatchObject({
+			status: "processing",
+			attempt_count: 4,
+			delivery_fence: "7",
+			lease_owner: "worker-b",
+		});
+		await sql`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 millisecond' where id = 'task-a'`;
+		await worker.tick("worker-a");
+		expect(
+			(
+				await sql`select status, attempt_count, delivery_fence::text, lease_owner, lease_expires_at from platform.outbox_items where id = 'task-a'`
+			)[0],
+		).toMatchObject({
+			status: "succeeded",
+			attempt_count: 5,
+			delivery_fence: "8",
+			lease_owner: null,
+			lease_expires_at: null,
+		});
+	});
 	it("serializes two Workers and prevents configuration writers from passing an in-flight step", async () => {
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
