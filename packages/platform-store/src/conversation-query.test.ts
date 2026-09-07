@@ -90,13 +90,13 @@ beforeAll(async () => {
 			insert into platform.conversation_events
 				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
 				 conversation_cursor, event_type, event_payload, event_digest,
-				 runtime_cursor, occurred_at)
+				 runtime_cursor, occurred_at, source)
 			values
 				(${`event-${cursor}`}, 'conversation-1', 'execution-conversation-1',
 				 ${`adapter-${cursor}`}, ${cursor}, ${cursor}, 'text.delta',
 				 ${client.json({ type: "text.delta", text: `part-${cursor}` })},
 				 ${String(cursor).repeat(64)}, ${`runtime-${cursor}`},
-				 ${`2026-09-06T00:00:0${cursor + 1}.000Z`})
+				 ${`2026-09-06T00:00:0${cursor + 1}.000Z`}, 'runtime')
 		`;
 	}
 	await client`
@@ -112,12 +112,12 @@ beforeAll(async () => {
 		insert into platform.conversation_events
 			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
 			 conversation_cursor, event_type, event_payload, event_digest,
-			 runtime_cursor, occurred_at)
+			 runtime_cursor, occurred_at, source)
 		values
 			('event-conversation-2', 'conversation-2', 'execution-conversation-2',
 			 'adapter-conversation-2', 1, 1, 'text.delta',
 			 ${client.json({ type: "text.delta", text: "other" })}, ${"a".repeat(64)},
-			 'runtime-conversation-2', '2026-09-06T00:00:02.000Z')
+			 'runtime-conversation-2', '2026-09-06T00:00:02.000Z', 'runtime')
 	`;
 	await client`
 		update platform.conversations set last_conversation_cursor = 1

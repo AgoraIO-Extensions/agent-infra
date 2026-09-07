@@ -1,8 +1,10 @@
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
+	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	framePilotSseMessageV1,
 	MessageCommandRequestV1Schema,
@@ -18,6 +20,9 @@ import {
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
+	parseConversationPersistedEventPayloadV1,
+	projectConversationExecutionV1,
+	projectConversationMessagesV1,
 } from "@agent-infra/platform-core";
 import type {
 	ConversationExecutionDetailV1,
@@ -117,20 +122,7 @@ export interface ConversationRoutesDependencies {
 type ConversationProjection = ReturnType<
 	typeof ConversationProjectionV1Schema.parse
 >;
-type MessageProjection = ReturnType<typeof MessageProjectionV1Schema.parse>;
 type SseMessage = ReturnType<typeof ConversationSseMessageV1Schema.parse>;
-
-const createConversationRequestSchema = {
-	safeParse(value: unknown) {
-		return typeof value === "object" &&
-			value !== null &&
-			!Array.isArray(value) &&
-			Object.keys(value).length === 1 &&
-			(value as { schemaVersion?: unknown }).schemaVersion === 1
-			? { success: true as const, data: { schemaVersion: 1 as const } }
-			: { success: false as const, error: undefined };
-	},
-};
 
 function fail(
 	code: ConstructorParameters<typeof HttpProtocolError>[0],
@@ -284,31 +276,10 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function record(input: unknown): Record<string, unknown> {
-	if (typeof input !== "object" || input === null || Array.isArray(input)) {
-		throw new Error("Invalid persisted event");
-	}
-	return input as Record<string, unknown>;
-}
-
-function exactRecord(
-	input: unknown,
-	required: readonly string[],
-	optional: readonly string[] = [],
-): Record<string, unknown> {
-	const value = record(input);
-	const allowed = new Set([...required, ...optional]);
-	if (
-		Object.keys(value).some((key) => !allowed.has(key)) ||
-		required.some((key) => !Object.hasOwn(value, key))
-	) {
-		throw new Error("Invalid persisted event shape");
-	}
-	return value;
-}
-
 function eventProjection(input: ConversationQueryEventV1): SseMessage {
-	let persisted = record(input.eventPayload);
+	const persisted = parseConversationPersistedEventPayloadV1(
+		input.eventPayload,
+	);
 	if (persisted.type !== input.eventType) {
 		throw new Error("Invalid persisted event type");
 	}
@@ -323,26 +294,19 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 		occurredAt: input.occurredAt.toISOString(),
 	};
 	let projected: unknown;
-	if (input.eventType === "text.delta") {
-		persisted = exactRecord(persisted, ["type", "text"]);
+	if (persisted.type === "text.delta") {
 		projected = {
 			...base,
 			type: "text.delta",
 			payload: { text: persisted.text },
 		};
-	} else if (input.eventType === "execution.status") {
-		persisted = exactRecord(persisted, ["type", "status"]);
+	} else if (persisted.type === "execution.status") {
 		projected = {
 			...base,
 			type: "execution.status",
 			payload: { status: persisted.status },
 		};
-	} else if (input.eventType === "execution.detail") {
-		persisted = exactRecord(
-			persisted,
-			["type", "category", "summary"],
-			["callId"],
-		);
+	} else if (persisted.type === "execution.detail") {
 		projected = {
 			...base,
 			type: "execution.detail",
@@ -352,14 +316,7 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				...(persisted.callId === undefined ? {} : { callId: persisted.callId }),
 			},
 		};
-	} else if (input.eventType === "result.file") {
-		persisted = exactRecord(persisted, [
-			"type",
-			"fileId",
-			"name",
-			"mediaType",
-			"sizeBytes",
-		]);
+	} else if (persisted.type === "result.file") {
 		projected = {
 			...base,
 			type: "result.file",
@@ -370,13 +327,7 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				sizeBytes: persisted.sizeBytes,
 			},
 		};
-	} else if (input.eventType === "conversation.error") {
-		persisted = exactRecord(persisted, [
-			"type",
-			"code",
-			"message",
-			"retryable",
-		]);
+	} else if (persisted.type === "conversation.error") {
 		projected = {
 			...base,
 			type: "conversation.error",
@@ -390,13 +341,7 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				},
 			},
 		};
-	} else if (input.eventType === "model.selection.fell_back") {
-		persisted = exactRecord(persisted, [
-			"type",
-			"modelOptionId",
-			"reasoningLevel",
-			"reason",
-		]);
+	} else if (persisted.type === "model.selection.fell_back") {
 		projected = {
 			...base,
 			type: "model.selection.fell_back",
@@ -412,28 +357,6 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 	return ConversationSseMessageV1Schema.parse(projected);
 }
 
-function executionStatus(
-	input: string,
-):
-	| "submitted"
-	| "processing"
-	| "completed"
-	| "failed"
-	| "cancelled"
-	| "unknown" {
-	if (
-		input === "submitted" ||
-		input === "processing" ||
-		input === "completed" ||
-		input === "failed" ||
-		input === "cancelled" ||
-		input === "unknown"
-	) {
-		return input;
-	}
-	throw new Error("Invalid persisted execution status");
-}
-
 function failure(traceId: string | null) {
 	if (!traceId) throw new Error("Missing execution trace");
 	return {
@@ -447,100 +370,30 @@ function failure(traceId: string | null) {
 
 function messageProjections(
 	input: ConversationQueryDetailV1,
-): MessageProjection[] {
-	const userMessages = input.messages.map((item) =>
-		MessageProjectionV1Schema.parse({
-			messageId: item.messageId,
-			role: "user",
-			text: item.text,
-			status: item.status,
-			executionId: item.executionId,
-			replyToMessageId: null,
-			answerVersion: null,
-			isCurrentAnswer: null,
-			error: null,
-			createdAt: item.createdAt.toISOString(),
-		}),
-	);
-	const bySource = new Map<string, typeof input.executions>();
-	for (const item of input.executions) {
-		if (!item.sourceMessageId) continue;
-		bySource.set(item.sourceMessageId, [
-			...(bySource.get(item.sourceMessageId) ?? []),
-			item,
-		]);
-	}
-	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
-		items.flatMap((item, index) => {
-			const events = input.events.filter(
-				(event) => event.executionId === item.executionId,
-			);
-			const text = events
-				.filter((event) => event.eventType === "text.delta")
-				.map((event) => record(event.eventPayload).text)
-				.join("");
-			const status = executionStatus(item.status);
-			if (
-				text.length === 0 &&
-				!["completed", "failed", "cancelled"].includes(status)
-			) {
-				return [];
-			}
-			const messageStatus = status === "unknown" ? "processing" : status;
-			const createdAt = events[0]?.occurredAt ?? item.updatedAt;
-			return [
-				MessageProjectionV1Schema.parse({
-					messageId: `assistant:${item.executionId}`,
-					role: "assistant",
-					text,
-					status: messageStatus,
-					executionId: item.executionId,
-					replyToMessageId: sourceMessageId,
-					answerVersion: index + 1,
-					isCurrentAnswer: index === items.length - 1,
-					error: status === "failed" ? failure(item.traceId) : null,
-					createdAt: createdAt.toISOString(),
-				}),
-			];
-		}),
-	);
-	return [...userMessages, ...answers].toSorted(
-		(left, right) =>
-			left.createdAt.localeCompare(right.createdAt) ||
-			left.messageId.localeCompare(right.messageId),
+): ReturnType<typeof MessageProjectionV1Schema.parse>[] {
+	return projectConversationMessagesV1(input).map(
+		({ failureTraceId, ...item }) =>
+			MessageProjectionV1Schema.parse({
+				...item,
+				error: failureTraceId === null ? null : failure(failureTraceId),
+				createdAt: item.createdAt.toISOString(),
+			}),
 	);
 }
 
 function executionProjection(input: ConversationExecutionDetailV1) {
-	const status = executionStatus(input.execution.status);
-	const statusEvents = input.events.flatMap((item) => {
-		if (item.eventType !== "execution.status") return [];
-		const persisted = record(item.eventPayload);
-		const eventStatus = executionStatus(String(persisted.status));
-		return [
-			{
-				occurredAt: item.occurredAt.toISOString(),
-				kind: "status" as const,
-				status: eventStatus,
-				summary: `Execution ${eventStatus}.`,
-			},
-		];
-	});
-	const startedAt = statusEvents.find(
-		({ status }) => status === "processing",
-	)?.occurredAt;
-	const finishedAt = statusEvents.find(({ status }) =>
-		["completed", "failed", "cancelled"].includes(status),
-	)?.occurredAt;
+	const { failureTraceId, ...projection } =
+		projectConversationExecutionV1(input);
 	return ExecutionDetailProjectionV1Schema.parse({
+		...projection,
 		schemaVersion: 1,
-		executionId: input.execution.executionId,
-		conversationId: input.execution.conversationId,
-		status,
-		processSummary: statusEvents,
-		startedAt: startedAt ?? null,
-		finishedAt: finishedAt ?? null,
-		error: status === "failed" ? failure(input.execution.traceId) : null,
+		processSummary: projection.processSummary.map((item) => ({
+			...item,
+			occurredAt: item.occurredAt.toISOString(),
+		})),
+		startedAt: projection.startedAt?.toISOString() ?? null,
+		finishedAt: projection.finishedAt?.toISOString() ?? null,
+		error: failureTraceId === null ? null : failure(failureTraceId),
 	});
 }
 
@@ -683,7 +536,12 @@ export function registerConversationRoutes(
 					);
 				}),
 			);
-			return context.json({ items, nextCursor: result.nextCursor });
+			return context.json(
+				ConversationPageV1Schema.parse({
+					items,
+					nextCursor: result.nextCursor,
+				}),
+			);
 		}),
 	);
 
@@ -696,7 +554,7 @@ export function registerConversationRoutes(
 			);
 			await parseJson(
 				context.req.raw,
-				createConversationRequestSchema,
+				CreateConversationRequestV1Schema,
 				metadata.traceId,
 			);
 			const agentId = context.req.param("agentId");

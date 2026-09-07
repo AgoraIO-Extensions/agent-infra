@@ -456,7 +456,7 @@ const agentPage = z.strictObject({
 	items: z.array(AgentProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
-const conversationPage = z.strictObject({
+export const ConversationPageV1Schema = z.strictObject({
 	items: z.array(ConversationProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
@@ -475,7 +475,7 @@ const executionPath = z.strictObject({
 	conversationId: pathId(),
 	executionId: pathId(),
 });
-const createConversationRequest = z.strictObject({
+export const CreateConversationRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 });
 
@@ -634,14 +634,14 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			operationId: "listConversations",
 			requestParams: { path: agentPath, query: pageQuery },
 			responses: {
-				"200": jsonResponse("Conversation history", conversationPage),
+				"200": jsonResponse("Conversation history", ConversationPageV1Schema),
 				...errorResponses,
 			},
 		},
 		post: {
 			operationId: "createConversation",
 			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(createConversationRequest),
+			requestBody: requiredJsonRequestBody(CreateConversationRequestV1Schema),
 			responses: {
 				"201": jsonResponse(
 					"Conversation created",

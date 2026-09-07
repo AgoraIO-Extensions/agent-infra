@@ -360,7 +360,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 	invalidInput();
 }
 
-function parsePersistedEventPayload(
+export function parseConversationPersistedEventPayloadV1(
 	input: unknown,
 ): ConversationPersistedEventPayloadV1 {
 	if (eventType(input) !== "model.selection.fell_back")
@@ -451,7 +451,7 @@ function parsePersistedEvent(input: unknown): PersistedConversationEventV1 {
 		sequence: values.sequence,
 		conversationCursor: values.conversationCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
-		event: parsePersistedEventPayload(values.event),
+		event: parseConversationPersistedEventPayloadV1(values.event),
 	};
 }
 
