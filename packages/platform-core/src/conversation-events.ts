@@ -72,6 +72,11 @@ export interface PersistedConversationEventV1 {
 	readonly event: ConversationPersistedEventPayloadV1;
 }
 
+export type PersistedRuntimeConversationEventV1 = Omit<
+	PersistedConversationEventV1,
+	"event"
+> & { readonly event: ConversationNormalizedEventV1 };
+
 export interface ConversationEventStateV1 {
 	readonly conversation:
 		| {
@@ -91,7 +96,7 @@ export interface ConversationEventStateV1 {
 		| undefined;
 	readonly existingEvent:
 		| {
-				readonly event: PersistedConversationEventV1;
+				readonly event: PersistedRuntimeConversationEventV1;
 				readonly eventDigest: string;
 		  }
 		| undefined;
@@ -99,7 +104,7 @@ export interface ConversationEventStateV1 {
 
 export interface ConversationEventWritePlanV1 {
 	readonly schemaVersion: 1;
-	readonly event: PersistedConversationEventV1;
+	readonly event: PersistedRuntimeConversationEventV1;
 	readonly adapterEventKey: string;
 	readonly eventDigest: string;
 	readonly runtimeCursor: string;
@@ -110,7 +115,7 @@ export interface ConversationEventWritePlanV1 {
 export type ConversationEventDecisionV1 =
 	| {
 			readonly outcome: "accepted" | "replayed";
-			readonly event: PersistedConversationEventV1;
+			readonly event: PersistedRuntimeConversationEventV1;
 	  }
 	| { readonly outcome: "stale" };
 
@@ -450,6 +455,14 @@ function parsePersistedEvent(input: unknown): PersistedConversationEventV1 {
 	};
 }
 
+function parsePersistedRuntimeEvent(
+	input: unknown,
+): PersistedRuntimeConversationEventV1 {
+	const persisted = parsePersistedEvent(input);
+	if (persisted.event.type === "model.selection.fell_back") invalidInput();
+	return { ...persisted, event: persisted.event };
+}
+
 function parseState(input: ConversationEventStateV1): ConversationEventStateV1 {
 	try {
 		const values = snapshotObject(input, [
@@ -515,8 +528,9 @@ function parseState(input: ConversationEventStateV1): ConversationEventStateV1 {
 			) {
 				unavailable();
 			}
+			const event = parsePersistedRuntimeEvent(state.event);
 			return {
-				event: parsePersistedEvent(state.event),
+				event,
 				eventDigest: state.eventDigest,
 			};
 		})();
@@ -592,7 +606,7 @@ function normalizeDecision(
 			if (values.outcome !== "accepted" || values.event === undefined) {
 				return unavailable();
 			}
-			const event = parsePersistedEvent(values.event);
+			const event = parsePersistedRuntimeEvent(values.event);
 			if (!samePersistedEvent(event, expected.event)) return unavailable();
 			return { outcome: "accepted", event };
 		}
@@ -606,7 +620,7 @@ function normalizeDecision(
 			return unavailable();
 		}
 		if (values.event === undefined) return unavailable();
-		const event = parsePersistedEvent(values.event);
+		const event = parsePersistedRuntimeEvent(values.event);
 		if (!samePersistedEvent(event, expected.event)) return unavailable();
 		return { outcome: "replayed", event };
 	} catch {
@@ -662,7 +676,7 @@ export function createConversationEventUseCaseV1(
 							) {
 								return { outcome: "stale" as const };
 							}
-							const event: PersistedConversationEventV1 = {
+							const event: PersistedRuntimeConversationEventV1 = {
 								schemaVersion: 1,
 								eventId: nextOpaqueId(newId),
 								conversationId: command.conversationId,

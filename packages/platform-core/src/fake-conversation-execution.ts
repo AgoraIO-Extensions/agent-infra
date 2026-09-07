@@ -6,6 +6,7 @@ import {
 	type ConversationEventWritePlanV1,
 	createConversationEventUseCaseV1,
 	type PersistedConversationEventV1,
+	type PersistedRuntimeConversationEventV1,
 } from "./conversation-events.js";
 import {
 	type ConversationCommandDecisionV1,
@@ -100,7 +101,7 @@ type StoredTimelineEvent =
 			readonly adapterEventKey: string;
 			readonly eventDigest: string;
 			readonly runtimeCursor: string;
-			readonly event: PersistedConversationEventV1;
+			readonly event: PersistedRuntimeConversationEventV1;
 	  }
 	| {
 			readonly source: "platform";
