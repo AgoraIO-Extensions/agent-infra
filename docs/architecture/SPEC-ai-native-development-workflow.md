@@ -375,7 +375,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   闭环；Review 摘要不阻塞合并。
 - provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选
   Reviewer 的可信 current-head evidence：PR-Agent 使用当前 workflow run 中 `PR-Agent Analysis` job
-  的确定性 token decision log，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
+  的确定性 token decision log 与已发布的 persistent Review；后者必须由 GitHub Actions App 发布，
+  带固定 full-review identity、当前 head 和 run/attempt 标记，且正文与该 Analysis log 中的输出一致。
+  标记由可信 workflow 配置写入 heading，不由模型生成；首次发布与 persistent update 都必须验证。
+  缺失、被编辑、超出该 Analysis job 时间窗口、无法验证或带 coverage footer 的输出不能通过。
+  Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
   完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回失败 Check 和稳定 reason code。
 - `Automated Review Coverage` 只由隔离的 check-only App 发布到精确 head；provider workflow 中的
@@ -433,7 +437,8 @@ PR 正文列出验证内容。
 
 所有 PR 必须同时满足：
 
-- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate` 和 `Human Validation Gate` 通过。
+- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate`、`Human Validation Gate` 和适用的
+  `Automated Review Coverage` 通过。
 - 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
 - 所有 Review thread 已解决。
 

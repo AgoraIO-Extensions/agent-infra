@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { appendFile, readFile } from "node:fs/promises";
 
 import {
+  GITHUB_ACTIONS_APP_ID,
   gateExternalId,
   selectCurrentGateCheck,
 } from "./check-run-contract.mjs";
@@ -13,6 +14,11 @@ import {
 
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
 const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
+const REVIEW_IDENTITY = "<!-- pr-agent:review:full -->";
+const REVIEW_HEADER =
+  /^## PR Reviewer Guide \[head ([a-f0-9]{40}); run ([1-9][0-9]*)\/([1-9][0-9]*)\] 🔍$/;
+const COVERAGE_FOOTER =
+  "⚠️ **Review coverage:** The following files were not included in this review because of the token budget:";
 
 const FULL_DIFF_PATTERN =
   /^Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\.$/;
@@ -21,7 +27,13 @@ const PRUNED_DIFF_PATTERN =
 const JOB_LOG_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
-function result(provider, headSha, conclusion, reasonCode, omittedFileCount = 0) {
+function result(
+  provider,
+  headSha,
+  conclusion,
+  reasonCode,
+  omittedFileCount = conclusion === "success" ? 0 : null,
+) {
   return { conclusion, headSha, omittedFileCount, provider, reasonCode };
 }
 
@@ -38,8 +50,8 @@ function runFailure(provider, headSha, runResult) {
   return null;
 }
 
-function jobLogMessages(log) {
-  const messages = [];
+function jobLogRecords(log) {
+  const records = [];
   for (const line of log.split(/\r?\n/)) {
     const separator = line.indexOf(" ");
     if (
@@ -49,13 +61,13 @@ function jobLogMessages(log) {
       continue;
     }
     try {
-      const message = JSON.parse(line.slice(separator + 1))?.record?.message;
-      if (typeof message === "string") messages.push(message);
+      const record = JSON.parse(line.slice(separator + 1))?.record;
+      if (typeof record?.message === "string") records.push(record);
     } catch {
       continue;
     }
   }
-  return messages;
+  return records;
 }
 
 function evaluatePrAgent({
@@ -63,6 +75,9 @@ function evaluatePrAgent({
   runResult,
   analysisJobConclusion,
   analysisLog,
+  reviewContext,
+  reviewComments,
+  analysisJob,
 }) {
   const failed = runFailure("pr-agent", expectedHead, runResult);
   if (failed) return failed;
@@ -72,21 +87,36 @@ function evaluatePrAgent({
   if (analysisJobConclusion !== "success") {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
-  if (Buffer.byteLength(analysisLog, "utf8") > MAX_EVIDENCE_BYTES) {
+  if (
+    typeof analysisLog !== "string" ||
+    Buffer.byteLength(analysisLog, "utf8") > MAX_EVIDENCE_BYTES
+  ) {
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
 
-  const messages = jobLogMessages(analysisLog);
+  const records = jobLogRecords(analysisLog);
+  const messages = records
+    .filter(
+      (record) =>
+        record.name === "pr_agent.algo.pr_processing" &&
+        record.function === "get_pr_diff",
+    )
+    .map((record) => record.message);
   const completeMatches = messages.filter((message) =>
     FULL_DIFF_PATTERN.test(message),
   );
   const prunedMatches = messages.filter((message) =>
     PRUNED_DIFF_PATTERN.test(message),
   );
-  if (completeMatches.length === 1 && prunedMatches.length === 0) {
-    return result("pr-agent", expectedHead, "success", "complete");
-  }
-  if (prunedMatches.length === 1 && completeMatches.length === 0) {
+  // Even a later full-diff decision cannot erase earlier pruning/filtering.
+  if (
+    prunedMatches.length ||
+    records.some(
+      (record) =>
+        record.name === "pr_agent.git_providers.github_provider" &&
+        record.message.startsWith("Filtered out "),
+    )
+  ) {
     return result(
       "pr-agent",
       expectedHead,
@@ -95,21 +125,122 @@ function evaluatePrAgent({
       null,
     );
   }
-  return result("pr-agent", expectedHead, "failure", "review-output-invalid");
+  const reject = (reason = "review-output-invalid") =>
+    result("pr-agent", expectedHead, "failure", reason);
+  if (completeMatches.length !== 1) return reject();
+  if (
+    records.some(
+      (record) =>
+        record.name === "pr_agent.tools.pr_reviewer" &&
+        record.message === "Failed to parse review data",
+    )
+  )
+    return reject();
+
+  const outputs = records.filter(
+    (record) =>
+      record.name === "pr_agent.tools.pr_reviewer" &&
+      record.function === "run" &&
+      record.message === "PR output",
+  );
+  if (!outputs.length) return reject("review-output-missing");
+  const output = outputs[0].extra?.artifact;
+  if (outputs.length !== 1 || typeof output !== "string" || !output.trim())
+    return reject();
+  const marker = output.split("\n", 1)[0].match(REVIEW_HEADER);
+  if (!marker || !output.startsWith(`${marker[0]}\n\n`)) return reject();
+  if (marker[1] !== expectedHead) return reject("review-output-stale");
+  if (
+    !reviewContext ||
+    marker[2] !== String(reviewContext.runId) ||
+    marker[3] !== String(reviewContext.runAttempt)
+  )
+    return reject();
+  if (output.includes(COVERAGE_FOOTER)) {
+    return result(
+      "pr-agent",
+      expectedHead,
+      "failure",
+      "review-coverage-incomplete",
+      null,
+    );
+  }
+
+  if (!Array.isArray(reviewComments)) return reject("review-output-missing");
+  const candidates = reviewComments.filter(
+    (comment) =>
+      typeof comment?.body === "string" &&
+      comment.body.split("\n").slice(0, 5).includes(REVIEW_IDENTITY),
+  );
+  if (!candidates.length) return reject("review-output-missing");
+  const current = candidates.filter((comment) =>
+    comment.body.startsWith(`${marker[0]}\n\n${REVIEW_IDENTITY}\n\n`),
+  );
+  if (current.length !== 1) {
+    if (
+      current.length === 0 &&
+      candidates.every((comment) => {
+        const head = comment.body.split("\n", 1)[0].match(REVIEW_HEADER)?.[1];
+        return head && head !== expectedHead;
+      })
+    )
+      return reject("review-output-stale");
+    return reject();
+  }
+  const comment = current[0];
+  const { repository, prNumber } = reviewContext;
+  const updatedAt = Date.parse(comment.updated_at);
+  const startedAt = Date.parse(analysisJob?.started_at);
+  const completedAt = Date.parse(analysisJob?.completed_at);
+  if (
+    comment.user?.id !== 41_898_282 ||
+    comment.user?.login !== "github-actions[bot]" ||
+    comment.user?.type !== "Bot" ||
+    comment.performed_via_github_app?.id !== GITHUB_ACTIONS_APP_ID ||
+    comment.issue_url !==
+      `https://api.github.com/repos/${repository}/issues/${prNumber}` ||
+    !Number.isSafeInteger(comment.id) ||
+    comment.id <= 0 ||
+    ![updatedAt, startedAt, completedAt].every(Number.isFinite) ||
+    updatedAt < startedAt ||
+    updatedAt > completedAt
+  )
+    return reject();
+
+  // Compare bytes with the immutable Analysis artifact, allowing only the two
+  // deterministic persistent-comment wrappers from the official provider.
+  const remainder = output.slice(marker[0].length + 2);
+  if (!remainder.trim()) return reject();
+  const prefix = `${marker[0]}\n\n${REVIEW_IDENTITY}\n\n`;
+  const updateHeader = `#### (Review updated until commit https://github.com/${repository}/commit/${expectedHead})\n\n\n`;
+  if (
+    comment.body !== prefix + remainder &&
+    comment.body !== prefix + updateHeader + remainder
+  )
+    return reject();
+  return result("pr-agent", expectedHead, "success", "complete");
 }
 
-function reasonCode(summary) {
-  return String(summary ?? "").match(/^reason_code: ([a-z0-9_-]+)$/m)?.[1];
-}
-
-function evaluateClaude({ expectedHead, runResult, claudeReview }) {
+function evaluateClaude({ expectedHead, runResult, claudeReview, prNumber }) {
   const failed = runFailure("claude", expectedHead, runResult);
   if (failed) return failed;
   if (!claudeReview) {
     return result("claude", expectedHead, "failure", "review-output-missing");
   }
 
-  const reason = reasonCode(claudeReview.output?.summary);
+  if (claudeReview.head_sha !== expectedHead) {
+    return result("claude", expectedHead, "failure", "review-output-stale");
+  }
+  if (
+    claudeReview.status !== "completed" ||
+    !selectReviewGateCheck([claudeReview], expectedHead, prNumber)
+  ) {
+    return result("claude", expectedHead, "failure", "review-output-invalid");
+  }
+  const reason = uniqueSummaryValue(
+    claudeReview.output?.summary,
+    "reason_code: ",
+  );
   const completePair =
     (reason === "success" && claudeReview.conclusion === "success") ||
     (reason === "blocking_finding" && claudeReview.conclusion === "failure");
@@ -129,6 +260,14 @@ function evaluateClaude({ expectedHead, runResult, claudeReview }) {
 }
 
 export function evaluateReviewCoverage(input) {
+  if (input?.selectedProvider !== input?.provider) {
+    return result(
+      input?.provider,
+      input?.expectedHead,
+      "failure",
+      "provider-mismatch",
+    );
+  }
   if (input?.provider === "pr-agent") return evaluatePrAgent(input);
   if (input?.provider === "claude") return evaluateClaude(input);
   return result(
@@ -234,7 +373,11 @@ export async function publishCoverageCheck({
   const response = await request(
     `/repos/${repository}/commits/${expectedHead}/check-runs?check_name=${encodedName}&filter=latest&per_page=100`,
   );
-  let check = selectCoverageCheck(response.check_runs ?? [], expectedHead, prNumber);
+  let check = selectCoverageCheck(
+    response.check_runs ?? [],
+    expectedHead,
+    prNumber,
+  );
   if (!check) {
     check = await checkRequest(`/repos/${repository}/check-runs`, {
       method: "POST",
@@ -251,7 +394,8 @@ export async function publishCoverageCheck({
         }),
         output: {
           title: "Automated Review Coverage: in_progress",
-          summary: "Waiting for current-head Automated Review coverage evidence.",
+          summary:
+            "Waiting for current-head Automated Review coverage evidence.",
         },
       }),
     });
@@ -292,7 +436,9 @@ async function githubRequest(path, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
+    throw new Error(
+      `GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`,
+    );
   }
   return response.status === 204 ? null : response.json();
 }
@@ -334,26 +480,68 @@ async function githubTextRequest(path) {
   return readBoundedTextResponse(response);
 }
 
-async function collectEvidence({ repository, prNumber, expectedHead, provider }) {
+export async function collectEvidence({
+  repository,
+  prNumber,
+  expectedHead,
+  provider,
+  runId,
+  runAttempt,
+  request = githubRequest,
+  textRequest = githubTextRequest,
+}) {
   if (provider === "pr-agent") {
-    const runId = requiredEnvironment("GITHUB_RUN_ID");
-    const response = await githubRequest(
-      `/repos/${repository}/actions/runs/${runId}/jobs?filter=latest&per_page=100`,
+    const run = await request(
+      `/repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}`,
+    );
+    if (
+      run.id !== runId ||
+      run.run_attempt !== runAttempt ||
+      run.repository?.full_name !== repository ||
+      run.path !== ".github/workflows/pr-agent-review.yml" ||
+      run.event !== "pull_request_target"
+    )
+      return {};
+    if (["failure", "cancelled"].includes(run.conclusion)) {
+      return { runResult: run.conclusion };
+    }
+    const response = await request(
+      `/repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
     );
     const jobs = (response.jobs ?? []).filter(
       (job) => job.name === "PR-Agent Analysis",
     );
-    if (jobs.length !== 1) return {};
+    if (
+      jobs.length !== 1 ||
+      jobs[0].run_id !== runId ||
+      jobs[0].status !== "completed"
+    )
+      return {};
+    const reviewComments = [];
+    for (let page = 1; ; page += 1) {
+      if (page > 10)
+        throw new Error("Review comment inventory exceeds evidence limit");
+      const comments = await request(
+        `/repos/${repository}/issues/${prNumber}/comments?per_page=100&page=${page}`,
+      );
+      if (!Array.isArray(comments))
+        throw new Error("Invalid Review comment inventory");
+      reviewComments.push(...comments);
+      if (comments.length < 100) break;
+    }
     return {
+      reviewContext: { repository, prNumber, runId, runAttempt },
+      reviewComments,
+      analysisJob: jobs[0],
       analysisJobConclusion: jobs[0].conclusion,
-      analysisLog: await githubTextRequest(
+      analysisLog: await textRequest(
         `/repos/${repository}/actions/jobs/${jobs[0].id}/logs`,
       ),
     };
   }
   if (provider === "claude") {
     const encodedName = encodeURIComponent("Claude Review Gate");
-    const response = await githubRequest(
+    const response = await request(
       `/repos/${repository}/commits/${expectedHead}/check-runs?check_name=${encodedName}&filter=all&per_page=100`,
     );
     return {
@@ -380,6 +568,8 @@ async function main() {
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const prNumber = Number(requiredEnvironment("PR_NUMBER"));
   const provider = requiredEnvironment("REVIEW_PROVIDER");
+  const selectedProvider =
+    process.env.SELECTED_REVIEW_PROVIDER === "claude" ? "claude" : "pr-agent";
   const event = process.env.GITHUB_EVENT_PATH
     ? JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"))
     : {};
@@ -388,10 +578,19 @@ async function main() {
   if (!expectedHead) throw new Error("Current Review head is required");
   const runResult = requiredEnvironment("REVIEW_RUN_RESULT");
   const evidence = await collectReviewEvidence(runResult, () =>
-    collectEvidence({ repository, prNumber, expectedHead, provider }),
+    collectEvidence({
+      repository,
+      prNumber,
+      expectedHead,
+      provider,
+      runId: Number(requiredEnvironment("GITHUB_RUN_ID")),
+      runAttempt: Number(requiredEnvironment("GITHUB_RUN_ATTEMPT")),
+    }),
   );
   const coverage = evaluateReviewCoverage({
     provider,
+    selectedProvider,
+    prNumber,
     expectedHead,
     runResult,
     ...evidence,
@@ -414,7 +613,10 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

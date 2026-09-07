@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildCoverageCheckOutput,
   buildCoverageJobSummary,
+  collectEvidence,
   collectReviewEvidence,
   evaluateReviewCoverage,
   publishCoverageCheck,
@@ -18,10 +19,61 @@ const prunedDecision =
   "Tokens: 135314, total tokens over limit: 32000, pruning diff.";
 const logRecord = (message, extra = {}) =>
   `2026-08-29T00:50:50.5849411Z ${JSON.stringify({
-    record: { extra, message },
+    record: {
+      extra,
+      message,
+      name: "pr_agent.algo.pr_processing",
+      function: "get_pr_diff",
+    },
     text: `${message}\n`,
   })}`;
-const completeLog = logRecord(completeDecision);
+const heading = `## PR Reviewer Guide [head ${head}; run 123/2] 🔍`;
+const output = `${heading}\n\nReview observations.`;
+const outputRecord = (artifact = output) =>
+  `2026-08-29T00:51:00Z ${JSON.stringify({
+    record: {
+      name: "pr_agent.tools.pr_reviewer",
+      function: "run",
+      message: "PR output",
+      extra: { artifact },
+    },
+  })}`;
+const completeLog = `${logRecord(completeDecision)}\n${outputRecord()}`;
+const reviewContext = {
+  repository: "example/repo",
+  prNumber: 42,
+  runId: 123,
+  runAttempt: 2,
+};
+const analysisJob = {
+  started_at: "2026-08-29T00:50:00Z",
+  completed_at: "2026-08-29T00:52:00Z",
+};
+const comment = {
+  id: 25,
+  user: { login: "github-actions[bot]", id: 41_898_282, type: "Bot" },
+  performed_via_github_app: { id: 15_368 },
+  issue_url: "https://api.github.com/repos/example/repo/issues/42",
+  updated_at: "2026-08-29T00:51:01Z",
+  body: `${heading}\n\n<!-- pr-agent:review:full -->\n\nReview observations.`,
+};
+const evidence = { reviewContext, analysisJob, reviewComments: [comment] };
+const input = {
+  provider: "pr-agent",
+  selectedProvider: "pr-agent",
+  expectedHead: head,
+  runResult: "success",
+  analysisJobConclusion: "success",
+  analysisLog: completeLog,
+  ...evidence,
+};
+const claudeCheck = {
+  name: "Claude Review Gate",
+  app: { id: 4_503_079 },
+  head_sha: head,
+  status: "completed",
+  external_id: `agent-infra:pr:42:claude-review-gate:${head}`,
+};
 const prunedLog = logRecord(prunedDecision);
 
 test("bounds downloaded review evidence while reading", async () => {
@@ -39,9 +91,15 @@ test("skips failed runs and degrades evidence collection errors", async () => {
     throw new Error("logs unavailable");
   };
 
-  assert.deepEqual(await collectReviewEvidence("failure", failingCollector), {});
+  assert.deepEqual(
+    await collectReviewEvidence("failure", failingCollector),
+    {},
+  );
   assert.equal(calls, 0);
-  assert.deepEqual(await collectReviewEvidence("success", failingCollector), {});
+  assert.deepEqual(
+    await collectReviewEvidence("success", failingCollector),
+    {},
+  );
   assert.equal(calls, 1);
   assert.deepEqual(
     await collectReviewEvidence("success", async () => ({
@@ -54,7 +112,9 @@ test("skips failed runs and degrades evidence collection errors", async () => {
 test("accepts a complete current-head PR-Agent review", () => {
   assert.deepEqual(
     evaluateReviewCoverage({
+      ...evidence,
       provider: "pr-agent",
+      selectedProvider: "pr-agent",
       expectedHead: head,
       runResult: "success",
       analysisJobConclusion: "success",
@@ -73,7 +133,9 @@ test("accepts a complete current-head PR-Agent review", () => {
 test("fails closed when PR-Agent reports omitted files", () => {
   assert.deepEqual(
     evaluateReviewCoverage({
+      ...evidence,
       provider: "pr-agent",
+      selectedProvider: "pr-agent",
       expectedHead: head,
       runResult: "success",
       analysisJobConclusion: "success",
@@ -106,7 +168,7 @@ test("rejects missing, malformed, or mismatched PR-Agent job evidence", () => {
     },
     {
       analysisLog: `${completeLog}\n${prunedLog}`,
-      reasonCode: "review-output-invalid",
+      reasonCode: "review-coverage-incomplete",
     },
     {
       analysisLog: completeLog,
@@ -122,7 +184,9 @@ test("rejects missing, malformed, or mismatched PR-Agent job evidence", () => {
   } of cases) {
     assert.equal(
       evaluateReviewCoverage({
+        ...evidence,
         provider: "pr-agent",
+        selectedProvider: "pr-agent",
         expectedHead: head,
         runResult: "success",
         analysisJobConclusion,
@@ -141,7 +205,9 @@ test("maps reviewer control outcomes to stable reasons", () => {
   ]) {
     assert.equal(
       evaluateReviewCoverage({
+        ...evidence,
         provider: "pr-agent",
+        selectedProvider: "pr-agent",
         expectedHead: head,
         runResult,
         analysisJobConclusion: runResult,
@@ -170,9 +236,11 @@ test("maps trusted Claude Review Gate evidence to coverage only", () => {
     assert.equal(
       evaluateReviewCoverage({
         provider: "claude",
+        selectedProvider: "claude",
+        prNumber: 42,
         expectedHead: head,
         runResult: "success",
-        claudeReview: { conclusion, output: { summary } },
+        claudeReview: { ...claudeCheck, conclusion, output: { summary } },
       }).reasonCode,
       expected,
     );
@@ -188,9 +256,11 @@ test("maps trusted Claude Review Gate evidence to coverage only", () => {
     assert.equal(
       evaluateReviewCoverage({
         provider: "claude",
+        selectedProvider: "claude",
+        prNumber: 42,
         expectedHead: head,
         runResult: "success",
-        claudeReview,
+        claudeReview: { ...claudeCheck, ...claudeReview },
       }).reasonCode,
       "review-output-invalid",
     );
@@ -252,7 +322,9 @@ test("publishes the required Gate through a current-head dedicated App path", as
   const checkRequests = [];
   let targetReads = 0;
   const coverage = evaluateReviewCoverage({
+    ...evidence,
     provider: "pr-agent",
+    selectedProvider: "pr-agent",
     expectedHead: head,
     runResult: "success",
     analysisJobConclusion: "success",
@@ -280,7 +352,10 @@ test("publishes the required Gate through a current-head dedicated App path", as
   });
 
   assert.equal(targetReads, 2);
-  assert.match(requests[1], /check-runs\?check_name=Automated%20Review%20Coverage/);
+  assert.match(
+    requests[1],
+    /check-runs\?check_name=Automated%20Review%20Coverage/,
+  );
   assert.deepEqual(checkRequests[0], {
     path: "/repos/example/repo/check-runs",
     body: {
@@ -329,4 +404,338 @@ test("renders a bounded Job Summary from coverage facts", () => {
       "",
     ].join("\n"),
   );
+});
+
+test("requires the published current-run output, not only a full-diff decision", () => {
+  const cases = [
+    [
+      "missing artifact",
+      { analysisLog: logRecord(completeDecision) },
+      "review-output-missing",
+    ],
+    ["missing comment", { reviewComments: [] }, "review-output-missing"],
+    [
+      "stale output",
+      {
+        analysisLog: `${logRecord(completeDecision)}\n${outputRecord(output.replace(head, "b".repeat(40)))}`,
+      },
+      "review-output-stale",
+    ],
+    [
+      "stale comment",
+      {
+        reviewComments: [
+          { ...comment, body: comment.body.replace(head, "b".repeat(40)) },
+        ],
+      },
+      "review-output-stale",
+    ],
+    [
+      "old attempt",
+      { reviewContext: { ...reviewContext, runAttempt: 3 } },
+      "review-output-invalid",
+    ],
+    [
+      "old run",
+      { reviewContext: { ...reviewContext, runId: 124 } },
+      "review-output-invalid",
+    ],
+    ["inactive provider", { selectedProvider: "claude" }, "provider-mismatch"],
+    [
+      "edited comment",
+      { reviewComments: [{ ...comment, body: `${comment.body}\nEdited.` }] },
+      "review-output-invalid",
+    ],
+    [
+      "untrusted user",
+      { reviewComments: [{ ...comment, user: { ...comment.user, id: 1 } }] },
+      "review-output-invalid",
+    ],
+    [
+      "untrusted app",
+      { reviewComments: [{ ...comment, performed_via_github_app: { id: 1 } }] },
+      "review-output-invalid",
+    ],
+    [
+      "wrong PR",
+      {
+        reviewComments: [
+          {
+            ...comment,
+            issue_url: "https://api.github.com/repos/example/repo/issues/43",
+          },
+        ],
+      },
+      "review-output-invalid",
+    ],
+    [
+      "missing timestamp",
+      { reviewComments: [{ ...comment, updated_at: undefined }] },
+      "review-output-invalid",
+    ],
+    [
+      "late edit",
+      { reviewComments: [{ ...comment, updated_at: "2026-08-29T00:52:01Z" }] },
+      "review-output-invalid",
+    ],
+    [
+      "early output",
+      { reviewComments: [{ ...comment, updated_at: "2026-08-29T00:49:59Z" }] },
+      "review-output-invalid",
+    ],
+    [
+      "duplicate output",
+      { reviewComments: [comment, { ...comment, id: 26 }] },
+      "review-output-invalid",
+    ],
+    [
+      "suggestions only",
+      {
+        reviewComments: [
+          {
+            ...comment,
+            body: comment.body.replace(
+              "pr-agent:review:full",
+              "pr-agent:improve:no-suggestions",
+            ),
+          },
+        ],
+      },
+      "review-output-missing",
+    ],
+    ["malformed log", { analysisLog: {} }, "review-output-invalid"],
+    [
+      "ambiguous artifact",
+      { analysisLog: `${completeLog}\n${outputRecord()}` },
+      "review-output-invalid",
+    ],
+    [
+      "spoofed log origin",
+      {
+        analysisLog: completeLog.replace(
+          "pr_agent.tools.pr_reviewer",
+          "pr_agent.tools.pr_code_suggestions",
+        ),
+      },
+      "review-output-missing",
+    ],
+  ];
+  for (const [label, change, reason] of cases) {
+    const actual = evaluateReviewCoverage({ ...input, ...change });
+    assert.equal(actual.conclusion, "failure", label);
+    assert.equal(actual.reasonCode, reason, label);
+  }
+});
+
+test("malformed output separators and null comment entries fail closed", () => {
+  const parseFailure = `2026-08-29T00:51:00Z ${JSON.stringify({
+    record: {
+      name: "pr_agent.tools.pr_reviewer",
+      message: "Failed to parse review data",
+    },
+  })}`;
+  assert.equal(
+    evaluateReviewCoverage({
+      ...input,
+      analysisLog: `${completeLog}\n${parseFailure}`,
+    }).reasonCode,
+    "review-output-invalid",
+  );
+  assert.equal(
+    evaluateReviewCoverage({
+      ...input,
+      analysisLog: `${logRecord(completeDecision)}\n${outputRecord(output.replace("\n\n", "\nx"))}`,
+    }).reasonCode,
+    "review-output-invalid",
+  );
+  assert.equal(
+    evaluateReviewCoverage({ ...input, reviewComments: [null] }).reasonCode,
+    "review-output-missing",
+  );
+});
+
+test("accepts the deterministic persistent update wrapper and same-run replay", () => {
+  const updated = {
+    ...comment,
+    body: comment.body.replace(
+      "Review observations.",
+      `#### (Review updated until commit https://github.com/example/repo/commit/${head})\n\n\nReview observations.`,
+    ),
+  };
+  const expected = evaluateReviewCoverage(input);
+  assert.deepEqual(
+    evaluateReviewCoverage({ ...input, reviewComments: [updated] }),
+    expected,
+  );
+  assert.deepEqual(evaluateReviewCoverage(input), expected);
+});
+
+test("remaining-file footer and upstream filtering cannot be hidden by full-diff success", () => {
+  const files = [
+    "packages/contracts/generated/client.ts",
+    "openapi.json",
+    "schema.json",
+    "tests/isolation.test.ts",
+    "tests/fake.ts",
+    "pnpm-lock.yaml",
+    "vendor/runtime.ts",
+  ];
+  const footer =
+    "\n\n<hr>\n\n⚠️ **Review coverage:** The following files were not included in this review because of the token budget:\n" +
+    files.map((file) => `- \`${file}\``).join("\n");
+  const logs = [
+    `${logRecord(completeDecision)}\n${outputRecord(output + footer)}`,
+    `${completeLog}\n2026-08-29T00:51:00Z ${JSON.stringify({ record: { name: "pr_agent.git_providers.github_provider", message: "Filtered out files with invalid extensions: " + JSON.stringify(files) } })}`,
+    `${prunedLog}\n${completeLog}`,
+  ];
+  for (const analysisLog of logs) {
+    assert.equal(
+      evaluateReviewCoverage({ ...input, analysisLog }).reasonCode,
+      "review-coverage-incomplete",
+    );
+  }
+});
+
+test("rejects stale, untrusted, unfinished and ambiguous Claude evidence", () => {
+  const valid = {
+    ...claudeCheck,
+    conclusion: "success",
+    output: { summary: "reason_code: success" },
+  };
+  for (const [change, reason] of [
+    [{ head_sha: "b".repeat(40) }, "review-output-stale"],
+    [{ app: { id: 15368 } }, "review-output-invalid"],
+    [{ status: "in_progress" }, "review-output-invalid"],
+    [
+      { external_id: `agent-infra:pr:43:claude-review-gate:${head}` },
+      "review-output-invalid",
+    ],
+    [
+      {
+        output: {
+          summary: "reason_code: success\nreason_code: invalid_output",
+        },
+      },
+      "review-output-invalid",
+    ],
+  ]) {
+    assert.equal(
+      evaluateReviewCoverage({
+        provider: "claude",
+        selectedProvider: "claude",
+        expectedHead: head,
+        prNumber: 42,
+        runResult: "success",
+        claudeReview: { ...valid, ...change },
+      }).reasonCode,
+      reason,
+    );
+  }
+});
+
+test("collects only the selected workflow attempt and paginates Review comments", async () => {
+  const requests = [];
+  const run = {
+    id: 123,
+    run_attempt: 2,
+    repository: { full_name: "example/repo" },
+    path: ".github/workflows/pr-agent-review.yml",
+    event: "pull_request_target",
+  };
+  const job = {
+    ...analysisJob,
+    id: 456,
+    run_id: 123,
+    name: "PR-Agent Analysis",
+    status: "completed",
+    conclusion: "success",
+  };
+  const request = async (path) => {
+    requests.push(path);
+    if (path.endsWith("/attempts/2")) return run;
+    if (path.endsWith("/jobs?per_page=100")) return { jobs: [job] };
+    if (path.endsWith("page=1"))
+      return Array.from({ length: 100 }, () => ({ body: "Unrelated" }));
+    if (path.endsWith("page=2")) return [comment];
+    throw new Error("Unexpected request");
+  };
+  const textRequest = async (path) => {
+    assert.equal(path, "/repos/example/repo/actions/jobs/456/logs");
+    return completeLog;
+  };
+  const options = {
+    ...reviewContext,
+    expectedHead: head,
+    provider: "pr-agent",
+    request,
+    textRequest,
+  };
+  const collected = await collectEvidence(options);
+  assert.equal(
+    evaluateReviewCoverage({ ...input, ...collected }).reasonCode,
+    "complete",
+  );
+  assert.ok(requests.every((path) => !path.includes("filter=latest")));
+  for (const conclusion of ["failure", "cancelled"]) {
+    const failed = await collectEvidence({
+      ...options,
+      request: async () => ({ ...run, conclusion }),
+    });
+    assert.equal(
+      evaluateReviewCoverage({ ...input, ...failed }).reasonCode,
+      conclusion === "failure" ? "review-run-failed" : "review-run-cancelled",
+    );
+  }
+  for (const change of [
+    { run_attempt: 1 },
+    { path: ".github/workflows/ci.yml" },
+    { event: "workflow_dispatch" },
+    { repository: { full_name: "other/repo" } },
+  ]) {
+    assert.deepEqual(
+      await collectEvidence({
+        ...options,
+        request: async () => ({ ...run, ...change }),
+      }),
+      {},
+    );
+  }
+});
+
+test("publication replay updates the same dedicated Check and rejects a moved head", async () => {
+  const writes = [];
+  const existing = {
+    id: 99,
+    name: "Automated Review Coverage",
+    head_sha: head,
+    app: { id: 4_503_079 },
+    external_id: `agent-infra:pr:42:automated-review-coverage:${head}`,
+  };
+  let currentHead = head;
+  const args = {
+    repository: "example/repo",
+    prNumber: 42,
+    expectedHead: head,
+    targetUrl: "https://github.com/example/repo/actions/runs/123",
+    coverage: evaluateReviewCoverage(input),
+    request: async (path) =>
+      path.endsWith("/pulls/42")
+        ? { state: "open", head: { sha: currentHead } }
+        : { check_runs: [existing] },
+    checkRequest: async (path, options) => {
+      writes.push([path, options.method]);
+    },
+  };
+  await publishCoverageCheck(args);
+  await publishCoverageCheck(args);
+  assert.deepEqual(
+    writes,
+    Array.from({ length: 2 }, () => [
+      "/repos/example/repo/check-runs/99",
+      "PATCH",
+    ]),
+  );
+  currentHead = "b".repeat(40);
+  await assert.rejects(publishCoverageCheck(args));
+  assert.equal(writes.length, 2);
 });

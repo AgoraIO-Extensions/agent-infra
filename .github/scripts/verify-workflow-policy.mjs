@@ -1304,9 +1304,20 @@ export function validateWorkflowDocuments(workflows) {
   for (const [name, workflow] of Object.entries(workflows)) {
     if (!workflow.on?.pull_request_target) continue;
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      const executionJob = structuredClone(job);
+      if (name === "pr-agent-review.yml" && jobName === "analyze") {
+        // This fixed Action setting labels output; it never executes the head.
+        const review = executionJob.steps?.find((step) => step.id === "pr-agent");
+        if (
+          review?.env?.["pr_reviewer.review_heading"] ===
+          "PR Reviewer Guide [head ${{ github.event.pull_request.head.sha }}; run ${{ github.run_id }}/${{ github.run_attempt }}]"
+        ) {
+          delete review.env["pr_reviewer.review_heading"];
+        }
+      }
       if (
         jobName !== "outcome" &&
-        /pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))
+        /pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(executionJob))
       ) {
         errors.push(`${name}/${jobName}: pull_request_target jobs must not execute PR head`);
       }
@@ -1566,6 +1577,9 @@ export function validateWorkflowDocuments(workflows) {
     "config.use_repo_settings_file": "false",
     "config.use_wiki_settings_file": "false",
     "config.fallback_models": "[]",
+    "ignore.glob": "[]",
+    "ignore.regex": "[]",
+    "config.ignore_language_framework": "[]",
     "config.ai_timeout":
       "${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}",
     "config.custom_model_max_tokens":
@@ -1654,6 +1668,7 @@ export function validateWorkflowDocuments(workflows) {
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.pull_request.number }}",
       REVIEW_PROVIDER: "pr-agent",
+      SELECTED_REVIEW_PROVIDER: "${{ vars.PR_REVIEW_PROVIDER }}",
       REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
     }) ||
     JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
@@ -1668,6 +1683,11 @@ export function validateWorkflowDocuments(workflows) {
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
       "pr_reviewer.num_max_findings": "10",
+      "pr_reviewer.review_heading":
+        "PR Reviewer Guide [head ${{ github.event.pull_request.head.sha }}; run ${{ github.run_id }}/${{ github.run_attempt }}]",
+      "pr_reviewer.persistent_comment": "true",
+      "pr_reviewer.publish_output_no_suggestions": "true",
+      "pr_reviewer.enable_review_coverage_footer": "true",
       "pr_reviewer.require_can_be_split_review": "false",
       "pr_reviewer.require_estimate_contribution_time_cost": "false",
       "pr_reviewer.require_estimate_effort_to_review": "false",
@@ -1682,6 +1702,7 @@ export function validateWorkflowDocuments(workflows) {
     !sameObject(prAgentSuggestionsAction?.env, {
       ...prAgentCommonEnv,
       "pr_code_suggestions.commitable_code_suggestions": "true",
+      "pr_code_suggestions.enable_suggestions_coverage_footer": "true",
       "github_action_config.auto_review": "false",
       "github_action_config.auto_improve": "true",
     })
@@ -2161,6 +2182,7 @@ export function validateWorkflowDocuments(workflows) {
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
       REVIEW_PROVIDER: "claude",
+      SELECTED_REVIEW_PROVIDER: "${{ vars.PR_REVIEW_PROVIDER }}",
       REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
     }) ||
     !sameObject(review?.jobs?.publish?.permissions, {

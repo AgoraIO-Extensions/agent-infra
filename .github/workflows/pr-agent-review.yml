@@ -51,6 +51,9 @@ jobs:
           config.use_repo_settings_file: "false"
           config.use_wiki_settings_file: "false"
           config.fallback_models: "[]"
+          ignore.glob: "[]"
+          ignore.regex: "[]"
+          config.ignore_language_framework: "[]"
           config.ai_timeout: ${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}
           config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
           config.max_model_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
@@ -61,6 +64,10 @@ jobs:
           pr_reviewer.enable_review_labels_effort: "false"
           pr_reviewer.enable_review_labels_security: "false"
           pr_reviewer.num_max_findings: "10"
+          pr_reviewer.review_heading: "PR Reviewer Guide [head ${{ github.event.pull_request.head.sha }}; run ${{ github.run_id }}/${{ github.run_attempt }}]"
+          pr_reviewer.persistent_comment: "true"
+          pr_reviewer.publish_output_no_suggestions: "true"
+          pr_reviewer.enable_review_coverage_footer: "true"
           pr_reviewer.require_can_be_split_review: "false"
           pr_reviewer.require_estimate_contribution_time_cost: "false"
           pr_reviewer.require_estimate_effort_to_review: "false"
@@ -107,6 +114,9 @@ jobs:
           config.use_repo_settings_file: "false"
           config.use_wiki_settings_file: "false"
           config.fallback_models: "[]"
+          ignore.glob: "[]"
+          ignore.regex: "[]"
+          config.ignore_language_framework: "[]"
           config.ai_timeout: ${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}
           config.custom_model_max_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
           config.max_model_tokens: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
@@ -114,6 +124,7 @@ jobs:
           litellm.force_streaming_custom_llm_provider: openai
           litellm.force_streaming_api_base_substrings: '["https://"]'
           pr_code_suggestions.commitable_code_suggestions: "true"
+          pr_code_suggestions.enable_suggestions_coverage_footer: "true"
           github_action_config.auto_review: "false"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"
@@ -167,6 +178,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEW_PROVIDER: pr-agent
+          SELECTED_REVIEW_PROVIDER: ${{ vars.PR_REVIEW_PROVIDER }}
           REVIEW_RUN_RESULT: ${{ needs.analyze.result }}
         run: node .github/scripts/review-coverage.mjs
 

@@ -1111,6 +1111,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     GITHUB_TOKEN: "${{ github.token }}",
     PR_NUMBER: "${{ github.event.pull_request.number }}",
     REVIEW_PROVIDER: "pr-agent",
+    SELECTED_REVIEW_PROVIDER: "${{ vars.PR_REVIEW_PROVIDER }}",
     REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
   });
   assert.equal(
@@ -1130,6 +1131,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     GITHUB_TOKEN: "${{ github.token }}",
     PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
     REVIEW_PROVIDER: "claude",
+    SELECTED_REVIEW_PROVIDER: "${{ vars.PR_REVIEW_PROVIDER }}",
     REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
   });
 });
@@ -2417,4 +2419,31 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       error.includes("Issue Review model must stay read-only"),
     ),
   );
+});
+
+test("locks Review identity, coverage reporting and unrestricted reviewable paths", async () => {
+  const changes = [
+    ["analyze", "pr_reviewer.review_heading", "PR Reviewer Guide"],
+    ["analyze", "pr_reviewer.persistent_comment", "false"],
+    ["analyze", "pr_reviewer.publish_output_no_suggestions", "false"],
+    ["analyze", "pr_reviewer.enable_review_coverage_footer", "false"],
+    ["suggestions", "pr_code_suggestions.enable_suggestions_coverage_footer", "false"],
+    ["analyze", "ignore.glob", '["**/generated/**", "**/*.test.ts", "vendor/**"]'],
+    ["suggestions", "ignore.regex", '[".*schema.*"]'],
+    ["analyze", "config.ignore_language_framework", '["protobuf"]'],
+    ["analyze", "config.max_model_tokens", undefined],
+    ["suggestions", "config.max_model_tokens", "32000"],
+    ["analyze", "config.custom_model_max_tokens", "32000"],
+  ];
+  for (const [jobName, key, value] of changes) {
+    const workflows = await actualWorkflows();
+    const action = workflows["pr-agent-review.yml"].jobs[jobName].steps.find((step) => step.uses?.startsWith("The-PR-Agent/"));
+    if (value === undefined) delete action.env[key];
+    else action.env[key] = value;
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")), `${jobName}/${key}`);
+  }
+  const workflows = await actualWorkflows();
+  const analyze = workflows["pr-agent-review.yml"].jobs.analyze;
+  analyze.steps.push({ run: "git checkout ${{ github.event.pull_request.head.sha }}" });
+  assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
 });
