@@ -44,7 +44,7 @@ L2 必须分别有 Platform Owner、Connection Owner、Security、SRE 和 Pilot 
 ```mermaid
 flowchart TB
     D["规划已定：#149 / #152 / #178"] -.-> PLAN["#150 汇合：待确认"]
-    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> G["#186 Fake Tool Gateway：未完成"]
+    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> G["#186 Platform Tool Gateway / assertion：未完成"]
     BASE --> K["#190 Kubernetes 调谐：未完成"]
     UI["#389 shadcn/ui：未完成"] --> W["#192 对话 Web：未完成"]
     DESIGN["#400 原型：待人工确认"] --> W
@@ -90,10 +90,8 @@ flowchart TB
     CATALOG --> READY
     PROVIDER --> READY
     VERIFY --> READY
-    CONTRACT -.-> REAL["Platform 真实接入：新 primary Issue 待确认"]
     CONTRACT --> G
-    G -.-> REAL
-    REAL -.-> PILOT
+    G -.-> PILOT
     LOCAL -.-> PILOT["L2 联合验收：新 primary Issue 待确认"]
     READY -.-> PILOT
     ACK["#171 ACK 资源准备：open，待真实环境证据"] -.-> PILOT
@@ -180,37 +178,25 @@ Platform 和 Connection 消费方完成评审，再进入真实签发、#391/#39
 
 | 差异或交接 | 唯一现有 Issue 边界 | 通过证据 |
 | --- | --- | --- |
-| 现有 #252 `ExecutionGrantClaimsV1Schema` 绑定 Runtime Execution，但没有独立 delegated Principal evidence、Consumer/Instance、一次性 `jti`、参数摘要、deadline、recovery generation 和 policy fence 绑定 | #398 发布当前 delegated consumer 契约；Platform 按工程 Spec §6.4 主责其 owned namespace 并评审，Connection 评审消费；不重开 #252 或另写第二套 DTO | 同一生成产物上的签发/验签双方正负 contract tests、版本与兼容性评审；Runtime Execution Grant 不能被直接宣称为已满足新 assertion |
-| Platform 当前授权、稳定身份映射、签发与 `callId`，以及撤权先停止签发/关闭 route、持久同步 fence、确认后恢复 | 现有 #186 明确拥有 Fake Gateway；真实接入归属须由 #150 核对 #156 的 issuer 责任后确认，建议采用下述独立票，不扩大 #186 | 与 #391 的相同 claim/参数/幂等绑定互验；Connection 不可用时 route 保持 fail closed，恢复先同步 fence；Platform 不读取 Connection DB |
-| Connection 验签、workload-to-Actor、同事务 `jti`/Call、dispatch 前 current Grant/fence 和未知写结果 | #391 拥有 verifier，#399 拥有持久权威，#392 拥有 dispatch/reconcile/revoke；消费 #398 | PostgreSQL 并发、篡改、相同重放、撤权竞态与响应丢失证据；不能用 #186 的 Fake 回包替代 |
+| 现有 #252 `ExecutionGrantClaimsV1Schema` 绑定 Runtime Execution，但没有独立 delegated Principal evidence、Consumer/Instance、一次性 `jti`、参数摘要、deadline、recovery generation 和 policy fence 绑定 | #398 是唯一的通用 wire contract owner，发布版本化 Schema、生成产物、consumer Fake 和 tests；Platform 与 Connection 消费方评审，不重开 #252 或另写第二套 DTO | 同一生成产物上的签发/验签双方正负 contract tests、版本与兼容性评审；Runtime Execution Grant 不能被直接宣称为已满足新 assertion |
+| Platform 当前授权、稳定身份映射、签发与 `callId`，以及撤权先停止签发/关闭 route、持久同步 fence、确认后恢复 | [#156](https://github.com/AgoraIO-Extensions/agent-infra/issues/156) 已将 Platform policy、assertion 和 `callId` 边界交给 #186。#186 的 Fake Connection 是 schema-conformant 外部测试替代；剩余真实 HTTP / policy-fence command 增量只能作为 #186 的既有 Scope/AC 澄清，经 #398 消费方评审后决定，不创建第二个 Gateway、issuer、auth 或 DTO owner | 与 #391 的相同 claim/参数/幂等绑定互验；Connection 不可用时 route 保持 fail closed，恢复先同步 fence；Platform 不读取 Connection DB |
+| Connection 验签、workload-to-Actor、同事务 `jti`/Call、dispatch 前 current Grant/fence 和未知写结果 | #391 保持 verifier，#399 保持持久权威，#392 保持 dispatch/reconcile/revoke；policy-fence command 的接收、持久化和 dispatch-time 覆盖须由 Connection Owner 在这些既有边界中明确，不假定 #391 已拥有 handler；均消费 #398 | PostgreSQL 并发、篡改、相同重放、撤权竞态与响应丢失证据；不能用 #186 的 Fake 回包替代 |
 | Catalog 与 Owner 配置、独立 Connection Web 的 OAuth/Grant 双确认 | #398 定义公开契约，#394 实现 Catalog，#397 实现 Connection 管理页面；Platform 消费方评审 | `catalog:read` 不能调用 Action；Runtime 不选 Connection；两个产品入口独立；缺失 Platform 消费实现先由 #150 确认归属，不能由 #194 顺手实现 |
 
 上述差异是已证实的契约消费缺口，不是已证明运行中的越权漏洞。
 原生边 #398 -> #186 已在 #186 的 `2026-09-07T13:07:51Z` 更新中落盘，且当前正文与
-原生关系一致；本计划只记录这一耐久的当前状态，不删除、重写或新增该边。Fake-first
-表示不等待真实 Connection runtime，并不表示可以继续使用与当前权威文档不一致的契约。
-建议保留 #186 的 Fake contract 边界，由 #150 毕业唯一真实接入票；
-若选择扩大 #186，则须重新评审其完整 execution contract 和依赖，并取消新增同义票。
-此归属决定未完成前，L2 不具备可授权执行图。
+原生关系一致；本计划只记录这一耐久的当前状态，不删除、重写或新增该边。该边本身不修改
+现有 #186 的 Scope/AC。Fake Connection 表示 schema-conformant 外部测试替代，不表示可以继续使用
+过期 wire contract，也不构成新 Gateway/issuer/auth/DTO 的授权。
 
-### 4.1 独立真实接入票建议
+### 4.1 现有 Issue 的待评审增量
 
-建议标题：`feat(platform): integrate real delegated Connection invocation`，
-DRI @LichKing-2234，消费方 reviewer @guoxianzhe，尚未创建或授权。
-它只解决 #186 的 Fake 与当前 Connection 真实协议之间的缺口，
-不实现 Connection 内部权威，不承担联合 Pilot 验收。
-
-| 契约章节 | 待确认的正文 |
-| --- | --- |
-| Problem | 现有 Runtime Execution Grant 和 Fake Gateway 不能直接满足新 Connection delegated 协议 |
-| Scope | 消费 #398 同一正式生成产物，实现 Platform Catalog HTTP 消费、可信 Principal 映射、短期 assertion 签发、结果/call 关联和可恢复 policy fence 同步；复用 #186 当前授权边界 |
-| AC-1 | Catalog 使用注册 workload 的只读凭据，投影仅用于 Owner 配置；调用按 current policy 及 current Connection 状态校验，不缓存用户 Grant 或 Provider Credential |
-| AC-2 | assertion 绑定 HLD §7 的全部身份、Action、参数、幂等、期限、generation/fence；来源是可信 IdentityContext，调用方不能覆盖；与 #391 消费测试互验 |
-| AC-3 | policy 撤权按 HLD §6.2 持久停止签发并禁用受影响 route/workload，Connection 不可用时保持 fail closed；重启后先同步 fence 再恢复入口 |
-| AC-4 | 完全相同重放、绑定篡改、跨用户/Agent、未知结果和恢复均保持稳定调用关联及真实状态，无重复外部副作用或凭证泄露 |
-| AC-5 | 正式 HTTP 接入与 schema-derived Fake 使用同一契约，独立 consumer/集成验证和完整仓库检查通过；只交付适配，不声明真实 Pilot 通过 |
-| Validation | 签发/验签互验、Catalog 权限、撤权宕机/重启、幂等/unknown、脱敏及仓库完整检查；生产资源与真实副作用留给唯一联合验收票 |
-| Blocked by | 建议原生实现前置为 #186、#398；#150 的归属决定与消费方评审是发起本票前的规划门禁 |
+现有 #186 是 #156 确定的唯一 Platform policy/assertion/`callId` 边界，#398 是唯一通用 wire
+contract 边界。剩余的人为 Scope 选择仅限真实 HTTP 与 policy-fence command 增量：先由 #398
+提供同一版本的 Schema、生成产物、consumer Fake 和测试，再由 Platform 与 Connection Owner
+决定这些增量如何写入 #186、#391、#399、#392 的既有 Scope/AC。不得创建竞争性 Platform
+Gateway、issuer、auth 或 DTO Issue，也不得把尚未通过消费方评审的增量宣称为已交付。
+在上述既有 Issue 澄清与消费方评审完成前，L2 不具备可授权执行图。
 
 ## 5. 真实 Pilot 的新增门禁
 
@@ -277,7 +263,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 跨系统真实验收。
 因此只提出一个新 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。
-创建及原生依赖落盘仍等待 §4 的唯一实现归属和 §5.1 的范围确认。
+创建及原生依赖落盘仍等待 §4 的 #186/#398 既有边界澄清与消费方评审，以及 §5.1 的范围确认。
 
 | 契约章节 | 待创建正文 |
 | --- | --- |
@@ -289,7 +275,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | AC-4 | 经范围确认的参与者完成 #149 规定的观察；每人任务、总任务数、工作日与故障处置有脱敏记录；任一硬门禁失败立即 No-Go，修复后重验受影响组合 |
 | AC-5 | 五方具名签收、最终 Go/No-Go 和允许的成功声明在票内回读；测试 PR/branch/Token 清理由测试资源 Owner 按 HLD 执行，保留 Call/Effect/Dispatch/审计 |
 | Validation | 自动矩阵命令、预期结果、真实 GitHub PR/call 关联、环境故障与回滚、观察记录、签收链接和仓库完整验证；所有记录脱敏，不保存 Token、assertion、密码或普通会话正文 |
-| Blocked by | 建议原生实现前置为 #194、#395，以及 §4 毕业的唯一 Platform 真实接入票（如采用）；#171/#177 的通过记录在 AC-1 显式验收，#150 先完成规划决定；不依赖 #402 的父票关闭 |
+| Blocked by | #194、#395，以及 #186 的既有 Scope/AC 澄清、#398 版本化契约与相应消费方评审；#171/#177 的通过记录在 AC-1 显式验收，#150 先完成规划决定；不依赖 #402 的父票关闭 |
 
 仅在上述决策确认、票正文和原生边回读一致后，该草案才能成为最终执行入口。
 规划票 #150 不反向依赖这张实施票，避免“规划等待实施、实施等待规划”的环。
@@ -351,7 +337,7 @@ Platform 现有票保留 `M1 - Agent Platform Pilot` milestone；#402 及其未�
 
 规划票 #150 只有在以下事项全部记录后才可关闭，文档 PR 合入本身不替代这些条件：
 
-- §4 合约归属与 Fake-first 路线完成消费方评审；选择补全 #186 或独立真实接入票，不能二者重复。
+- §4 的 #186 既有 Platform 边界、#398 通用 wire contract 及真实 HTTP/policy-fence 增量完成消费方评审；不得建立竞争性实现票。
 - §5.1 的产品范围差异完成权威文档评审，L2/L3 总验收 Owner 与必要签收责任得到确认。
 - 唯一联合验收票有完整正文、稳定 AC、原生 dependencies 和 milestone；完整 M1 待毕业范围有唯一归属及待估原因。
 - 对应开放票的 Status、Start/Target、Milestone 按证据投影；真实日期缺少依据时为空。
