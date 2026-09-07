@@ -831,7 +831,8 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   `imageId`（lockfile 使用 `null`）、`reason`、UTC `expiresAt`、`approvalUrl`。
   审批 Review 正文必须单独包含 `vulnerability-exception sha256:<摘要>`；摘要为以上
   字段（不含 `approvalUrl`）按此顺序 JSON 编码的 SHA-256。CI 只读回查本仓库的
-  已合并 PR、当前 head 的 `APPROVED` Review 及审批人的实时 maintain/admin 权限；
+  未关闭或已合并 PR、当前 head 的最新有效 `APPROVED` Review 及审批人的实时
+  maintain/admin 权限；后续 `CHANGES_REQUESTED` 或 `DISMISSED` 使旧批准失效。
   仓库配置登记与可回读 Review 缺一不可，不能由 PR 文件自填审批人。
   无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
   普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
