@@ -275,7 +275,8 @@ function isNativeSelectionRejection(value: unknown) {
 
 function isHistoryNotMaterializedError(value: unknown) {
 	if (!isPlainRecord(value) || !Number.isSafeInteger(value.code)) return false;
-	if (value.code === -32_601) return nonEmptyString(value.message);
+	if (value.code === -32_601)
+		return value.message === "list_turns is not supported yet";
 	return (
 		value.code === -32_600 &&
 		typeof value.message === "string" &&
@@ -1870,11 +1871,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 	) {
-		const session = this.session(nativeSessionRef);
-		const execution = ownRecordValue(session.executions, executionId);
+		let session = this.session(nativeSessionRef);
+		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		await this.resumeSession(nativeSessionRef);
-		const status = await this.readNativeTurnStatus(session, execution);
+		session = this.session(nativeSessionRef);
+		execution = ownRecordValue(session.executions, executionId);
+		if (!execution || !session.threadId) unavailable();
+		const status =
+			execution.status === "running"
+				? await this.readNativeTurnStatus(session, execution)
+				: execution.status;
 		const items = await this.readNativeAgentMessageItems(
 			session.threadId,
 			execution.nativeTurnId,

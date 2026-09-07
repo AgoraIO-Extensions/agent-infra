@@ -339,6 +339,7 @@ class TestCodexBridge {
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
+	private terminalStatusOnThreadResume?: Exclude<CodexTurnStatus, "inProgress">;
 	private dropInterruptResponse = false;
 	private nextTurnStartError?: { code: number; message: string };
 	private interruptTerminalStatus?: Exclude<CodexTurnStatus, "inProgress">;
@@ -389,6 +390,17 @@ class TestCodexBridge {
 			if (this.dropThreadResumeResponse) {
 				await this.close();
 				return;
+			}
+			if (this.terminalStatusOnThreadResume) {
+				const status = this.terminalStatusOnThreadResume;
+				this.terminalStatusOnThreadResume = undefined;
+				this.push({
+					method: "turn/completed",
+					params: {
+						threadId: this.nativeThreadId,
+						turn: { id: this.nativeTurnId, status, items: [] },
+					},
+				});
 			}
 			this.respond(id, { thread: { id: this.nativeThreadId } });
 			return;
@@ -492,6 +504,10 @@ class TestCodexBridge {
 
 	dropNextThreadResumeResponse() {
 		this.dropThreadResumeResponse = true;
+	}
+
+	completeOnThreadResume(status: Exclude<CodexTurnStatus, "inProgress">) {
+		this.terminalStatusOnThreadResume = status;
 	}
 
 	dropNextInterruptResponse() {
@@ -2108,6 +2124,47 @@ describe("Codex Runtime Driver", () => {
 		expect(JSON.stringify(events)).not.toContain("codex-native-item-private");
 	});
 
+	it("uses a terminal notification persisted while resuming before recovering history", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.completeOnThreadResume("completed");
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const events = await resumedDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.at(-1)).toMatchObject({
+			type: "completed",
+			payload: { status: "completed" },
+		});
+		expect(
+			resumedBridge.requests.filter(
+				({ method }) => method === "thread/turns/list",
+			),
+		).toHaveLength(0);
+		expect(
+			resumedBridge.requests.filter(
+				({ method }) => method === "thread/items/list",
+			),
+		).toHaveLength(1);
+		expect(
+			resumedBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+	});
+
 	it("fails closed with a redacted error when persisted item recovery is malformed", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -2903,7 +2960,7 @@ describe("Codex Runtime Driver", () => {
 	});
 
 	it.each([
-		[-32_601, "native turn history is not materialized"],
+		[-32_601, "list_turns is not supported yet"],
 		[
 			-32_600,
 			"thread opaque is not materialized yet; thread/turns/list is unavailable before first user message",
@@ -3019,16 +3076,42 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-	it("fails closed when native history remains unavailable after turn/started", async () => {
+	it.each([
+		[-32_601, "another native method is not supported"],
+		[-32_600, "synthetic unrelated invalid request"],
+	] as const)(
+		"fails closed without retrying an unrelated native history error %i",
+		async (code, message) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.rejectNextTurnsList({ code, message });
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+			).toHaveLength(1);
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/start"),
+			).toHaveLength(1);
+		},
+	);
+
+	it("fails closed when the exact native history error remains after turn/started", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		bridge.rejectNextTurnsList({
 			code: -32601,
-			message: "native turns list unavailable",
+			message: "list_turns is not supported yet",
 		});
 		bridge.setTurnsListError({
 			code: -32601,
-			message: "native turns list is still unavailable",
+			message: "list_turns is not supported yet",
 		});
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
