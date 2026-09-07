@@ -21,7 +21,11 @@ beforeAll(async () => {
 	databaseUrl = database.databaseUrl;
 	client = postgres(databaseUrl, { max: 10 });
 	await migratePlatformDatabase({ databaseUrl });
-	query = new PostgresConversationQueryV1({ databaseUrl, replayWindow: 2 });
+	query = new PostgresConversationQueryV1({
+		databaseUrl,
+		replayWindow: 2,
+		replayWindowMs: 7 * 24 * 60 * 60 * 1000,
+	});
 
 	for (const [conversationId, actorId] of [
 		["conversation-1", "actor-1"],
@@ -260,5 +264,26 @@ describe("PostgreSQL Conversation query", () => {
 				cursor: page.nextCursor,
 			}),
 		).rejects.toMatchObject({ code: "invalid_request" });
+	});
+
+	it("returns reload when a cursor exceeds the configured time window", async () => {
+		const timeBounded = new PostgresConversationQueryV1({
+			databaseUrl,
+			replayWindow: 2,
+			replayWindowMs: 1,
+		});
+		try {
+			await expect(
+				timeBounded.replay(actorOne, "conversation-1", {
+					kind: "last-event-id",
+					value: "event-2",
+				}),
+			).resolves.toMatchObject({
+				outcome: "reload",
+				reason: "cursor_expired",
+			});
+		} finally {
+			await timeBounded.close();
+		}
 	});
 });

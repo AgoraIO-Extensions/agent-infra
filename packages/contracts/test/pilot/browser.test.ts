@@ -431,6 +431,13 @@ describe("Pilot browser contracts", () => {
 						status: "succeeded",
 						summary: "Issue read completed",
 					},
+					{
+						occurredAt: "2026-08-28T10:01:45Z",
+						kind: "agent_summary",
+						category: "connection_call",
+						callId: "call-2",
+						summary: "Runtime reported a delegated tool call",
+					},
 				],
 				startedAt: "2026-08-28T10:00:00Z",
 				finishedAt: "2026-08-28T10:02:00Z",

@@ -9,6 +9,12 @@ import { describe, expect, it } from "vitest";
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const fixturePath = (name: string) =>
 	fileURLToPath(new URL(`../test/compatibility/${name}.json`, import.meta.url));
+const pilotBrowserArtifactPath = fileURLToPath(
+	new URL(
+		"../artifacts/openapi/pilot-browser.v1.openapi.json",
+		import.meta.url,
+	),
+);
 
 function comparePaths(current: string, previous: string) {
 	return spawnSync(
@@ -114,6 +120,67 @@ describe("contract compatibility command", () => {
 			removedRequired.components.schemas.PersistedConversationEventV1.oneOf[0].required =
 				["type"];
 			await expectRejected("existing-required", removedRequired);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts only the agent-summary OpenAPI addition", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const options = current.components.schemas.ExecutionProcessSummaryV1.oneOf;
+		const summaryIndex = options.findIndex(
+			(option: { properties?: { kind?: { const?: string } } }) =>
+				option.properties?.kind?.const === "agent_summary",
+		);
+		expect(summaryIndex).toBeGreaterThanOrEqual(0);
+		const previous = structuredClone(current);
+		previous.components.schemas.ExecutionProcessSummaryV1.oneOf.splice(
+			summaryIndex,
+			1,
+		);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-agent-summary-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const expectResult = async (
+			name: string,
+			candidate: unknown,
+			status: number,
+		) => {
+			const currentPath = resolve(directory, `${name}.json`);
+			await Promise.all([
+				writeFile(previousPath, JSON.stringify(previous), "utf8"),
+				writeFile(currentPath, JSON.stringify(candidate), "utf8"),
+			]);
+			const result = comparePaths(currentPath, previousPath);
+			expect(result.status, name).toBe(status);
+			if (status === 0) {
+				expect(result.stderr, name).toBe("");
+			} else {
+				expect(result.stderr, name).toContain("changed OpenAPI contract");
+			}
+		};
+
+		try {
+			await expectResult("additive", current, 0);
+
+			const wrongCategory = structuredClone(current);
+			wrongCategory.components.schemas.ExecutionProcessSummaryV1.oneOf[
+				summaryIndex
+			].properties.category.enum.push("credential");
+			await expectResult("wrong-category", wrongCategory, 1);
+
+			const extraField = structuredClone(current);
+			extraField.components.schemas.ExecutionProcessSummaryV1.oneOf[
+				summaryIndex
+			].properties.credential = { type: "string" };
+			await expectResult("extra-field", extraField, 1);
+
+			const operationChange = structuredClone(current);
+			operationChange.info.title = "changed";
+			await expectResult("other-change", operationChange, 1);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

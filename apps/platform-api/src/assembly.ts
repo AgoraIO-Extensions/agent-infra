@@ -32,6 +32,8 @@ type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
 export interface PlatformApiAssemblyInput {
 	readonly databaseUrl: string;
+	readonly conversationReplayWindow?: number;
+	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
 	readonly admissions: Admissions;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -75,6 +77,12 @@ export function assemblePlatformApi(
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,
+		...(input.conversationReplayWindow === undefined
+			? {}
+			: { replayWindow: input.conversationReplayWindow }),
+		...(input.conversationReplayWindowMs === undefined
+			? {}
+			: { replayWindowMs: input.conversationReplayWindowMs }),
 	});
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,

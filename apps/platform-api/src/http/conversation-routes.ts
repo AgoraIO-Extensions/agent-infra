@@ -333,7 +333,9 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 			payload: {
 				error: {
 					schemaVersion: 1,
-					code: persisted.code,
+					code: persisted.retryable
+						? "RUNTIME_UNAVAILABLE"
+						: "EXECUTION_FAILED",
 					message: "Conversation processing failed.",
 					retryable: persisted.retryable,
 					traceId: input.traceId,

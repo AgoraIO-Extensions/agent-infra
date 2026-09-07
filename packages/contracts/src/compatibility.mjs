@@ -671,12 +671,81 @@ function isModelSelectionFallbackOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+function isAgentSummaryOpenApiAddition(previous, current) {
+	const componentName = "ExecutionProcessSummaryV1";
+	const previousOptions = previous.components?.schemas?.[componentName]?.oneOf;
+	const currentOptions = current.components?.schemas?.[componentName]?.oneOf;
+	if (!Array.isArray(previousOptions) || !Array.isArray(currentOptions)) {
+		return false;
+	}
+	const addedOptions = unmatchedOptions(currentOptions, previousOptions);
+	if (
+		unmatchedOptions(previousOptions, currentOptions).length !== 0 ||
+		addedOptions.length !== 1
+	) {
+		return false;
+	}
+
+	const summary = addedOptions[0];
+	const template = previousOptions[0];
+	const fields = ["callId", "category", "kind", "occurredAt", "summary"];
+	if (
+		summary?.type !== "object" ||
+		summary.additionalProperties !== false ||
+		!hasExactObjectKeys(summary, [
+			"additionalProperties",
+			"properties",
+			"required",
+			"type",
+		]) ||
+		!hasExactObjectKeys(summary.properties, fields) ||
+		!sameValue(summary.required, [
+			"occurredAt",
+			"kind",
+			"category",
+			"summary",
+		]) ||
+		!sameValue(summary.properties.kind, {
+			const: "agent_summary",
+			type: "string",
+		}) ||
+		!sameValue(summary.properties.category, {
+			enum: ["status", "model_call", "connection_call"],
+			type: "string",
+		}) ||
+		!sameValue(summary.properties.callId, {
+			minLength: 1,
+			type: "string",
+		}) ||
+		!sameValue(
+			summary.properties.occurredAt,
+			template?.properties?.occurredAt,
+		) ||
+		!sameValue(summary.properties.summary, template?.properties?.summary) ||
+		!previousOptions.every((option) =>
+			literalSchemasAreDisjoint(summary, option),
+		)
+	) {
+		return false;
+	}
+
+	const normalized = structuredClone(current);
+	const normalizedOptions = normalized.components.schemas[componentName].oneOf;
+	const summaryIndex = normalizedOptions.findIndex((option) =>
+		sameValue(option, summary),
+	);
+	if (summaryIndex === -1) return false;
+	normalizedOptions.splice(summaryIndex, 1);
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
-			!isModelSelectionFallbackOpenApiAddition(previous, current)
+			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
+			!isAgentSummaryOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

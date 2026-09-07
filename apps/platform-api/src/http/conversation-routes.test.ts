@@ -528,6 +528,43 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("credential");
 	});
 
+	it("redacts Runtime error codes into the browser protocol", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventType: "conversation.error",
+						eventPayload: {
+							type: "conversation.error",
+							code: "fixture_error",
+							message: "private Runtime failure detail",
+							retryable: false,
+						},
+					},
+				],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(body).toContain('"code":"EXECUTION_FAILED"');
+		expect(body).not.toContain("fixture_error");
+		expect(body).not.toContain("private Runtime failure detail");
+	});
+
 	it("resolves Last-Event-ID, rechecks authorization before each event, and emits reload", async () => {
 		const input = dependencies();
 		const response = await testApp(input).app.request(

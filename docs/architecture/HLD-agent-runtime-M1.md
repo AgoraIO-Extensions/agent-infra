@@ -187,6 +187,7 @@ RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelecti
 - Worker 只能在上述事务提交后向 Runtime Host、Bridge 或原生 Runtime 确认已处理游标。Runtime 事件连接中断、Worker/Pod 重启或事件事务失败时，Adapter 从 Platform DB 最后已确认游标重放；事务已提交但 Runtime 确认前崩溃会产生可去重的重放，不能丢失事件。浏览器 SSE 连接状态不得推进该 Runtime 游标。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
 - 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
+- Runtime 的 `execution.detail` 只作为 Agent 提供的过程摘要，保留其 `category`、`summary` 和可选 `callId`，浏览器投影为 `agent_summary`。平台不能把该摘要冒充为实际模型调用或 Connection Action，也不能填充 Runtime 未提供的 `modelId`、Provider、账号或 Action 字段；平台实际掌握结构化记录时使用独立的 `model_call` 或 `connection_call` 投影。
 
 ### 8.3 SSE 补发
 

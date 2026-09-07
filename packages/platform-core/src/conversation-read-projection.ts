@@ -53,16 +53,26 @@ export interface ConversationExecutionReadModelV1 {
 	readonly events: readonly ConversationReadEventV1[];
 }
 
+export type ConversationExecutionProcessSummaryV1 =
+	| {
+			readonly occurredAt: Date;
+			readonly kind: "status";
+			readonly status: ConversationEventStatusV1;
+			readonly summary: string;
+	  }
+	| {
+			readonly occurredAt: Date;
+			readonly kind: "agent_summary";
+			readonly category: "status" | "model_call" | "connection_call";
+			readonly summary: string;
+			readonly callId?: string;
+	  };
+
 export interface ConversationExecutionProjectionV1 {
 	readonly executionId: string;
 	readonly conversationId: string;
 	readonly status: ConversationEventStatusV1;
-	readonly processSummary: readonly {
-		readonly occurredAt: Date;
-		readonly kind: "status";
-		readonly status: ConversationEventStatusV1;
-		readonly summary: string;
-	}[];
+	readonly processSummary: readonly ConversationExecutionProcessSummaryV1[];
 	readonly startedAt: Date | null;
 	readonly finishedAt: Date | null;
 	readonly failureTraceId: string | null;
@@ -190,31 +200,50 @@ export function projectConversationExecutionV1(
 	input: ConversationExecutionReadModelV1,
 ): ConversationExecutionProjectionV1 {
 	const status = executionStatus(input.execution.status);
-	const processSummary = input.events.flatMap((item) => {
-		if (item.eventType !== "execution.status") return [];
-		const payload = eventPayload(item);
-		if (payload.type !== "execution.status") return unavailable();
-		const eventStatus = executionStatus(payload.status);
-		return [
-			{
-				occurredAt: date(item.occurredAt),
-				kind: "status" as const,
-				status: eventStatus,
-				summary: `Execution ${eventStatus}.`,
-			},
-		];
-	});
+	const processSummary =
+		input.events.flatMap<ConversationExecutionProcessSummaryV1>((item) => {
+			if (
+				item.eventType !== "execution.status" &&
+				item.eventType !== "execution.detail"
+			) {
+				return [];
+			}
+			const payload = eventPayload(item);
+			if (payload.type === "execution.detail") {
+				return [
+					{
+						occurredAt: date(item.occurredAt),
+						kind: "agent_summary" as const,
+						category: payload.category,
+						summary: payload.summary,
+						...(payload.callId === undefined ? {} : { callId: payload.callId }),
+					},
+				];
+			}
+			if (payload.type !== "execution.status") return unavailable();
+			const eventStatus = executionStatus(payload.status);
+			return [
+				{
+					occurredAt: date(item.occurredAt),
+					kind: "status" as const,
+					status: eventStatus,
+					summary: `Execution ${eventStatus}.`,
+				},
+			];
+		});
 	return {
 		executionId: input.execution.executionId,
 		conversationId: input.execution.conversationId,
 		status,
 		processSummary,
 		startedAt:
-			processSummary.find((item) => item.status === "processing")?.occurredAt ??
-			null,
+			processSummary.find(
+				(item) => item.kind === "status" && item.status === "processing",
+			)?.occurredAt ?? null,
 		finishedAt:
-			processSummary.find((item) => isTerminalStatus(item.status))
-				?.occurredAt ?? null,
+			processSummary.find(
+				(item) => item.kind === "status" && isTerminalStatus(item.status),
+			)?.occurredAt ?? null,
 		failureTraceId: failureTraceId(status, input.execution.traceId),
 	};
 }

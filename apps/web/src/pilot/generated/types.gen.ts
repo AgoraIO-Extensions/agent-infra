@@ -358,6 +358,12 @@ export type ExecutionProcessSummaryV1 = {
     providerId: string;
     status: 'succeeded' | 'failed';
     summary: string;
+} | {
+    callId?: string;
+    category: 'status' | 'model_call' | 'connection_call';
+    kind: 'agent_summary';
+    occurredAt: string;
+    summary: string;
 };
 
 export type HeartbeatSignalV1 = {

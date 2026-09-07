@@ -6,6 +6,9 @@ import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
+const defaultReplayWindowMs = 5 * 60 * 1000;
+const maximumReplayWindowMs = 31 * 24 * 60 * 60 * 1000;
+
 export interface ConversationQueryScopeV1 {
 	readonly actorId: string;
 	readonly channelId: string;
@@ -86,6 +89,7 @@ export type ConversationReplayResultV1 =
 export interface PostgresConversationQueryOptionsV1 {
 	readonly databaseUrl: string;
 	readonly replayWindow?: number;
+	readonly replayWindowMs?: number;
 }
 
 interface ConversationRow {
@@ -129,6 +133,10 @@ interface EventRow {
 
 interface EventIdentityRow {
 	readonly conversation_cursor: string | number;
+}
+
+interface EventWindowRow {
+	readonly within_window: boolean;
 }
 
 interface EventReadOptions {
@@ -469,6 +477,26 @@ async function readEvents(
 	return rows.map(event);
 }
 
+async function isWithinReplayTimeWindow(
+	database: Database,
+	conversationId: string,
+	afterCursor: number,
+	latestCursor: number,
+	replayWindowMs: number,
+): Promise<boolean> {
+	if (latestCursor === 0) return true;
+	const anchorCursor = afterCursor === 0 ? 1 : afterCursor;
+	const rows = await database<EventWindowRow[]>`
+		select occurred_at >= now() - (${replayWindowMs}::bigint * interval '1 millisecond')
+			as within_window
+		from platform.conversation_events
+		where conversation_id = ${conversationId}
+			and conversation_cursor = ${anchorCursor}
+		limit 1
+	`;
+	return rows[0]?.within_window === true;
+}
+
 async function repeatableRead<T>(
 	client: ReturnType<typeof postgres>,
 	read: (transaction: postgres.TransactionSql) => Promise<T>,
@@ -482,13 +510,20 @@ async function repeatableRead<T>(
 export class PostgresConversationQueryV1 {
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #replayWindow: number;
+	readonly #replayWindowMs: number;
 
 	constructor(options: PostgresConversationQueryOptionsV1) {
 		try {
 			if (
 				!Number.isSafeInteger(options.replayWindow ?? 100) ||
 				(options.replayWindow ?? 100) < 1 ||
-				(options.replayWindow ?? 100) > 1000
+				(options.replayWindow ?? 100) > 1000 ||
+				!Number.isSafeInteger(
+					options.replayWindowMs ?? defaultReplayWindowMs,
+				) ||
+				(options.replayWindowMs ?? defaultReplayWindowMs) < 1 ||
+				(options.replayWindowMs ?? defaultReplayWindowMs) >
+					maximumReplayWindowMs
 			) {
 				invalidRequest();
 			}
@@ -499,6 +534,7 @@ export class PostgresConversationQueryV1 {
 				{ max: 10 },
 			);
 			this.#replayWindow = options.replayWindow ?? 100;
+			this.#replayWindowMs = options.replayWindowMs ?? defaultReplayWindowMs;
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
@@ -689,7 +725,14 @@ export class PostgresConversationQueryV1 {
 				}
 				if (
 					after > latest ||
-					after < Math.max(0, latest - this.#replayWindow)
+					after < Math.max(0, latest - this.#replayWindow) ||
+					!(await isWithinReplayTimeWindow(
+						transaction,
+						conversationId,
+						after,
+						latest,
+						this.#replayWindowMs,
+					))
 				) {
 					return {
 						outcome: "reload",

@@ -93,6 +93,17 @@ describe("Conversation read projection", () => {
 					},
 					{
 						executionId: "execution-1",
+						eventType: "execution.detail",
+						eventPayload: {
+							type: "execution.detail",
+							category: "model_call",
+							summary: "Runtime reported a model call",
+							callId: "call-1",
+						},
+						occurredAt: second,
+					},
+					{
+						executionId: "execution-1",
 						eventType: "execution.status",
 						eventPayload: { type: "execution.status", status: "failed" },
 						occurredAt: third,
@@ -104,7 +115,15 @@ describe("Conversation read projection", () => {
 			startedAt: second,
 			finishedAt: third,
 			failureTraceId: "trace-1",
-			processSummary: [{ status: "processing" }, { status: "failed" }],
+			processSummary: [
+				{ status: "processing" },
+				{
+					kind: "agent_summary",
+					category: "model_call",
+					callId: "call-1",
+				},
+				{ status: "failed" },
+			],
 		});
 	});
 
