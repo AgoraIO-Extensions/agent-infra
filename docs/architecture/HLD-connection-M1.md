@@ -88,7 +88,8 @@ LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/�
 - PostgreSQL 只保存 session hash、Principal、issuer、过期、撤销和 recovery generation。
 - 退出、过期、Principal 停用或 recovery generation 变化后立即失效。
 - BrowserSession 只用于 Connection Web 管理操作，不能作为 delegated Action 调用凭据。
-- 所有 Browser 写请求必须同时校验独立 CSRF token、精确同源 `Origin` 和 Fetch Metadata；缺失、跨源或不匹配时在执行任何状态变更前拒绝。
+- 除 OAuth callback 外，所有 Browser 写请求必须同时校验独立 CSRF token、精确同源 `Origin` 和 Fetch Metadata；缺失、跨源或不匹配时在执行任何状态变更前拒绝。
+- OAuth callback 不依赖 BrowserSession Cookie、`Origin` 或同源 Fetch Metadata；它必须原子消费一次性、短期、不可预测且服务端持久化的 state，并校验其绑定的 Principal、Provider、发起事务和受控回跳地址。callback 只能完成原 OAuth 事务，不能创建 Grant 或接受调用方提供的 Principal、Connection 归属和任意跳转地址。
 
 ### 5.3 Principal 复核
 
@@ -127,7 +128,7 @@ Platform current Agent Action policy
 
 Platform policy 由 Agent Owner 管理。Connection Grant 只能由当前 Principal 在 Connection Web 确认。GitHub OAuth 成功不自动创建 Grant；Owner 新增 Action 后旧 Grant 不自动扩权。
 
-Connection 不保存 Platform policy 内容，但为 delegated 调用保存当前 Agent/Action 的 `PlatformPolicyFence`。Platform 创建或更新 Agent policy 时注册单调 revision；delegated assertion 必须绑定该 revision。Owner 移除 Action 时，Platform 必须先让 Connection 持久终结对应 fence，取得成功确认后才能把撤权命令标记完成。Connection 不可用时撤权保持处理中且 Platform 停止签发新 assertion；重复命令按同一 revision 幂等恢复。这样 Connection dispatch 可以在本地事务检查 fence，而不读取 Platform DB 或保存第二份 Grant。
+Connection 不保存 Platform policy 内容，但为 delegated 调用保存当前 Agent/Action 的 `PlatformPolicyFence`。Platform 创建或更新 Agent policy 时注册单调 revision；delegated assertion 必须绑定该 revision。Owner 移除 Action 时，Platform 必须先原子停止签发新 assertion，并禁用对应 delegated workload 的调用资格，再让 Connection 持久终结对应 fence；取得成功确认后才能恢复不受该撤权影响的调用并把撤权命令标记完成。Connection 不可用或 fence 尚未同步时，撤权保持处理中，相关 workload credential 或 delegated route 必须 fail closed，使已签发 assertion 也无法调用；服务恢复时先完成 fence 同步，再恢复相关入口。重复命令按同一 revision 幂等恢复。这样 Connection dispatch 可以在本地事务检查 fence，而不读取 Platform DB 或保存第二份 Grant。
 
 ## 7. Delegated 身份
 
