@@ -84,6 +84,8 @@ LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/�
 
 唯一例外是具名 LA3 受监督 Pilot profile：它沿用 Rehoboam 当前固定私网 `ldap://` 传输，因为公司 LDAP 没有可用 TLS。部署必须同时限制到批准的 LA3 网络路径、固定 endpoint 和受控 Connection workload，禁止动态 endpoint、自动降级、fallback 和外部网络访问，并明确接受员工密码及 Service Bind Credential 在该私网链路明文传输的风险。该例外不能被其他环境、客户端或生产声明复用；公司 LDAP 提供可用 TLS 后必须迁移，广泛生产上线前必须关闭明文 profile。
 
+LA3 Pilot 保持与 Rehoboam 一致的目录查找和用户 bind 路径，只保证统一外部错误，不宣称不同失败路径的可观察时延不可区分；账号枚举时序属于明确残余风险。正式 profile 除关闭明文传输外，还必须让不存在账号路径执行等价认证工作，并通过安全测试证明外部时序不能可靠区分条目是否存在。
+
 ### 5.2 Session
 
 登录成功后签发高熵 opaque Cookie：
@@ -226,8 +228,8 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 
 - Grant revoke、Connection disconnect、Credential fence 和 Provider revoke 分别记录。
 - 本地撤销先原子终结 current Grant/fence，立即阻止新 dispatch。
-- Disconnect 创建持久 Provider revoke attempt，默认只撤销该 Connection 的单个 GitHub Token。
-- Provider revoke 记录请求、成功、失败/待重试、attempt 和脱敏证据。
+- Disconnect 创建持久 Provider revoke attempt；该 attempt 不可变地绑定断开时的 CredentialVersion 和受保护凭据引用，只撤销该版本对应的单个 GitHub Token，执行或重试时不得解析 Connection 的 current CredentialVersion。
+- Provider revoke 记录请求、成功、失败/待重试、attempt 和脱敏证据；旧 CredentialVersion 的受保护凭据保留到 attempt 进入终态，之后按凭据销毁策略删除或 crypto-shred。
 - 不默认删除用户对整个 OAuth App 的 grant；该动作只允许由明确展示影响范围的独立用户操作触发。
 - 用户在 GitHub 侧撤销或 scope 缩减后，仅当 Provider 返回可确认的无效凭证响应，或独立 token check 明确确认 Token 已撤销或缺少必需 scope 时，才将 Credential fence 为不可用并要求重新连接。普通 `403` 必须先区分限流、abuse protection、仓库权限和其他资源级拒绝，不得据此直接停用整个 Credential。
 
@@ -241,7 +243,7 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 
 普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。LDAP 只认证 Principal；Connection PostgreSQL 保存 AdministratorRole binding，每次管理请求重新检查当前角色。
 
-首个管理员只能由持有部署权限的操作员按稳定 LDAP subject 一次性 bootstrap。bootstrap 必须在同一 PostgreSQL 事务中锁定唯一 bootstrap 状态、再次确认不存在管理员、创建首个角色绑定并永久标记已消费；并发请求只能有一个成功。已有管理员或 bootstrap 已消费后该入口必须 fail closed，重新启用必须经过显式部署变更并记录审计。所有页面默认简体中文。
+首个管理员只能由持有部署权限的操作员一次性 bootstrap。目标稳定 LDAP subject 必须来自受保护的部署配置，不能由浏览器请求指定或覆盖；bootstrap 请求必须使用独立的一次性部署凭据或受信 workload identity 认证，不能仅依赖普通 BrowserSession。bootstrap 必须在同一 PostgreSQL 事务中锁定唯一 bootstrap 状态、再次确认不存在管理员、创建首个角色绑定并永久标记已消费；并发请求只能有一个成功。成功后立即撤销 bootstrap 凭据并关闭入口；已有管理员或 bootstrap 已消费后该入口必须 fail closed，重新启用必须经过显式部署变更并记录审计。所有页面默认简体中文。
 
 ## 13. 数据与审计
 
@@ -284,7 +286,8 @@ Connection DB 至少保存：
 - 错误 issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数或幂等绑定均拒绝。
 - stale Platform policy revision、已终结 fence 和超过 deadline 的 PENDING Dispatch 均在 Provider 访问前拒绝。
 - LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
-- LA3 Pilot 验证只允许固定私网 LDAP endpoint且无 downgrade/fallback；证据明确标记明文 Credential 传输风险，不能作为 TLS conformance 证据。
+- LA3 Pilot 验证只允许固定私网 LDAP endpoint 且无 downgrade/fallback；证据明确标记明文 Credential 传输风险，不能作为 TLS conformance 证据。
+- LA3 Pilot 不宣称 LDAP 失败路径具备时序不可区分性；正式 profile 必须用等价认证工作和安全测试关闭该账号枚举风险。
 - Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
 - 仓库重命名、转移和同名替换不能改变 allowlist 指向的 numeric repository ID；无法确认稳定 ID 时拒绝写操作。

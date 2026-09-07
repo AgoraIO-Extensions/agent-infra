@@ -638,7 +638,7 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 - Principal、identity mapping、Browser Session、Consumer/Instance 和 Actor/workload registration。
 - ProviderRelease、immutable ActionVersion 和 Consumer declaration。
 - 个人/共享 Connection、外部账号安全标识、scope、Connection Grant 和确认快照。
-- 加密 CredentialVersion、OAuth state、刷新和 Provider revoke attempt。
+- 加密 CredentialVersion、OAuth state、刷新，以及不可变绑定断开时 CredentialVersion 的 Provider revoke attempt。
 - AuthorizedInvocation、Platform policy revision/fence、ActionCall、Effect、Dispatch、对账任务、脱敏结果和 Connection 审计。
 
 ### 15.3 跨系统一致性
