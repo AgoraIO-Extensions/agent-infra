@@ -42,6 +42,7 @@ interface NativeResponses {
 	"thread/read": { thread: { id: string; turns: unknown[] } };
 	"thread/items/list": unknown;
 	"turn/start": { turn: { id: string; status: string } };
+	"turn/interrupt": unknown;
 }
 
 // Only real Bridge frames enter this client. Assertions compare IDs as booleans
@@ -449,6 +450,57 @@ describe
 			expect(
 				legacy?.data.find(({ id }) => id === turn.turn.id)?.status,
 			).not.toBe("inProgress");
+		}, 90_000);
+
+		it("reads a subsequent active Turn from materialized legacy history", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			await loopbackResponsesProvider(root, "active");
+			const driver = await nativeDriver(path);
+			await driver.close();
+			const client = await nativeClient(`${path}.native`);
+			const started = await client.request("thread/start");
+			const first = await client.request("turn/start", {
+				threadId: started.thread.id,
+				clientUserMessageId: "synthetic-legacy-first-operation",
+				input: [{ type: "text", text: "synthetic recovery input" }],
+				model: "gpt-5.3-codex",
+				effort: "low",
+			});
+			await client.waitForTurnStarted(started.thread.id, first.turn.id);
+			await client.request("turn/interrupt", {
+				threadId: started.thread.id,
+				turnId: first.turn.id,
+			});
+			await expect
+				.poll(
+					async () => {
+						const turns = await client.request("thread/turns/list", {
+							threadId: started.thread.id,
+							itemsView: "notLoaded",
+							limit: 100,
+						});
+						return turns.data.find(({ id }) => id === first.turn.id)?.status;
+					},
+					{ timeout: 10_000 },
+				)
+				.toMatch(/^(completed|failed|interrupted)$/);
+			const next = await client.request("turn/start", {
+				threadId: started.thread.id,
+				clientUserMessageId: "synthetic-legacy-next-operation",
+				input: [{ type: "text", text: "synthetic recovery input" }],
+				model: "gpt-5.3-codex",
+				effort: "low",
+			});
+			await client.waitForTurnStarted(started.thread.id, next.turn.id);
+			const turns = await client.request("thread/turns/list", {
+				threadId: started.thread.id,
+				itemsView: "notLoaded",
+				limit: 100,
+			});
+			expect(turns.data.find(({ id }) => id === next.turn.id)?.status).toBe(
+				"inProgress",
+			);
 		}, 90_000);
 
 		it("reads an active Turn through native thread/read after experimental API negotiation", async () => {
