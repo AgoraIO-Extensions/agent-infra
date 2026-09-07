@@ -366,6 +366,76 @@ describe("Conversation Worker dispatch", () => {
 		expect(inner.sideEffectCount()).toBe(1);
 	});
 
+	it("enforces the Fake RuntimeHost recovery digest and fence barrier", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const recovery = {
+			schemaVersion: 2 as const,
+			requestId: "request-recovery",
+			traceId: "trace-1",
+			agentId: "agent-1",
+			actorId: "actor-1",
+			channelId: "web",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			turnId: "turn-1",
+			sessionGeneration: 1,
+			deliveryFence: 2,
+			hostSessionRef: "host-session-conversation-1",
+			recovery: {
+				schemaVersion: 1 as const,
+				input: { text: "bounded fixture", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "model-option-1",
+					reasoningLevel: "medium",
+				},
+			},
+			runtimeGrant: "synthetic-grant",
+		};
+		const { recovery: recoveryInput, ...runtimeContext } = recovery;
+		const submit = {
+			...runtimeContext,
+			schemaVersion: 1 as const,
+			operation: "turn.submit" as const,
+			input: recoveryInput.input,
+			selection: recoveryInput.selection,
+		};
+
+		await expect(runtimeHost.recoverStatus(recovery)).resolves.toMatchObject({
+			outcome: "not_found",
+		});
+		await expect(runtimeHost.dispatch(submit)).rejects.toMatchObject({
+			code: "RUNTIME_FENCE_STALE",
+		});
+
+		const accepted = await runtimeHost.dispatch({
+			...submit,
+			deliveryFence: 3,
+		});
+		await expect(
+			runtimeHost.recoverStatus({
+				...recovery,
+				deliveryFence: 4,
+				hostSessionRef: accepted.hostSessionRef,
+			}),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		await expect(
+			runtimeHost.recoverStatus({
+				...recovery,
+				deliveryFence: 5,
+				hostSessionRef: accepted.hostSessionRef,
+				recovery: {
+					...recovery.recovery,
+					selection: {
+						...recovery.recovery.selection,
+						reasoningLevel: "high",
+					},
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		expect(runtimeHost.sideEffectCount()).toBe(1);
+	});
+
 	it("persists normalized Runtime events before acknowledging them", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
