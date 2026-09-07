@@ -219,6 +219,10 @@ async function loopbackResponsesProvider(
 			resolve();
 		});
 	});
+	closers.push(async () => {
+		for (const response of responses) response.destroy();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
 	const address = server.address();
 	if (!address || typeof address === "string") {
 		throw new Error("Expected loopback provider port");
@@ -246,10 +250,6 @@ async function loopbackResponsesProvider(
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
-	closers.push(async () => {
-		for (const response of responses) response.destroy();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-	});
 	return { wasRequested: () => requested };
 }
 
