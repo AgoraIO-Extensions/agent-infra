@@ -37,7 +37,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 
 - 拒绝原生 `button/input/textarea/select/option/optgroup/label/summary`。
 - 拒绝原生元素直接声明通用控件角色，如 `button/checkbox/combobox/textbox`。
-- 同样拒绝 `react` 的 default、namespace 或 named `createElement` alias 对上述字面量控件和角色的调用。
+- 同样拒绝词法绑定到 `react` default、namespace 或 named `createElement` alias 的上述字面量控件和角色调用。
 - 允许 `components/ui` 内部、普通语义 HTML、测试文件和三个具名现有测试 helper；生产页面不得导入测试 helper。
 - 唯一具名例外 `hidden-form-value` 只接受带 `data-native-control="hidden-form-value"` 和字面量
   `type="hidden"` 的 input，理由是传递不可见表单元数据。动态 type、属性 spread、其他标签或

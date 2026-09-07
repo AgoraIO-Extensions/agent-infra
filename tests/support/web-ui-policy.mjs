@@ -35,20 +35,40 @@ const fixtures = new Set([
 const isTest = (path) =>
 	/\.(test|spec)\.[cm]?[jt]sx?$/.test(path) || fixtures.has(path);
 
-export function checkWebUiSource(source, { path }) {
-	const normalized = path.replaceAll("\\", "/");
-	if (!roots.some((root) => normalized.startsWith(root)) || isTest(normalized))
-		return [];
+function sourceFileAndChecker(path, source) {
+	const options = {
+		target: ts.ScriptTarget.Latest,
+		jsx: ts.JsxEmit.Preserve,
+		noResolve: true,
+		skipLibCheck: true,
+	};
 	const file = ts.createSourceFile(
-		normalized,
+		path,
 		source,
 		ts.ScriptTarget.Latest,
 		true,
 		ts.ScriptKind.TSX,
 	);
+	const host = ts.createCompilerHost(options, true);
+	host.fileExists = (fileName) => fileName === path;
+	host.readFile = (fileName) => (fileName === path ? source : undefined);
+	host.getSourceFile = (fileName) => (fileName === path ? file : undefined);
+	const program = ts.createProgram({ rootNames: [path], options, host });
+	return {
+		file: program.getSourceFile(path) ?? file,
+		checker: program.getTypeChecker(),
+	};
+}
+
+export function checkWebUiSource(source, { path }) {
+	const normalized = path.replaceAll("\\", "/");
+	if (!roots.some((root) => normalized.startsWith(root)) || isTest(normalized))
+		return [];
+	const { file, checker } = sourceFileAndChecker(normalized, source);
 	const violations = [];
 	const reactNamespaces = new Set();
 	const reactCreateElement = new Set();
+	const symbolAt = (node) => checker.getSymbolAtLocation(node);
 	for (const statement of file.statements) {
 		if (
 			!ts.isImportDeclaration(statement) ||
@@ -58,14 +78,14 @@ export function checkWebUiSource(source, { path }) {
 		)
 			continue;
 		const { importClause } = statement;
-		if (importClause.name) reactNamespaces.add(importClause.name.text);
+		if (importClause.name) reactNamespaces.add(symbolAt(importClause.name));
 		if (importClause.namedBindings) {
 			if (ts.isNamespaceImport(importClause.namedBindings)) {
-				reactNamespaces.add(importClause.namedBindings.name.text);
+				reactNamespaces.add(symbolAt(importClause.namedBindings.name));
 			} else {
 				for (const item of importClause.namedBindings.elements) {
 					if ((item.propertyName?.text ?? item.name.text) === "createElement")
-						reactCreateElement.add(item.name.text);
+						reactCreateElement.add(symbolAt(item.name));
 				}
 			}
 		}
@@ -88,19 +108,19 @@ export function checkWebUiSource(source, { path }) {
 	};
 	const isReactCreateElement = (expression) => {
 		if (ts.isIdentifier(expression))
-			return reactCreateElement.has(expression.text);
+			return reactCreateElement.has(symbolAt(expression));
 		if (
 			ts.isPropertyAccessExpression(expression) &&
 			expression.name.text === "createElement" &&
 			ts.isIdentifier(expression.expression)
 		)
-			return reactNamespaces.has(expression.expression.text);
+			return reactNamespaces.has(symbolAt(expression.expression));
 		return (
 			ts.isElementAccessExpression(expression) &&
 			ts.isIdentifier(expression.expression) &&
 			ts.isStringLiteral(expression.argumentExpression) &&
 			expression.argumentExpression.text === "createElement" &&
-			reactNamespaces.has(expression.expression.text)
+			reactNamespaces.has(symbolAt(expression.expression))
 		);
 	};
 	function visit(node) {

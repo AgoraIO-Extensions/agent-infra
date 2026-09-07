@@ -77,6 +77,15 @@ test("rejects React createElement controls and native control roles", () => {
 	);
 });
 
+test("attributes React createElement calls to lexical import bindings", () => {
+	for (const source of [
+		'import { createElement } from "react"; function render(createElement) { return createElement("button"); }',
+		'import React from "react"; function render() { const React = { createElement: () => null }; return React.createElement("button"); }',
+		'import * as React from "react"; function render(React) { return React["createElement"]("button"); }',
+	])
+		assert.deepEqual(check(source), [], source);
+});
+
 test("accepts shared controls and ordinary semantic layout and navigation", () => {
 	assert.deepEqual(
 		check(
