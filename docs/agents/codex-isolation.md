@@ -66,12 +66,14 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
 | `fail` | 外来标记到达模型输入/结果，或他人文件被修改 | 保留 #404/#194 门禁并请求修复决策 |
 | `unverified` | 未执行、前置失败、正向对照失败或证据不足 | 保留 #404/#194 门禁 |
 
-前置 Host 正向对照失败时，报告保留后续所有场景的 `unverified`。pinned Codex `0.153.0` 在
-active Turn 的 `thread/turns/list` 返回 `-32601` 是已知协议限制；#403 仅验证正常关闭后的
-`thread/resume`、`thread/turns/list`、`thread/items/list` 持久化恢复，不覆盖此 active-Turn 路径。
-`#404` 不得为此伪造历史回包、重发 Turn、关闭后把恢复结果当作 active status，或引入 fallback。
-除非 RuntimeHost/Driver 的 fail-closed 行为获独立确认，该回包使正向控制保持 `unverified`，不
-单独判定泄漏或永久缺少该接口。
+前置 Host 正向对照失败时，报告保留后续所有场景的 `unverified`。pinned Codex `0.153.0` 的实际
+`RuntimeHost.getStatus` 在 active Turn 中观察到原生 `-32601` `Unsupported(list_turns)`。pinned
+源码的 paginated-read 校验会在 state DB 或 thread metadata 缺失、或 history mode 为 Legacy 时拒绝
+`list_turns`；当前尚未区分这些条件与其他协议原因。#403 仅验证正常关闭后的 `thread/resume`、
+`thread/turns/list`、`thread/items/list` 持久化恢复，不覆盖此 active-Turn 路径。`#404` 不得为此
+伪造历史回包、重发 Turn、关闭后把恢复结果当作 active status，或引入 fallback/retry 语义。除非
+RuntimeHost/Driver 的 fail-closed 行为获独立确认，该回包使正向控制保持 `unverified`，不单独判定
+泄漏、永久缺少接口或其具体原因。
 脱敏报告、完整检查结果与最终 HEAD 一起放在 #404 PR/Issue，不能以“调查完成”关闭 #404。
 
 已有回归入口为 `runtime-host.test.ts`、`runtime-driver-conformance.test.ts`、
