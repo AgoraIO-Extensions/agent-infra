@@ -33,6 +33,12 @@ function fixture() {
 				code: "SECRET_KEY_UNAVAILABLE" as const,
 			}),
 		},
+		revisionBinder: {
+			bind: async () => ({
+				outcome: "failed" as const,
+				code: "SECRET_KEY_UNAVAILABLE" as const,
+			}),
+		},
 		probeRuntime: async () => ({ core: "passed" as const, capabilities: {} }),
 		pollIntervalMs: 10,
 		log: vi.fn(),

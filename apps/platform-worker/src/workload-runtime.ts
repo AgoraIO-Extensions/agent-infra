@@ -34,7 +34,7 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly registrySubjectRef: string;
 	readonly decryptor: SecretActivationDecryptorPortV1;
 	/** Worker-only crypto for binding a verified Secret to a later revision. */
-	readonly revisionBinder?: SecretRevisionBindingCryptoV1;
+	readonly revisionBinder: SecretRevisionBindingCryptoV1;
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -126,6 +126,8 @@ function recordsFor(
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 {
+	if (!options.revisionBinder)
+		throw new TypeError("Worker Secret revision binder is required");
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new Map<string, Record<string, boolean>>();
 	const adapter = createKubernetesRuntimeAdapterV1({
@@ -211,8 +213,7 @@ export function createWorkloadRuntimeV1(
 				)
 			)
 				continue;
-			if (!input.secrets || !options.revisionBinder)
-				throw new Error("Workload Secret is unavailable");
+			if (!input.secrets) throw new Error("Workload Secret is unavailable");
 			const source = all
 				.filter(
 					(record) =>
