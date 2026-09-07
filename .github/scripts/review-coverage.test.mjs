@@ -666,9 +666,9 @@ test("collects only the selected workflow attempt and paginates Review comments"
     requests.push(path);
     if (path.endsWith("/attempts/2")) return run;
     if (path.endsWith("/jobs?per_page=100")) return { jobs: [job] };
-    if (path.endsWith("page=1"))
+    if (path.includes("page=1&"))
       return Array.from({ length: 100 }, () => ({ body: "Unrelated" }));
-    if (path.endsWith("page=2")) return [comment];
+    if (path.includes("page=2&")) return [comment];
     throw new Error("Unexpected request");
   };
   const textRequest = async (path) => {
@@ -683,6 +683,14 @@ test("collects only the selected workflow attempt and paginates Review comments"
     textRequest,
   };
   const collected = await collectEvidence(options);
+  assert.deepEqual(collected.reviewComments, [comment]);
+  assert.ok(
+    requests
+      .filter((path) => path.includes("/comments?"))
+      .every((path) =>
+        path.endsWith(`since=${encodeURIComponent(analysisJob.started_at)}`),
+      ),
+  );
   assert.equal(
     evaluateReviewCoverage({ ...input, ...collected }).reasonCode,
     "complete",

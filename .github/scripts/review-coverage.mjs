@@ -569,16 +569,24 @@ export async function collectEvidence({
       jobs[0].status !== "completed"
     )
       return {};
+    const commentSince = jobs[0].started_at;
+    if (!Number.isFinite(Date.parse(commentSince))) return {};
     const reviewComments = [];
     for (let page = 1; ; page += 1) {
       if (page > 10)
         throw new Error("Review comment inventory exceeds evidence limit");
       const comments = await request(
-        `/repos/${repository}/issues/${prNumber}/comments?per_page=100&page=${page}`,
+        `/repos/${repository}/issues/${prNumber}/comments?per_page=100&page=${page}&since=${encodeURIComponent(commentSince)}`,
       );
       if (!Array.isArray(comments))
         throw new Error("Invalid Review comment inventory");
-      reviewComments.push(...comments);
+      reviewComments.push(
+        ...comments.filter(
+          (comment) =>
+            typeof comment?.body === "string" &&
+            comment.body.split("\n").slice(0, 5).includes(REVIEW_IDENTITY),
+        ),
+      );
       if (comments.length < 100) break;
     }
     return {
