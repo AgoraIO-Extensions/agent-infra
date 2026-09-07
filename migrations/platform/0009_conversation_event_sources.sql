@@ -60,4 +60,6 @@ ALTER TABLE "platform"."conversation_events" ADD CONSTRAINT "conversation_event_
 					"platform"."conversation_events"."source" = 'platform'
 					AND "platform"."conversation_events"."runtime_cursor" IS NULL
 					AND "platform"."conversation_events"."event_type" = 'model.selection.fell_back'
-				));
+				));--> statement-breakpoint
+DROP INDEX "platform"."conversation_event_execution_adapter_key_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "conversation_event_execution_adapter_key_unique" ON "platform"."conversation_events" USING btree ("execution_id","adapter_event_key") WHERE "platform"."conversation_events"."source" = 'runtime';

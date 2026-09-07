@@ -1132,6 +1132,7 @@
             }
           ],
           "isUnique": true,
+          "where": "\"platform\".\"conversation_events\".\"source\" = 'runtime'",
           "concurrently": false,
           "method": "btree",
           "with": {}

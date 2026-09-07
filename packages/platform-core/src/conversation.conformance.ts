@@ -650,7 +650,7 @@ export function conversationCommandConformanceV1(
 			}
 		});
 
-		it("persists and replays one Execution-bound fallback with the initial message", async () => {
+		it("persists and replays one Execution-bound fallback with an isolated Runtime key", async () => {
 			const harness = await open();
 			try {
 				const conversationId = await createConversationFixture(
@@ -689,7 +689,8 @@ export function conversationCommandConformanceV1(
 					outcome: "replayed",
 					result: accepted.result,
 				});
-				expect(await harness.eventSnapshot(conversationId)).toEqual({
+				const fallbackSnapshot = await harness.eventSnapshot(conversationId);
+				expect(fallbackSnapshot).toEqual({
 					lastConversationCursor: 1,
 					executions: [
 						{
@@ -720,6 +721,19 @@ export function conversationCommandConformanceV1(
 						},
 					],
 					fallbackAuditExecutionIds: [accepted.result.executionId],
+				});
+				const fallbackEvent = fallbackSnapshot.events[0];
+				if (!fallbackEvent) throw new Error("Expected fallback event");
+				await expect(
+					harness.persistRuntimeEvent(
+						conversationId,
+						accepted.result.executionId,
+						`platform:${fallbackEvent.event.eventId}`,
+					),
+				).resolves.toMatchObject({
+					sequence: 2,
+					conversationCursor: 2,
+					event: { type: "text.delta" },
 				});
 			} finally {
 				await harness.close();

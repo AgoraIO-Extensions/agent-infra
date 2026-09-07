@@ -970,10 +970,9 @@ export const conversationEvents = platformSchema.table(
 					AND ${table.eventType} = 'model.selection.fell_back'
 				)`,
 		),
-		uniqueIndex("conversation_event_execution_adapter_key_unique").on(
-			table.executionId,
-			table.adapterEventKey,
-		),
+		uniqueIndex("conversation_event_execution_adapter_key_unique")
+			.on(table.executionId, table.adapterEventKey)
+			.where(sql`${table.source} = 'runtime'`),
 		uniqueIndex("conversation_event_execution_sequence_unique").on(
 			table.executionId,
 			table.sequence,
