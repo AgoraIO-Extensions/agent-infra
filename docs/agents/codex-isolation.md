@@ -37,6 +37,11 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
 - 模型端是仅监听 loopback 的确定性 Responses API 替身。测试 launcher 原样转发原生协议字节，
   只通过 CLI flags 指定无凭证的本地模型 Provider，旁路观察配置和生命周期回包；不改变
   sandbox、审批、HOME、cwd、文件工具或 Bridge。模型替身不直接读写合成用户文件。
+- #403 的正式装配由 `CodexRuntimeDriver.open` 从 `path` 派生 `dataDirectory: path + ".native"`，
+  并传入已验证的 model、reasoning effort 和 pinned provenance。PVC 所属的 `dataDirectory/home`
+  是 `CODEX_HOME`，`dataDirectory/workspace` 是 cwd；父进程 HOME 和 `TMPDIR` 仍是独立临时目录。
+  关闭只清理临时 launch/probe/schema/scratch，不清理持久目录。Bridge 要求绝对规范路径、无 symlink、
+  Runtime UID 私有 `0700`，拒绝与父 HOME/CODEX_HOME/cwd 重叠及持久化配置或凭证文件。
 - 两个用户的文件正文使用独立随机标记，标记不进入读取请求；真实 Codex `exec_command`
   执行读取、搜索及修改。正向对照必须在工具输出与平台结果中看到本人标记；搜索使用同命令
   正向对照，修改还由测试独立回读磁盘。工具不可用或本人访问失败不能形成负向通过。
