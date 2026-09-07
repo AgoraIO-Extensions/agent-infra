@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
@@ -31,6 +32,10 @@ export function MyAgentApplicationDetailScreen({
 			? withdrawalResult
 			: undefined;
 	const resultRef = useResultFocus(submittedResult);
+	const withdrawButtonRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (withdrawalError && !withdrawing) withdrawButtonRef.current?.focus();
+	}, [withdrawalError, withdrawing]);
 	if (state.kind === "loading") {
 		return <p aria-live="polite">Loading My Agent...</p>;
 	}
@@ -148,7 +153,12 @@ export function MyAgentApplicationDetailScreen({
 					</Link>
 				) : null}
 				{application.status === "pending_approval" ? (
-					<Button disabled={withdrawing} onClick={onWithdraw} type="button">
+					<Button
+						disabled={withdrawing}
+						onClick={onWithdraw}
+						ref={withdrawButtonRef}
+						type="button"
+					>
 						{withdrawing ? "Withdrawing..." : "Withdraw application"}
 					</Button>
 				) : null}

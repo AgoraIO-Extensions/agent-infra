@@ -62,6 +62,7 @@ async function fixture(
 	});
 	let release: (() => void) | undefined;
 	let nextGate: Promise<void> | undefined;
+	let rejectNextWithdrawal = false;
 	const commands: { path: string; body: unknown; key: string | undefined }[] =
 		[];
 	await page.route("**/api/v1/**", async (route) => {
@@ -76,6 +77,20 @@ async function fixture(
 			});
 			await nextGate;
 			nextGate = undefined;
+			if (pathname.endsWith("/withdraw") && rejectNextWithdrawal) {
+				rejectNextWithdrawal = false;
+				await route.fulfill({
+					status: 409,
+					json: {
+						schemaVersion: 1,
+						code: "RESOURCE_UNAVAILABLE",
+						message: "Application state changed",
+						retryable: false,
+						traceId: "trace-withdraw-conflict",
+					},
+				});
+				return;
+			}
 			if (pathname.endsWith("/decision")) {
 				const decision = body as ApprovalDecisionRequestV1;
 				application = AgentApplicationProjectionV1Schema.parse({
@@ -146,6 +161,9 @@ async function fixture(
 					reason: "Capacity is unavailable",
 				},
 			};
+		},
+		rejectNextWithdrawal() {
+			rejectNextWithdrawal = true;
 		},
 		customAgent() {
 			agent = {
@@ -272,8 +290,17 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 		.click();
 	await expect(page.getByRole("status")).toContainText("Pending approval");
 	await page.getByRole("link", { name: "Open application" }).click();
+	const withdraw = page.getByRole("button", { name: "Withdraw application" });
+	api.rejectNextWithdrawal();
+	await withdraw.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("alert")).toHaveText(
+		"Unable to withdraw application.",
+	);
+	await expect(withdraw).toBeEnabled();
+	await expect(withdraw).toBeFocused();
+	await capture(page, info, "withdraw-application-error");
 	api.holdNextCommand();
-	await page.getByRole("button", { name: "Withdraw application" }).focus();
 	await page.keyboard.press("Enter");
 	await expect(
 		page.getByRole("button", { name: "Withdrawing..." }),
