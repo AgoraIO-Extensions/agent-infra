@@ -382,6 +382,53 @@ async function mapping(path: string) {
 	return { nativeSessionRef, ...session };
 }
 
+type NativeHistory = { contents: string; size: number };
+
+async function nativeHistory(home: string): Promise<NativeHistory[]> {
+	try {
+		const historyFiles = (await readdir(home, { recursive: true })).filter(
+			(entry) => entry.endsWith(".jsonl"),
+		);
+		return await Promise.all(
+			historyFiles.map(async (entry) => {
+				const path = join(home, entry);
+				return {
+					contents: await readFile(path, "utf8"),
+					size: (await stat(path)).size,
+				};
+			}),
+		);
+	} catch {
+		return [];
+	}
+}
+
+async function waitForNativeHistorySeed(
+	home: string,
+	threadId: string,
+	seed: string,
+	ordinal: number,
+) {
+	const persisted = await expect
+		.poll(
+			async () =>
+				(await nativeHistory(home)).some(
+					({ contents }) =>
+						contents.includes(threadId) && contents.includes(seed),
+				),
+			{ timeout: 60_000 },
+		)
+		.toBe(true)
+		.then(
+			() => true,
+			() => false,
+		);
+	if (!persisted)
+		throw new Error(
+			`Native history seed materialization timed out (seed ${ordinal})`,
+		);
+}
+
 async function seedDriver(path: string) {
 	await loopbackResponsesProvider(dirname(path));
 	const driver = await nativeDriver(path);
@@ -641,16 +688,31 @@ describe
 				(_, index) => `synthetic-long-history-${index}-${"x".repeat(9_000)}`,
 			);
 			let nativeSessionRef: string | undefined;
+			let threadId: string | undefined;
+			const home = `${path}.native/home`;
 
 			for (let index = 0; index < 8; index += 1) {
+				const seed = syntheticHistoryInputs[index];
+				if (!seed) throw new Error("Expected synthetic history seed");
 				const command = submit(
 					`synthetic-history-${index}`,
 					nativeSessionRef,
-					syntheticHistoryInputs[index],
+					seed,
 				);
 				const accepted = await driver.execute(command);
 				nativeSessionRef ??= accepted.nativeSessionRef;
 				expect(accepted.nativeSessionRef).toBe(nativeSessionRef);
+				const session = await mapping(path);
+				expect(session.nativeSessionRef).toBe(accepted.nativeSessionRef);
+				const mappedThreadId = threadId ?? session.threadId;
+				threadId = mappedThreadId;
+				expect(session.threadId).toBe(mappedThreadId);
+				await waitForNativeHistorySeed(
+					home,
+					mappedThreadId,
+					seed,
+					index,
+				);
 				expect(
 					(
 						await driver.execute(
@@ -663,29 +725,28 @@ describe
 					).result,
 				).toEqual({ outcome: "accepted", status: "cancelled" });
 			}
-			if (!nativeSessionRef) throw new Error("Expected a native Session");
+			if (!nativeSessionRef || !threadId)
+				throw new Error("Expected a native Session mapping");
 			const session = await mapping(path);
 			expect(session.nativeSessionRef).toBe(nativeSessionRef);
+			expect(session.threadId).toBe(threadId);
 			expect(Object.keys(session.executions)).toHaveLength(8);
 
-			const home = `${path}.native/home`;
-			const historyFiles = (await readdir(home, { recursive: true })).filter(
-				(entry) => entry.endsWith(".jsonl"),
+			const history = await nativeHistory(home);
+			const relevantHistory = history.filter(({ contents }) =>
+				syntheticHistoryInputs.some((input) => contents.includes(input)),
 			);
-			const history = await Promise.all(
-				historyFiles.map(async (entry) => {
-					const path = join(home, entry);
-					return {
-						contents: await readFile(path, "utf8"),
-						size: (await stat(path)).size,
-					};
-				}),
-			);
-			const threadHistory = history.filter(({ contents }) =>
-				contents.includes(session.threadId),
-			);
-			expect(threadHistory).not.toHaveLength(0);
-			const historyBytes = threadHistory.reduce(
+			for (const input of syntheticHistoryInputs) {
+				expect(
+					relevantHistory.some(({ contents }) => contents.includes(input)),
+				).toBe(true);
+			}
+			expect(
+				relevantHistory.every(({ contents }) =>
+					contents.includes(session.threadId),
+				),
+			).toBe(true);
+			const historyBytes = relevantHistory.reduce(
 				(total, entry) => total + entry.size,
 				0,
 			);
