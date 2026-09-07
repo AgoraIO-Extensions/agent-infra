@@ -22,7 +22,7 @@ GitHub 原生依赖是执行图权威，Issue 的 `Blocked by` 和本图只投�
 
 | 层次 | 唯一验收入口与 Owner | 准入和环境 | 完成证据与可复现条件 |
 | --- | --- | --- | --- |
-| L1 主系统本地可测 | [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194)，@LichKing-2234 | §3 的未完成集合交付；本地 PostgreSQL、kind、正式 Web/API/Worker/RuntimeHost 装配、合成身份和 schema-conformant Fake Connection | #194 的四条完整旅程、准确源码与镜像、执行命令和脱敏 artifact；同时回读 #403/#404/#405/#406 的最终版本证据。仅组件测试、healthz 或 Fake Driver 不证明真实 Codex 装配 |
+| L1 主系统本地可测 | [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194)，@LichKing-2234 | §3 的未完成集合交付；本地 PostgreSQL、kind、正式 Web/API/Worker/RuntimeHost 装配、合成身份和 schema-conformant Fake Connection | #194 的四条完整旅程、准确源码与镜像、执行命令和脱敏 artifact；同时回读 #403 已合入的持久化修复及 #415/#404/#405/#406 的最终版本证据。仅组件测试、healthz 或 Fake Driver 不证明真实 Codex 装配 |
 | L2 双系统真实 GitHub 内部 Pilot | §5 的唯一联合验收 primary Issue 待建立；总验收 Owner 建议 @LichKing-2234，待 #150 确认 | L1 通过，#395 Connection readiness、#171 的 ACK 资源真实验证证据和 #177 的环境/参与者准备记录齐备；§4 合约互验和 §5 人数冲突先收口；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | 新验收票保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、HLD §§15–16 和 #149，完成真实观察与全部具名签收 |
 | L3 完整 M1 上线 | #150 负责毕业 §6 的实施及最终验收票；总验收 Owner 建议 @LichKing-2234，待确认 | L2 通过，完整 PRD 场景全部获得唯一实施票、Owner、上线环境和安全/运维资源窗口 | 最终验收票逐行映射 Platform PRD §14、Connection PRD 的适用要求及工程 Spec §24；每行有版本、自动验证、真实环境验证和人工结论，无失败或未验证硬门禁 |
 
@@ -48,8 +48,9 @@ flowchart TB
     BASE --> K["#190 Kubernetes 调谐：未完成"]
     UI["#389 shadcn/ui：未完成"] --> W["#192 对话 Web：未完成"]
     DESIGN["#400 原型：待人工确认"] --> W
-    PERSIST["#403 原生持久化：未完成"] --> ISO["#404 原生隔离：待真实进程验证"]
-    PERSIST --> BOOT["#406 Codex 镜像装配：未完成"]
+    PERSIST["#403 原生持久化：已完成"] --> STATUS["#415 原生 Turn 状态：未完成"]
+    STATUS --> ISO["#404 原生隔离：待真实进程验证"]
+    STATUS --> BOOT["#406 Codex 镜像装配：未完成"]
     SCAN["#405 扫描：未完成"] --> LOCAL["L1 #194：待本地验证"]
     BASE --> LOCAL
     G --> LOCAL
@@ -111,9 +112,10 @@ flowchart TB
 | #186 | #252、#275、#276、#277、#278、#285、#286、#287、#288、#320（completed）；#398（open） |
 | #190 | #181、#188、#189、#256、#257、#275、#276、#277、#278、#285、#286、#287、#288（均 completed） |
 | #192 | #251、#253、#321（completed）；#389、#400（open） |
-| #194 | #193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324（completed）；#186、#190、#192、#389、#403、#404、#405、#406（open） |
+| #194 | #193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324、#403（completed）；#186、#190、#192、#389、#404、#405、#406（open） |
 | #389、#400、#403、#405 | 无 |
-| #404、#406 | #403 |
+| #415 | #403（completed） |
+| #404、#406 | #403（completed）；#415（open） |
 | #398 | #252、#393（均 completed） |
 | #399、#396 | #393（completed）、#398 |
 | #390 | #393（completed）、#398、#399 |
@@ -152,13 +154,13 @@ Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 仍按 Con
 排除在首个 GitHub Pilot 与当前 #395 范围外。本计划不恢复这些历史范围，也不授予任何
 Connection 实现、退休或 HCI 部署权限。
 
-L1 的最小未完成闭包是 **#186、#190、#192、#194、#389、#398、#400、#403、#404、#405、#406**。
+L1 的最小未完成闭包是 **#186、#190、#192、#194、#389、#398、#400、#404、#405、#406、#415**。
 其中 #400 经 #192 间接阻塞 #194，不能只看 #194 的直接依赖而漏掉人工设计确认。
 独立回读确认：#186 在 `2026-09-07T13:07:51Z` 已将 #398 同时写入正文和
 原生 `blocked_by`；这是当前执行图的已落盘状态，不是本计划提出的候选边。L1 因此也消费
 Connection 新契约，但不等待 Connection runtime 或 #402 全部完成。#398 仍为 open，
 由 @guoxianzhe 唯一交付；本计划不重复建票、接管 Connection 或授权 #186 实现。
-组件迁移 #389 与原型 #400 独立推进；#404 与 #406 的最终验收消费 #403；#190/#322 不增加 Codex 修正票依赖。
+组件迁移 #389 与原型 #400 独立推进；#403 已完成持久化修复，#415 是 #404 与 #406 当前未完成的原生前置；#190/#322 不增加 Codex 修正票依赖。
 本地验收 #194 复用组件完整矩阵，只新增自身四条整装旅程，不复制 #404 的原生数据隔离矩阵。
 
 当前代码证据包括 [delegated Schema](../../packages/contracts/src/pilot/delegated.ts)、
@@ -311,7 +313,7 @@ Platform PRD §15 的 Eval、Skill Hub、统一 Sandbox、多 Agent、删除、A
 
 | 工作包 | DRI / 现有入口 | 估期所需输入 |
 | --- | --- | --- |
-| L1 五条流和六项修正及新契约 | @LichKing-2234 负责十张 Platform 票，@guoxianzhe 负责 #398 | 各票剩余实施/测试量与实际并发能力；#398 消费方评审、#400 人工设计、#403 后 #404/#406、#405 报告与修复分支 |
+| L1 五条流和六项修正及新契约 | @LichKing-2234 负责十张 Platform 票，@guoxianzhe 负责 #398 | 各票剩余实施/测试量与实际并发能力；#398 消费方评审、#400 人工设计、#415 后 #404/#406、#405 报告与修复分支 |
 | Connection contract-first DAG | @guoxianzhe，#402 下九张未完成实施票 | #398 消费方签收，再估 Store/Provider、身份/verifier、Effect/Catalog、Web、HCI 的关键路径 |
 | 跨系统资源与验收 | #171/#177 的 @LichKing-2234；#395 的 @guoxianzhe | ACK/HCI 联通、身份映射、专用账号、模型配额、五方可用时间和 §5.1 决定 |
 | 完整 M1 剩余交付 | #150；#388 当前未分配 | §6 逐项形成完整 primary Issue、DRI、上线验证资源后才排期 |
@@ -344,7 +346,7 @@ Platform 现有票保留 `M1 - Agent Platform Pilot` milestone；#402 及其未�
 - 再次读取 #150、涉及票正文、原生边和 Project；检查投影一致、无漏票、无重复交付、无环、无虚假完成。
 
 本轮已回读 §7 的 Project 日期、Status 和 milestone 更新；本 PR 未修改原生依赖。
-最终快照已吸收并发新增的 #398 -> #186，24 张相关票的正文和原生边一致，L1 未完成闭包为十一票。
+最终快照已吸收并发新增的 #398 -> #186，以及 #403 已完成、#415 为 #404/#406 当前原生前置的状态，24 张相关票的正文和原生边一致，L1 未完成闭包为十一票。
 执行图尚未最终收口的原因是 §4/§5 的待决项，不能将这些投影修正记为完整规划通过。
 
 可复现回读入口：
