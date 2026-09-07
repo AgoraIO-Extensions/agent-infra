@@ -1073,9 +1073,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	static async open(options: CodexRuntimeDriverOptions) {
 		// The deployment's Driver file and its sibling native storage share one
 		// Agent PVC. Losing the mapping must never initialize replacement sessions.
-		if (!isAbsolute(options.path) || resolve(options.path) !== options.path)
-			stateInvalid();
 		try {
+			if (!isAbsolute(options.path) || resolve(options.path) !== options.path)
+				stateInvalid();
 			const state = await lstat(options.path).catch(
 				(error: NodeJS.ErrnoException) => {
 					if (error.code === "ENOENT") return undefined;

@@ -17,9 +17,9 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
-import type {
+import {
 	CodexRuntimeDriver,
-	CodexRuntimeDriverOptions,
+	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -710,6 +710,18 @@ afterEach(async () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it.each([undefined, null, 123])(
+		"redacts an invalid deployment path %s before launch",
+		async (path) => {
+			await expect(
+				CodexRuntimeDriver.open(driverOptions(path as unknown as string)),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_STATE_INVALID",
+				message: "Codex Runtime session state is unavailable",
+			});
+		},
+	);
+
 	it.each([
 		["missing options", undefined],
 		["empty options", []],

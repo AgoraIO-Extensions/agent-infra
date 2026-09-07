@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
@@ -196,6 +197,31 @@ async function seedDriver(path: string) {
 	const driver = await nativeDriver(path);
 	const accepted = await driver.execute(submit());
 	expect(accepted.result.outcome).toBe("accepted");
+	// The native acceptance response precedes recording the user input. Wait for
+	// native metadata before closing, without fabricating native IDs or history.
+	await expect
+		.poll(
+			() => {
+				let database: DatabaseSync | undefined;
+				try {
+					database = new DatabaseSync(`${path}.native/home/state_5.sqlite`, {
+						readOnly: true,
+					});
+					return database
+						.prepare("SELECT first_user_message FROM threads")
+						.all()
+						.some(
+							(row) => row.first_user_message === "synthetic recovery input",
+						);
+				} catch {
+					return false;
+				} finally {
+					database?.close();
+				}
+			},
+			{ timeout: 60_000 },
+		)
+		.toBe(true);
 	// Closing the real native process cancels its Turn and flushes native history.
 	await driver.close();
 	return accepted;
@@ -299,7 +325,7 @@ describe
 				);
 				expect(await readdir(personal)).toEqual(["auth.json", "config.toml"]);
 			},
-			30_000,
+			90_000,
 		);
 
 		it.each(["missing", "corrupt"])(
@@ -339,7 +365,7 @@ describe
 				});
 				expect(healthy.result.outcome).toBe("accepted");
 			},
-			30_000,
+			90_000,
 		);
 
 		it.each([
@@ -369,6 +395,6 @@ describe
 				if (damage === "missing workspace")
 					await expect(access(`${path}.native/workspace`)).rejects.toThrow();
 			},
-			20_000,
+			90_000,
 		);
 	});

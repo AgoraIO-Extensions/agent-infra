@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import {
 	access,
 	chmod,
+	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -11,7 +12,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -295,6 +296,98 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			).rejects.toMatchObject({
 				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
 			});
+		},
+	);
+
+	it.each(["root", "home", "workspace"])(
+		"rejects permissions exposing persistent %s to other users",
+		async (target) => {
+			if (!process.getuid) return;
+			const { capturePath } = await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const path =
+				target === "root"
+					? configuration.dataDirectory
+					: join(configuration.dataDirectory, target);
+			await writeFile(join(path, "sentinel"), "unchanged");
+			for (const mode of [0o740, 0o702]) {
+				await chmod(path, mode);
+				await expect(
+					CodexAppServerBridge.open(configuration),
+				).rejects.toMatchObject({
+					code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+				});
+				expect((await lstat(path)).mode & 0o777).toBe(mode);
+			}
+			expect(await readFile(join(path, "sentinel"), "utf8")).toBe("unchanged");
+			expect(
+				(await readCaptures(capturePath, 7)).filter(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toHaveLength(1);
+		},
+	);
+
+	it("rejects persistent storage owned by a different runtime UID", async () => {
+		if (!process.getuid) return;
+		await installFakeCodex("echo");
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		await bridge.close();
+		const uid = vi
+			.spyOn(process, "getuid")
+			.mockReturnValue(process.getuid() + 1);
+		try {
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		} finally {
+			uid.mockRestore();
+		}
+	});
+
+	it.each(["HOME", "CODEX_HOME", "cwd"])(
+		"rejects both directions of persistent storage overlap with %s",
+		async (source) => {
+			const { capturePath } = await installFakeCodex("echo");
+			for (const relation of ["equal", "ancestor", "descendant"]) {
+				const configuration = options();
+				const personal =
+					relation === "equal"
+						? configuration.dataDirectory
+						: relation === "ancestor"
+							? join(configuration.dataDirectory, "personal")
+							: dirname(configuration.dataDirectory);
+				await mkdir(personal, { recursive: true });
+				await writeFile(join(personal, "sentinel"), "unchanged");
+				const cwd =
+					source === "cwd"
+						? vi.spyOn(process, "cwd").mockReturnValue(personal)
+						: undefined;
+				if (source !== "cwd") vi.stubEnv(source, personal);
+				try {
+					await expect(
+						CodexAppServerBridge.open(configuration),
+					).rejects.toMatchObject({
+						code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+					});
+				} finally {
+					cwd?.mockRestore();
+					vi.unstubAllEnvs();
+				}
+				expect(await readFile(join(personal, "sentinel"), "utf8")).toBe(
+					"unchanged",
+				);
+			}
+			expect(
+				(await readCaptures(capturePath, 6)).some(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toBe(false);
 		},
 	);
 

@@ -402,7 +402,14 @@ async function persistentLaunchPolicy(
 		]) {
 			if (!personal) continue;
 			const canonical = await realpath(personal).catch(() => resolve(personal));
-			if (canonical === root || canonical.startsWith(`${root}${sep}`))
+			const personalPrefix = canonical.endsWith(sep)
+				? canonical
+				: `${canonical}${sep}`;
+			if (
+				canonical === root ||
+				canonical.startsWith(`${root}${sep}`) ||
+				root.startsWith(personalPrefix)
+			)
 				configurationInvalid();
 		}
 		const existing = await lstat(root).catch((error: NodeJS.ErrnoException) => {
@@ -415,7 +422,13 @@ async function persistentLaunchPolicy(
 			join(root, "workspace"),
 		]) {
 			if (!existing) await mkdir(directory, { mode: 0o700 });
-			if (!(await lstat(directory)).isDirectory()) configurationInvalid();
+			const metadata = await lstat(directory);
+			if (
+				!metadata.isDirectory() ||
+				(process.getuid &&
+					(metadata.uid !== process.getuid() || (metadata.mode & 0o077) !== 0))
+			)
+				configurationInvalid();
 		}
 		// Durable native state is not a source of credentials or configuration.
 		for (const file of [
