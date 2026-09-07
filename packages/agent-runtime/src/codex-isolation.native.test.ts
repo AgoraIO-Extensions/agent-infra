@@ -550,6 +550,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				}
 				const turnStarted = await client.request("turn/start", {
 					threadId: nativeThread.id,
+					clientUserMessageId: probe.id,
 					input: [{ type: "text", text: `ISOLATION_PROBE:${probe.id}` }],
 					model: "gpt-5.3-codex",
 					effort: "high",
