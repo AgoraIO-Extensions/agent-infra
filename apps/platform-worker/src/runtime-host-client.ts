@@ -27,6 +27,7 @@ export interface WorkerRuntimeHostClientOptionsV1 {
 }
 
 const maximumResponseBytes = 65_536;
+const maximumEventFrameBytes = 131_072;
 
 function endpoint(baseUrl: string, path: string) {
 	let base: URL;
@@ -69,11 +70,12 @@ async function responseFailure(response: Response): Promise<never> {
 }
 
 async function boundedResponseText(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
 	const length = response.headers.get("content-length");
 	if (length && /^\d+$/.test(length) && Number(length) > maximumResponseBytes) {
+		await reader?.cancel().catch(() => undefined);
 		return failure("RUNTIME_RESPONSE_INVALID", true);
 	}
-	const reader = response.body?.getReader();
 	if (!reader) return "";
 	const chunks: Uint8Array[] = [];
 	let bytes = 0;
@@ -300,7 +302,7 @@ async function* eventStream(response: Response) {
 					frame = [];
 					const event = parseFrame(value);
 					if (event) yield event;
-				} else if (frame.length > maximumResponseBytes) {
+				} else if (frame.length > maximumEventFrameBytes) {
 					return failure("RUNTIME_EVENT_INVALID", true);
 				}
 			}

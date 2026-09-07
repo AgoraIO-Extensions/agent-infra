@@ -1,0 +1,1 @@
+ALTER TYPE "platform"."conversation_message_status" ADD VALUE 'failed';

@@ -172,9 +172,15 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 
 	it("bounds successful, error, and SSE response bodies before parsing", async () => {
 		const oversized = "x".repeat(65_537);
+		const cancel = vi.fn();
+		const declaredOversized = new Response(new ReadableStream({ cancel }), {
+			status: 200,
+			headers: { "content-length": "65537" },
+		});
 		for (const response of [
 			new Response(oversized, { status: 200 }),
 			new Response(oversized, { status: 502 }),
+			declaredOversized,
 		]) {
 			const client = createWorkerRuntimeHostClientV1({
 				baseUrl: "https://runtime.internal",
@@ -185,13 +191,15 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 				code: "RUNTIME_RESPONSE_INVALID",
 			});
 		}
+		expect(cancel).toHaveBeenCalledOnce();
 
+		const oversizedFrame = "x".repeat(131_073);
 		const client = createWorkerRuntimeHostClientV1({
 			baseUrl: "https://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: vi.fn<typeof fetch>(
 				async () =>
-					new Response(`data: ${oversized}\n\n`, {
+					new Response(`data: ${oversizedFrame}\n\n`, {
 						headers: { "content-type": "text/event-stream" },
 					}),
 			),

@@ -151,6 +151,58 @@ async function seed(
 	};
 }
 
+async function seedStop(work: Awaited<ReturnType<typeof seed>>) {
+	await client`
+		insert into platform.conversation_stops
+			(execution_id, stop_request_id, status, created_at, updated_at)
+		values (${work.executionId}, ${work.stopRequestId}, 'submitted', now(), now())
+	`;
+	await client`
+		insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 available_at, created_at, updated_at)
+		values
+			(${`conversation:stop:${work.stopRequestId}`}, 'conversation',
+			 ${work.conversationId}, 'conversation.turn.stop.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					executionId: work.executionId,
+					sessionGeneration: 1,
+					stopRequestId: work.stopRequestId,
+				})}, 'trace-stop-dispatch', 'request-stop-dispatch', now(), now(), now())
+	`;
+}
+
+async function seedSupplement(work: Awaited<ReturnType<typeof seed>>) {
+	const messageId = `supplement-${work.messageId}`;
+	await client`
+		insert into platform.conversation_messages
+			(message_id, conversation_id, actor_id, role, text, execution_id,
+			 status, created_at, updated_at)
+		values (${messageId}, ${work.conversationId}, 'actor-dispatch', 'user',
+			'pending supplement', ${work.executionId}, 'submitted', now(), now())
+	`;
+	await client`
+		insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 available_at, created_at, updated_at)
+		values (${`conversation:supplement:${messageId}`}, 'conversation',
+			${work.conversationId}, 'conversation.turn.supplement.v1', ${client.json({
+				schemaVersion: 1,
+				conversationId: work.conversationId,
+				executionId: work.executionId,
+				messageId,
+				turnId: work.turnId,
+				sessionGeneration: 1,
+				modelConfigurationRevision: 4,
+				modelOptionId: "model-option-dispatch",
+				reasoningLevel: "medium",
+			})}, 'trace-supplement-dispatch', 'request-supplement-dispatch',
+			now(), now(), now())
+	`;
+	return messageId;
+}
+
 function open() {
 	return new PostgresConversationDispatchStoreV1({ databaseUrl });
 }
@@ -184,7 +236,7 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
-	it("claims a Turn and atomically advances its Execution fence", async () => {
+	it("claims a Turn and prepares unknown delivery only after authorization", async () => {
 		const work = await seed();
 		const first = await claim(work.itemId);
 		try {
@@ -196,7 +248,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					executionId: work.executionId,
 					deliveryFence: 1,
 					executionDeliveryFence: 1,
-					executionStatus: "unknown",
+					executionStatus: "submitted",
 					modelConfigurationRevision: 4,
 					modelOptionId: "model-option-dispatch",
 					reasoningLevel: "medium",
@@ -213,6 +265,19 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(row).toMatchObject({
 				status: "processing",
 				outbox_fence: 1,
+				execution_status: "submitted",
+				execution_fence: 1,
+			});
+			if (first.decision.outcome !== "claimed") {
+				throw new Error("Expected claim");
+			}
+			await expect(
+				first.store.prepare({
+					claim: first.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			await expect(dispatchState(work)).resolves.toMatchObject({
 				execution_status: "unknown",
 				execution_fence: 1,
 			});
@@ -242,25 +307,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 
 	it("atomically cancels an unaccepted Turn when its stop is already pending", async () => {
 		const work = await seed();
-		await client`
-			insert into platform.conversation_stops
-				(execution_id, stop_request_id, status, created_at, updated_at)
-			values (${work.executionId}, ${work.stopRequestId}, 'submitted', now(), now())
-		`;
-		await client`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
-				 available_at, created_at, updated_at)
-			values
-				(${`conversation:stop:${work.stopRequestId}`}, 'conversation',
-				 ${work.conversationId}, 'conversation.turn.stop.v1', ${client.json({
-						schemaVersion: 1,
-						conversationId: work.conversationId,
-						executionId: work.executionId,
-						sessionGeneration: 1,
-						stopRequestId: work.stopRequestId,
-					})}, 'trace-stop-dispatch', 'request-stop-dispatch', now(), now(), now())
-		`;
+		await seedStop(work);
+		const supplementMessageId = await seedSupplement(work);
 		const { store, decision } = await claim(work.itemId);
 		try {
 			expect(decision).toEqual({ outcome: "succeeded" });
@@ -271,7 +319,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					stop_outbox.delivery_fence::int as stop_fence,
 					e.status as execution_status,
 					e.delivery_fence::int as execution_fence,
-					s.status as stop_request_status
+					s.status as stop_request_status,
+					supplement.status as supplement_status,
+					supplement_outbox.status as supplement_outbox_status
 				from platform.outbox_items turn_outbox
 				join platform.outbox_items stop_outbox
 					on stop_outbox.id = ${`conversation:stop:${work.stopRequestId}`}
@@ -279,6 +329,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					on e.execution_id = ${work.executionId}
 				join platform.conversation_stops s
 					on s.execution_id = e.execution_id
+				join platform.conversation_messages supplement
+					on supplement.message_id = ${supplementMessageId}
+				join platform.outbox_items supplement_outbox
+					on supplement_outbox.id = ${`conversation:supplement:${supplementMessageId}`}
 				where turn_outbox.id = ${work.itemId}
 			`;
 			expect(state).toEqual({
@@ -289,6 +343,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				execution_status: "cancelled",
 				execution_fence: 0,
 				stop_request_status: "completed",
+				supplement_status: "failed",
+				supplement_outbox_status: "failed",
 			});
 		} finally {
 			await store.close();
@@ -300,14 +356,27 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed") throw new Error("Expected claim");
-			await client`
-				insert into platform.conversation_stops
-					(execution_id, stop_request_id, status, created_at, updated_at)
-				values (${work.executionId}, ${work.stopRequestId}, 'submitted', now(), now())
-			`;
+			await seedStop(work);
 			await expect(
-				store.renew({ claim: decision.claim, leaseDurationMs: 30_000 }),
+				store.prepare({ claim: decision.claim, leaseDurationMs: 30_000 }),
 			).resolves.toBe(false);
+			await client`
+				update platform.outbox_items
+				set lease_expires_at = clock_timestamp() - interval '1 second'
+				where id = ${work.itemId}
+			`;
+			const takeover = await claim(work.itemId, "worker-2");
+			try {
+				expect(takeover.decision).toEqual({ outcome: "succeeded" });
+				expect(await dispatchState(work)).toMatchObject({
+					status: "succeeded",
+					outbox_fence: 1,
+					execution_status: "cancelled",
+					execution_fence: 1,
+				});
+			} finally {
+				await takeover.store.close();
+			}
 		} finally {
 			await store.close();
 		}

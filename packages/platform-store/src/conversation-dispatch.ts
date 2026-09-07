@@ -340,6 +340,12 @@ function requireClaim(claim: ConversationDispatchClaimV1) {
 	}
 }
 
+function requireLeaseDuration(value: number) {
+	if (!Number.isSafeInteger(value) || value < 1 || value > 300_000) {
+		throw new TypeError("Conversation dispatch lease duration is invalid");
+	}
+}
+
 function requireTransition(transition: ConversationDispatchStateTransitionV1) {
 	if (!transition || typeof transition !== "object") {
 		throw new TypeError("Conversation dispatch transition is invalid");
@@ -429,6 +435,44 @@ async function readStop(
 		from platform.conversation_stops where execution_id = ${executionId}
 	`;
 	return rows[0];
+}
+
+async function failPendingSupplements(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+	sessionGeneration: number,
+) {
+	const [result] = await transaction<
+		{ outbox_count: number; message_count: number }[]
+	>`
+		with failed_outboxes as (
+			update platform.outbox_items
+			set status = 'failed', lease_owner = null, lease_expires_at = null,
+				updated_at = clock_timestamp()
+			where scope_type = 'conversation' and scope_id = ${conversationId}
+				and operation = 'conversation.turn.supplement.v1'
+				and status in ('pending', 'processing', 'retry_scheduled')
+				and payload->>'conversationId' = ${conversationId}
+				and payload->>'executionId' = ${executionId}
+				and payload->>'sessionGeneration' = ${String(sessionGeneration)}
+			returning payload->>'messageId' as message_id
+		), failed_messages as (
+			update platform.conversation_messages as message
+			set status = 'failed', updated_at = clock_timestamp()
+			from failed_outboxes
+			where message.message_id = failed_outboxes.message_id
+				and message.conversation_id = ${conversationId}
+				and message.execution_id = ${executionId}
+				and message.status = 'submitted'
+			returning message.message_id
+		)
+		select (select count(*)::int from failed_outboxes) as outbox_count,
+			(select count(*)::int from failed_messages) as message_count
+	`;
+	if (!result || result.outbox_count !== result.message_count) {
+		throw new StaleDispatchLease();
+	}
 }
 
 function bindingMatches(
@@ -606,6 +650,12 @@ async function claimWork(
 				and status = 'submitted'
 			returning execution_id
 		`;
+		await failPendingSupplements(
+			transaction,
+			conversation.id,
+			execution.execution_id,
+			payload.sessionGeneration,
+		);
 		if (
 			cancelled.length !== 1 ||
 			readied.length !== 1 ||
@@ -639,11 +689,11 @@ async function claimWork(
 	`;
 	if (claimedRows.length !== 1) throw new StaleDispatchLease();
 	let currentExecutionFence = executionFence;
-	let currentExecutionStatus = execution.status;
+	const currentExecutionStatus = execution.status;
 	if (isTurn(selectedOperation) && !terminal(execution.status)) {
 		const updated = await transaction<{ execution_id: string }[]>`
 			update platform.conversation_executions
-			set delivery_fence = ${nextFence}, status = 'unknown', updated_at = clock_timestamp()
+			set delivery_fence = ${nextFence}, updated_at = clock_timestamp()
 			where execution_id = ${execution.execution_id}
 				and conversation_id = ${conversation.id}
 				and session_generation = ${payload.sessionGeneration}
@@ -653,7 +703,6 @@ async function claimWork(
 		`;
 		if (updated.length !== 1) throw new StaleDispatchLease();
 		currentExecutionFence = nextFence;
-		currentExecutionStatus = "unknown";
 	}
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
@@ -882,6 +931,27 @@ async function retryOutbox(
 	await insertAttemptEvent(transaction, state, "retry_scheduled", errorCode);
 }
 
+async function renewLease(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+	leaseDurationMs: number,
+) {
+	const rows = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set lease_expires_at = greatest(
+			lease_expires_at,
+			clock_timestamp() +
+				(${leaseDurationMs}::bigint * interval '1 millisecond')
+		), updated_at = clock_timestamp()
+		where id = ${claim.itemId} and status = 'processing'
+			and lease_owner = ${claim.leaseOwner}
+			and delivery_fence = ${claim.deliveryFence}
+			and lease_expires_at > clock_timestamp()
+		returning id
+	`;
+	if (rows.length !== 1) throw new StaleDispatchLease();
+}
+
 async function transactionResult(
 	client: Client,
 	work: (transaction: Transaction) => Promise<void>,
@@ -941,30 +1011,40 @@ export class PostgresConversationDispatchStoreV1
 		readonly leaseDurationMs: number;
 	}): Promise<boolean> {
 		requireClaim(input.claim);
-		if (
-			!Number.isSafeInteger(input.leaseDurationMs) ||
-			input.leaseDurationMs < 1 ||
-			input.leaseDurationMs > 300_000
-		) {
-			throw new TypeError("Conversation dispatch renewal is invalid");
-		}
+		requireLeaseDuration(input.leaseDurationMs);
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim);
 			if (!state) throw new StaleDispatchLease();
-			const rows = await transaction<{ id: string }[]>`
-				update platform.outbox_items
-				set lease_expires_at = greatest(
-					lease_expires_at,
-					clock_timestamp() +
-						(${input.leaseDurationMs}::bigint * interval '1 millisecond')
-				), updated_at = clock_timestamp()
-				where id = ${input.claim.itemId} and status = 'processing'
-					and lease_owner = ${input.claim.leaseOwner}
-					and delivery_fence = ${input.claim.deliveryFence}
-					and lease_expires_at > clock_timestamp()
-				returning id
-			`;
-			if (rows.length !== 1) throw new StaleDispatchLease();
+			await renewLease(transaction, input.claim, input.leaseDurationMs);
+		});
+	}
+
+	async prepare(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly leaseDurationMs: number;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		requireLeaseDuration(input.leaseDurationMs);
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim);
+			if (!state) throw new StaleDispatchLease();
+			if (
+				isTurn(input.claim.operation) &&
+				input.claim.executionStatus === "submitted"
+			) {
+				const rows = await transaction<{ execution_id: string }[]>`
+					update platform.conversation_executions
+					set status = 'unknown', updated_at = clock_timestamp()
+					where execution_id = ${input.claim.executionId}
+						and conversation_id = ${input.claim.conversationId}
+						and session_generation = ${input.claim.sessionGeneration}
+						and delivery_fence = ${input.claim.executionDeliveryFence}
+						and status = 'submitted'
+					returning execution_id
+				`;
+				if (rows.length !== 1) throw new StaleDispatchLease();
+			}
+			await renewLease(transaction, input.claim, input.leaseDurationMs);
 		});
 	}
 

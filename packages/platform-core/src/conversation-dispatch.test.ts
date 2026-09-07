@@ -97,6 +97,21 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return this.renewable && this.outboxStatus === "processing";
 	}
 
+	async prepare(input: {
+		claim: ConversationDispatchClaimV1;
+		leaseDurationMs: number;
+	}) {
+		if (!(await this.renew())) return false;
+		if (
+			(input.claim.operation === "conversation.turn.submit.v1" ||
+				input.claim.operation === "conversation.turn.regenerate.v1") &&
+			this.current.executionStatus === "submitted"
+		) {
+			this.current = { ...this.current, executionStatus: "unknown" };
+		}
+		return true;
+	}
+
 	async recordRuntimeResponse(input: {
 		claim: ConversationDispatchClaimV1;
 		hostSessionRef: string;
@@ -385,7 +400,7 @@ describe("Conversation Worker dispatch", () => {
 		expect(harness.events.persisted[1]?.adapterEventKey).toBe("event-2");
 	});
 
-	it("rejects a status event that contradicts an accepted terminal result", async () => {
+	it("replays historical status before validating an accepted terminal result", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
 		runtimeHost.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
@@ -393,12 +408,38 @@ describe("Conversation Worker dispatch", () => {
 
 		await expect(dispatch(useCase)).resolves.toEqual({
 			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		expect(events.persisted.map(({ event }) => event)).toEqual([
+			{ type: "execution.status", status: "processing" },
+			{ type: "execution.status", status: "completed" },
+		]);
+		expect(runtimeHost.acknowledgedEventCount()).toBe(2);
+		expect(store.current.executionStatus).toBe("completed");
+		expect(store.outboxStatus).toBe("succeeded");
+	});
+
+	it("rejects a terminal event that contradicts an accepted terminal result", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
+		runtimeHost.setEvents([
+			{
+				schemaVersion: 1,
+				adapterEventKey: "event-1",
+				executionId: "execution-1",
+				cursor: "cursor-1",
+				occurredAt: "2026-09-06T00:00:01.000Z",
+				type: "completed",
+				payload: { status: "failed" },
+			},
+		]);
+		const { useCase, store, events } = setup({ runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toMatchObject({
 			outcome: "rejected",
 		});
 		expect(events.persisted).toHaveLength(0);
-		expect(runtimeHost.acknowledgedEventCount()).toBe(0);
 		expect(store.current.executionStatus).toBe("completed");
-		expect(store.outboxStatus).toBe("failed");
 		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
 	});
 
@@ -520,12 +561,14 @@ describe("Conversation Worker dispatch", () => {
 			expect(harness.store.outboxStatus).toBe(
 				outcome === "denied" ? "failed" : "retry_scheduled",
 			);
+			expect(harness.store.current.executionStatus).toBe(
+				outcome === "denied" ? "failed" : "submitted",
+			);
 		}
 	});
 
-	it("recovers an acceptance-unknown Turn before dispatching its pending stop", async () => {
+	it("keeps acceptance unknown without submitting a stopped Turn again", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
-		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
 		const store = new MemoryDispatchStore(
 			claim({ executionStatus: "unknown", stopPending: true }),
 		);
@@ -533,11 +576,12 @@ describe("Conversation Worker dispatch", () => {
 
 		await expect(dispatch(useCase)).resolves.toEqual({
 			schemaVersion: 1,
-			outcome: "accepted",
+			outcome: "unknown",
+			retryScheduled: true,
 		});
-		expect(runtimeHost.sideEffectCount()).toBe(1);
-		expect(store.current.executionStatus).toBe("completed");
-		expect(store.outboxStatus).toBe("succeeded");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+		expect(store.current.executionStatus).toBe("unknown");
+		expect(store.outboxStatus).toBe("retry_scheduled");
 	});
 
 	it("does not acknowledge stale or raw-native Runtime events", async () => {

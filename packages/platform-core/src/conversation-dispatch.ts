@@ -135,6 +135,10 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<boolean>;
+	prepare(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly leaseDurationMs: number;
+	}): Promise<boolean>;
 	recordRuntimeResponse(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly hostSessionRef: string;
@@ -1058,12 +1062,13 @@ async function retry(
 	retryDelayMs: number,
 	errorCode: string,
 	outcome: "busy" | "unknown" | "retry",
+	transition = retryTransition(claim),
 ): Promise<ConversationDispatchDecisionV1> {
 	const scheduled = await store.retry({
 		claim,
 		retryDelayMs,
 		errorCode,
-		transition: retryTransition(claim),
+		transition,
 	});
 	return scheduled
 		? { schemaVersion: 1, outcome, retryScheduled: true }
@@ -1180,6 +1185,7 @@ export function createConversationDispatchUseCaseV1(
 					retryDelayMs,
 					"AUTHORIZATION_UNAVAILABLE",
 					"retry",
+					{},
 				);
 			}
 			const authorization = exactObject(
@@ -1195,6 +1201,7 @@ export function createConversationDispatchUseCaseV1(
 					retryDelayMs,
 					"AUTHORIZATION_UNAVAILABLE",
 					"retry",
+					{},
 				);
 			}
 			if (authorization.outcome === "denied") {
@@ -1216,6 +1223,20 @@ export function createConversationDispatchUseCaseV1(
 					dependencies.store,
 					claim,
 					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+				);
+			}
+			if (
+				claim.stopPending &&
+				(claim.operation === "conversation.turn.submit.v1" ||
+					claim.operation === "conversation.turn.regenerate.v1")
+			) {
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"RUNTIME_ACCEPTANCE_UNKNOWN",
+					"unknown",
+					claim.executionStatus === "submitted" ? {} : retryTransition(claim),
 				);
 			}
 			const executionFinished =
@@ -1253,7 +1274,7 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			try {
-				if (!(await dependencies.store.renew({ claim, leaseDurationMs }))) {
+				if (!(await dependencies.store.prepare({ claim, leaseDurationMs }))) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}
 			} catch {
@@ -1354,12 +1375,14 @@ export function createConversationDispatchUseCaseV1(
 					: { schemaVersion: 1, outcome: "stale" };
 			}
 
-			let finalStatus =
+			const responseFinalStatus =
 				response.result.status === "completed" ||
 				response.result.status === "failed" ||
 				response.result.status === "cancelled"
 					? response.result.status
 					: undefined;
+			let finalStatus = responseFinalStatus;
+			let terminalEventSeen = false;
 			const eventHeartbeat = heartbeat(
 				dependencies.store,
 				claim,
@@ -1390,10 +1413,14 @@ export function createConversationDispatchUseCaseV1(
 					const runtimeEvent = parseRuntimeEvent(eventInput, claim);
 					const event = normalizedEvent(runtimeEvent);
 					const transition = transitionFromEvent(event);
+					const eventFinalStatus = terminalStatus(event);
 					if (
-						finalStatus &&
-						transition?.executionStatus !== undefined &&
-						transition.executionStatus !== finalStatus
+						(finalStatus &&
+							eventFinalStatus &&
+							eventFinalStatus !== finalStatus) ||
+						(terminalEventSeen &&
+							transition?.executionStatus !== undefined &&
+							transition.executionStatus !== finalStatus)
 					) {
 						const finished = await dependencies.store.finish({
 							claim,
@@ -1435,11 +1462,15 @@ export function createConversationDispatchUseCaseV1(
 					}
 					if (
 						transition &&
+						(!responseFinalStatus || terminalEventSeen || eventFinalStatus) &&
 						!(await dependencies.store.recordEventStatus({ claim, transition }))
 					) {
 						return { schemaVersion: 1, outcome: "stale" };
 					}
-					finalStatus = terminalStatus(event) ?? finalStatus;
+					if (eventFinalStatus) {
+						terminalEventSeen = true;
+						finalStatus = eventFinalStatus;
+					}
 				}
 			} catch (error) {
 				const current = await eventHeartbeat.stop();

@@ -106,7 +106,7 @@ function messageStatus(input: string): VisibleMessageStatusV1 {
 
 function userMessageStatus(input: string): VisibleMessageStatusV1 {
 	const status = executionStatus(input);
-	if (status === "unknown" || status === "failed") return unavailable();
+	if (status === "unknown") return unavailable();
 	return status;
 }
 
@@ -145,18 +145,27 @@ function eventSequence(input: ConversationReadEventV1): number {
 export function projectConversationMessagesV1(
 	input: ConversationMessageReadModelV1,
 ): readonly ConversationMessageProjectionV1[] {
-	const userMessages = input.messages.map((item) => ({
-		messageId: item.messageId,
-		role: "user" as const,
-		text: item.text,
-		status: userMessageStatus(item.status),
-		executionId: item.executionId,
-		replyToMessageId: null,
-		answerVersion: null,
-		isCurrentAnswer: null,
-		failureTraceId: null,
-		createdAt: date(item.createdAt),
-	}));
+	const traceByExecution = new Map(
+		input.executions.map(({ executionId, traceId }) => [executionId, traceId]),
+	);
+	const userMessages = input.messages.map((item) => {
+		const status = userMessageStatus(item.status);
+		return {
+			messageId: item.messageId,
+			role: "user" as const,
+			text: item.text,
+			status,
+			executionId: item.executionId,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			failureTraceId: failureTraceId(
+				status,
+				traceByExecution.get(item.executionId) ?? null,
+			),
+			createdAt: date(item.createdAt),
+		};
+	});
 	const bySource = new Map<string, ConversationReadExecutionV1[]>();
 	for (const execution of input.executions) {
 		if (!execution.sourceMessageId) continue;

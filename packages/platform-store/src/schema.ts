@@ -37,7 +37,7 @@ export const platformStatusValues = {
 		"failed",
 		"cancelled",
 	],
-	conversationMessageStatus: ["submitted"],
+	conversationMessageStatus: ["submitted", "failed"],
 	conversationStopStatus: ["submitted", "completed"],
 	agentManagementStatus: [
 		"pending_approval",
