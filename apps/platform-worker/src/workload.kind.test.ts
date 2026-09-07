@@ -28,6 +28,31 @@ async function kubectl(...args: string[]) {
 		})
 	).stdout.trim();
 }
+async function waitForReadyPods() {
+	try {
+		await kubectl(
+			"wait",
+			"pods",
+			"--all",
+			"--for=condition=Ready",
+			"--timeout=120s",
+		);
+	} catch (error) {
+		const [pods, events] = await Promise.allSettled([
+			kubectl("get", "pods", "-o=wide"),
+			kubectl("get", "events", "--sort-by=.lastTimestamp"),
+		]);
+		const output = (result: PromiseSettledResult<string>) =>
+			result.status === "fulfilled"
+				? result.value
+				: result.reason instanceof Error
+					? result.reason.message
+					: String(result.reason);
+		throw new Error(
+			`Fixture pods did not become ready: ${error instanceof Error ? error.message : String(error)}\nPods:\n${output(pods)}\nEvents:\n${output(events)}`,
+		);
+	}
+}
 function apply(object: unknown) {
 	const result = spawnSync("kubectl", ["apply", "-f", "-"], {
 		input: JSON.stringify(object),
@@ -196,13 +221,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					},
 				});
 			}
-			await kubectl(
-				"wait",
-				"pods",
-				"--all",
-				"--for=condition=Ready",
-				"--timeout=120s",
-			);
+			await waitForReadyPods();
 			adapter = createKubernetesRuntimeAdapterV1({
 				client,
 				policy,

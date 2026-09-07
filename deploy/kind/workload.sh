@@ -40,6 +40,8 @@ for node in $("$kind_bin" get nodes --name "$cluster_name"); do
   docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${registry_port}"
   printf '[host."http://%s:5000"]\n  capabilities = ["pull", "resolve"]\n' "$registry_name" > "$state_dir/hosts.toml"
   docker cp "$state_dir/hosts.toml" "$node:/etc/containerd/certs.d/localhost:${registry_port}/hosts.toml"
+  docker exec "$node" crictl pull "$WORKLOAD_KIND_REPOSITORY@$WORKLOAD_KIND_IMAGE_A"
+  docker exec "$node" crictl pull "$WORKLOAD_KIND_REPOSITORY@$WORKLOAD_KIND_IMAGE_B"
 done
 curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
   https://raw.githubusercontent.com/projectcalico/calico/v3.30.3/manifests/calico.yaml \
