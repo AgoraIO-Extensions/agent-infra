@@ -707,12 +707,7 @@ describe
 				const mappedThreadId = threadId ?? session.threadId;
 				threadId = mappedThreadId;
 				expect(session.threadId).toBe(mappedThreadId);
-				await waitForNativeHistorySeed(
-					home,
-					mappedThreadId,
-					seed,
-					index,
-				);
+				await waitForNativeHistorySeed(home, mappedThreadId, seed, index);
 				expect(
 					(
 						await driver.execute(
