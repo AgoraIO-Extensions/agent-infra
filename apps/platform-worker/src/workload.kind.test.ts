@@ -87,6 +87,8 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				)
 			)
 				throw new Error("An isolated workload kind cluster is required");
+			const imageDigest = process.env.WORKLOAD_KIND_IMAGE_A;
+			if (!imageDigest) throw new Error("A fixture image digest is required");
 			apply({
 				apiVersion: "v1",
 				kind: "Namespace",
@@ -100,6 +102,10 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				chart,
 				"--namespace",
 				namespace,
+				"--set-string",
+				`images.platformWorker.digest=${imageDigest}`,
+				"--set",
+				"migration.enabled=false",
 			]);
 			for (const document of parseAllDocuments(rendered.stdout)) {
 				const value = document.toJSON();
@@ -141,7 +147,6 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				},
 			};
 			const base = workloadDesiredFixture();
-			const imageDigest = process.env.WORKLOAD_KIND_IMAGE_A;
 			a = validateAgentWorkloadDesiredV1({
 				...base,
 				imageDigest,
