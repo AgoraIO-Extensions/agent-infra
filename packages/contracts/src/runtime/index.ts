@@ -34,7 +34,9 @@ import {
 	RuntimeReplayResponseV1Schema,
 	RuntimeSelectionV1Schema,
 	RuntimeStatusRequestV1Schema,
+	RuntimeStatusRequestV2Schema,
 	RuntimeStatusResponseV1Schema,
+	RuntimeStatusResponseV2Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
@@ -77,6 +79,8 @@ export const RuntimeHostV2SchemaDefinitions = {
 	RuntimeOperationResultV2: RuntimeOperationResultV2Schema,
 	RuntimeSelectionV1: RuntimeSelectionV1Schema,
 	RuntimeSubmitTurnRequestV2: RuntimeSubmitTurnRequestV2Schema,
+	RuntimeStatusRequestV2: RuntimeStatusRequestV2Schema,
+	RuntimeStatusResponseV2: RuntimeStatusResponseV2Schema,
 };
 
 export const RuntimeDriverV2SchemaDefinitions = {

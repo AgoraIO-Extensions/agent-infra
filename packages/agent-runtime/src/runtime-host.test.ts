@@ -75,6 +75,47 @@ function submitRequestV2(): RuntimeSubmitTurnRequestV2 {
 	};
 }
 
+function statusRequest(
+	request: RuntimeSubmitTurnRequestV1 | RuntimeSubmitTurnRequestV2,
+	hostSessionRef: string,
+	requestId: string,
+	deliveryFence = request.deliveryFence,
+) {
+	return {
+		schemaVersion: 1 as const,
+		requestId,
+		traceId: request.traceId,
+		actorId: request.actorId,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		deliveryFence,
+		hostSessionRef,
+		grant: grant(request, ["session.status"]),
+	};
+}
+
+function recoveryStatusRequest(
+	request: RuntimeSubmitTurnRequestV1 | RuntimeSubmitTurnRequestV2,
+	hostSessionRef: string,
+	requestId: string,
+	deliveryFence: number,
+) {
+	return {
+		...statusRequest(request, hostSessionRef, requestId, deliveryFence),
+		schemaVersion: 2 as const,
+		recovery: {
+			schemaVersion: 1 as const,
+			input: request.input,
+			...(request.schemaVersion === 2 ? { selection: request.selection } : {}),
+		},
+		grant: grant(request, ["session.status", "turn.submit"]),
+	};
+}
+
 function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
 	return RuntimeHost.open({
 		store,
@@ -127,6 +168,34 @@ describe("RuntimeHost durable Session", () => {
 				selection: {
 					...first.selection,
 					reasoningLevel: "low",
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		await expect(
+			runtimeHost.recoverStatusV2(
+				recoveryStatusRequest(
+					first,
+					accepted.hostSessionRef,
+					"request-conformance-v2-status-recovery",
+					2,
+				),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		const conflictingRecovery = recoveryStatusRequest(
+			first,
+			accepted.hostSessionRef,
+			"request-conformance-v2-status-conflict",
+			3,
+		);
+		await expect(
+			runtimeHost.recoverStatusV2({
+				...conflictingRecovery,
+				recovery: {
+					...conflictingRecovery.recovery,
+					selection: {
+						...first.selection,
+						reasoningLevel: "low",
+					},
 				},
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
@@ -303,26 +372,21 @@ describe("RuntimeHost durable Session", () => {
 			/native|vendor|stdio|protocol/i,
 		);
 
+		const restartedDriver = await FakeRuntimeDriver.open(
+			join(directory, "driver.json"),
+		);
 		const restartedHost = await host(
 			await FileRuntimeStore.open(join(directory, "host.json")),
-			await FakeRuntimeDriver.open(join(directory, "driver.json")),
+			restartedDriver,
 		);
 		const binding = submitRequest();
-		const status = await restartedHost.status({
-			schemaVersion: 1,
-			requestId: "request-conformance-status",
-			traceId: binding.traceId,
-			actorId: binding.actorId,
-			channelId: binding.channelId,
-			agentId: binding.agentId,
-			conversationId: binding.conversationId,
-			executionId: binding.executionId,
-			turnId: binding.turnId,
-			sessionGeneration: binding.sessionGeneration,
-			deliveryFence: binding.deliveryFence,
-			hostSessionRef: submitted.hostSessionRef,
-			grant: grant(binding, ["session.status"]),
-		});
+		const status = await restartedHost.status(
+			statusRequest(
+				binding,
+				submitted.hostSessionRef,
+				"request-conformance-status",
+			),
+		);
 
 		expect(status).toEqual({
 			schemaVersion: 1,
@@ -330,6 +394,62 @@ describe("RuntimeHost durable Session", () => {
 			executionId: "execution-conformance-1",
 			status: "running",
 		});
+		await expect(
+			restartedHost.recoverStatusV2(
+				recoveryStatusRequest(
+					binding,
+					submitted.hostSessionRef,
+					"request-conformance-status-takeover",
+					2,
+				),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		await expect(
+			restartedHost.status(
+				statusRequest(
+					binding,
+					submitted.hostSessionRef,
+					"request-conformance-status-stale",
+				),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+		expect(await restartedDriver.sideEffectCount()).toBe(1);
+	});
+
+	it("persists an idle fence before confirming a Turn was never accepted", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+		);
+		const submitted = await runtimeHost.submitTurn(submitRequest());
+		const missing = {
+			...submitRequest(),
+			requestId: "request-conformance-missing-status",
+			executionId: "execution-conformance-missing",
+			turnId: "turn-conformance-missing",
+			deliveryFence: 2,
+		};
+
+		await expect(
+			runtimeHost.recoverStatusV2(
+				recoveryStatusRequest(
+					missing,
+					submitted.hostSessionRef,
+					missing.requestId,
+					missing.deliveryFence,
+				),
+			),
+		).resolves.toMatchObject({ outcome: "not_found" });
+		await expect(
+			runtimeHost.submitTurn({
+				...missing,
+				hostSessionRef: submitted.hostSessionRef,
+				grant: grant(missing, ["turn.submit"]),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+		expect(await driver.sideEffectCount()).toBe(1);
 	});
 
 	it("namespaces identical operation IDs across Sessions", async () => {

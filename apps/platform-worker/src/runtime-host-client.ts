@@ -7,6 +7,8 @@ import {
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeStatusRequestV2Schema,
+	RuntimeStatusResponseV2Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
@@ -18,6 +20,7 @@ import {
 	type ConversationRuntimeEventV1,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
+	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
@@ -214,7 +217,11 @@ function dispatchBody(request: ConversationRuntimeDispatchRequestV1) {
 	};
 }
 
-function replayBody(request: ConversationRuntimeEventRequestV1) {
+function replayBody(
+	request:
+		| ConversationRuntimeEventRequestV1
+		| ConversationRuntimeStatusRequestV2,
+) {
 	return RuntimeReplayRequestV1Schema.parse({
 		schemaVersion: 1,
 		requestId: request.requestId,
@@ -228,8 +235,24 @@ function replayBody(request: ConversationRuntimeEventRequestV1) {
 		sessionGeneration: request.sessionGeneration,
 		deliveryFence: request.deliveryFence,
 		hostSessionRef: request.hostSessionRef,
-		...(request.afterCursor ? { afterCursor: request.afterCursor } : {}),
+		...("afterCursor" in request && request.afterCursor
+			? { afterCursor: request.afterCursor }
+			: {}),
 		grant: grant(request.runtimeGrant),
+	});
+}
+
+function statusBody(request: ConversationRuntimeStatusRequestV2) {
+	return RuntimeStatusRequestV2Schema.parse({
+		...replayBody(request),
+		schemaVersion: 2,
+		recovery: {
+			schemaVersion: 1,
+			input: request.recovery.input,
+			...(request.recovery.selection
+				? { selection: request.recovery.selection }
+				: {}),
+		},
 	});
 }
 
@@ -351,6 +374,30 @@ export function createWorkerRuntimeHostClientV1(
 						? RuntimeOperationResponseV2Schema
 						: RuntimeOperationResponseV1Schema
 				).parse(JSON.parse(text));
+			} catch {
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		},
+		async recoverStatus(request, signal) {
+			let body: ReturnType<typeof statusBody>;
+			try {
+				body = statusBody(request);
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v2/status", dispatchBase),
+				options.serviceToken,
+				request.traceId,
+				body,
+				signal,
+			);
+			try {
+				return RuntimeStatusResponseV2Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
 			} catch {
 				return failure("RUNTIME_RESPONSE_INVALID", true);
 			}

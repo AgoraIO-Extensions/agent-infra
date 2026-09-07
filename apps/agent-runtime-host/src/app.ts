@@ -7,6 +7,7 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
+	RuntimeStatusRequestV2Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
@@ -133,6 +134,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		return context.json(
 			await options.host.status(
+				request,
+				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v2/status", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeStatusRequestV2Schema,
+		);
+		return context.json(
+			await options.host.recoverStatusV2(
 				request,
 				await options.verifyGrant(request.grant),
 			),

@@ -6,6 +6,7 @@ import type {
 	RuntimeGenerationCancelRequestV1,
 	RuntimeReplayRequestV1,
 	RuntimeStatusRequestV1,
+	RuntimeStatusRequestV2,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
@@ -101,6 +102,12 @@ export function ingressVerifiedRuntimeHost(host: RuntimeHost) {
 		},
 		status(request: RuntimeStatusRequestV1) {
 			return host.status(request, verificationForRuntimeGrant(request.grant));
+		},
+		recoverStatusV2(request: RuntimeStatusRequestV2) {
+			return host.recoverStatusV2(
+				request,
+				verificationForRuntimeGrant(request.grant),
+			);
 		},
 		capabilities(request: RuntimeCapabilitiesRequestV1) {
 			return host.capabilities(

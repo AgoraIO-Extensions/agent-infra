@@ -97,7 +97,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return this.renewable && this.outboxStatus === "processing";
 	}
 
-	async prepare(input: {
+	async prepareRuntimeDispatch(input: {
 		claim: ConversationDispatchClaimV1;
 		leaseDurationMs: number;
 	}) {
@@ -109,6 +109,19 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		) {
 			this.current = { ...this.current, executionStatus: "unknown" };
 		}
+		return true;
+	}
+
+	async cancelUnaccepted(input: { claim: ConversationDispatchClaimV1 }) {
+		if (
+			!this.#owned(input.claim) ||
+			!this.current.stopPending ||
+			this.current.executionStatus !== "unknown"
+		) {
+			return false;
+		}
+		this.outboxStatus = "succeeded";
+		this.current = { ...this.current, executionStatus: "cancelled" };
 		return true;
 	}
 
@@ -324,6 +337,7 @@ describe("Conversation Worker dispatch", () => {
 				observedRequest = request;
 				return inner.dispatch(request);
 			},
+			recoverStatus: (request) => inner.recoverStatus(request),
 			events: (request) => inner.events(request),
 		};
 		const { useCase } = setup({ runtimeHost });
@@ -443,6 +457,30 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
 	});
 
+	it("rejects every Runtime event after the terminal event", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setEvents([
+			runtimeEvent(1),
+			{
+				schemaVersion: 1,
+				adapterEventKey: "event-2",
+				executionId: "execution-1",
+				cursor: "cursor-2",
+				occurredAt: "2026-09-06T00:00:02.000Z",
+				type: "text",
+				payload: { delta: "late" },
+			},
+		]);
+		const { useCase, store, events } = setup({ runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(events.persisted).toHaveLength(1);
+		expect(runtimeHost.acknowledgedEventCount()).toBe(1);
+		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
+	});
+
 	it.each([
 		[
 			{ outcome: "busy" as const },
@@ -496,6 +534,30 @@ describe("Conversation Worker dispatch", () => {
 		},
 	);
 
+	it("maps a Runtime-ended supplement to the product failure reason", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_ACTIVE",
+			message: "Runtime turn is no longer active",
+			retryable: false,
+		});
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.supplement.v1",
+				messageId: "message-supplement",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(store.errorCode).toBe("ORIGINAL_RESPONSE_ALREADY_FINISHED");
+	});
+
 	it("fails closed on cross-user, cross-Agent, stale, and raw-native result facts", async () => {
 		for (const invalidAuthorization of [
 			{ actorId: "other-actor" },
@@ -530,6 +592,9 @@ describe("Conversation Worker dispatch", () => {
 					result: { outcome: "accepted", status: "running" },
 					nativeSessionId: "must-not-cross",
 				} as never;
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
 			},
 			async *events() {},
 		};
@@ -584,6 +649,67 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.outboxStatus).toBe("retry_scheduled");
 	});
 
+	it("recovers a stopped unknown Turn through status without submitting it again", async () => {
+		let statusCalls = 0;
+		let dispatchCalls = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				dispatchCalls += 1;
+				throw new Error("Unexpected submit");
+			},
+			async recoverStatus(request) {
+				statusCalls += 1;
+				return {
+					schemaVersion: 2,
+					hostSessionRef: request.hostSessionRef,
+					executionId: request.executionId,
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				yield runtimeEvent(1);
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				stopPending: true,
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		expect({ statusCalls, dispatchCalls }).toEqual({
+			statusCalls: 1,
+			dispatchCalls: 0,
+		});
+		expect(store.current.executionStatus).toBe("completed");
+	});
+
+	it("locally cancels after RuntimeHost fences a never-accepted Turn", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				stopPending: true,
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "already_completed",
+		});
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+		expect(store.current.executionStatus).toBe("cancelled");
+	});
+
 	it("does not acknowledge stale or raw-native Runtime events", async () => {
 		const staleRuntime = new FakeConversationRuntimeHostV1();
 		staleRuntime.setEvents([runtimeEvent(1)]);
@@ -603,6 +729,9 @@ describe("Conversation Worker dispatch", () => {
 					operationId: request.executionId,
 					result: { outcome: "accepted", status: "running" },
 				};
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
 			},
 			async *events() {
 				yield {

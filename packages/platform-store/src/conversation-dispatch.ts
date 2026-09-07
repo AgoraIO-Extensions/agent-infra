@@ -459,7 +459,8 @@ async function failPendingSupplements(
 			returning payload->>'messageId' as message_id
 		), failed_messages as (
 			update platform.conversation_messages as message
-			set status = 'failed', updated_at = clock_timestamp()
+			set status = 'failed', failure_code = 'ORIGINAL_RESPONSE_NOT_STARTED',
+				updated_at = clock_timestamp()
 			from failed_outboxes
 			where message.message_id = failed_outboxes.message_id
 				and message.conversation_id = ${conversationId}
@@ -471,6 +472,91 @@ async function failPendingSupplements(
 			(select count(*)::int from failed_messages) as message_count
 	`;
 	if (!result || result.outbox_count !== result.message_count) {
+		throw new StaleDispatchLease();
+	}
+}
+
+async function cancelStoppedTurn(
+	transaction: Transaction,
+	outbox: OutboxRow,
+	conversation: ConversationRow,
+	execution: ExecutionRow,
+	stop: StopRow,
+	payload: ConversationPayload,
+) {
+	const stopOutbox = await lockOutbox(
+		transaction,
+		`conversation:stop:${stop.stop_request_id}`,
+	);
+	const stopPayload = stopOutbox
+		? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
+		: undefined;
+	if (
+		!stopOutbox ||
+		!stopPayload ||
+		stopOutbox.operation !== "conversation.turn.stop.v1" ||
+		(stopOutbox.status !== "pending" &&
+			stopOutbox.status !== "processing" &&
+			stopOutbox.status !== "retry_scheduled") ||
+		stopPayload.stopRequestId !== stop.stop_request_id ||
+		!bindingMatches(stopOutbox, stopPayload, conversation, execution)
+	) {
+		throw new StaleDispatchLease();
+	}
+	const cancelled = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set status = 'cancelled', updated_at = clock_timestamp()
+		where execution_id = ${execution.execution_id}
+			and conversation_id = ${conversation.id}
+			and status = ${execution.status}
+			and delivery_fence = ${execution.delivery_fence}
+		returning execution_id
+	`;
+	const readied = await transaction<{ id: string }[]>`
+		update platform.conversations
+		set status = 'ready', updated_at = clock_timestamp()
+		where id = ${conversation.id}
+			and session_generation = ${payload.sessionGeneration}
+			and authorization_revision = ${execution.authorization_revision}
+		returning id
+	`;
+	const completedTurn = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where id = ${outbox.id} and status = ${outbox.status}
+			and delivery_fence = ${outbox.delivery_fence}
+		returning id
+	`;
+	const completedStop = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where id = ${stopOutbox.id} and status = ${stopOutbox.status}
+			and delivery_fence = ${stopOutbox.delivery_fence}
+		returning id
+	`;
+	const completedStopRequest = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_stops
+		set status = 'completed', updated_at = clock_timestamp()
+		where execution_id = ${execution.execution_id}
+			and stop_request_id = ${stop.stop_request_id}
+			and status = 'submitted'
+		returning execution_id
+	`;
+	await failPendingSupplements(
+		transaction,
+		conversation.id,
+		execution.execution_id,
+		payload.sessionGeneration,
+	);
+	if (
+		cancelled.length !== 1 ||
+		readied.length !== 1 ||
+		completedTurn.length !== 1 ||
+		completedStop.length !== 1 ||
+		completedStopRequest.length !== 1
+	) {
 		throw new StaleDispatchLease();
 	}
 }
@@ -591,80 +677,14 @@ async function claimWork(
 		execution.status === "submitted" &&
 		stop?.status === "submitted"
 	) {
-		const stopOutbox = await lockOutbox(
+		await cancelStoppedTurn(
 			transaction,
-			`conversation:stop:${stop.stop_request_id}`,
+			outbox,
+			conversation,
+			execution,
+			stop,
+			payload,
 		);
-		const stopPayload = stopOutbox
-			? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
-			: undefined;
-		if (
-			!stopOutbox ||
-			!stopPayload ||
-			stopOutbox.operation !== "conversation.turn.stop.v1" ||
-			(stopOutbox.status !== "pending" &&
-				stopOutbox.status !== "retry_scheduled") ||
-			stopPayload.stopRequestId !== stop.stop_request_id ||
-			!bindingMatches(stopOutbox, stopPayload, conversation, execution)
-		) {
-			return { outcome: "stale" };
-		}
-		const cancelled = await transaction<{ execution_id: string }[]>`
-			update platform.conversation_executions
-			set status = 'cancelled', updated_at = clock_timestamp()
-			where execution_id = ${execution.execution_id}
-				and conversation_id = ${conversation.id}
-				and status = 'submitted'
-				and delivery_fence = ${execution.delivery_fence}
-			returning execution_id
-		`;
-		const readied = await transaction<{ id: string }[]>`
-			update platform.conversations
-			set status = 'ready', updated_at = clock_timestamp()
-			where id = ${conversation.id}
-				and session_generation = ${payload.sessionGeneration}
-				and authorization_revision = ${execution.authorization_revision}
-			returning id
-		`;
-		const completedTurn = await transaction<{ id: string }[]>`
-			update platform.outbox_items
-			set status = 'succeeded', lease_owner = null, lease_expires_at = null,
-				updated_at = clock_timestamp()
-			where id = ${outbox.id} and status = ${outbox.status}
-				and delivery_fence = ${outbox.delivery_fence}
-			returning id
-		`;
-		const completedStop = await transaction<{ id: string }[]>`
-			update platform.outbox_items
-			set status = 'succeeded', lease_owner = null, lease_expires_at = null,
-				updated_at = clock_timestamp()
-			where id = ${stopOutbox.id} and status = ${stopOutbox.status}
-				and delivery_fence = ${stopOutbox.delivery_fence}
-			returning id
-		`;
-		const completedStopRequest = await transaction<{ execution_id: string }[]>`
-			update platform.conversation_stops
-			set status = 'completed', updated_at = clock_timestamp()
-			where execution_id = ${execution.execution_id}
-				and stop_request_id = ${stop.stop_request_id}
-				and status = 'submitted'
-			returning execution_id
-		`;
-		await failPendingSupplements(
-			transaction,
-			conversation.id,
-			execution.execution_id,
-			payload.sessionGeneration,
-		);
-		if (
-			cancelled.length !== 1 ||
-			readied.length !== 1 ||
-			completedTurn.length !== 1 ||
-			completedStop.length !== 1 ||
-			completedStopRequest.length !== 1
-		) {
-			throw new StaleDispatchLease();
-		}
 		return { outcome: "succeeded" };
 	}
 	const previousFence = safeCounter(outbox.delivery_fence);
@@ -672,7 +692,8 @@ async function claimWork(
 	if (
 		previousFence === undefined ||
 		executionFence === undefined ||
-		previousFence >= maximumSafeCounter
+		previousFence >= maximumSafeCounter ||
+		(isTurn(selectedOperation) && executionFence !== previousFence)
 	) {
 		return { outcome: "stale" };
 	}
@@ -1019,7 +1040,7 @@ export class PostgresConversationDispatchStoreV1
 		});
 	}
 
-	async prepare(input: {
+	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<boolean> {
@@ -1045,6 +1066,38 @@ export class PostgresConversationDispatchStoreV1
 				if (rows.length !== 1) throw new StaleDispatchLease();
 			}
 			await renewLease(transaction, input.claim, input.leaseDurationMs);
+		});
+	}
+
+	async cancelUnaccepted(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim);
+			const payload = state
+				? exactPayload(state.outbox.payload, input.claim.operation)
+				: undefined;
+			const stop = state
+				? await readStop(transaction, input.claim.executionId)
+				: undefined;
+			if (
+				!state ||
+				!payload ||
+				!isTurn(input.claim.operation) ||
+				state.execution.status !== "unknown" ||
+				stop?.status !== "submitted"
+			) {
+				throw new StaleDispatchLease();
+			}
+			await cancelStoppedTurn(
+				transaction,
+				state.outbox,
+				state.conversation,
+				state.execution,
+				stop,
+				payload,
+			);
 		});
 	}
 
@@ -1112,6 +1165,28 @@ export class PostgresConversationDispatchStoreV1
 			const state = await ownedState(transaction, input.claim);
 			if (!state) throw new StaleDispatchLease();
 			await applyTransition(transaction, state, input.claim, input.transition);
+			if (
+				input.claim.operation === "conversation.turn.supplement.v1" &&
+				input.status === "failed"
+			) {
+				const failureCode =
+					input.errorCode === "AUTHORIZATION_REVOKED" ||
+					input.errorCode === "ORIGINAL_RESPONSE_NOT_STARTED" ||
+					input.errorCode === "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+						? input.errorCode
+						: "EXECUTION_FAILED";
+				const messages = await transaction<{ message_id: string }[]>`
+					update platform.conversation_messages
+					set status = 'failed', failure_code = ${failureCode},
+						updated_at = clock_timestamp()
+					where message_id = ${input.claim.messageId}
+						and conversation_id = ${input.claim.conversationId}
+						and execution_id = ${input.claim.executionId}
+						and status = 'submitted'
+					returning message_id
+				`;
+				if (messages.length !== 1) throw new StaleDispatchLease();
+			}
 			if (
 				input.claim.operation === "conversation.turn.stop.v1" &&
 				input.status === "succeeded"

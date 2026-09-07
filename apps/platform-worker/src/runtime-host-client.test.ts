@@ -64,6 +64,22 @@ function eventRequest(afterCursor?: string) {
 	};
 }
 
+function statusRequest() {
+	return {
+		...eventRequest(),
+		schemaVersion: 2 as const,
+		recovery: {
+			schemaVersion: 1 as const,
+			input: { text: "bounded client fixture", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-client",
+				reasoningLevel: "medium",
+			},
+		},
+	};
+}
+
 function response(
 	result: object = { outcome: "accepted", status: "running" },
 	schemaVersion: 1 | 2 = 1,
@@ -230,6 +246,42 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 		);
 		const body = JSON.parse(String(init?.body));
 		expect(body).not.toHaveProperty("selection");
+	});
+
+	it("recovers Execution status through the fixed versioned endpoint", async () => {
+		const fetcher = vi.fn<typeof fetch>(
+			async () =>
+				new Response(
+					JSON.stringify({
+						schemaVersion: 2,
+						hostSessionRef: "host-client",
+						executionId: "execution-client",
+						outcome: "found",
+						status: "running",
+					}),
+				),
+		);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "https://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+
+		await expect(client.recoverStatus(statusRequest())).resolves.toMatchObject({
+			status: "running",
+		});
+		const [url, init] = fetcher.mock.calls[0] ?? [];
+		expect(String(url)).toBe(
+			"https://runtime.internal/internal/runtime/v2/status",
+		);
+		expect(JSON.parse(String(init?.body))).toMatchObject({
+			executionId: "execution-client",
+			deliveryFence: 3,
+			recovery: {
+				input: { text: "bounded client fixture", attachments: [] },
+			},
+			grant,
+		});
 	});
 
 	it("streams only contract-valid correlated SSE events after the persisted cursor", async () => {

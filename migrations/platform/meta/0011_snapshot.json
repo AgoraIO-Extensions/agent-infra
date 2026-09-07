@@ -1,5 +1,5 @@
 {
-  "id": "df5f37e4-2dfa-40ef-9827-bea0899cd2e1",
+  "id": "54c5af99-87a8-4be1-8091-f041ea3199ed",
   "prevId": "8d5a9fae-7444-4227-bd85-c94bce44ea2d",
   "version": "7",
   "dialect": "postgresql",
@@ -1558,6 +1558,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1632,6 +1638,14 @@
         "conversation_message_text_non_empty": {
           "name": "conversation_message_text_non_empty",
           "value": "char_length(\"platform\".\"conversation_messages\".\"text\") > 0"
+        },
+        "conversation_message_failure_binding": {
+          "name": "conversation_message_failure_binding",
+          "value": "(\"platform\".\"conversation_messages\".\"status\"::text = 'failed') = (\"platform\".\"conversation_messages\".\"failure_code\" is not null)"
+        },
+        "conversation_message_failure_code_non_empty": {
+          "name": "conversation_message_failure_code_non_empty",
+          "value": "\"platform\".\"conversation_messages\".\"failure_code\" is null or char_length(\"platform\".\"conversation_messages\".\"failure_code\") > 0"
         }
       },
       "isRLSEnabled": false

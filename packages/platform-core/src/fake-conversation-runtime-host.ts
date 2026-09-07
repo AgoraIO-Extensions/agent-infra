@@ -7,6 +7,7 @@ import {
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationResponseV1,
+	type ConversationRuntimeStatusRequestV2,
 } from "./conversation-dispatch.js";
 
 function digest(value: unknown) {
@@ -86,6 +87,35 @@ export class FakeConversationRuntimeHostV1
 		};
 		this.#operations.set(operationKey, { digest: requestDigest, response });
 		return structuredClone(response);
+	}
+
+	async recoverStatus(request: ConversationRuntimeStatusRequestV2) {
+		const operationKey = `${request.agentId}\0${request.conversationId}\0${request.executionId}`;
+		const operation = this.#operations.get(operationKey);
+		if (!operation) {
+			return {
+				schemaVersion: 2 as const,
+				hostSessionRef: request.hostSessionRef,
+				executionId: request.executionId,
+				outcome: "not_found" as const,
+			};
+		}
+		if (operation.response.hostSessionRef !== request.hostSessionRef) {
+			throw new ConversationRuntimeHostError(
+				"RUNTIME_SESSION_BINDING_MISMATCH",
+				false,
+			);
+		}
+		return {
+			schemaVersion: 2 as const,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "found" as const,
+			status:
+				operation.response.result.outcome === "accepted"
+					? operation.response.result.status
+					: ("unknown" as const),
+		};
 	}
 
 	async *events(request: ConversationRuntimeEventRequestV1) {

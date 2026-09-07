@@ -71,6 +71,10 @@ interface PrepareOperation {
 	) => RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
 }
 
+type RecoverOperation = Omit<PrepareOperation, "command"> & {
+	requestedHostSessionRef: string;
+};
+
 function storeCorrupted(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_STORE_CORRUPTED",
@@ -675,6 +679,51 @@ export class FileRuntimeStore {
 			);
 		}
 		return session;
+	}
+
+	recoverOperation(input: RecoverOperation) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const session = sessionFor(
+				state,
+				input.requestedHostSessionRef,
+				input.binding,
+			);
+			const currentFence = session.highestFences[input.scope] ?? 0;
+			if (
+				!Number.isSafeInteger(input.deliveryFence) ||
+				input.deliveryFence < 1 ||
+				input.deliveryFence < currentFence
+			) {
+				throw new RuntimeHostError(
+					"RUNTIME_FENCE_STALE",
+					"Runtime delivery fence is stale",
+					409,
+				);
+			}
+			const operation = session.operations[input.operationId];
+			if (!operation) {
+				session.highestFences[input.scope] = input.deliveryFence;
+				return undefined;
+			}
+			if (
+				operation.requestDigest !== input.requestDigest ||
+				operation.kind !== input.kind ||
+				operation.scope !== input.scope
+			) {
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation was retried with different content",
+					409,
+				);
+			}
+			assertExecutionBinding(session, input.binding);
+			if (input.deliveryFence > operation.deliveryFence) {
+				operation.deliveryFence = input.deliveryFence;
+				session.highestFences[input.scope] = input.deliveryFence;
+			}
+			return structuredClone(session);
+		});
 	}
 
 	activateGenerationBarrier(

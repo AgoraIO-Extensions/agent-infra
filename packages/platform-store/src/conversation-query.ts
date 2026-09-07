@@ -33,6 +33,7 @@ export interface ConversationQueryMessageV1 {
 	readonly text: string;
 	readonly executionId: string;
 	readonly status: string;
+	readonly failureCode: string | null;
 	readonly createdAt: Date;
 }
 
@@ -106,6 +107,7 @@ interface MessageRow {
 	readonly text: string;
 	readonly execution_id: string;
 	readonly status: string;
+	readonly failure_code: string | null;
 	readonly created_at: Date;
 }
 
@@ -352,6 +354,7 @@ function message(row: MessageRow): ConversationQueryMessageV1 {
 		text: typeof row.text === "string" ? row.text : unavailable(),
 		executionId: text(row.execution_id),
 		status: text(row.status, 64),
+		failureCode: row.failure_code === null ? null : text(row.failure_code, 64),
 		createdAt: timestamp(row.created_at),
 	};
 }
@@ -409,7 +412,7 @@ async function readMessages(
 	conversationId: string,
 ): Promise<ConversationQueryMessageV1[]> {
 	const rows = await database<MessageRow[]>`
-		select message_id, text, execution_id, status, created_at
+		select message_id, text, execution_id, status, failure_code, created_at
 		from platform.conversation_messages
 		where conversation_id = ${conversationId}
 		order by created_at, message_id

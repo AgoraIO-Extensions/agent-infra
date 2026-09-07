@@ -135,9 +135,12 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<boolean>;
-	prepare(input: {
+	prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
+	}): Promise<boolean>;
+	cancelUnaccepted(input: {
+		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;
 	recordRuntimeResponse(input: {
 		readonly claim: ConversationDispatchClaimV1;
@@ -272,11 +275,46 @@ export interface ConversationRuntimeEventRequestV1 {
 	readonly runtimeGrant: unknown;
 }
 
+export type ConversationRuntimeStatusRequestV2 = Omit<
+	ConversationRuntimeEventRequestV1,
+	"afterCursor" | "schemaVersion"
+> & {
+	readonly schemaVersion: 2;
+	readonly recovery: {
+		readonly schemaVersion: 1;
+		readonly input: {
+			readonly text: string;
+			readonly attachments: readonly string[];
+		};
+		readonly selection?: {
+			readonly schemaVersion: 1;
+			readonly modelOptionId: string;
+			readonly reasoningLevel: string;
+		};
+	};
+};
+
+export type ConversationRuntimeStatusResponseV2 = {
+	readonly schemaVersion: 2;
+	readonly hostSessionRef: string;
+	readonly executionId: string;
+} & (
+	| {
+			readonly outcome: "found";
+			readonly status: ConversationRuntimeStatusV1;
+	  }
+	| { readonly outcome: "not_found" }
+);
+
 export interface ConversationRuntimeHostPortV1 {
 	dispatch(
 		request: ConversationRuntimeDispatchRequestV1,
 		signal?: AbortSignal,
 	): Promise<ConversationRuntimeOperationResponseV1>;
+	recoverStatus(
+		request: ConversationRuntimeStatusRequestV2,
+		signal?: AbortSignal,
+	): Promise<ConversationRuntimeStatusResponseV2>;
 	events(
 		request: ConversationRuntimeEventRequestV1,
 		signal?: AbortSignal,
@@ -783,6 +821,42 @@ function parseRuntimeResponse(
 	};
 }
 
+function parseRuntimeStatusResponse(
+	value: unknown,
+	claim: ConversationDispatchClaimV1,
+): ConversationRuntimeStatusResponseV2 {
+	const input = exactObject(
+		value,
+		["schemaVersion", "hostSessionRef", "executionId", "outcome"],
+		["status"],
+	);
+	if (
+		input.schemaVersion !== 2 ||
+		input.hostSessionRef !== claim.hostSessionRef ||
+		input.executionId !== claim.executionId
+	) {
+		return unavailable();
+	}
+	if (input.outcome === "not_found" && input.status === undefined) {
+		return {
+			schemaVersion: 2,
+			hostSessionRef: claim.hostSessionRef ?? unavailable(),
+			executionId: claim.executionId,
+			outcome: "not_found",
+		};
+	}
+	if (input.outcome !== "found" || input.status === undefined) {
+		return unavailable();
+	}
+	return {
+		schemaVersion: 2,
+		hostSessionRef: claim.hostSessionRef ?? unavailable(),
+		executionId: claim.executionId,
+		outcome: "found",
+		status: runtimeStatus(input.status),
+	};
+}
+
 function parseRuntimeEvent(
 	value: unknown,
 	claim: ConversationDispatchClaimV1,
@@ -1225,10 +1299,13 @@ export function createConversationDispatchUseCaseV1(
 					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 				);
 			}
-			if (
+			const recoveringStoppedTurn =
 				claim.stopPending &&
 				(claim.operation === "conversation.turn.submit.v1" ||
-					claim.operation === "conversation.turn.regenerate.v1")
+					claim.operation === "conversation.turn.regenerate.v1");
+			if (
+				recoveringStoppedTurn &&
+				(claim.executionStatus === "submitted" || claim.hostSessionRef === null)
 			) {
 				return retry(
 					dependencies.store,
@@ -1274,7 +1351,12 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			try {
-				if (!(await dependencies.store.prepare({ claim, leaseDurationMs }))) {
+				if (
+					!(await dependencies.store.prepareRuntimeDispatch({
+						claim,
+						leaseDurationMs,
+					}))
+				) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}
 			} catch {
@@ -1287,13 +1369,73 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				response = parseRuntimeResponse(
-					await dependencies.runtimeHost.dispatch(
-						runtimeRequest(claim, authority),
-						dispatchHeartbeat.signal,
-					),
-					claim,
-				);
+				if (recoveringStoppedTurn) {
+					const status = parseRuntimeStatusResponse(
+						await dependencies.runtimeHost.recoverStatus(
+							{
+								schemaVersion: 2,
+								requestId: claim.requestId,
+								traceId: claim.traceId,
+								agentId: claim.agentId,
+								actorId: claim.actorId,
+								channelId: claim.channelId,
+								conversationId: claim.conversationId,
+								executionId: claim.executionId,
+								turnId: claim.turnId,
+								sessionGeneration: claim.sessionGeneration,
+								deliveryFence: claim.executionDeliveryFence,
+								hostSessionRef: claim.hostSessionRef ?? unavailable(),
+								recovery: {
+									schemaVersion: 1,
+									input: claim.input ?? unavailable(),
+									...(claim.modelOptionId && claim.reasoningLevel
+										? {
+												selection: {
+													schemaVersion: 1 as const,
+													modelOptionId: claim.modelOptionId,
+													reasoningLevel: claim.reasoningLevel,
+												},
+											}
+										: {}),
+								},
+								runtimeGrant: authority.runtimeGrant,
+							},
+							dispatchHeartbeat.signal,
+						),
+						claim,
+					);
+					if (status.outcome === "not_found") {
+						if (!(await dispatchHeartbeat.stop())) {
+							return { schemaVersion: 1, outcome: "stale" };
+						}
+						const cancelled = await dependencies.store.cancelUnaccepted({
+							claim,
+						});
+						return cancelled
+							? { schemaVersion: 1, outcome: "already_completed" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
+					if (status.status === "unavailable") {
+						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+					}
+					response = {
+						schemaVersion:
+							isTurnOperation(claim.operation) && claim.modelOptionId !== null
+								? 2
+								: 1,
+						hostSessionRef: status.hostSessionRef,
+						operationId: operationId(claim),
+						result: { outcome: "accepted", status: status.status },
+					};
+				} else {
+					response = parseRuntimeResponse(
+						await dependencies.runtimeHost.dispatch(
+							runtimeRequest(claim, authority),
+							dispatchHeartbeat.signal,
+						),
+						claim,
+					);
+				}
 			} catch (error) {
 				const current = await dispatchHeartbeat.stop();
 				if (!current) return { schemaVersion: 1, outcome: "stale" };
@@ -1359,7 +1501,14 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			if (response.result.outcome === "rejected") {
-				return reject(dependencies.store, claim, response.result.code);
+				return reject(
+					dependencies.store,
+					claim,
+					claim.operation === "conversation.turn.supplement.v1" &&
+						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
+						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+						: response.result.code,
+				);
 			}
 			if (
 				claim.operation === "conversation.turn.supplement.v1" ||
@@ -1415,12 +1564,10 @@ export function createConversationDispatchUseCaseV1(
 					const transition = transitionFromEvent(event);
 					const eventFinalStatus = terminalStatus(event);
 					if (
+						terminalEventSeen ||
 						(finalStatus &&
 							eventFinalStatus &&
-							eventFinalStatus !== finalStatus) ||
-						(terminalEventSeen &&
-							transition?.executionStatus !== undefined &&
-							transition.executionStatus !== finalStatus)
+							eventFinalStatus !== finalStatus)
 					) {
 						const finished = await dependencies.store.finish({
 							claim,

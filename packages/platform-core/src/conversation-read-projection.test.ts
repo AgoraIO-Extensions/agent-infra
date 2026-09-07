@@ -144,6 +144,7 @@ describe("Conversation read projection", () => {
 						text: "Too late",
 						executionId: "execution-1",
 						status: "failed",
+						failureCode: "ORIGINAL_RESPONSE_NOT_STARTED",
 						createdAt: first,
 					},
 				],
@@ -166,6 +167,7 @@ describe("Conversation read projection", () => {
 				role: "user",
 				status: "failed",
 				failureTraceId: "trace-failed",
+				failureCode: "ORIGINAL_RESPONSE_NOT_STARTED",
 			}),
 		]);
 	});

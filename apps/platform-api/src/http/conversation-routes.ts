@@ -362,12 +362,24 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 	return ConversationSseMessageV1Schema.parse(projected);
 }
 
-function failure(traceId: string | null) {
+function failure(
+	traceId: string | null,
+	code:
+		| "EXECUTION_FAILED"
+		| "AUTHORIZATION_REVOKED"
+		| "ORIGINAL_RESPONSE_NOT_STARTED"
+		| "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+) {
 	if (!traceId) throw new Error("Missing execution trace");
 	return {
 		schemaVersion: 1 as const,
-		code: "EXECUTION_FAILED" as const,
-		message: "Execution failed.",
+		code,
+		message: {
+			AUTHORIZATION_REVOKED: "Authorization was revoked.",
+			EXECUTION_FAILED: "Execution failed.",
+			ORIGINAL_RESPONSE_NOT_STARTED: "Original response did not start.",
+			ORIGINAL_RESPONSE_ALREADY_FINISHED: "Original response already finished.",
+		}[code],
 		retryable: false as const,
 		traceId,
 	};
@@ -377,10 +389,13 @@ function messageProjections(
 	input: ConversationQueryDetailV1,
 ): ReturnType<typeof MessageProjectionV1Schema.parse>[] {
 	return projectConversationMessagesV1(input).map(
-		({ failureTraceId, ...item }) =>
+		({ failureTraceId, failureCode, ...item }) =>
 			MessageProjectionV1Schema.parse({
 				...item,
-				error: failureTraceId === null ? null : failure(failureTraceId),
+				error:
+					failureTraceId === null
+						? null
+						: failure(failureTraceId, failureCode ?? "EXECUTION_FAILED"),
 				createdAt: item.createdAt.toISOString(),
 			}),
 	);
@@ -398,7 +413,10 @@ function executionProjection(input: ConversationExecutionDetailV1) {
 		})),
 		startedAt: projection.startedAt?.toISOString() ?? null,
 		finishedAt: projection.finishedAt?.toISOString() ?? null,
-		error: failureTraceId === null ? null : failure(failureTraceId),
+		error:
+			failureTraceId === null
+				? null
+				: failure(failureTraceId, "EXECUTION_FAILED"),
 	});
 }
 

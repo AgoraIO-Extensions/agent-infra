@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -739,13 +740,42 @@ function isAgentSummaryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v2/status";
+	const requestName = "RuntimeStatusRequestV2";
+	const responseName = "RuntimeStatusResponseV2";
+	const previousSchemas = previous.components?.schemas;
+	const currentSchemas = current.components?.schemas;
+	const addedPath = current.paths?.[path];
+	const request = currentSchemas?.[requestName];
+	const response = currentSchemas?.[responseName];
+	const additionDigest = createHash("sha256")
+		.update(JSON.stringify({ path: addedPath, request, response }))
+		.digest("hex");
+	if (
+		previous.paths?.[path] !== undefined ||
+		previousSchemas?.[requestName] !== undefined ||
+		previousSchemas?.[responseName] !== undefined ||
+		additionDigest !==
+			"510b6dba362d2775a80c93fa454014f1fc0bdf2a2651f4aa1e7d15d84f6c9ddf"
+	) {
+		return false;
+	}
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[requestName];
+	delete normalized.components.schemas[responseName];
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
-			!isAgentSummaryOpenApiAddition(previous, current)
+			!isAgentSummaryOpenApiAddition(previous, current) &&
+			!isRuntimeStatusRecoveryOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

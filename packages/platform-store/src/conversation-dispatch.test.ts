@@ -272,7 +272,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				throw new Error("Expected claim");
 			}
 			await expect(
-				first.store.prepare({
+				first.store.prepareRuntimeDispatch({
 					claim: first.decision.claim,
 					leaseDurationMs: 30_000,
 				}),
@@ -321,6 +321,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					e.delivery_fence::int as execution_fence,
 					s.status as stop_request_status,
 					supplement.status as supplement_status,
+					supplement.failure_code as supplement_failure_code,
 					supplement_outbox.status as supplement_outbox_status
 				from platform.outbox_items turn_outbox
 				join platform.outbox_items stop_outbox
@@ -344,6 +345,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				execution_fence: 0,
 				stop_request_status: "completed",
 				supplement_status: "failed",
+				supplement_failure_code: "ORIGINAL_RESPONSE_NOT_STARTED",
 				supplement_outbox_status: "failed",
 			});
 		} finally {
@@ -358,7 +360,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			if (decision.outcome !== "claimed") throw new Error("Expected claim");
 			await seedStop(work);
 			await expect(
-				store.prepare({ claim: decision.claim, leaseDurationMs: 30_000 }),
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
 			).resolves.toBe(false);
 			await client`
 				update platform.outbox_items
@@ -377,6 +382,47 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			} finally {
 				await takeover.store.close();
 			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("cancels an unknown Turn after RuntimeHost confirms it was not accepted", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: "host-session-existing",
+		});
+		await seedStop(work);
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(decision.claim).toMatchObject({
+				executionStatus: "unknown",
+				stopPending: true,
+				executionDeliveryFence: 1,
+			});
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			await expect(
+				store.cancelUnaccepted({ claim: decision.claim }),
+			).resolves.toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "cancelled",
+				execution_fence: 1,
+			});
+			const [stop] = await client`
+				select request.status, outbox.status as outbox_status
+				from platform.conversation_stops request
+				join platform.outbox_items outbox
+					on outbox.id = ${`conversation:stop:${work.stopRequestId}`}
+				where request.execution_id = ${work.executionId}
+			`;
+			expect(stop).toEqual({ status: "completed", outbox_status: "succeeded" });
 		} finally {
 			await store.close();
 		}
@@ -530,6 +576,40 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			} finally {
 				await store.close();
 			}
+		}
+	});
+
+	it("persists a supplementary delivery failure on its Message", async () => {
+		const work = await seed("conversation.turn.supplement.v1", {
+			executionStatus: "processing",
+			executionFence: 7,
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await expect(
+				store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {},
+					errorCode: "AUTHORIZATION_REVOKED",
+				}),
+			).resolves.toBe(true);
+			const [state] = await client`
+				select message.status as message_status,
+					message.failure_code, outbox.status as outbox_status
+				from platform.conversation_messages message
+				join platform.outbox_items outbox on outbox.id = ${work.itemId}
+				where message.message_id = ${work.messageId}
+			`;
+			expect(state).toEqual({
+				message_status: "failed",
+				failure_code: "AUTHORIZATION_REVOKED",
+				outbox_status: "failed",
+			});
+		} finally {
+			await store.close();
 		}
 	});
 
