@@ -3,6 +3,7 @@ import {
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseV1,
 	type ConversationModelConfigurationV1,
+	createConversationEventUseCaseV1,
 	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-
+import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -51,6 +52,7 @@ const failureTable = {
 	stop: "platform.conversation_stops",
 	outbox: "platform.outbox_items",
 	audit: "platform.conversation_audit_events",
+	event: "platform.conversation_events",
 	commit: "platform.conversation_audit_events",
 } as const;
 
@@ -164,11 +166,20 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		conversationConformanceAuthorityV1;
 	let nextId = 1;
 	let failureCleanupRequired = false;
+	let fallbackFailureCleanupRequired = false;
 	let modelSelectionFailureCleanupRequired = false;
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
 	});
+	const eventAdapter = new PostgresConversationEventTransactionV1({
+		databaseUrl,
+	});
+	let nextRuntimeEventId = 1;
+	const runtimeEvents = createConversationEventUseCaseV1(
+		{ transaction: eventAdapter },
+		{ newId: () => `runtime_event_fixture_${nextRuntimeEventId++}` },
+	);
 	const transaction: ConversationExecutionTransactionPortV1 = {
 		readConversation: (request, project) =>
 			adapter.readConversation(request, project),
@@ -178,11 +189,14 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			try {
 				return await adapter.executeMessage(request, decide);
 			} finally {
-				if (failureCleanupRequired) {
+				if (failureCleanupRequired || fallbackFailureCleanupRequired) {
 					try {
-						await disarmFailure("message");
+						await disarmFailure(
+							fallbackFailureCleanupRequired ? "event" : "message",
+						);
 					} finally {
 						failureCleanupRequired = false;
+						fallbackFailureCleanupRequired = false;
 					}
 				}
 			}
@@ -251,6 +265,10 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			modelSelectionFailureCleanupRequired = true;
 			await armFailure("audit");
 		},
+		async failNextFallbackEventCommit() {
+			fallbackFailureCleanupRequired = true;
+			await armFailure("event");
+		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
 		},
@@ -263,6 +281,87 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			if (updated.count !== 1) throw new Error("Expected one Execution");
 		},
 		setModelConfiguration: persistConformanceModelConfiguration,
+		async persistRuntimeEvent(conversationId, executionId, adapterEventKey) {
+			const decision = await runtimeEvents.persist({
+				schemaVersion: 1,
+				conversationId,
+				executionId,
+				sessionGeneration: 1,
+				deliveryFence: 0,
+				adapterEventKey,
+				runtimeCursor: `runtime_cursor_${adapterEventKey}`,
+				occurredAt: "2026-09-04T00:00:00.000Z",
+				event: { type: "text.delta", text: "bounded runtime fixture" },
+			});
+			if (decision.outcome !== "accepted") {
+				throw new Error("Expected PostgreSQL Runtime event acceptance");
+			}
+			return decision.event;
+		},
+		async eventSnapshot(conversationId) {
+			const [conversation] = await client<
+				{ readonly last_conversation_cursor: string | number }[]
+			>`select last_conversation_cursor from platform.conversations
+				where id = ${conversationId}`;
+			if (!conversation) throw new Error("Expected Conversation");
+			const executions = await client<
+				{
+					readonly execution_id: string;
+					readonly last_event_sequence: string | number;
+					readonly last_runtime_cursor: string | null;
+				}[]
+			>`select execution_id, last_event_sequence, last_runtime_cursor
+				from platform.conversation_executions
+				where conversation_id = ${conversationId}
+				order by created_at, execution_id`;
+			const events = await client<
+				{
+					readonly source: "platform" | "runtime";
+					readonly runtime_cursor: string | null;
+					readonly event_id: string;
+					readonly execution_id: string;
+					readonly sequence: string | number;
+					readonly conversation_cursor: string | number;
+					readonly occurred_at: Date;
+					readonly event_payload: Record<string, unknown>;
+				}[]
+			>`select source, runtime_cursor, event_id, execution_id, sequence,
+				conversation_cursor, occurred_at, event_payload
+				from platform.conversation_events
+				where conversation_id = ${conversationId}
+				order by conversation_cursor`;
+			const audits = await client<{ readonly execution_id: string }[]>`
+				select execution_id from platform.conversation_audit_events
+				where conversation_id = ${conversationId}
+					and action = 'conversation.model_selection.fell_back'
+				order by occurred_at, id
+			`;
+			return {
+				lastConversationCursor: Number(conversation.last_conversation_cursor),
+				executions: executions.map((execution) => ({
+					executionId: execution.execution_id,
+					lastEventSequence: Number(execution.last_event_sequence),
+					lastRuntimeCursor: execution.last_runtime_cursor,
+				})),
+				events: events.map((event) => ({
+					source: event.source,
+					runtimeCursor: event.runtime_cursor,
+					event: {
+						schemaVersion: 1 as const,
+						eventId: event.event_id,
+						conversationId,
+						executionId: event.execution_id,
+						sequence: Number(event.sequence),
+						conversationCursor: Number(event.conversation_cursor),
+						occurredAt: event.occurred_at.toISOString(),
+						event: event.event_payload as never,
+					},
+				})),
+				fallbackAuditExecutionIds: audits.map(
+					({ execution_id }) => execution_id,
+				),
+			};
+		},
 		async modelSnapshot(conversationId) {
 			const [conversation] = await client<
 				{
@@ -351,12 +450,12 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		snapshot: commandEffectCounts,
 		async close() {
 			try {
-				await disarmFailure("message");
+				await Promise.all([disarmFailure("message"), disarmFailure("event")]);
 			} finally {
 				try {
 					await disarmFailure("audit");
 				} finally {
-					await adapter.close();
+					await Promise.all([adapter.close(), eventAdapter.close()]);
 				}
 			}
 		},
