@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-
+import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
@@ -171,6 +171,7 @@ export interface ConversationExecutionStateV1 {
 				readonly modelConfigurationRevision: number | null;
 				readonly modelOptionId: string | null;
 				readonly reasoningLevel: string | null;
+				readonly lastEventSequence: number;
 				readonly stopPending: boolean;
 				readonly status: "submitted" | "processing" | "unknown";
 		  }
@@ -452,8 +453,17 @@ export interface ConversationModelSelectionWritePlanV1 {
 
 export interface ConversationModelSelectionFallbackWriteV1
 	extends ConversationModelSelectionFallbackV1 {
+	readonly timelineEvent: PersistedConversationEventV1 & {
+		readonly event: {
+			readonly type: "model.selection.fell_back";
+			readonly modelOptionId: string;
+			readonly reasoningLevel: string;
+			readonly reason: "selection_unavailable";
+		};
+	};
 	readonly auditEvent: {
 		readonly action: "conversation.model_selection.fell_back";
+		readonly executionId: string;
 		readonly actorId: string;
 		readonly agentId: string;
 		readonly conversationId: string;
@@ -901,6 +911,13 @@ function nextOpaqueId(newId: () => string): string {
 	}
 }
 
+function nextCounter(value: number): number {
+	if (!isNonNegativeSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER) {
+		unavailable();
+	}
+	return value + 1;
+}
+
 function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
@@ -1131,6 +1148,7 @@ function parseState(
 				"modelConfigurationRevision",
 				"modelOptionId",
 				"reasoningLevel",
+				"lastEventSequence",
 				"stopPending",
 				"status",
 			]);
@@ -1147,6 +1165,7 @@ function parseState(
 					!isText(execution.modelOptionId)) ||
 				(execution.reasoningLevel !== null &&
 					!isText(execution.reasoningLevel)) ||
+				!isNonNegativeSafeInteger(execution.lastEventSequence) ||
 				new Set([
 					execution.modelConfigurationRevision === null,
 					execution.modelOptionId === null,
@@ -1168,6 +1187,7 @@ function parseState(
 				modelConfigurationRevision: execution.modelConfigurationRevision,
 				modelOptionId: execution.modelOptionId,
 				reasoningLevel: execution.reasoningLevel,
+				lastEventSequence: execution.lastEventSequence,
 				stopPending: execution.stopPending,
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
@@ -1481,24 +1501,44 @@ function modelSelectionFallbackWrite(
 	fallback: ConversationModelSelectionFallbackV1 | null,
 	authority: ConversationExecutionAuthorityV1,
 	conversationId: string,
+	executionId: string,
+	lastEventSequence: number,
+	lastConversationCursor: number,
 	requestId: string,
 	traceId: string,
 	occurredAt: Date,
+	newId: () => string,
 ): ConversationModelSelectionFallbackWriteV1 | null {
-	return fallback
-		? {
-				...fallback,
-				auditEvent: {
-					action: "conversation.model_selection.fell_back",
-					actorId: authority.actorId,
-					agentId: authority.agentId,
-					conversationId,
-					traceId,
-					requestId,
-					occurredAt,
-				},
-			}
-		: null;
+	if (!fallback) return null;
+	const eventId = nextOpaqueId(newId);
+	return {
+		...fallback,
+		timelineEvent: {
+			schemaVersion: 1,
+			eventId,
+			conversationId,
+			executionId,
+			sequence: nextCounter(lastEventSequence),
+			conversationCursor: nextCounter(lastConversationCursor),
+			occurredAt: occurredAt.toISOString(),
+			event: {
+				type: "model.selection.fell_back",
+				modelOptionId: fallback.modelOptionId,
+				reasoningLevel: fallback.reasoningLevel,
+				reason: "selection_unavailable",
+			},
+		},
+		auditEvent: {
+			action: "conversation.model_selection.fell_back",
+			executionId,
+			actorId: authority.actorId,
+			agentId: authority.agentId,
+			conversationId,
+			traceId,
+			requestId,
+			occurredAt,
+		},
+	};
 }
 
 function parseAcceptedOrReplayedDecision<T>(
@@ -1790,6 +1830,18 @@ export function createConversationExecutionUseCaseV1(
 								}
 								const occurredAt = safeNow(now);
 								const messageId = nextOpaqueId(newId);
+								const modelSelectionFallback = modelSelectionFallbackWrite(
+									modelSelection.fallback,
+									authority,
+									conversation.conversationId,
+									state.activeExecution.executionId,
+									state.activeExecution.lastEventSequence,
+									conversation.lastConversationCursor,
+									command.requestId,
+									command.traceId,
+									occurredAt,
+									newId,
+								);
 								const result: ConversationCommandResultV1 = {
 									schemaVersion: 1,
 									status: "submitted",
@@ -1801,6 +1853,10 @@ export function createConversationExecutionUseCaseV1(
 									kind: "supplement",
 									conversation: {
 										...selectedConversation,
+										lastConversationCursor:
+											modelSelectionFallback?.timelineEvent
+												.conversationCursor ??
+											conversation.lastConversationCursor,
 										authorizationRevision: authority.authorizationRevision,
 										updatedAt: occurredAt,
 									},
@@ -1838,14 +1894,7 @@ export function createConversationExecutionUseCaseV1(
 										requestId: command.requestId,
 										occurredAt,
 									},
-									modelSelectionFallback: modelSelectionFallbackWrite(
-										modelSelection.fallback,
-										authority,
-										conversation.conversationId,
-										command.requestId,
-										command.traceId,
-										occurredAt,
-									),
+									modelSelectionFallback,
 									result,
 									idempotency: {
 										scopeType: "conversation",
@@ -1861,6 +1910,18 @@ export function createConversationExecutionUseCaseV1(
 							const messageId = nextOpaqueId(newId);
 							const executionId = nextOpaqueId(newId);
 							const turnId = nextOpaqueId(newId);
+							const modelSelectionFallback = modelSelectionFallbackWrite(
+								modelSelection.fallback,
+								authority,
+								conversation.conversationId,
+								executionId,
+								0,
+								conversation.lastConversationCursor,
+								command.requestId,
+								command.traceId,
+								occurredAt,
+								newId,
+							);
 							const result: ConversationCommandResultV1 = {
 								schemaVersion: 1,
 								status: "submitted",
@@ -1873,6 +1934,9 @@ export function createConversationExecutionUseCaseV1(
 								conversation: {
 									...selectedConversation,
 									status: "active",
+									lastConversationCursor:
+										modelSelectionFallback?.timelineEvent.conversationCursor ??
+										conversation.lastConversationCursor,
 									authorizationRevision: authority.authorizationRevision,
 									updatedAt: occurredAt,
 								},
@@ -1927,14 +1991,7 @@ export function createConversationExecutionUseCaseV1(
 									requestId: command.requestId,
 									occurredAt,
 								},
-								modelSelectionFallback: modelSelectionFallbackWrite(
-									modelSelection.fallback,
-									authority,
-									conversation.conversationId,
-									command.requestId,
-									command.traceId,
-									occurredAt,
-								),
+								modelSelectionFallback,
 								result,
 								idempotency: {
 									scopeType: "conversation",
@@ -2080,6 +2137,18 @@ export function createConversationExecutionUseCaseV1(
 							const occurredAt = safeNow(now);
 							const executionId = nextOpaqueId(newId);
 							const turnId = nextOpaqueId(newId);
+							const modelSelectionFallback = modelSelectionFallbackWrite(
+								modelSelection.fallback,
+								authority,
+								conversation.conversationId,
+								executionId,
+								0,
+								conversation.lastConversationCursor,
+								command.requestId,
+								command.traceId,
+								occurredAt,
+								newId,
+							);
 							const result: ConversationCommandResultV1 = {
 								schemaVersion: 1,
 								status: "submitted",
@@ -2092,6 +2161,9 @@ export function createConversationExecutionUseCaseV1(
 								conversation: {
 									...conversation,
 									status: "active",
+									lastConversationCursor:
+										modelSelectionFallback?.timelineEvent.conversationCursor ??
+										conversation.lastConversationCursor,
 									authorizationRevision: authority.authorizationRevision,
 									selectedModelOptionId: modelSelection.modelOptionId,
 									selectedReasoningLevel: modelSelection.reasoningLevel,
@@ -2139,14 +2211,7 @@ export function createConversationExecutionUseCaseV1(
 									requestId: command.requestId,
 									occurredAt,
 								},
-								modelSelectionFallback: modelSelectionFallbackWrite(
-									modelSelection.fallback,
-									authority,
-									conversation.conversationId,
-									command.requestId,
-									command.traceId,
-									occurredAt,
-								),
+								modelSelectionFallback,
 								result,
 								idempotency: {
 									scopeType: "conversation",

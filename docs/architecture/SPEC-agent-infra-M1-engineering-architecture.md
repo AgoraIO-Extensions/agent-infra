@@ -285,6 +285,8 @@ Connection 在产品上是独立系统，但 M1 复用同一 Web Shell 和公司
 对话回复和状态流使用 `text/event-stream`：
 
 - 每个事件包含稳定 `eventId`、`executionId`、Execution 内递增 `sequence`、Conversation 内严格递增 `conversationCursor`、`type`、`occurredAt` 和类型化 payload。
+- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；M1 唯一的 Platform 来源类型是 `model.selection.fell_back`，它绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度和固定的受限原因。
+- 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
 - 浏览器通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前有权访问的 Conversation。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。
 - 心跳只用于保持连接，不进入业务时间线。

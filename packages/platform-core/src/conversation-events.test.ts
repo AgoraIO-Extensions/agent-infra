@@ -214,6 +214,20 @@ describe("Conversation event ingestion", () => {
 				} as never,
 			}),
 		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({ ...event, source: "platform" } as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "model.selection.fell_back",
+					modelOptionId: "model_primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
 		await events.persist(event);
 		await expect(
 			events.persist({
@@ -320,6 +334,41 @@ describe("Conversation event ingestion", () => {
 						},
 					},
 				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("rejects a Platform fallback forged as an existing Runtime event", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				const forged = {
+					schemaVersion: 1 as const,
+					eventId: "event_forged_fallback",
+					conversationId: event.conversationId,
+					executionId: event.executionId,
+					sequence: 1,
+					conversationCursor: 1,
+					occurredAt: event.occurredAt,
+					event: {
+						type: "model.selection.fell_back" as const,
+						modelOptionId: "model_primary",
+						reasoningLevel: "medium",
+						reason: "selection_unavailable" as const,
+					},
+				};
+				decide({
+					...activeState(),
+					existingEvent: {
+						event: forged,
+						eventDigest: request.eventDigest,
+					},
+				} as never);
+				return { outcome: "replayed", event: forged } as never;
 			},
 		};
 		const events = createConversationEventUseCaseV1({ transaction });

@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
 	type ConversationCommandDecisionV1,
@@ -98,6 +98,7 @@ interface ExecutionRow {
 	readonly model_configuration_revision: string | number | null;
 	readonly model_option_id: string | null;
 	readonly reasoning_level: string | null;
+	readonly last_event_sequence: string | number;
 	readonly status: string;
 }
 
@@ -190,6 +191,13 @@ function date(value: unknown): Date {
 
 function sameDate(left: Date, right: Date): boolean {
 	return left.getTime() === right.getTime();
+}
+
+function timestamp(value: unknown): string {
+	if (typeof value !== "string") unavailable();
+	const milliseconds = Date.parse(value);
+	if (!Number.isFinite(milliseconds)) unavailable();
+	return new Date(milliseconds).toISOString();
 }
 
 function parseAuthority(value: unknown): ConversationExecutionAuthorityV1 {
@@ -849,10 +857,28 @@ function parseModelSelectionFallback(
 		"modelConfigurationRevision",
 		"modelOptionId",
 		"reasoningLevel",
+		"timelineEvent",
 		"auditEvent",
+	]);
+	const timeline = exactRecord(input.timelineEvent, [
+		"schemaVersion",
+		"eventId",
+		"conversationId",
+		"executionId",
+		"sequence",
+		"conversationCursor",
+		"occurredAt",
+		"event",
+	]);
+	const payload = exactRecord(timeline.event, [
+		"type",
+		"modelOptionId",
+		"reasoningLevel",
+		"reason",
 	]);
 	const audit = exactRecord(input.auditEvent, [
 		"action",
+		"executionId",
 		"actorId",
 		"agentId",
 		"conversationId",
@@ -860,7 +886,14 @@ function parseModelSelectionFallback(
 		"requestId",
 		"occurredAt",
 	]);
-	if (audit.action !== "conversation.model_selection.fell_back") unavailable();
+	if (
+		timeline.schemaVersion !== 1 ||
+		payload.type !== "model.selection.fell_back" ||
+		payload.reason !== "selection_unavailable" ||
+		audit.action !== "conversation.model_selection.fell_back"
+	) {
+		unavailable();
+	}
 	return {
 		previousModelOptionId: text(input.previousModelOptionId),
 		previousReasoningLevel: text(input.previousReasoningLevel),
@@ -870,8 +903,24 @@ function parseModelSelectionFallback(
 		),
 		modelOptionId: text(input.modelOptionId),
 		reasoningLevel: text(input.reasoningLevel),
+		timelineEvent: {
+			schemaVersion: 1,
+			eventId: text(timeline.eventId),
+			conversationId: text(timeline.conversationId),
+			executionId: text(timeline.executionId),
+			sequence: safeInteger(timeline.sequence, 1),
+			conversationCursor: safeInteger(timeline.conversationCursor, 1),
+			occurredAt: timestamp(timeline.occurredAt),
+			event: {
+				type: "model.selection.fell_back",
+				modelOptionId: text(payload.modelOptionId),
+				reasoningLevel: text(payload.reasoningLevel),
+				reason: "selection_unavailable",
+			},
+		},
 		auditEvent: {
 			action: "conversation.model_selection.fell_back",
+			executionId: text(audit.executionId),
 			actorId: text(audit.actorId),
 			agentId: text(audit.agentId),
 			conversationId: text(audit.conversationId),
@@ -891,13 +940,21 @@ function validateModelSelectionFallback(
 		readonly requestId: string;
 		readonly traceId: string;
 		readonly occurredAt: Date;
+		readonly executionId: string;
+		readonly lastEventSequence: number;
 	},
 ): void {
-	if (!fallback) return;
 	const current = input.state.conversation;
-	const configuration = input.state.modelConfiguration;
 	if (
 		!current ||
+		input.conversation.lastConversationCursor !==
+			current.lastConversationCursor + (fallback ? 1 : 0)
+	) {
+		unavailable();
+	}
+	if (!fallback) return;
+	const configuration = input.state.modelConfiguration;
+	if (
 		!configuration ||
 		fallback.previousModelOptionId !== current.selectedModelOptionId ||
 		fallback.previousReasoningLevel !== current.selectedReasoningLevel ||
@@ -905,9 +962,18 @@ function validateModelSelectionFallback(
 			configuration.configurationRevision ||
 		fallback.modelOptionId !== input.conversation.selectedModelOptionId ||
 		fallback.reasoningLevel !== input.conversation.selectedReasoningLevel ||
+		fallback.timelineEvent.conversationId !== current.conversationId ||
+		fallback.timelineEvent.executionId !== input.executionId ||
+		fallback.timelineEvent.sequence !== input.lastEventSequence + 1 ||
+		fallback.timelineEvent.conversationCursor !==
+			input.conversation.lastConversationCursor ||
+		fallback.timelineEvent.occurredAt !== input.occurredAt.toISOString() ||
+		fallback.timelineEvent.event.modelOptionId !== fallback.modelOptionId ||
+		fallback.timelineEvent.event.reasoningLevel !== fallback.reasoningLevel ||
 		fallback.auditEvent.actorId !== input.authority.actorId ||
 		fallback.auditEvent.agentId !== input.authority.agentId ||
 		fallback.auditEvent.conversationId !== current.conversationId ||
+		fallback.auditEvent.executionId !== input.executionId ||
 		fallback.auditEvent.requestId !== input.requestId ||
 		fallback.auditEvent.traceId !== input.traceId ||
 		!sameDate(fallback.auditEvent.occurredAt, input.occurredAt)
@@ -1011,7 +1077,6 @@ function validateMessagePlan(
 		conversation.channelId !== current.channelId ||
 		conversation.sessionGeneration !== current.sessionGeneration ||
 		conversation.hostSessionRef !== current.hostSessionRef ||
-		conversation.lastConversationCursor !== current.lastConversationCursor ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
 		!sameDate(conversation.createdAt, current.createdAt) ||
 		!sameDate(conversation.updatedAt, message.createdAt) ||
@@ -1045,14 +1110,6 @@ function validateMessagePlan(
 	) {
 		return unavailable();
 	}
-	validateModelSelectionFallback(modelSelectionFallback, {
-		state,
-		conversation,
-		authority,
-		requestId: request.command.requestId,
-		traceId: request.command.traceId,
-		occurredAt: message.createdAt,
-	});
 	if (input.kind === "initial") {
 		if (state.activeExecution || conversation.status !== "active")
 			unavailable();
@@ -1083,6 +1140,16 @@ function validateMessagePlan(
 		) {
 			return unavailable();
 		}
+		validateModelSelectionFallback(modelSelectionFallback, {
+			state,
+			conversation,
+			authority,
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: message.createdAt,
+			executionId: execution.executionId,
+			lastEventSequence: 0,
+		});
 	} else if (input.kind === "supplement") {
 		const active = state.activeExecution;
 		if (
@@ -1099,6 +1166,16 @@ function validateMessagePlan(
 		) {
 			return unavailable();
 		}
+		validateModelSelectionFallback(modelSelectionFallback, {
+			state,
+			conversation,
+			authority,
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: message.createdAt,
+			executionId: active.executionId,
+			lastEventSequence: active.lastEventSequence,
+		});
 	} else {
 		return unavailable();
 	}
@@ -1208,7 +1285,6 @@ function validateRegenerationPlan(
 		conversation.sessionGeneration !== current.sessionGeneration ||
 		conversation.hostSessionRef !== current.hostSessionRef ||
 		conversation.authorizationRevision !== authority.authorizationRevision ||
-		conversation.lastConversationCursor !== current.lastConversationCursor ||
 		!sameDate(conversation.createdAt, current.createdAt) ||
 		!sameDate(conversation.updatedAt, execution.createdAt) ||
 		!conversationSelectionMatchesConfigurationShape(
@@ -1261,6 +1337,8 @@ function validateRegenerationPlan(
 		requestId: request.command.requestId,
 		traceId: request.command.traceId,
 		occurredAt: execution.createdAt,
+		executionId: execution.executionId,
+		lastEventSequence: 0,
 	});
 	return value as ConversationRegenerationWritePlanV1;
 }
@@ -1523,7 +1601,8 @@ async function readMessageState(
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
 	const activeRows = await transaction<ExecutionRow[]>`
 		select execution_id, conversation_id, actor_id, turn_id, session_generation,
-			model_configuration_revision, model_option_id, reasoning_level, status
+			model_configuration_revision, model_option_id, reasoning_level,
+			last_event_sequence, status
 		from platform.conversation_executions
 		where conversation_id = ${conversation.conversationId}
 			and status in ('submitted', 'processing', 'unknown')
@@ -1573,6 +1652,7 @@ async function readMessageState(
 				active.model_option_id === null ? null : text(active.model_option_id),
 			reasoningLevel:
 				active.reasoning_level === null ? null : text(active.reasoning_level),
+			lastEventSequence: safeInteger(active.last_event_sequence, 0),
 			stopPending: stop?.status === "submitted",
 			status: status as "submitted" | "processing" | "unknown",
 		},
@@ -1832,17 +1912,41 @@ async function requireStopReplay(
 	}
 }
 
-async function insertModelSelectionFallbackAudit(
+async function insertModelSelectionFallback(
 	transaction: Transaction,
 	fallback: ConversationModelSelectionFallbackWriteV1 | null,
 ): Promise<void> {
 	if (!fallback) return;
+	const timeline = fallback.timelineEvent;
+	await transaction`
+		insert into platform.conversation_events
+			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+			 conversation_cursor, event_type, event_payload, event_digest, source,
+			 runtime_cursor, occurred_at)
+		values
+			(${timeline.eventId}, ${timeline.conversationId}, ${timeline.executionId},
+			 ${`platform:${timeline.eventId}`}, ${timeline.sequence},
+			 ${timeline.conversationCursor}, ${timeline.event.type},
+			 ${transaction.json(timeline.event as unknown as JsonValue)},
+			 ${createHash("sha256").update(JSON.stringify(timeline.event)).digest("hex")},
+			 'platform', null, ${timeline.occurredAt})
+	`;
+	const updated = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set last_event_sequence = ${timeline.sequence}, updated_at = now()
+		where execution_id = ${timeline.executionId}
+			and conversation_id = ${timeline.conversationId}
+			and last_event_sequence = ${timeline.sequence - 1}
+		returning execution_id
+	`;
+	if (updated.length !== 1) unavailable();
 	await transaction`
 		insert into platform.conversation_audit_events
 			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
 			 request_id, occurred_at, details)
 		values
-			(${randomUUID()}, ${fallback.auditEvent.conversationId}, null,
+			(${randomUUID()}, ${fallback.auditEvent.conversationId},
+			 ${fallback.auditEvent.executionId},
 			 ${fallback.auditEvent.agentId}, ${fallback.auditEvent.actorId},
 			 ${fallback.auditEvent.action}, ${fallback.auditEvent.traceId},
 			 ${fallback.auditEvent.requestId}, ${fallback.auditEvent.occurredAt},
@@ -2026,6 +2130,7 @@ export class PostgresConversationExecutionTransactionV1
 				update platform.conversations
 				set status = ${plan.conversation.status},
 					authorization_revision = ${plan.conversation.authorizationRevision},
+					last_conversation_cursor = ${plan.conversation.lastConversationCursor},
 					selected_model_option_id = ${plan.conversation.selectedModelOptionId},
 					selected_reasoning_level = ${plan.conversation.selectedReasoningLevel},
 					updated_at = ${plan.message.createdAt}
@@ -2099,7 +2204,7 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.auditEvent.traceId}, ${plan.auditEvent.requestId},
 					 ${plan.auditEvent.occurredAt})
 			`;
-			await insertModelSelectionFallbackAudit(
+			await insertModelSelectionFallback(
 				transaction,
 				plan.modelSelectionFallback,
 			);
@@ -2250,6 +2355,7 @@ export class PostgresConversationExecutionTransactionV1
 				update platform.conversations
 				set status = ${plan.conversation.status},
 					authorization_revision = ${plan.conversation.authorizationRevision},
+					last_conversation_cursor = ${plan.conversation.lastConversationCursor},
 					selected_model_option_id = ${plan.conversation.selectedModelOptionId},
 					selected_reasoning_level = ${plan.conversation.selectedReasoningLevel},
 					updated_at = ${plan.execution.createdAt}
@@ -2308,7 +2414,7 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.auditEvent.traceId}, ${plan.auditEvent.requestId},
 					 ${plan.auditEvent.occurredAt})
 			`;
-			await insertModelSelectionFallbackAudit(
+			await insertModelSelectionFallback(
 				transaction,
 				plan.modelSelectionFallback,
 			);

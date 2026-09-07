@@ -8,7 +8,8 @@ import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventWritePlanV1,
 	type ConversationNormalizedEventV1,
-	type PersistedConversationEventV1,
+	type ConversationPersistedEventPayloadV1,
+	type PersistedRuntimeConversationEventV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 
@@ -267,7 +268,7 @@ function request(value: unknown): PersistRequest {
 	return { command: command(input.command), eventDigest: input.eventDigest };
 }
 
-function persistedEvent(row: EventRow): PersistedConversationEventV1 {
+function persistedEvent(row: EventRow): PersistedRuntimeConversationEventV1 {
 	const event = normalizedEvent(row.event_payload);
 	if (row.event_type !== event.type) return unavailable();
 	return {
@@ -320,8 +321,8 @@ function eventState(
 }
 
 function sameEvent(
-	left: ConversationNormalizedEventV1,
-	right: ConversationNormalizedEventV1,
+	left: ConversationPersistedEventPayloadV1,
+	right: ConversationPersistedEventPayloadV1,
 ): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -378,7 +379,7 @@ function validatePlan(
 		"event",
 	]);
 	if (eventInput.schemaVersion !== 1) return unavailable();
-	const event: PersistedConversationEventV1 = {
+	const event: PersistedRuntimeConversationEventV1 = {
 		schemaVersion: 1,
 		eventId: text(eventInput.eventId),
 		conversationId: text(eventInput.conversationId),
@@ -431,7 +432,7 @@ function validateDecision(
 		"event",
 	]);
 	if (replayed.schemaVersion !== 1) return unavailable();
-	const event: PersistedConversationEventV1 = {
+	const event: PersistedRuntimeConversationEventV1 = {
 		schemaVersion: 1,
 		eventId: text(replayed.eventId),
 		conversationId: text(replayed.conversationId),
@@ -487,6 +488,7 @@ async function readExistingEvent(
 			event_type, event_payload, event_digest, occurred_at
 		from platform.conversation_events
 		where execution_id = ${executionId} and adapter_event_key = ${adapterEventKey}
+			and source = 'runtime'
 	`;
 	if (rows.length > 1) unavailable();
 	return rows[0];
@@ -539,16 +541,16 @@ export class PostgresConversationEventTransactionV1
 			const plan = validatePlan(decision, persistedRequest, state);
 
 			await transaction`
-				insert into platform.conversation_events
-					(event_id, conversation_id, execution_id, adapter_event_key, sequence,
-					 conversation_cursor, event_type, event_payload, event_digest,
-					 runtime_cursor, occurred_at)
+					insert into platform.conversation_events
+						(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+						 conversation_cursor, event_type, event_payload, event_digest,
+						 source, runtime_cursor, occurred_at)
 				values
 					(${plan.event.eventId}, ${plan.event.conversationId},
 					 ${plan.event.executionId}, ${plan.adapterEventKey}, ${plan.event.sequence},
-					 ${plan.event.conversationCursor}, ${plan.event.event.type},
-					 ${transaction.json(plan.event.event as JsonValue)}, ${plan.eventDigest},
-					 ${plan.runtimeCursor}, ${plan.event.occurredAt})
+						 ${plan.event.conversationCursor}, ${plan.event.event.type},
+						 ${transaction.json(plan.event.event as JsonValue)}, ${plan.eventDigest},
+						 'runtime', ${plan.runtimeCursor}, ${plan.event.occurredAt})
 			`;
 			const updatedExecution = await transaction<{ execution_id: string }[]>`
 				update platform.conversation_executions

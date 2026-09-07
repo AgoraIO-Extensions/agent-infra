@@ -76,6 +76,9 @@ conversationCommandConformanceV1("Fake", async () => {
 		failNextModelSelectionCommit() {
 			fake.failNextCommit();
 		},
+		failNextFallbackEventCommit() {
+			fake.failNextCommit();
+		},
 		loseNextResponseAfterCommit() {
 			loseNextResponse = true;
 		},
@@ -84,6 +87,61 @@ conversationCommandConformanceV1("Fake", async () => {
 		},
 		setModelConfiguration(configuration) {
 			fake.setModelConfiguration(configuration);
+		},
+		async persistRuntimeEvent(conversationId, executionId, adapterEventKey) {
+			const decision = await fake.persistRuntimeEvent({
+				schemaVersion: 1,
+				conversationId,
+				executionId,
+				sessionGeneration: 1,
+				deliveryFence: 0,
+				adapterEventKey,
+				runtimeCursor: `runtime_cursor_${adapterEventKey}`,
+				occurredAt: "2026-09-04T00:00:00.000Z",
+				event: { type: "text.delta", text: "bounded runtime fixture" },
+			});
+			if (decision.outcome !== "accepted") {
+				throw new Error("Expected Fake Runtime event acceptance");
+			}
+			return decision.event;
+		},
+		async eventSnapshot(conversationId) {
+			const snapshot = fake.snapshot();
+			const conversation = snapshot.conversations.find(
+				(candidate) => candidate?.conversationId === conversationId,
+			);
+			if (!conversation) throw new Error("Expected Conversation");
+			const events = snapshot.events
+				.filter(({ event }) => event.conversationId === conversationId)
+				.toSorted(
+					(left, right) =>
+						left.event.conversationCursor - right.event.conversationCursor,
+				);
+			return {
+				lastConversationCursor: conversation.lastConversationCursor,
+				executions: snapshot.executions
+					.filter((execution) => execution.conversationId === conversationId)
+					.map((execution) => ({
+						executionId: execution.executionId,
+						lastEventSequence: execution.lastEventSequence,
+						lastRuntimeCursor:
+							events.findLast(
+								(event) =>
+									event.source === "runtime" &&
+									event.event.executionId === execution.executionId,
+							)?.runtimeCursor ?? null,
+					})),
+				events: events.map(({ source, runtimeCursor, event }) => ({
+					source,
+					runtimeCursor,
+					event,
+				})),
+				fallbackAuditExecutionIds: snapshot.audit
+					.filter(
+						({ action }) => action === "conversation.model_selection.fell_back",
+					)
+					.map(({ executionId }) => String(executionId)),
+			};
 		},
 		async modelSnapshot(conversationId) {
 			const snapshot = fake.snapshot();
@@ -575,6 +633,7 @@ describe("Conversation execution use case", () => {
 				modelConfigurationRevision: null,
 				modelOptionId: null,
 				reasoningLevel: null,
+				lastEventSequence: 0,
 				stopPending: false,
 				status: "submitted",
 			},

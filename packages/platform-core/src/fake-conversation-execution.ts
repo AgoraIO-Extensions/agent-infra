@@ -1,4 +1,14 @@
 import {
+	type ConversationEventCommandV1,
+	type ConversationEventDecisionV1,
+	type ConversationEventTransactionPortV1,
+	type ConversationEventUseCaseV1,
+	type ConversationEventWritePlanV1,
+	createConversationEventUseCaseV1,
+	type PersistedConversationEventV1,
+	type PersistedRuntimeConversationEventV1,
+} from "./conversation-events.js";
+import {
 	type ConversationCommandDecisionV1,
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionAuthorizationPortV1,
@@ -9,6 +19,7 @@ import {
 	type ConversationMessageWritePlanV1,
 	type ConversationModelConfigurationV1,
 	type ConversationModelSelectionDecisionV1,
+	type ConversationModelSelectionFallbackWriteV1,
 	type ConversationModelSelectionWritePlanV1,
 	type ConversationRegenerationWritePlanV1,
 	type ConversationStopDecisionV1,
@@ -44,9 +55,11 @@ interface StoredExecution {
 	readonly actorId: string;
 	readonly turnId: string;
 	readonly sessionGeneration: number;
+	readonly deliveryFence: number;
 	readonly modelConfigurationRevision: number | null;
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
+	lastEventSequence: number;
 	status:
 		| "submitted"
 		| "processing"
@@ -78,8 +91,23 @@ interface StoredAudit {
 	readonly actorId: string;
 	readonly traceId: string;
 	readonly requestId: string;
+	readonly executionId?: string;
 	readonly details?: Record<string, unknown>;
 }
+
+type StoredTimelineEvent =
+	| {
+			readonly source: "runtime";
+			readonly adapterEventKey: string;
+			readonly eventDigest: string;
+			readonly runtimeCursor: string;
+			readonly event: PersistedRuntimeConversationEventV1;
+	  }
+	| {
+			readonly source: "platform";
+			readonly runtimeCursor: null;
+			readonly event: PersistedConversationEventV1;
+	  };
 
 function key(parts: readonly string[]): string {
 	return JSON.stringify(parts);
@@ -102,6 +130,12 @@ function isMessageWritePlan(
 		| ConversationMessageWritePlanV1
 		| { readonly outcome: "busy" | "denied" },
 ): decision is ConversationMessageWritePlanV1 {
+	return !Object.hasOwn(decision, "outcome");
+}
+
+function isEventWritePlan(
+	decision: ConversationEventWritePlanV1 | ConversationEventDecisionV1,
+): decision is ConversationEventWritePlanV1 {
 	return !Object.hasOwn(decision, "outcome");
 }
 
@@ -167,6 +201,7 @@ export class FakeConversationExecutionV1
 	readonly #stops: StoredStop[] = [];
 	readonly #outbox: StoredOutbox[] = [];
 	readonly #audit: StoredAudit[] = [];
+	readonly #events: StoredTimelineEvent[] = [];
 	readonly #currentAuthorizationRevision: string | undefined;
 	#modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly #createIdempotency = new Map<
@@ -186,6 +221,7 @@ export class FakeConversationExecutionV1
 		StoredIdempotency<ConversationModelSelectionDecisionV1>
 	>();
 	readonly #interface: ConversationExecutionUseCaseV1;
+	readonly #eventInterface: ConversationEventUseCaseV1;
 
 	constructor(options: FakeConversationExecutionOptionsV1 = {}) {
 		let nextId = 1;
@@ -309,10 +345,12 @@ export class FakeConversationExecutionV1
 						actorId: plan.execution.actorId,
 						turnId: plan.execution.turnId,
 						sessionGeneration: plan.execution.sessionGeneration,
+						deliveryFence: plan.execution.deliveryFence,
 						modelConfigurationRevision:
 							plan.execution.modelConfigurationRevision,
 						modelOptionId: plan.execution.modelOptionId,
 						reasoningLevel: plan.execution.reasoningLevel,
+						lastEventSequence: 0,
 						status: plan.execution.status,
 					});
 				}
@@ -332,24 +370,7 @@ export class FakeConversationExecutionV1
 					traceId: plan.auditEvent.traceId,
 					requestId: plan.auditEvent.requestId,
 				});
-				if (plan.modelSelectionFallback) {
-					this.#audit.push({
-						action: plan.modelSelectionFallback.auditEvent.action,
-						actorId: plan.modelSelectionFallback.auditEvent.actorId,
-						traceId: plan.modelSelectionFallback.auditEvent.traceId,
-						requestId: plan.modelSelectionFallback.auditEvent.requestId,
-						details: {
-							previousModelOptionId:
-								plan.modelSelectionFallback.previousModelOptionId,
-							previousReasoningLevel:
-								plan.modelSelectionFallback.previousReasoningLevel,
-							modelConfigurationRevision:
-								plan.modelSelectionFallback.modelConfigurationRevision,
-							modelOptionId: plan.modelSelectionFallback.modelOptionId,
-							reasoningLevel: plan.modelSelectionFallback.reasoningLevel,
-						},
-					});
-				}
+				this.#persistModelSelectionFallback(plan.modelSelectionFallback);
 				const accepted = {
 					outcome: "accepted",
 					result: structuredClone(plan.result),
@@ -484,9 +505,11 @@ export class FakeConversationExecutionV1
 					actorId: plan.execution.actorId,
 					turnId: plan.execution.turnId,
 					sessionGeneration: plan.execution.sessionGeneration,
+					deliveryFence: plan.execution.deliveryFence,
 					modelConfigurationRevision: plan.execution.modelConfigurationRevision,
 					modelOptionId: plan.execution.modelOptionId,
 					reasoningLevel: plan.execution.reasoningLevel,
+					lastEventSequence: 0,
 					status: plan.execution.status,
 				});
 				this.#outbox.push({
@@ -505,24 +528,7 @@ export class FakeConversationExecutionV1
 					traceId: plan.auditEvent.traceId,
 					requestId: plan.auditEvent.requestId,
 				});
-				if (plan.modelSelectionFallback) {
-					this.#audit.push({
-						action: plan.modelSelectionFallback.auditEvent.action,
-						actorId: plan.modelSelectionFallback.auditEvent.actorId,
-						traceId: plan.modelSelectionFallback.auditEvent.traceId,
-						requestId: plan.modelSelectionFallback.auditEvent.requestId,
-						details: {
-							previousModelOptionId:
-								plan.modelSelectionFallback.previousModelOptionId,
-							previousReasoningLevel:
-								plan.modelSelectionFallback.previousReasoningLevel,
-							modelConfigurationRevision:
-								plan.modelSelectionFallback.modelConfigurationRevision,
-							modelOptionId: plan.modelSelectionFallback.modelOptionId,
-							reasoningLevel: plan.modelSelectionFallback.reasoningLevel,
-						},
-					});
-				}
+				this.#persistModelSelectionFallback(plan.modelSelectionFallback);
 				const accepted = {
 					outcome: "accepted",
 					result: structuredClone(plan.result),
@@ -606,6 +612,66 @@ export class FakeConversationExecutionV1
 				return accepted;
 			},
 		};
+		const eventTransaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				const conversation = this.#conversations.get(
+					request.command.conversationId,
+				);
+				const execution = this.#executions.find(
+					(candidate) =>
+						candidate.conversationId === request.command.conversationId &&
+						candidate.executionId === request.command.executionId,
+				);
+				const existing = this.#events.find(
+					(candidate) =>
+						candidate.source === "runtime" &&
+						candidate.event.executionId === request.command.executionId &&
+						candidate.adapterEventKey === request.command.adapterEventKey,
+				);
+				const decision = decide({
+					conversation: conversation
+						? {
+								conversationId: conversation.conversationId,
+								sessionGeneration: conversation.sessionGeneration,
+								lastConversationCursor: conversation.lastConversationCursor,
+							}
+						: undefined,
+					execution: execution
+						? {
+								executionId: execution.executionId,
+								conversationId: execution.conversationId,
+								sessionGeneration: execution.sessionGeneration,
+								deliveryFence: execution.deliveryFence,
+								lastSequence: execution.lastEventSequence,
+							}
+						: undefined,
+					existingEvent:
+						existing?.source === "runtime"
+							? {
+									event: structuredClone(existing.event),
+									eventDigest: existing.eventDigest,
+								}
+							: undefined,
+				});
+				if (!isEventWritePlan(decision)) return decision;
+				if (!conversation || !execution || existing) {
+					throw new Error("Invalid Fake Conversation event plan");
+				}
+				this.#events.push({
+					source: "runtime",
+					adapterEventKey: decision.adapterEventKey,
+					eventDigest: decision.eventDigest,
+					runtimeCursor: decision.runtimeCursor,
+					event: structuredClone(decision.event),
+				});
+				execution.lastEventSequence = decision.event.sequence;
+				this.#conversations.set(conversation.conversationId, {
+					...conversation,
+					lastConversationCursor: decision.event.conversationCursor,
+				});
+				return { outcome: "accepted", event: structuredClone(decision.event) };
+			},
+		};
 		this.#interface = createConversationExecutionUseCaseV1(
 			{
 				authorization:
@@ -613,6 +679,10 @@ export class FakeConversationExecutionV1
 				transaction,
 			},
 			{ now, newId },
+		);
+		this.#eventInterface = createConversationEventUseCaseV1(
+			{ transaction: eventTransaction },
+			{ newId },
 		);
 	}
 
@@ -635,6 +705,10 @@ export class FakeConversationExecutionV1
 
 	stop: ConversationExecutionUseCaseV1["stop"] = (command) =>
 		this.#interface.stop(command);
+
+	persistRuntimeEvent(command: ConversationEventCommandV1) {
+		return this.#eventInterface.persist(command);
+	}
 
 	failNextCommit() {
 		this.#failNextCommit = true;
@@ -664,6 +738,7 @@ export class FakeConversationExecutionV1
 			stops: this.#stops,
 			outbox: this.#outbox,
 			audit: this.#audit,
+			events: this.#events,
 		});
 	}
 
@@ -674,6 +749,43 @@ export class FakeConversationExecutionV1
 			this.#stopIdempotency.size +
 			this.#modelSelectionIdempotency.size
 		);
+	}
+
+	#persistModelSelectionFallback(
+		fallback: ConversationModelSelectionFallbackWriteV1 | null,
+	): void {
+		if (!fallback) return;
+		const execution = this.#executions.find(
+			(candidate) =>
+				candidate.executionId === fallback.timelineEvent.executionId &&
+				candidate.conversationId === fallback.timelineEvent.conversationId,
+		);
+		if (
+			!execution ||
+			fallback.timelineEvent.sequence !== execution.lastEventSequence + 1
+		) {
+			throw new Error("Invalid Fake model fallback event binding");
+		}
+		execution.lastEventSequence = fallback.timelineEvent.sequence;
+		this.#events.push({
+			source: "platform",
+			runtimeCursor: null,
+			event: structuredClone(fallback.timelineEvent),
+		});
+		this.#audit.push({
+			action: fallback.auditEvent.action,
+			actorId: fallback.auditEvent.actorId,
+			traceId: fallback.auditEvent.traceId,
+			requestId: fallback.auditEvent.requestId,
+			executionId: fallback.auditEvent.executionId,
+			details: {
+				previousModelOptionId: fallback.previousModelOptionId,
+				previousReasoningLevel: fallback.previousReasoningLevel,
+				modelConfigurationRevision: fallback.modelConfigurationRevision,
+				modelOptionId: fallback.modelOptionId,
+				reasoningLevel: fallback.reasoningLevel,
+			},
+		});
 	}
 
 	#state(
@@ -752,6 +864,7 @@ export class FakeConversationExecutionV1
 						modelConfigurationRevision: active.modelConfigurationRevision,
 						modelOptionId: active.modelOptionId,
 						reasoningLevel: active.reasoningLevel,
+						lastEventSequence: active.lastEventSequence,
 						stopPending: activeStopPending,
 						status: active.status as "submitted" | "processing" | "unknown",
 					}
