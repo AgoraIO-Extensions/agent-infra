@@ -17,12 +17,14 @@ Connection 同时需要公司员工登录。Agent Platform 已通过部署 Ident
 3. Agent Platform 只保存 Agent Action policy 和 Connection `callId` 引用；用户 Grant 只保存在 Connection。
 4. Agent Platform 通过受信短期 assertion 代表当前 Principal 和 Agent Actor，Connection 独立验证并解析 current Grant；任何请求字段都不能指定 Principal、Connection 或 Credential。
 5. `LOCAL_SINGLE_USER`、`REMOTE_SHARED`、本机 installation identity、SQLite、Runtime token 和本机 Credential store 不作为产品模式。可选本机组件只能是无状态 edge。
+6. LDAP transport 默认要求验证证书和主机名的 LDAPS/StartTLS。当前 LA3 受监督 Pilot 因公司 LDAP 没有可用 TLS，可以使用固定私网 `ldap://` profile，并明确接受员工密码和 Service Bind Credential 明文传输风险；该例外禁止降级/fallback、不能跨环境复用，正式上线前必须关闭。
 
 ## 影响
 
 - Connection 可以独立部署、登录、撤权和审计，不依赖 Platform 浏览器会话或数据库。
 - Platform 和 Connection 的双层授权通过 assertion 与 `callId` 关联，不使用分布式事务或 Grant 副本。
 - LDAP 可用性成为 Connection 登录和 Principal 复核依赖；当前 Pilot 只确认条目存在，正式离职状态仍是后续门禁。
+- LA3 Pilot 暂时接受私网明文 LDAP 风险；网络边界、固定 endpoint 和无 fallback 只能降低暴露面，不能把该链路描述为加密传输或生产 TLS conformance。
 - 历史本机 profile 代码不能整体合入，候选实现必须按新的 Implementation Issues 重新切片。
 
 ## 备选方案

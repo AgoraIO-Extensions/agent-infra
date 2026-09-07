@@ -78,7 +78,9 @@ Connection 使用部署批准的固定 LDAP profile：
 6. 邮箱、登录名和显示名只更新展示资料，不参与授权键。
 7. LDAP 密码在请求结束后丢弃，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。
 
-LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/配置提供，调用方不能选择或触发降级。
+LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/配置提供，调用方不能选择或触发降级。默认部署必须使用经过 CA、证书有效期和主机名验证的 LDAPS 或强制 StartTLS；证书验证失败、StartTLS 失败及任何自动回退都必须在启动或请求执行前 fail closed。
+
+唯一例外是具名 LA3 受监督 Pilot profile：由于当前公司 LDAP 没有可用 TLS，该 profile 可以使用固定私网 `ldap://` endpoint。部署必须同时限制到批准的 LA3 网络路径、固定 endpoint 和受控 Connection workload，禁止动态 endpoint、自动降级、fallback 和外部网络访问，并明确接受员工密码及 Service Bind Credential 在该私网链路明文传输的风险。该例外不能被其他环境、客户端或生产声明复用；公司 LDAP 提供可用 TLS 后必须迁移，广泛生产上线前必须关闭明文 profile。
 
 ### 5.2 Session
 
@@ -260,6 +262,7 @@ Connection DB 至少保存：
 - 越权、Credential 泄露、错误 assertion 被接受、重复 PR、Effect 无法持久化或撤权后仍可新调用时立即停止 Pilot。
 - 停止时禁用 ProviderRelease/Action 或 delegated route，保留数据库和审计。回滚到健康检查或只读入口不表示 GitHub 能力仍可用。
 - 公司 KMS/Secret 产品、唯一受控 egress、HA/PITR、容量和正式值班仍是 Pilot 后生产化门禁；受监督 Pilot 的局部通过不能关闭这些缺口。
+- LA3 私网 `ldap://` 是具名 Pilot 风险接受，不是通用兼容模式；正式上线证据必须证明已使用验证证书和主机名的 LDAPS/StartTLS，并关闭明文 profile。
 
 ## 15. Pilot 验证矩阵
 
@@ -278,6 +281,7 @@ Connection DB 至少保存：
 - 错误 issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数或幂等绑定均拒绝。
 - stale Platform policy revision、已终结 fence 和超过 deadline 的 PENDING Dispatch 均在 Provider 访问前拒绝。
 - LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
+- LA3 Pilot 验证只允许固定私网 LDAP endpoint且无 downgrade/fallback；证据明确标记明文 Credential 传输风险，不能作为 TLS conformance 证据。
 - Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
 - 仓库重命名、转移和同名替换不能改变 allowlist 指向的 numeric repository ID；无法确认稳定 ID 时拒绝写操作。

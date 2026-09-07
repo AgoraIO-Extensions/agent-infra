@@ -313,7 +313,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - 账号状态与组织关系在每次敏感操作前重新解析；短期缓存不能成为独立权限来源。IdentityAdapter 缺失、返回非法结果或暂时不可用时，敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
 - IdentityAdapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
-Connection 不消费 Platform 浏览器会话。它按 [Connection M1 HLD](HLD-connection-M1.md) 使用部署批准的公司 LDAP profile 完成员工登录，以 `issuer + uid` 映射稳定 Principal，并建立自己的 hash-only 浏览器会话。登录后按 Principal 最多每 15 分钟复核 LDAP 条目，过期并发复核必须合并；LDAP 不可用时敏感操作 fail closed。当前 Pilot 只确认条目存在，不把该结果描述为员工仍在职。
+Connection 不消费 Platform 浏览器会话。它按 [Connection M1 HLD](HLD-connection-M1.md) 使用部署批准的公司 LDAP profile 完成员工登录，以 `issuer + uid` 映射稳定 Principal，并建立自己的 hash-only 浏览器会话。默认 profile 必须使用验证证书和主机名的 LDAPS/StartTLS；当前 LA3 受监督 Pilot 可以显式选择固定私网 `ldap://` 例外，但不得自动降级、fallback 或扩展到其他环境，正式上线前必须关闭。登录后按 Principal 最多每 15 分钟复核 LDAP 条目，过期并发复核必须合并；LDAP 不可用时敏感操作 fail closed。当前 Pilot 只确认条目存在，不把该结果描述为员工仍在职。
 
 ### 9.2 权限顺序
 
