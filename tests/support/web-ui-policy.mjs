@@ -67,11 +67,19 @@ export function checkWebUiSource(source, { path }) {
 	const { file, checker } = sourceFileAndChecker(normalized, source);
 	const violations = [];
 	const reactNamespaces = new Set();
+	const reactImportCreateElement = new Set();
 	const reactCreateElement = new Set();
 	const symbolAt = (node) => checker.getSymbolAtLocation(node);
 	const addReactCreateElement = (node) => {
 		const symbol = symbolAt(node);
 		if (symbol) reactCreateElement.add(symbol);
+	};
+	const addReactImportCreateElement = (node) => {
+		const symbol = symbolAt(node);
+		if (symbol) {
+			reactImportCreateElement.add(symbol);
+			reactCreateElement.add(symbol);
+		}
 	};
 	for (const statement of file.statements) {
 		if (
@@ -89,7 +97,7 @@ export function checkWebUiSource(source, { path }) {
 			} else {
 				for (const item of importClause.namedBindings.elements) {
 					if ((item.propertyName?.text ?? item.name.text) === "createElement")
-						addReactCreateElement(item.name);
+						addReactImportCreateElement(item.name);
 				}
 			}
 		}
@@ -110,9 +118,9 @@ export function checkWebUiSource(source, { path }) {
 		const value = matches.length === 1 ? matches[0].initializer : undefined;
 		return value && ts.isStringLiteral(value) ? value.text : undefined;
 	};
-	const isReactCreateElement = (expression) => {
+	const isDirectReactCreateElement = (expression) => {
 		if (ts.isIdentifier(expression))
-			return reactCreateElement.has(symbolAt(expression));
+			return reactImportCreateElement.has(symbolAt(expression));
 		if (
 			ts.isPropertyAccessExpression(expression) &&
 			expression.name.text === "createElement" &&
@@ -127,16 +135,27 @@ export function checkWebUiSource(source, { path }) {
 			reactNamespaces.has(symbolAt(expression.expression))
 		);
 	};
+	const isReactCreateElement = (expression) =>
+		(ts.isIdentifier(expression) &&
+			reactCreateElement.has(symbolAt(expression))) ||
+		isDirectReactCreateElement(expression);
 	const isConst = (declaration) =>
 		ts.isVariableDeclarationList(declaration.parent) &&
 		(declaration.parent.flags & ts.NodeFlags.Const) !== 0;
 	const isReactNamespace = (expression) =>
 		ts.isIdentifier(expression) && reactNamespaces.has(symbolAt(expression));
-	const propertyNameText = (name) =>
-		ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
+	const propertyNameText = (name) => {
+		if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+		if (ts.isComputedPropertyName(name) && ts.isStringLiteral(name.expression))
+			return name.expression.text;
+		return undefined;
+	};
 	function collectReactCreateElementAliases(node) {
 		if (ts.isVariableDeclaration(node) && isConst(node) && node.initializer) {
-			if (ts.isIdentifier(node.name) && isReactCreateElement(node.initializer))
+			if (
+				ts.isIdentifier(node.name) &&
+				isDirectReactCreateElement(node.initializer)
+			)
 				addReactCreateElement(node.name);
 			if (
 				ts.isObjectBindingPattern(node.name) &&

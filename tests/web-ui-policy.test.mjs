@@ -49,7 +49,9 @@ test("rejects React createElement controls and native control roles", () => {
 		'import { createElement } from "react"; const screen = createElement("select");',
 		'import { createElement as h } from "react"; const screen = h("label");',
 		'import React from "react"; const h = React.createElement; const screen = h("button");',
+		'import React from "react"; const h = React["createElement"]; const screen = h("input");',
 		'import * as React from "react"; const { createElement: h } = React; const screen = h("input");',
+		'import * as React from "react"; const { ["createElement"]: h } = React; const screen = h("select");',
 		'import { createElement } from "react"; const h = createElement; const screen = h("textarea");',
 	])
 		assert.match(
@@ -87,6 +89,7 @@ test("attributes React createElement calls to lexical import bindings", () => {
 		'import * as React from "react"; function render(React) { return React["createElement"]("button"); }',
 		'import React from "react"; function render(React) { const h = React.createElement; return h("button"); }',
 		'import * as React from "react"; function render(React) { const { createElement: h } = React; return h("button"); }',
+		'import React from "react"; const h1 = React.createElement; const h2 = h1; const screen = h2("button");',
 	])
 		assert.deepEqual(check(source), [], source);
 });
