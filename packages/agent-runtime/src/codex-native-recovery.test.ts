@@ -7,6 +7,7 @@ import {
 	readdir,
 	readFile,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -47,6 +48,8 @@ interface NativeResponses {
 // so failures never print native IDs, protocol frames, or deployment paths.
 class NativeClient {
 	private sequence = 0;
+	private readonly startedTurns = new Set<string>();
+	private readonly turnStartedWaiters = new Map<string, Set<() => void>>();
 	private readonly responses = new Map<
 		number,
 		{
@@ -59,6 +62,7 @@ class NativeClient {
 		void (async () => {
 			try {
 				for await (const frame of bridge.frames()) {
+					this.recordTurnStarted(frame);
 					const pending =
 						typeof frame.id === "number"
 							? this.responses.get(frame.id)
@@ -103,6 +107,48 @@ class NativeClient {
 			clearTimeout(timer);
 		}
 	}
+	async waitForTurnStarted(threadId: string, turnId: string) {
+		const key = JSON.stringify([threadId, turnId]);
+		if (this.startedTurns.has(key)) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const waiters = this.turnStartedWaiters.get(key) ?? new Set();
+				this.turnStartedWaiters.set(key, waiters);
+				waiters.add(resolve);
+				timer = setTimeout(() => {
+					waiters.delete(resolve);
+					if (waiters.size === 0) this.turnStartedWaiters.delete(key);
+					reject(new Error("Native Turn did not start"));
+				}, 10_000);
+			});
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	private recordTurnStarted(frame: unknown) {
+		if (
+			typeof frame !== "object" ||
+			frame === null ||
+			(frame as { method?: unknown }).method !== "turn/started"
+		)
+			return;
+		const params = (frame as { params?: unknown }).params;
+		if (
+			typeof params !== "object" ||
+			params === null ||
+			typeof (params as { threadId?: unknown }).threadId !== "string" ||
+			typeof (params as { turn?: { id?: unknown } }).turn?.id !== "string"
+		)
+			return;
+		const key = JSON.stringify([
+			(params as { threadId: string }).threadId,
+			(params as { turn: { id: string } }).turn.id,
+		]);
+		this.startedTurns.add(key);
+		for (const wake of this.turnStartedWaiters.get(key) ?? []) wake();
+		this.turnStartedWaiters.delete(key);
+	}
 }
 
 async function directory() {
@@ -132,7 +178,12 @@ function shellQuote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function loopbackResponsesProvider(root: string, respondHeaders = false) {
+type LoopbackResponseMode = "active";
+
+async function loopbackResponsesProvider(
+	root: string,
+	responseMode?: LoopbackResponseMode,
+) {
 	let requested = false;
 	const responses = new Set<ServerResponse>();
 	const server = createServer((request, response) => {
@@ -141,9 +192,8 @@ async function loopbackResponsesProvider(root: string, respondHeaders = false) {
 			(request.url === "/v1/responses" || request.url === "/responses")
 		) {
 			requested = true;
-			responses.add(response);
-			response.once("close", () => responses.delete(response));
-			if (respondHeaders) {
+			request.resume();
+			if (responseMode) {
 				response.writeHead(200, {
 					"cache-control": "no-cache",
 					"content-type": "text/event-stream",
@@ -154,6 +204,8 @@ async function loopbackResponsesProvider(root: string, respondHeaders = false) {
 					'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_agent_infra_native"}}\n\n',
 				);
 			}
+			responses.add(response);
+			response.once("close", () => responses.delete(response));
 			return;
 		}
 		response.statusCode = 404;
@@ -258,6 +310,7 @@ async function nativeDriver(path: string) {
 function submit(
 	executionId = "synthetic-execution",
 	nativeSessionRef?: string,
+	text = "synthetic recovery input",
 ): RuntimeDriverCommand {
 	return {
 		schemaVersion: 1,
@@ -268,8 +321,26 @@ function submit(
 		executionId,
 		turnId: `${executionId}-turn`,
 		sessionGeneration: 1,
-		input: { text: "synthetic recovery input", attachments: [] },
+		input: { text, attachments: [] },
 		...(nativeSessionRef ? { nativeSessionRef } : {}),
+	};
+}
+
+function stop(
+	executionId: string,
+	turnId: string,
+	nativeSessionRef: string,
+): Extract<RuntimeDriverCommand, { kind: "stop" }> {
+	return {
+		schemaVersion: 1,
+		kind: "stop",
+		operationId: `${executionId}-stop`,
+		agentId: "synthetic-agent",
+		conversationId: "synthetic-conversation",
+		executionId,
+		turnId,
+		sessionGeneration: 1,
+		nativeSessionRef,
 	};
 }
 
@@ -383,7 +454,7 @@ describe
 		it("reads an active Turn through native thread/read after experimental API negotiation", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			await loopbackResponsesProvider(root, true);
+			await loopbackResponsesProvider(root, "active");
 			const driver = await nativeDriver(path);
 			await driver.close();
 			const client = await nativeClient(`${path}.native`, true);
@@ -395,6 +466,7 @@ describe
 				model: "gpt-5.3-codex",
 				effort: "low",
 			});
+			await client.waitForTurnStarted(started.thread.id, turn.turn.id);
 			const read = await client.request("thread/read", {
 				threadId: started.thread.id,
 				includeTurns: true,
@@ -413,10 +485,46 @@ describe
 			expect(matches[0]?.status).toBe("inProgress");
 		}, 90_000);
 
-		it("observes a newly accepted Turn through the Driver before native history materializes", async () => {
+		it("reads an active Turn through paginated native turn history", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			const loopback = await loopbackResponsesProvider(root);
+			await loopbackResponsesProvider(root, "active");
+			const driver = await nativeDriver(path);
+			await driver.close();
+			const client = await nativeClient(`${path}.native`, true);
+			const started = await client.request("thread/start", {
+				historyMode: "paginated",
+			});
+			const turn = await client.request("turn/start", {
+				threadId: started.thread.id,
+				clientUserMessageId: "synthetic-operation",
+				input: [{ type: "text", text: "synthetic recovery input" }],
+				model: "gpt-5.3-codex",
+				effort: "low",
+			});
+			await client.waitForTurnStarted(started.thread.id, turn.turn.id);
+			const turns = await client.request("thread/turns/list", {
+				threadId: started.thread.id,
+				itemsView: "notLoaded",
+				limit: 1,
+			});
+			const matches = turns.data.filter(
+				(value): value is { id: string; status: string; items: unknown[] } =>
+					typeof value === "object" &&
+					value !== null &&
+					!Array.isArray(value) &&
+					(value as { id?: unknown }).id === turn.turn.id &&
+					typeof (value as { status?: unknown }).status === "string" &&
+					Array.isArray((value as { items?: unknown }).items),
+			);
+			expect(matches).toHaveLength(1);
+			expect(matches[0]?.status).toBe("inProgress");
+		}, 90_000);
+
+		it("observes a newly accepted Turn through the Driver during initial native history availability", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			await loopbackResponsesProvider(root, "active");
 			const driver = await nativeDriver(path);
 			const accepted = await driver.execute(submit());
 			expect(accepted.result).toEqual({
@@ -430,13 +538,12 @@ describe
 				),
 			).toBe("running");
 			await driver.close();
-			expect(loopback.wasRequested()).toBe(false);
 		}, 90_000);
 
-		it("observes a newly accepted Turn through the Host before native history materializes", async () => {
+		it("observes a newly accepted Turn through the Host during initial native history availability", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			await loopbackResponsesProvider(root, true);
+			await loopbackResponsesProvider(root, "active");
 			const driver = await nativeDriver(path);
 			const runtimeHost = ingressVerifiedRuntimeHost(
 				await RuntimeHost.open({
@@ -467,6 +574,49 @@ describe
 			expect(JSON.stringify(response)).not.toContain(
 				"synthetic recovery input",
 			);
+		}, 90_000);
+
+		it("reads an active Turn from paginated history larger than one Bridge frame", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			await loopbackResponsesProvider(root, "active");
+			const driver = await nativeDriver(path);
+			const syntheticHistoryInput = "x".repeat(9_000);
+
+			for (let index = 0; index < 8; index += 1) {
+				const command = submit(
+					`synthetic-history-${index}`,
+					undefined,
+					syntheticHistoryInput,
+				);
+				const accepted = await driver.execute(command);
+				expect(
+					(
+						await driver.execute(
+							stop(
+								command.executionId,
+								command.turnId,
+								accepted.nativeSessionRef,
+							),
+						)
+					).result,
+				).toEqual({ outcome: "accepted", status: "cancelled" });
+			}
+
+			const home = `${path}.native/home`;
+			const historyFiles = (await readdir(home, { recursive: true })).filter(
+				(entry) => entry.endsWith(".jsonl"),
+			);
+			const historyBytes = (
+				await Promise.all(historyFiles.map((entry) => stat(join(home, entry))))
+			).reduce((total, entry) => total + entry.size, 0);
+			expect(historyBytes).toBeGreaterThan(65_536);
+
+			const command = submit("synthetic-active-after-long-history");
+			const active = await driver.execute(command);
+			expect(
+				await driver.getStatus(active.nativeSessionRef, command.executionId),
+			).toBe("running");
 		}, 90_000);
 
 		it.each(["close", "crash"])(
