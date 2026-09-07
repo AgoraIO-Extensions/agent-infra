@@ -1,0 +1,556 @@
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, delimiter, dirname, join, sep } from "node:path";
+import type { RuntimeSubmitTurnRequestV2 } from "@agent-infra/contracts/runtime";
+import { expect, it } from "vitest";
+import { CODEX_APP_SERVER_V2_PROVENANCE } from "./codex-app-server-bridge.js";
+import {
+	type IsolationProbe,
+	isolationModel,
+	nativeIsolationLauncher,
+} from "./codex-isolation.test-support.js";
+import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import {
+	ingressVerifiedRuntimeHost,
+	runtimeGrantFixture,
+} from "./grant-fixture.test-support.js";
+import { FileRuntimeStore, RuntimeHost } from "./index.js";
+
+type Status = "pass" | "fail" | "unverified";
+const behaviors = [
+	"thread-context",
+	"owner-file-read",
+	"cross-file-read",
+	"cross-file-search",
+	"cross-history-file",
+	"cross-file-modify",
+] as const;
+interface Evidence {
+	status: Status;
+	reason: string;
+}
+
+function quote(value: string) {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// A skipped native suite is never isolation acceptance evidence.
+it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
+	"requires real Codex cross-user data isolation with successful owner controls",
+	async () => {
+		const binary = process.env.CODEX_ISOLATION_BINARY;
+		if (!binary) throw new Error("Missing pinned executable");
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-isolation-"));
+		const originalPath = process.env.PATH;
+		const scenarios: Record<string, Evidence> = {};
+		scenarios["restart-resume.original-native-sessions"] = {
+			status: "unverified",
+			reason: "not-executed",
+		};
+		for (const phase of ["concurrent", "restart-resume"]) {
+			for (const actor of ["a", "b"]) {
+				for (const behavior of behaviors)
+					scenarios[[phase, actor, behavior].join(".")] = {
+						status: "unverified",
+						reason: "not-executed",
+					};
+			}
+		}
+		const report: Record<string, unknown> = {
+			commit: execFileSync("git", ["rev-parse", "HEAD"], {
+				encoding: "utf8",
+			}).trim(),
+			testSourceSha256: createHash("sha256")
+				.update(await readFile(import.meta.filename))
+				.digest("hex"),
+			fixtureSourceSha256: createHash("sha256")
+				.update(
+					await readFile(
+						join(import.meta.dirname, "codex-isolation.test-support.ts"),
+					),
+				)
+				.digest("hex"),
+			platform: process.platform,
+			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			provenanceVerified: false,
+			model: "local-deterministic-responses",
+			scenarios,
+		};
+		const users = ["a", "b"].map((id) => ({
+			id,
+			context:
+				"SYNTH_CONTEXT_" +
+				id.toUpperCase() +
+				"_" +
+				randomUUID().replaceAll("-", "").toUpperCase(),
+			file: `SYNTH_PRIVATE_${id.toUpperCase()}_${randomUUID()}`,
+			ref: undefined as string | undefined,
+		}));
+		let driver: CodexRuntimeDriver | undefined;
+		let host: ReturnType<typeof ingressVerifiedRuntimeHost>;
+		let model: Awaited<ReturnType<typeof isolationModel>> | undefined;
+		let launcher:
+			| Awaited<ReturnType<typeof nativeIsolationLauncher>>
+			| undefined;
+		let nativeHome = "";
+		let workspace = "";
+		let stage = "startup";
+		const record = (key: string, status: Status, reason: string) => {
+			scenarios[key] = { status, reason };
+		};
+		const filePath = (user: (typeof users)[number], name: string) =>
+			join(workspace, "workspace", user.id, name);
+		async function open() {
+			driver = await CodexRuntimeDriver.open({
+				path: join(directory, "driver.json"),
+				model: "gpt-5.3-codex",
+				reasoningEffort: "high",
+				modelOptions: [
+					{
+						modelOptionId: "synthetic",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+					},
+				],
+			});
+			host = ingressVerifiedRuntimeHost(
+				await RuntimeHost.open({
+					driver,
+					store: await FileRuntimeStore.open(join(directory, "host.json")),
+					grantValidation: {
+						expectedIssuer: "agent-platform",
+						now: () => "2026-08-28T10:00:00Z",
+					},
+				}),
+			);
+		}
+		function request(
+			user: (typeof users)[number],
+			probe: IsolationProbe,
+			seed: boolean,
+		): RuntimeSubmitTurnRequestV2 {
+			const binding = {
+				agentId: "agent-isolation",
+				actorId: `actor-${user.id}`,
+				channelId: "web",
+				conversationId: `conversation-${user.id}`,
+				executionId: `execution-${probe.id}`,
+				turnId: `turn-${probe.id}`,
+				sessionGeneration: 1,
+				traceId: `trace-${probe.id}`,
+			};
+			return {
+				schemaVersion: 2,
+				...binding,
+				requestId: `request-${probe.id}`,
+				deliveryFence: 1,
+				...(user.ref ? { hostSessionRef: user.ref } : {}),
+				grant: runtimeGrantFixture(binding, ["turn.submit"]),
+				input: {
+					text: `ISOLATION_PROBE:${probe.id}${seed ? ` ${user.context}` : ""}`,
+					attachments: [],
+				},
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "synthetic",
+					reasoningLevel: "high",
+				},
+			};
+		}
+		async function run(
+			user: (typeof users)[number],
+			probe: IsolationProbe,
+			seed: boolean,
+		) {
+			const command = request(user, probe, seed);
+			const result = await host.submitTurnV2(command);
+			if (result.result.outcome !== "accepted")
+				throw new Error("Native turn not accepted");
+			user.ref ??= result.hostSessionRef;
+			if (user.ref !== result.hostSessionRef)
+				throw new Error("Session was replaced");
+			const query = {
+				schemaVersion: 1 as const,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				actorId: command.actorId,
+				channelId: command.channelId,
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				executionId: command.executionId,
+				turnId: command.turnId,
+				sessionGeneration: command.sessionGeneration,
+				deliveryFence: command.deliveryFence,
+				hostSessionRef: user.ref,
+				grant: runtimeGrantFixture(command, [
+					"session.status",
+					"events.replay",
+				]),
+			};
+			await expect
+				.poll(async () => (await host.status(query)).status, {
+					timeout: 20_000,
+					interval: 100,
+				})
+				.toBe("completed");
+			return { probe, events: JSON.stringify(await host.replay(query)) };
+		}
+		async function pair(
+			commands: (string | undefined)[] = [undefined, undefined],
+			seed = false,
+		) {
+			if (!model) throw new Error("No synthetic model");
+			const activeModel = model;
+			const probes = commands.map((command) => activeModel.probe(command));
+			activeModel.synchronize(probes);
+			// Settle both calls before closing the native process after a failure.
+			const results = await Promise.allSettled(
+				users.map((user, index) => {
+					const probe = probes[index];
+					if (!probe) throw new Error("Missing synthetic probe");
+					return run(user, probe, seed);
+				}),
+			);
+			return results.map((result) => {
+				if (result.status === "rejected") throw result.reason;
+				if (!result.value.probe.concurrent)
+					throw new Error("Concurrent positive control unavailable");
+				return result.value;
+			});
+		}
+		const sees = (result: Awaited<ReturnType<typeof run>>, marker: string) =>
+			result.probe.inputs.some((input) => input.includes(marker)) ||
+			result.events.includes(marker);
+		async function phase(name: string) {
+			const context = await pair();
+			for (const [index, user] of users.entries()) {
+				const own = context[index];
+				const other = users[1 - index];
+				if (!own || !other) throw new Error("Missing pair");
+				const positive =
+					sees(own, user.context) && own.events.includes(user.context);
+				record(
+					[name, user.id, "thread-context"].join("."),
+					sees(own, other.context) ? "fail" : positive ? "pass" : "unverified",
+					sees(own, other.context)
+						? "foreign-context-observed"
+						: positive
+							? "owner-history-present-foreign-history-absent"
+							: "owner-context-control-failed",
+				);
+			}
+			const ownerReads = await pair(
+				users.map((user) => `cat ${quote(filePath(user, "private.txt"))}`),
+			);
+			const canRead = ownerReads.map(
+				(result, index) =>
+					result.probe.outputs.some((output) =>
+						output.includes(users[index]?.file ?? "MISSING"),
+					) && result.events.includes(users[index]?.file ?? "MISSING"),
+			);
+			for (const [index, user] of users.entries())
+				record(
+					[name, user.id, "owner-file-read"].join("."),
+					canRead[index] ? "pass" : "unverified",
+					canRead[index]
+						? "native-tool-and-result-contain-owner-marker"
+						: "owner-read-control-failed",
+				);
+			for (const behavior of [
+				"cross-file-read",
+				"cross-file-search",
+				"cross-history-file",
+			] as const) {
+				const search = behavior === "cross-file-search";
+				const history = behavior === "cross-history-file";
+				const searchControls = search
+					? await pair(
+							users.map(
+								(user) =>
+									"grep -R -F SYNTH_PRIVATE_ " +
+									quote(filePath(user, "private.txt")),
+							),
+						)
+					: undefined;
+				const results = await pair(
+					users.map((_, index) => {
+						const other = users[1 - index];
+						if (!other) throw new Error("Missing other user");
+						return history
+							? "grep -R -h -o 'SYNTH_CONTEXT_[A-Z0-9_]*' " +
+									quote(join(nativeHome, "sessions"))
+							: (search ? "grep -R -F SYNTH_PRIVATE_ " : "cat ") +
+									quote(filePath(other, "private.txt"));
+					}),
+				);
+				for (const [index, result] of results.entries()) {
+					const user = users[index];
+					const other = users[1 - index];
+					if (!user || !other) throw new Error("Missing user");
+					const leaked = sees(result, history ? other.context : other.file);
+					const preexisting = result.probe.inputs[0]?.includes(
+						history ? other.context : other.file,
+					);
+					const control = search
+						? searchControls?.[index]?.probe.outputs.some((output) =>
+								output.includes(user.file),
+							)
+						: history
+							? result.probe.outputs.some((output) =>
+									output.includes(user.context),
+								)
+							: canRead[index];
+					const completeOutput =
+						result.probe.outputs.length > 0 &&
+						!result.probe.outputs.some((output) =>
+							/truncated|Process running with session ID/i.test(output),
+						);
+					record(
+						[name, user.id, behavior].join("."),
+						leaked ? "fail" : control && completeOutput ? "pass" : "unverified",
+						leaked
+							? preexisting
+								? "foreign-marker-already-in-history"
+								: "foreign-marker-reached-model-input-or-result"
+							: !completeOutput
+								? "tool-output-incomplete"
+								: control
+									? "foreign-marker-absent"
+									: "matching-positive-control-failed",
+					);
+				}
+			}
+			const mutation = `SYNTH_WRITE_${randomUUID()}`;
+			for (const user of users)
+				for (const file of ["owner-write.txt", "foreign-write.txt"])
+					await writeFile(filePath(user, file), "SYNTH_UNCHANGED");
+			await pair(
+				users.map(
+					(user) =>
+						"printf %s " +
+						quote(mutation) +
+						" > " +
+						quote(filePath(user, "owner-write.txt")),
+				),
+			);
+			const canWrite = await Promise.all(
+				users.map(
+					async (user) =>
+						(await readFile(filePath(user, "owner-write.txt"), "utf8")) ===
+						mutation,
+				),
+			);
+			await pair(
+				users.map((_, index) => {
+					const other = users[1 - index];
+					if (!other) throw new Error("Missing other user");
+					return (
+						"printf %s " +
+						quote(mutation) +
+						" > " +
+						quote(filePath(other, "foreign-write.txt"))
+					);
+				}),
+			);
+			for (const [index, user] of users.entries()) {
+				const other = users[1 - index];
+				if (!other) throw new Error("Missing other user");
+				const changed =
+					(await readFile(filePath(other, "foreign-write.txt"), "utf8")) !==
+					"SYNTH_UNCHANGED";
+				record(
+					[name, user.id, "cross-file-modify"].join("."),
+					changed ? "fail" : canWrite[index] ? "pass" : "unverified",
+					changed
+						? "foreign-file-modified"
+						: canWrite[index]
+							? "owner-write-succeeded-foreign-write-denied"
+							: "owner-write-control-failed",
+				);
+			}
+		}
+		try {
+			model = await isolationModel();
+			launcher = await nativeIsolationLauncher(directory, binary, model.url);
+			process.env.PATH = launcher.bin + delimiter + (originalPath ?? "");
+			await open();
+			report.provenanceVerified = true;
+			const launch = (await launcher.observations()).find(
+				(entry) => entry.method === "launch",
+			);
+			if (!launch?.codexHome || !launch.cwd)
+				throw new Error("Missing native launch");
+			nativeHome = launch.codexHome;
+			workspace = launch.cwd;
+			const ownedRoot = await realpath(directory);
+			const temporaryRoot = await realpath(tmpdir());
+			for (const path of [nativeHome, workspace]) {
+				const resolved = await realpath(path);
+				if (
+					!resolved.startsWith(`${ownedRoot}${sep}`) &&
+					!(
+						dirname(resolved) === temporaryRoot &&
+						basename(resolved).startsWith("agent-runtime-codex-home-")
+					)
+				)
+					throw new Error("Native directory is not synthetic");
+			}
+			report.launchConfiguration = {
+				homeEqualsCwd: launch.home === launch.cwd,
+				codexHomeEqualsCwd: launch.codexHome === launch.cwd,
+			};
+			const memoryDisabled = /^memories\s+\S+\s+false$/m.test(
+				launcher.features(nativeHome),
+			);
+			record(
+				"configuration.personal-memory",
+				memoryDisabled ? "pass" : "unverified",
+				memoryDisabled
+					? "pinned-native-feature-disabled"
+					: "enabled-or-feature-status-unavailable",
+			);
+			stage = "host-positive-control";
+			const seeds = await pair(undefined, true);
+			record(stage, "pass", "both-native-turns-completed-and-replayed");
+			const memoryTools = seeds.some(({ probe }) =>
+				probe.tools.some((tool) => /memor/i.test(tool)),
+			);
+			if (memoryTools)
+				record(
+					"configuration.personal-memory",
+					"unverified",
+					"memory-tool-advertised",
+				);
+			for (const user of users) {
+				await mkdir(filePath(user, "."), { recursive: true });
+				await writeFile(filePath(user, "private.txt"), user.file);
+			}
+			stage = "concurrent";
+			await phase(stage);
+			await driver?.close();
+			driver = undefined;
+			stage = "restart-resume";
+			await open();
+			await phase(stage);
+		} catch (error) {
+			report.errorCode =
+				error &&
+				typeof error === "object" &&
+				"code" in error &&
+				typeof error.code === "string" &&
+				/^RUNTIME_[A-Z_]+$/.test(error.code)
+					? error.code
+					: "PROBE_INCOMPLETE";
+			record(
+				stage,
+				"unverified",
+				"native-positive-control-or-lifecycle-unavailable",
+			);
+		} finally {
+			await driver?.close().catch(() => {});
+			await model?.close();
+			const observations =
+				(await launcher?.observations().catch(() => [])) ?? [];
+			const starts = observations.filter(
+				(entry) => entry.method === "thread/start",
+			);
+			const resumed = observations.filter(
+				(entry) => entry.method === "thread/resume",
+			);
+			const nativeId = (entry: (typeof observations)[number]) =>
+				(entry.result?.thread as { id?: string } | undefined)?.id;
+			const originalIds = starts.map(nativeId);
+			const sameSessions =
+				starts.length === 2 &&
+				new Set(originalIds).size === 2 &&
+				originalIds.every(
+					(id) =>
+						typeof id === "string" &&
+						resumed.some(
+							(entry) =>
+								nativeId(entry) === id && entry.params?.threadId === id,
+						),
+				);
+			const restarted =
+				observations.filter((entry) => entry.method === "launch").length === 2;
+			if (stage === "restart-resume" && sameSessions && restarted)
+				record(
+					"restart-resume.original-native-sessions",
+					"pass",
+					"two-processes-resumed-original-native-sessions",
+				);
+			report.nativeRequests = observations.map((entry) => ({
+				method: entry.method,
+				...(entry.error
+					? {
+							errorCode: entry.error.code,
+							reason:
+								entry.error.message === "list_turns is not supported yet"
+									? "native-turn-history-unavailable"
+									: "native-request-rejected",
+						}
+					: {}),
+			}));
+			report.effectiveThreads = observations
+				.filter(
+					(entry) =>
+						entry.method === "thread/start" || entry.method === "thread/resume",
+				)
+				.map((entry) => {
+					const sandbox = entry.result?.sandbox as
+						| { type?: string; networkAccess?: boolean }
+						| undefined;
+					return {
+						method: entry.method,
+						approvalPolicy: entry.result?.approvalPolicy,
+						sandboxType: sandbox?.type,
+						networkAccess: sandbox?.networkAccess,
+						requestKeys: Object.keys(entry.params ?? {}),
+					};
+				});
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			await rm(directory, { recursive: true, force: true });
+		}
+		const persistenceCommit = process.env.CODEX_ISOLATION_PERSISTENCE_COMMIT;
+		let containsPersistenceFix = false;
+		if (persistenceCommit && /^[a-f0-9]{40}$/.test(persistenceCommit)) {
+			try {
+				execFileSync(
+					"git",
+					["merge-base", "--is-ancestor", persistenceCommit, "HEAD"],
+					{ stdio: "ignore" },
+				);
+				containsPersistenceFix = true;
+			} catch {
+				/* The required persistence revision is absent. */
+			}
+		}
+		report.persistenceCommit = containsPersistenceFix
+			? persistenceCommit
+			: "unverified";
+		report.overall = Object.values(scenarios).some(
+			(row) => row.status === "fail",
+		)
+			? "fail"
+			: containsPersistenceFix &&
+					Object.values(scenarios).every((row) => row.status === "pass")
+				? "pass"
+				: "unverified";
+		console.info(JSON.stringify(report, null, 2));
+		expect(
+			report.overall,
+			"#404 and #194 remain blocked until native isolation passes",
+		).toBe("pass");
+	},
+	180_000,
+);
