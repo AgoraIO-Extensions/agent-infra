@@ -412,6 +412,9 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../config
+      '@agent-infra/image-registry':
+        specifier: workspace:*
+        version: link:../image-registry
       '@agent-infra/secret-store':
         specifier: workspace:*
         version: link:../secret-store

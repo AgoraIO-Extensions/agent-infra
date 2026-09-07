@@ -16,7 +16,7 @@
 	},
 	"scripts": {
 		"build": "tsdown",
-		"check-types": "pnpm --filter @agent-infra/contracts build && pnpm --filter @agent-infra/agent-runtime build && pnpm --filter @agent-infra/image-registry build && pnpm --filter @agent-infra/platform-core build && pnpm --filter @agent-infra/platform-store build && pnpm --filter @agent-infra/secret-store build && tsc --noEmit",
+		"check-types": "tsc --noEmit",
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.mjs",
 		"test": "vitest run src"
