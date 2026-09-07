@@ -1,4 +1,9 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
 	AgentApplicationProjectionV1,
@@ -47,8 +52,14 @@ function DecisionFeedback({
 }: {
 	decision?: AgentApplicationProjectionV1;
 }) {
+	const resultRef = useResultFocus(decision);
 	return decision ? (
-		<p className="mt-4 font-medium text-slate-950 text-sm" role="status">
+		<p
+			ref={resultRef}
+			tabIndex={-1}
+			className="mt-4 font-medium text-slate-950 text-sm"
+			role="status"
+		>
 			Decision submitted for {decision.name}:{" "}
 			{agentManagementStatusLabels[decision.status]}.
 		</p>
@@ -65,6 +76,7 @@ function ApplicationDecisionControls({
 	pendingDecision?: PendingDecision;
 }) {
 	const [reason, setReason] = useState("");
+	const reasonId = useId();
 	const deciding = pendingDecision !== undefined;
 	const currentDecision =
 		pendingDecision?.applicationId === application.applicationId
@@ -73,8 +85,7 @@ function ApplicationDecisionControls({
 
 	return (
 		<div className="flex min-w-0 flex-col gap-3 sm:min-w-72">
-			<button
-				className="min-h-11 border border-slate-900 bg-slate-900 px-4 font-medium text-sm text-white transition-colors hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:bg-slate-400"
+			<Button
 				disabled={deciding}
 				onClick={() =>
 					onDecision(application.applicationId, { decision: "approve" })
@@ -84,11 +95,12 @@ function ApplicationDecisionControls({
 				{currentDecision?.decision === "approve"
 					? "Approving..."
 					: "Approve application"}
-			</button>
+			</Button>
 			<form
 				className="flex flex-col gap-2"
 				onSubmit={(event) => {
 					event.preventDefault();
+					if (deciding) return;
 					const trimmedReason = reason.trim();
 					if (!trimmedReason) return;
 					onDecision(application.applicationId, {
@@ -97,25 +109,25 @@ function ApplicationDecisionControls({
 					});
 				}}
 			>
-				<label className="font-medium text-slate-700 text-sm">
-					Rejection reason
-					<textarea
-						className="mt-1 block min-h-20 w-full border border-slate-300 bg-white px-3 py-2 text-slate-950 text-sm outline-none focus:border-slate-900 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2 disabled:bg-slate-100"
-						disabled={deciding}
-						onChange={(event) => setReason(event.target.value)}
-						required
-						value={reason}
-					/>
-				</label>
-				<button
-					className="min-h-11 self-start border border-slate-700 px-4 font-medium text-slate-800 text-sm transition-colors hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+				<Label htmlFor={reasonId}>Rejection reason</Label>
+				<Textarea
+					id={reasonId}
+					className="min-h-20"
+					disabled={deciding}
+					onChange={(event) => setReason(event.target.value)}
+					required
+					value={reason}
+				/>
+				<Button
+					variant="outline"
+					className="self-start"
 					disabled={deciding || !reason.trim()}
 					type="submit"
 				>
 					{currentDecision?.decision === "reject"
 						? "Rejecting..."
 						: "Reject application"}
-				</button>
+				</Button>
 			</form>
 		</div>
 	);
@@ -181,9 +193,9 @@ export function AdminAgentApplicationsScreen({
 										<strong className="text-slate-950">
 											{application.name}
 										</strong>
-										<span className="border border-slate-300 px-2 py-1 text-slate-700 text-xs">
+										<Badge variant="outline">
 											{agentManagementStatusLabels[application.status]}
-										</span>
+										</Badge>
 									</div>
 									<p className="text-slate-600 text-sm">
 										{application.description}

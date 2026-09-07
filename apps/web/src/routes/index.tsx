@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 export const Route = createFileRoute("/")({
 	component: HomeComponent,
@@ -19,7 +20,7 @@ function HomeComponent() {
 					分阶段交付。
 				</p>
 				<Link
-					className="inline-flex min-h-11 items-center border border-slate-900 bg-slate-900 px-4 font-medium text-sm text-white transition-colors hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2"
+					className={buttonVariants({ variant: "outline", className: "px-0" })}
 					to="/agents"
 				>
 					查看 Agent

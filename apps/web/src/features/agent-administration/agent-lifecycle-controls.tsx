@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { useResultFocus } from "@/hooks/use-result-focus";
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
@@ -104,6 +106,7 @@ export function AgentLifecycleControls({
 	const isPending = pendingCommand !== undefined;
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
+	const resultRef = useResultFocus(submittedResult);
 
 	return (
 		<section className="flex flex-col gap-4 border-slate-200 border-t pt-5 sm:flex-row sm:items-start sm:justify-between">
@@ -135,7 +138,12 @@ export function AgentLifecycleControls({
 					</p>
 				) : null}
 				{submittedResult ? (
-					<p className="font-medium text-slate-950 text-sm" role="status">
+					<p
+						ref={resultRef}
+						tabIndex={-1}
+						className="font-medium text-slate-950 text-sm"
+						role="status"
+					>
 						Lifecycle command submitted:{" "}
 						{agentManagementStatusLabels[submittedResult.managementStatus]}.
 					</p>
@@ -151,8 +159,8 @@ export function AgentLifecycleControls({
 			{commands.length > 0 ? (
 				<div className="flex flex-wrap gap-3">
 					{commands.map((command) => (
-						<button
-							className="min-h-11 border border-slate-700 px-4 font-medium text-slate-800 text-sm transition-colors hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-slate-900 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+						<Button
+							variant="outline"
 							disabled={isPending}
 							key={command}
 							onClick={() => onCommand(command)}
@@ -162,7 +170,7 @@ export function AgentLifecycleControls({
 							pendingCommand.command === command
 								? commandProgressLabels[command]
 								: commandLabels[command]}
-						</button>
+						</Button>
 					))}
 				</div>
 			) : null}
