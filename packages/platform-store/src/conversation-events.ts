@@ -9,7 +9,7 @@ import {
 	type ConversationEventWritePlanV1,
 	type ConversationNormalizedEventV1,
 	type ConversationPersistedEventPayloadV1,
-	type PersistedConversationEventV1,
+	type PersistedRuntimeConversationEventV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 
@@ -268,7 +268,7 @@ function request(value: unknown): PersistRequest {
 	return { command: command(input.command), eventDigest: input.eventDigest };
 }
 
-function persistedEvent(row: EventRow): PersistedConversationEventV1 {
+function persistedEvent(row: EventRow): PersistedRuntimeConversationEventV1 {
 	const event = normalizedEvent(row.event_payload);
 	if (row.event_type !== event.type) return unavailable();
 	return {
@@ -379,7 +379,7 @@ function validatePlan(
 		"event",
 	]);
 	if (eventInput.schemaVersion !== 1) return unavailable();
-	const event: PersistedConversationEventV1 = {
+	const event: PersistedRuntimeConversationEventV1 = {
 		schemaVersion: 1,
 		eventId: text(eventInput.eventId),
 		conversationId: text(eventInput.conversationId),
@@ -432,7 +432,7 @@ function validateDecision(
 		"event",
 	]);
 	if (replayed.schemaVersion !== 1) return unavailable();
-	const event: PersistedConversationEventV1 = {
+	const event: PersistedRuntimeConversationEventV1 = {
 		schemaVersion: 1,
 		eventId: text(replayed.eventId),
 		conversationId: text(replayed.conversationId),
