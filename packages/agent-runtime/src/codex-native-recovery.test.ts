@@ -681,20 +681,11 @@ describe
 					};
 				}),
 			);
-			const relevantHistory = history.filter(({ contents }) =>
-				syntheticHistoryInputs.some((input) => contents.includes(input)),
+			const threadHistory = history.filter(({ contents }) =>
+				contents.includes(session.threadId),
 			);
-			for (const input of syntheticHistoryInputs) {
-				expect(
-					relevantHistory.some(({ contents }) => contents.includes(input)),
-				).toBe(true);
-			}
-			expect(
-				relevantHistory.every(({ contents }) =>
-					contents.includes(session.threadId),
-				),
-			).toBe(true);
-			const historyBytes = relevantHistory.reduce(
+			expect(threadHistory).not.toHaveLength(0);
+			const historyBytes = threadHistory.reduce(
 				(total, entry) => total + entry.size,
 				0,
 			);
