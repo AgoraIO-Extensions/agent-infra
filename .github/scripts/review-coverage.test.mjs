@@ -379,6 +379,114 @@ test("publishes the required Gate through a current-head dedicated App path", as
   assert.equal(checkRequests[1].body.status, "completed");
 });
 
+test("retries a transient service failure while verifying the current target", async () => {
+  const waits = [];
+  const writes = [];
+  let targetReads = 0;
+  const existing = {
+    id: 99,
+    name: "Automated Review Coverage",
+    head_sha: head,
+    app: { id: 4_503_079 },
+    external_id: `agent-infra:pr:42:automated-review-coverage:${head}`,
+  };
+
+  await publishCoverageCheck({
+    repository: "example/repo",
+    prNumber: 42,
+    expectedHead: head,
+    targetUrl: "https://github.com/example/repo/actions/runs/1",
+    coverage: evaluateReviewCoverage(input),
+    request: async (path) => {
+      if (path.endsWith("/pulls/42")) {
+        targetReads += 1;
+        if (targetReads === 1) {
+          throw Object.assign(new Error("GitHub API GET /repos/example/repo/pulls/42: 503"), {
+            status: 503,
+          });
+        }
+        return { state: "open", head: { sha: head } };
+      }
+      return { check_runs: [existing] };
+    },
+    checkRequest: async (path, options) => {
+      writes.push([path, options.method]);
+    },
+    wait: async (milliseconds) => {
+      waits.push(milliseconds);
+    },
+  });
+
+  assert.equal(targetReads, 3);
+  assert.deepEqual(waits, [250]);
+  assert.deepEqual(writes, [["/repos/example/repo/check-runs/99", "PATCH"]]);
+});
+
+test("does not retry a closed or moved current Review target", async () => {
+  for (const target of [
+    { state: "closed", head: { sha: head } },
+    { state: "open", head: { sha: "b".repeat(40) } },
+  ]) {
+    const waits = [];
+    const writes = [];
+
+    await assert.rejects(
+      publishCoverageCheck({
+        repository: "example/repo",
+        prNumber: 42,
+        expectedHead: head,
+        targetUrl: "https://github.com/example/repo/actions/runs/1",
+        coverage: evaluateReviewCoverage(input),
+        request: async (path) =>
+          path.endsWith("/pulls/42") ? target : { check_runs: [] },
+        checkRequest: async (path, options) => {
+          writes.push([path, options.method]);
+        },
+        wait: async (milliseconds) => {
+          waits.push(milliseconds);
+        },
+      }),
+      /PR is closed or its head changed/,
+    );
+
+    assert.deepEqual(waits, []);
+    assert.deepEqual(writes, []);
+  }
+});
+
+test("fails closed when current-target service retries are exhausted", async () => {
+  const waits = [];
+  const writes = [];
+
+  await assert.rejects(
+    publishCoverageCheck({
+      repository: "example/repo",
+      prNumber: 42,
+      expectedHead: head,
+      targetUrl: "https://github.com/example/repo/actions/runs/1",
+      coverage: evaluateReviewCoverage(input),
+      request: async (path) => {
+        if (path.endsWith("/pulls/42")) {
+          throw Object.assign(new Error("GitHub API GET /repos/example/repo/pulls/42: 503"), {
+            status: 503,
+          });
+        }
+        return { check_runs: [] };
+      },
+      checkRequest: async (path, options) => {
+        writes.push([path, options.method]);
+      },
+      wait: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    }),
+    /503/,
+  );
+
+  assert.deepEqual(waits, [250, 500]);
+  assert.deepEqual(writes, []);
+});
+
 test("renders a bounded Job Summary from coverage facts", () => {
   assert.equal(
     buildCoverageJobSummary(

@@ -14,6 +14,8 @@ import {
 
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
 const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
+const CURRENT_REVIEW_TARGET_ATTEMPTS = 3;
+const CURRENT_REVIEW_TARGET_RETRY_DELAY_MS = 250;
 const REVIEW_IDENTITY = "<!-- pr-agent:review:full -->";
 const REVIEW_HEADER =
   /^## PR Reviewer Guide \[head ([a-f0-9]{40}); run ([1-9][0-9]*)\/([1-9][0-9]*)\] 🔍$/;
@@ -413,12 +415,14 @@ export async function publishCoverageCheck({
   coverage,
   request,
   checkRequest = gateCheckRequest,
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }) {
-  await requireCurrentReviewTarget({
+  await requireCurrentCoverageTarget({
     repository,
     prNumber,
     expectedHead,
     request,
+    wait,
   });
 
   const encodedName = encodeURIComponent(COVERAGE_CHECK_NAME);
@@ -453,11 +457,12 @@ export async function publishCoverageCheck({
     });
   }
 
-  await requireCurrentReviewTarget({
+  await requireCurrentCoverageTarget({
     repository,
     prNumber,
     expectedHead,
     request,
+    wait,
   });
   await checkRequest(`/repos/${repository}/check-runs/${check.id}`, {
     method: "PATCH",
@@ -469,6 +474,34 @@ export async function publishCoverageCheck({
       output: buildCoverageCheckOutput(coverage),
     }),
   });
+}
+
+async function requireCurrentCoverageTarget({
+  repository,
+  prNumber,
+  expectedHead,
+  request,
+  wait,
+}) {
+  for (let attempt = 0; attempt < CURRENT_REVIEW_TARGET_ATTEMPTS; attempt += 1) {
+    try {
+      return await requireCurrentReviewTarget({
+        repository,
+        prNumber,
+        expectedHead,
+        request,
+      });
+    } catch (error) {
+      const retryable =
+        Number.isSafeInteger(error?.status) &&
+        error.status >= 500 &&
+        error.status < 600;
+      if (!retryable || attempt === CURRENT_REVIEW_TARGET_ATTEMPTS - 1) {
+        throw error;
+      }
+      await wait(CURRENT_REVIEW_TARGET_RETRY_DELAY_MS * 2 ** attempt);
+    }
+  }
 }
 
 function requiredEnvironment(name) {
@@ -488,9 +521,11 @@ async function githubRequest(path, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       `GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`,
     );
+    error.status = response.status;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
