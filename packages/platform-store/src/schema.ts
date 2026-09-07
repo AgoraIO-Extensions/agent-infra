@@ -923,6 +923,9 @@ export const conversationEvents = platformSchema.table(
 		runtimeCursor: text("runtime_cursor"),
 		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
 		source: varchar("source", { length: 16 }).notNull(),
+		persistedAt: timestamp("persisted_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
 	},
 	(table) => [
 		foreignKey({

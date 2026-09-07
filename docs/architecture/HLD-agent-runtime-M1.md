@@ -192,7 +192,7 @@ RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelecti
 ### 8.3 SSE 补发
 
 - SSE 的 `id` 字段和浏览器重连时的 `Last-Event-ID` 都使用稳定 `eventId`。`platform-api` 必须先在当前用户有权访问的 Conversation 内查询该 `eventId` 对应的 `conversationCursor`，再按游标补发其后的已保存事件；显式游标请求直接使用 `conversationCursor`，并执行相同的 Conversation 权限校验。未知、超出补发窗口或属于其他 Conversation 的 `eventId` 或游标统一返回“重新加载时间线”信号。
-- 实时补发受服务端配置的数量和时间窗口限制，避免单次重连无限读取。
+- 实时补发受服务端配置的数量和时间窗口限制，时间窗口按平台持久化事件的时间计算，不信任 Runtime 提供的事件发生时间，避免单次重连无限读取。
 - 游标超出补发窗口时，服务端返回明确的“重新加载时间线”信号；客户端先读取 Platform DB 中的持久化历史，再从新的游标继续 SSE。补发窗口不改变业务数据保留期限。
 
 ## 9. Runtime 身份上下文

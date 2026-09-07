@@ -265,7 +265,7 @@ describe("PostgreSQL Conversation query", () => {
 		).rejects.toMatchObject({ code: "invalid_request" });
 	});
 
-	it("returns reload when a cursor exceeds the configured time window", async () => {
+	it("uses persistence time and returns a resumable reload after the time window", async () => {
 		await client`
 			update platform.conversation_events
 			set occurred_at = now() - interval '1 hour'
@@ -274,9 +274,23 @@ describe("PostgreSQL Conversation query", () => {
 		const timeBounded = new PostgresConversationQueryV1({
 			databaseUrl,
 			replayWindow: 2,
-			replayWindowMs: 1,
+			replayWindowMs: 60_000,
 		});
 		try {
+			await expect(
+				timeBounded.replay(actorOne, "conversation-1", {
+					kind: "last-event-id",
+					value: "event-2",
+				}),
+			).resolves.toMatchObject({
+				outcome: "events",
+				events: [{ eventId: "event-3" }],
+			});
+			await client`
+				update platform.conversation_events
+				set persisted_at = now() - interval '1 hour'
+				where event_id = 'event-3'
+			`;
 			const expired = await timeBounded.replay(actorOne, "conversation-1", {
 				kind: "last-event-id",
 				value: "event-2",

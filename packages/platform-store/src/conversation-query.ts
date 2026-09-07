@@ -487,7 +487,7 @@ async function isWithinReplayTimeWindow(
 	if (afterCursor === latestCursor) return true;
 	const anchorCursor = afterCursor + 1;
 	const rows = await database<EventWindowRow[]>`
-		select occurred_at >= now() - (${replayWindowMs}::bigint * interval '1 millisecond')
+		select persisted_at >= now() - (${replayWindowMs}::bigint * interval '1 millisecond')
 			as within_window
 		from platform.conversation_events
 		where conversation_id = ${conversationId}
