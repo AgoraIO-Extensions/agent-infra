@@ -148,10 +148,6 @@ export interface ConversationDispatchStorePortV1 {
 		readonly hostSessionRef: string;
 		readonly transition: ConversationDispatchStateTransitionV1;
 	}): Promise<boolean>;
-	recordEventStatus(input: {
-		readonly claim: ConversationDispatchClaimV1;
-		readonly transition: ConversationDispatchStateTransitionV1;
-	}): Promise<boolean>;
 	finish(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly status: "succeeded" | "failed";

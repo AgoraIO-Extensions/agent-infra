@@ -146,15 +146,6 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return true;
 	}
 
-	async recordEventStatus(input: {
-		claim: ConversationDispatchClaimV1;
-		transition: ConversationDispatchStateTransitionV1;
-	}) {
-		if (!this.#owned(input.claim) || !this.recordable) return false;
-		this.applyEventTransition(input.transition);
-		return true;
-	}
-
 	applyEventTransition(transition: ConversationDispatchStateTransitionV1) {
 		this.current = {
 			...this.current,

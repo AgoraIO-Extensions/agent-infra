@@ -1134,19 +1134,6 @@ export class PostgresConversationDispatchStoreV1
 		});
 	}
 
-	async recordEventStatus(input: {
-		readonly claim: ConversationDispatchClaimV1;
-		readonly transition: ConversationDispatchStateTransitionV1;
-	}): Promise<boolean> {
-		requireClaim(input.claim);
-		requireTransition(input.transition);
-		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
-			if (!state) throw new StaleDispatchLease();
-			await applyTransition(transaction, state, input.claim, input.transition);
-		});
-	}
-
 	async finish(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly status: "succeeded" | "failed";

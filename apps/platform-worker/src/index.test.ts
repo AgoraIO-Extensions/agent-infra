@@ -20,7 +20,6 @@ const storeMocks = vi.hoisted(() => {
 		claim: vi.fn(),
 		close: vi.fn<() => Promise<void>>(),
 		finish: vi.fn(),
-		recordEventStatus: vi.fn(),
 		recordRuntimeResponse: vi.fn(),
 		renew: vi.fn(),
 		retry: vi.fn(),

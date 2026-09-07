@@ -444,15 +444,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				}),
 			).resolves.toBe(true);
 			await expect(
-				store.recordEventStatus({
-					claim: decision.claim,
-					transition: {
-						executionStatus: "completed",
-						conversationStatus: "ready",
-					},
-				}),
-			).resolves.toBe(true);
-			await expect(
 				store.finish({
 					claim: decision.claim,
 					status: "succeeded",
