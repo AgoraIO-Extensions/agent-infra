@@ -139,8 +139,6 @@ const capabilities: RuntimeCapabilitiesV1 = {
 	supplementaryInstruction: false,
 };
 
-const turnsListPageSize = 100;
-const maximumTurnsListPages = 8;
 const itemsListPageSize = 100;
 const maximumItemsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
@@ -1128,7 +1126,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			await driver.rpc.request(
 				"initialize",
-				{ clientInfo: { name: "agent-infra-runtime", version: "1" } },
+				{
+					clientInfo: { name: "agent-infra-runtime", version: "1" },
+					capabilities: { experimentalApi: true },
+				},
 				(value) => {
 					if (!isPlainRecord(value)) protocolInvalid();
 				},
@@ -1922,32 +1923,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async readNativeTurnStatus(threadId: string, nativeTurnId: string) {
-		let cursor: string | undefined;
-		const seenCursors = new Set<string>();
-		for (let page = 0; page < maximumTurnsListPages; page += 1) {
-			const result = await this.rpc.request(
-				"thread/turns/list",
-				{
-					threadId,
-					itemsView: "notLoaded",
-					limit: turnsListPageSize,
-					...(cursor === undefined ? {} : { cursor }),
-				},
-				(value) => this.statusFromTurnsList(value, nativeTurnId),
-			);
-			if (result.status !== undefined) return result.status;
-			if (result.nextCursor === undefined) unavailable();
-			if (seenCursors.has(result.nextCursor)) protocolInvalid();
-			seenCursors.add(result.nextCursor);
-			cursor = result.nextCursor;
-		}
-		unavailable();
+		return this.rpc.request(
+			"thread/read",
+			{ threadId, includeTurns: true },
+			(value) => this.statusFromThreadRead(value, threadId, nativeTurnId),
+		);
 	}
 
-	private statusFromTurnsList(value: unknown, nativeTurnId: string) {
-		if (!isPlainRecord(value) || !Array.isArray(value.data)) protocolInvalid();
+	private statusFromThreadRead(
+		value: unknown,
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		const thread = isPlainRecord(value) ? value.thread : undefined;
+		if (
+			!isPlainRecord(thread) ||
+			thread.id !== threadId ||
+			!Array.isArray(thread.turns)
+		) {
+			protocolInvalid();
+		}
 		let status: PersistedTurnStatus | undefined;
-		for (const turn of value.data) {
+		for (const turn of thread.turns) {
 			if (
 				!isPlainRecord(turn) ||
 				!nonEmptyString(turn.id) ||
@@ -1960,11 +1957,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (status !== undefined) protocolInvalid();
 			status = turnStatus;
 		}
-		if (value.nextCursor === undefined || value.nextCursor === null) {
-			return { status, nextCursor: undefined };
-		}
-		if (!nonEmptyString(value.nextCursor)) protocolInvalid();
-		return { status, nextCursor: value.nextCursor };
+		if (status === undefined) unavailable();
+		return status;
 	}
 
 	private async updateExecutionStatus(

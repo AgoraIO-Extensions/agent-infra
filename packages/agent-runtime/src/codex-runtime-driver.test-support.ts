@@ -165,11 +165,14 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 				}
 				this.respond(frame.id, {});
 				return;
-			case "thread/turns/list":
+			case "thread/read":
 				this.respond(frame.id, {
-					data: [
-						{ id: this.currentTurnId(), status: this.turnStatus, items: [] },
-					],
+					thread: {
+						id: "thread-opaque",
+						turns: [
+							{ id: this.currentTurnId(), status: this.turnStatus, items: [] },
+						],
+					},
 				});
 				return;
 			case "thread/items/list":
