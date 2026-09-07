@@ -387,7 +387,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			const launch = (await launcher.observations()).find(
 				(entry) => entry.method === "launch",
 			);
-			if (!launch?.codexHome || !launch.cwd)
+			if (!launch?.codexHome || !launch.cwd || !launch.home)
 				throw new Error("Missing native launch");
 			nativeHome = launch.codexHome;
 			workspace = launch.cwd;
@@ -405,8 +405,10 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					throw new Error("Native directory is not synthetic");
 			}
 			report.launchConfiguration = {
-				homeEqualsCwd: launch.home === launch.cwd,
-				codexHomeEqualsCwd: launch.codexHome === launch.cwd,
+				homeEqualsCwd:
+					(await realpath(launch.home)) === (await realpath(workspace)),
+				codexHomeEqualsCwd:
+					(await realpath(nativeHome)) === (await realpath(workspace)),
 			};
 			const memoryDisabled = /^memories\s+\S+\s+false$/m.test(
 				launcher.features(nativeHome),
