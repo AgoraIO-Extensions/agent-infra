@@ -41,6 +41,42 @@ test("rejects direct common native controls in routes and features", () => {
 	);
 });
 
+test("rejects React createElement controls and native control roles", () => {
+	for (const source of [
+		'import React from "react"; const screen = React.createElement("button");',
+		'import ReactAlias from "react"; const screen = ReactAlias.createElement("input");',
+		'import * as React from "react"; const screen = React["createElement"]("textarea");',
+		'import { createElement } from "react"; const screen = createElement("select");',
+		'import { createElement as h } from "react"; const screen = h("label");',
+	])
+		assert.match(
+			check(source)[0],
+			/use components\/ui instead of React\.createElement/,
+		);
+	assert.match(
+		check(
+			'import * as React from "react"; const screen = React.createElement("div", { role: "button" });',
+		)[0],
+		/control role/,
+	);
+	assert.deepEqual(
+		check(
+			'import React from "react"; const metadata = React.createElement("input", { "data-native-control": "hidden-form-value", type: "hidden" });',
+		),
+		[],
+	);
+	for (const source of [
+		'import React from "react"; React.createElement("input", { type: "hidden" });',
+		'import React from "react"; React.createElement("input", { "data-native-control": "hidden-form-value", type: "text" });',
+		'import React from "react"; React.createElement("input", { "data-native-control": "hidden-form-value", type: "hidden", ...props });',
+	])
+		assert.ok(check(source).length > 0, source);
+	assert.deepEqual(
+		check('const createElement = () => null; createElement("button");'),
+		[],
+	);
+});
+
 test("accepts shared controls and ordinary semantic layout and navigation", () => {
 	assert.deepEqual(
 		check(

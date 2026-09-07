@@ -47,11 +47,61 @@ export function checkWebUiSource(source, { path }) {
 		ts.ScriptKind.TSX,
 	);
 	const violations = [];
+	const reactNamespaces = new Set();
+	const reactCreateElement = new Set();
+	for (const statement of file.statements) {
+		if (
+			!ts.isImportDeclaration(statement) ||
+			!ts.isStringLiteral(statement.moduleSpecifier) ||
+			statement.moduleSpecifier.text !== "react" ||
+			!statement.importClause
+		)
+			continue;
+		const { importClause } = statement;
+		if (importClause.name) reactNamespaces.add(importClause.name.text);
+		if (importClause.namedBindings) {
+			if (ts.isNamespaceImport(importClause.namedBindings)) {
+				reactNamespaces.add(importClause.namedBindings.name.text);
+			} else {
+				for (const item of importClause.namedBindings.elements) {
+					if ((item.propertyName?.text ?? item.name.text) === "createElement")
+						reactCreateElement.add(item.name.text);
+				}
+			}
+		}
+	}
 	const report = (node, message) => {
 		const { line, character } = file.getLineAndCharacterOfPosition(
 			node.getStart(file),
 		);
 		violations.push(`${normalized}:${line + 1}:${character + 1} ${message}`);
+	};
+	const objectLiteralValue = (object, name) => {
+		const matches = object.properties.filter(
+			(item) =>
+				ts.isPropertyAssignment(item) &&
+				(ts.isIdentifier(item.name) || ts.isStringLiteral(item.name)) &&
+				item.name.text === name,
+		);
+		const value = matches.length === 1 ? matches[0].initializer : undefined;
+		return value && ts.isStringLiteral(value) ? value.text : undefined;
+	};
+	const isReactCreateElement = (expression) => {
+		if (ts.isIdentifier(expression))
+			return reactCreateElement.has(expression.text);
+		if (
+			ts.isPropertyAccessExpression(expression) &&
+			expression.name.text === "createElement" &&
+			ts.isIdentifier(expression.expression)
+		)
+			return reactNamespaces.has(expression.expression.text);
+		return (
+			ts.isElementAccessExpression(expression) &&
+			ts.isIdentifier(expression.expression) &&
+			ts.isStringLiteral(expression.argumentExpression) &&
+			expression.argumentExpression.text === "createElement" &&
+			reactNamespaces.has(expression.expression.text)
+		);
 	};
 	function visit(node) {
 		if (
@@ -102,6 +152,39 @@ export function checkWebUiSource(source, { path }) {
 					node,
 					"use components/ui instead of a native element with a control role",
 				);
+		}
+		if (ts.isCallExpression(node) && isReactCreateElement(node.expression)) {
+			const tag = node.arguments[0];
+			const props = node.arguments[1];
+			if (tag && ts.isStringLiteral(tag)) {
+				const attributes =
+					props && ts.isObjectLiteralExpression(props) ? props : undefined;
+				const exception = attributes
+					? objectLiteralValue(attributes, "data-native-control")
+					: undefined;
+				const hiddenFormValue =
+					exception === "hidden-form-value" &&
+					tag.text === "input" &&
+					attributes &&
+					objectLiteralValue(attributes, "type") === "hidden" &&
+					!attributes.properties.some(ts.isSpreadAssignment);
+				if (exception !== undefined && !hiddenFormValue)
+					report(node, "invalid native control exception");
+				if (controls.has(tag.text) && !hiddenFormValue)
+					report(
+						node,
+						`use components/ui instead of React.createElement("${tag.text}")`,
+					);
+				if (
+					/^[a-z]/.test(tag.text) &&
+					attributes &&
+					controlRoles.has(objectLiteralValue(attributes, "role"))
+				)
+					report(
+						node,
+						"use components/ui instead of a native element with a control role",
+					);
+			}
 		}
 		ts.forEachChild(node, visit);
 	}
