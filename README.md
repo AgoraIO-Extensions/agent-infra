@@ -18,17 +18,20 @@
 - [ADR: Connection 使用单一账号级权威](docs/adr/0005-use-one-account-backed-connection-authority.md)
 - [ADR: 独立部署 Connection Web](docs/adr/0006-deploy-connection-web-independently.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
+- [M1 三层交付与汇合计划](docs/architecture/PLAN-M1-delivery-convergence.md)
 
 ## 当前状态
 
-仓库已进入 M1 领域功能实现阶段。当前提交已实现 Platform 的 Agent 管理、配置、
-持久化和 HTTP Adapter；其他部署单元仍按工程架构 Spec 逐步实现。
+仓库已进入 M1 领域功能实现阶段，已交付 Platform 管理、配置、Conversation 持久化与
+HTTP/SSE、RuntimeHost 和 Codex Driver 组件。主系统本地整装、真实 GitHub Pilot 和完整
+M1 上线是独立验收层次，当前仍有未完成门禁，见交付与汇合计划。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
-| Web | `apps/web` | React、TanStack Router、Vite 与最小启动页 |
-| Platform API | `apps/platform-api` | Agent 管理、配置、会话和审计 HTTP API |
-| Platform Worker | `apps/platform-worker` | 独立 Worker 进程与生命周期 smoke |
+| Web | `apps/web` | Agent 列表、申请/审批和 Owner 配置；对话页面与设计确认待交付 |
+| Platform API | `apps/platform-api` | Agent 管理、配置、Conversation、审计 HTTP API 与 SSE |
+| Platform Worker | `apps/platform-worker` | Conversation dispatch 和 Secret 装配；完整 Kubernetes 调谐待交付 |
+| Agent RuntimeHost | `apps/agent-runtime-host` | HTTP/SSE Host、持久 store 与 Driver 组件；环境启动入口仍为 Fake，正式 Codex 镜像装配待交付 |
 | Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
