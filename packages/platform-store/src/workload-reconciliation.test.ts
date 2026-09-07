@@ -450,6 +450,12 @@ describe("PostgreSQL Workload steps", () => {
 					code: "SECRET_KEY_UNAVAILABLE" as const,
 				}),
 			},
+			revisionBinder: {
+				bind: async () => ({
+					outcome: "failed" as const,
+					code: "SECRET_KEY_UNAVAILABLE" as const,
+				}),
+			},
 			fetch: (async () => new Response("ok")) as typeof fetch,
 			probeRuntime: async () => ({ core: "passed" as const, capabilities: {} }),
 		};
