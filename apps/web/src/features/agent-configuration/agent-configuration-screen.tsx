@@ -556,6 +556,7 @@ export function AgentConfigurationScreen({
 								New image reference
 							</Label>
 							<Input
+								disabled={submitting}
 								id="configuration-image-reference"
 								onChange={(event) => setImageReference(event.target.value)}
 								value={imageReference}

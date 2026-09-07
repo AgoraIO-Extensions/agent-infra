@@ -395,7 +395,13 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 	await page
 		.getByLabel("New image reference")
 		.fill("registry.example/agent:v2");
+	api.holdNextCommand();
 	await page.getByRole("button", { name: "Upgrade image" }).click();
+	await expect(
+		page.getByRole("button", { name: "Upgrading image..." }),
+	).toBeDisabled();
+	await expect(page.getByLabel("New image reference")).toBeDisabled();
+	api.release();
 	await expect(page.getByRole("status")).toContainText(
 		"Configuration submitted",
 	);
