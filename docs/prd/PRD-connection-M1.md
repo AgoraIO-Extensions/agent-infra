@@ -174,7 +174,7 @@ Connection M1 提供独立于 Agent Platform 的中文 Web 入口和部署单元
 | 未知结果 | 响应丢失进入待确认，覆盖自动对账、管理员处理和最终无法确认状态，不自动重发 |
 | Provider 撤销 | 断开时撤销单个 GitHub Token，并能看到成功、失败或待重试状态 |
 | 凭证保护 | 页面、Platform、Agent、日志、错误和审计均无法读取原始凭证或密钥 |
-| 失败停止 | 越权、凭证泄露、错误调用证明被接受、重复 PR 或撤权失效时立即停止 Pilot并保留证据 |
+| 失败停止 | 越权、凭证泄露、错误调用证明被接受、重复 PR 或撤权失效时立即停止 Pilot 并保留证据 |
 | 联合签收 | Platform、Connection、Security、SRE 和 Pilot 使用者分别签收自己的边界 |
 
 验收只允许声明：在具名 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Agent Platform delegated GitHub Pilot 已通过。
