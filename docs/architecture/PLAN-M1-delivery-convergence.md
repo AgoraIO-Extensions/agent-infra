@@ -184,18 +184,46 @@ DRI @LichKing-2234，消费方 reviewer @guoxianzhe，尚未创建或授权。
 
 ## 5. 真实 Pilot 的新增门禁
 
-### 5.1 必须先决定的参与者边界
+### 5.1 正向执行主体的唯一 Owner 决策
 
-[#149 已确认结论](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511)
-要求 3–5 名员工持续 5 个工作日、每人至少一次真实 Codex + GitHub PR 任务、总计不少于 10 次。
-Connection PRD §13 和 HLD §16 只允许两个测试 Principal、两个专用 GitHub 账号的成功声明。
-目前没有足够依据把两者写成同一个已通过或可直接执行的门禁。
+当前权威 PRD 与历史 Pilot 决议的正向执行人数不一致，不能把签收者、观察者或负向身份
+重命名为“参与者”来消除差异。产品 PRD 优先于已关闭的 #149 决议和资源票 #177；
+在本决策完成前，#177 不能确定 roster、窗口或运行矩阵，L2 不能开始。
 
-建议先完成 Alice/Bob 技术矩阵，再为观察期每位参与者分配自己的专用测试账号，
-始终只用同一个受控 private 仓库，不共享个人 Grant、不引入员工日常账号。
-这是**待确认建议**；先由 #150 记录产品结论，按两份 PRD、工程 Spec、HLD 顺序检查并修正文档，
-经消费方和 Security/SRE 评审后，#177 才能据此确定参与者与窗口。
-不能缩短 #149 的观察期，也不能把两个账号轮流使用当作多用户隔离证明。
+| 证据 | 当前文字 | 对 L2 的约束 |
+| --- | --- | --- |
+| [Platform PRD §9](https://github.com/AgoraIO-Extensions/agent-infra/blob/4e6e1fa456f1712b81d9cc4ac4ad765106ecd811/docs/prd/PRD-agent-platform-M1.md#L262) | 首个受监督 Connection Pilot 仅使用 Codex、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库 | 正向 Connection 执行只有两个测试用户/账号 |
+| [Connection PRD §13](https://github.com/AgoraIO-Extensions/agent-infra/blob/4e6e1fa456f1712b81d9cc4ac4ad765106ecd811/docs/prd/PRD-connection-M1.md#L169-L184) | 两个 LDAP 测试用户分别绑定两个专用 GitHub 账号；唯一成功声明固定为两个 Principal/账号 | 不允许第三个正向 Principal、账号或成功声明 |
+| [#149 Resolution 的 Pilot 范围与真实使用观察](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) | 3–5 名内部员工；3–5 名参与者持续 5 个工作日，每人至少一次真实 Codex + GitHub PR，总计不少于 10 次任务 | 人数与 PRD 冲突；5 个工作日和不少于 10 次任务本身不冲突 |
+| [#177 的 `## Question`](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) | 准备 3–5 名正向参与者，并确认参与者、5 个工作日窗口和不少于 10 次真实任务 | 资源票不能自行扩大 PRD 所限的正向执行主体 |
+| [#150 的已确认收口范围与 2026-09-07 汇合审查](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 参与人数、工作日观察和任务要求引用 #149 | 该引用不能在未决状态下选择性覆盖两份 PRD |
+
+**唯一决策 Owner：** #150 当前 Owner @LichKing-2234。#177 Owner 只提供 readiness
+matrix，@guoxianzhe 只复核 Connection 约束；二者都不以资源准备或实施身份替代产品范围决定。
+
+**待确认的推荐结论：** 首个 Pilot 只有两个正向执行 Principal，分别绑定两个专用
+GitHub 测试账号并在同一个受控 private 仓库执行 OAuth、Grant、读取和真实 PR。保留
+历史 #149 的连续 5 个工作日和总计不少于 10 次真实任务，两个执行主体可以完成这些任务；
+不得将 3–5 名执行用户改称为 reviewer 以制造一致性。Platform、Connection、Security、
+SRE 和 Pilot 使用者的签收角色独立于正向执行主体；未授权、禁用、组织变更和管理员等
+负向测试身份也独立记录，不能拥有正向 OAuth/Grant/Action 成功证据。此处不指定姓名、
+账号、日期或任务分配。
+
+Owner 只能作出下列一项明确选择：
+
+1. **确认推荐结论：** 保持两份 PRD 不变，按下表修改历史决议和资源/汇合投影，再由 #177
+   以 readiness matrix 安排资源。
+2. **不采用推荐结论：** 先完成两份 PRD 的产品范围修订与评审，再相应修改历史决议和资源/
+   汇合投影；在 PRD 修订前不得以部署说明、账号轮换或测试 fixture 扩大正向执行主体。
+
+| 受影响 Issue 段落 | 仅在 Owner 决策后的提议变更 | 不在本 PR 中执行 |
+| --- | --- | --- |
+| [#149 Resolution：`### Pilot 范围`](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) 与 `### 真实使用观察` | 若确认推荐结论，将 3–5 名正向执行员工/参与者修订为两个正向执行 Principal/专用账号；保留 5 个工作日和不少于 10 次任务 | 不改写已关闭决议，不降低观察或任务要求 |
+| [#177：`## Question`](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) 的第一项和最后一项 | 将“3–5 名正向参与者”改为两个正向执行 Principal/账号；matrix 另列签收角色和负向身份 | 不关闭 #177，不填写 roster、窗口或任务日期 |
+| [#150：`## 已确认的收口范围` 与 `## 2026-09-07 汇合审查`](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 记录 Owner 的选择，并使 L2 草案只引用已对齐的执行主体、观察期和任务要求 | 不把本计划提案当作已确认结论或创建执行授权 |
+
+决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可创建 §5.2 的联合验收票并安排
+参与者与窗口。
 
 ### 5.2 唯一新增联合验收票草案
 
