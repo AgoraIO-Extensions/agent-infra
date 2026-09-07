@@ -558,7 +558,7 @@ sequenceDiagram
     P-->>A: 工具结果
 ```
 
-`ActionCall` 是已接受的逻辑调用，`Effect` 是可能产生的外部副作用，`Dispatch` 是具体 Provider 提交尝试。三者只由 Connection DB 持久化；Platform 只保存 `callId`、状态和脱敏结果引用。
+`ActionCall` 是已接受的逻辑调用，`Dispatch` 是每次 Provider 执行尝试，`Effect` 只表示 WRITE Action 可能产生的外部副作用。三者只由 Connection DB 持久化；Platform 只保存 `callId`、状态和脱敏结果引用。
 
 WRITE Action 的 `SUBMISSION_STARTED` 是撤权线性化点。此前完成撤权时当前调用必须本地拒绝；此后发生撤权时保留 Provider 实际结果，但阻止后续新调用。进程恢复只能对账持久证据，不能重发未知写操作。
 

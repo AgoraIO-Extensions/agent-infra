@@ -38,8 +38,8 @@ Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员
 | CredentialVersion | Connection 当前受保护的 Provider Credential 版本 |
 | Grant | Principal 对 Consumer/Actor、Connection 和 exact ActionVersion 的确认授权 |
 | ActionCall | Connection 已接受并持久化的一次逻辑调用 |
-| Effect | ActionCall 可能产生的外部业务副作用 |
-| Dispatch | 向 Provider 发起 Effect 的具体提交尝试 |
+| Effect | WRITE ActionCall 可能产生的外部业务副作用 |
+| Dispatch | 向 Provider 发起一次 Action 执行的具体尝试；WRITE Dispatch 关联对应 Effect |
 
 Connection DB 是上述模型的唯一权威。Platform DB 只保存 Agent Action policy、执行状态、Connection `callId`、状态和脱敏结果引用。
 
@@ -146,7 +146,7 @@ Connection 在 Grant lookup 前校验：
 - Actor 存在、已注册且 current workload 有权代表；Agent Platform 固定 `REQUIRED` Actor，不允许回退到 Consumer-level Grant。
 - exact ActionVersion、参数摘要、业务幂等键和 deadline。
 
-PostgreSQL 原子绑定 `jti` 与首次接受的请求。完全相同的传输重放只能读取原 ActionCall，不能再次执行；任一绑定字段变化都拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
+Connection 必须在创建 ActionCall 的同一 PostgreSQL 事务中原子写入 `jti`、全部请求绑定字段和 `callId`，并以 `jti` 唯一约束串行化并发请求；不得先单独标记 `jti` 已消费。若 `jti` 已存在，只有全部绑定字段完全一致且原 ActionCall 已提交时才能读取原调用，任一字段变化或绑定记录不完整都必须拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
 
 ## 8. GitHub ProviderRelease
 
@@ -176,7 +176,7 @@ Connection 在一个持久化流程中：
 2. 校验 Action Schema 和 repository policy。
 3. 以 Principal、Consumer/Actor、ActionVersion、参数摘要和业务幂等键查找原调用。
 4. 同键同请求返回原 `callId`；同键不同请求拒绝。
-5. 创建 ActionCall，并为 WRITE Action 创建 Effect 和 PENDING Dispatch。
+5. 创建 ActionCall，并为所有需要访问 Provider 的 Action 创建 PENDING Dispatch；WRITE Action 还必须创建 Effect 并将 Dispatch 关联到该 Effect。
 
 ### 9.2 Dispatch 线性化
 
@@ -188,7 +188,7 @@ Connection 在一个持久化流程中：
 - Consumer declaration、ProviderRelease 和 ActionVersion 状态。
 - repository allowlist。
 
-全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是外部提交的授权线性化点，可能早于实际网络请求；零行更新等价于本地拒绝，不得调用 Provider。
+全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是 Provider 访问的授权线性化点，可能早于实际网络请求；零行更新等价于本地拒绝，不得调用 Provider。READ Dispatch 直接记录调用结果；WRITE Dispatch 还必须同步对应 Effect 状态。
 
 撤权在该事务前完成时阻止当前调用；事务完成后才撤权时不回滚可能已提交的 Provider 操作，但后续新调用均拒绝。
 
@@ -197,13 +197,14 @@ Connection 在一个持久化流程中：
 GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受请求但 Connection 未取得或未保存可靠结果时：
 
 1. ActionCall/Effect 进入 `RESULT_PENDING/UNCERTAIN`。
-2. 不自动再次 POST create-PR。
-3. 对账最多运行 24 小时并退避查询。
-4. 唯一且完整匹配的 PR 可以确认成功；零候选不构成可安全重发证据。
-5. 多候选或字段冲突立即进入 `NEEDS_MANUAL_REVIEW`。
-6. Connection 管理员在 Connection Web 选择有 Provider 证据的结果或记录仍无法确认；普通用户只能查看脱敏证据并提供线索。
-7. 管理目标为一个工作日。七天后仍无法确认则进入终态 `UNRESOLVED`。
-8. `UNRESOLVED` 既不是成功也不是失败，不再自动查询/重试，原幂等键永久绑定原调用。新操作必须人工核查后显式使用新键。
+2. 首次 dispatch 前生成并持久化高熵 opaque correlation marker；`github.create_pull_request` 的 immutable ActionVersion 将该标记以隐藏注释写入 PR body，并记录实际提交的 repository、head、base 和参数摘要。
+3. 不自动再次 POST create-PR。
+4. 对账最多运行 24 小时并退避查询。
+5. 只有 correlation marker、repository、head、base 和预期字段全部匹配且候选唯一时才能自动确认成功；零候选不构成可安全重发证据。
+6. 多候选、缺少关联标记或字段冲突立即进入 `NEEDS_MANUAL_REVIEW`。
+7. Connection 管理员在 Connection Web 选择有 Provider 证据的结果或记录仍无法确认；普通用户只能查看脱敏证据并提供线索。
+8. 管理目标为一个工作日。七天后仍无法确认则进入终态 `UNRESOLVED`。
+9. `UNRESOLVED` 既不是成功也不是失败，不再自动查询/重试，原幂等键永久绑定原调用。新操作必须人工核查后显式使用新键。
 
 ## 11. Connection 与 Provider 撤销
 
