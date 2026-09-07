@@ -80,6 +80,12 @@ async function readPlatformCatalog(client: PostgresClient) {
 	};
 }
 
+async function applyLegacyPlatformMigrations(client: PostgresClient) {
+	for (const migration of migrations.slice(0, -1)) {
+		for (const statement of migration.sql) await client.unsafe(statement);
+	}
+}
+
 beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("platform-store-migrations");
 	databaseUrl = testDatabase.databaseUrl;
@@ -503,6 +509,162 @@ describe("Platform PostgreSQL migration foundation", () => {
 			);
 		} finally {
 			await client.end();
+		}
+	}, 120_000);
+
+	it("upgrades legacy Runtime events and uniquely binds fallback audits", async () => {
+		const upgradeDatabase = await startPostgresTestDatabase(
+			"conversation-event-source-upgrade",
+		);
+		const upgradeClient = postgres(upgradeDatabase.databaseUrl, { max: 1 });
+		try {
+			await applyLegacyPlatformMigrations(upgradeClient);
+			await upgradeClient`
+				insert into platform.conversations
+					(id, agent_id, actor_id, channel_id, status, session_generation,
+					 authorization_revision)
+				values
+					('conversation_upgrade', 'agent_upgrade', 'actor_upgrade', 'web',
+					 'active', 1, 'authorization_upgrade')
+			`;
+			await upgradeClient`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+					 status, session_generation, authorization_revision, created_at)
+				values
+					('execution_upgrade', 'conversation_upgrade', 'agent_upgrade',
+					 'actor_upgrade', 'web', 'turn_upgrade', 'completed', 1,
+					 'authorization_upgrade', '2026-09-04T00:00:00.000Z'),
+					('execution_decoy', 'conversation_upgrade', 'agent_decoy', 'actor_decoy',
+					 'web', 'turn_decoy', 'completed', 1, 'authorization_decoy',
+					 '2026-09-04T00:00:00.000Z')
+			`;
+			await upgradeClient`
+				insert into platform.conversation_events
+					(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+					 conversation_cursor, event_type, event_payload, event_digest,
+					 runtime_cursor, occurred_at)
+				values
+					('event_upgrade', 'conversation_upgrade', 'execution_upgrade',
+					 'adapter_upgrade', 1, 1, 'text.delta',
+					 ${upgradeClient.json({ type: "text.delta", text: "legacy" })},
+					 ${"0".repeat(64)}, 'runtime_upgrade',
+					 '2026-09-04T00:00:00.000Z')
+			`;
+			await upgradeClient`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at, details)
+				values
+					('audit_command_upgrade', 'conversation_upgrade', 'execution_upgrade',
+					 'agent_upgrade', 'actor_upgrade', 'conversation.message.accepted',
+					 'trace_upgrade', 'request_upgrade',
+					 '2026-09-04T00:00:00.000Z', null),
+					('audit_command_decoy', 'conversation_upgrade', 'execution_decoy',
+					 'agent_decoy', 'actor_decoy', 'conversation.message.accepted',
+					 'trace_upgrade', 'request_upgrade',
+					 '2026-09-04T00:00:00.000Z', null),
+					('audit_fallback_upgrade', 'conversation_upgrade', null,
+					 'agent_upgrade', 'actor_upgrade',
+					 'conversation.model_selection.fell_back', 'trace_upgrade',
+					 'request_upgrade', '2026-09-04T00:00:00.000Z',
+					 ${upgradeClient.json({
+							previousModelOptionId: "model_removed",
+							previousReasoningLevel: "high",
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						})})
+			`;
+
+			const sourceMigration = migrations.at(-1);
+			if (!sourceMigration) throw new Error("Expected source migration");
+			for (const statement of sourceMigration.sql) {
+				await upgradeClient.unsafe(statement);
+			}
+
+			expect(
+				await upgradeClient`
+					select source, runtime_cursor from platform.conversation_events
+					where event_id = 'event_upgrade'
+				`,
+			).toEqual([{ source: "runtime", runtime_cursor: "runtime_upgrade" }]);
+			expect(
+				await upgradeClient`
+					select execution_id, agent_id, actor_id
+					from platform.conversation_audit_events
+					where id = 'audit_fallback_upgrade'
+				`,
+			).toEqual([
+				{
+					execution_id: "execution_upgrade",
+					agent_id: "agent_upgrade",
+					actor_id: "actor_upgrade",
+				},
+			]);
+		} finally {
+			await upgradeClient.end();
+			await upgradeDatabase.stop();
+		}
+	}, 120_000);
+
+	it("rolls back 0009 when a legacy fallback audit has no unique binding", async () => {
+		const upgradeDatabase = await startPostgresTestDatabase(
+			"conversation-event-source-upgrade-rejection",
+		);
+		const upgradeClient = postgres(upgradeDatabase.databaseUrl, { max: 1 });
+		try {
+			await applyLegacyPlatformMigrations(upgradeClient);
+			await upgradeClient`
+				insert into platform.conversations
+					(id, agent_id, actor_id, channel_id, status, session_generation,
+					 authorization_revision)
+				values
+					('conversation_unbound', 'agent_unbound', 'actor_unbound', 'web',
+					 'ready', 1, 'authorization_unbound')
+			`;
+			await upgradeClient`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at, details)
+				values
+					('audit_fallback_unbound', 'conversation_unbound', null,
+					 'agent_unbound', 'actor_unbound',
+					 'conversation.model_selection.fell_back', 'trace_unbound',
+					 'request_unbound', '2026-09-04T00:00:00.000Z',
+					 ${upgradeClient.json({
+							previousModelOptionId: "model_removed",
+							previousReasoningLevel: "high",
+							modelConfigurationRevision: 2,
+							modelOptionId: "model_primary",
+							reasoningLevel: "medium",
+						})})
+			`;
+			const sourceMigration = migrations.at(-1);
+			if (!sourceMigration) throw new Error("Expected source migration");
+			await expect(
+				upgradeClient.begin(async (transaction) => {
+					for (const statement of sourceMigration.sql) {
+						await transaction.unsafe(statement);
+					}
+				}),
+			).rejects.toThrow("cannot uniquely bind 1 legacy model fallback audit");
+			expect(
+				await upgradeClient`
+					select count(*)::int as count from information_schema.columns
+					where table_schema = 'platform'
+						and table_name = 'conversation_events' and column_name = 'source'
+				`,
+			).toEqual([{ count: 0 }]);
+			expect(
+				await upgradeClient`
+					select execution_id from platform.conversation_audit_events
+					where id = 'audit_fallback_unbound'
+				`,
+			).toEqual([{ execution_id: null }]);
+		} finally {
+			await upgradeClient.end();
+			await upgradeDatabase.stop();
 		}
 	}, 120_000);
 });

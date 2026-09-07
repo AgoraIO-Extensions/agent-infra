@@ -872,18 +872,12 @@ export const conversationAuditEvents = platformSchema.table(
 		check(
 			"conversation_audit_execution_binding",
 			sql`(
-				${table.executionId} IS NULL
-				AND ${table.action} in (
-					'conversation.model_selection.updated',
-					'conversation.model_selection.fell_back'
-				)
-			) OR (
-				${table.executionId} IS NOT NULL
-				AND ${table.action} not in (
-					'conversation.model_selection.updated',
-					'conversation.model_selection.fell_back'
-				)
-			)`,
+					${table.executionId} IS NULL
+					AND ${table.action} = 'conversation.model_selection.updated'
+				) OR (
+					${table.executionId} IS NOT NULL
+					AND ${table.action} <> 'conversation.model_selection.updated'
+				)`,
 		),
 		check(
 			"conversation_audit_details_binding",
@@ -926,8 +920,9 @@ export const conversationEvents = platformSchema.table(
 			.$type<Record<string, unknown>>()
 			.notNull(),
 		eventDigest: varchar("event_digest", { length: 64 }).notNull(),
-		runtimeCursor: text("runtime_cursor").notNull(),
+		runtimeCursor: text("runtime_cursor"),
 		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+		source: varchar("source", { length: 16 }).notNull(),
 	},
 	(table) => [
 		foreignKey({
@@ -963,8 +958,17 @@ export const conversationEvents = platformSchema.table(
 			sql`${table.eventDigest} ~ '^[a-f0-9]{64}$'`,
 		),
 		check(
-			"conversation_event_runtime_cursor_non_empty",
-			sql`char_length(${table.runtimeCursor}) > 0`,
+			"conversation_event_source_binding",
+			sql`(
+					${table.source} = 'runtime'
+					AND ${table.runtimeCursor} IS NOT NULL
+					AND char_length(${table.runtimeCursor}) > 0
+					AND ${table.eventType} <> 'model.selection.fell_back'
+				) OR (
+					${table.source} = 'platform'
+					AND ${table.runtimeCursor} IS NULL
+					AND ${table.eventType} = 'model.selection.fell_back'
+				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique").on(
 			table.executionId,

@@ -3,6 +3,7 @@ import type {
 	ConversationEventCommandV1,
 	ConversationEventUseCaseV1,
 	ConversationNormalizedEventV1,
+	PersistedConversationEventV1,
 } from "./conversation-events.ts";
 import type {
 	ConversationCommandResultV1,
@@ -47,11 +48,31 @@ export interface ConversationCommandConformanceHarnessV1 {
 	setAuthority(authority: ConversationExecutionAuthorityV1 | undefined): void;
 	failNextCommit(): Promise<void> | void;
 	failNextModelSelectionCommit(): Promise<void> | void;
+	failNextFallbackEventCommit(): Promise<void> | void;
 	loseNextResponseAfterCommit(): void;
 	completeExecution(executionId: string): Promise<void> | void;
 	setModelConfiguration(
 		configuration: ConversationModelConfigurationV1 | undefined,
 	): Promise<void> | void;
+	persistRuntimeEvent(
+		conversationId: string,
+		executionId: string,
+		adapterEventKey: string,
+	): Promise<PersistedConversationEventV1>;
+	eventSnapshot(conversationId: string): Promise<{
+		readonly lastConversationCursor: number;
+		readonly executions: readonly {
+			readonly executionId: string;
+			readonly lastEventSequence: number;
+			readonly lastRuntimeCursor: string | null;
+		}[];
+		readonly events: readonly {
+			readonly source: "platform" | "runtime";
+			readonly runtimeCursor: string | null;
+			readonly event: PersistedConversationEventV1;
+		}[];
+		readonly fallbackAuditExecutionIds: readonly string[];
+	}>;
 	modelSnapshot(conversationId: string): Promise<{
 		readonly selectedModelOptionId: string | null;
 		readonly selectedReasoningLevel: string | null;
@@ -401,6 +422,12 @@ export function conversationCommandConformanceV1(
 					code: "unavailable",
 				});
 				expect(await harness.snapshot()).toEqual(before);
+				expect(await harness.eventSnapshot(conversationId)).toEqual({
+					lastConversationCursor: 0,
+					executions: [],
+					events: [],
+					fallbackAuditExecutionIds: [],
+				});
 				await expect(harness.useCase.accept(command)).resolves.toMatchObject({
 					outcome: "accepted",
 				});
@@ -618,6 +645,208 @@ export function conversationCommandConformanceV1(
 					audit: 4,
 					idempotency: 4,
 				});
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("persists and replays one Execution-bound fallback with the initial message", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"initial_fallback_event_fixture",
+				);
+				await harness.useCase.selectModel(
+					modelSelectionFixture(
+						conversationId,
+						"initial_fallback_event_fixture",
+					),
+				);
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				const command = messageFixture(
+					conversationId,
+					"initial_fallback_event_fixture",
+					"bounded initial fallback fixture",
+				);
+				const before = await harness.snapshot();
+				await harness.failNextFallbackEventCommit();
+				await expect(harness.useCase.accept(command)).rejects.toMatchObject({
+					code: "unavailable",
+				});
+				expect(await harness.snapshot()).toEqual(before);
+
+				const accepted = await harness.useCase.accept(command);
+				if (accepted.outcome !== "accepted") {
+					throw new Error("Expected initial fallback message acceptance");
+				}
+				await expect(harness.useCase.accept(command)).resolves.toEqual({
+					outcome: "replayed",
+					result: accepted.result,
+				});
+				expect(await harness.eventSnapshot(conversationId)).toEqual({
+					lastConversationCursor: 1,
+					executions: [
+						{
+							executionId: accepted.result.executionId,
+							lastEventSequence: 1,
+							lastRuntimeCursor: null,
+						},
+					],
+					events: [
+						{
+							source: "platform",
+							runtimeCursor: null,
+							event: {
+								schemaVersion: 1,
+								eventId: expect.any(String),
+								conversationId,
+								executionId: accepted.result.executionId,
+								sequence: 1,
+								conversationCursor: 1,
+								occurredAt: "2026-09-04T00:00:00.000Z",
+								event: {
+									type: "model.selection.fell_back",
+									modelOptionId: "model_primary",
+									reasoningLevel: "medium",
+									reason: "selection_unavailable",
+								},
+							},
+						},
+					],
+					fallbackAuditExecutionIds: [accepted.result.executionId],
+				});
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("binds a regeneration fallback to the new Execution", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"regeneration_fallback_event_fixture",
+				);
+				await harness.useCase.selectModel(
+					modelSelectionFixture(
+						conversationId,
+						"regeneration_fallback_event_fixture",
+					),
+				);
+				const initial = await acceptMessageFixture(
+					harness,
+					conversationId,
+					"regeneration_fallback_initial_fixture",
+					"bounded regeneration source fixture",
+				);
+				await harness.completeExecution(initial.executionId);
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				const regenerated = await harness.useCase.regenerate({
+					schemaVersion: 1,
+					command: "regenerate",
+					conversationId,
+					sourceMessageId: initial.messageId,
+					idempotencyKey: "regeneration_fallback_event_fixture",
+					requestId: "request_regeneration_fallback_event_fixture",
+					traceId: "trace_regeneration_fallback_event_fixture",
+				});
+				if (regenerated.outcome !== "accepted") {
+					throw new Error("Expected regeneration fallback acceptance");
+				}
+				const snapshot = await harness.eventSnapshot(conversationId);
+				expect(snapshot.lastConversationCursor).toBe(1);
+				expect(snapshot.events).toHaveLength(1);
+				expect(snapshot.events[0]).toMatchObject({
+					source: "platform",
+					runtimeCursor: null,
+					event: {
+						executionId: regenerated.result.executionId,
+						sequence: 1,
+						conversationCursor: 1,
+					},
+				});
+				expect(snapshot.fallbackAuditExecutionIds).toEqual([
+					regenerated.result.executionId,
+				]);
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("serializes a supplementary fallback with a concurrent Runtime event", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"supplement_fallback_event_fixture",
+				);
+				await harness.useCase.selectModel(
+					modelSelectionFixture(
+						conversationId,
+						"supplement_fallback_event_fixture",
+					),
+				);
+				const initial = await acceptMessageFixture(
+					harness,
+					conversationId,
+					"supplement_fallback_initial_fixture",
+					"bounded active fallback fixture",
+				);
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				const [supplement, runtime] = await Promise.all([
+					harness.useCase.accept(
+						messageFixture(
+							conversationId,
+							"supplement_fallback_event_fixture",
+							"bounded fallback supplement fixture",
+						),
+					),
+					harness.persistRuntimeEvent(
+						conversationId,
+						initial.executionId,
+						"runtime_concurrent_fallback_fixture",
+					),
+				]);
+				expect(supplement).toMatchObject({ outcome: "accepted" });
+				expect(runtime.executionId).toBe(initial.executionId);
+				const snapshot = await harness.eventSnapshot(conversationId);
+				expect(snapshot.lastConversationCursor).toBe(2);
+				expect(
+					snapshot.events.map(({ event }) => event.sequence).toSorted(),
+				).toEqual([1, 2]);
+				expect(
+					snapshot.events
+						.map(({ event }) => event.conversationCursor)
+						.toSorted(),
+				).toEqual([1, 2]);
+				expect(snapshot.events.map(({ source }) => source).toSorted()).toEqual([
+					"platform",
+					"runtime",
+				]);
+				expect(snapshot.executions).toEqual([
+					{
+						executionId: initial.executionId,
+						lastEventSequence: 2,
+						lastRuntimeCursor:
+							"runtime_cursor_runtime_concurrent_fallback_fixture",
+					},
+				]);
 			} finally {
 				await harness.close();
 			}

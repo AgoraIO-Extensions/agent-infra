@@ -278,13 +278,14 @@ describe("PostgreSQL Conversation event transaction", () => {
 				runtime_cursor: input.runtimeCursor,
 			});
 			const [stored] = await client`
-				select event_payload, runtime_cursor
+				select event_payload, runtime_cursor, source
 				from platform.conversation_events
 				where execution_id = ${executionId}
 			`;
 			expect(stored).toEqual({
 				event_payload: input.event,
 				runtime_cursor: input.runtimeCursor,
+				source: "runtime",
 			});
 		} finally {
 			await close();
@@ -367,16 +368,60 @@ describe("PostgreSQL Conversation event transaction", () => {
 			client`
 				insert into platform.conversation_events
 					(event_id, conversation_id, execution_id, adapter_event_key, sequence,
-					 conversation_cursor, event_type, event_payload, event_digest,
-					 runtime_cursor, occurred_at)
+						 conversation_cursor, event_type, event_payload, event_digest,
+						 runtime_cursor, occurred_at, source)
 				values
 					(${`event_cross_conversation_${nextFixture++}`},
 					 ${conversation.conversationId}, ${execution.executionId}, 'adapter_cross', 1,
 					 1, 'text.delta', ${client.json({ type: "text.delta", text: "Hello" })},
-					 ${"0".repeat(64)}, 'runtime_cross', now())
+						 ${"0".repeat(64)}, 'runtime_cross', now(), 'runtime')
 			`,
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_execution_conversation_fk",
+		});
+	});
+
+	it("enforces the persisted source, event type, and Runtime cursor binding", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const insert = (
+			eventId: string,
+			source: string,
+			eventType: string,
+			runtimeCursor: string | null,
+		) => client`
+			insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+				 conversation_cursor, event_type, event_payload, event_digest,
+				 runtime_cursor, occurred_at, source)
+			values
+				(${eventId}, ${conversationId}, ${executionId}, ${`adapter_${eventId}`}, 1,
+				 1, ${eventType}, ${client.json({ type: eventType })}, ${"0".repeat(64)},
+				 ${runtimeCursor}, now(), ${source})
+		`;
+		await expect(
+			insert(
+				"event_runtime_fallback_forgery",
+				"runtime",
+				"model.selection.fell_back",
+				"runtime_cursor_forged",
+			),
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_source_binding",
+		});
+		await expect(
+			insert("event_platform_runtime_cursor", "platform", "text.delta", null),
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_source_binding",
+		});
+		await expect(
+			insert(
+				"event_platform_invented_cursor",
+				"platform",
+				"model.selection.fell_back",
+				"invented_runtime_cursor",
+			),
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_source_binding",
 		});
 	});
 

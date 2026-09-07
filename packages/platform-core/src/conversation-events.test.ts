@@ -214,6 +214,20 @@ describe("Conversation event ingestion", () => {
 				} as never,
 			}),
 		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({ ...event, source: "platform" } as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "model.selection.fell_back",
+					modelOptionId: "model_primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
 		await events.persist(event);
 		await expect(
 			events.persist({

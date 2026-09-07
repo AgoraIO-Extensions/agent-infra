@@ -38,6 +38,17 @@ export type ConversationNormalizedEventV1 =
 			readonly retryable: boolean;
 	  };
 
+export interface ConversationModelSelectionFallbackEventV1 {
+	readonly type: "model.selection.fell_back";
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
+	readonly reason: "selection_unavailable";
+}
+
+export type ConversationPersistedEventPayloadV1 =
+	| ConversationNormalizedEventV1
+	| ConversationModelSelectionFallbackEventV1;
+
 export interface ConversationEventCommandV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
@@ -58,7 +69,7 @@ export interface PersistedConversationEventV1 {
 	readonly sequence: number;
 	readonly conversationCursor: number;
 	readonly occurredAt: string;
-	readonly event: ConversationNormalizedEventV1;
+	readonly event: ConversationPersistedEventPayloadV1;
 }
 
 export interface ConversationEventStateV1 {
@@ -344,6 +355,32 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 	invalidInput();
 }
 
+function parsePersistedEventPayload(
+	input: unknown,
+): ConversationPersistedEventPayloadV1 {
+	if (eventType(input) !== "model.selection.fell_back")
+		return parseEvent(input);
+	const values = snapshotObject(input, [
+		"type",
+		"modelOptionId",
+		"reasoningLevel",
+		"reason",
+	]);
+	if (
+		!isText(values.modelOptionId) ||
+		!isText(values.reasoningLevel) ||
+		values.reason !== "selection_unavailable"
+	) {
+		invalidInput();
+	}
+	return {
+		type: "model.selection.fell_back",
+		modelOptionId: values.modelOptionId,
+		reasoningLevel: values.reasoningLevel,
+		reason: "selection_unavailable",
+	};
+}
+
 function parseCommand(input: unknown): ConversationEventCommandV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
@@ -409,7 +446,7 @@ function parsePersistedEvent(input: unknown): PersistedConversationEventV1 {
 		sequence: values.sequence,
 		conversationCursor: values.conversationCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
-		event: parseEvent(values.event),
+		event: parsePersistedEventPayload(values.event),
 	};
 }
 
