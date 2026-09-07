@@ -21,7 +21,12 @@ export async function startPostgresTestDatabase(
 ): Promise<PostgresTestDatabase> {
 	const containerName = `agent-infra-${name}-${randomUUID()}`;
 	const stop = async () => {
-		await execFile("docker", ["rm", "--force", containerName]).catch(() => {});
+		await execFile("docker", [
+			"rm",
+			"--force",
+			"--volumes",
+			containerName,
+		]).catch(() => {});
 	};
 	try {
 		await execFile("docker", [
