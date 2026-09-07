@@ -626,7 +626,7 @@ export function validateAgentWorkloadDesiredV1(
 		desired.secretRefs.some(
 			(secretRef) =>
 				secretRef.agentId !== desired.agentId ||
-				secretRef.configRevision !== desired.configRevision,
+				secretRef.configRevision > desired.configRevision,
 		)
 	) {
 		throw new Error("Desired Workload correlation mismatch");

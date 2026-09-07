@@ -1,4 +1,10 @@
 import { pathToFileURL } from "node:url";
+import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
+
+export * from "./kubernetes-client.js";
+export * from "./kubernetes-runtime-adapter.js";
+export * from "./workload-runtime.js";
+export * from "./workload-worker.js";
 
 import {
 	type ConversationDispatchAuthorizationPortV1,
@@ -166,7 +172,11 @@ export function startPlatformWorker(options: StartOptions = {}) {
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	const worker = startPlatformWorker();
-	process.once("SIGINT", worker.stop);
-	process.once("SIGTERM", worker.stop);
+	const worker = await startPlatformWorkloadWorkerFromDeploymentV1();
+	process.once("SIGINT", () => {
+		void worker.stop();
+	});
+	process.once("SIGTERM", () => {
+		void worker.stop();
+	});
 }

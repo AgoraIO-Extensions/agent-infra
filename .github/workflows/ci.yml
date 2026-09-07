@@ -104,9 +104,34 @@ jobs:
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
 
+  workload-kind:
+    name: Workload kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install tools and dependencies
+        run: |
+          npm install --global pnpm@11.20.0
+          go install sigs.k8s.io/kind@v0.30.0
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          pnpm install --frozen-lockfile
+      - name: Build Workload dependencies
+        run: pnpm exec turbo run build --filter=@agent-infra/platform-worker
+      - name: Verify Kubernetes lifecycle and isolation
+        run: bash deploy/kind/workload.sh
+
   outcome:
     name: Publish terminal outcome
-    needs: [ci]
+    needs: [ci, workload-kind]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

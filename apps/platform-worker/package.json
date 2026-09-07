@@ -8,9 +8,11 @@
 	],
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
-		"@agent-infra/secret-store": "workspace:*"
+		"@agent-infra/secret-store": "workspace:*",
+		"@kubernetes/client-node": "2.0.0"
 	},
 	"scripts": {
 		"build": "tsdown",
@@ -20,6 +22,7 @@
 		"test": "vitest run src"
 	},
 	"devDependencies": {
+		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "^0.22.14",

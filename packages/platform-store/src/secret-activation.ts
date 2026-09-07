@@ -414,9 +414,18 @@ export interface PostgresSecretActivationStoreOptionsV1 {
 export class PostgresSecretActivationStoreV1
 	implements SecretActivationStorePortV1
 {
-	readonly #client: ReturnType<typeof postgres>;
+	readonly #client: ReturnType<typeof postgres> | undefined;
+	readonly #transaction: postgres.TransactionSql | undefined;
 
-	constructor(options: PostgresSecretActivationStoreOptionsV1) {
+	constructor(
+		options:
+			| PostgresSecretActivationStoreOptionsV1
+			| { readonly transaction: postgres.TransactionSql },
+	) {
+		if ("transaction" in options) {
+			this.#transaction = options.transaction;
+			return;
+		}
 		const databaseUrl = platformDatabaseUrlFromEnvironment({
 			PLATFORM_DATABASE_URL: text(options.databaseUrl),
 		});
@@ -424,7 +433,15 @@ export class PostgresSecretActivationStoreV1
 	}
 
 	async close(): Promise<void> {
-		await this.#client.end();
+		await this.#client?.end();
+	}
+
+	async #run<T>(
+		operation: (sql: postgres.TransactionSql) => Promise<T>,
+	): Promise<T> {
+		if (this.#transaction) return operation(this.#transaction);
+		if (!this.#client) throw new SecretActivationStoreError();
+		return this.#client.begin(operation) as Promise<T>;
 	}
 
 	async claimCandidate(
@@ -433,7 +450,7 @@ export class PostgresSecretActivationStoreV1
 	): ReturnType<SecretActivationStorePortV1["claimCandidate"]> {
 		try {
 			const request = claimInput(input);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, request);
 				if (!row) return { outcome: "stale" as const };
 				const record = parseRecord(row);
@@ -494,7 +511,7 @@ export class PostgresSecretActivationStoreV1
 	): Promise<boolean> {
 		try {
 			validateAudit(input.auditEvent, input.claim);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, input.claim.candidate);
 				if (!row) return false;
 				const record = parseRecord(row);
@@ -515,7 +532,7 @@ export class PostgresSecretActivationStoreV1
 	): Promise<boolean> {
 		try {
 			validatePlan(input.plan, input.claim);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, input.claim.candidate);
 				if (!row) return false;
 				const record = parseRecord(row);

@@ -102,3 +102,4 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
