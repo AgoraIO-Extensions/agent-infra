@@ -23,7 +23,7 @@ GitHub 原生依赖是执行图权威，Issue 的 `Blocked by` 和本图只投�
 | 层次 | 唯一验收入口与 Owner | 准入和环境 | 完成证据与可复现条件 |
 | --- | --- | --- | --- |
 | L1 主系统本地可测 | [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194)，@LichKing-2234 | §3 的未完成集合交付；本地 PostgreSQL、kind、正式 Web/API/Worker/RuntimeHost 装配、合成身份和 schema-conformant Fake Connection | #194 的四条完整旅程、准确源码与镜像、执行命令和脱敏 artifact；同时回读 #403/#404/#405/#406 的最终版本证据。仅组件测试、healthz 或 Fake Driver 不证明真实 Codex 装配 |
-| L2 双系统真实 GitHub 内部 Pilot | §5 的唯一联合验收 primary Issue 待建立；总验收 Owner 建议 @LichKing-2234，待 #150 确认 | L1 通过，#395 Connection readiness、#171 ACK 资源、#177 环境与参与者准备完成；§4 合约互验和 §5 人数冲突先收口；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | 新验收票保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、HLD §§15–16 和 #149，完成真实观察与全部具名签收 |
+| L2 双系统真实 GitHub 内部 Pilot | §5 的唯一联合验收 primary Issue 待建立；总验收 Owner 建议 @LichKing-2234，待 #150 确认 | L1 通过，#395 Connection readiness、#171 的 ACK 资源真实验证证据和 #177 的环境/参与者准备记录齐备；§4 合约互验和 §5 人数冲突先收口；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | 新验收票保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、HLD §§15–16 和 #149，完成真实观察与全部具名签收 |
 | L3 完整 M1 上线 | #150 负责毕业 §6 的实施及最终验收票；总验收 Owner 建议 @LichKing-2234，待确认 | L2 通过，完整 PRD 场景全部获得唯一实施票、Owner、上线环境和安全/运维资源窗口 | 最终验收票逐行映射 Platform PRD §14、Connection PRD 的适用要求及工程 Spec §24；每行有版本、自动验证、真实环境验证和人工结论，无失败或未验证硬门禁 |
 
 总验收 Owner 负责收齐证据并记录最终结论，不代签其他角色。
@@ -96,7 +96,7 @@ flowchart TB
     REAL -.-> PILOT
     LOCAL -.-> PILOT["L2 联合验收：新 primary Issue 待确认"]
     READY -.-> PILOT
-    ACK["#171 ACK 资源：待真实环境验证"] -.-> PILOT
+    ACK["#171 ACK 资源准备：open，待真实环境证据"] -.-> PILOT
     OPS["#177 参与者 / Runbook：待人工确认"] -.-> PILOT
     PLAN -.-> PILOT
     PILOT -.-> FULL["L3 完整 M1：待排期与验收"]
@@ -125,6 +125,17 @@ flowchart TB
 | #397 | #390、#392、#394、#396、#398、#399 |
 | #395 | #390、#391、#392、#394、#396、#397 |
 | #171、#177 | #149（completed） |
+
+### #171 ACK 资源准备边界
+
+[#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) 是 open 的资源型 Wayfinder task，
+标签为 `wayfinder:task` 和 `wayfinder`（2026-09-07T13:11:28Z 回读）。它只准备 ACK tenancy、
+访问入口和 Workload Plane 所需资源，不拥有缺失 Platform/Connection 实现，也不因缺少
+Implementation AC 需要再建立文档或实现契约才可继续资源准备。
+
+该分类不构成资源 ready：ACK target 与内部 overlay 尚未确认，真实 API capability、namespace
+RBAC、网络隔离、存储、DNS/TLS 和入口证据仍缺失。L2 只消费这些可回读的实际环境证据，
+不能以 #171 开放、标签、resource handoff 或本地 kind 结果代替。
 
 ### Connection HCI 历史证据与当前实施
 
@@ -246,7 +257,9 @@ Owner 只能作出下列一项明确选择：
 
 ### 5.2 唯一新增联合验收票草案
 
-现有 #194 只负责 Fake，#395 只负责 Connection readiness，#177 只负责准备和 Go/No-Go。
+现有 #194 只负责 Fake，#395 只负责 Connection readiness，#171 只负责 ACK 资源准备；
+参与者准备和 Go/No-Go 由 #177 负责。#171 的资源型 Wayfinder 分类不要求新增实现契约，
+也不自身证明 ACK 资源已就绪。
 [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 是待替代的历史 HCI 证据，
 按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
 且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。没有现有票拥有
@@ -259,7 +272,7 @@ Owner 只能作出下列一项明确选择：
 | --- | --- |
 | Problem | Fake 主系统与 Connection-side readiness 不能证明真实双系统授权、写操作、恢复和观察期通过 |
 | Scope | 以正式运行装配验证两系统、ACK/HCI 网络与身份映射；执行权威真实矩阵和确认后的观察期；复用组件证据；不实现缺失产品能力、不部署未批准环境 |
-| AC-1 | 输入证据全部绑定本次 main commit、两系统镜像、migration、配置版本和具名环境；#194、#395、#171、#177 已有通过记录，错误或缺失输入拒绝开始 |
+| AC-1 | 输入证据全部绑定本次 main commit、两系统镜像、migration、配置版本和具名环境；#194/#395 有对应通过记录，#171 的 ACK 资源实际验证与 #177 的准备记录已回读，错误或缺失输入拒绝开始 |
 | AC-2 | Connection PRD §13、HLD §§15–16 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、双层撤权、未知结果与清理全部有可回读结果 |
 | AC-3 | #149 的完整申请创建、Owner 配置、真实 Codex、SSE/进程/Pod 恢复及 A/B/C 升级回滚，在本次组合版本通过；不得用预置 Agent、Fake Connection 或不同版本组件报告替代 |
 | AC-4 | 经范围确认的参与者完成 #149 规定的观察；每人任务、总任务数、工作日与故障处置有脱敏记录；任一硬门禁失败立即 No-Go，修复后重验受影响组合 |
