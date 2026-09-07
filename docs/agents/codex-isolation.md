@@ -21,11 +21,10 @@ CODEX_ISOLATION_BINARY=/absolute/path/to/pinned/codex \
 ```
 
 最终验收必须在包含 [#403](https://github.com/AgoraIO-Extensions/agent-infra/issues/403)
-修复的版本运行，并额外设置 `CODEX_ISOLATION_PERSISTENCE_COMMIT` 为当前验收 HEAD 可达的
-完整交付 commit SHA。#403 的 source 是 `35d15abe187385672de3ac14bb2a48c37ea8e6bd`，其
-squash merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`；在包含该 merge 的 HEAD 上设置
-后者，并在报告同时记录 source。测试只验证所设置 SHA 是当前 HEAD 的祖先，不能自行判断任意
-祖先是否实现了 #403。缺少该证据时总结果保持 `unverified`。
+修复的版本运行。#403 的 source 是 `35d15abe187385672de3ac14bb2a48c37ea8e6bd`，其 squash
+merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者可从当前 HEAD 到达，并在
+报告同时记录 source 和 merge；运行时不能由环境变量替换为任意 ancestor。工作目录有已暂存、未
+暂存或未跟踪改动时，总结果也保持 `unverified`。
 
 输出 JSON 包含仓库 commit、测试源码摘要、原生版本、有效线程配置、逐场景状态及总结果。
 退出码只有在所有场景通过且存在持久化版本证据时为 0。普通 `pnpm test` 未设置原生可执行

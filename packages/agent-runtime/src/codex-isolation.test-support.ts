@@ -4,6 +4,54 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 
+export const CODEX_ISOLATION_PERSISTENCE_EVIDENCE = Object.freeze({
+	// #403 was squash-merged as #414, so the source commit is not an ancestor.
+	sourceCommit: "35d15abe187385672de3ac14bb2a48c37ea8e6bd",
+	mergeCommit: "389b2b30890399270c645a32cd21ddf3a81dd41e",
+});
+
+export interface PersistenceEvidence {
+	status: "pass" | "unverified";
+	reason: string;
+	sourceCommit: string;
+	mergeCommit: string;
+}
+
+export function evaluatePersistenceEvidence(input: {
+	readonly requiredCommit: string;
+	readonly requiredCommitReachable: boolean;
+	readonly workingTreeClean: boolean;
+}): PersistenceEvidence {
+	const { sourceCommit, mergeCommit } = CODEX_ISOLATION_PERSISTENCE_EVIDENCE;
+	if (input.requiredCommit !== mergeCommit)
+		return {
+			status: "unverified",
+			reason: "unexpected-persistence-commit",
+			sourceCommit,
+			mergeCommit,
+		};
+	if (!input.requiredCommitReachable)
+		return {
+			status: "unverified",
+			reason: "required-403-merge-not-reachable",
+			sourceCommit,
+			mergeCommit,
+		};
+	if (!input.workingTreeClean)
+		return {
+			status: "unverified",
+			reason: "acceptance-worktree-dirty",
+			sourceCommit,
+			mergeCommit,
+		};
+	return {
+		status: "pass",
+		reason: "required-403-merge-reachable-clean-head",
+		sourceCommit,
+		mergeCommit,
+	};
+}
+
 export interface IsolationProbe {
 	id: string;
 	command?: string;

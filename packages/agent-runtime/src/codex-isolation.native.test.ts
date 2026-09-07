@@ -14,6 +14,8 @@ import type { RuntimeSubmitTurnRequestV2 } from "@agent-infra/contracts/runtime"
 import { expect, it } from "vitest";
 import { CODEX_APP_SERVER_V2_PROVENANCE } from "./codex-app-server-bridge.js";
 import {
+	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
+	evaluatePersistenceEvidence,
 	type IsolationProbe,
 	isolationModel,
 	nativeIsolationLauncher,
@@ -523,28 +525,34 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			else process.env.PATH = originalPath;
 			await rm(directory, { recursive: true, force: true });
 		}
-		const persistenceCommit = process.env.CODEX_ISOLATION_PERSISTENCE_COMMIT;
-		let containsPersistenceFix = false;
-		if (persistenceCommit && /^[a-f0-9]{40}$/.test(persistenceCommit)) {
-			try {
-				execFileSync(
-					"git",
-					["merge-base", "--is-ancestor", persistenceCommit, "HEAD"],
-					{ stdio: "ignore" },
-				);
-				containsPersistenceFix = true;
-			} catch {
-				/* The required persistence revision is absent. */
-			}
+		const requiredCommit = CODEX_ISOLATION_PERSISTENCE_EVIDENCE.mergeCommit;
+		let requiredCommitReachable = false;
+		let workingTreeClean = false;
+		try {
+			execFileSync(
+				"git",
+				["merge-base", "--is-ancestor", requiredCommit, "HEAD"],
+				{ stdio: "ignore" },
+			);
+			requiredCommitReachable = true;
+			workingTreeClean =
+				execFileSync("git", ["status", "--porcelain=v1"], {
+					encoding: "utf8",
+				}).trim() === "";
+		} catch {
+			/* A checkout without the required merge cannot be acceptance evidence. */
 		}
-		report.persistenceCommit = containsPersistenceFix
-			? persistenceCommit
-			: "unverified";
+		const persistenceEvidence = evaluatePersistenceEvidence({
+			requiredCommit,
+			requiredCommitReachable,
+			workingTreeClean,
+		});
+		report.persistence = persistenceEvidence;
 		report.overall = Object.values(scenarios).some(
 			(row) => row.status === "fail",
 		)
 			? "fail"
-			: containsPersistenceFix &&
+			: persistenceEvidence.status === "pass" &&
 					Object.values(scenarios).every((row) => row.status === "pass")
 				? "pass"
 				: "unverified";

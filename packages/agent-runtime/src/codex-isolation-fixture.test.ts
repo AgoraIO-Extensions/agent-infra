@@ -1,5 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import {
+	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
+	evaluatePersistenceEvidence,
 	type IsolationProbe,
 	isolationModel,
 } from "./codex-isolation.test-support.js";
@@ -90,4 +92,52 @@ it("fails the model probe when native command tools are unavailable", async () =
 	expect((await submit(server, probe)).status).toBe(500);
 	expect(probe.outputs).toEqual([]);
 	expect(probe.answer).toBe("");
+});
+
+it("binds a final isolation result to the exact clean #403 merge", () => {
+	const { mergeCommit } = CODEX_ISOLATION_PERSISTENCE_EVIDENCE;
+	expect(
+		evaluatePersistenceEvidence({
+			requiredCommit: mergeCommit,
+			requiredCommitReachable: true,
+			workingTreeClean: true,
+		}),
+	).toMatchObject({
+		status: "pass",
+		reason: "required-403-merge-reachable-clean-head",
+	});
+});
+
+it("rejects unrelated, missing, and dirty persistence evidence", () => {
+	const { mergeCommit } = CODEX_ISOLATION_PERSISTENCE_EVIDENCE;
+	expect(
+		evaluatePersistenceEvidence({
+			requiredCommit: "4e6e1fa456f1712b81d9cc4ac4ad765106ecd811",
+			requiredCommitReachable: true,
+			workingTreeClean: true,
+		}),
+	).toMatchObject({
+		status: "unverified",
+		reason: "unexpected-persistence-commit",
+	});
+	expect(
+		evaluatePersistenceEvidence({
+			requiredCommit: mergeCommit,
+			requiredCommitReachable: false,
+			workingTreeClean: true,
+		}),
+	).toMatchObject({
+		status: "unverified",
+		reason: "required-403-merge-not-reachable",
+	});
+	expect(
+		evaluatePersistenceEvidence({
+			requiredCommit: mergeCommit,
+			requiredCommitReachable: true,
+			workingTreeClean: false,
+		}),
+	).toMatchObject({
+		status: "unverified",
+		reason: "acceptance-worktree-dirty",
+	});
 });
