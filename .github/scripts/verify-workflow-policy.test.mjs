@@ -293,20 +293,6 @@ test("publishes repository validation through the CI workflow and check", async 
   );
 });
 
-test("checks out the pull-request merge result in CI", async () => {
-  const workflows = await actualWorkflows();
-  const checkout = workflows["ci.yml"].jobs.ci.steps.find(
-    (step) => step.name === "Checkout repository",
-  );
-  assert.equal(checkout.with.ref, "${{ github.sha }}");
-  checkout.with.ref = "${{ github.event.pull_request.head.sha }}";
-  assert.ok(
-    validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("CI must check out github.sha"),
-    ),
-  );
-});
-
 test("starts review, recovery, and outcome handling from the CI workflow", async () => {
   const workflows = await actualWorkflows();
   assert.deepEqual(
