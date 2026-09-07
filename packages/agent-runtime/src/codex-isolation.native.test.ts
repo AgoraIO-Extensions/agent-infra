@@ -857,74 +857,82 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				"native-positive-control-or-lifecycle-unavailable",
 			);
 		} finally {
-			await driver?.close().catch(() => {});
-			await model?.close();
-			const observations =
-				(await launcher?.observations().catch(() => [])) ?? [];
-			const starts = observations.filter(
-				(entry) => entry.method === "thread/start",
-			);
-			const resumed = observations.filter(
-				(entry) => entry.method === "thread/resume",
-			);
-			const nativeId = (entry: (typeof observations)[number]) =>
-				(entry.result?.thread as { id?: string } | undefined)?.id;
-			const originalStarts = starts.filter(
-				(entry) => nativeId(entry) !== sampledNativeThreadId,
-			);
-			const originalIds = originalStarts.map(nativeId);
-			const sameSessions =
-				originalStarts.length === 2 &&
-				new Set(originalIds).size === 2 &&
-				originalIds.every(
-					(id) =>
-						typeof id === "string" &&
-						resumed.some(
-							(entry) =>
-								nativeId(entry) === id && entry.params?.threadId === id,
-						),
+			try {
+				await driver?.close().catch(() => {});
+				await model?.close().catch(() => {});
+				const observations =
+					(await launcher?.observations().catch(() => [])) ?? [];
+				const starts = observations.filter(
+					(entry) => entry.method === "thread/start",
 				);
-			const restarted =
-				observations.filter((entry) => entry.method === "launch").length ===
-				2 + rawProbeLaunches + bootstrapDriverLaunches;
-			if (stage === "restart-resume" && sameSessions && restarted)
-				record(
-					"restart-resume.original-native-sessions",
-					"pass",
-					"two-processes-resumed-original-native-sessions",
+				const restartLaunchIndex = observations.findLastIndex(
+					(entry) => entry.method === "launch",
 				);
-			report.nativeRequests = observations.map((entry) => ({
-				method: entry.method,
-				...(entry.error
-					? {
-							errorCode: entry.error.code,
-							reason:
-								entry.error.message === "list_turns is not supported yet"
-									? "native-turn-history-unavailable"
-									: "native-request-rejected",
-						}
-					: {}),
-			}));
-			report.effectiveThreads = observations
-				.filter(
-					(entry) =>
-						entry.method === "thread/start" || entry.method === "thread/resume",
-				)
-				.map((entry) => {
-					const sandbox = entry.result?.sandbox as
-						| { type?: string; networkAccess?: boolean }
-						| undefined;
-					return {
-						method: entry.method,
-						approvalPolicy: entry.result?.approvalPolicy,
-						sandboxType: sandbox?.type,
-						networkAccess: sandbox?.networkAccess,
-						requestKeys: Object.keys(entry.params ?? {}),
-					};
-				});
-			if (originalPath === undefined) delete process.env.PATH;
-			else process.env.PATH = originalPath;
-			await rm(directory, { recursive: true, force: true });
+				const resumedAfterRestart = observations
+					.slice(restartLaunchIndex + 1)
+					.filter((entry) => entry.method === "thread/resume");
+				const nativeId = (entry: (typeof observations)[number]) =>
+					(entry.result?.thread as { id?: string } | undefined)?.id;
+				const originalStarts = starts.filter(
+					(entry) => nativeId(entry) !== sampledNativeThreadId,
+				);
+				const originalIds = originalStarts.map(nativeId);
+				const sameSessions =
+					restartLaunchIndex >= 0 &&
+					originalStarts.length === 2 &&
+					new Set(originalIds).size === 2 &&
+					originalIds.every(
+						(id) =>
+							typeof id === "string" &&
+							resumedAfterRestart.some(
+								(entry) =>
+									nativeId(entry) === id && entry.params?.threadId === id,
+							),
+					);
+				const restarted =
+					observations.filter((entry) => entry.method === "launch").length ===
+					2 + rawProbeLaunches + bootstrapDriverLaunches;
+				if (stage === "restart-resume" && sameSessions && restarted)
+					record(
+						"restart-resume.original-native-sessions",
+						"pass",
+						"two-processes-resumed-original-native-sessions",
+					);
+				report.nativeRequests = observations.map((entry) => ({
+					method: entry.method,
+					...(entry.error
+						? {
+								errorCode: entry.error.code,
+								reason:
+									entry.error.message === "list_turns is not supported yet"
+										? "native-turn-history-unavailable"
+										: "native-request-rejected",
+							}
+						: {}),
+				}));
+				report.effectiveThreads = observations
+					.filter(
+						(entry) =>
+							entry.method === "thread/start" ||
+							entry.method === "thread/resume",
+					)
+					.map((entry) => {
+						const sandbox = entry.result?.sandbox as
+							| { type?: string; networkAccess?: boolean }
+							| undefined;
+						return {
+							method: entry.method,
+							approvalPolicy: entry.result?.approvalPolicy,
+							sandboxType: sandbox?.type,
+							networkAccess: sandbox?.networkAccess,
+							requestKeys: Object.keys(entry.params ?? {}),
+						};
+					});
+			} finally {
+				if (originalPath === undefined) delete process.env.PATH;
+				else process.env.PATH = originalPath;
+				await rm(directory, { recursive: true, force: true });
+			}
 		}
 		const requiredCommit = CODEX_ISOLATION_PERSISTENCE_EVIDENCE.mergeCommit;
 		let requiredCommitReachable = false;
