@@ -786,6 +786,7 @@ describe("Codex Runtime Driver", () => {
 			model: "gpt-5.3-codex",
 			reasoningEffort: "high",
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			dataDirectory: `${join(directory, "driver.json")}.native`,
 		});
 		expect(bridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",

@@ -5,9 +5,25 @@ import {
 } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import {
+	access,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import {
+	basename,
+	delimiter,
+	dirname,
+	isAbsolute,
+	join,
+	resolve,
+	sep,
+} from "node:path";
 import { TextDecoder } from "node:util";
 
 const defaultTimeoutMs = 5_000;
@@ -44,6 +60,8 @@ export const CODEX_APP_SERVER_V2_PROVENANCE = Object.freeze({
 export type CodexAppServerFrame = Readonly<Record<string, unknown>>;
 
 export interface CodexAppServerBridgeOptions {
+	// Deployment-owned storage on the current Agent PVC; never a wire input.
+	readonly dataDirectory: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
 	readonly provenance: CodexAppServerProvenanceV2;
@@ -75,6 +93,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	dataDirectory: string;
 	model: string;
 	reasoningEffort: string;
 	startupTimeoutMs: number;
@@ -247,6 +266,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"dataDirectory",
 		"model",
 		"reasoningEffort",
 		"provenance",
@@ -257,6 +277,13 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	}
 	if (
+		typeof input.dataDirectory !== "string" ||
+		!isAbsolute(input.dataDirectory) ||
+		dirname(input.dataDirectory) === input.dataDirectory ||
+		resolve(input.dataDirectory) !== input.dataDirectory ||
+		[...input.dataDirectory].some(
+			(character) => character.charCodeAt(0) < 32,
+		) ||
 		typeof input.model !== "string" ||
 		!modelPattern.test(input.model) ||
 		typeof input.reasoningEffort !== "string" ||
@@ -266,6 +293,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	}
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
 	return {
+		dataDirectory: input.dataDirectory,
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
@@ -354,7 +382,65 @@ async function removeIsolatedDirectory(directory: string) {
 	try {
 		await rm(directory, { recursive: true, force: true });
 	} catch {
-		// The private runtime directory contains no durable Driver state.
+		// Only the ephemeral HOME/probe/scratch directory is eligible for cleanup.
+	}
+}
+
+async function persistentLaunchPolicy(
+	dataDirectory: string,
+	isolated: IsolatedLaunchPolicy,
+): Promise<IsolatedLaunchPolicy> {
+	try {
+		// Resolve the deployment parent (for example a mounted PVC), never follow a
+		// symlink at the data root or either native data directory.
+		const parent = await realpath(dirname(dataDirectory));
+		const root = join(parent, basename(dataDirectory));
+		for (const personal of [
+			process.env.HOME,
+			process.env.CODEX_HOME,
+			process.cwd(),
+		]) {
+			if (!personal) continue;
+			const canonical = await realpath(personal).catch(() => resolve(personal));
+			if (canonical === root || canonical.startsWith(`${root}${sep}`))
+				configurationInvalid();
+		}
+		const existing = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		for (const directory of [
+			root,
+			join(root, "home"),
+			join(root, "workspace"),
+		]) {
+			if (!existing) await mkdir(directory, { mode: 0o700 });
+			if (!(await lstat(directory)).isDirectory()) configurationInvalid();
+		}
+		// Durable native state is not a source of credentials or configuration.
+		for (const file of [
+			join(root, "home", "config.toml"),
+			join(root, "home", "managed_config.toml"),
+			join(root, "home", "auth.json"),
+			join(root, "workspace", ".codex"),
+		]) {
+			const found = await lstat(file).catch((error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return undefined;
+				throw error;
+			});
+			if (found) configurationInvalid();
+		}
+		return {
+			directory: join(root, "workspace"),
+			environment: {
+				...isolated.environment,
+				CODEX_HOME: join(root, "home"),
+				TMPDIR: isolated.directory,
+			},
+		};
+	} catch (error) {
+		if (error instanceof CodexAppServerBridgeError) throw error;
+		throw unavailable();
 	}
 }
 
@@ -528,9 +614,14 @@ export class CodexAppServerBridge {
 		const validated = validateOptions(options);
 		const executable = await resolveCodexExecutable();
 		const launchPolicy = await createIsolatedLaunchPolicy();
+		let nativeLaunchPolicy: IsolatedLaunchPolicy;
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
+			nativeLaunchPolicy = await persistentLaunchPolicy(
+				validated.dataDirectory,
+				launchPolicy,
+			);
 		} catch (error) {
 			await removeIsolatedDirectory(launchPolicy.directory);
 			throw error;
@@ -554,8 +645,8 @@ export class CodexAppServerBridge {
 				],
 				{
 					stdio: ["pipe", "pipe", "pipe"],
-					cwd: launchPolicy.directory,
-					env: launchPolicy.environment,
+					cwd: nativeLaunchPolicy.directory,
+					env: nativeLaunchPolicy.environment,
 				},
 			);
 		} catch {
