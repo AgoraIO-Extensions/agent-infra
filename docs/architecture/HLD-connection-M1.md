@@ -164,7 +164,7 @@ Connection 必须在创建 ActionCall 的同一 PostgreSQL 事务中原子写入
 - OAuth App 请求 `read:user repo`；不请求 `user:email`、`workflow` 或 `delete_repo`。
 - 只使用专用 GitHub 测试账号；员工日常账号禁止进入 Pilot。
 - 外部账号 identity 为 `github.com + numeric user id`，login/name 仅展示。
-- 部署级 repository allowlist 固定唯一 private 测试仓库；create-PR 在 Provider 网络请求前检查，repository-read 的返回结果只保留该仓库。
+- 部署级 repository allowlist 绑定唯一 private 测试仓库的 GitHub numeric repository ID，名称和 `owner/repo` 仅用于展示。create-PR 在提交写请求前通过 GitHub 解析目标并核对稳定 repository ID，不匹配或无法确认时 fail closed；repository-read 的返回结果也只按该稳定 ID 保留该仓库。
 - 其他 GitHub Action 和其他 Provider 不发布、不发现、不执行。
 
 固定 OpenConnector commit 的 allowlist closure 必须记录 source commit、digest、license、notice 和复制清单。默认不维护 Fork；只有 Provider/OAuth/executor 通用缺口经过评审后才建立最小 Fork。
@@ -226,7 +226,9 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 - Browser API、OAuth callback、Catalog 和 delegated API 进入 Connection API。
 - 不使用跨域 Cookie、公共 tunnel 或调用方身份 Header 补偿错误路由。
 
-普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。LDAP 只认证 Principal；Connection PostgreSQL 保存 AdministratorRole binding，每次管理请求重新检查当前角色。首个管理员只能由持有部署权限的操作员按稳定 LDAP subject 一次性 bootstrap，已有管理员后该入口不能再次授予角色。所有页面默认简体中文。
+普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。LDAP 只认证 Principal；Connection PostgreSQL 保存 AdministratorRole binding，每次管理请求重新检查当前角色。
+
+首个管理员只能由持有部署权限的操作员按稳定 LDAP subject 一次性 bootstrap。bootstrap 必须在同一 PostgreSQL 事务中锁定唯一 bootstrap 状态、再次确认不存在管理员、创建首个角色绑定并永久标记已消费；并发请求只能有一个成功。已有管理员或 bootstrap 已消费后该入口必须 fail closed，重新启用必须经过显式部署变更并记录审计。所有页面默认简体中文。
 
 ## 13. 数据与审计
 
@@ -268,6 +270,7 @@ Connection DB 至少保存：
 - LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
 - Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
+- 仓库重命名、转移和同名替换不能改变 allowlist 指向的 numeric repository ID；无法确认稳定 ID 时拒绝写操作。
 - GitHub 普通 `403` 覆盖限流、abuse protection 和仓库权限拒绝，不得错误 fence 有效 Credential。
 - 浏览器、Agent、Platform、日志、错误和审计均无原始 Secret。
 

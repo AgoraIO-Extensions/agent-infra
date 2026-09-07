@@ -514,7 +514,7 @@ Connection 从固定 OpenConnector commit 导出经 allowlist 审核的 Provider
 
 默认通过重新导出固定 closure 吸收上游版本。只有通用 Provider/OAuth/executor 缺口确实需要维护上游修改时，才建立保留历史的最小 Fork；Connection Principal、Grant、Credential、审计和恢复不得进入 Fork。
 
-首个 GitHub Pilot 只发布 `github.get_current_user`、`github.list_my_repositories` 和 `github.create_pull_request` 三个 immutable ActionVersion。`create_pull_request` 在 Provider 网络调用前强制唯一受控 private repository allowlist；`list_my_repositories` 的返回结果过滤到该 allowlist。Bitbucket、Jira、Confluence 和其他 GitHub Action 不进入该 runtime。
+首个 GitHub Pilot 只发布 `github.get_current_user`、`github.list_my_repositories` 和 `github.create_pull_request` 三个 immutable ActionVersion。repository allowlist 绑定唯一受控 private 仓库的 GitHub numeric repository ID；`create_pull_request` 在提交前解析并核对稳定 ID，`list_my_repositories` 的返回结果按同一 ID 过滤。Bitbucket、Jira、Confluence 和其他 GitHub Action 不进入该 runtime。
 
 ### 13.2 授权模型
 
