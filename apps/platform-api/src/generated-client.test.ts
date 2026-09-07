@@ -20,16 +20,25 @@ const { createClient: createClientV2 } = generatedClientV2;
 const {
 	commandAgentLifecycle,
 	createAgentApplication,
+	createConversation,
 	decideAgentApplication,
 	getAgent,
 	getAgentApplication,
+	getConversation,
 	getCurrentSession,
+	getExecutionDetail,
 	listAgentApplications,
 	listAgents,
+	listConversations,
 	listPendingAgentApplications,
 	listPlatformAudit,
+	regenerateAnswer,
+	stopExecution,
+	streamConversationEvents,
+	submitMessage,
 	updateAgentApplication,
 	updateAgentConfiguration,
+	updateConversationModelSelection,
 	withdrawAgentApplication,
 } = generatedSdk;
 const { listPlatformAuditV2 } = generatedSdkV2;
@@ -209,6 +218,122 @@ function testApp() {
 				modelCredentialOptionIds: [],
 			}),
 		},
+		conversation: {
+			identity: identityAdapter,
+			authorization: {
+				authorize: vi.fn().mockResolvedValue({
+					outcome: "allowed",
+					authority: {
+						schemaVersion: 1,
+						actorId: identity.userId,
+						agentId: "agent-1",
+						channelId: "web",
+						authorizationRevision: identity.authorizationRevision,
+						supportsSupplementaryInstruction: false,
+					},
+				}),
+			},
+			commands: vi.fn().mockReturnValue({
+				createConversation: vi.fn().mockResolvedValue({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						conversationId: "conversation-1",
+						agentId: "agent-1",
+						status: "ready",
+					},
+				}),
+				accept: vi.fn().mockResolvedValue({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: "message-1",
+						executionId: "execution-1",
+					},
+				}),
+				regenerate: vi.fn().mockResolvedValue({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "execution-2",
+					},
+				}),
+				stop: vi.fn().mockResolvedValue({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						executionId: "execution-1",
+					},
+				}),
+				selectModel: vi.fn().mockResolvedValue({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						conversationId: "conversation-1",
+					},
+				}),
+				readConversation: vi.fn().mockResolvedValue({
+					outcome: "found",
+					result: {
+						schemaVersion: 1,
+						conversation: {
+							schemaVersion: 1,
+							conversationId: "conversation-1",
+							agentId: "agent-1",
+							actorId: identity.userId,
+							channelId: "web",
+							status: "ready",
+							sessionGeneration: 1,
+							hostSessionRef: null,
+							authorizationRevision: identity.authorizationRevision,
+							lastConversationCursor: 0,
+							selectedModelOptionId: "model-primary",
+							selectedReasoningLevel: "medium",
+							createdAt: new Date("2026-09-06T00:00:00.000Z"),
+							updatedAt: new Date("2026-09-06T00:00:00.000Z"),
+						},
+						modelSelectionFallback: null,
+					},
+				}),
+			}),
+			query: {
+				list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+				get: vi.fn().mockResolvedValue({
+					conversation: {
+						conversationId: "conversation-1",
+						agentId: "agent-1",
+						status: "ready",
+						lastConversationCursor: null,
+						createdAt: new Date("2026-09-06T00:00:00.000Z"),
+						updatedAt: new Date("2026-09-06T00:00:00.000Z"),
+					},
+					messages: [],
+					executions: [],
+					events: [],
+				}),
+				getExecution: vi.fn().mockResolvedValue({
+					execution: {
+						executionId: "execution-1",
+						conversationId: "conversation-1",
+						sourceMessageId: "message-1",
+						status: "submitted",
+						createdAt: new Date("2026-09-06T00:00:00.000Z"),
+						updatedAt: new Date("2026-09-06T00:00:00.000Z"),
+						traceId: "trace-1",
+					},
+					events: [],
+				}),
+				replay: vi.fn().mockResolvedValue({
+					outcome: "reload",
+					reason: "unknown_event_id",
+					resumeCursor: "cursor-0",
+				}),
+			},
+		},
 		sessionAudit: {
 			identity: identityAdapter,
 			audit: {
@@ -286,5 +411,82 @@ describe("generated Pilot browser client", () => {
 		]);
 		expect(results.every(({ error }) => error === undefined)).toBe(true);
 		expect(resolve).toHaveBeenCalledTimes(results.length);
+	});
+});
+
+describe("generated Conversation client", () => {
+	it("consumes HTTP commands, queries, and persisted SSE through Hono", async () => {
+		const { app } = testApp();
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const headers = { "Idempotency-Key": "generated-conversation-1" };
+		const responses = await Promise.all([
+			listConversations({ client, path: { agentId: "agent-1" } }),
+			createConversation({
+				client,
+				path: { agentId: "agent-1" },
+				headers,
+				body: { schemaVersion: 1 },
+			}),
+			getConversation({
+				client,
+				path: { conversationId: "conversation-1" },
+			}),
+			getExecutionDetail({
+				client,
+				path: {
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			}),
+			submitMessage({
+				client,
+				path: { conversationId: "conversation-1" },
+				headers,
+				body: { schemaVersion: 1, text: "Run it" },
+			}),
+			regenerateAnswer({
+				client,
+				path: { conversationId: "conversation-1" },
+				headers,
+				body: { schemaVersion: 1, messageId: "message-1" },
+			}),
+			stopExecution({
+				client,
+				path: { conversationId: "conversation-1" },
+				headers,
+				body: { schemaVersion: 1, targetExecutionId: "execution-1" },
+			}),
+			updateConversationModelSelection({
+				client,
+				path: { conversationId: "conversation-1" },
+				headers,
+				body: {
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+				},
+			}),
+		]);
+		expect(responses.map(({ response }) => response.status)).toEqual([
+			200, 201, 200, 200, 202, 202, 202, 200,
+		]);
+		expect(responses.every(({ error }) => error === undefined)).toBe(true);
+
+		const abort = new AbortController();
+		const { stream } = await streamConversationEvents({
+			client,
+			path: { conversationId: "conversation-1" },
+			signal: abort.signal,
+		});
+		const first = await stream.next();
+		abort.abort();
+		expect(first.value).toMatchObject({
+			kind: "control",
+			type: "timeline.reload",
+		});
 	});
 });

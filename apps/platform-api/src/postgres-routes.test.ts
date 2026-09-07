@@ -2,6 +2,8 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
 	BrowserSessionProjectionV1Schema,
+	ConversationDetailProjectionV1Schema,
+	ConversationProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -10,6 +12,7 @@ import {
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
+	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
 import {
@@ -20,6 +23,8 @@ import {
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresConversationExecutionTransactionV1,
+	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
 } from "@agent-infra/platform-store";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -123,6 +128,11 @@ beforeAll(async () => {
 		databaseUrl,
 	});
 	const auditQuery = new PostgresPlatformAuditQueryV1({ databaseUrl });
+	const conversationTransaction =
+		new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+	const conversationQuery = new PostgresConversationQueryV1({ databaseUrl });
 	adapters.push(
 		foundationTransaction,
 		revisionTransaction,
@@ -130,6 +140,8 @@ beforeAll(async () => {
 		managementQuery,
 		configurationTransaction,
 		configurationQuery,
+		conversationTransaction,
+		conversationQuery,
 		auditQuery,
 	);
 
@@ -315,6 +327,47 @@ beforeAll(async () => {
 			};
 		},
 	});
+	const conversationAuthorization = {
+		async authorize(
+			identity: IdentityContext,
+			request: {
+				readonly agentId?: string;
+				readonly conversationId?: string;
+			},
+		) {
+			let agentId = request.agentId;
+			if (request.conversationId) {
+				agentId = (
+					await conversationQuery.getAuthorizationTarget(
+						{ actorId: identity.userId, channelId: "web" },
+						request.conversationId,
+					)
+				)?.agentId;
+			}
+			if (!agentId) return { outcome: "denied" as const };
+			const agent = await managementQuery.getAgent(
+				{
+					kind: "user",
+					userId: identity.userId,
+					organizationIds: identity.organizationIds,
+				},
+				agentId,
+			);
+			return agent
+				? {
+						outcome: "allowed" as const,
+						authority: {
+							schemaVersion: 1 as const,
+							actorId: identity.userId,
+							agentId,
+							channelId: "web",
+							authorizationRevision: identity.authorizationRevision,
+							supportsSupplementaryInstruction: false,
+						},
+					}
+				: { outcome: "denied" as const };
+		},
+	};
 
 	app = createPlatformApp({
 		management: {
@@ -341,6 +394,19 @@ beforeAll(async () => {
 				secrets: [],
 				modelCredentialOptionIds: [],
 			}),
+		},
+		conversation: {
+			identity: identityAdapter,
+			authorization: conversationAuthorization,
+			commands: (identity) =>
+				createConversationExecutionUseCaseV1({
+					transaction: conversationTransaction,
+					authorization: {
+						authorize: (request) =>
+							conversationAuthorization.authorize(identity, request),
+					},
+				}),
+			query: conversationQuery,
 		},
 		sessionAudit: { identity: identityAdapter, audit: auditQuery },
 	});
@@ -475,6 +541,66 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				})
 			).status,
 		).toBe(200);
+		const createdConversation = await app.request(
+			"/api/v1/agents/agent-run/conversations",
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("owner", "conversation-create-1"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1 }),
+			},
+		);
+		expect(createdConversation.status).toBe(201);
+		const conversation = ConversationProjectionV1Schema.parse(
+			await createdConversation.json(),
+		);
+		expect(
+			(
+				await app.request(
+					`/api/v1/conversations/${conversation.conversationId}/messages`,
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("owner", "conversation-message-1"),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+					},
+				)
+			).status,
+		).toBe(202);
+		const conversationList = await app.request(
+			"/api/v1/agents/agent-run/conversations",
+			{ headers: requestHeaders("owner") },
+		);
+		expect(conversationList.status).toBe(200);
+		expect(
+			((await conversationList.json()) as { items: unknown[] }).items,
+		).toHaveLength(1);
+		const conversationDetail = await app.request(
+			`/api/v1/conversations/${conversation.conversationId}`,
+			{ headers: requestHeaders("owner") },
+		);
+		expect(conversationDetail.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV1Schema.parse(
+				await conversationDetail.json(),
+			).messages,
+		).toEqual([expect.objectContaining({ role: "user", text: "Run it" })]);
+		for (const path of [
+			`/api/v1/conversations/${conversation.conversationId}`,
+			`/api/v1/conversations/missing-${conversation.conversationId}`,
+		]) {
+			const denied = await app.request(path, {
+				headers: requestHeaders("attacker"),
+			});
+			expect(denied.status).toBe(404);
+			expect(await denied.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
 		expect(
 			(
 				await app.request("/api/v1/agents/agent-run/lifecycle", {

@@ -1,6 +1,8 @@
 import { once } from "node:events";
 import { createServer } from "node:net";
 
+import { PostgresAgentManagementQueryV1 } from "@agent-infra/platform-store";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assemblePlatformApi } from "./assembly.js";
@@ -24,6 +26,7 @@ afterEach(async () => {
 					),
 			),
 	);
+	vi.restoreAllMocks();
 });
 
 describe("Platform API production assembly", () => {
@@ -51,6 +54,10 @@ describe("Platform API production assembly", () => {
 		const unavailable = async () => {
 			throw new Error("unused test adapter");
 		};
+		const getAgent = vi.spyOn(
+			PostgresAgentManagementQueryV1.prototype,
+			"getAgent",
+		);
 		const assembly = assemblePlatformApi({
 			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
 			identity: {
@@ -82,6 +89,47 @@ describe("Platform API production assembly", () => {
 		}
 
 		try {
+			for (const serviceAvailability of [
+				"starting",
+				"updating",
+				"unavailable",
+			] as const) {
+				getAgent.mockResolvedValueOnce({
+					schemaVersion: 1,
+					agentId: "agent-1",
+					applicationId: "application-1",
+					name: "Agent",
+					description: "Agent fixture",
+					sourceReference: "source-1",
+					management: {
+						schemaVersion: 1,
+						applicationId: "application-1",
+						agentId: "agent-1",
+						applicantId: identity.userId,
+						status: "available",
+						revision: 1,
+						approvalRevision: 1,
+						decisionReason: null,
+						serviceAvailability,
+						desiredState: "running",
+						workloadRevision: 1,
+						fence: 1,
+						ownerIds: [identity.userId],
+						availability: [],
+						failureCode:
+							serviceAvailability === "unavailable"
+								? "workload_unavailable"
+								: null,
+					},
+				});
+				await expect(
+					assembly.dependencies.conversation.authorization.authorize(identity, {
+						schemaVersion: 1,
+						operation: "conversation.create",
+						agentId: "agent-1",
+					}),
+				).resolves.toEqual({ outcome: "unavailable" });
+			}
 			const response = await fetch(
 				`http://127.0.0.1:${address.port}/api/v1/session`,
 			);

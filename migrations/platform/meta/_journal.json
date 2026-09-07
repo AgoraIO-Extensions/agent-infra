@@ -71,6 +71,13 @@
       "when": 1788702289211,
       "tag": "0009_conversation_event_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788757593205,
+      "tag": "0010_conversation_event_persistence_time",
+      "breakpoints": true
     }
   ]
 }

@@ -43,6 +43,7 @@ export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
+export * from "./conversation-read-projection.js";
 export * from "./idempotency.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";

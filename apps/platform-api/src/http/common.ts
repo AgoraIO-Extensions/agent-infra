@@ -17,6 +17,13 @@ const protocolErrors = {
 		"Request conflicts with current state.",
 		false,
 	],
+	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
+	CONVERSATION_UNAVAILABLE: [
+		409,
+		"CONVERSATION_UNAVAILABLE",
+		"The conversation is unavailable.",
+		false,
+	],
 	FORBIDDEN: [403, "RESOURCE_UNAVAILABLE", "Request is not authorized.", false],
 	AUTHENTICATION_REQUIRED: [
 		401,
@@ -42,6 +49,12 @@ const protocolErrors = {
 		"A required service is temporarily unavailable.",
 		true,
 	],
+	RUNTIME_UNAVAILABLE: [
+		503,
+		"RUNTIME_UNAVAILABLE",
+		"The Agent runtime is temporarily unavailable.",
+		true,
+	],
 	INTERNAL_ERROR: [
 		500,
 		"INTERNAL_ERROR",
@@ -50,7 +63,7 @@ const protocolErrors = {
 	],
 } as const satisfies Partial<
 	Record<
-		ProtocolErrorCode | "CONFLICT" | "FORBIDDEN",
+		ProtocolErrorCode | "BUSY" | "CONFLICT" | "FORBIDDEN",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

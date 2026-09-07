@@ -48,6 +48,20 @@ export {
 	PostgresConversationExecutionTransactionV1,
 } from "./conversation-execution.ts";
 export {
+	type ConversationExecutionDetailV1,
+	type ConversationQueryDetailV1,
+	ConversationQueryError,
+	type ConversationQueryEventV1,
+	type ConversationQueryExecutionV1,
+	type ConversationQueryMessageV1,
+	type ConversationQueryPageV1,
+	type ConversationQueryProjectionV1,
+	type ConversationQueryScopeV1,
+	type ConversationReplayResultV1,
+	type PostgresConversationQueryOptionsV1,
+	PostgresConversationQueryV1,
+} from "./conversation-query.ts";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
