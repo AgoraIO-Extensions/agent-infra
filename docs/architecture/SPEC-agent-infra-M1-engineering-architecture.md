@@ -815,6 +815,8 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   Unknown 保留报告。severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
   advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
   `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
+  Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
+  保留原始 vendor/advisory 数据，不自行重算或降低 severity。
   选择规则以[固定版本的 Trivy 文档](https://github.com/aquasecurity/trivy/blob/v0.74.0/docs/guide/scanner/vulnerability.md#severity-selection)为依据。
 - 每次从漏洞库获取可用的当前快照，然后在本轮扫描中固定该快照。报告绑定源 commit、
   lockfile SHA-256、CI run/attempt、workspace/镜像清单、image ID/rootfs layers、Trivy
