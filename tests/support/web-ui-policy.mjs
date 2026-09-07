@@ -69,6 +69,10 @@ export function checkWebUiSource(source, { path }) {
 	const reactNamespaces = new Set();
 	const reactCreateElement = new Set();
 	const symbolAt = (node) => checker.getSymbolAtLocation(node);
+	const addReactCreateElement = (node) => {
+		const symbol = symbolAt(node);
+		if (symbol) reactCreateElement.add(symbol);
+	};
 	for (const statement of file.statements) {
 		if (
 			!ts.isImportDeclaration(statement) ||
@@ -85,7 +89,7 @@ export function checkWebUiSource(source, { path }) {
 			} else {
 				for (const item of importClause.namedBindings.elements) {
 					if ((item.propertyName?.text ?? item.name.text) === "createElement")
-						reactCreateElement.add(symbolAt(item.name));
+						addReactCreateElement(item.name);
 				}
 			}
 		}
@@ -123,6 +127,34 @@ export function checkWebUiSource(source, { path }) {
 			reactNamespaces.has(symbolAt(expression.expression))
 		);
 	};
+	const isConst = (declaration) =>
+		ts.isVariableDeclarationList(declaration.parent) &&
+		(declaration.parent.flags & ts.NodeFlags.Const) !== 0;
+	const isReactNamespace = (expression) =>
+		ts.isIdentifier(expression) && reactNamespaces.has(symbolAt(expression));
+	const propertyNameText = (name) =>
+		ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
+	function collectReactCreateElementAliases(node) {
+		if (ts.isVariableDeclaration(node) && isConst(node) && node.initializer) {
+			if (ts.isIdentifier(node.name) && isReactCreateElement(node.initializer))
+				addReactCreateElement(node.name);
+			if (
+				ts.isObjectBindingPattern(node.name) &&
+				isReactNamespace(node.initializer)
+			) {
+				for (const element of node.name.elements) {
+					if (
+						ts.isIdentifier(element.name) &&
+						propertyNameText(element.propertyName ?? element.name) ===
+							"createElement"
+					)
+						addReactCreateElement(element.name);
+				}
+			}
+		}
+		ts.forEachChild(node, collectReactCreateElementAliases);
+	}
+	collectReactCreateElementAliases(file);
 	function visit(node) {
 		if (
 			ts.isImportDeclaration(node) &&

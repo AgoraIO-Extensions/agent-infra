@@ -37,13 +37,14 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 
 - 拒绝原生 `button/input/textarea/select/option/optgroup/label/summary`。
 - 拒绝原生元素直接声明通用控件角色，如 `button/checkbox/combobox/textbox`。
-- 同样拒绝词法绑定到 `react` default、namespace 或 named `createElement` alias 的上述字面量控件和角色调用。
+- 同样拒绝词法绑定到 `react` default、namespace 或 named `createElement` alias 的上述字面量控件和角色调用，
+  包括直接 `const` 属性或解构 alias。
 - 允许 `components/ui` 内部、普通语义 HTML、测试文件和三个具名现有测试 helper；生产页面不得导入测试 helper。
 - 唯一具名例外 `hidden-form-value` 只接受带 `data-native-control="hidden-form-value"` 和字面量
   `type="hidden"` 的 input，理由是传递不可见表单元数据。动态 type、属性 spread、其他标签或
   未知例外名均失败。当前生产页面没有使用原生例外。
 
-规则检查直接 JSX 声明与静态可归因的 React 调用，不是任意 JavaScript 数据流分析。新增例外必须在规则中限定结构、
+规则检查直接 JSX 声明与静态可归因的 React 调用，包括一层不可变 alias，不是任意 JavaScript 数据流分析。新增例外必须在规则中限定结构、
 记录理由，并添加正负测试；不得增加业务文件级或目录通配排除。
 
 ## 验证
