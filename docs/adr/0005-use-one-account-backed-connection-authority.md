@@ -17,7 +17,7 @@ Connection 同时需要公司员工登录。Agent Platform 已通过部署 Ident
 3. Agent Platform 只保存 Agent Action policy 和 Connection `callId` 引用；用户 Grant 只保存在 Connection。
 4. Agent Platform 通过受信短期 assertion 代表当前 Principal 和 Agent Actor，Connection 独立验证并解析 current Grant；任何请求字段都不能指定 Principal、Connection 或 Credential。
 5. `LOCAL_SINGLE_USER`、`REMOTE_SHARED`、本机 installation identity、SQLite、Runtime token 和本机 Credential store 不作为产品模式。可选本机组件只能是无状态 edge。
-6. LDAP transport 默认要求验证证书和主机名的 LDAPS/StartTLS。当前 LA3 受监督 Pilot 因公司 LDAP 没有可用 TLS，可以使用固定私网 `ldap://` profile，并明确接受员工密码和 Service Bind Credential 明文传输风险；该例外禁止降级/fallback、不能跨环境复用，正式上线前必须关闭。
+6. 公司 LDAP 登录参考 Rehoboam 已验证的 Service Bind 查找、稳定 `uid` 和用户 DN bind 契约，不复制其 Token、Socket 登录或 Session。LDAP transport 默认要求验证证书和主机名的 LDAPS/StartTLS；当前 LA3 受监督 Pilot 因公司 LDAP 没有可用 TLS，可以沿用 Rehoboam 固定私网 `ldap://` profile，并明确接受员工密码和 Service Bind Credential 明文传输风险；该例外禁止降级/fallback、不能跨环境复用，正式上线前必须关闭。
 
 ## 影响
 

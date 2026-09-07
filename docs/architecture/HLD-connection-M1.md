@@ -80,7 +80,9 @@ Connection 使用部署批准的固定 LDAP profile：
 
 LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/配置提供，调用方不能选择或触发降级。默认部署必须使用经过 CA、证书有效期和主机名验证的 LDAPS 或强制 StartTLS；证书验证失败、StartTLS 失败及任何自动回退都必须在启动或请求执行前 fail closed。
 
-唯一例外是具名 LA3 受监督 Pilot profile：由于当前公司 LDAP 没有可用 TLS，该 profile 可以使用固定私网 `ldap://` endpoint。部署必须同时限制到批准的 LA3 网络路径、固定 endpoint 和受控 Connection workload，禁止动态 endpoint、自动降级、fallback 和外部网络访问，并明确接受员工密码及 Service Bind Credential 在该私网链路明文传输的风险。该例外不能被其他环境、客户端或生产声明复用；公司 LDAP 提供可用 TLS 后必须迁移，广泛生产上线前必须关闭明文 profile。
+当前公司 LDAP profile 参考 Rehoboam 已验证的登录契约：使用部署 Service Bind 查找用户目录条目，读取稳定 `uid` 和展示属性，再以用户 DN bind 验证密码。Connection 不复制 Rehoboam 应用 Token、Socket 登录或会话实现，也不从 Rehoboam 数据库读取身份状态。
+
+唯一例外是具名 LA3 受监督 Pilot profile：它沿用 Rehoboam 当前固定私网 `ldap://` 传输，因为公司 LDAP 没有可用 TLS。部署必须同时限制到批准的 LA3 网络路径、固定 endpoint 和受控 Connection workload，禁止动态 endpoint、自动降级、fallback 和外部网络访问，并明确接受员工密码及 Service Bind Credential 在该私网链路明文传输的风险。该例外不能被其他环境、客户端或生产声明复用；公司 LDAP 提供可用 TLS 后必须迁移，广泛生产上线前必须关闭明文 profile。
 
 ### 5.2 Session
 
@@ -100,6 +102,7 @@ LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/�
 - 缓存过期后的并发请求合并为一次 LDAP 查询，其他请求等待同一结果。
 - LDAP 条目缺失时禁用 Principal 并拒绝敏感操作；LDAP 不可用或返回非法结果时 fail closed。
 - 当前 Pilot 只验证 `uid` 条目存在。缺少离职 active-state 真值必须进入风险与验收说明，不能描述为离职立即停权。
+- Rehoboam 只在登录时执行 LDAP bind，现有 Token 校验不回查 LDAP，也没有可复用的离职状态判断；Connection 不复制该 Token 行为，按已确认的 15 分钟条目存在性策略执行。
 
 ## 6. Catalog 与双层授权
 
