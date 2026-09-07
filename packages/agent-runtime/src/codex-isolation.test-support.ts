@@ -62,6 +62,14 @@ export interface IsolationProbe {
 	concurrent: boolean;
 }
 
+export interface IsolationObservationHold {
+	readonly received: Promise<void>;
+	readonly observed: Promise<void>;
+	readonly responseSent: Promise<void>;
+	allowObservation(): void;
+	releaseResponse(): void;
+}
+
 interface ModelRequest {
 	input: {
 		type?: string;
@@ -76,6 +84,18 @@ interface ModelRequest {
 // Only the model endpoint is substituted. Codex executes every requested tool.
 export async function isolationModel() {
 	const probes = new Map<string, IsolationProbe>();
+	const observationHolds = new Map<
+		string,
+		{
+			received: () => void;
+			observed: () => void;
+			responseSent: () => void;
+			waitForObservation: Promise<void>;
+			waitForResponse: Promise<void>;
+			allowObservation: () => void;
+			releaseResponse: () => void;
+		}
+	>();
 	const barriers = new Map<
 		string,
 		{ wait: Promise<void>; arrive: (id: string) => void; cancel: () => void }
@@ -98,6 +118,11 @@ export async function isolationModel() {
 			const probe = id ? probes.get(id) : undefined;
 			if (!probe) throw new Error("Unknown synthetic probe");
 			if (probe.inputs.length >= 4) throw new Error("Synthetic request limit");
+			const observationHold = observationHolds.get(probe.id);
+			if (observationHold) {
+				observationHold.received();
+				await observationHold.waitForObservation;
+			}
 			const barrier = barriers.get(probe.id);
 			if (barrier) {
 				barrier.arrive(probe.id);
@@ -105,6 +130,8 @@ export async function isolationModel() {
 				barriers.delete(probe.id);
 			}
 			probe.inputs.push(JSON.stringify(body.input));
+			observationHold?.observed();
+			if (observationHold) await observationHold.waitForResponse;
 			probe.tools = (body.tools ?? []).flatMap((tool) =>
 				tool.name ? [tool.name] : [],
 			);
@@ -175,6 +202,8 @@ export async function isolationModel() {
 				);
 			}
 			response.end();
+			observationHold?.responseSent();
+			observationHolds.delete(probe.id);
 		} catch {
 			response.writeHead(500).end("Synthetic model request invalid");
 		}
@@ -200,6 +229,50 @@ export async function isolationModel() {
 			};
 			probes.set(probe.id, probe);
 			return probe;
+		},
+		holdObservation(probe: IsolationProbe): IsolationObservationHold {
+			if (!probes.has(probe.id) || observationHolds.has(probe.id))
+				throw new Error("Synthetic observation hold is unavailable");
+			let received: () => void = () => {};
+			let observed: () => void = () => {};
+			let responseSent: () => void = () => {};
+			let allowObservation: () => void = () => {};
+			let releaseResponse: () => void = () => {};
+			const hold = {
+				received: new Promise<void>((resolve) => {
+					received = resolve;
+				}),
+				observed: new Promise<void>((resolve) => {
+					observed = resolve;
+				}),
+				responseSent: new Promise<void>((resolve) => {
+					responseSent = resolve;
+				}),
+				waitForObservation: new Promise<void>((resolve) => {
+					allowObservation = resolve;
+				}),
+				waitForResponse: new Promise<void>((resolve) => {
+					releaseResponse = resolve;
+				}),
+				allowObservation,
+				releaseResponse,
+			};
+			observationHolds.set(probe.id, {
+				received,
+				observed,
+				responseSent,
+				waitForObservation: hold.waitForObservation,
+				waitForResponse: hold.waitForResponse,
+				allowObservation,
+				releaseResponse,
+			});
+			return {
+				received: hold.received,
+				observed: hold.observed,
+				responseSent: hold.responseSent,
+				allowObservation,
+				releaseResponse,
+			};
 		},
 		synchronize(pair: IsolationProbe[]) {
 			const arrivals = new Set<string>();
@@ -231,6 +304,10 @@ export async function isolationModel() {
 		},
 		async close() {
 			for (const barrier of barriers.values()) barrier.cancel();
+			for (const hold of observationHolds.values()) {
+				hold.allowObservation();
+				hold.releaseResponse();
+			}
 			server.closeAllConnections();
 			await new Promise<void>((accept, reject) =>
 				server.close((error) => (error ? reject(error) : accept())),

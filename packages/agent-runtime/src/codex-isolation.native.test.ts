@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, sep } from "node:path";
 import type { RuntimeSubmitTurnRequestV2 } from "@agent-infra/contracts/runtime";
 import { expect, it } from "vitest";
-import { CODEX_APP_SERVER_V2_PROVENANCE } from "./codex-app-server-bridge.js";
+import {
+	CODEX_APP_SERVER_V2_PROVENANCE,
+	CodexAppServerBridge,
+	type CodexAppServerFrame,
+} from "./codex-app-server-bridge.js";
 import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
 	evaluatePersistenceEvidence,
@@ -41,6 +45,213 @@ interface Evidence {
 	reason: string;
 }
 
+type NativeReadCategory =
+	| "success"
+	| "unsupported"
+	| "native-json-rpc-error"
+	| "native-transport-error"
+	| "native-timeout"
+	| "invalid-native-response"
+	| "model-observation-unavailable";
+
+interface RawNativeReply {
+	category: NativeReadCategory;
+	result?: unknown;
+}
+
+interface NativeReadSample {
+	point: "after-turn-start-accepted" | "after-model-observed";
+	method: "thread/read" | "thread/turns/list";
+	options: { includeTurns?: boolean; itemsView?: "notLoaded" };
+	category: NativeReadCategory;
+	threadStatusType?: string;
+	turnCount?: number;
+	knownTurnMatches?: boolean | "unavailable";
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.getPrototypeOf(value) === Object.prototype
+	);
+}
+
+// This peer preserves JSON-RPC errors as test evidence instead of teaching the
+// production Driver new behavior for a raw app-server response.
+class RawNativeClient {
+	private sequence = 0;
+	private closed = false;
+	private readonly pending = new Map<number, (reply: RawNativeReply) => void>();
+
+	private constructor(private readonly bridge: CodexAppServerBridge) {
+		void this.consume();
+	}
+
+	static async open(dataDirectory: string) {
+		const bridge = await CodexAppServerBridge.open({
+			dataDirectory,
+			model: "gpt-5.3-codex",
+			reasoningEffort: "high",
+			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+		});
+		const client = new RawNativeClient(bridge);
+		const initialize = await client.request("initialize", {
+			clientInfo: { name: "agent-infra-isolation-probe", version: "1" },
+		});
+		if (initialize.category !== "success") {
+			await client.close();
+			throw new Error("Native raw probe initialization unavailable");
+		}
+		return client;
+	}
+
+	async request(
+		method: string,
+		params: Record<string, unknown>,
+	): Promise<RawNativeReply> {
+		if (this.closed) return { category: "native-transport-error" };
+		const id = ++this.sequence;
+		return new Promise<RawNativeReply>((resolve) => {
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				resolve({ category: "native-timeout" });
+			}, 10_000);
+			this.pending.set(id, (reply) => {
+				clearTimeout(timer);
+				resolve(reply);
+			});
+			void this.bridge.send({ id, method, params }).catch(() => {
+				const pending = this.pending.get(id);
+				if (!pending) return;
+				this.pending.delete(id);
+				pending({ category: "native-transport-error" });
+			});
+		});
+	}
+
+	async close() {
+		if (this.closed) return;
+		this.closed = true;
+		await this.bridge.close().catch(() => {});
+	}
+
+	private async consume() {
+		try {
+			for await (const frame of this.bridge.frames()) this.receive(frame);
+		} catch {
+			// The per-request summaries classify this as a transport error.
+		}
+		this.closed = true;
+		for (const resolve of this.pending.values())
+			resolve({ category: "native-transport-error" });
+		this.pending.clear();
+	}
+
+	private receive(frame: CodexAppServerFrame) {
+		const id = frame.id;
+		if (typeof id !== "number") return;
+		const resolve = this.pending.get(id);
+		if (!resolve) return;
+		this.pending.delete(id);
+		if ("error" in frame) {
+			const error = frame.error;
+			resolve({
+				category:
+					isPlainRecord(error) && error.code === -32601
+						? "unsupported"
+						: "native-json-rpc-error",
+			});
+			return;
+		}
+		if (!("result" in frame)) {
+			resolve({ category: "invalid-native-response" });
+			return;
+		}
+		resolve({ category: "success", result: frame.result });
+	}
+}
+
+function nativeReadSample(
+	point: NativeReadSample["point"],
+	method: NativeReadSample["method"],
+	options: NativeReadSample["options"],
+	reply: RawNativeReply,
+	knownTurnId: string,
+): NativeReadSample {
+	const sample: NativeReadSample = {
+		point,
+		method,
+		options,
+		category: reply.category,
+		...(reply.category === "success"
+			? {}
+			: { knownTurnMatches: "unavailable" as const }),
+	};
+	if (reply.category !== "success") return sample;
+	if (method === "thread/read") {
+		const thread = isPlainRecord(reply.result)
+			? reply.result.thread
+			: undefined;
+		const status = isPlainRecord(thread) ? thread.status : undefined;
+		if (
+			!isPlainRecord(thread) ||
+			!isPlainRecord(status) ||
+			typeof status.type !== "string" ||
+			!Array.isArray(thread.turns)
+		) {
+			return { ...sample, category: "invalid-native-response" };
+		}
+		return {
+			...sample,
+			threadStatusType: status.type,
+			turnCount: thread.turns.length,
+			knownTurnMatches: thread.turns.some(
+				(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
+			),
+		};
+	}
+	const data = isPlainRecord(reply.result) ? reply.result.data : undefined;
+	if (!Array.isArray(data))
+		return { ...sample, category: "invalid-native-response" };
+	return {
+		...sample,
+		turnCount: data.length,
+		knownTurnMatches: data.some(
+			(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
+		),
+	};
+}
+
+function unavailableModelObservationSamples(
+	point: NativeReadSample["point"],
+): NativeReadSample[] {
+	return [
+		{
+			point,
+			method: "thread/read",
+			options: { includeTurns: false },
+			category: "model-observation-unavailable",
+			knownTurnMatches: "unavailable",
+		},
+		{
+			point,
+			method: "thread/read",
+			options: { includeTurns: true },
+			category: "model-observation-unavailable",
+			knownTurnMatches: "unavailable",
+		},
+		{
+			point,
+			method: "thread/turns/list",
+			options: { itemsView: "notLoaded" },
+			category: "model-observation-unavailable",
+			knownTurnMatches: "unavailable",
+		},
+	];
+}
+
 function quote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -52,6 +263,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		const binary = process.env.CODEX_ISOLATION_BINARY;
 		if (!binary) throw new Error("Missing pinned executable");
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-isolation-"));
+		const rawDriverPath = join(directory, "raw-native-read-probe.json");
 		const originalPath = process.env.PATH;
 		const scenarios: Record<string, Evidence> = {};
 		scenarios["restart-resume.original-native-sessions"] = {
@@ -105,6 +317,10 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			| undefined;
 		let nativeHome = "";
 		let workspace = "";
+		let rawProbeLaunches = 0;
+		let bootstrapDriverLaunches = 0;
+		let activeDriver: CodexRuntimeDriver | undefined;
+		let sampledNativeThreadId = "";
 		let stage = "startup";
 		const record = (key: string, status: Status, reason: string) => {
 			scenarios[key] = { status, reason };
@@ -134,6 +350,23 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					},
 				}),
 			);
+			return driver;
+		}
+		async function prepareRawNativeStorage() {
+			const rawDriver = await CodexRuntimeDriver.open({
+				path: rawDriverPath,
+				model: "gpt-5.3-codex",
+				reasoningEffort: "high",
+				modelOptions: [
+					{
+						modelOptionId: "synthetic",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+					},
+				],
+			});
+			await rawDriver.close();
+			bootstrapDriverLaunches = 1;
 		}
 		function request(
 			user: (typeof users)[number],
@@ -205,6 +438,131 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				})
 				.toBe("completed");
 			return { probe, events: JSON.stringify(await host.replay(query)) };
+		}
+		async function waitForModelSignal(signal: Promise<void>) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				return await Promise.race([
+					signal.then(() => true),
+					new Promise<boolean>((resolve) => {
+						timer = setTimeout(() => resolve(false), 10_000);
+					}),
+				]);
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+		}
+		async function snapshotActiveThread(
+			point: NativeReadSample["point"],
+			client: RawNativeClient,
+			threadId: string,
+			turnId: string,
+		) {
+			const withoutTurns = await client.request("thread/read", {
+				threadId,
+				includeTurns: false,
+			});
+			const withTurns = await client.request("thread/read", {
+				threadId,
+				includeTurns: true,
+			});
+			const turns = await client.request("thread/turns/list", {
+				threadId,
+				itemsView: "notLoaded",
+			});
+			return [
+				nativeReadSample(
+					point,
+					"thread/read",
+					{ includeTurns: false },
+					withoutTurns,
+					turnId,
+				),
+				nativeReadSample(
+					point,
+					"thread/read",
+					{ includeTurns: true },
+					withTurns,
+					turnId,
+				),
+				nativeReadSample(
+					point,
+					"thread/turns/list",
+					{ itemsView: "notLoaded" },
+					turns,
+					turnId,
+				),
+			];
+		}
+		async function sampleActiveThreadHistory() {
+			if (!model || !launcher) throw new Error("No native isolation fixture");
+			const probe = model.probe();
+			const hold = model.holdObservation(probe);
+			const beforeRawClient = (await launcher.observations()).filter(
+				(entry) => entry.method === "launch",
+			).length;
+			let client: RawNativeClient | undefined;
+			try {
+				client = await RawNativeClient.open(`${rawDriverPath}.native`);
+				const threadStarted = await client.request("thread/start", {});
+				const nativeThread = isPlainRecord(threadStarted.result)
+					? threadStarted.result.thread
+					: undefined;
+				if (
+					threadStarted.category !== "success" ||
+					!isPlainRecord(nativeThread) ||
+					typeof nativeThread.id !== "string"
+				) {
+					throw new Error("Native thread identity unavailable");
+				}
+				const turnStarted = await client.request("turn/start", {
+					threadId: nativeThread.id,
+					input: [{ type: "text", text: `ISOLATION_PROBE:${probe.id}` }],
+					model: "gpt-5.3-codex",
+					effort: "high",
+				});
+				const nativeTurn = isPlainRecord(turnStarted.result)
+					? turnStarted.result.turn
+					: undefined;
+				if (
+					turnStarted.category !== "success" ||
+					!isPlainRecord(nativeTurn) ||
+					typeof nativeTurn.id !== "string"
+				) {
+					throw new Error("Native turn not accepted");
+				}
+				sampledNativeThreadId = nativeThread.id;
+				report.activeThreadReadSamples = await snapshotActiveThread(
+					"after-turn-start-accepted",
+					client,
+					nativeThread.id,
+					nativeTurn.id,
+				);
+				hold.allowObservation();
+				const observed = await waitForModelSignal(hold.observed);
+				report.activeThreadReadSamples = observed
+					? [
+							...(report.activeThreadReadSamples as NativeReadSample[]),
+							...(await snapshotActiveThread(
+								"after-model-observed",
+								client,
+								nativeThread.id,
+								nativeTurn.id,
+							)),
+						]
+					: [
+							...(report.activeThreadReadSamples as NativeReadSample[]),
+							...unavailableModelObservationSamples("after-model-observed"),
+						];
+			} finally {
+				const afterRawClient = (await launcher.observations()).filter(
+					(entry) => entry.method === "launch",
+				).length;
+				rawProbeLaunches += afterRawClient - beforeRawClient;
+				hold.allowObservation();
+				hold.releaseResponse();
+				await client?.close();
+			}
 		}
 		async function pair(
 			commands: (string | undefined)[] = [undefined, undefined],
@@ -384,11 +742,13 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			model = await isolationModel();
 			launcher = await nativeIsolationLauncher(directory, binary, model.url);
 			process.env.PATH = launcher.bin + delimiter + (originalPath ?? "");
-			await open();
+			await prepareRawNativeStorage();
+			await sampleActiveThreadHistory();
+			activeDriver = await open();
 			report.provenanceVerified = true;
-			const launch = (await launcher.observations()).find(
-				(entry) => entry.method === "launch",
-			);
+			const launch = (await launcher.observations())
+				.filter((entry) => entry.method === "launch")
+				.at(-1);
 			if (!launch?.codexHome || !launch.cwd || !launch.home)
 				throw new Error("Missing native launch");
 			nativeHome = launch.codexHome;
@@ -440,7 +800,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			}
 			stage = "concurrent";
 			await phase(stage);
-			await driver?.close();
+			if (!activeDriver) throw new Error("No active native driver");
+			await activeDriver.close();
 			driver = undefined;
 			stage = "restart-resume";
 			await open();
@@ -472,9 +833,12 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			);
 			const nativeId = (entry: (typeof observations)[number]) =>
 				(entry.result?.thread as { id?: string } | undefined)?.id;
-			const originalIds = starts.map(nativeId);
+			const originalStarts = starts.filter(
+				(entry) => nativeId(entry) !== sampledNativeThreadId,
+			);
+			const originalIds = originalStarts.map(nativeId);
 			const sameSessions =
-				starts.length === 2 &&
+				originalStarts.length === 2 &&
 				new Set(originalIds).size === 2 &&
 				originalIds.every(
 					(id) =>
@@ -485,7 +849,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						),
 				);
 			const restarted =
-				observations.filter((entry) => entry.method === "launch").length === 2;
+				observations.filter((entry) => entry.method === "launch").length ===
+				2 + rawProbeLaunches + bootstrapDriverLaunches;
 			if (stage === "restart-resume" && sameSessions && restarted)
 				record(
 					"restart-resume.original-native-sessions",

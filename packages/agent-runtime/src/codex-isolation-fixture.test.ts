@@ -94,6 +94,21 @@ it("fails the model probe when native command tools are unavailable", async () =
 	expect(probe.answer).toBe("");
 });
 
+it("holds synthetic request observation and response at separate probe points", async () => {
+	const server = await model();
+	const probe = server.probe();
+	const hold = server.holdObservation(probe);
+	const response = submit(server, probe);
+	await hold.received;
+	expect(probe.inputs).toEqual([]);
+	hold.allowObservation();
+	await hold.observed;
+	expect(probe.inputs).toHaveLength(1);
+	hold.releaseResponse();
+	await hold.responseSent;
+	expect((await response).status).toBe(200);
+});
+
 it("binds a final isolation result to the exact clean #403 merge", () => {
 	const { mergeCommit } = CODEX_ISOLATION_PERSISTENCE_EVIDENCE;
 	expect(

@@ -45,6 +45,18 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   是 `CODEX_HOME`，`dataDirectory/workspace` 是 cwd；父进程 HOME 和 `TMPDIR` 仍是独立临时目录。
   关闭只清理临时 launch/probe/schema/scratch，不清理持久目录。Bridge 要求绝对规范路径、无 symlink、
   Runtime UID 私有 `0700`，拒绝与父 HOME/CODEX_HOME/cwd 重叠及持久化配置或凭证文件。
+- active-history 兼容性探针先由正式 Driver 创建测试专用的持久 root，随后以单个 pinned app-server
+  在同一 Thread 上调用 `thread/start`、`turn/start`，并在 loopback 模型记录合成用户请求前、以及记录后
+  但响应仍受控暂停时，分别调用 `thread/read(includeTurns=false)`、
+  `thread/read(includeTurns=true)` 与 `thread/turns/list(itemsView=notLoaded)`。该 root 与正式双用户
+  Driver root 分开，避免诊断 Thread 影响后续隔离控制；两个点不更换 Thread、二进制或 Provider。
+  Bridge 为该进程创建独立临时 HOME/TMPDIR，不继承父进程凭证，也不修改 sandbox、cwd、`CODEX_HOME`
+  或任何原生回包。
+- 该兼容性探针只输出 point、method、非敏感 options、success/error category、`thread.status.type`、
+  turn count 和目标 Turn 是否匹配；不输出 ID、线程正文、路径、模型输入、完整 frame 或凭证。
+  `includeTurns=true` 是 paginated history 的废弃 hydration 路径，不能作为 `thread/turns/list` 的替代，
+  也不能单独证明隔离。若 loopback 模型未在有界时间内观察到请求，第二点标为
+  `model-observation-unavailable`，不重发 Turn 或把第一点结果挪用为第二点。
 - 两个用户的文件正文使用独立随机标记，标记不进入读取请求；真实 Codex `exec_command`
   执行读取、搜索及修改。正向对照必须在工具输出与平台结果中看到本人标记；搜索使用同命令
   正向对照，修改还由测试独立回读磁盘。工具不可用或本人访问失败不能形成负向通过。
