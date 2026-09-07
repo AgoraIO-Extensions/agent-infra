@@ -429,6 +429,7 @@ describe
 					"synthetic-execution",
 				),
 			).toBe("running");
+			await driver.close();
 			expect(loopback.wasRequested()).toBe(false);
 		}, 90_000);
 
