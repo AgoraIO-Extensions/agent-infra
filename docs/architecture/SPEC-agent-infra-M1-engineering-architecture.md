@@ -534,6 +534,8 @@ Platform Owner 当前 Agent Action policy
 
 Owner 新增 Action 后，旧 Grant 不包含新增项；用户必须在 Connection 重新确认。Owner 移除 policy 或 Connection 停用 Provider/Action 后立即拒绝新调用。Connection 不读取 Platform DB，而是验证由 Platform 当前 policy 约束的短期 assertion；assertion 只能证明调用主体和请求绑定，不能创建或扩大 Grant。
 
+为使已签发 assertion 不能越过后续 Platform 撤权，Connection 只保存 Agent/Action policy 的单调 revision 和 revocation fence，不保存 policy 内容。Platform 撤权命令必须先持久终结 Connection fence 并取得确认，再标记撤权完成；Connection 不可用时停止签发新 assertion 并保持撤权处理中。Dispatch 事务同时检查 assertion revision 与 current fence。
+
 ### 13.3 调用链路
 
 ```mermaid
@@ -637,7 +639,7 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 - ProviderRelease、immutable ActionVersion 和 Consumer declaration。
 - 个人/共享 Connection、外部账号安全标识、scope、Connection Grant 和确认快照。
 - 加密 CredentialVersion、OAuth state、刷新和 Provider revoke attempt。
-- AuthorizedInvocation、ActionCall、Effect、Dispatch、对账任务、脱敏结果和 Connection 审计。
+- AuthorizedInvocation、Platform policy revision/fence、ActionCall、Effect、Dispatch、对账任务、脱敏结果和 Connection 审计。
 
 ### 15.3 跨系统一致性
 

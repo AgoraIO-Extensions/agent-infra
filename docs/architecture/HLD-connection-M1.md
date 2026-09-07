@@ -37,6 +37,7 @@ Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员
 | Connection | Principal 拥有或当前有资格使用的外部账号连接 |
 | CredentialVersion | Connection 当前受保护的 Provider Credential 版本 |
 | Grant | Principal 对 Consumer/Actor、Connection 和 exact ActionVersion 的确认授权 |
+| PlatformPolicyFence | Connection 保存的 Platform Agent/Action policy revision 与撤权 fence；不是 Grant 副本 |
 | ActionCall | Connection 已接受并持久化的一次逻辑调用 |
 | Effect | WRITE ActionCall 可能产生的外部业务副作用 |
 | Dispatch | 向 Provider 发起一次 Action 执行的具体尝试；WRITE Dispatch 关联对应 Effect |
@@ -126,6 +127,8 @@ Platform current Agent Action policy
 
 Platform policy 由 Agent Owner 管理。Connection Grant 只能由当前 Principal 在 Connection Web 确认。GitHub OAuth 成功不自动创建 Grant；Owner 新增 Action 后旧 Grant 不自动扩权。
 
+Connection 不保存 Platform policy 内容，但为 delegated 调用保存当前 Agent/Action 的 `PlatformPolicyFence`。Platform 创建或更新 Agent policy 时注册单调 revision；delegated assertion 必须绑定该 revision。Owner 移除 Action 时，Platform 必须先让 Connection 持久终结对应 fence，取得成功确认后才能把撤权命令标记完成。Connection 不可用时撤权保持处理中且 Platform 停止签发新 assertion；重复命令按同一 revision 幂等恢复。这样 Connection dispatch 可以在本地事务检查 fence，而不读取 Platform DB 或保存第二份 Grant。
+
 ## 7. Delegated 身份
 
 ### 7.1 Platform 签发责任
@@ -137,6 +140,7 @@ Platform Tool Gateway 负责：
 - 认证注册 workload，并解析稳定 Agent Actor。
 - 从可信 Platform IdentityContext 取得部署批准的稳定 issuer/subject；该值必须与 Connection LDAP `issuer + uid` 映射同一员工，不能从邮箱、显示名或请求字段推导。
 - 签发短期、不可篡改、一次性 delegated assertion。
+- 将当前 Agent/Action policy revision 绑定到 assertion，并在 policy 撤销流程中先终结 Connection 的对应 PlatformPolicyFence，再确认 Platform 撤权完成。
 - 保存自己的执行记录和 Connection `callId` 引用。
 
 ### 7.2 Connection 验证责任
@@ -148,6 +152,7 @@ Connection 在 Grant lookup 前校验：
 - Principal evidence、Consumer、ConsumerInstance 和 workload。
 - Actor 存在、已注册且 current workload 有权代表；Agent Platform 固定 `REQUIRED` Actor，不允许回退到 Consumer-level Grant。
 - exact ActionVersion、参数摘要、业务幂等键和 deadline。
+- assertion 绑定的 Platform policy revision 与 Connection 当前 PlatformPolicyFence 一致。
 
 Connection 必须在创建 ActionCall 的同一 PostgreSQL 事务中原子写入 `jti`、全部请求绑定字段和 `callId`，并以 `jti` 唯一约束串行化并发请求；不得先单独标记 `jti` 已消费。若 `jti` 已存在，只有全部绑定字段完全一致且原 ActionCall 已提交时才能读取原调用，任一字段变化或绑定记录不完整都必须拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
 
@@ -189,11 +194,13 @@ Connection 在一个持久化流程中：
 - Grant root/current Grant 和 exact ActionVersion。
 - Connection revision/fence 和 CredentialVersion。
 - Consumer declaration、ProviderRelease 和 ActionVersion 状态。
+- Platform policy revision/fence 仍有效。
 - repository allowlist。
+- 请求 deadline 尚未到期。
 
 事务必须锁定参与判断的 Grant root/current Grant、Connection fence、CredentialVersion、ConsumerInstance 和 Dispatch 行，或使用覆盖同一 revision/fence 的 CAS，使并发撤权与 Dispatch 转换只能形成一个确定提交顺序。全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是 Provider 访问的授权线性化点，可能早于实际网络请求；零行更新或 CAS 冲突等价于本地拒绝，不得调用 Provider。READ Dispatch 直接记录调用结果；WRITE Dispatch 还必须同步对应 Effect 状态。
 
-撤权在该事务前完成时阻止当前调用；事务完成后才撤权时不回滚可能已提交的 Provider 操作，但后续新调用均拒绝。
+撤权在该事务前完成时阻止当前调用；事务完成后才撤权时不回滚可能已提交的 Provider 操作，但后续新调用均拒绝。恢复 PENDING Dispatch 时必须重新检查 deadline；已经过期的调用本地终结且不得访问 Provider。
 
 ## 10. 未知结果与对账
 
@@ -236,6 +243,7 @@ Connection DB 至少保存：
 
 - Principal、identity mapping、BrowserSession 和 AdministratorRole binding。
 - Consumer、ConsumerInstance、workload 和 Actor registration。
+- Platform Agent/Action policy revision 和 revocation fence，不保存 policy 内容或用户 Grant 副本。
 - ProviderRelease、ActionVersion 和 Consumer declaration。
 - Connection、CredentialVersion、Grant/root/fence。
 - AuthorizedInvocation、ActionCall、Effect、Dispatch 和 reconciliation job。
@@ -267,6 +275,7 @@ Connection DB 至少保存：
 
 - Alice/Bob 不能访问对方 Principal、Connection、Grant、Credential、OAuth transaction 或调用记录。
 - 错误 issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数或幂等绑定均拒绝。
+- stale Platform policy revision、已终结 fence 和超过 deadline 的 PENDING Dispatch 均在 Provider 访问前拒绝。
 - LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
 - Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
