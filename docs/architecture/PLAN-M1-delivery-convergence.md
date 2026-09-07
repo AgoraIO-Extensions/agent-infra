@@ -255,6 +255,17 @@ Owner 只能作出下列一项明确选择：
 决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可创建 §5.2 的联合验收票并安排
 参与者与窗口。
 
+资源与运行就绪矩阵由 [#177](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) 持有；
+本决策只解决执行主体与观察口径，不修改 #177，也不确认其身份集成、参与者、窗口、
+Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上述输入须在 #177 以脱敏、
+可回读的实际证据完成；未确认项不能作为 Pilot 通过证据。
+[#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) 继续负责 ACK tenancy、Registry pull
+和 Kubernetes Secret 绑定。
+
+执行 Principal、观察参与者（如适用）、未授权/账号禁用/组织变化/用户/Owner/admin 等负向测试身份、
+签收和事故响应角色，以及任务、PR、`callId`、Execution 与 Workload 计数必须分别记录；任一类别
+不自动满足另一类别。此处不记录姓名、日期、数值 ID、已批准运行值或 Go/No-Go 结论。
+
 ### 5.2 唯一新增联合验收票草案
 
 现有 #194 只负责 Fake，#395 只负责 Connection readiness，#171 只负责 ACK 资源准备；
