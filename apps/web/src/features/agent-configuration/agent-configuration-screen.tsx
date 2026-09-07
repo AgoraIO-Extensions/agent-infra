@@ -147,7 +147,9 @@ export function AgentConfigurationScreen({
 }: AgentConfigurationScreenProps) {
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [imageReference, setImageReference] = useState("");
-	const resultRef = useResultFocus(commandResult);
+	const submittedResult =
+		commandResult?.agentId === agent.agentId ? commandResult : undefined;
+	const resultRef = useResultFocus(submittedResult);
 	if (
 		session.kind !== "ready" ||
 		!isAgentConfigurationOwner(agent, session.session)
@@ -164,9 +166,6 @@ export function AgentConfigurationScreen({
 				`${secret.name} (${secret.isSet ? "set" : "not set"}${secret.version === null ? "" : `, version ${secret.version}`})`,
 		)
 		.join(", ");
-	const submittedResult =
-		commandResult?.agentId === agent.agentId ? commandResult : undefined;
-
 	const updateAction = (
 		index: number,
 		key: keyof AgentConfigurationActionDraft,
