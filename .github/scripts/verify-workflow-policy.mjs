@@ -1107,6 +1107,15 @@ export function validateWorkflowDocuments(workflows) {
   ) {
     errors.push("CI workflow and required check must both use the CI name");
   }
+  const ciCheckout = workflows["ci.yml"]?.jobs?.ci?.steps?.find(
+    (step) => step.name === "Checkout repository",
+  );
+  if (
+    ciCheckout?.uses !== CHECKOUT_ACTION ||
+    ciCheckout?.with?.ref !== "${{ github.sha }}"
+  ) {
+    errors.push("CI must check out github.sha to validate the pull-request merge result");
+  }
 
   for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
     const runName = workflows[name]?.["run-name"];
