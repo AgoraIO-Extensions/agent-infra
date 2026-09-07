@@ -70,10 +70,12 @@ flowchart LR
 Connection 使用部署批准的固定 LDAP profile：
 
 1. Browser 通过 HTTPS 向 Connection 提交用户名和密码。
-2. Connection 转义所有 DN/filter 输入，设置连接、bind、search 和总请求 deadline，拒绝空密码和匿名 bind。
-3. 成功验证后读取稳定 `uid`，以 `issuer + uid` 查找或创建 Principal。
-4. 邮箱、登录名和显示名只更新展示资料，不参与授权键。
-5. LDAP 密码在请求结束后丢弃，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。
+2. Connection 对登录尝试按规范化账号和请求来源执行限速、退避与审计；限流状态不能记录密码，也不能形成可用于锁死指定员工账号的无界远程锁定。
+3. Connection 转义所有 DN/filter 输入，设置连接、bind、search 和总请求 deadline，拒绝空密码和匿名 bind。
+4. 不存在的账号、密码错误和不允许登录的账号返回相同的外部状态、响应结构和脱敏错误，不能泄露 LDAP 条目是否存在。
+5. 成功验证后读取稳定 `uid`，以 `issuer + uid` 查找或创建 Principal。
+6. 邮箱、登录名和显示名只更新展示资料，不参与授权键。
+7. LDAP 密码在请求结束后丢弃，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。
 
 LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/配置提供，调用方不能选择或触发降级。
 
@@ -81,10 +83,11 @@ LDAP endpoint、Service Bind Credential 和 transport profile 由部署 Secret/�
 
 登录成功后签发高熵 opaque Cookie：
 
-- `HttpOnly`、`Secure`、`SameSite=Strict`。
+- 使用 host-only `__Host-` Cookie，并设置 `HttpOnly`、`Secure`、`SameSite=Strict` 和 `Path=/`，不设置 `Domain`。
 - PostgreSQL 只保存 session hash、Principal、issuer、过期、撤销和 recovery generation。
 - 退出、过期、Principal 停用或 recovery generation 变化后立即失效。
 - BrowserSession 只用于 Connection Web 管理操作，不能作为 delegated Action 调用凭据。
+- 所有 Browser 写请求必须同时校验独立 CSRF token、精确同源 `Origin` 和 Fetch Metadata；缺失、跨源或不匹配时在执行任何状态变更前拒绝。
 
 ### 5.3 Principal 复核
 
@@ -174,8 +177,8 @@ Connection 在一个持久化流程中：
 
 1. 验证 delegated assertion 和 current Grant。
 2. 校验 Action Schema 和 repository policy。
-3. 以 Principal、Consumer/Actor、ActionVersion、参数摘要和业务幂等键查找原调用。
-4. 同键同请求返回原 `callId`；同键不同请求拒绝。
+3. 以 Principal、Consumer/Actor 和业务幂等键查找原调用；业务幂等键在该命名空间内使用唯一约束串行化并发创建。
+4. 将 ActionVersion、参数摘要和服务端从 current Grant 解析出的 Connection 稳定 ID 作为原调用的不可变绑定；全部一致时返回原 `callId`，任一字段不同则拒绝。
 5. 创建 ActionCall，并为所有需要访问 Provider 的 Action 创建 PENDING Dispatch；WRITE Action 还必须创建 Effect 并将 Dispatch 关联到该 Effect。
 
 ### 9.2 Dispatch 线性化
@@ -188,7 +191,7 @@ Connection 在一个持久化流程中：
 - Consumer declaration、ProviderRelease 和 ActionVersion 状态。
 - repository allowlist。
 
-全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是 Provider 访问的授权线性化点，可能早于实际网络请求；零行更新等价于本地拒绝，不得调用 Provider。READ Dispatch 直接记录调用结果；WRITE Dispatch 还必须同步对应 Effect 状态。
+事务必须锁定参与判断的 Grant root/current Grant、Connection fence、CredentialVersion、ConsumerInstance 和 Dispatch 行，或使用覆盖同一 revision/fence 的 CAS，使并发撤权与 Dispatch 转换只能形成一个确定提交顺序。全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是 Provider 访问的授权线性化点，可能早于实际网络请求；零行更新或 CAS 冲突等价于本地拒绝，不得调用 Provider。READ Dispatch 直接记录调用结果；WRITE Dispatch 还必须同步对应 Effect 状态。
 
 撤权在该事务前完成时阻止当前调用；事务完成后才撤权时不回滚可能已提交的 Provider 操作，但后续新调用均拒绝。
 
@@ -213,7 +216,7 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 - Disconnect 创建持久 Provider revoke attempt，默认只撤销该 Connection 的单个 GitHub Token。
 - Provider revoke 记录请求、成功、失败/待重试、attempt 和脱敏证据。
 - 不默认删除用户对整个 OAuth App 的 grant；该动作只允许由明确展示影响范围的独立用户操作触发。
-- 用户在 GitHub 侧撤销或 scope 缩减后，Provider 401/403 或 token check 将 Credential fence 为不可用，并要求重新连接。
+- 用户在 GitHub 侧撤销或 scope 缩减后，仅当 Provider 返回可确认的无效凭证响应，或独立 token check 明确确认 Token 已撤销或缺少必需 scope 时，才将 Credential fence 为不可用并要求重新连接。普通 `403` 必须先区分限流、abuse protection、仓库权限和其他资源级拒绝，不得据此直接停用整个 Credential。
 
 ## 12. Web 与管理
 
@@ -262,8 +265,10 @@ Connection DB 至少保存：
 
 - Alice/Bob 不能访问对方 Principal、Connection、Grant、Credential、OAuth transaction 或调用记录。
 - 错误 issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数或幂等绑定均拒绝。
+- LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
 - Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
+- GitHub 普通 `403` 覆盖限流、abuse protection 和仓库权限拒绝，不得错误 fence 有效 Credential。
 - 浏览器、Agent、Platform、日志、错误和审计均无原始 Secret。
 
 ### 15.3 故障与人工处理
