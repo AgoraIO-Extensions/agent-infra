@@ -557,9 +557,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 					 trace_id, request_id, occurred_at, details)
 				values
 					('audit_command_upgrade', 'conversation_upgrade', 'execution_upgrade',
-					 'agent_upgrade', 'actor_upgrade', 'conversation.message.accepted',
-					 'trace_upgrade', 'request_upgrade',
-					 '2026-09-04T00:00:00.000Z', null),
+						 'agent_upgrade', 'actor_upgrade', 'conversation.message.accepted',
+						 'trace_upgrade', 'request_upgrade',
+						 '2026-09-04T00:00:00.000Z', null),
+					('audit_command_upgrade_duplicate', 'conversation_upgrade',
+						 'execution_upgrade', 'agent_upgrade', 'actor_upgrade',
+						 'conversation.message.accepted', 'trace_upgrade', 'request_upgrade',
+						 '2026-09-04T00:00:00.000Z', null),
 					('audit_command_decoy', 'conversation_upgrade', 'execution_decoy',
 					 'agent_decoy', 'actor_decoy', 'conversation.message.accepted',
 					 'trace_upgrade', 'request_upgrade',
@@ -624,10 +628,30 @@ describe("Platform PostgreSQL migration foundation", () => {
 					 'ready', 1, 'authorization_unbound')
 			`;
 			await upgradeClient`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+					 status, session_generation, authorization_revision, created_at)
+				values
+					('execution_unbound_a', 'conversation_unbound', 'agent_unbound',
+						 'actor_unbound', 'web', 'turn_unbound_a', 'completed', 1,
+						 'authorization_unbound', '2026-09-04T00:00:00.000Z'),
+					('execution_unbound_b', 'conversation_unbound', 'agent_unbound',
+						 'actor_unbound', 'web', 'turn_unbound_b', 'completed', 1,
+						 'authorization_unbound', '2026-09-04T00:00:00.000Z')
+			`;
+			await upgradeClient`
 				insert into platform.conversation_audit_events
 					(id, conversation_id, execution_id, agent_id, actor_id, action,
 					 trace_id, request_id, occurred_at, details)
 				values
+					('audit_command_unbound_a', 'conversation_unbound',
+						 'execution_unbound_a', 'agent_unbound', 'actor_unbound',
+						 'conversation.message.accepted', 'trace_unbound', 'request_unbound',
+						 '2026-09-04T00:00:00.000Z', null),
+					('audit_command_unbound_b', 'conversation_unbound',
+						 'execution_unbound_b', 'agent_unbound', 'actor_unbound',
+						 'conversation.message.accepted', 'trace_unbound', 'request_unbound',
+						 '2026-09-04T00:00:00.000Z', null),
 					('audit_fallback_unbound', 'conversation_unbound', null,
 					 'agent_unbound', 'actor_unbound',
 					 'conversation.model_selection.fell_back', 'trace_unbound',

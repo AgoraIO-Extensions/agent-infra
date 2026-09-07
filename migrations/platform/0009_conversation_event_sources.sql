@@ -27,7 +27,7 @@ BEGIN
 		WHERE fallback.action = 'conversation.model_selection.fell_back'
 			AND fallback.execution_id IS NULL
 		GROUP BY fallback.id
-		HAVING count(*) = 1
+		HAVING count(DISTINCT command.execution_id) = 1
 	)
 	UPDATE platform.conversation_audit_events AS fallback
 	SET execution_id = unique_bindings.execution_id
