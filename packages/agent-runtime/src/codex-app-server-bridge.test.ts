@@ -1,15 +1,18 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync } from "node:fs";
 import {
 	access,
 	chmod,
+	lstat,
+	mkdir,
 	mkdtemp,
 	readFile,
-	realpath,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -131,7 +134,10 @@ if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes
 }
 
 function options(overrides: Record<string, unknown> = {}) {
+	const directory = mkdtempSync(join(tmpdir(), "agent-runtime-codex-pvc-"));
+	directories.push(directory);
 	return {
+		dataDirectory: join(directory, "native"),
 		model: "gpt-5.3-codex",
 		reasoningEffort: "high",
 		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
@@ -257,6 +263,211 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	it("reuses native storage while replacing and cleaning only the temporary HOME", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const configuration = options();
+		const first = await CodexAppServerBridge.open(configuration);
+		const before = await readAppCapture(capturePath);
+		await writeFile(join(before.cwd, "synthetic.txt"), "persisted");
+		await first.close();
+		const second = await CodexAppServerBridge.open(configuration);
+		const captures = await readCaptures(capturePath, 6);
+		const after = captures.at(-1);
+		expect(after?.cwd).toBe(before.cwd);
+		expect(after?.environment.codexHome).toBe(before.environment.codexHome);
+		expect(after?.environment.home).not.toBe(before.environment.home);
+		expect(await readFile(join(before.cwd, "synthetic.txt"), "utf8")).toBe(
+			"persisted",
+		);
+		await second.close();
+		for (const launch of [before, after]) {
+			if (!launch?.environment.home)
+				throw new Error("Missing synthetic launch");
+			await expectPathRemoved(launch.environment.home);
+		}
+	});
+
+	it.each(["", "/", "relative", "/tmp/../native"])(
+		"rejects an uncontrolled storage path %s",
+		async (dataDirectory) => {
+			await installFakeCodex("echo");
+			await expect(
+				CodexAppServerBridge.open(options({ dataDirectory })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it.each(["root", "home", "workspace"])(
+		"rejects permissions exposing persistent %s to other users",
+		async (target) => {
+			if (!process.getuid) return;
+			const { capturePath } = await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const path =
+				target === "root"
+					? configuration.dataDirectory
+					: join(configuration.dataDirectory, target);
+			await writeFile(join(path, "sentinel"), "unchanged");
+			for (const mode of [0o740, 0o702]) {
+				await chmod(path, mode);
+				await expect(
+					CodexAppServerBridge.open(configuration),
+				).rejects.toMatchObject({
+					code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+				});
+				expect((await lstat(path)).mode & 0o777).toBe(mode);
+			}
+			expect(await readFile(join(path, "sentinel"), "utf8")).toBe("unchanged");
+			expect(
+				(await readCaptures(capturePath, 7)).filter(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toHaveLength(1);
+		},
+	);
+
+	it("rejects persistent storage owned by a different runtime UID", async () => {
+		if (!process.getuid) return;
+		await installFakeCodex("echo");
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		await bridge.close();
+		const uid = vi
+			.spyOn(process, "getuid")
+			.mockReturnValue(process.getuid() + 1);
+		try {
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		} finally {
+			uid.mockRestore();
+		}
+	});
+
+	it.each(["HOME", "CODEX_HOME", "cwd"])(
+		"rejects both directions of persistent storage overlap with %s",
+		async (source) => {
+			const { capturePath } = await installFakeCodex("echo");
+			for (const relation of ["equal", "ancestor", "descendant"]) {
+				const configuration = options();
+				const personal =
+					relation === "equal"
+						? configuration.dataDirectory
+						: relation === "ancestor"
+							? join(configuration.dataDirectory, "personal")
+							: dirname(configuration.dataDirectory);
+				await mkdir(personal, { recursive: true });
+				await writeFile(join(personal, "sentinel"), "unchanged");
+				const cwd =
+					source === "cwd"
+						? vi.spyOn(process, "cwd").mockReturnValue(personal)
+						: undefined;
+				if (source !== "cwd") vi.stubEnv(source, personal);
+				try {
+					await expect(
+						CodexAppServerBridge.open(configuration),
+					).rejects.toMatchObject({
+						code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+					});
+				} finally {
+					cwd?.mockRestore();
+					vi.unstubAllEnvs();
+				}
+				expect(await readFile(join(personal, "sentinel"), "utf8")).toBe(
+					"unchanged",
+				);
+			}
+			expect(
+				(await readCaptures(capturePath, 6)).some(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toBe(false);
+		},
+	);
+
+	it.each(["root", "home", "workspace"])(
+		"rejects symlinked persistent %s without touching its target",
+		async (target) => {
+			await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const linkedPath =
+				target === "root"
+					? configuration.dataDirectory
+					: join(configuration.dataDirectory, target);
+			const personal = await mkdtemp(join(tmpdir(), "synthetic-personal-"));
+			directories.push(personal);
+			await writeFile(join(personal, "sentinel"), "unchanged");
+			await rm(linkedPath, { recursive: true });
+			await symlink(personal, linkedPath);
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			expect(await readFile(join(personal, "sentinel"), "utf8")).toBe(
+				"unchanged",
+			);
+		},
+	);
+
+	it.each([
+		"config.toml",
+		"auth.json",
+		"managed_config.toml",
+		"workspace config",
+	])(
+		"rejects persistent %s as an untrusted configuration source",
+		async (source) => {
+			await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			if (source === "workspace config")
+				await mkdir(join(configuration.dataDirectory, "workspace", ".codex"));
+			else
+				await writeFile(
+					join(configuration.dataDirectory, "home", source),
+					"synthetic-untrusted-configuration",
+				);
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it("retains native session data and workspace when the process closes", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(options());
+		const captures = await readCaptures(capturePath, 3);
+		const launch = captures[2];
+		if (!launch?.environment.codexHome) throw new Error("missing launch");
+		await writeFile(
+			join(launch.environment.codexHome, "synthetic-session"),
+			"session",
+		);
+		await writeFile(join(launch.cwd, "synthetic-workspace"), "workspace");
+		await bridge.close();
+		expect(
+			await readFile(
+				join(launch.environment.codexHome, "synthetic-session"),
+				"utf8",
+			),
+		).toBe("session");
+		expect(
+			await readFile(join(launch.cwd, "synthetic-workspace"), "utf8"),
+		).toBe("workspace");
+	});
+
 	it("starts every Codex subprocess with an isolated deployment-owned tool configuration", async () => {
 		process.env.CODEX_HOME = "/parent-codex-home";
 		process.env.HOME = "/parent-home";
@@ -268,7 +479,11 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		try {
 			for (const capture of captures) {
 				expect(capture.cwd).not.toBe(process.cwd());
-				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+				expect(capture.environmentKeys).toEqual(
+					capture.args.includes("--stdio")
+						? [...isolatedEnvironmentKeys, "TMPDIR"].sort()
+						: isolatedEnvironmentKeys,
+				);
 				expect(capture.environment.codexHome).toBeDefined();
 				expect(capture.environment.home).toBeDefined();
 				if (process.platform === "darwin") {
@@ -276,12 +491,13 @@ describe.sequential("Codex app-server v2 bridge", () => {
 						process.env.__CF_USER_TEXT_ENCODING ?? "",
 					);
 				}
-				expect(await realpath(capture.environment.codexHome ?? "")).toBe(
-					await realpath(capture.cwd),
-				);
-				expect(await realpath(capture.environment.home ?? "")).toBe(
-					await realpath(capture.cwd),
-				);
+				if (!capture.args.includes("--stdio")) {
+					expect(capture.environment.codexHome).toBe(capture.environment.home);
+				} else {
+					expect(capture.environment.codexHome).not.toBe(
+						capture.environment.home,
+					);
+				}
 				expect(capture.environment.hasMcpConfiguration).toBe(false);
 				expect(capture.environment.hasConnectionCredential).toBe(false);
 			}
@@ -302,7 +518,9 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			await bridge.close();
 		}
 		for (const capture of captures) {
-			await expect(access(capture.cwd)).rejects.toThrow();
+			if (capture.args.includes("--stdio"))
+				await expect(access(capture.cwd)).resolves.toBeUndefined();
+			else await expect(access(capture.cwd)).rejects.toThrow();
 		}
 	});
 
@@ -455,14 +673,15 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
-	it("removes its private runtime directory after an unexpected child exit", async () => {
+	it("removes only its temporary HOME after an unexpected child exit", async () => {
 		const { capturePath } = await installFakeCodex("startup-exit");
 		const bridge = await CodexAppServerBridge.open(options());
-		const { cwd } = await readAppCapture(capturePath);
+		const { cwd, environment } = await readAppCapture(capturePath);
 		await expect(
 			bridge.frames()[Symbol.asyncIterator]().next(),
 		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
-		await expectPathRemoved(cwd);
+		await expectPathRemoved(environment.home ?? "");
+		await expect(access(cwd)).resolves.toBeUndefined();
 		await bridge.close();
 	});
 

@@ -51,6 +51,28 @@ pnpm smoke
 pnpm docker:build
 ```
 
+### Codex 原生恢复验证
+
+Codex Driver 的部署端 `path` 必须位于当前 Agent PVC，Driver 使用其旁的
+`<path>.native/home` 保存原生 Session，`<path>.native/workspace` 保存工作区。
+部署必须同时保留映射文件和这两个目录。进程退出仅清理临时 HOME、schema 与 scratch；
+持久目录不得与父进程 HOME、CODEX_HOME 或 cwd 重叠，不得包含个人配置、凭证文件或工作区 `.codex` 配置。
+POSIX 部署中三个目录必须归 Runtime UID 所有，且不能授予 group/other 权限；新目录以 `0700` 创建。
+该路径不属于 HTTP Contract。
+
+CI 下载并校验固定 Codex `0.153.0` 的 release archive SHA-256，再由正式 Bridge
+校验版本和协议 schema 指纹。开发者在隔离的 `PATH` 中准备同一版本后执行：
+
+```bash
+AGENT_INFRA_CODEX_NATIVE_TEST=1 pnpm --filter @agent-infra/agent-runtime test
+```
+
+这组测试通过真实 Driver/Bridge 创建合成 Turn，确认原生已记录输入后关闭进程以停止 Turn 并落盘，
+再跨正常关闭与异常退出恢复原 Session、Turn、合成历史及工作区，检查幂等和缺失/损坏数据。
+测试不使用模型凭证，不证明模型调用成功。普通 `pnpm test` 保留模拟 conformance，
+未设置上述变量时跳过原生进程测试；CI 必须执行两者。
+Pod/PVC 调谐、多人运行上下文隔离和真实 Pilot 仍由对应交付任务验收。
+
 ## 开发工作流
 
 开发流转、角色权限、Worker 授权、门禁、失败恢复和通知规则见
