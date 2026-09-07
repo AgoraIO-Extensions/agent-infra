@@ -665,9 +665,15 @@ export class FakeConversationExecutionV1
 					event: structuredClone(decision.event),
 				});
 				execution.lastEventSequence = decision.event.sequence;
+				if (decision.transition) {
+					execution.status = decision.transition.executionStatus;
+				}
 				this.#conversations.set(conversation.conversationId, {
 					...conversation,
 					lastConversationCursor: decision.event.conversationCursor,
+					...(decision.transition
+						? { status: decision.transition.conversationStatus }
+						: {}),
 				});
 				return { outcome: "accepted", event: structuredClone(decision.event) };
 			},

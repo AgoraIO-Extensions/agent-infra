@@ -329,6 +329,81 @@ describe("PostgreSQL Conversation event transaction", () => {
 		}
 	});
 
+	it("commits an event and its status transition atomically", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openEvents("event_postgres_terminal");
+		try {
+			await expect(
+				events.persist({
+					...eventInput(conversationId, executionId),
+					event: { type: "execution.status", status: "completed" },
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+				}),
+			).resolves.toMatchObject({ outcome: "accepted" });
+			const [state] = await client`
+				select c.status as conversation_status,
+					c.last_conversation_cursor::int as conversation_cursor,
+					e.status as execution_status,
+					e.last_event_sequence::int as execution_sequence,
+					e.last_runtime_cursor as runtime_cursor
+				from platform.conversations c
+				join platform.conversation_executions e
+					on e.conversation_id = c.id
+				where c.id = ${conversationId} and e.execution_id = ${executionId}
+			`;
+			expect(state).toEqual({
+				conversation_status: "ready",
+				conversation_cursor: 1,
+				execution_status: "completed",
+				execution_sequence: 1,
+				runtime_cursor: "runtime_cursor_adapter_event_1",
+			});
+		} finally {
+			await close();
+		}
+	});
+
+	it("rolls back an event that would rewrite a terminal Execution", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		await client`
+			update platform.conversation_executions set status = 'completed'
+			where execution_id = ${executionId}
+		`;
+		const { events, close } = openEvents("event_postgres_late_running");
+		try {
+			await expect(
+				events.persist({
+					...eventInput(conversationId, executionId),
+					event: { type: "execution.status", status: "processing" },
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [state] = await client`
+				select e.status as execution_status,
+					e.last_event_sequence::int as execution_sequence,
+					e.last_runtime_cursor as runtime_cursor,
+					(select count(*)::int from platform.conversation_events
+						where execution_id = ${executionId}) as events
+				from platform.conversation_executions e
+				where e.execution_id = ${executionId}
+			`;
+			expect(state).toEqual({
+				execution_status: "completed",
+				execution_sequence: 0,
+				runtime_cursor: null,
+				events: 0,
+			});
+		} finally {
+			await close();
+		}
+	});
+
 	it("rejects a new Runtime event after its dispatch lease expires", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const itemId = `conversation:turn:${executionId}`;

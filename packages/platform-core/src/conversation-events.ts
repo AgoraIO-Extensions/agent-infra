@@ -12,6 +12,11 @@ export type ConversationEventStatusV1 =
 	| "cancelled"
 	| "unknown";
 
+export interface ConversationEventStateTransitionV1 {
+	readonly executionStatus: ConversationEventStatusV1;
+	readonly conversationStatus: "ready" | "active";
+}
+
 export type ConversationNormalizedEventV1 =
 	| { readonly type: "text.delta"; readonly text: string }
 	| {
@@ -59,6 +64,7 @@ export interface ConversationEventCommandV1 {
 	readonly runtimeCursor: string;
 	readonly occurredAt: string;
 	readonly event: ConversationNormalizedEventV1;
+	readonly transition?: ConversationEventStateTransitionV1;
 	readonly dispatchLease?: {
 		readonly schemaVersion: 1;
 		readonly itemId: string;
@@ -116,6 +122,7 @@ export interface ConversationEventWritePlanV1 {
 	readonly runtimeCursor: string;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
+	readonly transition?: ConversationEventStateTransitionV1;
 }
 
 export type ConversationEventDecisionV1 =
@@ -406,7 +413,7 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 			"occurredAt",
 			"event",
 		],
-		["dispatchLease"],
+		["transition", "dispatchLease"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -419,6 +426,31 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 	) {
 		invalidInput();
 	}
+	const event = parseEvent(values.event);
+	const transition: ConversationEventStateTransitionV1 | undefined = (() => {
+		if (values.transition === undefined) return undefined;
+		const value = snapshotObject(values.transition, [
+			"executionStatus",
+			"conversationStatus",
+		]);
+		if (
+			!isEventStatus(value.executionStatus) ||
+			(value.conversationStatus !== "ready" &&
+				value.conversationStatus !== "active") ||
+			event.type !== "execution.status" ||
+			value.executionStatus !== event.status ||
+			value.conversationStatus !==
+				(["completed", "failed", "cancelled"].includes(event.status)
+					? "ready"
+					: "active")
+		) {
+			invalidInput();
+		}
+		return {
+			executionStatus: value.executionStatus,
+			conversationStatus: value.conversationStatus,
+		};
+	})();
 	return {
 		schemaVersion: 1,
 		conversationId: values.conversationId,
@@ -428,7 +460,8 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 		adapterEventKey: values.adapterEventKey,
 		runtimeCursor: values.runtimeCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
-		event: parseEvent(values.event),
+		event,
+		...(transition ? { transition } : {}),
 		...(values.dispatchLease === undefined
 			? {}
 			: {
@@ -732,6 +765,9 @@ export function createConversationEventUseCaseV1(
 								runtimeCursor: command.runtimeCursor,
 								sessionGeneration: command.sessionGeneration,
 								deliveryFence: command.deliveryFence,
+								...(command.transition
+									? { transition: command.transition }
+									: {}),
 							};
 						})();
 						expected = structuredClone(next);

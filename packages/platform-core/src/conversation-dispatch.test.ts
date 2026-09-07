@@ -151,12 +151,16 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		transition: ConversationDispatchStateTransitionV1;
 	}) {
 		if (!this.#owned(input.claim) || !this.recordable) return false;
+		this.applyEventTransition(input.transition);
+		return true;
+	}
+
+	applyEventTransition(transition: ConversationDispatchStateTransitionV1) {
 		this.current = {
 			...this.current,
 			executionStatus:
-				input.transition.executionStatus ?? this.current.executionStatus,
+				transition.executionStatus ?? this.current.executionStatus,
 		};
-		return true;
 	}
 
 	async finish(input: {
@@ -182,7 +186,16 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		errorCode: string;
 		transition: ConversationDispatchStateTransitionV1;
 	}) {
-		if (!this.#owned(input.claim) || !this.recordable) return false;
+		if (
+			!this.#owned(input.claim) ||
+			!this.recordable ||
+			(["completed", "failed", "cancelled"].includes(
+				this.current.executionStatus,
+			) &&
+				input.transition.executionStatus !== undefined &&
+				input.transition.executionStatus !== this.current.executionStatus)
+		)
+			return false;
 		this.outboxStatus = "retry_scheduled";
 		this.errorCode = input.errorCode;
 		this.current = {
@@ -222,6 +235,9 @@ class MemoryEvents implements Pick<ConversationEventUseCaseV1, "persist"> {
 		);
 		if (!existing) this.persisted.push(structuredClone(command));
 		this.store.setRuntimeCursor(command.runtimeCursor);
+		if (!existing && command.transition) {
+			this.store.applyEventTransition(command.transition);
+		}
 		if (this.loseNextResponse) {
 			this.loseNextResponse = false;
 			throw new Error("injected response loss after commit");
@@ -482,6 +498,27 @@ describe("Conversation Worker dispatch", () => {
 		expect(runtimeHost.sideEffectCount()).toBe(1);
 		expect(harness.events.persisted).toHaveLength(2);
 		expect(harness.events.persisted[1]?.adapterEventKey).toBe("event-2");
+	});
+
+	it("commits a terminal event and status before an acknowledgement is lost", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setEvents([runtimeEvent(1)]);
+		const harness = setup({ runtimeHost });
+		harness.events.loseNextResponse = true;
+
+		await expect(dispatch(harness.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "stale",
+		});
+		expect(harness.events.persisted).toHaveLength(1);
+		expect(harness.store.current.executionStatus).toBe("completed");
+
+		await expect(dispatch(harness.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "already_completed",
+		});
+		expect(runtimeHost.sideEffectCount()).toBe(1);
+		expect(harness.store.outboxStatus).toBe("succeeded");
 	});
 
 	it("replays historical status before validating an accepted terminal result", async () => {

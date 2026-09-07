@@ -4,6 +4,7 @@ import { types } from "node:util";
 import type {
 	ConversationEventCommandV1,
 	ConversationEventDecisionV1,
+	ConversationEventStateTransitionV1,
 	ConversationEventUseCaseV1,
 	ConversationNormalizedEventV1,
 } from "./conversation-events.js";
@@ -1062,10 +1063,19 @@ function acceptedTransition(status: ConversationRuntimeStatusV1) {
 	return undefined;
 }
 
-function transitionFromEvent(event: ConversationNormalizedEventV1) {
-	return event.type === "execution.status"
-		? transitionForStatus(event.status)
-		: undefined;
+function transitionFromEvent(
+	event: ConversationNormalizedEventV1,
+): ConversationEventStateTransitionV1 | undefined {
+	if (event.type !== "execution.status") return undefined;
+	return {
+		executionStatus: event.status,
+		conversationStatus:
+			event.status === "completed" ||
+			event.status === "failed" ||
+			event.status === "cancelled"
+				? "ready"
+				: "active",
+	};
 }
 
 function terminalStatus(event: ConversationNormalizedEventV1) {
@@ -1604,6 +1614,10 @@ export function createConversationDispatchUseCaseV1(
 							runtimeCursor: runtimeEvent.cursor,
 							occurredAt: runtimeEvent.occurredAt,
 							event,
+							...(transition &&
+							(!responseFinalStatus || terminalEventSeen || eventFinalStatus)
+								? { transition }
+								: {}),
 							dispatchLease: {
 								schemaVersion: 1,
 								itemId: claim.itemId,
@@ -1618,13 +1632,6 @@ export function createConversationDispatchUseCaseV1(
 						);
 					}
 					if (persisted.outcome === "stale") {
-						return { schemaVersion: 1, outcome: "stale" };
-					}
-					if (
-						transition &&
-						(!responseFinalStatus || terminalEventSeen || eventFinalStatus) &&
-						!(await dependencies.store.recordEventStatus({ claim, transition }))
-					) {
 						return { schemaVersion: 1, outcome: "stale" };
 					}
 					if (eventFinalStatus) {
