@@ -31,6 +31,10 @@ Pilot 完成不表示员工日常 GitHub 账号、其他 Provider、其他 Consu
 
 Agent Owner 只能选择 Agent 的 Provider 和 Action policy，不能替普通使用者绑定外部账号或创建 Connection Grant。使用者在 Connection 中选择具体账号并确认能力；Agent 不能选择默认账号或替换目标 Connection。
 
+### 2.1 Connection 管理员
+
+Connection 管理员可以发布或停用 Provider/Action、管理公司共享 Connection、查看 Connection 审计，并处理无法自动确认的外部结果。LDAP 登录只证明员工身份，不自动授予管理员权限；管理员资格由 Connection 独立、可撤销且可审计地管理。
+
 ## 3. 系统边界
 
 ### 3.1 Connection 负责
@@ -131,8 +135,8 @@ Alice 与 Bob 不能互相发现、授权、调用、断开或查询对方的 Co
 
 ## 10. 撤权与未知结果
 
-- Connection 在向 Provider 提交写操作前再次检查当前 Principal、Consumer/Actor、Grant、Connection、Credential、Action 和 Provider 状态。
-- 撤权在外部提交开始前完成时，本次调用拒绝；提交开始后才撤权时，不伪造回滚，保留 Provider 实际结果。
+- Connection 在把写操作持久标记为开始提交前，再次检查当前 Principal、Consumer/Actor、Grant、Connection、Credential、Action 和 Provider 状态。
+- 撤权在该持久提交边界前完成时，本次调用拒绝；边界完成后才撤权时，不伪造回滚，保留 Provider 实际结果。
 - Provider 可能已接受写操作但结果无法确认时，产品显示“结果待确认”，不能自动按失败重试。
 - 自动对账最多持续 24 小时。唯一且完整匹配的结果可以确认成功；多个候选或字段冲突转管理员处理。
 - 到达工程设计规定的最长处理期限后仍无法确认则显示“结果无法确认”；该状态既不是成功也不是失败，停止自动查询和重试，原请求标识不能复用。
@@ -169,7 +173,7 @@ Connection M1 提供独立于 Agent Platform 的中文 Web 入口和部署单元
 | 真实写操作 | 两个测试用户使用预先准备的不同分支创建真实 Pull Request |
 | 幂等 | 相同请求标识重试返回同一调用和 Pull Request，不创建第二个 PR |
 | 跨用户隔离 | Alice 与 Bob 不能发现或使用对方的 Connection、Grant、Credential 和调用记录 |
-| 调用证明 | 错误签名、受众、期限、workload、Actor、Action、参数或重复证明均拒绝 |
+| 调用证明 | 错误签名、受众、期限、workload、Actor、Action、参数或改变绑定的重复证明均拒绝；完全相同的传输重放只返回原调用 |
 | 撤权 | 移除 Platform policy、撤销 Grant、断开 Connection 或停用 Action 后，新调用立即失败 |
 | 未知结果 | 响应丢失进入待确认，覆盖自动对账、管理员处理和最终无法确认状态，不自动重发 |
 | Provider 撤销 | 断开时撤销单个 GitHub Token，并能看到成功、失败或待重试状态 |

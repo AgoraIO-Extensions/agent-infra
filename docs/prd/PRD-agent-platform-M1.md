@@ -259,7 +259,7 @@ Agent 平台与 Connection 的边界如下：
 - Owner 新增 Action 后，已有 Connection Grant 不能自动获得新增能力。使用者确认更新后的能力范围后，Agent 才能调用；Owner 移除 Action或 Connection 停用 Provider/Action 后立即停止新调用。
 - Agent Platform 只保存自己的 policy、执行状态和 Connection 稳定调用引用、状态及脱敏结果，不保存 Provider Credential 或 Connection 可写状态机。
 - Agent、模型和运行环境不能获得 Connection 保存的原始凭证。
-- 首个受监督 Connection Pilot 使用 Codex 标准模板、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库，验收读取、真实创建 PR、隔离、幂等、审计和撤权；通过结论不能外推到其他模板、账号、Provider 或生产环境。
+- 四个标准模板必须完成 Connection 接入；首个受监督 Connection Pilot 仅使用 Codex 标准模板、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库，验收读取、真实创建 PR、隔离、幂等、审计和撤权；Pilot 通过结论不能外推到其他模板、账号、Provider 或生产环境。
 
 ## 10. 使用渠道
 

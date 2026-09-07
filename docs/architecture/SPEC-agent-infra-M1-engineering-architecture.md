@@ -627,7 +627,7 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 - 会话、消息、回答版本、执行和执行事件。
 - worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态。
 - 附件与结果文件元数据。
-- Agent Owner 的 Provider/Action policy；Connection Grant 只保存 `callId` 等只读引用，不在 Platform DB 建立可写副本。
+- Agent Owner 的 Provider/Action policy；Connection 调用只保存 `callId`、状态和脱敏结果等只读引用，不在 Platform DB 建立 Connection Grant 或其他可写副本。
 - Agent 期望状态、已应用修订和平台审计。
 - Outbox 和可重试工作项。
 

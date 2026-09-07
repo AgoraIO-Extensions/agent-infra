@@ -17,7 +17,7 @@ Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员
 
 1. Connection 独立拥有 Principal、Consumer/Actor、Connection Grant、外部账号、Credential 和调用审计。
 2. Platform Agent Action policy 与 Connection Grant 只能共同收紧能力，不能互相替代。
-3. Agent、模型、浏览器和 Platform 都不能获得 Provider Credential 或选择目标 Connection。
+3. Agent、模型、浏览器和 Platform 都不能获得 Provider Credential；delegated Action 调用不能由 Agent、模型、Platform 或请求字段指定目标 Connection。Connection Web 仅允许当前 Principal 在管理流程中选择经服务端确认其有权使用的 Connection。
 4. 撤权在 Provider 提交前可靠阻止调用；提交后保留外部真实结果，不伪造回滚。
 5. 写操作结果未知时不自动重发，并能经过限时自动对账、管理员处理和明确未知终态。
 6. 所有跨 Principal、Consumer、Actor 和 Connection 访问 fail closed 且不可枚举。
@@ -28,6 +28,7 @@ Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员
 | --- | --- |
 | Principal | `identity issuer + stable subject` 映射的 Connection 员工主体 |
 | BrowserSession | Connection Web 的 hash-only、可撤销登录会话 |
+| AdministratorRole | Connection 内独立、可撤销且可审计的管理员角色绑定 |
 | Consumer | 已注册的调用产品；本 Pilot 为 Agent Platform |
 | ConsumerInstance | 已认证 Platform workload 的稳定实例 |
 | Actor | Consumer 内不透明稳定授权单元；本 Pilot 为 Agent ID |
@@ -145,7 +146,7 @@ Connection 在 Grant lookup 前校验：
 - Actor 存在、已注册且 current workload 有权代表；Agent Platform 固定 `REQUIRED` Actor，不允许回退到 Consumer-level Grant。
 - exact ActionVersion、参数摘要、业务幂等键和 deadline。
 
-PostgreSQL 原子绑定或消费 `jti`。完全相同的重放只能读取原 ActionCall；任一绑定字段变化都拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
+PostgreSQL 原子绑定 `jti` 与首次接受的请求。完全相同的传输重放只能读取原 ActionCall，不能再次执行；任一绑定字段变化都拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
 
 ## 8. GitHub ProviderRelease
 
@@ -187,7 +188,7 @@ Connection 在一个持久化流程中：
 - Consumer declaration、ProviderRelease 和 ActionVersion 状态。
 - repository allowlist。
 
-全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。零行更新等价于本地拒绝，不得调用 Provider。
+全部有效时原子把 Dispatch 从 `PENDING` 变为 `SUBMISSION_STARTED`。该持久状态转换是外部提交的授权线性化点，可能早于实际网络请求；零行更新等价于本地拒绝，不得调用 Provider。
 
 撤权在该事务前完成时阻止当前调用；事务完成后才撤权时不回滚可能已提交的 Provider 操作，但后续新调用均拒绝。
 
@@ -221,13 +222,13 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 - Browser API、OAuth callback、Catalog 和 delegated API 进入 Connection API。
 - 不使用跨域 Cookie、公共 tunnel 或调用方身份 Header 补偿错误路由。
 
-普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。所有页面默认简体中文。
+普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。LDAP 只认证 Principal；Connection PostgreSQL 保存 AdministratorRole binding，每次管理请求重新检查当前角色。首个管理员只能由持有部署权限的操作员按稳定 LDAP subject 一次性 bootstrap，已有管理员后该入口不能再次授予角色。所有页面默认简体中文。
 
 ## 13. 数据与审计
 
 Connection DB 至少保存：
 
-- Principal、identity mapping、BrowserSession。
+- Principal、identity mapping、BrowserSession 和 AdministratorRole binding。
 - Consumer、ConsumerInstance、workload 和 Actor registration。
 - ProviderRelease、ActionVersion 和 Consumer declaration。
 - Connection、CredentialVersion、Grant/root/fence。
