@@ -13,6 +13,7 @@ import * as secretStore from "./index.js";
 import {
 	createSecretEncryptorV1,
 	encodeSecretAadV1,
+	rebindSecretRecordV1,
 	reencryptSecretRecordV1,
 } from "./index.js";
 
@@ -273,6 +274,121 @@ describe("Secret encryptor V1", () => {
 		expect(JSON.stringify(rotated)).not.toContain(plaintext);
 	});
 
+	it("binds an active Secret to a later configuration with fresh authenticated material", () => {
+		const pending = encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "secret_01",
+			ownerType: "agent-owner",
+			ownerId: "user_01",
+			agentId: "agent_01",
+			name: "MODEL_API_KEY",
+			secretVersion: 2,
+			configRevision: 7,
+			plaintext,
+			occurredAt: "2026-09-03T09:00:00Z",
+		});
+		const active = validatePlatformSecretRecordV1({
+			...pending,
+			lifecycleState: "active",
+			kubernetesSecretRef: {
+				schemaVersion: 1,
+				ownerType: pending.ownerType,
+				ownerId: pending.ownerId,
+				agentId: pending.agentId,
+				secretId: pending.secretId,
+				secretVersion: pending.secretVersion,
+				configRevision: pending.configRevision,
+				algorithmVersion: pending.crypto.algorithmVersion,
+				wrappingAlgorithmVersion: pending.crypto.wrappingAlgorithmVersion,
+				wrappingKeyVersion: pending.crypto.wrappingKeyVersion,
+				name: "agent-secret-v2-r7",
+			},
+			activationFence: {
+				schemaVersion: 1,
+				agentId: pending.agentId,
+				secretId: pending.secretId,
+				secretVersion: pending.secretVersion,
+				configRevision: pending.configRevision,
+				kubernetesSecretName: "agent-secret-v2-r7",
+				workloadUid: "workload_01",
+				workloadGeneration: 3,
+				fence: 5,
+			},
+		});
+		const plaintextBytes = Buffer.from(plaintext);
+		const rebound = rebindSecretRecordV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: "key-2026-09",
+				keys: [
+					{
+						schemaVersion: 1,
+						keyVersion: "key-2026-09",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(publicKeySpkiDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+			record: active,
+			plaintext: plaintextBytes,
+			configRevision: 8,
+			occurredAt: "2026-09-05T13:30:00Z",
+		});
+
+		expect(rebound).toMatchObject({
+			secretId: active.secretId,
+			agentId: active.agentId,
+			secretVersion: active.secretVersion,
+			configRevision: 8,
+			lifecycleState: "pending",
+			crypto: {
+				aadBinding: { configRevision: 8 },
+				wrappingKeyVersion: "key-2026-09",
+			},
+			createdAt: "2026-09-05T13:30:00Z",
+		});
+		expect(rebound).not.toHaveProperty("kubernetesSecretRef");
+		expect(rebound).not.toHaveProperty("activationFence");
+		expect(rebound.crypto.nonce).not.toBe(active.crypto.nonce);
+		expect(rebound.crypto.dekFingerprint).not.toBe(
+			active.crypto.dekFingerprint,
+		);
+		expect(plaintextBytes.toString()).toBe(plaintext);
+		expect(decrypt(rebound, unwrapDek(rebound))).toBe(plaintext);
+		for (const configRevision of [7, 0, Number.MAX_SAFE_INTEGER + 1]) {
+			expect(() =>
+				rebindSecretRecordV1({
+					encryptionKeys: {
+						schemaVersion: 1,
+						activeWrappingKeyVersion: "key-2026-09",
+						keys: [
+							{
+								schemaVersion: 1,
+								keyVersion: "key-2026-09",
+								wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+								publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
+								publicKeyFingerprint: createHash("sha256")
+									.update(publicKeySpkiDer)
+									.digest("hex"),
+								rsaModulusBits: 3072,
+								status: "active",
+							},
+						],
+					},
+					record: active,
+					plaintext: Buffer.from(plaintext),
+					configRevision,
+					occurredAt: "2026-09-05T13:30:00Z",
+				}),
+			).toThrow("Secret revision binding failed");
+		}
+	});
+
 	it("fails closed for invalid inputs and exposes no decrypt operation", () => {
 		expect(() =>
 			createSecretEncryptorV1({
@@ -319,6 +435,7 @@ describe("Secret encryptor V1", () => {
 		expect(Object.keys(secretStore).toSorted()).toEqual([
 			"createSecretEncryptorV1",
 			"encodeSecretAadV1",
+			"rebindSecretRecordV1",
 			"reencryptSecretRecordV1",
 		]);
 	});

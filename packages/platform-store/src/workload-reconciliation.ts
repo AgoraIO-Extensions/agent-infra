@@ -16,6 +16,7 @@ import {
 } from "./agent-management.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
+import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 
 const workloadLeaseMs = 300_000;
 
@@ -155,6 +156,83 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						secrets: {
 							records,
 							store: new PostgresSecretActivationStoreV1({ transaction: sql }),
+							async persistCurrentRevisionRecord(record) {
+								const candidate = validatePlatformSecretRecordV1(record);
+								const expected = [
+									...configuration.secrets.map(
+										({ name, secretId, version }) => ({
+											name,
+											secretId,
+											secretVersion: version,
+										}),
+									),
+									...(configuration.modelConfiguration?.options.map(
+										({ optionId, credential }) => ({
+											name: `model:${optionId}`,
+											secretId: credential.secretId,
+											secretVersion: credential.version,
+										}),
+									) ?? []),
+								];
+								if (
+									candidate.lifecycleState !== "pending" ||
+									candidate.agentId !== agent.id ||
+									candidate.configRevision !== configuration.revision ||
+									candidate.ownerType !== "agent-owner" ||
+									!management.ownerIds.includes(candidate.ownerId) ||
+									!expected.some(
+										(secret) =>
+											secret.name === candidate.name &&
+											secret.secretId === candidate.secretId &&
+											secret.secretVersion === candidate.secretVersion,
+									)
+								) {
+									throw new Error();
+								}
+								await sql`select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${secretKeyAdvisoryLockName(candidate.crypto.wrappingKeyVersion)}, 0))`;
+								const retired = await sql<{ key_version: string }[]>`
+									select key_version from platform.retired_secret_wrapping_keys
+									where key_version = ${candidate.crypto.wrappingKeyVersion}
+								`;
+								if (retired.length !== 0) throw new Error();
+								const inserted = await sql<{ agent_id: string }[]>`
+									insert into platform.secret_records
+										(agent_id, secret_id, secret_version, configuration_revision,
+										 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
+										 wrapping_key_version, record, created_at, updated_at)
+									values
+									(${candidate.agentId}, ${candidate.secretId}, ${candidate.secretVersion},
+										 ${candidate.configRevision}, ${candidate.ownerType}, ${candidate.ownerId},
+										 ${candidate.name}, ${candidate.lifecycleState}, ${candidate.crypto.dekFingerprint},
+										 ${candidate.crypto.wrappingKeyVersion}, ${sql.json(candidate)},
+										 ${candidate.createdAt}, ${candidate.updatedAt})
+									on conflict (agent_id, secret_id, secret_version, configuration_revision)
+									do nothing returning agent_id
+								`;
+								if (inserted.length !== 0)
+									return { outcome: "inserted" as const, record: candidate };
+								const [existing] = await sql<{ record: unknown }[]>`
+									select record from platform.secret_records where agent_id = ${candidate.agentId}
+										and secret_id = ${candidate.secretId}
+										and secret_version = ${candidate.secretVersion}
+										and configuration_revision = ${candidate.configRevision}
+								`;
+								if (!existing) throw new Error();
+								const persisted = validatePlatformSecretRecordV1(
+									existing.record,
+								);
+								if (
+									persisted.agentId !== candidate.agentId ||
+									persisted.secretId !== candidate.secretId ||
+									persisted.secretVersion !== candidate.secretVersion ||
+									persisted.configRevision !== candidate.configRevision ||
+									persisted.ownerType !== candidate.ownerType ||
+									persisted.ownerId !== candidate.ownerId ||
+									persisted.name !== candidate.name
+								)
+									throw new Error();
+								return { outcome: "exists" as const, record: persisted };
+							},
 							async auditDecryption(secretId, wrappingKeyVersion, outcome) {
 								if (
 									!records.some(

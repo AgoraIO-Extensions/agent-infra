@@ -57,6 +57,10 @@ export interface WorkloadReconciliationInputV1 {
 	readonly secrets?: {
 		readonly records: readonly unknown[];
 		readonly store: SecretActivationStorePortV1;
+		persistCurrentRevisionRecord(record: unknown): Promise<{
+			readonly outcome: "inserted" | "exists";
+			readonly record: unknown;
+		}>;
 		auditDecryption(
 			secretId: string,
 			wrappingKeyVersion: string,

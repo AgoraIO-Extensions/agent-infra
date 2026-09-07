@@ -115,7 +115,6 @@ describe("Agent persistence schema contract", () => {
 		).toEqual(
 			expect.arrayContaining([
 				"secret_record_dek_fingerprint_unique",
-				"secret_record_agent_secret_version_unique",
 				"secret_record_wrapping_key_version_idx",
 			]),
 		);
