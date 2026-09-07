@@ -24,34 +24,38 @@ describe("Conversation read projection", () => {
 				],
 				executions: [
 					{
-						executionId: "execution-1",
-						conversationId: "conversation-1",
-						sourceMessageId: "message-1",
-						status: "completed",
-						updatedAt: second,
-						traceId: "trace-1",
-					},
-					{
 						executionId: "execution-2",
 						conversationId: "conversation-1",
 						sourceMessageId: "message-1",
 						status: "processing",
+						createdAt: third,
 						updatedAt: third,
 						traceId: "trace-2",
+					},
+					{
+						executionId: "execution-1",
+						conversationId: "conversation-1",
+						sourceMessageId: "message-1",
+						status: "completed",
+						createdAt: second,
+						updatedAt: second,
+						traceId: "trace-1",
 					},
 				],
 				events: [
 					{
 						executionId: "execution-1",
-						eventType: "text.delta",
-						eventPayload: { type: "text.delta", text: "Hel" },
-						occurredAt: second,
-					},
-					{
-						executionId: "execution-1",
+						sequence: 2,
 						eventType: "text.delta",
 						eventPayload: { type: "text.delta", text: "lo" },
 						occurredAt: third,
+					},
+					{
+						executionId: "execution-1",
+						sequence: 1,
+						eventType: "text.delta",
+						eventPayload: { type: "text.delta", text: "Hel" },
+						occurredAt: second,
 					},
 				],
 			}),
@@ -78,12 +82,14 @@ describe("Conversation read projection", () => {
 					conversationId: "conversation-1",
 					sourceMessageId: "message-1",
 					status: "failed",
+					createdAt: first,
 					updatedAt: third,
 					traceId: "trace-1",
 				},
 				events: [
 					{
 						executionId: "execution-1",
+						sequence: 1,
 						eventType: "execution.status",
 						eventPayload: {
 							type: "execution.status",
@@ -93,6 +99,7 @@ describe("Conversation read projection", () => {
 					},
 					{
 						executionId: "execution-1",
+						sequence: 2,
 						eventType: "execution.detail",
 						eventPayload: {
 							type: "execution.detail",
@@ -104,6 +111,7 @@ describe("Conversation read projection", () => {
 					},
 					{
 						executionId: "execution-1",
+						sequence: 3,
 						eventType: "execution.status",
 						eventPayload: { type: "execution.status", status: "failed" },
 						occurredAt: third,
@@ -137,6 +145,7 @@ describe("Conversation read projection", () => {
 						conversationId: "conversation-1",
 						sourceMessageId: "message-1",
 						status: "completed",
+						createdAt: first,
 						updatedAt: second,
 						traceId: null,
 					},
@@ -144,6 +153,7 @@ describe("Conversation read projection", () => {
 				events: [
 					{
 						executionId: "execution-1",
+						sequence: 1,
 						eventType: "text.delta",
 						eventPayload: { type: "text.delta", text: "safe", secret: true },
 						occurredAt: second,

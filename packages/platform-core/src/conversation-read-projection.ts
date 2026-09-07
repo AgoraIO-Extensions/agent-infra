@@ -18,12 +18,14 @@ export interface ConversationReadExecutionV1 {
 	readonly conversationId: string;
 	readonly sourceMessageId: string | null;
 	readonly status: string;
+	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
 }
 
 export interface ConversationReadEventV1 {
 	readonly executionId: string;
+	readonly sequence: number;
 	readonly eventType: string;
 	readonly eventPayload: unknown;
 	readonly occurredAt: Date;
@@ -133,6 +135,13 @@ function eventPayload(input: ConversationReadEventV1) {
 	return payload;
 }
 
+function eventSequence(input: ConversationReadEventV1): number {
+	if (!Number.isSafeInteger(input.sequence) || input.sequence < 1) {
+		return unavailable();
+	}
+	return input.sequence;
+}
+
 export function projectConversationMessagesV1(
 	input: ConversationMessageReadModelV1,
 ): readonly ConversationMessageProjectionV1[] {
@@ -151,16 +160,29 @@ export function projectConversationMessagesV1(
 	const bySource = new Map<string, ConversationReadExecutionV1[]>();
 	for (const execution of input.executions) {
 		if (!execution.sourceMessageId) continue;
-		bySource.set(execution.sourceMessageId, [
-			...(bySource.get(execution.sourceMessageId) ?? []),
-			execution,
-		]);
+		const items = bySource.get(execution.sourceMessageId);
+		if (items) items.push(execution);
+		else bySource.set(execution.sourceMessageId, [execution]);
+	}
+	for (const items of bySource.values()) {
+		items.sort(
+			(left, right) =>
+				date(left.createdAt).getTime() - date(right.createdAt).getTime() ||
+				left.executionId.localeCompare(right.executionId),
+		);
+	}
+	const byExecution = new Map<string, ConversationReadEventV1[]>();
+	for (const event of input.events) {
+		const events = byExecution.get(event.executionId);
+		if (events) events.push(event);
+		else byExecution.set(event.executionId, [event]);
+	}
+	for (const events of byExecution.values()) {
+		events.sort((left, right) => eventSequence(left) - eventSequence(right));
 	}
 	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
-			const events = input.events.filter(
-				(event) => event.executionId === item.executionId,
-			);
+			const events = byExecution.get(item.executionId) ?? [];
 			const text = events
 				.filter((event) => event.eventType === "text.delta")
 				.map((event) => {
@@ -200,8 +222,9 @@ export function projectConversationExecutionV1(
 	input: ConversationExecutionReadModelV1,
 ): ConversationExecutionProjectionV1 {
 	const status = executionStatus(input.execution.status);
-	const processSummary =
-		input.events.flatMap<ConversationExecutionProcessSummaryV1>((item) => {
+	const processSummary = input.events
+		.toSorted((left, right) => eventSequence(left) - eventSequence(right))
+		.flatMap<ConversationExecutionProcessSummaryV1>((item) => {
 			if (
 				item.eventType !== "execution.status" &&
 				item.eventType !== "execution.detail"
