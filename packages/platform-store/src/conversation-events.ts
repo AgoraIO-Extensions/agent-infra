@@ -48,6 +48,16 @@ interface EventRow {
 	readonly occurred_at: Date;
 }
 
+interface DispatchLeaseRow {
+	readonly id: string;
+	readonly scope_type: string;
+	readonly scope_id: string;
+	readonly status: string;
+	readonly lease_owner: string | null;
+	readonly delivery_fence: string | number;
+	readonly lease_active: boolean | null;
+}
+
 export interface PostgresConversationEventOptionsV1 {
 	readonly databaseUrl: string;
 }
@@ -232,18 +242,38 @@ function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 }
 
 function command(value: unknown): ConversationEventCommandV1 {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"deliveryFence",
-		"adapterEventKey",
-		"runtimeCursor",
-		"occurredAt",
-		"event",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"schemaVersion",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"deliveryFence",
+			"adapterEventKey",
+			"runtimeCursor",
+			"occurredAt",
+			"event",
+		],
+		["dispatchLease"],
+	);
 	if (input.schemaVersion !== 1) return unavailable();
+	const dispatchLease = (() => {
+		if (input.dispatchLease === undefined) return undefined;
+		const lease = exactRecord(input.dispatchLease, [
+			"schemaVersion",
+			"itemId",
+			"leaseOwner",
+			"deliveryFence",
+		]);
+		if (lease.schemaVersion !== 1) return unavailable();
+		return {
+			schemaVersion: 1 as const,
+			itemId: text(lease.itemId),
+			leaseOwner: text(lease.leaseOwner),
+			deliveryFence: safeInteger(lease.deliveryFence, 1),
+		};
+	})();
 	return {
 		schemaVersion: 1,
 		conversationId: text(input.conversationId),
@@ -254,6 +284,7 @@ function command(value: unknown): ConversationEventCommandV1 {
 		runtimeCursor: text(input.runtimeCursor),
 		occurredAt: timestamp(input.occurredAt),
 		event: normalizedEvent(input.event),
+		...(dispatchLease ? { dispatchLease } : {}),
 	};
 }
 
@@ -494,6 +525,32 @@ async function readExistingEvent(
 	return rows[0];
 }
 
+async function currentDispatchLease(
+	transaction: Transaction,
+	command: ConversationEventCommandV1,
+): Promise<boolean> {
+	if (!command.dispatchLease) return true;
+	const rows = await transaction<DispatchLeaseRow[]>`
+		select id, scope_type, scope_id, status, lease_owner,
+			delivery_fence::text,
+			lease_expires_at > clock_timestamp() as lease_active
+		from platform.outbox_items
+		where id = ${command.dispatchLease.itemId}
+		for update
+	`;
+	const row = rows[0];
+	return (
+		rows.length === 1 &&
+		row?.scope_type === "conversation" &&
+		row.scope_id === command.conversationId &&
+		row.status === "processing" &&
+		row.lease_owner === command.dispatchLease.leaseOwner &&
+		safeInteger(row.delivery_fence, 1) ===
+			command.dispatchLease.deliveryFence &&
+		row.lease_active === true
+	);
+}
+
 export class PostgresConversationEventTransactionV1
 	implements ConversationEventTransactionPortV1
 {
@@ -510,6 +567,10 @@ export class PostgresConversationEventTransactionV1
 		const persistedRequest = request(requestInput);
 		if (typeof decide !== "function") unavailable();
 		return this.#transaction(async (transaction) => {
+			const leaseCurrent = await currentDispatchLease(
+				transaction,
+				persistedRequest.command,
+			);
 			const conversation = await lockConversation(
 				transaction,
 				persistedRequest.command.conversationId,
@@ -519,13 +580,14 @@ export class PostgresConversationEventTransactionV1
 				persistedRequest.command.executionId,
 				persistedRequest.command.adapterEventKey,
 			);
-			const execution = conversation
-				? await readExecution(
-						transaction,
-						conversation.id,
-						persistedRequest.command.executionId,
-					)
-				: undefined;
+			const execution =
+				conversation && leaseCurrent
+					? await readExecution(
+							transaction,
+							conversation.id,
+							persistedRequest.command.executionId,
+						)
+					: undefined;
 			const state: ConversationEventStateV1 = {
 				conversation: conversationState(conversation),
 				execution: executionState(execution),

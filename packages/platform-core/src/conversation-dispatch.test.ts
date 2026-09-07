@@ -7,6 +7,7 @@ import {
 	type ConversationDispatchStorePortV1,
 	type ConversationDispatchUseCaseV1,
 	type ConversationEventUseCaseV1,
+	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEventV1,
 	type ConversationRuntimeHostPortV1,
 	createConversationDispatchUseCaseV1,
@@ -302,10 +303,10 @@ describe("Conversation Worker dispatch", () => {
 	it("forwards the Execution-frozen selection without resolving defaults", async () => {
 		const inner = new FakeConversationRuntimeHostV1();
 		inner.setResult({ outcome: "accepted", status: "completed" });
-		let observedSelection: unknown;
+		let observedRequest: ConversationRuntimeDispatchRequestV1 | undefined;
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch(request) {
-				observedSelection = request.selection;
+				observedRequest = request;
 				return inner.dispatch(request);
 			},
 			events: (request) => inner.events(request),
@@ -316,11 +317,24 @@ describe("Conversation Worker dispatch", () => {
 			schemaVersion: 1,
 			outcome: "accepted",
 		});
-		expect(observedSelection).toEqual({
+		expect(observedRequest?.selection).toEqual({
 			schemaVersion: 1,
 			modelOptionId: "model-option-1",
 			reasoningLevel: "medium",
 		});
+		if (!observedRequest?.selection) {
+			throw new Error("Expected a selected Runtime request");
+		}
+		await expect(
+			inner.dispatch({
+				...observedRequest,
+				selection: {
+					...observedRequest.selection,
+					reasoningLevel: "high",
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		expect(inner.sideEffectCount()).toBe(1);
 	});
 
 	it("persists normalized Runtime events before acknowledging them", async () => {
@@ -337,6 +351,12 @@ describe("Conversation Worker dispatch", () => {
 			{ type: "execution.status", status: "processing" },
 			{ type: "execution.status", status: "completed" },
 		]);
+		expect(events.persisted[0]?.dispatchLease).toEqual({
+			schemaVersion: 1,
+			itemId: "conversation:turn:execution-1",
+			leaseOwner: "worker-1",
+			deliveryFence: 2,
+		});
 		expect(runtimeHost.acknowledgedEventCount()).toBe(2);
 		expect(store.outboxStatus).toBe("succeeded");
 		expect(store.current.executionStatus).toBe("completed");
@@ -363,6 +383,23 @@ describe("Conversation Worker dispatch", () => {
 		expect(runtimeHost.sideEffectCount()).toBe(1);
 		expect(harness.events.persisted).toHaveLength(2);
 		expect(harness.events.persisted[1]?.adapterEventKey).toBe("event-2");
+	});
+
+	it("rejects a status event that contradicts an accepted terminal result", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
+		runtimeHost.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
+		const { useCase, store, events } = setup({ runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(events.persisted).toHaveLength(0);
+		expect(runtimeHost.acknowledgedEventCount()).toBe(0);
+		expect(store.current.executionStatus).toBe("completed");
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
 	});
 
 	it.each([
@@ -486,17 +523,20 @@ describe("Conversation Worker dispatch", () => {
 		}
 	});
 
-	it("locally cancels a Turn when a stop is already pending", async () => {
+	it("recovers an acceptance-unknown Turn before dispatching its pending stop", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
-		const store = new MemoryDispatchStore(claim({ stopPending: true }));
+		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", stopPending: true }),
+		);
 		const { useCase } = setup({ store, runtimeHost });
 
 		await expect(dispatch(useCase)).resolves.toEqual({
 			schemaVersion: 1,
-			outcome: "already_completed",
+			outcome: "accepted",
 		});
-		expect(runtimeHost.sideEffectCount()).toBe(0);
-		expect(store.current.executionStatus).toBe("cancelled");
+		expect(runtimeHost.sideEffectCount()).toBe(1);
+		expect(store.current.executionStatus).toBe("completed");
 		expect(store.outboxStatus).toBe("succeeded");
 	});
 

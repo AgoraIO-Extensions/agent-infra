@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
@@ -24,7 +26,7 @@ export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly fetch?: typeof fetch;
 }
 
-const maximumErrorBytes = 65_536;
+const maximumResponseBytes = 65_536;
 
 function endpoint(baseUrl: string, path: string) {
 	let base: URL;
@@ -53,11 +55,8 @@ function failure(code: string, retryable: boolean): never {
 async function responseFailure(response: Response): Promise<never> {
 	let text: string;
 	try {
-		text = await response.text();
+		text = await boundedResponseText(response);
 	} catch {
-		return failure("RUNTIME_RESPONSE_INVALID", true);
-	}
-	if (new TextEncoder().encode(text).byteLength > maximumErrorBytes) {
 		return failure("RUNTIME_RESPONSE_INVALID", true);
 	}
 	try {
@@ -66,6 +65,35 @@ async function responseFailure(response: Response): Promise<never> {
 	} catch (error) {
 		if (error instanceof ConversationRuntimeHostError) throw error;
 		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+	const length = response.headers.get("content-length");
+	if (length && /^\d+$/.test(length) && Number(length) > maximumResponseBytes) {
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+	const reader = response.body?.getReader();
+	if (!reader) return "";
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (next.value) {
+				bytes += next.value.byteLength;
+				if (bytes > maximumResponseBytes) {
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				}
+				chunks.push(next.value);
+			}
+			if (next.done) break;
+		}
+		return new TextDecoder("utf-8", { fatal: true }).decode(
+			Buffer.concat(chunks, bytes),
+		);
+	} finally {
+		await reader.cancel().catch(() => undefined);
 	}
 }
 
@@ -203,14 +231,6 @@ function replayBody(request: ConversationRuntimeEventRequestV1) {
 	});
 }
 
-function frameBoundary(value: string) {
-	const lf = value.indexOf("\n\n");
-	const crlf = value.indexOf("\r\n\r\n");
-	if (lf < 0) return crlf < 0 ? undefined : { index: crlf, length: 4 };
-	if (crlf < 0 || lf < crlf) return { index: lf, length: 2 };
-	return { index: crlf, length: 4 };
-}
-
 function parseFrame(value: string): ConversationRuntimeEventV1 | undefined {
 	if (value.startsWith(":")) return undefined;
 	const fields = new Map<string, string>();
@@ -252,23 +272,43 @@ async function* eventStream(response: Response) {
 	}
 	const reader = response.body?.getReader();
 	if (!reader) return failure("RUNTIME_RESPONSE_INVALID", true);
-	const decoder = new TextDecoder();
-	let buffer = "";
+	let frame: number[] = [];
 	try {
 		while (true) {
 			const next = await reader.read();
-			buffer += decoder.decode(next.value, { stream: !next.done });
-			let boundary = frameBoundary(buffer);
-			while (boundary) {
-				const frame = buffer.slice(0, boundary.index);
-				buffer = buffer.slice(boundary.index + boundary.length);
-				const event = parseFrame(frame);
-				if (event) yield event;
-				boundary = frameBoundary(buffer);
+			for (const byte of next.value ?? []) {
+				frame.push(byte);
+				const boundaryLength =
+					frame.at(-1) === 10 && frame.at(-2) === 10
+						? 2
+						: frame.at(-1) === 10 &&
+								frame.at(-2) === 13 &&
+								frame.at(-3) === 10 &&
+								frame.at(-4) === 13
+							? 4
+							: 0;
+				if (boundaryLength) {
+					frame.length -= boundaryLength;
+					let value: string;
+					try {
+						value = new TextDecoder("utf-8", { fatal: true }).decode(
+							Uint8Array.from(frame),
+						);
+					} catch {
+						return failure("RUNTIME_EVENT_INVALID", true);
+					}
+					frame = [];
+					const event = parseFrame(value);
+					if (event) yield event;
+				} else if (frame.length > maximumResponseBytes) {
+					return failure("RUNTIME_EVENT_INVALID", true);
+				}
 			}
 			if (next.done) break;
 		}
-		if (buffer.trim()) return failure("RUNTIME_EVENT_INVALID", true);
+		if (frame.some((byte) => ![9, 10, 13, 32].includes(byte))) {
+			return failure("RUNTIME_EVENT_INVALID", true);
+		}
 	} catch (error) {
 		if (error instanceof ConversationRuntimeHostError) throw error;
 		return failure("RUNTIME_UNAVAILABLE", true);
@@ -303,11 +343,12 @@ export function createWorkerRuntimeHostClientV1(
 				signal,
 			);
 			try {
+				const text = await boundedResponseText(response);
 				return (
 					selected.responseVersion === 2
 						? RuntimeOperationResponseV2Schema
 						: RuntimeOperationResponseV1Schema
-				).parse(await response.json());
+				).parse(JSON.parse(text));
 			} catch {
 				return failure("RUNTIME_RESPONSE_INVALID", true);
 			}

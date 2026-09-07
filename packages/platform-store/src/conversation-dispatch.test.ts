@@ -240,18 +240,55 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
-	it("rechecks a pending stop in the same Conversation claim", async () => {
+	it("atomically cancels an unaccepted Turn when its stop is already pending", async () => {
 		const work = await seed();
 		await client`
 			insert into platform.conversation_stops
 				(execution_id, stop_request_id, status, created_at, updated_at)
 			values (${work.executionId}, ${work.stopRequestId}, 'submitted', now(), now())
 		`;
+		await client`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 available_at, created_at, updated_at)
+			values
+				(${`conversation:stop:${work.stopRequestId}`}, 'conversation',
+				 ${work.conversationId}, 'conversation.turn.stop.v1', ${client.json({
+						schemaVersion: 1,
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+						sessionGeneration: 1,
+						stopRequestId: work.stopRequestId,
+					})}, 'trace-stop-dispatch', 'request-stop-dispatch', now(), now(), now())
+		`;
 		const { store, decision } = await claim(work.itemId);
 		try {
-			expect(decision).toMatchObject({
-				outcome: "claimed",
-				claim: { stopPending: true },
+			expect(decision).toEqual({ outcome: "succeeded" });
+			const [state] = await client`
+				select turn_outbox.status as turn_status,
+					turn_outbox.delivery_fence::int as turn_fence,
+					stop_outbox.status as stop_status,
+					stop_outbox.delivery_fence::int as stop_fence,
+					e.status as execution_status,
+					e.delivery_fence::int as execution_fence,
+					s.status as stop_request_status
+				from platform.outbox_items turn_outbox
+				join platform.outbox_items stop_outbox
+					on stop_outbox.id = ${`conversation:stop:${work.stopRequestId}`}
+				join platform.conversation_executions e
+					on e.execution_id = ${work.executionId}
+				join platform.conversation_stops s
+					on s.execution_id = e.execution_id
+				where turn_outbox.id = ${work.itemId}
+			`;
+			expect(state).toEqual({
+				turn_status: "succeeded",
+				turn_fence: 0,
+				stop_status: "succeeded",
+				stop_fence: 0,
+				execution_status: "cancelled",
+				execution_fence: 0,
+				stop_request_status: "completed",
 			});
 		} finally {
 			await store.close();

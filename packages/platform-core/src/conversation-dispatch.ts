@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
 import type {
+	ConversationEventCommandV1,
 	ConversationEventDecisionV1,
 	ConversationEventUseCaseV1,
 	ConversationNormalizedEventV1,
@@ -1090,7 +1091,15 @@ export function createConversationDispatchUseCaseV1(
 		readonly store: ConversationDispatchStorePortV1;
 		readonly authorization: ConversationDispatchAuthorizationPortV1;
 		readonly runtimeHost: ConversationRuntimeHostPortV1;
-		readonly events: Pick<ConversationEventUseCaseV1, "persist">;
+		readonly events: {
+			persist(
+				command: ConversationEventCommandV1 & {
+					readonly dispatchLease: NonNullable<
+						ConversationEventCommandV1["dispatchLease"]
+					>;
+				},
+			): ReturnType<ConversationEventUseCaseV1["persist"]>;
+		};
 	},
 	options: {
 		readonly leaseDurationMs?: number;
@@ -1201,23 +1210,13 @@ export function createConversationDispatchUseCaseV1(
 			const authority = parseAuthority(authorization.authority, claim);
 			if (
 				claim.stopPending &&
-				claim.operation !== "conversation.turn.stop.v1"
+				claim.operation === "conversation.turn.supplement.v1"
 			) {
-				if (claim.operation === "conversation.turn.supplement.v1") {
-					return reject(
-						dependencies.store,
-						claim,
-						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-					);
-				}
-				const finished = await dependencies.store.finish({
+				return reject(
+					dependencies.store,
 					claim,
-					status: "succeeded",
-					transition: transitionForStatus("cancelled"),
-				});
-				return finished
-					? { schemaVersion: 1, outcome: "already_completed" }
-					: { schemaVersion: 1, outcome: "stale" };
+					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+				);
 			}
 			const executionFinished =
 				claim.executionStatus === "completed" ||
@@ -1390,6 +1389,22 @@ export function createConversationDispatchUseCaseV1(
 				)) {
 					const runtimeEvent = parseRuntimeEvent(eventInput, claim);
 					const event = normalizedEvent(runtimeEvent);
+					const transition = transitionFromEvent(event);
+					if (
+						finalStatus &&
+						transition?.executionStatus !== undefined &&
+						transition.executionStatus !== finalStatus
+					) {
+						const finished = await dependencies.store.finish({
+							claim,
+							status: "failed",
+							transition: {},
+							errorCode: "RUNTIME_EVENT_CONFLICT",
+						});
+						return finished
+							? { schemaVersion: 1, outcome: "rejected" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
 					let persisted: ConversationEventDecisionV1;
 					try {
 						persisted = await dependencies.events.persist({
@@ -1402,6 +1417,12 @@ export function createConversationDispatchUseCaseV1(
 							runtimeCursor: runtimeEvent.cursor,
 							occurredAt: runtimeEvent.occurredAt,
 							event,
+							dispatchLease: {
+								schemaVersion: 1,
+								itemId: claim.itemId,
+								leaseOwner: claim.leaseOwner,
+								deliveryFence: claim.deliveryFence,
+							},
 						});
 					} catch {
 						throw new ConversationRuntimeHostError(
@@ -1412,7 +1433,6 @@ export function createConversationDispatchUseCaseV1(
 					if (persisted.outcome === "stale") {
 						return { schemaVersion: 1, outcome: "stale" };
 					}
-					const transition = transitionFromEvent(event);
 					if (
 						transition &&
 						!(await dependencies.store.recordEventStatus({ claim, transition }))

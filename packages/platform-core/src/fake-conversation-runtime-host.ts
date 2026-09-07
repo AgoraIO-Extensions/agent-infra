@@ -64,6 +64,7 @@ export class FakeConversationRuntimeHostV1
 			messageId: request.messageId,
 			stopRequestId: request.stopRequestId,
 			sessionGeneration: request.sessionGeneration,
+			selection: request.selection,
 			input: request.input,
 		});
 		const existing = this.#operations.get(operationKey);

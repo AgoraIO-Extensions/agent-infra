@@ -329,6 +329,47 @@ describe("PostgreSQL Conversation event transaction", () => {
 		}
 	});
 
+	it("rejects a new Runtime event after its dispatch lease expires", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const itemId = `conversation:turn:${executionId}`;
+		await client`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, status, attempt_count,
+				 trace_id, request_id, available_at, lease_owner, lease_expires_at,
+				 delivery_fence, created_at, updated_at)
+			values
+				(${itemId}, 'conversation', ${conversationId},
+				 'conversation.turn.submit.v1', ${client.json({})}, 'processing', 1,
+				 'trace-event-lease', 'request-event-lease', now(), 'worker-event',
+				 clock_timestamp() - interval '1 second', 7, now(), now())
+		`;
+		const { events, close } = openEvents("event_postgres_expired_lease");
+		const input = {
+			...eventInput(conversationId, executionId),
+			dispatchLease: {
+				schemaVersion: 1 as const,
+				itemId,
+				leaseOwner: "worker-event",
+				deliveryFence: 7,
+			},
+		};
+		try {
+			await expect(events.persist(input)).resolves.toEqual({
+				outcome: "stale",
+			});
+			await client`
+				update platform.outbox_items
+				set lease_expires_at = clock_timestamp() + interval '30 seconds'
+				where id = ${itemId}
+			`;
+			await expect(events.persist(input)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+		} finally {
+			await close();
+		}
+	});
+
 	it("uses database time for operational event updates", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const { events, close } = openEvents("event_postgres_database_time");

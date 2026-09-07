@@ -170,6 +170,41 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 		});
 	});
 
+	it("bounds successful, error, and SSE response bodies before parsing", async () => {
+		const oversized = "x".repeat(65_537);
+		for (const response of [
+			new Response(oversized, { status: 200 }),
+			new Response(oversized, { status: 502 }),
+		]) {
+			const client = createWorkerRuntimeHostClientV1({
+				baseUrl: "https://runtime.internal",
+				serviceToken: "synthetic-service-token",
+				fetch: vi.fn<typeof fetch>(async () => response),
+			});
+			await expect(client.dispatch(request())).rejects.toMatchObject({
+				code: "RUNTIME_RESPONSE_INVALID",
+			});
+		}
+
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "https://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: vi.fn<typeof fetch>(
+				async () =>
+					new Response(`data: ${oversized}\n\n`, {
+						headers: { "content-type": "text/event-stream" },
+					}),
+			),
+		});
+		await expect(
+			(async () => {
+				for await (const _event of client.events(eventRequest())) {
+					throw new Error("Unexpected event");
+				}
+			})(),
+		).rejects.toMatchObject({ code: "RUNTIME_EVENT_INVALID" });
+	});
+
 	it("uses V1 only for a legacy submit without frozen selection", async () => {
 		const fetcher = vi.fn<typeof fetch>(async () => response());
 		const client = createWorkerRuntimeHostClientV1({

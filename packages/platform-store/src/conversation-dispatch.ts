@@ -542,6 +542,81 @@ async function claimWork(
 	) {
 		return { outcome: "stale" };
 	}
+	if (
+		isTurn(selectedOperation) &&
+		execution.status === "submitted" &&
+		stop?.status === "submitted"
+	) {
+		const stopOutbox = await lockOutbox(
+			transaction,
+			`conversation:stop:${stop.stop_request_id}`,
+		);
+		const stopPayload = stopOutbox
+			? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
+			: undefined;
+		if (
+			!stopOutbox ||
+			!stopPayload ||
+			stopOutbox.operation !== "conversation.turn.stop.v1" ||
+			(stopOutbox.status !== "pending" &&
+				stopOutbox.status !== "retry_scheduled") ||
+			stopPayload.stopRequestId !== stop.stop_request_id ||
+			!bindingMatches(stopOutbox, stopPayload, conversation, execution)
+		) {
+			return { outcome: "stale" };
+		}
+		const cancelled = await transaction<{ execution_id: string }[]>`
+			update platform.conversation_executions
+			set status = 'cancelled', updated_at = clock_timestamp()
+			where execution_id = ${execution.execution_id}
+				and conversation_id = ${conversation.id}
+				and status = 'submitted'
+				and delivery_fence = ${execution.delivery_fence}
+			returning execution_id
+		`;
+		const readied = await transaction<{ id: string }[]>`
+			update platform.conversations
+			set status = 'ready', updated_at = clock_timestamp()
+			where id = ${conversation.id}
+				and session_generation = ${payload.sessionGeneration}
+				and authorization_revision = ${execution.authorization_revision}
+			returning id
+		`;
+		const completedTurn = await transaction<{ id: string }[]>`
+			update platform.outbox_items
+			set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+				updated_at = clock_timestamp()
+			where id = ${outbox.id} and status = ${outbox.status}
+				and delivery_fence = ${outbox.delivery_fence}
+			returning id
+		`;
+		const completedStop = await transaction<{ id: string }[]>`
+			update platform.outbox_items
+			set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+				updated_at = clock_timestamp()
+			where id = ${stopOutbox.id} and status = ${stopOutbox.status}
+				and delivery_fence = ${stopOutbox.delivery_fence}
+			returning id
+		`;
+		const completedStopRequest = await transaction<{ execution_id: string }[]>`
+			update platform.conversation_stops
+			set status = 'completed', updated_at = clock_timestamp()
+			where execution_id = ${execution.execution_id}
+				and stop_request_id = ${stop.stop_request_id}
+				and status = 'submitted'
+			returning execution_id
+		`;
+		if (
+			cancelled.length !== 1 ||
+			readied.length !== 1 ||
+			completedTurn.length !== 1 ||
+			completedStop.length !== 1 ||
+			completedStopRequest.length !== 1
+		) {
+			throw new StaleDispatchLease();
+		}
+		return { outcome: "succeeded" };
+	}
 	const previousFence = safeCounter(outbox.delivery_fence);
 	const executionFence = safeCounter(execution.delivery_fence);
 	if (

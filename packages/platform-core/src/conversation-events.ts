@@ -59,6 +59,12 @@ export interface ConversationEventCommandV1 {
 	readonly runtimeCursor: string;
 	readonly occurredAt: string;
 	readonly event: ConversationNormalizedEventV1;
+	readonly dispatchLease?: {
+		readonly schemaVersion: 1;
+		readonly itemId: string;
+		readonly leaseOwner: string;
+		readonly deliveryFence: number;
+	};
 }
 
 export interface PersistedConversationEventV1 {
@@ -387,17 +393,21 @@ export function parseConversationPersistedEventPayloadV1(
 }
 
 function parseCommand(input: unknown): ConversationEventCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"deliveryFence",
-		"adapterEventKey",
-		"runtimeCursor",
-		"occurredAt",
-		"event",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"deliveryFence",
+			"adapterEventKey",
+			"runtimeCursor",
+			"occurredAt",
+			"event",
+		],
+		["dispatchLease"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		!isText(values.conversationId) ||
@@ -419,6 +429,32 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 		runtimeCursor: values.runtimeCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
 		event: parseEvent(values.event),
+		...(values.dispatchLease === undefined
+			? {}
+			: {
+					dispatchLease: (() => {
+						const lease = snapshotObject(values.dispatchLease, [
+							"schemaVersion",
+							"itemId",
+							"leaseOwner",
+							"deliveryFence",
+						]);
+						if (
+							lease.schemaVersion !== 1 ||
+							!isText(lease.itemId) ||
+							!isText(lease.leaseOwner) ||
+							!isPositiveSafeInteger(lease.deliveryFence)
+						) {
+							invalidInput();
+						}
+						return {
+							schemaVersion: 1 as const,
+							itemId: lease.itemId,
+							leaseOwner: lease.leaseOwner,
+							deliveryFence: lease.deliveryFence,
+						};
+					})(),
+				}),
 	};
 }
 
