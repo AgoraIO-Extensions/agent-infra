@@ -40,6 +40,12 @@ export {
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
 export {
+	ConversationDispatchStoreError,
+	openPostgresConversationDispatchStoreV1,
+	type PostgresConversationDispatchOptionsV1,
+	PostgresConversationDispatchStoreV1,
+} from "./conversation-dispatch.ts";
+export {
 	type PostgresConversationEventOptionsV1,
 	PostgresConversationEventTransactionV1,
 } from "./conversation-events.ts";
