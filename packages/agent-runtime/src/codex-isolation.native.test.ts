@@ -65,8 +65,8 @@ interface NativeReadSample {
 	options: { includeTurns?: boolean; itemsView?: "notLoaded" };
 	category: NativeReadCategory;
 	threadStatusType?: string;
-	turnCount?: number;
 	knownTurnMatches?: boolean | "unavailable";
+	foreignMarkerAbsent?: boolean | "unavailable";
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +75,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 		value !== null &&
 		!Array.isArray(value) &&
 		Object.getPrototypeOf(value) === Object.prototype
+	);
+}
+
+function containsMarker(value: unknown, marker: string): boolean {
+	if (typeof value === "string") return value.includes(marker);
+	if (Array.isArray(value))
+		return value.some((entry) => containsMarker(entry, marker));
+	return (
+		isPlainRecord(value) &&
+		Object.values(value).some((entry) => containsMarker(entry, marker))
 	);
 }
 
@@ -179,6 +189,7 @@ function nativeReadSample(
 	options: NativeReadSample["options"],
 	reply: RawNativeReply,
 	knownTurnId: string,
+	foreignMarker: string,
 ): NativeReadSample {
 	const sample: NativeReadSample = {
 		point,
@@ -187,7 +198,10 @@ function nativeReadSample(
 		category: reply.category,
 		...(reply.category === "success"
 			? {}
-			: { knownTurnMatches: "unavailable" as const }),
+			: {
+					knownTurnMatches: "unavailable" as const,
+					foreignMarkerAbsent: "unavailable" as const,
+				}),
 	};
 	if (reply.category !== "success") return sample;
 	if (method === "thread/read") {
@@ -198,29 +212,39 @@ function nativeReadSample(
 		if (
 			!isPlainRecord(thread) ||
 			!isPlainRecord(status) ||
-			typeof status.type !== "string" ||
-			!Array.isArray(thread.turns)
+			typeof status.type !== "string"
 		) {
-			return { ...sample, category: "invalid-native-response" };
+			return {
+				...sample,
+				category: "invalid-native-response",
+				knownTurnMatches: "unavailable",
+				foreignMarkerAbsent: "unavailable",
+			};
 		}
+		const turns = thread.turns;
 		return {
 			...sample,
 			threadStatusType: status.type,
-			turnCount: thread.turns.length,
-			knownTurnMatches: thread.turns.some(
-				(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
-			),
+			knownTurnMatches: Array.isArray(turns)
+				? turns.some((turn) => isPlainRecord(turn) && turn.id === knownTurnId)
+				: "unavailable",
+			foreignMarkerAbsent: !containsMarker(thread, foreignMarker),
 		};
 	}
 	const data = isPlainRecord(reply.result) ? reply.result.data : undefined;
 	if (!Array.isArray(data))
-		return { ...sample, category: "invalid-native-response" };
+		return {
+			...sample,
+			category: "invalid-native-response",
+			knownTurnMatches: "unavailable",
+			foreignMarkerAbsent: "unavailable",
+		};
 	return {
 		...sample,
-		turnCount: data.length,
 		knownTurnMatches: data.some(
 			(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
 		),
+		foreignMarkerAbsent: !containsMarker(data, foreignMarker),
 	};
 }
 
@@ -234,6 +258,7 @@ function unavailableModelObservationSamples(
 			options: { includeTurns: false },
 			category: "model-observation-unavailable",
 			knownTurnMatches: "unavailable",
+			foreignMarkerAbsent: "unavailable",
 		},
 		{
 			point,
@@ -241,6 +266,7 @@ function unavailableModelObservationSamples(
 			options: { includeTurns: true },
 			category: "model-observation-unavailable",
 			knownTurnMatches: "unavailable",
+			foreignMarkerAbsent: "unavailable",
 		},
 		{
 			point,
@@ -248,6 +274,7 @@ function unavailableModelObservationSamples(
 			options: { itemsView: "notLoaded" },
 			category: "model-observation-unavailable",
 			knownTurnMatches: "unavailable",
+			foreignMarkerAbsent: "unavailable",
 		},
 	];
 }
@@ -457,6 +484,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			client: RawNativeClient,
 			threadId: string,
 			turnId: string,
+			foreignMarker: string,
 		) {
 			const withoutTurns = await client.request("thread/read", {
 				threadId,
@@ -477,6 +505,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					{ includeTurns: false },
 					withoutTurns,
 					turnId,
+					foreignMarker,
 				),
 				nativeReadSample(
 					point,
@@ -484,6 +513,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					{ includeTurns: true },
 					withTurns,
 					turnId,
+					foreignMarker,
 				),
 				nativeReadSample(
 					point,
@@ -491,12 +521,15 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					{ itemsView: "notLoaded" },
 					turns,
 					turnId,
+					foreignMarker,
 				),
 			];
 		}
 		async function sampleActiveThreadHistory() {
 			if (!model || !launcher) throw new Error("No native isolation fixture");
 			const probe = model.probe();
+			const foreignMarker = users.at(1)?.context;
+			if (!foreignMarker) throw new Error("Missing foreign isolation marker");
 			const hold = model.holdObservation(probe);
 			const beforeRawClient = (await launcher.observations()).filter(
 				(entry) => entry.method === "launch",
@@ -537,6 +570,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					client,
 					nativeThread.id,
 					nativeTurn.id,
+					foreignMarker,
 				);
 				hold.allowObservation();
 				const observed = await waitForModelSignal(hold.observed);
@@ -548,6 +582,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 								client,
 								nativeThread.id,
 								nativeTurn.id,
+								foreignMarker,
 							)),
 						]
 					: [

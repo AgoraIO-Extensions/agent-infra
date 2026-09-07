@@ -53,7 +53,9 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   Bridge 为该进程创建独立临时 HOME/TMPDIR，不继承父进程凭证，也不修改 sandbox、cwd、`CODEX_HOME`
   或任何原生回包。
 - 该兼容性探针只输出 point、method、非敏感 options、success/error category、`thread.status.type`、
-  turn count 和目标 Turn 是否匹配；不输出 ID、线程正文、路径、模型输入、完整 frame 或凭证。
+  目标 Turn 是否匹配及外来 marker 是否缺失；不输出 ID、线程正文、路径、模型输入、完整 frame 或凭证。
+  `thread/read(includeTurns=true)` 在 active Turn 中若成功，只将目标 Turn 匹配、`inProgress` 等状态分类和
+  外来 marker 缺失作为原生观测；`thread/turns/list` 的 `unsupported` 仍按实际回包保留。
   `includeTurns=true` 是 paginated history 的废弃 hydration 路径，不能作为 `thread/turns/list` 的替代，
   也不能单独证明隔离。若 loopback 模型未在有界时间内观察到请求，第二点标为
   `model-observation-unavailable`，不重发 Turn 或把第一点结果挪用为第二点。
