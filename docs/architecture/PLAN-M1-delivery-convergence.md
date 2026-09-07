@@ -126,6 +126,23 @@ flowchart TB
 | #395 | #390、#391、#392、#394、#396、#397 |
 | #171、#177 | #149（completed） |
 
+### Connection HCI 历史证据与当前实施
+
+[#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 保持 open，作为待替代的
+历史 HCI 证据，不是已交付的 Connection readiness，也不承接当前联合验收。根据
+[#402 的协调验收](https://github.com/AgoraIO-Extensions/agent-infra/issues/402)，旧 HCI Issue、
+历史分支、tag 和开放 PR 只能在替代内容合入后关闭；本计划不授权关闭、重启或部署 #301。
+
+当前 Connection 实施仍由 @guoxianzhe 负责：[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)
+是 open 的 HCI readiness 票，尚未交付，直接受 #390、#391、#392、#394、#396、#397 六张
+open 实施票阻塞；[#402](https://github.com/AgoraIO-Extensions/agent-infra/issues/402) 仍是 open 的
+十票协调入口，不是 primary Implementation Issue、代码 PR 或跨系统验收入口。两者的当前进展
+不能由 #301 的保留状态推断，也不能把 #301 计为已完成。
+
+Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 仍按 Connection PRD §14
+排除在首个 GitHub Pilot 与当前 #395 范围外。本计划不恢复这些历史范围，也不授予任何
+Connection 实现、退休或 HCI 部署权限。
+
 L1 的最小未完成闭包是 **#186、#190、#192、#194、#389、#398、#400、#403、#404、#405、#406**。
 其中 #400 经 #192 间接阻塞 #194，不能只看 #194 的直接依赖而漏掉人工设计确认。
 最终回读发现 #186 已新增 #398 的正文与原生依赖，L1 因此也消费 Connection 新契约；
@@ -228,7 +245,10 @@ Owner 只能作出下列一项明确选择：
 ### 5.2 唯一新增联合验收票草案
 
 现有 #194 只负责 Fake，#395 只负责 Connection readiness，#177 只负责准备和 Go/No-Go。
-历史 HCI 候选入口 #301 与协调票 #402 均不能承接；没有现有票拥有跨系统真实验收。
+[#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 是待替代的历史 HCI 证据，
+按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
+且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。没有现有票拥有
+跨系统真实验收。
 因此只提出一个新 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。
 创建及原生依赖落盘仍等待 §4 的唯一实现归属和 §5.1 的范围确认。
