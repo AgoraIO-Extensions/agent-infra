@@ -65,7 +65,8 @@ type AuthorizationDecision =
 			readonly outcome: "allowed";
 			readonly authority: ConversationExecutionAuthorityV1;
 	  }
-	| { readonly outcome: "denied" };
+	| { readonly outcome: "denied" }
+	| { readonly outcome: "unavailable" };
 
 export interface ConversationAuthorization {
 	authorize(
@@ -195,6 +196,9 @@ async function authorize(
 		decision = await dependencies.authorization.authorize(identity, input);
 	} catch {
 		return fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (decision.outcome === "unavailable") {
+		return fail("RUNTIME_UNAVAILABLE", traceId);
 	}
 	if (decision.outcome !== "allowed") {
 		return fail(
@@ -450,6 +454,7 @@ async function stillAuthorized(
 			operation: "conversation.read",
 			conversationId,
 		});
+		if (decision.outcome === "unavailable") return "unavailable";
 		if (decision.outcome !== "allowed") return "revoked";
 		return authorityMatches(decision.authority, identity)
 			? "allowed"
@@ -482,8 +487,15 @@ async function deniedCommand(
 	dependencies: ConversationRoutesDependencies,
 	identity: IdentityContext,
 	conversationId: string,
+	operation: "message" | "regenerate",
 	traceId: string,
 ): Promise<never> {
+	await authorize(
+		dependencies,
+		identity,
+		{ schemaVersion: 1, operation, conversationId },
+		traceId,
+	);
 	await authorize(
 		dependencies,
 		identity,
@@ -573,8 +585,15 @@ export function registerConversationRoutes(
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
 			});
-			if (decision.outcome === "denied")
+			if (decision.outcome === "denied") {
+				await authorize(
+					dependencies,
+					identity,
+					{ schemaVersion: 1, operation: "conversation.create", agentId },
+					metadata.traceId,
+				);
 				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+			}
 			if (decision.outcome === "conflict")
 				return fail("CONFLICT", metadata.traceId);
 			const detail = await query(
@@ -707,6 +726,7 @@ export function registerConversationRoutes(
 					dependencies,
 					identity,
 					context.req.param("conversationId"),
+					"message",
 					metadata.traceId,
 				);
 			}
@@ -746,6 +766,7 @@ export function registerConversationRoutes(
 					dependencies,
 					identity,
 					context.req.param("conversationId"),
+					"regenerate",
 					metadata.traceId,
 				);
 			}

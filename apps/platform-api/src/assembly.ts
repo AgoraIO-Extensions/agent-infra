@@ -127,13 +127,16 @@ export function assemblePlatformApi(
 			);
 			if (!agent) return { outcome: "denied" };
 			if (
-				(request.operation === "conversation.create" ||
-					request.operation === "message" ||
-					request.operation === "regenerate") &&
-				(agent.management.status !== "available" ||
-					agent.management.serviceAvailability !== "ready")
+				request.operation === "conversation.create" ||
+				request.operation === "message" ||
+				request.operation === "regenerate"
 			) {
-				return { outcome: "denied" };
+				if (agent.management.status !== "available") {
+					return { outcome: "denied" };
+				}
+				if (agent.management.serviceAvailability !== "ready") {
+					return { outcome: "unavailable" };
+				}
 			}
 			let supportsSupplementaryInstruction = false;
 			if (request.operation === "message") {
@@ -193,8 +196,15 @@ export function assemblePlatformApi(
 				createConversationExecutionUseCaseV1({
 					transaction: conversationTransaction,
 					authorization: {
-						authorize: (request) =>
-							conversationAuthorization.authorize(identity, request),
+						async authorize(request) {
+							const decision = await conversationAuthorization.authorize(
+								identity,
+								request,
+							);
+							return decision.outcome === "unavailable"
+								? { outcome: "denied" }
+								: decision;
+						},
 					},
 				}),
 			query: conversationQuery,

@@ -334,6 +334,46 @@ describe("Conversation HTTP routes", () => {
 		expect(JSON.stringify(error)).not.toContain("Run it");
 	});
 
+	it("maps temporarily unavailable Agent commands to a retryable Runtime error", async () => {
+		const input = dependencies({
+			authorization: {
+				authorize: vi.fn().mockResolvedValue({ outcome: "unavailable" }),
+			},
+		});
+		const command = input.commands(identity);
+		command.createConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		command.accept = vi.fn().mockResolvedValue({ outcome: "denied" });
+		command.regenerate = vi.fn().mockResolvedValue({ outcome: "denied" });
+		const { app } = testApp(input);
+		const responses = await Promise.all([
+			app.request("/api/v1/agents/agent-1/conversations", {
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1 }),
+			}),
+			app.request("/api/v1/conversations/conversation-1/messages", {
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			}),
+			app.request("/api/v1/conversations/conversation-1/regenerations", {
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, messageId: "message-1" }),
+			}),
+		]);
+
+		expect(responses.map(({ status }) => status)).toEqual([503, 503, 503]);
+		for (const response of responses) {
+			expect(await response.json()).toMatchObject({
+				code: "RUNTIME_UNAVAILABLE",
+				retryable: true,
+			});
+		}
+	});
+
 	it("returns actor-scoped history, timeline, and execution details", async () => {
 		const { app, dependencies: input } = testApp();
 		const list = await app.request("/api/v1/agents/agent-1/conversations");

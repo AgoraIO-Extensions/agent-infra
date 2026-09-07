@@ -49,6 +49,12 @@ const protocolErrors = {
 		"A required service is temporarily unavailable.",
 		true,
 	],
+	RUNTIME_UNAVAILABLE: [
+		503,
+		"RUNTIME_UNAVAILABLE",
+		"The Agent runtime is temporarily unavailable.",
+		true,
+	],
 	INTERNAL_ERROR: [
 		500,
 		"INTERNAL_ERROR",

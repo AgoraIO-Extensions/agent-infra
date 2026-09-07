@@ -185,6 +185,12 @@ describe("HTTP common boundary", () => {
 			code: "CONVERSATION_UNAVAILABLE",
 			retryable: false,
 		});
+		expect(new HttpProtocolError("RUNTIME_UNAVAILABLE", traceId)).toMatchObject(
+			{
+				status: 503,
+				body: { code: "RUNTIME_UNAVAILABLE", retryable: true },
+			},
+		);
 
 		const forbidden = new HttpProtocolError("FORBIDDEN", traceId);
 		expect(forbidden.status).toBe(403);
