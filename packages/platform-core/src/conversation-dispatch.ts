@@ -1501,6 +1501,19 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			if (response.result.outcome === "rejected") {
+				if (
+					claim.operation === "conversation.turn.stop.v1" &&
+					response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
+				) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "succeeded",
+						transition: {},
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "already_completed" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
 				return reject(
 					dependencies.store,
 					claim,

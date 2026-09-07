@@ -628,6 +628,35 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("ORIGINAL_RESPONSE_ALREADY_FINISHED");
 	});
 
+	it("completes a stop when Runtime reports the target already ended", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_ACTIVE",
+			message: "Runtime turn is no longer active",
+			retryable: false,
+		});
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-request-1",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+				input: null,
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "already_completed",
+		});
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(store.errorCode).toBeUndefined();
+		expect(store.current.executionStatus).toBe("processing");
+	});
+
 	it("fails closed on cross-user, cross-Agent, stale, and raw-native result facts", async () => {
 		for (const invalidAuthorization of [
 			{ actorId: "other-actor" },
