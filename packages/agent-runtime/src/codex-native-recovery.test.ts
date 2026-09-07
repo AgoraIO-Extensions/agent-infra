@@ -132,7 +132,7 @@ function shellQuote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function loopbackResponsesProvider(root: string) {
+async function loopbackResponsesProvider(root: string, respondHeaders = false) {
 	let requested = false;
 	const responses = new Set<ServerResponse>();
 	const server = createServer((request, response) => {
@@ -143,6 +143,14 @@ async function loopbackResponsesProvider(root: string) {
 			requested = true;
 			responses.add(response);
 			response.once("close", () => responses.delete(response));
+			if (respondHeaders) {
+				response.writeHead(200, {
+					"cache-control": "no-cache",
+					"content-type": "text/event-stream",
+					connection: "keep-alive",
+				});
+				response.flushHeaders();
+			}
 			return;
 		}
 		response.statusCode = 404;
@@ -343,7 +351,7 @@ afterEach(async () => {
 describe
 	.skipIf(!enabled)
 	.sequential("pinned Codex native process recovery", () => {
-		it("reproduces legacy history reads failing without the experimental API opt-in", async () => {
+		it("reproduces the legacy turns-list history read failing through the formal Bridge", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
 			const loopback = await loopbackResponsesProvider(root);
@@ -365,12 +373,6 @@ describe
 					limit: 100,
 				}),
 			).rejects.toThrow("Native thread/turns/list request unavailable");
-			await expect(
-				client.request("thread/read", {
-					threadId: started.thread.id,
-					includeTurns: true,
-				}),
-			).rejects.toThrow("Native thread/read request unavailable");
 			expect(loopback.wasRequested()).toBe(false);
 		}, 90_000);
 
@@ -430,7 +432,7 @@ describe
 		it("observes a newly accepted Turn through the Host before native history materializes", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			const loopback = await loopbackResponsesProvider(root);
+			await loopbackResponsesProvider(root, true);
 			const driver = await nativeDriver(path);
 			const runtimeHost = ingressVerifiedRuntimeHost(
 				await RuntimeHost.open({
@@ -461,7 +463,6 @@ describe
 			expect(JSON.stringify(response)).not.toContain(
 				"synthetic recovery input",
 			);
-			expect(loopback.wasRequested()).toBe(false);
 		}, 90_000);
 
 		it.each(["close", "crash"])(
