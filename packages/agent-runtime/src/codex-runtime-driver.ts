@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { lstat, readFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import type {
 	RuntimeCapabilitiesV1,
 	RuntimeDriverOperationRecordV1,
@@ -121,6 +123,7 @@ interface CodexDriverState {
 }
 
 interface PendingRequest {
+	method: string;
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	nativeSelectionRejection: boolean;
@@ -678,6 +681,18 @@ function unavailableError() {
 	);
 }
 
+class CodexSessionUnavailableError extends RuntimeHostError {
+	constructor() {
+		super(
+			"RUNTIME_CODEX_UNAVAILABLE",
+			"Codex Runtime is unavailable",
+			503,
+			true,
+			"unavailable",
+		);
+	}
+}
+
 function protocolInvalidError() {
 	return new RuntimeHostError(
 		"RUNTIME_CODEX_PROTOCOL_INVALID",
@@ -888,6 +903,7 @@ class CodexRpc {
 		const id = this.nextRequestId++;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
+				method,
 				resolve: (value) => resolve(parse(value)),
 				reject,
 				nativeSelectionRejection,
@@ -908,6 +924,7 @@ class CodexRpc {
 		} catch (error) {
 			this.pending.delete(id);
 			if (error instanceof CodexModelSelectionRejectedError) throw error;
+			if (error instanceof CodexSessionUnavailableError) throw error;
 			const failure =
 				error instanceof RuntimeHostError ? error : unavailableError();
 			this.fail(failure);
@@ -980,6 +997,16 @@ class CodexRpc {
 		}
 		if ("error" in frame) {
 			if (
+				pending.method === "thread/resume" &&
+				isPlainRecord(frame.error) &&
+				Number.isSafeInteger(frame.error.code) &&
+				nonEmptyString(frame.error.message)
+			) {
+				pending.reject(new CodexSessionUnavailableError());
+				this.pending.delete(frame.id);
+				return;
+			}
+			if (
 				pending.nativeSelectionRejection &&
 				isNativeSelectionRejection(frame.error)
 			) {
@@ -1044,6 +1071,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly rpc: CodexRpc;
 
 	static async open(options: CodexRuntimeDriverOptions) {
+		// The deployment's Driver file and its sibling native storage share one
+		// Agent PVC. Losing the mapping must never initialize replacement sessions.
+		try {
+			if (!isAbsolute(options.path) || resolve(options.path) !== options.path)
+				stateInvalid();
+			const state = await lstat(options.path).catch(
+				(error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return undefined;
+					throw error;
+				},
+			);
+			const native = await lstat(`${options.path}.native`).catch(
+				(error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return undefined;
+					throw error;
+				},
+			);
+			if ((state && !state.isFile()) || (!state && native)) stateInvalid();
+			if (state && !native) {
+				const saved: unknown = JSON.parse(await readFile(options.path, "utf8"));
+				assertDriverState(saved);
+				if (Object.keys(saved.sessions).length > 0) unavailable();
+			}
+		} catch (error) {
+			if (error instanceof RuntimeHostError) throw error;
+			stateInvalid();
+		}
 		return CodexRuntimeDriver.openWithBridge(
 			options,
 			CodexAppServerBridge.open,
@@ -1059,6 +1113,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let bridge: CodexAppServerTransport;
 		try {
 			bridge = await openBridge({
+				dataDirectory: `${options.path}.native`,
 				model: options.model,
 				reasoningEffort: options.reasoningEffort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
