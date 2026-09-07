@@ -2427,6 +2427,8 @@ test("locks Review identity, coverage reporting and unrestricted reviewable path
     ["analyze", "pr_reviewer.persistent_comment", "false"],
     ["analyze", "pr_reviewer.publish_output_no_suggestions", "false"],
     ["analyze", "pr_reviewer.enable_review_coverage_footer", "false"],
+    ["analyze", "pr_reviewer.enable_help_text", "true"],
+    ["analyze", "config.output_relevant_configurations", "true"],
     ["suggestions", "pr_code_suggestions.enable_suggestions_coverage_footer", "false"],
     ["analyze", "ignore.glob", '["**/generated/**", "**/*.test.ts", "vendor/**"]'],
     ["suggestions", "ignore.regex", '[".*schema.*"]'],

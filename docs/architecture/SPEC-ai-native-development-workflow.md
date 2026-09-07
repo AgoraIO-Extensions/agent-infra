@@ -379,6 +379,8 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   带固定 full-review identity、当前 head 和 run/attempt 标记，且正文与该 Analysis log 中的输出一致。
   标记由可信 workflow 配置写入 heading，不由模型生成；首次发布与 persistent update 都必须验证。
   缺失、被编辑、超出该 Analysis job 时间窗口、无法验证或带 coverage footer 的输出不能通过。
+  官方输出附带 versioned review-state 时，还必须验证其 head、complete 与 excluded-files；未知或
+  无效版本不能通过。footer 只匹配末尾固定区块，模型正文中的引用不作为裁剪证据。
   Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
   完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回失败 Check 和稳定 reason code。

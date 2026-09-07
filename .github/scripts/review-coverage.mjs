@@ -17,8 +17,10 @@ const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
 const REVIEW_IDENTITY = "<!-- pr-agent:review:full -->";
 const REVIEW_HEADER =
   /^## PR Reviewer Guide \[head ([a-f0-9]{40}); run ([1-9][0-9]*)\/([1-9][0-9]*)\] 🔍$/;
+// The workflow disables the optional help/config appendices, so the engine's
+// coverage footer is a final section, not a quote inside model prose.
 const COVERAGE_FOOTER =
-  "⚠️ **Review coverage:** The following files were not included in this review because of the token budget:";
+  /\n\n<hr>\n\n⚠️ \*\*Review coverage:\*\* The following files were not included in this review because of the token budget:\n(?:- `[^\r\n]+`(?:\n|$))+(?:\.\.\. and [1-9][0-9]* more\n?)?$/;
 
 const FULL_DIFF_PATTERN =
   /^Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\.$/;
@@ -68,6 +70,44 @@ function jobLogRecords(log) {
     }
   }
   return records;
+}
+
+function reviewState(output, expectedHead) {
+  const start = output.lastIndexOf("\n\n<!-- pr-agent-review-state:");
+  if (start < 0) return { body: output };
+  const invalid = { reasonCode: "review-output-invalid" };
+  const marker = output
+    .slice(start)
+    .match(/^\n\n<!-- pr-agent-review-state:v1\n([^\r\n]+)\n-->\n?$/);
+  if (!marker) return invalid;
+  let state;
+  try {
+    state = JSON.parse(marker[1]);
+  } catch {
+    return invalid;
+  }
+  const run = state?.last_run;
+  if (
+    state?.schema_version !== 1 ||
+    !Array.isArray(state.findings) ||
+    !/^[a-f0-9]{40}$/.test(run?.head_sha ?? "") ||
+    run?.kind !== "full" ||
+    typeof run.complete !== "boolean" ||
+    !Array.isArray(run.excluded_files) ||
+    !run.excluded_files.every(
+      (file) => typeof file === "string" && file.length > 0,
+    )
+  )
+    return invalid;
+  if (run.head_sha !== expectedHead)
+    return { reasonCode: "review-output-stale" };
+  if (!run.complete || run.excluded_files.length) {
+    return {
+      reasonCode: "review-coverage-incomplete",
+      omittedFileCount: run.excluded_files.length || null,
+    };
+  }
+  return { body: output.slice(0, start) };
 }
 
 function evaluatePrAgent({
@@ -156,7 +196,19 @@ function evaluatePrAgent({
     marker[3] !== String(reviewContext.runAttempt)
   )
     return reject();
-  if (output.includes(COVERAGE_FOOTER)) {
+  // Recent official Action images append deterministic state after the prose.
+  // Keep it in the byte comparison, but evaluate its coverage fields separately.
+  const state = reviewState(output, expectedHead);
+  if (state.reasonCode) {
+    return result(
+      "pr-agent",
+      expectedHead,
+      "failure",
+      state.reasonCode,
+      state.omittedFileCount,
+    );
+  }
+  if (COVERAGE_FOOTER.test(state.body)) {
     return result(
       "pr-agent",
       expectedHead,

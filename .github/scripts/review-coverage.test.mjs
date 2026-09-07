@@ -585,6 +585,7 @@ test("remaining-file footer and upstream filtering cannot be hidden by full-diff
     files.map((file) => `- \`${file}\``).join("\n");
   const logs = [
     `${logRecord(completeDecision)}\n${outputRecord(output + footer)}`,
+    `${logRecord(completeDecision)}\n${outputRecord(output + footer + "\n... and 25 more")}`,
     `${completeLog}\n2026-08-29T00:51:00Z ${JSON.stringify({ record: { name: "pr_agent.git_providers.github_provider", message: "Filtered out files with invalid extensions: " + JSON.stringify(files) } })}`,
     `${prunedLog}\n${completeLog}`,
   ];
@@ -594,6 +595,17 @@ test("remaining-file footer and upstream filtering cannot be hidden by full-diff
       "review-coverage-incomplete",
     );
   }
+
+  const quotation =
+    "\n\n```markdown" + footer + "\n```\nThis is a quoted example.";
+  assert.equal(
+    evaluateReviewCoverage({
+      ...input,
+      analysisLog: `${logRecord(completeDecision)}\n${outputRecord(output + quotation)}`,
+      reviewComments: [{ ...comment, body: comment.body + quotation }],
+    }).reasonCode,
+    "complete",
+  );
 });
 
 test("rejects stale, untrusted, unfinished and ambiguous Claude evidence", () => {
@@ -738,4 +750,51 @@ test("publication replay updates the same dedicated Check and rejects a moved he
   currentHead = "b".repeat(40);
   await assert.rejects(publishCoverageCheck(args));
   assert.equal(writes.length, 2);
+});
+
+test("validates current official Action state without treating findings as coverage", () => {
+  const lastRun = {
+    head_sha: head,
+    kind: "full",
+    complete: true,
+    excluded_files: [],
+  };
+  const trailer = (last_run = lastRun, version = 1) =>
+    `\n\n<!-- pr-agent-review-state:v${version}\n${JSON.stringify({ schema_version: version, findings: [], last_run })}\n-->\n`;
+  for (const [state, expected] of [
+    [trailer(), "complete"],
+    [trailer({ ...lastRun, complete: false }), "review-coverage-incomplete"],
+    [
+      trailer({
+        ...lastRun,
+        excluded_files: ["generated/client.ts", "tests/fake.ts"],
+      }),
+      "review-coverage-incomplete",
+    ],
+    [trailer({ ...lastRun, head_sha: "b".repeat(40) }), "review-output-stale"],
+    [trailer({ ...lastRun, excluded_files: "none" }), "review-output-invalid"],
+    [trailer(lastRun, 2), "review-output-invalid"],
+    [
+      trailer().replace('"schema_version":1', '"schema_version":'),
+      "review-output-invalid",
+    ],
+  ]) {
+    assert.equal(
+      evaluateReviewCoverage({
+        ...input,
+        analysisLog: `${logRecord(completeDecision)}\n${outputRecord(output + state)}`,
+        reviewComments: [{ ...comment, body: comment.body + state }],
+      }).reasonCode,
+      expected,
+    );
+  }
+  const footer =
+    "\n\n<hr>\n\n⚠️ **Review coverage:** The following files were not included in this review because of the token budget:\n- `schema.json`";
+  assert.equal(
+    evaluateReviewCoverage({
+      ...input,
+      analysisLog: `${logRecord(completeDecision)}\n${outputRecord(output + footer + trailer())}`,
+    }).reasonCode,
+    "review-coverage-incomplete",
+  );
 });

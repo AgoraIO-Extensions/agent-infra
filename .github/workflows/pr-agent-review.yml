@@ -68,6 +68,8 @@ jobs:
           pr_reviewer.persistent_comment: "true"
           pr_reviewer.publish_output_no_suggestions: "true"
           pr_reviewer.enable_review_coverage_footer: "true"
+          pr_reviewer.enable_help_text: "false"
+          config.output_relevant_configurations: "false"
           pr_reviewer.require_can_be_split_review: "false"
           pr_reviewer.require_estimate_contribution_time_cost: "false"
           pr_reviewer.require_estimate_effort_to_review: "false"
