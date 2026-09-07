@@ -257,7 +257,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		],
 		["Secret Agent", { secretRefs: [{ ...secretRef, agentId: "agent_02" }] }],
 		[
-			"Secret config revision",
+			"Secret from a future config revision",
 			{ secretRefs: [{ ...secretRef, configRevision: 8 }] },
 		],
 		["Runtime service port", { service: { ...desired.service, port: 9090 } }],
@@ -269,6 +269,14 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(() =>
 			validateAgentWorkloadDesiredV1({ ...desired, ...mismatch }),
 		).toThrow("Desired Workload correlation mismatch");
+	});
+
+	it("accepts an immutable Secret retained from an earlier configuration", () => {
+		const retained = {
+			...desired,
+			configRevision: desired.configRevision + 1,
+		};
+		expect(validateAgentWorkloadDesiredV1(retained)).toEqual(retained);
 	});
 
 	it("binds each self-managed identity choice to exactly one route policy", () => {

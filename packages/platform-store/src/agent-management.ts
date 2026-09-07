@@ -11,7 +11,7 @@ import {
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
+import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
 	agentManagementStateUpdate,
@@ -154,8 +154,8 @@ async function readIdempotency(
 	return row;
 }
 
-async function readState(
-	database: ReturnType<typeof drizzle> | Transaction,
+export async function readAgentManagementState(
+	database: PostgresJsDatabase | Transaction,
 	agentId: string,
 ): Promise<AgentManagementStateV1 | undefined> {
 	const [application] = await database
@@ -238,7 +238,10 @@ async function lockState(
 		.where(and(subjectCondition, eq(agentApplications.agentId, agentId)))
 		.for("update")
 		.limit(1);
-	return lockedApplication && readState(transaction, lockedApplication.agentId);
+	return (
+		lockedApplication &&
+		readAgentManagementState(transaction, lockedApplication.agentId)
+	);
 }
 
 function requireAcceptedEnvelope(
@@ -287,8 +290,8 @@ function requireAcceptedEnvelope(
 	return { result, writePlan };
 }
 
-async function persistAccepted(
-	transaction: Transaction,
+export async function persistAcceptedAgentManagement(
+	transaction: Transaction | PostgresJsDatabase,
 	request: AgentManagementTransactionRequestV1,
 	current: AgentManagementStateV1,
 	decision: AcceptedDecision,
@@ -373,7 +376,12 @@ export class PostgresAgentManagementTransactionV1
 				const decision = decide(state && structuredClone(state));
 				if (decision.outcome !== "accepted") return decision;
 				if (!state) throw new AgentManagementError("unavailable");
-				return persistAccepted(transaction, request, state, decision);
+				return persistAcceptedAgentManagement(
+					transaction,
+					request,
+					state,
+					decision,
+				);
 			});
 		} catch {
 			throw new AgentManagementError("unavailable");
@@ -386,7 +394,7 @@ export class PostgresAgentManagementTransactionV1
 		try {
 			return await this.#database.transaction(
 				async (transaction) => {
-					const state = await readState(transaction, agentId);
+					const state = await readAgentManagementState(transaction, agentId);
 					return state && structuredClone(state);
 				},
 				{ isolationLevel: "repeatable read", accessMode: "read only" },

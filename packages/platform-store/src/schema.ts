@@ -1,5 +1,8 @@
 import type { PlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
-import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationRecordV1,
+	WorkloadReconciliationStateV1,
+} from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
 import {
 	bigint,
@@ -1214,7 +1217,36 @@ export const persistedEvents = platformSchema.table(
 	],
 );
 
+export const workloadReconciliations = platformSchema.table(
+	"workload_reconciliations",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		state: jsonb("state").$type<WorkloadReconciliationStateV1>().notNull(),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"workload_reconciliation_revision_safe",
+			sql`${table.revision} between 1 and 9007199254740991`,
+		),
+		check(
+			"workload_reconciliation_identity",
+			sql`jsonb_typeof(${table.state}) = 'object' and ${table.state} @> jsonb_build_object('schemaVersion', 1, 'agentId', ${table.agentId}, 'revision', ${table.revision})`,
+		),
+		index("workload_reconciliation_due_idx").on(table.nextAttemptAt),
+	],
+);
+
 export const platformInfrastructureTables = [
+	workloadReconciliations,
 	agents,
 	agentApplications,
 	agentConfigurationRevisions,

@@ -84,6 +84,8 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
+              value: {{ .Values.platformWorker.deploymentModule | quote }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
