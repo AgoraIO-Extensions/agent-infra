@@ -251,14 +251,15 @@ Connection 是与 Agent 平台并行建设的独立系统。详细需求见 [Con
 
 Agent 平台与 Connection 的边界如下：
 
-- Connection 系统发布 Provider 和 Action，处理外部账户鉴权、凭证保管和 API 调用。
-- Agent Owner 选择 Agent 可以使用的 Action，但不能绑定普通使用者的个人外部账号。
-- 使用者将自己的 Connection，或自己有权使用的公司 Connection，授权给具体 Agent。
-- Owner 新增 Action 后，已有 Connection 授权不能自动获得该新增能力。使用者确认更新后的能力范围后，Agent 才能代表该用户调用新增 Action。
-- Owner 移除 Action，或 Connection 系统停用 Provider 或 Action 后，对应能力立即停止使用。
+- Connection 系统发布 Provider 和 Action，处理外部账户鉴权、凭证保管、用户 Grant、API 调用和调用审计。
+- Agent Platform 使用只读目录投影；Agent Owner 选择 Agent 可以请求的 Action，但不能绑定普通使用者的外部账号或创建用户 Grant。
+- 使用者在独立 Connection 入口中，将自己的 Connection 或自己有权使用的公司 Connection 授权给 Agent Platform Consumer 下的具体 Agent Actor。
+- 一次调用同时受 Platform 当前 Agent Action policy 和 Connection 当前 Grant 约束；任一层不允许都拒绝。Platform 不能保存第二份可写 Connection Grant。
+- Platform 使用受信短期调用证明向 Connection 表达当前用户、workload、Agent Actor、Action 和请求绑定；Agent、模型和普通请求字段不能指定用户、Connection 或外部账号。
+- Owner 新增 Action 后，已有 Connection Grant 不能自动获得新增能力。使用者确认更新后的能力范围后，Agent 才能调用；Owner 移除 Action或 Connection 停用 Provider/Action 后立即停止新调用。
+- Agent Platform 只保存自己的 policy、执行状态和 Connection 稳定调用引用、状态及脱敏结果，不保存 Provider Credential 或 Connection 可写状态机。
 - Agent、模型和运行环境不能获得 Connection 保存的原始凭证。
-- 四个标准模板必须完成 Connection 接入。
-- M1 至少使用一个真实外部平台，完成连接、授权、调用和撤销授权的端到端闭环。
+- 四个标准模板必须完成 Connection 接入；首个受监督 Connection Pilot 仅使用 Codex 标准模板、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库，验收读取、真实创建 PR、隔离、幂等、审计和撤权；Pilot 通过结论不能外推到其他模板、账号、Provider 或生产环境。
 
 ## 10. 使用渠道
 
@@ -353,10 +354,10 @@ M1 不支持分享、临时会话或对话分支。
 - 标准模板的模型清单和默认项变更。
 - 环境变量变更和 Secret 替换；审计不记录 Secret 值。
 - Agent 可用的 Provider 和 Action 变更。
-- 用户对 Connection 的授权、更新确认和撤销。
+- Agent 可用的 Connection Provider/Action policy 变更；用户 Grant、更新确认和撤销由 Connection 记录，平台只保存关联引用。
 - 用户使用 Agent 的时间、渠道和结果状态，不记录会话内容。
 
-平台操作审计与 Connection 调用审计分别由两个系统提供。两类记录必须能够关联同一次 Connection 调用。审计不记录聊天内容、模型内部思考或 API Key 明文。
+平台操作审计与 Connection 授权、调用审计分别由两个系统提供。两类记录必须通过稳定调用引用关联同一次 Connection 调用。审计不记录聊天内容、模型内部思考、调用证明或原始凭证。
 
 ## 14. 上线验收
 
