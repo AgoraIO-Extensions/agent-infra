@@ -266,6 +266,31 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		expect(stream).toContain("id: fake-cursor-1");
 		expect(stream).toContain('"type":"status"');
 		expect(stream).not.toMatch(/native|vendor|stdio|protocol/i);
+
+		const recovered = await app.request("/internal/runtime/v2/status", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...body,
+				schemaVersion: 2,
+				requestId: "request-http-status-recovery",
+				deliveryFence: 2,
+				hostSessionRef: submitted.hostSessionRef,
+				input: undefined,
+				recovery: { schemaVersion: 1, input: body.input },
+				grant: executionGrant(
+					body,
+					["session.status", "turn.submit"],
+					"grant-http-status-recovery",
+				),
+			}),
+		});
+		expect(recovered.status).toBe(200);
+		expect(await recovered.json()).toMatchObject({
+			schemaVersion: 2,
+			outcome: "found",
+			status: "running",
+		});
 	});
 
 	it("returns a redacted failure before opening SSE when initial recovery fails", async () => {

@@ -228,6 +228,25 @@ describe("Conversation event ingestion", () => {
 				},
 			} as never),
 		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				transition: {
+					executionStatus: "completed",
+					conversationStatus: "ready",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: { type: "execution.status", status: "completed" },
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
 		await events.persist(event);
 		await expect(
 			events.persist({

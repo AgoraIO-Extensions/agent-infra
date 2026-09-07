@@ -48,6 +48,16 @@ interface EventRow {
 	readonly occurred_at: Date;
 }
 
+interface DispatchLeaseRow {
+	readonly id: string;
+	readonly scope_type: string;
+	readonly scope_id: string;
+	readonly status: string;
+	readonly lease_owner: string | null;
+	readonly delivery_fence: string | number;
+	readonly lease_active: boolean | null;
+}
+
 export interface PostgresConversationEventOptionsV1 {
 	readonly databaseUrl: string;
 }
@@ -231,19 +241,73 @@ function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 	return unavailable();
 }
 
+function eventTransition(
+	value: unknown,
+	event: ConversationNormalizedEventV1,
+): NonNullable<ConversationEventCommandV1["transition"]> {
+	const input = exactRecord(value, ["executionStatus", "conversationStatus"]);
+	if (
+		(input.executionStatus !== "submitted" &&
+			input.executionStatus !== "processing" &&
+			input.executionStatus !== "completed" &&
+			input.executionStatus !== "failed" &&
+			input.executionStatus !== "cancelled" &&
+			input.executionStatus !== "unknown") ||
+		(input.conversationStatus !== "ready" &&
+			input.conversationStatus !== "active") ||
+		event.type !== "execution.status" ||
+		input.executionStatus !== event.status ||
+		input.conversationStatus !==
+			(["completed", "failed", "cancelled"].includes(event.status)
+				? "ready"
+				: "active")
+	) {
+		return unavailable();
+	}
+	return {
+		executionStatus: input.executionStatus,
+		conversationStatus: input.conversationStatus,
+	};
+}
+
 function command(value: unknown): ConversationEventCommandV1 {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"deliveryFence",
-		"adapterEventKey",
-		"runtimeCursor",
-		"occurredAt",
-		"event",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"schemaVersion",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"deliveryFence",
+			"adapterEventKey",
+			"runtimeCursor",
+			"occurredAt",
+			"event",
+		],
+		["transition", "dispatchLease"],
+	);
 	if (input.schemaVersion !== 1) return unavailable();
+	const event = normalizedEvent(input.event);
+	const transition =
+		input.transition === undefined
+			? undefined
+			: eventTransition(input.transition, event);
+	const dispatchLease = (() => {
+		if (input.dispatchLease === undefined) return undefined;
+		const lease = exactRecord(input.dispatchLease, [
+			"schemaVersion",
+			"itemId",
+			"leaseOwner",
+			"deliveryFence",
+		]);
+		if (lease.schemaVersion !== 1) return unavailable();
+		return {
+			schemaVersion: 1 as const,
+			itemId: text(lease.itemId),
+			leaseOwner: text(lease.leaseOwner),
+			deliveryFence: safeInteger(lease.deliveryFence, 1),
+		};
+	})();
 	return {
 		schemaVersion: 1,
 		conversationId: text(input.conversationId),
@@ -253,7 +317,9 @@ function command(value: unknown): ConversationEventCommandV1 {
 		adapterEventKey: text(input.adapterEventKey),
 		runtimeCursor: text(input.runtimeCursor),
 		occurredAt: timestamp(input.occurredAt),
-		event: normalizedEvent(input.event),
+		event,
+		...(transition ? { transition } : {}),
+		...(dispatchLease ? { dispatchLease } : {}),
 	};
 }
 
@@ -338,15 +404,19 @@ function validatePlan(
 	requestValue: PersistRequest,
 	state: ConversationEventStateV1,
 ): ConversationEventWritePlanV1 {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"event",
-		"adapterEventKey",
-		"eventDigest",
-		"runtimeCursor",
-		"sessionGeneration",
-		"deliveryFence",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"schemaVersion",
+			"event",
+			"adapterEventKey",
+			"eventDigest",
+			"runtimeCursor",
+			"sessionGeneration",
+			"deliveryFence",
+		],
+		["transition"],
+	);
 	if (
 		input.schemaVersion !== 1 ||
 		input.adapterEventKey !== requestValue.command.adapterEventKey ||
@@ -389,6 +459,10 @@ function validatePlan(
 		occurredAt: timestamp(eventInput.occurredAt),
 		event: normalizedEvent(eventInput.event),
 	};
+	const transition =
+		input.transition === undefined
+			? undefined
+			: eventTransition(input.transition, event.event);
 	if (
 		event.conversationId !== requestValue.command.conversationId ||
 		event.executionId !== requestValue.command.executionId ||
@@ -396,7 +470,9 @@ function validatePlan(
 		event.conversationCursor !==
 			state.conversation.lastConversationCursor + 1 ||
 		event.occurredAt !== requestValue.command.occurredAt ||
-		!sameEvent(event.event, requestValue.command.event)
+		!sameEvent(event.event, requestValue.command.event) ||
+		JSON.stringify(transition) !==
+			JSON.stringify(requestValue.command.transition)
 	) {
 		return unavailable();
 	}
@@ -408,6 +484,7 @@ function validatePlan(
 		runtimeCursor: requestValue.command.runtimeCursor,
 		sessionGeneration: requestValue.command.sessionGeneration,
 		deliveryFence: requestValue.command.deliveryFence,
+		...(transition ? { transition } : {}),
 	};
 }
 
@@ -494,6 +571,32 @@ async function readExistingEvent(
 	return rows[0];
 }
 
+async function currentDispatchLease(
+	transaction: Transaction,
+	command: ConversationEventCommandV1,
+): Promise<boolean> {
+	if (!command.dispatchLease) return true;
+	const rows = await transaction<DispatchLeaseRow[]>`
+		select id, scope_type, scope_id, status, lease_owner,
+			delivery_fence::text,
+			lease_expires_at > clock_timestamp() as lease_active
+		from platform.outbox_items
+		where id = ${command.dispatchLease.itemId}
+		for update
+	`;
+	const row = rows[0];
+	return (
+		rows.length === 1 &&
+		row?.scope_type === "conversation" &&
+		row.scope_id === command.conversationId &&
+		row.status === "processing" &&
+		row.lease_owner === command.dispatchLease.leaseOwner &&
+		safeInteger(row.delivery_fence, 1) ===
+			command.dispatchLease.deliveryFence &&
+		row.lease_active === true
+	);
+}
+
 export class PostgresConversationEventTransactionV1
 	implements ConversationEventTransactionPortV1
 {
@@ -510,6 +613,10 @@ export class PostgresConversationEventTransactionV1
 		const persistedRequest = request(requestInput);
 		if (typeof decide !== "function") unavailable();
 		return this.#transaction(async (transaction) => {
+			const leaseCurrent = await currentDispatchLease(
+				transaction,
+				persistedRequest.command,
+			);
 			const conversation = await lockConversation(
 				transaction,
 				persistedRequest.command.conversationId,
@@ -519,13 +626,14 @@ export class PostgresConversationEventTransactionV1
 				persistedRequest.command.executionId,
 				persistedRequest.command.adapterEventKey,
 			);
-			const execution = conversation
-				? await readExecution(
-						transaction,
-						conversation.id,
-						persistedRequest.command.executionId,
-					)
-				: undefined;
+			const execution =
+				conversation && leaseCurrent
+					? await readExecution(
+							transaction,
+							conversation.id,
+							persistedRequest.command.executionId,
+						)
+					: undefined;
 			const state: ConversationEventStateV1 = {
 				conversation: conversationState(conversation),
 				execution: executionState(execution),
@@ -575,6 +683,33 @@ export class PostgresConversationEventTransactionV1
 				returning id
 			`;
 			if (updatedConversation.length !== 1) unavailable();
+			if (plan.transition) {
+				const transitionedExecution = await transaction<
+					{ execution_id: string }[]
+				>`
+					update platform.conversation_executions
+					set status = ${plan.transition.executionStatus}, updated_at = now()
+					where execution_id = ${plan.event.executionId}
+						and conversation_id = ${plan.event.conversationId}
+						and session_generation = ${plan.sessionGeneration}
+						and delivery_fence = ${plan.deliveryFence}
+						and last_event_sequence = ${plan.event.sequence}
+						and (status not in ('completed', 'failed', 'cancelled')
+							or status = ${plan.transition.executionStatus})
+					returning execution_id
+				`;
+				if (transitionedExecution.length !== 1) unavailable();
+				const transitionedConversation = await transaction<{ id: string }[]>`
+					update platform.conversations
+					set status = ${plan.transition.conversationStatus}, updated_at = now()
+					where id = ${plan.event.conversationId}
+						and session_generation = ${plan.sessionGeneration}
+						and last_conversation_cursor = ${plan.event.conversationCursor}
+						and status <> 'unavailable'
+					returning id
+				`;
+				if (transitionedConversation.length !== 1) unavailable();
+			}
 			return { outcome: "accepted", event: plan.event };
 		});
 	}

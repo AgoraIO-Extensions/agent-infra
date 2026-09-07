@@ -37,7 +37,7 @@ export const platformStatusValues = {
 		"failed",
 		"cancelled",
 	],
-	conversationMessageStatus: ["submitted"],
+	conversationMessageStatus: ["submitted", "failed"],
 	conversationStopStatus: ["submitted", "completed"],
 	agentManagementStatus: [
 		"pending_approval",
@@ -774,6 +774,7 @@ export const conversationMessages = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		failureCode: varchar("failure_code", { length: 64 }),
 	},
 	(table) => [
 		foreignKey({
@@ -798,6 +799,14 @@ export const conversationMessages = platformSchema.table(
 		check(
 			"conversation_message_text_non_empty",
 			sql`char_length(${table.text}) > 0`,
+		),
+		check(
+			"conversation_message_failure_binding",
+			sql`(${table.status}::text = 'failed') = (${table.failureCode} is not null)`,
+		),
+		check(
+			"conversation_message_failure_code_non_empty",
+			sql`${table.failureCode} is null or char_length(${table.failureCode}) > 0`,
 		),
 		index("conversation_message_conversation_idx").on(
 			table.conversationId,

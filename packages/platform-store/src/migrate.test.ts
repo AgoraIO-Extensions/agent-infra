@@ -22,6 +22,8 @@ const migrations = readMigrationFiles({
 		"../../../migrations/platform",
 	),
 });
+const eventSourceMigrationIndex = 9;
+const eventPersistenceTimeMigrationIndex = 10;
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
 );
@@ -81,7 +83,7 @@ async function readPlatformCatalog(client: PostgresClient) {
 }
 
 async function applyLegacyPlatformMigrations(client: PostgresClient) {
-	for (const migration of migrations.slice(0, -2)) {
+	for (const migration of migrations.slice(0, eventSourceMigrationIndex)) {
 		for (const statement of migration.sql) await client.unsafe(statement);
 	}
 }
@@ -581,12 +583,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 						})})
 			`;
 
-			const sourceMigration = migrations.at(-2);
+			const sourceMigration = migrations[eventSourceMigrationIndex];
 			if (!sourceMigration) throw new Error("Expected source migration");
 			for (const statement of sourceMigration.sql) {
 				await upgradeClient.unsafe(statement);
 			}
-			const persistenceMigration = migrations.at(-1);
+			const persistenceMigration =
+				migrations[eventPersistenceTimeMigrationIndex];
 			if (!persistenceMigration) {
 				throw new Error("Expected event persistence-time migration");
 			}
@@ -678,7 +681,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 							reasoningLevel: "medium",
 						})})
 			`;
-			const sourceMigration = migrations.at(-2);
+			const sourceMigration = migrations[eventSourceMigrationIndex];
 			if (!sourceMigration) throw new Error("Expected source migration");
 			await expect(
 				upgradeClient.begin(async (transaction) => {

@@ -41,6 +41,7 @@ describe("platform-store package surface", () => {
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationStoreError",
 			"ApplicationRevisionStoreError",
+			"ConversationDispatchStoreError",
 			"ConversationQueryError",
 			"OutboxStoreError",
 			"PlatformAuditQueryError",
@@ -50,6 +51,7 @@ describe("platform-store package surface", () => {
 			"PostgresAgentManagementTransactionV1",
 			"PostgresApplicationFoundationTransactionV1",
 			"PostgresApplicationRevisionTransactionV1",
+			"PostgresConversationDispatchStoreV1",
 			"PostgresConversationEventTransactionV1",
 			"PostgresConversationExecutionTransactionV1",
 			"PostgresConversationQueryV1",
@@ -60,6 +62,7 @@ describe("platform-store package surface", () => {
 			"SecretKeyRotationStoreError",
 			"createPostgresOutboxStore",
 			"migratePlatformDatabase",
+			"openPostgresConversationDispatchStoreV1",
 			"openPostgresPlatformIdempotencyStore",
 			"openPostgresSecretActivationStoreV1",
 			"openPostgresSecretKeyRotationStoreV1",

@@ -7,7 +7,9 @@ import type {
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
+	RuntimeStatusRequestV2,
 	RuntimeStatusResponseV1,
+	RuntimeStatusResponseV2,
 	RuntimeStatusV1,
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
@@ -25,6 +27,7 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
+	RuntimeStatusRequestV2Schema,
 	RuntimeStatusV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
@@ -38,6 +41,7 @@ import {
 	type FileRuntimeStore,
 	requestDigest,
 	type StoredOperation,
+	type StoredSession,
 } from "./file-runtime-store.js";
 import {
 	type ExecutionGrantValidationOptions,
@@ -376,28 +380,77 @@ export class RuntimeHost {
 			request,
 			request.deliveryFence,
 		);
-		if (session.recovery?.status === "blocked") {
-			return {
-				schemaVersion: 1,
-				hostSessionRef: request.hostSessionRef,
-				executionId: request.executionId,
-				status: "unavailable",
-			};
-		}
-		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
-		const status = RuntimeStatusV1Schema.safeParse(
-			await callDriver(() =>
-				this.options.driver.getStatus(nativeSessionRef, request.executionId),
-			),
-		);
-		if (!status.success) driverInvalid();
 		return {
 			schemaVersion: 1,
 			hostSessionRef: request.hostSessionRef,
 			executionId: request.executionId,
-			status: status.data,
+			status: await this.readStatus(session, request.executionId),
 		};
+	}
+
+	async recoverStatusV2(
+		value: RuntimeStatusRequestV2,
+		verification: unknown,
+	): Promise<RuntimeStatusResponseV2> {
+		const parsed = RuntimeStatusRequestV2Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		for (const command of ["session.status", "turn.submit"] as const) {
+			validateRuntimeExecutionGrant(
+				request,
+				command,
+				verification,
+				this.options.grantValidation,
+			);
+		}
+		const session = await this.options.store.recoverOperation({
+			requestedHostSessionRef: request.hostSessionRef,
+			binding: request,
+			operationId: request.executionId,
+			kind: "submit-turn",
+			scope: `execution:${request.executionId}`,
+			deliveryFence: request.deliveryFence,
+			requestDigest: requestDigest({
+				kind: "submit-turn",
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				input: request.recovery.input,
+				...(request.recovery.selection
+					? { selection: request.recovery.selection }
+					: {}),
+			}),
+		});
+		if (!session) {
+			return {
+				schemaVersion: 2,
+				hostSessionRef: request.hostSessionRef,
+				executionId: request.executionId,
+				outcome: "not_found",
+			};
+		}
+		return {
+			schemaVersion: 2,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "found",
+			status: await this.readStatus(session, request.executionId),
+		};
+	}
+
+	private async readStatus(session: StoredSession, executionId: string) {
+		if (session.recovery?.status === "blocked") return "unavailable" as const;
+		const nativeSessionRef =
+			session.nativeSessionRef ?? nativeSessionRequired();
+		const status = RuntimeStatusV1Schema.safeParse(
+			await callDriver(() =>
+				this.options.driver.getStatus(nativeSessionRef, executionId),
+			),
+		);
+		if (!status.success) driverInvalid();
+		return status.data;
 	}
 
 	async capabilities(

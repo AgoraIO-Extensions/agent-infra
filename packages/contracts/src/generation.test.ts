@@ -147,6 +147,7 @@ describe("standard contract artifacts", () => {
 			"/internal/runtime/v1/turns",
 		]);
 		expect(Object.keys(artifacts.runtimeOpenapiV2.paths)).toEqual([
+			"/internal/runtime/v2/status",
 			"/internal/runtime/v2/turns",
 		]);
 		expect(

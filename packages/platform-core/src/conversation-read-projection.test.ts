@@ -135,6 +135,43 @@ describe("Conversation read projection", () => {
 		});
 	});
 
+	it("projects a failed supplementary user message", () => {
+		expect(
+			projectConversationMessagesV1({
+				messages: [
+					{
+						messageId: "message-failed",
+						text: "Too late",
+						executionId: "execution-1",
+						status: "failed",
+						failureCode: "ORIGINAL_RESPONSE_NOT_STARTED",
+						createdAt: first,
+					},
+				],
+				executions: [
+					{
+						executionId: "execution-1",
+						conversationId: "conversation-1",
+						sourceMessageId: null,
+						status: "cancelled",
+						createdAt: first,
+						updatedAt: second,
+						traceId: "trace-failed",
+					},
+				],
+				events: [],
+			}),
+		).toEqual([
+			expect.objectContaining({
+				messageId: "message-failed",
+				role: "user",
+				status: "failed",
+				failureTraceId: "trace-failed",
+				failureCode: "ORIGINAL_RESPONSE_NOT_STARTED",
+			}),
+		]);
+	});
+
 	it("fails closed on malformed persisted facts", () => {
 		expect(() =>
 			projectConversationMessagesV1({

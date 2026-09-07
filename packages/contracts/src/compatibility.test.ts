@@ -15,6 +15,9 @@ const pilotBrowserArtifactPath = fileURLToPath(
 		import.meta.url,
 	),
 );
+const runtimeHostV2ArtifactPath = fileURLToPath(
+	new URL("../artifacts/openapi/runtime-host.v2.openapi.json", import.meta.url),
+);
 
 function comparePaths(current: string, previous: string) {
 	return spawnSync(
@@ -181,6 +184,35 @@ describe("contract compatibility command", () => {
 			const operationChange = structuredClone(current);
 			operationChange.info.title = "changed";
 			await expectResult("other-change", operationChange, 1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts only the Runtime status-recovery V2 addition", async () => {
+		const current = JSON.parse(
+			await readFile(runtimeHostV2ArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.paths["/internal/runtime/v2/status"];
+		delete previous.components.schemas.RuntimeStatusRequestV2;
+		delete previous.components.schemas.RuntimeStatusResponseV2;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-runtime-status-recovery-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await Promise.all([
+				writeFile(previousPath, JSON.stringify(previous), "utf8"),
+				writeFile(currentPath, JSON.stringify(current), "utf8"),
+			]);
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+
+			const changed = structuredClone(current);
+			changed.components.schemas.RuntimeStatusRequestV2.properties.recovery.properties.schemaVersion.const = 2;
+			await writeFile(currentPath, JSON.stringify(changed), "utf8");
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

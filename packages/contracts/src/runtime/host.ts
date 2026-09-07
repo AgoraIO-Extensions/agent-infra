@@ -77,6 +77,17 @@ export const RuntimeStatusRequestV1Schema = z.strictObject({
 	hostSessionRef: OpaqueIdV1Schema,
 });
 
+export const RuntimeStatusRequestV2Schema = z.strictObject({
+	...requestContext,
+	schemaVersion: z.literal(2),
+	hostSessionRef: OpaqueIdV1Schema,
+	recovery: z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		input: RuntimeInputV1Schema,
+		selection: RuntimeSelectionV1Schema.optional(),
+	}),
+});
+
 export const RuntimeCapabilitiesRequestV1Schema = z.strictObject({
 	...requestContext,
 	hostSessionRef: OpaqueIdV1Schema.optional(),
@@ -159,6 +170,22 @@ export const RuntimeStatusResponseV1Schema = z.strictObject({
 	status: RuntimeStatusV1Schema,
 });
 
+export const RuntimeStatusResponseV2Schema = z.discriminatedUnion("outcome", [
+	z.strictObject({
+		schemaVersion: z.literal(2),
+		hostSessionRef: OpaqueIdV1Schema,
+		executionId: OpaqueIdV1Schema,
+		outcome: z.literal("found"),
+		status: RuntimeStatusV1Schema,
+	}),
+	z.strictObject({
+		schemaVersion: z.literal(2),
+		hostSessionRef: OpaqueIdV1Schema,
+		executionId: OpaqueIdV1Schema,
+		outcome: z.literal("not_found"),
+	}),
+]);
+
 export const RuntimeCapabilitiesResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	capabilities: RuntimeCapabilitiesV1Schema,
@@ -184,6 +211,9 @@ export type RuntimeStopRequestV1 = z.infer<typeof RuntimeStopRequestV1Schema>;
 export type RuntimeStatusRequestV1 = z.infer<
 	typeof RuntimeStatusRequestV1Schema
 >;
+export type RuntimeStatusRequestV2 = z.infer<
+	typeof RuntimeStatusRequestV2Schema
+>;
 export type RuntimeCapabilitiesRequestV1 = z.infer<
 	typeof RuntimeCapabilitiesRequestV1Schema
 >;
@@ -207,6 +237,9 @@ export type RuntimeOperationResponseV2 = z.infer<
 >;
 export type RuntimeStatusResponseV1 = z.infer<
 	typeof RuntimeStatusResponseV1Schema
+>;
+export type RuntimeStatusResponseV2 = z.infer<
+	typeof RuntimeStatusResponseV2Schema
 >;
 export type RuntimeCapabilitiesResponseV1 = z.infer<
 	typeof RuntimeCapabilitiesResponseV1Schema

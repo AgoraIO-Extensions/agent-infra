@@ -426,6 +426,45 @@ describe("Conversation HTTP routes", () => {
 		});
 	});
 
+	it("exposes the persisted supplementary delivery failure reason", async () => {
+		const input = dependencies();
+		const current = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+		);
+		if (!current) throw new Error("Expected Conversation fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...current,
+			messages: [
+				{
+					...current.messages[0],
+					status: "failed",
+					failureCode: "ORIGINAL_RESPONSE_NOT_STARTED",
+				},
+			],
+		});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1",
+		);
+		const detail = ConversationDetailProjectionV1Schema.parse(
+			await response.json(),
+		);
+
+		expect(response.status).toBe(200);
+		expect(detail.messages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					role: "user",
+					status: "failed",
+					error: expect.objectContaining({
+						code: "ORIGINAL_RESPONSE_NOT_STARTED",
+					}),
+				}),
+			]),
+		);
+	});
+
 	it("maps an authorized unavailable Conversation without exposing internals", async () => {
 		const input = dependencies();
 		input.commands(identity).accept = vi

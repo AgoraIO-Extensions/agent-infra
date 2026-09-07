@@ -1,0 +1,4 @@
+ALTER TYPE "platform"."conversation_message_status" ADD VALUE 'failed';--> statement-breakpoint
+ALTER TABLE "platform"."conversation_messages" ADD COLUMN "failure_code" varchar(64);--> statement-breakpoint
+ALTER TABLE "platform"."conversation_messages" ADD CONSTRAINT "conversation_message_failure_binding" CHECK (("platform"."conversation_messages"."status"::text = 'failed') = ("platform"."conversation_messages"."failure_code" is not null));--> statement-breakpoint
+ALTER TABLE "platform"."conversation_messages" ADD CONSTRAINT "conversation_message_failure_code_non_empty" CHECK ("platform"."conversation_messages"."failure_code" is null or char_length("platform"."conversation_messages"."failure_code") > 0);

@@ -12,6 +12,11 @@ export type ConversationEventStatusV1 =
 	| "cancelled"
 	| "unknown";
 
+export interface ConversationEventStateTransitionV1 {
+	readonly executionStatus: ConversationEventStatusV1;
+	readonly conversationStatus: "ready" | "active";
+}
+
 export type ConversationNormalizedEventV1 =
 	| { readonly type: "text.delta"; readonly text: string }
 	| {
@@ -59,6 +64,13 @@ export interface ConversationEventCommandV1 {
 	readonly runtimeCursor: string;
 	readonly occurredAt: string;
 	readonly event: ConversationNormalizedEventV1;
+	readonly transition?: ConversationEventStateTransitionV1;
+	readonly dispatchLease?: {
+		readonly schemaVersion: 1;
+		readonly itemId: string;
+		readonly leaseOwner: string;
+		readonly deliveryFence: number;
+	};
 }
 
 export interface PersistedConversationEventV1 {
@@ -110,6 +122,7 @@ export interface ConversationEventWritePlanV1 {
 	readonly runtimeCursor: string;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
+	readonly transition?: ConversationEventStateTransitionV1;
 }
 
 export type ConversationEventDecisionV1 =
@@ -387,17 +400,21 @@ export function parseConversationPersistedEventPayloadV1(
 }
 
 function parseCommand(input: unknown): ConversationEventCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"deliveryFence",
-		"adapterEventKey",
-		"runtimeCursor",
-		"occurredAt",
-		"event",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"deliveryFence",
+			"adapterEventKey",
+			"runtimeCursor",
+			"occurredAt",
+			"event",
+		],
+		["transition", "dispatchLease"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		!isText(values.conversationId) ||
@@ -409,6 +426,31 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 	) {
 		invalidInput();
 	}
+	const event = parseEvent(values.event);
+	const transition: ConversationEventStateTransitionV1 | undefined = (() => {
+		if (values.transition === undefined) return undefined;
+		const value = snapshotObject(values.transition, [
+			"executionStatus",
+			"conversationStatus",
+		]);
+		if (
+			!isEventStatus(value.executionStatus) ||
+			(value.conversationStatus !== "ready" &&
+				value.conversationStatus !== "active") ||
+			event.type !== "execution.status" ||
+			value.executionStatus !== event.status ||
+			value.conversationStatus !==
+				(["completed", "failed", "cancelled"].includes(event.status)
+					? "ready"
+					: "active")
+		) {
+			invalidInput();
+		}
+		return {
+			executionStatus: value.executionStatus,
+			conversationStatus: value.conversationStatus,
+		};
+	})();
 	return {
 		schemaVersion: 1,
 		conversationId: values.conversationId,
@@ -418,7 +460,34 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 		adapterEventKey: values.adapterEventKey,
 		runtimeCursor: values.runtimeCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
-		event: parseEvent(values.event),
+		event,
+		...(transition ? { transition } : {}),
+		...(values.dispatchLease === undefined
+			? {}
+			: {
+					dispatchLease: (() => {
+						const lease = snapshotObject(values.dispatchLease, [
+							"schemaVersion",
+							"itemId",
+							"leaseOwner",
+							"deliveryFence",
+						]);
+						if (
+							lease.schemaVersion !== 1 ||
+							!isText(lease.itemId) ||
+							!isText(lease.leaseOwner) ||
+							!isPositiveSafeInteger(lease.deliveryFence)
+						) {
+							invalidInput();
+						}
+						return {
+							schemaVersion: 1 as const,
+							itemId: lease.itemId,
+							leaseOwner: lease.leaseOwner,
+							deliveryFence: lease.deliveryFence,
+						};
+					})(),
+				}),
 	};
 }
 
@@ -696,6 +765,9 @@ export function createConversationEventUseCaseV1(
 								runtimeCursor: command.runtimeCursor,
 								sessionGeneration: command.sessionGeneration,
 								deliveryFence: command.deliveryFence,
+								...(command.transition
+									? { transition: command.transition }
+									: {}),
 							};
 						})();
 						expected = structuredClone(next);

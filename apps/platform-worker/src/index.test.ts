@@ -16,20 +16,44 @@ const storeMocks = vi.hoisted(() => {
 		recordRejection: vi.fn(),
 		retireKey: vi.fn(),
 	};
+	const dispatchStore = {
+		claim: vi.fn(),
+		close: vi.fn<() => Promise<void>>(),
+		finish: vi.fn(),
+		recordRuntimeResponse: vi.fn(),
+		renew: vi.fn(),
+		retry: vi.fn(),
+	};
+	const eventTransaction = {
+		close: vi.fn<() => Promise<void>>(),
+		persistEvent: vi.fn(),
+	};
 	return {
 		openActivation: vi.fn(() => activationStore),
+		openDispatch: vi.fn(() => dispatchStore),
+		openEvents: vi.fn(
+			class {
+				readonly close = eventTransaction.close;
+				readonly persistEvent = eventTransaction.persistEvent;
+			},
+		),
 		openRotation: vi.fn(() => rotationStore),
 		activationStore,
+		dispatchStore,
+		eventTransaction,
 		rotationStore,
 	};
 });
 
 vi.mock("@agent-infra/platform-store", () => ({
+	openPostgresConversationDispatchStoreV1: storeMocks.openDispatch,
 	openPostgresSecretActivationStoreV1: storeMocks.openActivation,
 	openPostgresSecretKeyRotationStoreV1: storeMocks.openRotation,
+	PostgresConversationEventTransactionV1: storeMocks.openEvents,
 }));
 
 import {
+	createPlatformConversationDispatchWorkerV1,
 	createPlatformSecretActivationWorkerV1,
 	createPlatformSecretRotationWorkerV1,
 	startPlatformWorker,
@@ -73,6 +97,55 @@ const kubernetesClient = {
 		return null;
 	},
 };
+
+const dispatchAuthorization = {
+	async authorize() {
+		return { outcome: "denied" as const };
+	},
+};
+
+describe("Conversation dispatch worker assembly", () => {
+	beforeEach(() => {
+		storeMocks.openDispatch.mockClear();
+		storeMocks.openEvents.mockClear();
+		storeMocks.dispatchStore.close.mockReset();
+		storeMocks.dispatchStore.close.mockResolvedValue();
+		storeMocks.eventTransaction.close.mockReset();
+		storeMocks.eventTransaction.close.mockResolvedValue();
+	});
+
+	it("returns one closable dispatch entrypoint", async () => {
+		const worker = createPlatformConversationDispatchWorkerV1({
+			databaseUrl: "postgres://test",
+			authorization: dispatchAuthorization,
+			runtimeHost: {
+				baseUrl: "https://runtime.internal",
+				serviceToken: "synthetic-service-token",
+				fetch: vi.fn<typeof fetch>(),
+			},
+		});
+
+		expect(Object.keys(worker).toSorted()).toEqual(["close", "dispatch"]);
+		await worker.close();
+		expect(storeMocks.dispatchStore.close).toHaveBeenCalledOnce();
+		expect(storeMocks.eventTransaction.close).toHaveBeenCalledOnce();
+	});
+
+	it("closes both Stores when RuntimeHost client validation fails", () => {
+		expect(() =>
+			createPlatformConversationDispatchWorkerV1({
+				databaseUrl: "postgres://test",
+				authorization: dispatchAuthorization,
+				runtimeHost: {
+					baseUrl: "ftp://runtime.invalid",
+					serviceToken: "synthetic-service-token",
+				},
+			}),
+		).toThrow("RuntimeHost base URL is invalid");
+		expect(storeMocks.dispatchStore.close).toHaveBeenCalledOnce();
+		expect(storeMocks.eventTransaction.close).toHaveBeenCalledOnce();
+	});
+});
 
 describe("Secret activation worker assembly", () => {
 	beforeEach(() => {
