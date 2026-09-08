@@ -58,6 +58,19 @@ function containsDesired(actual: unknown, expected: unknown): boolean {
 	return actual === expected;
 }
 
+function agentContainerSecurityContext() {
+	return {
+		allowPrivilegeEscalation: false,
+		readOnlyRootFilesystem: true,
+		capabilities: { drop: ["ALL"] },
+		runAsNonRoot: true,
+		runAsUser: 1000,
+		runAsGroup: 1000,
+		seccompProfile: { type: "RuntimeDefault" },
+		procMount: "Default",
+	};
+}
+
 export function workloadResourceNameV1(agentId: string): string {
 	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
 }
@@ -188,18 +201,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.containers.some((container) => {
 				const securityContext = container.securityContext;
 				return (
+					!containsDesired(securityContext, agentContainerSecurityContext()) ||
 					securityContext?.privileged === true ||
-					(securityContext?.capabilities?.add?.length ?? 0) > 0 ||
-					(securityContext?.runAsNonRoot !== undefined &&
-						securityContext.runAsNonRoot !== true) ||
-					(securityContext?.runAsUser !== undefined &&
-						securityContext.runAsUser !== 1000) ||
-					(securityContext?.runAsGroup !== undefined &&
-						securityContext.runAsGroup !== 1000) ||
-					(securityContext?.seccompProfile !== undefined &&
-						securityContext.seccompProfile.type !== "RuntimeDefault") ||
-					(securityContext?.procMount !== undefined &&
-						securityContext.procMount !== "Default")
+					(securityContext?.capabilities?.add?.length ?? 0) > 0
 				);
 			}) === true
 		);
@@ -470,16 +474,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					timeoutSeconds: value.health.timeoutSeconds,
 					failureThreshold: value.health.failureThreshold,
 				},
-				securityContext: {
-					allowPrivilegeEscalation: false,
-					readOnlyRootFilesystem: true,
-					capabilities: { drop: ["ALL"] },
-					runAsNonRoot: true,
-					runAsUser: 1000,
-					runAsGroup: 1000,
-					seccompProfile: { type: "RuntimeDefault" },
-					procMount: "Default",
-				},
+				securityContext: agentContainerSecurityContext(),
 				volumeMounts: [
 					{ name: "data", mountPath: value.persistentVolume.mountPath },
 				],
@@ -828,16 +823,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										timeoutSeconds: value.health.timeoutSeconds,
 										failureThreshold: value.health.failureThreshold,
 									},
-									securityContext: {
-										allowPrivilegeEscalation: false,
-										readOnlyRootFilesystem: true,
-										capabilities: { drop: ["ALL"] },
-										runAsNonRoot: true,
-										runAsUser: 1000,
-										runAsGroup: 1000,
-										seccompProfile: { type: "RuntimeDefault" },
-										procMount: "Default",
-									},
+									securityContext: agentContainerSecurityContext(),
 									volumeMounts: [
 										{
 											name: "data",

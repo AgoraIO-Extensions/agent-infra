@@ -3,6 +3,7 @@ import type {
 	V1Ingress,
 	V1Pod,
 	V1Secret,
+	V1SecurityContext,
 	V1Service,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
@@ -17,6 +18,10 @@ import type {
 	WorkloadResourceKind,
 } from "./kubernetes-client.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+
+type SecurityContextMutation = (
+	securityContext: V1SecurityContext | undefined,
+) => V1SecurityContext;
 
 function fixture() {
 	const api = fakeKubernetesApi();
@@ -381,48 +386,100 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBeNull();
 		}
 	});
-	it("scales down an unsafe owned Pod before recreating it from the safe template", async () => {
-		const f = fixture();
-		const desired = workloadDesiredFixture();
-		const adapter = f.adapter();
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending") throw new Error();
-		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
-		const container = pod?.spec?.containers[0];
-		if (!pod || !container || !pod.metadata?.uid) throw new Error();
-		f.resources.set(`Pod/${desired.service.name}-0`, {
-			...pod,
-			spec: {
-				...pod.spec,
-				containers: [
-					{
-						...container,
-						securityContext: {
-							...container.securityContext,
-							runAsUser: 0,
-						},
-					},
-				],
+	it("scales down unsafe owned Pods before recreating them from the safe template", async () => {
+		const mutations: {
+			readonly label: string;
+			readonly mutate: SecurityContextMutation;
+		}[] = [
+			{
+				label: "privilege escalation",
+				mutate: (securityContext) => ({
+					...securityContext,
+					allowPrivilegeEscalation: true,
+				}),
 			},
-		} as V1Pod);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
+			{
+				label: "writable root filesystem",
+				mutate: (securityContext) => ({
+					...securityContext,
+					readOnlyRootFilesystem: false,
+				}),
+			},
+			{
+				label: "dropped capabilities",
+				mutate: (securityContext) => ({
+					...securityContext,
+					capabilities: {},
+				}),
+			},
+			...(
+				[
+					"runAsNonRoot",
+					"runAsUser",
+					"runAsGroup",
+					"seccompProfile",
+					"procMount",
+				] as const
+			).map((field) => ({
+				label: `missing ${field}`,
+				mutate: (securityContext: V1SecurityContext | undefined) => ({
+					...securityContext,
+					[field]: undefined,
+				}),
+			})),
+		];
+		for (const { label, mutate } of mutations) {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			const container = pod?.spec?.containers[0];
+			if (!pod || !container) throw new Error();
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: {
+					...pod.spec,
+					containers: [
+						{
+							...container,
+							securityContext: mutate(container.securityContext),
+						},
+					],
+				},
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity), label).toBe("drifted");
 
-		expect(await adapter.apply(desired)).toBe("pending");
-		expect(
-			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
-				?.spec?.replicas,
-		).toBe(0);
-		const repaired = await adapter.apply(desired);
-		if (!repaired || repaired === "pending") throw new Error();
-		expect(
-			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
-				?.spec?.template.spec?.containers[0]?.securityContext?.runAsUser,
-		).toBe(1000);
-		expect(
-			(await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`))?.spec
-				?.containers[0]?.securityContext?.runAsUser,
-		).toBe(1000);
-		expect(await adapter.observe(desired, repaired)).toBe("healthy");
+			expect(await adapter.apply(desired), label).toBe("pending");
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.spec?.replicas,
+			).toBe(0);
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(
+				(await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`))?.spec
+					?.containers[0]?.securityContext,
+			).toMatchObject({
+				allowPrivilegeEscalation: false,
+				readOnlyRootFilesystem: true,
+				capabilities: { drop: ["ALL"] },
+				runAsNonRoot: true,
+				runAsUser: 1000,
+				runAsGroup: 1000,
+				seccompProfile: { type: "RuntimeDefault" },
+				procMount: "Default",
+			});
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+		}
 	});
 	it("does not scale down for an unsafe Pod owned by another StatefulSet", async () => {
 		const f = fixture();
