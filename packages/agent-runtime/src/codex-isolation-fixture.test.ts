@@ -1,9 +1,13 @@
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
 	evaluatePersistenceEvidence,
 	type IsolationProbe,
 	isolationModel,
+	nativeIsolationLauncher,
 } from "./codex-isolation.test-support.js";
 
 const servers: Awaited<ReturnType<typeof isolationModel>>[] = [];
@@ -107,6 +111,26 @@ it("holds synthetic request observation and response at separate probe points", 
 	hold.releaseResponse();
 	await hold.responseSent;
 	expect((await response).status).toBe(200);
+});
+
+it("waits for a complete native observation line while allowing pre-launch reads", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-observation-"));
+	try {
+		const launcher = await nativeIsolationLauncher(
+			directory,
+			process.execPath,
+			"http://127.0.0.1:1/v1",
+		);
+		await expect(launcher.observations()).resolves.toEqual([]);
+		const observationFile = join(directory, "observations.jsonl");
+		await writeFile(observationFile, '{"method":"launch"}');
+		const snapshot = launcher.observations();
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		await appendFile(observationFile, "\n");
+		await expect(snapshot).resolves.toEqual([{ method: "launch" }]);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 it("binds a final isolation result to the exact clean #403 merge", () => {

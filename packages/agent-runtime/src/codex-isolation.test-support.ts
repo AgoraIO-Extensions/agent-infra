@@ -383,10 +383,23 @@ child.on("close", (code) => process.exit(code ?? 1));
 	return {
 		bin,
 		async observations(): Promise<NativeObservation[]> {
-			return (await readFile(observations, "utf8"))
-				.trim()
-				.split("\n")
-				.map((line) => JSON.parse(line) as NativeObservation);
+			for (let attempt = 0; attempt < 5; attempt += 1) {
+				try {
+					const content = await readFile(observations, "utf8");
+					if (content.length === 0) return [];
+					if (!content.endsWith("\n"))
+						throw new Error("Incomplete native observation");
+					return content
+						.split("\n")
+						.filter(Boolean)
+						.map((line) => JSON.parse(line) as NativeObservation);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+					if (attempt === 4) throw error;
+					await new Promise<void>((resolve) => setTimeout(resolve, 20));
+				}
+			}
+			return [];
 		},
 		features(nativeHome: string) {
 			return execFileSync(binary, ["features", "list"], {
