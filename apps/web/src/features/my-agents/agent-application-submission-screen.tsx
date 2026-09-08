@@ -1,4 +1,6 @@
 import { Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
+import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
 	AgentApplicationCreateRequestV1Writable,
@@ -35,6 +37,7 @@ type AgentApplicationSubmissionScreenProps =
 export function AgentApplicationSubmissionScreen(
 	props: AgentApplicationSubmissionScreenProps,
 ) {
+	const resultRef = useResultFocus(props.result);
 	const heading =
 		props.mode === "create"
 			? "Create application"
@@ -62,14 +65,19 @@ export function AgentApplicationSubmissionScreen(
 				/>
 			)}
 			{props.result ? (
-				<p className="font-medium text-slate-950 text-sm" role="status">
+				<p
+					ref={resultRef}
+					tabIndex={-1}
+					className="font-medium text-slate-950 text-sm"
+					role="status"
+				>
 					Application submitted:{" "}
 					{agentManagementStatusLabels[props.result.status]}.
 				</p>
 			) : null}
 			{props.result ? (
 				<Link
-					className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+					className={buttonVariants({ variant: "link", className: "px-0" })}
 					params={{ applicationId: props.result.applicationId }}
 					to="/my-agents/$applicationId"
 				>

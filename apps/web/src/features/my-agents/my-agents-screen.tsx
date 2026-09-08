@@ -1,4 +1,6 @@
 import { Link } from "@tanstack/react-router";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { MyAgentApplicationsState } from "./my-agent-applications.js";
@@ -39,7 +41,10 @@ export function MyAgentsScreen({ state }: MyAgentsScreenProps) {
 					My Agents
 				</h1>
 				<Link
-					className="inline-flex min-h-11 items-center self-start border border-slate-700 px-4 font-medium text-slate-800 text-sm hover:bg-slate-100 sm:self-auto"
+					className={buttonVariants({
+						variant: "outline",
+						className: "self-start sm:self-auto",
+					})}
 					to="/my-agents/new"
 				>
 					Create application
@@ -67,12 +72,15 @@ export function MyAgentsScreen({ state }: MyAgentsScreenProps) {
 								</span>
 							</Link>
 							<div className="flex items-center gap-3 self-start sm:self-auto">
-								<span className="border border-slate-300 px-2 py-1 text-slate-700 text-xs">
+								<Badge variant="outline">
 									{agentManagementStatusLabels[application.status]}
-								</span>
+								</Badge>
 								{application.agentId ? (
 									<Link
-										className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+										className={buttonVariants({
+											variant: "link",
+											className: "px-0",
+										})}
 										params={{ agentId: application.agentId }}
 										to="/agents/$agentId"
 									>

@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 import { useBrowserSession } from "../../features/agent-administration/use-browser-session.js";
 import { AgentDiscoveryScreen } from "../../features/agent-discovery/agent-discovery-screen.js";
@@ -21,7 +22,7 @@ function AgentsRoute() {
 				{canReviewApplications ? (
 					<nav aria-label="Administrator navigation">
 						<Link
-							className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+							className={buttonVariants({ variant: "link", className: "px-0" })}
 							to="/admin/approvals"
 						>
 							Agent approvals
