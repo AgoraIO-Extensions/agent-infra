@@ -95,6 +95,77 @@ describe("GA Kubernetes Workload adapter", () => {
 			}),
 		);
 	});
+	it("closes an opened candidate selector but keeps the verified route stable", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		if (!service) throw new Error();
+		f.resources.set(`Service/${desired.service.name}`, {
+			...service,
+			spec: {
+				...service.spec,
+				selector: {
+					"agent-infra.agora.io/agent": desired.service.name,
+					"agent-infra.agora.io/revision": String(desired.workloadRevision),
+				},
+			},
+		} as V1Service);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+
+		const request = {
+			schemaVersion: 1 as const,
+			requestId: `${desired.requestId}-route`,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote" as const,
+			candidateValidated: true,
+			candidateRoute: {
+				routeRef: desired.route.name,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				workloadRevision: desired.workloadRevision,
+			},
+		};
+		expect(await adapter.switchRoute(request)).toMatchObject({
+			status: "failed",
+			routedWorkloads: [],
+		});
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector,
+		).toEqual({
+			"agent-infra.agora.io/agent": desired.service.name,
+			"agent-infra.agora.io/revision": "closed",
+		});
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+
+		await adapter.promote(desired, identity);
+		expect(await adapter.observe(desired, identity, "open")).toBe("healthy");
+		expect(await adapter.switchRoute(request, "open")).toMatchObject({
+			status: "completed",
+			routedWorkloads: [request.candidateRoute],
+		});
+		const verified = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		if (!verified) throw new Error();
+		f.resources.set(`Service/${desired.service.name}`, {
+			...verified,
+			spec: {
+				...verified.spec,
+				selector: { "agent-infra.agora.io/revision": "foreign" },
+			},
+		} as V1Service);
+		expect(await adapter.observe(desired, identity, "open")).toBe("drifted");
+	});
 	it("replays creation after every partial apply without duplicating resources", async () => {
 		for (let stage = 1; stage <= 6; stage++) {
 			const f = fixture();

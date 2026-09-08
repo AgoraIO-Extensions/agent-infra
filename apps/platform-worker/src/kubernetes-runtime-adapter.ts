@@ -38,6 +38,8 @@ const secretIdAnnotation = "agent-infra.agora.io/secret-id";
 const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
 const secretConfigRevisionAnnotation = "agent-infra.agora.io/config-revision";
 
+type RouteSelectorMode = "closed" | "open";
+
 function containsDesired(actual: unknown, expected: unknown): boolean {
 	if (Array.isArray(expected) && expected.length === 0 && actual === undefined)
 		return true;
@@ -83,6 +85,17 @@ function matchesNetworkPolicySpec(
 			),
 		)
 	);
+}
+
+function routeSelector(
+	name: string,
+	workloadRevision: number,
+	mode: RouteSelectorMode,
+) {
+	return {
+		[ownerLabel]: name,
+		[revisionLabel]: mode === "closed" ? "closed" : String(workloadRevision),
+	};
 }
 
 export function workloadResourceNameV1(agentId: string): string {
@@ -441,6 +454,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	async function observe(
 		input: unknown,
 		identity: { uid: string; generation: number },
+		routeMode: RouteSelectorMode = "closed",
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
 		const current = await statefulSet(value);
@@ -484,6 +498,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
 			}) ||
+			!isDeepStrictEqual(
+				service.spec?.selector,
+				routeSelector(name, value.workloadRevision, routeMode),
+			) ||
 			![probe, service].every(
 				(entry) =>
 					entry.spec?.type === "ClusterIP" &&
@@ -901,9 +919,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		async promote(
 			input: unknown,
 			identity: { uid: string; generation: number },
+			routeMode: RouteSelectorMode = "closed",
 		) {
 			const value = desired(input);
-			if ((await observe(value, identity)) !== "healthy")
+			if ((await observe(value, identity, routeMode)) !== "healthy")
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
 			if (value.route.exposure === "internal-only") {
@@ -1112,7 +1131,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				});
 			}
 		},
-		async switchRoute(input: unknown) {
+		async switchRoute(input: unknown, routeMode: RouteSelectorMode = "closed") {
 			const request = validateWorkloadRouteSwitchRequestV1(input);
 			const correlation = {
 				schemaVersion: 1,
@@ -1126,7 +1145,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				request.action === "promote"
 					? request.candidateRoute
 					: request.previousRoute;
-			let promoting = false;
+			let routeValidated = false;
 			try {
 				const current = await client.read<V1StatefulSet>(
 					"StatefulSet",
@@ -1144,18 +1163,26 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					target.routeRef !== value.route.name
 				)
 					throw new WorkloadKubernetesError("conflict");
+				routeValidated = true;
 				if (
-					(await observe(value, {
-						uid: target.workloadUid,
-						generation: target.workloadGeneration,
-					})) !== "healthy"
+					(await observe(
+						value,
+						{
+							uid: target.workloadUid,
+							generation: target.workloadGeneration,
+						},
+						routeMode,
+					)) !== "healthy"
 				)
 					throw new WorkloadKubernetesError("conflict");
-				promoting = true;
-				await adapter.promote(value, {
-					uid: target.workloadUid,
-					generation: target.workloadGeneration,
-				});
+				await adapter.promote(
+					value,
+					{
+						uid: target.workloadUid,
+						generation: target.workloadGeneration,
+					},
+					routeMode,
+				);
 				const service = await client.read<V1Service>(
 					"Service",
 					value.service.name,
@@ -1172,7 +1199,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				});
 			} catch {
 				if (
-					promoting &&
+					routeValidated &&
 					!(await closeAgent(request.agentId, target.workloadRevision))
 				)
 					throw new WorkloadKubernetesError("unavailable");

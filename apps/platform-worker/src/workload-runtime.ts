@@ -294,6 +294,13 @@ export function createWorkloadRuntimeV1(
 				: { state: "absent" },
 		});
 	}
+	function routeSelectorMode(
+		state: WorkloadReconciliationStateV1,
+	): "closed" | "open" {
+		return state.phase === "ready" || state.phase === "rejected"
+			? "open"
+			: "closed";
+	}
 	async function cleanupUnactivatedSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -523,7 +530,11 @@ export function createWorkloadRuntimeV1(
 		},
 		async observe(state) {
 			return state.identity
-				? adapter.observe(desired(state), state.identity)
+				? adapter.observe(
+						desired(state),
+						state.identity,
+						routeSelectorMode(state),
+					)
 				: "pending";
 		},
 		async activateSecrets(state, input) {
@@ -607,21 +618,24 @@ export function createWorkloadRuntimeV1(
 		async promote(state) {
 			if (!state.identity) throw new Error();
 			const workload = desired(state);
-			const result = await adapter.switchRoute({
-				schemaVersion: 1,
-				requestId: workload.requestId,
-				traceId: workload.traceId,
-				agentId: workload.agentId,
-				fence: workload.fence,
-				action: "promote",
-				candidateValidated: true,
-				candidateRoute: {
-					routeRef: workload.route.name,
-					workloadUid: state.identity.uid,
-					workloadGeneration: state.identity.generation,
-					workloadRevision: workload.workloadRevision,
+			const result = await adapter.switchRoute(
+				{
+					schemaVersion: 1,
+					requestId: workload.requestId,
+					traceId: workload.traceId,
+					agentId: workload.agentId,
+					fence: workload.fence,
+					action: "promote",
+					candidateValidated: true,
+					candidateRoute: {
+						routeRef: workload.route.name,
+						workloadUid: state.identity.uid,
+						workloadGeneration: state.identity.generation,
+						workloadRevision: workload.workloadRevision,
+					},
 				},
-			});
+				routeSelectorMode(state),
+			);
 			if (result.status !== "completed")
 				throw new Error("Workload route is unavailable");
 		},
