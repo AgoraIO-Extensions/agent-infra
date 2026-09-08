@@ -87,7 +87,7 @@ jobs:
           github_action_config.pr_actions: '["opened", "reopened", "synchronize",
             "ready_for_review", "review_requested"]'
         with:
-          entrypoint: /bin/sh
+          entrypoint: /bin/bash
           args: /github/workspace/.pr-agent-smoke-entrypoint.sh
   publish:
     name: PR-Agent Publish Review
