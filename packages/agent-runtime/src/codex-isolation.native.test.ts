@@ -94,6 +94,37 @@ function containsMarker(value: unknown, marker: string): boolean {
 	);
 }
 
+function effectiveThreadConfiguration(
+	result: Record<string, unknown> | undefined,
+) {
+	const sandbox = isPlainRecord(result?.sandbox) ? result.sandbox : undefined;
+	return {
+		approvalPolicy:
+			typeof result?.approvalPolicy === "string"
+				? result.approvalPolicy
+				: undefined,
+		sandboxType: typeof sandbox?.type === "string" ? sandbox.type : undefined,
+		networkAccess:
+			typeof sandbox?.networkAccess === "boolean"
+				? sandbox.networkAccess
+				: undefined,
+	};
+}
+
+function completeToolOutput(
+	outputs: readonly string[],
+	completionMarker?: string,
+) {
+	return (
+		outputs.length > 0 &&
+		!outputs.some((output) =>
+			/truncated|Process running with session ID/i.test(output),
+		) &&
+		(!completionMarker ||
+			outputs.some((output) => output.includes(completionMarker)))
+	);
+}
+
 // This peer preserves JSON-RPC errors as test evidence instead of teaching the
 // production Driver new behavior for a raw app-server response.
 class RawNativeClient {
@@ -205,7 +236,7 @@ function nativeReadSample(
 		options,
 		category: reply.category,
 		...(reply.category === "success"
-			? {}
+			? { foreignMarkerAbsent: !containsMarker(reply.result, foreignMarker) }
 			: {
 					knownTurnMatches: "unavailable" as const,
 					foreignMarkerAbsent: "unavailable" as const,
@@ -226,7 +257,6 @@ function nativeReadSample(
 				...sample,
 				category: "invalid-native-response",
 				knownTurnMatches: "unavailable",
-				foreignMarkerAbsent: "unavailable",
 			};
 		}
 		const turns = thread.turns;
@@ -236,7 +266,6 @@ function nativeReadSample(
 			knownTurnMatches: Array.isArray(turns)
 				? turns.some((turn) => isPlainRecord(turn) && turn.id === knownTurnId)
 				: "unavailable",
-			foreignMarkerAbsent: !containsMarker(thread, foreignMarker),
 		};
 	}
 	const data = isPlainRecord(reply.result) ? reply.result.data : undefined;
@@ -245,16 +274,56 @@ function nativeReadSample(
 			...sample,
 			category: "invalid-native-response",
 			knownTurnMatches: "unavailable",
-			foreignMarkerAbsent: "unavailable",
 		};
 	return {
 		...sample,
 		knownTurnMatches: data.some(
 			(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
 		),
-		foreignMarkerAbsent: !containsMarker(data, foreignMarker),
 	};
 }
+
+it("fails malformed successful native results that contain a foreign marker", () => {
+	const marker = "SYNTH_FOREIGN_MARKER";
+	const sample = nativeReadSample(
+		"after-turn-start-accepted",
+		"thread/read",
+		{ includeTurns: true },
+		{ category: "success", result: { unexpected: { marker } } },
+		"synthetic-turn",
+		marker,
+	);
+	expect(sample).toMatchObject({
+		category: "invalid-native-response",
+		knownTurnMatches: "unavailable",
+		foreignMarkerAbsent: false,
+	});
+});
+
+it("records effective thread settings from the native result root", () => {
+	expect(
+		effectiveThreadConfiguration({
+			approvalPolicy: "on-request",
+			sandbox: { type: "workspace-write", networkAccess: false },
+			thread: {
+				approvalPolicy: "nested-value-must-not-be-used",
+				sandbox: { type: "nested-value-must-not-be-used", networkAccess: true },
+			},
+		}),
+	).toEqual({
+		approvalPolicy: "on-request",
+		sandboxType: "workspace-write",
+		networkAccess: false,
+	});
+});
+
+it("requires the history scan completion marker before accepting its output", () => {
+	const marker = "SYNTH_HISTORY_SCAN_COMPLETE_user-a";
+	expect(completeToolOutput(["SYNTH_CONTEXT_USER_A"], marker)).toBe(false);
+	expect(completeToolOutput(["SYNTH_CONTEXT_USER_A", marker], marker)).toBe(
+		true,
+	);
+});
 
 function unavailableModelObservationSamples(
 	point: NativeReadSample["point"],
@@ -691,13 +760,15 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						)
 					: undefined;
 				const results = await pair(
-					users.map((_, index) => {
+					users.map((user, index) => {
 						const other = users[1 - index];
 						if (!other) throw new Error("Missing other user");
 						return history
-							? "grep -R -h -o 'SYNTH_CONTEXT_[A-Z0-9_]*' " +
+							? "set -o pipefail; grep -R -h -o 'SYNTH_CONTEXT_[A-Z0-9_]*' " +
 									quote(join(nativeHome, "sessions")) +
-									" | sort -u"
+									" | sort -u && printf '\\nSYNTH_HISTORY_SCAN_COMPLETE_" +
+									user.id +
+									"\\n'"
 							: (search ? "grep -R -F SYNTH_PRIVATE_ " : "cat ") +
 									quote(filePath(other, "private.txt"));
 					}),
@@ -726,11 +797,10 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 								result.probe.answer.includes(user.context) &&
 								result.events.includes(user.context)
 							: canRead[index];
-					const completeOutput =
-						result.probe.outputs.length > 0 &&
-						!result.probe.outputs.some((output) =>
-							/truncated|Process running with session ID/i.test(output),
-						);
+					const completeOutput = completeToolOutput(
+						result.probe.outputs,
+						history ? `SYNTH_HISTORY_SCAN_COMPLETE_${user.id}` : undefined,
+					);
 					const scenarioStatus = isolationScenarioStatus({
 						foreignMarkerObserved: leaked,
 						positiveControl: Boolean(control),
@@ -969,23 +1039,10 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							entry.method === "thread/resume",
 					)
 					.map((entry) => {
-						const thread = entry.result?.thread as
-							| {
-									approvalPolicy?: string;
-									sandbox?: {
-										type?: string;
-										networkAccess?: boolean;
-									};
-							  }
-							| undefined;
-						const sandbox = thread?.sandbox as
-							| { type?: string; networkAccess?: boolean }
-							| undefined;
+						const configuration = effectiveThreadConfiguration(entry.result);
 						return {
 							method: entry.method,
-							approvalPolicy: thread?.approvalPolicy,
-							sandboxType: sandbox?.type,
-							networkAccess: sandbox?.networkAccess,
+							...configuration,
 							requestKeys: Object.keys(entry.params ?? {}),
 						};
 					});
