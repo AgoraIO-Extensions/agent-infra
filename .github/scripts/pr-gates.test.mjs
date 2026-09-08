@@ -15,8 +15,7 @@ import {
   evaluateIssueGate,
   evaluateIssueReadinessGate,
   extractPrimaryIssueNumbers,
-  githubRequest,
-  parseGateCommand,
+  parseWaiverCommand,
   pendingGateNames,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
@@ -47,32 +46,6 @@ test("scheduled membership reconciliation reevaluates every open PR", () => {
     [pulls[0]],
   );
   assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
-});
-
-test("allows idempotent GitHub DELETE requests to ignore a missing target", async () => {
-  const previousFetch = globalThis.fetch;
-  const previousToken = process.env.GITHUB_TOKEN;
-  process.env.GITHUB_TOKEN = "test-token";
-  globalThis.fetch = async () => ({ ok: false, status: 404 });
-  try {
-    assert.equal(
-      await githubRequest("/repos/example/repo/issues/1/labels/ready-for-human", {
-        method: "DELETE",
-        allowNotFound: true,
-      }),
-      null,
-    );
-    await assert.rejects(
-      githubRequest("/repos/example/repo/issues/1/labels/ready-for-human", {
-        method: "DELETE",
-      }),
-      /GitHub API DELETE .*: 404/,
-    );
-  } finally {
-    globalThis.fetch = previousFetch;
-    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
-    else process.env.GITHUB_TOKEN = previousToken;
-  }
 });
 
 test("ignores closing keywords inside fenced examples", () => {
@@ -344,46 +317,43 @@ test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evi
   );
 });
 
-test("parses current-head validation and waiver commands with non-empty reasons", () => {
+test("parses only current-head Claude waiver commands with non-empty reasons", () => {
   const headSha = "a".repeat(40);
-  assert.deepEqual(parseGateCommand(`/human-validation ${headSha}\nTested in staging.`), {
-    type: "human-validation",
-    headSha,
-    reason: "Tested in staging.",
-  });
   assert.deepEqual(
-    parseGateCommand(`/claude-review-waiver ${headSha}\nProvider timeout.`),
+    parseWaiverCommand(`/claude-review-waiver ${headSha}\nProvider timeout.`),
     {
-      type: "claude-review-waiver",
       headSha,
       reason: "Provider timeout.",
     },
   );
-  assert.deepEqual(
-    parseGateCommand(`/human-validation ${headSha}\r\nVerified in the browser.`),
-    {
-      type: "human-validation",
-      headSha,
-      reason: "Verified in the browser.",
-    },
+  assert.equal(
+    parseWaiverCommand(`/human-validation ${headSha}\nTested in staging.`),
+    null,
   );
-  assert.equal(parseGateCommand(`/human-validation ${headSha}`), null);
-  assert.equal(parseGateCommand("looks good"), null);
+  assert.equal(parseWaiverCommand(`/claude-review-waiver ${headSha}`), null);
+  assert.equal(parseWaiverCommand("looks good"), null);
 });
 
-test("builds auditable gate records only for current-head comment commands", () => {
+test("builds validation from label removal and waivers from current-head comments", () => {
   const currentHead = "a".repeat(40);
-  const oldHead = "b".repeat(40);
+  const validationEvent = {
+    event: "unlabeled",
+    label: { name: "ready-for-human" },
+    actor: { login: "validator", type: "User" },
+    created_at: "2026-08-06T00:01:00Z",
+    url: "https://api.github.com/repos/example/repo/issues/events/2",
+  };
   const records = buildGateRecords({
     comments: [
       {
         body: `/human-validation ${currentHead}\nTested in staging.`,
         created_at: "2026-08-06T00:00:00Z",
         html_url: "https://github.com/example/repo/pull/1#issuecomment-1",
-        user: { login: "owner", type: "User" },
+        user: { login: "ignored", type: "User" },
       },
       {
-        body: `/claude-review-waiver ${oldHead}\nOld failure.`,
+        body: `/claude-review-waiver ${currentHead}\nProvider timeout.`,
+        created_at: "2026-08-06T00:02:00Z",
         html_url: "https://github.com/example/repo/pull/1#issuecomment-2",
         user: { login: "owner", type: "User" },
       },
@@ -393,57 +363,89 @@ test("builds auditable gate records only for current-head comment commands", () 
         user: { login: "owner", type: "User" },
       },
     ],
+    events: [
+      {
+        event: "labeled",
+        label: { name: "ready-for-human" },
+        actor: { login: "owner", type: "User" },
+        created_at: "2026-08-06T00:00:00Z",
+        url: "https://api.github.com/repos/example/repo/issues/events/1",
+      },
+      validationEvent,
+    ],
     currentHead,
-    memberships: new Map([["owner", { state: "active", role: "member" }]]),
+    memberships: new Map([
+      ["owner", { state: "active", role: "member" }],
+      ["validator", { state: "active", role: "member" }],
+    ]),
   });
   assert.deepEqual(records, {
-    confirmations: [
+    validation: {
+      actor: { login: "validator", type: "User" },
+      headSha: currentHead,
+      membership: { state: "active", role: "member" },
+      reason: "ready-for-human removed",
+      recordedAt: "2026-08-06T00:01:00Z",
+      url: "https://api.github.com/repos/example/repo/issues/events/2",
+    },
+    waivers: [
       {
         actor: { login: "owner", type: "User" },
         headSha: currentHead,
         membership: { state: "active", role: "member" },
-        reason: "Tested in staging.",
-        recordedAt: "2026-08-06T00:00:00Z",
-        url: "https://github.com/example/repo/pull/1#issuecomment-1",
+        reason: "Provider timeout.",
+        recordedAt: "2026-08-06T00:02:00Z",
+        url: "https://github.com/example/repo/pull/1#issuecomment-2",
       },
     ],
-    waivers: [],
   });
+  assert.deepEqual(
+    buildGateRecords({
+      comments: [],
+      events: [],
+      event: {
+        action: "unlabeled",
+        label: { name: "ready-for-human" },
+        sender: validationEvent.actor,
+        pull_request: {
+          head: { sha: currentHead },
+          updated_at: validationEvent.created_at,
+          html_url: validationEvent.url,
+        },
+      },
+      currentHead,
+      memberships: new Map([
+        ["validator", { state: "active", role: "member" }],
+      ]),
+    }).validation,
+    records.validation,
+  );
 });
 
 test("binds audit evidence to the exact actor selected by the Gate", () => {
   const records = {
-    confirmations: [
-      {
-        actor: { login: "alice" },
-        headSha: "a".repeat(40),
-        reason: "Wrong record",
-        recordedAt: "2026-08-06T00:00:00Z",
-        url: "https://example.test/alice",
-      },
-      {
-        actor: { login: "malice" },
-        headSha: "a".repeat(40),
-        reason: "Right record",
-        recordedAt: "2026-08-06T00:01:00Z",
-        url: "https://example.test/malice",
-      },
-    ],
+    validation: {
+      actor: { login: "validator" },
+      headSha: "a".repeat(40),
+      reason: "ready-for-human removed",
+      recordedAt: "2026-08-06T00:01:00Z",
+      url: "https://api.github.com/repos/example/repo/issues/events/2",
+    },
     waivers: [],
   };
   assert.equal(
     auditDescription(
       {
         ok: true,
-        description: "Human validation confirmed by malice for current head",
+        description: "Human validation confirmed by validator for current head",
       },
       records,
       "human-validation",
     ),
-    "Human validation confirmed by malice for current head\n\n" +
-      "Reason: Right record\n\n" +
+    "Human validation confirmed by validator for current head\n\n" +
+      "Reason: ready-for-human removed\n\n" +
       "Recorded at: 2026-08-06T00:01:00Z\n\n" +
-      "Evidence: https://example.test/malice",
+      "Evidence: https://api.github.com/repos/example/repo/issues/events/2",
   );
 });
 
@@ -459,16 +461,24 @@ test("Human Validation Gate requires a current-head active Team member record", 
   };
   assert.deepEqual(
     evaluateHumanValidationGate({
-      labels: [{ name: "ready-for-human" }],
+      labels: [],
       validationWasRequired: true,
       currentHead,
-      confirmations: [valid],
+      validation: valid,
     }),
     {
       ok: true,
-      removeLabel: true,
       description: "Human validation confirmed by owner for current head",
     },
+  );
+  assert.equal(
+    evaluateHumanValidationGate({
+      labels: [{ name: "ready-for-human" }],
+      validationWasRequired: true,
+      currentHead,
+      validation: valid,
+    }).ok,
+    false,
   );
   for (const invalid of [
     { ...valid, headSha: "b".repeat(40) },
@@ -482,7 +492,7 @@ test("Human Validation Gate requires a current-head active Team member record", 
         labels: [],
         validationWasRequired: true,
         currentHead,
-        confirmations: [invalid],
+        validation: invalid,
       }).ok,
       false,
     );
@@ -492,9 +502,9 @@ test("Human Validation Gate requires a current-head active Team member record", 
       labels: [],
       validationWasRequired: false,
       currentHead,
-      confirmations: [],
+      validation: null,
     }),
-    { ok: true, removeLabel: false, description: "Human validation is not required" },
+    { ok: true, description: "Human validation is not required" },
   );
 });
 
