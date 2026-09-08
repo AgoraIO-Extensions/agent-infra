@@ -381,6 +381,46 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBeNull();
 		}
 	});
+	it("replaces an unsafe owned Pod when its template already matches", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		const container = pod?.spec?.containers[0];
+		if (!pod || !container || !pod.metadata?.uid) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				containers: [
+					{
+						...container,
+						securityContext: {
+							...container.securityContext,
+							runAsUser: 0,
+						},
+					},
+				],
+			},
+		} as V1Pod);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+
+		const repaired = await adapter.apply(desired);
+		if (!repaired || repaired === "pending") throw new Error();
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.template.metadata?.annotations?.[
+				"agent-infra.agora.io/pod-rollout"
+			],
+		).toBe(pod.metadata.uid);
+		expect(
+			(await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`))?.spec
+				?.containers[0]?.securityContext?.runAsUser,
+		).toBe(1000);
+		expect(await adapter.observe(desired, repaired)).toBe("healthy");
+	});
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

@@ -33,6 +33,7 @@ const revisionLabel = "agent-infra.agora.io/revision";
 const agentAnnotation = "agent-infra.agora.io/agent-id";
 const fingerprintAnnotation = "agent-infra.agora.io/spec-hash";
 const desiredAnnotation = "agent-infra.agora.io/desired";
+const podRolloutAnnotation = "agent-infra.agora.io/pod-rollout";
 const controllerAnnotationPrefix = "agent-infra.agora.io/";
 const secretIdAnnotation = "agent-infra.agora.io/secret-id";
 const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
@@ -210,6 +211,37 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	): Promise<T> {
 		const kind = object.kind as WorkloadResourceKind;
 		const current = await client.read<T>(kind, object.metadata?.name ?? "");
+		if (current) {
+			own(current, value.agentId, value.workloadRevision);
+			if (current.metadata?.deletionTimestamp)
+				throw new WorkloadKubernetesError("conflict");
+			if (kind === "StatefulSet") {
+				const workload = object as V1StatefulSet;
+				const template = workload.spec?.template;
+				if (!template) throw new WorkloadKubernetesError("policy");
+				const unsafePod = (
+					await client.list<V1Pod>("Pod", selector(value.agentId))
+				).find(
+					(pod) =>
+						pod.metadata?.ownerReferences?.some(
+							(owner) => owner.uid === current.metadata?.uid,
+						) && hasUnsafePodSpec(pod.spec),
+				);
+				const marker =
+					unsafePod?.metadata?.uid ??
+					(current as V1StatefulSet).spec?.template.metadata?.annotations?.[
+						podRolloutAnnotation
+					];
+				if (marker)
+					template.metadata = {
+						...template.metadata,
+						annotations: {
+							...template.metadata?.annotations,
+							[podRolloutAnnotation]: marker,
+						},
+					};
+			}
+		}
 		const hash = createHash("sha256")
 			.update(JSON.stringify(object))
 			.digest("hex");
@@ -221,9 +253,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			},
 		};
 		if (!current) return client.create(object);
-		own(current, value.agentId, value.workloadRevision);
-		if (current.metadata?.deletionTimestamp)
-			throw new WorkloadKubernetesError("conflict");
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
