@@ -887,8 +887,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
-    issues: "write",
-    "pull-requests": "write",
+    "pull-requests": "read",
   });
   assert.deepEqual(workflow.jobs.suggestions.permissions, {
     contents: "read",
@@ -906,7 +905,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(suggestionsAction["continue-on-error"], true);
   assert.equal(
     reviewAction.uses,
-    "The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36",
+    "docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6",
   );
   assert.equal(suggestionsAction.uses, reviewAction.uses);
   assert.equal(reviewAction.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
@@ -916,7 +915,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
   assert.equal(reviewAction.env["config.model"], "${{ secrets.PR_AGENT_MODEL }}");
   assert.equal(reviewAction.env["config.propagate_tool_errors"], "true");
-  assert.equal(reviewAction.env["config.publish_output"], "true");
+  assert.equal(reviewAction.env["config.publish_output"], "false");
   assert.equal(reviewAction.env["config.restricted_mode"], "true");
   assert.equal(
     suggestionsAction.env["pr_code_suggestions.commitable_code_suggestions"],
@@ -935,14 +934,14 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
   );
 
-  reviewAction.env["config.publish_output"] = "false";
+  reviewAction.env["config.publish_output"] = "true";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  reviewAction.env["config.publish_output"] = "true";
+  reviewAction.env["config.publish_output"] = "false";
   reviewAction.env["config.propagate_tool_errors"] = "false";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
@@ -969,14 +968,14 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
 
   suggestionsAction.env["github_action_config.auto_improve"] = "true";
-  workflow.jobs.analyze.permissions["pull-requests"] = "read";
+  workflow.jobs.analyze.permissions["pull-requests"] = "write";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
       error.includes("official inline publishing"),
     ),
   );
 
-  workflow.jobs.analyze.permissions["pull-requests"] = "write";
+  workflow.jobs.analyze.permissions["pull-requests"] = "read";
   suggestionsAction["continue-on-error"] = false;
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) =>
@@ -1019,7 +1018,7 @@ test("requires bounded PR-Agent review chunking and matching immutable versions"
   assert.deepEqual(validateWorkflowDocuments(workflows), []);
   for (const job of ["analyze", "suggestions"]) {
     const action = workflows["pr-agent-review.yml"].jobs[job].steps.find(
-      (step) => step.uses?.startsWith("The-PR-Agent/pr-agent@"),
+      (step) => step.uses?.startsWith("docker://pragent/pr-agent@"),
     );
     const pinned = action.uses;
     for (const invalid of ["main", "ab6ec54bfeb37933ddb74259338752e9272016c6"]) {
@@ -1139,9 +1138,9 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     "pull-requests": "read",
   });
   assert.equal(coverage.name, "Publish Automated Review Coverage");
-  assert.equal(coverage.needs, "analyze");
+  assert.deepEqual(coverage.needs, ["analyze", "publish"]);
   assert.equal(coverage["continue-on-error"], true);
-  assert.deepEqual(prAgent.jobs.outcome.needs, ["analyze", "suggestions"]);
+  assert.deepEqual(prAgent.jobs.outcome.needs, ["analyze", "publish", "suggestions"]);
   assert.equal(coveragePublisher.if, "always()");
   assert.equal(
     coveragePublisher.run,
@@ -1152,7 +1151,8 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     GITHUB_TOKEN: "${{ github.token }}",
     PR_NUMBER: "${{ github.event.pull_request.number }}",
     REVIEW_PROVIDER: "pr-agent",
-    REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
+    REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
+    PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
   });
   assert.equal(
     coverageToken.uses,
