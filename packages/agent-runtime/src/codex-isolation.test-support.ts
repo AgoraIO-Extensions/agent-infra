@@ -476,7 +476,7 @@ child.stdout.on("data", (chunk) => {
     let newline;
     while ((newline = output.indexOf("\\n")) >= 0) {
       const line = output.slice(0, newline); output = output.slice(newline + 1);
-      try { const frame = JSON.parse(line); const sent = pending.get(frame.id); if (sent) { observe({ method: sent.method, params: sent.params, result: frame.result, error: frame.error }); pending.delete(frame.id); } } catch {}
+      try { const frame = JSON.parse(line); const sent = pending.get(frame.id); const response = Object.prototype.hasOwnProperty.call(frame, "result") || Object.prototype.hasOwnProperty.call(frame, "error"); if (sent && response) { observe({ method: sent.method, params: sent.params, result: frame.result, error: frame.error }); pending.delete(frame.id); } } catch {}
     }
   }
 });

@@ -1,4 +1,12 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import {
+	appendFile,
+	chmod,
+	mkdir,
+	mkdtemp,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -239,6 +247,68 @@ it("reports terminal native observation failures without treating them as empty"
 		await expect(launcher.observations()).rejects.toMatchObject({
 			category: "read-error",
 		});
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("keeps launcher observations pending through same-ID server requests", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-launcher-"));
+	try {
+		const executable = join(directory, "fake-codex");
+		await writeFile(
+			executable,
+			`#!${process.execPath}
+let input = "";
+process.stdin.on("data", (chunk) => {
+  input += chunk.toString();
+  let newline;
+  while ((newline = input.indexOf("\\n")) >= 0) {
+    const line = input.slice(0, newline); input = input.slice(newline + 1);
+    const frame = JSON.parse(line);
+    if (frame.id === undefined || !frame.method) continue;
+    process.stdout.write(JSON.stringify({ id: frame.id, method: "server/request", params: { source: "fake" } }) + "\\n");
+    process.stdout.write(JSON.stringify({ id: frame.id, result: { thread: { id: "actual-response" } } }) + "\\n");
+  }
+});
+process.stdin.on("end", () => process.stdout.write("", () => process.exit(0)));
+`,
+		);
+		await chmod(executable, 0o700);
+		const launcher = await nativeIsolationLauncher(
+			directory,
+			executable,
+			"http://127.0.0.1:1/v1",
+		);
+		const child = spawn(join(launcher.bin, "codex"), ["app-server"], {
+			stdio: ["pipe", "ignore", "ignore"],
+		});
+		await new Promise<void>((resolve, reject) => {
+			child.once("error", reject);
+			child.once("close", (code) =>
+				code === 0
+					? resolve()
+					: reject(new Error(`Fake launcher exited ${code}`)),
+			);
+			child.stdin.end(
+				`${JSON.stringify({
+					id: 7,
+					method: "thread/start",
+					params: { test: true },
+				})}\n`,
+			);
+		});
+		expect(
+			(await launcher.observations()).filter(
+				(entry) => entry.method === "thread/start",
+			),
+		).toEqual([
+			{
+				method: "thread/start",
+				params: { test: true },
+				result: { thread: { id: "actual-response" } },
+			},
+		]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

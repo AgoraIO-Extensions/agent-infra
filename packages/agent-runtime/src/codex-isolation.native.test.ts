@@ -274,6 +274,33 @@ function completeToolOutput(
 	);
 }
 
+function crossFileModifyEvidence(input: {
+	changed: boolean;
+	ownerWriteSucceeded: boolean;
+	outputs: readonly string[];
+	appliedMarker: string;
+	deniedMarker: string;
+}): Evidence {
+	const completeOutput = completeToolOutput(input.outputs);
+	const applied = input.outputs.some((output) =>
+		output.includes(input.appliedMarker),
+	);
+	const denied = input.outputs.some((output) =>
+		output.includes(input.deniedMarker),
+	);
+	if (input.changed) return { status: "fail", reason: "foreign-file-modified" };
+	if (!input.ownerWriteSucceeded)
+		return { status: "unverified", reason: "owner-write-control-failed" };
+	if (!completeOutput)
+		return { status: "unverified", reason: "foreign-write-output-incomplete" };
+	if (denied && !applied)
+		return {
+			status: "pass",
+			reason: "owner-write-succeeded-foreign-write-denied",
+		};
+	return { status: "unverified", reason: "foreign-write-denial-unconfirmed" };
+}
+
 function historyOutputLines(outputs: readonly string[]) {
 	return outputs.flatMap((output) => {
 		try {
@@ -919,6 +946,70 @@ it("keeps incomplete and failed history commands unverified", () => {
 	}
 });
 
+it("requires completed cross-write denial evidence before passing modification isolation", () => {
+	const appliedMarker = "SYNTH_FOREIGN_WRITE_APPLIED";
+	const deniedMarker = "SYNTH_FOREIGN_WRITE_DENIED";
+	const evidence = (
+		input: Partial<Parameters<typeof crossFileModifyEvidence>[0]>,
+	) =>
+		crossFileModifyEvidence({
+			changed: false,
+			ownerWriteSucceeded: true,
+			outputs: [],
+			appliedMarker,
+			deniedMarker,
+			...input,
+		});
+	const statuses: Status[] = [];
+	for (const [input, expected] of [
+		[
+			{ changed: true, outputs: [JSON.stringify(appliedMarker)] },
+			{ status: "fail", reason: "foreign-file-modified" },
+		],
+		[
+			{ outputs: [JSON.stringify(deniedMarker)] },
+			{
+				status: "pass",
+				reason: "owner-write-succeeded-foreign-write-denied",
+			},
+		],
+		[
+			{ outputs: [] },
+			{ status: "unverified", reason: "foreign-write-output-incomplete" },
+		],
+		[
+			{
+				outputs: [
+					JSON.stringify("Process running with session ID synthetic-session"),
+				],
+			},
+			{ status: "unverified", reason: "foreign-write-output-incomplete" },
+		],
+		[
+			{ outputs: [JSON.stringify("native command failed")] },
+			{ status: "unverified", reason: "foreign-write-denial-unconfirmed" },
+		],
+	] as const) {
+		const result = evidence(input);
+		expect(result).toMatchObject(expected);
+		statuses.push(result.status);
+		expect(
+			isolationOverallStatus({
+				activeThreadLeak: false,
+				persistenceVerified: true,
+				scenarioStatuses: ["pass", result.status],
+			}),
+		).toBe(result.status === "fail" ? "fail" : result.status);
+	}
+	expect(statuses).toEqual([
+		"fail",
+		"pass",
+		"unverified",
+		"unverified",
+		"unverified",
+	]);
+});
+
 function unavailableModelObservationSamples(
 	point: NativeReadSample["point"],
 ): NativeReadSample[] {
@@ -1524,6 +1615,10 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				}
 			}
 			const mutation = `SYNTH_WRITE_${randomUUID()}`;
+			const foreignWriteMarkers = users.map(
+				(user) =>
+					`SYNTH_FOREIGN_WRITE_${user.id.toUpperCase()}_${randomUUID()}`,
+			);
 			for (const user of users)
 				for (const file of ["owner-write.txt", "foreign-write.txt"])
 					await writeFile(filePath(user, file), "SYNTH_UNCHANGED");
@@ -1543,32 +1638,46 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						mutation,
 				),
 			);
-			await pair(
+			const foreignWrites = await pair(
 				users.map((_, index) => {
 					const other = users[1 - index];
+					const marker = foreignWriteMarkers[index];
 					if (!other) throw new Error("Missing other user");
+					if (!marker) throw new Error("Missing foreign-write marker");
 					return (
-						"printf %s " +
+						"if printf %s " +
 						quote(mutation) +
 						" > " +
-						quote(filePath(other, "foreign-write.txt"))
+						quote(filePath(other, "foreign-write.txt")) +
+						"; then printf '%s\\n' " +
+						quote(`${marker}_APPLIED`) +
+						"; else printf '%s\\n' " +
+						quote(`${marker}_DENIED`) +
+						"; fi"
 					);
 				}),
 			);
 			for (const [index, user] of users.entries()) {
 				const other = users[1 - index];
+				const foreignWrite = foreignWrites[index];
+				const marker = foreignWriteMarkers[index];
 				if (!other) throw new Error("Missing other user");
+				if (!foreignWrite || !marker)
+					throw new Error("Missing foreign-write evidence");
 				const changed =
 					(await readFile(filePath(other, "foreign-write.txt"), "utf8")) !==
 					"SYNTH_UNCHANGED";
+				const evidence = crossFileModifyEvidence({
+					changed,
+					ownerWriteSucceeded: canWrite[index] === true,
+					outputs: foreignWrite.probe.outputs,
+					appliedMarker: `${marker}_APPLIED`,
+					deniedMarker: `${marker}_DENIED`,
+				});
 				record(
 					[name, user.id, "cross-file-modify"].join("."),
-					changed ? "fail" : canWrite[index] ? "pass" : "unverified",
-					changed
-						? "foreign-file-modified"
-						: canWrite[index]
-							? "owner-write-succeeded-foreign-write-denied"
-							: "owner-write-control-failed",
+					evidence.status,
+					evidence.reason,
 				);
 			}
 		}
