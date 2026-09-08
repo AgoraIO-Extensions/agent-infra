@@ -194,37 +194,74 @@ export function evaluateIssueReadinessGate({
   };
 }
 
-export function parseGateCommand(body = "") {
+export function parseWaiverCommand(body = "") {
   if (typeof body !== "string" || Buffer.byteLength(body, "utf8") > 8 * 1024) return null;
   const match = body
     .trim()
-    .match(
-      /^\/(human-validation|claude-review-waiver) ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/,
-    );
+    .match(/^\/claude-review-waiver ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/);
   if (!match) return null;
-  const reason = match[3].trim();
+  const reason = match[2].trim();
   if (!reason) return null;
-  return { type: match[1], headSha: match[2], reason };
+  return { headSha: match[1], reason };
 }
 
-export function buildGateRecords({ comments = [], currentHead, memberships = new Map() }) {
-  const records = { confirmations: [], waivers: [] };
+function latestHumanValidationEvent(events = []) {
+  return events.findLast(
+    (event) =>
+      ["labeled", "unlabeled"].includes(event.event) &&
+      event.label?.name === HUMAN_LABEL,
+  );
+}
+
+function currentHumanValidationEvent(events, event, currentHead) {
+  if (event?.action !== "unlabeled" || event.label?.name !== HUMAN_LABEL) {
+    return latestHumanValidationEvent(events);
+  }
+  if (event.pull_request?.head?.sha !== currentHead) return null;
+  return {
+    event: "unlabeled",
+    label: event.label,
+    actor: event.sender,
+    created_at: event.pull_request.updated_at,
+    url: event.pull_request.html_url,
+  };
+}
+
+export function buildGateRecords({
+  comments = [],
+  events = [],
+  event,
+  currentHead,
+  memberships = new Map(),
+}) {
+  const waivers = [];
   for (const comment of comments) {
-    const command = parseGateCommand(comment.body);
+    const command = parseWaiverCommand(comment.body);
     const login = comment.user?.login;
     if (!command || command.headSha !== currentHead || !login) continue;
-    const record = {
+    waivers.push({
       actor: { login, type: comment.user?.type },
       headSha: command.headSha,
       membership: memberships.get(login),
       reason: command.reason,
       recordedAt: comment.updated_at ?? comment.created_at,
       url: comment.html_url,
-    };
-    if (command.type === "human-validation") records.confirmations.push(record);
-    if (command.type === "claude-review-waiver") records.waivers.push(record);
+    });
   }
-  return records;
+  const validationEvent = currentHumanValidationEvent(events, event, currentHead);
+  const login = validationEvent?.actor?.login;
+  const validation =
+    validationEvent?.event === "unlabeled" && login
+      ? {
+          actor: { login, type: validationEvent.actor?.type },
+          headSha: currentHead,
+          membership: memberships.get(login),
+          reason: "ready-for-human removed",
+          recordedAt: validationEvent.created_at,
+          url: validationEvent.url,
+        }
+      : null;
+  return { validation, waivers };
 }
 
 function isActiveTeamMember(record) {
@@ -250,33 +287,29 @@ export function evaluateHumanValidationGate({
   labels = [],
   validationWasRequired = false,
   currentHead,
-  confirmations = [],
+  validation,
 }) {
   const required = validationWasRequired || labelNames(labels).includes(HUMAN_LABEL);
   if (!required) {
     return {
       ok: true,
-      removeLabel: false,
       description: "Human validation is not required",
     };
   }
-  const confirmation = confirmations.find(
-    (candidate) =>
-      candidate.headSha === currentHead &&
-      boundedCheckValue(candidate.reason, 4_000) &&
-      isActiveTeamMember(candidate),
-  );
-  if (!confirmation) {
+  if (
+    labelNames(labels).includes(HUMAN_LABEL) ||
+    validation?.headSha !== currentHead ||
+    !boundedCheckValue(validation?.reason, 4_000) ||
+    !isActiveTeamMember(validation)
+  ) {
     return {
       ok: false,
-      removeLabel: false,
       description: "Current-head Team validation confirmation is required",
     };
   }
   return {
     ok: true,
-    removeLabel: labelNames(labels).includes(HUMAN_LABEL),
-    description: `Human validation confirmed by ${confirmation.actor.login} for current head`,
+    description: `Human validation confirmed by ${validation.actor.login} for current head`,
   };
 }
 
@@ -544,9 +577,9 @@ function requiredEnvironment(name) {
   return value;
 }
 
-export async function githubRequest(
+async function githubRequest(
   path,
-  { allowNotFound = false, tokenEnvironment = "GITHUB_TOKEN", ...options } = {},
+  { tokenEnvironment = "GITHUB_TOKEN", ...options } = {},
 ) {
   const response = await fetch(`https://api.github.com${path}`, {
     ...options,
@@ -557,7 +590,6 @@ export async function githubRequest(
       ...options.headers,
     },
   });
-  if (allowNotFound && response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
   }
@@ -649,14 +681,18 @@ async function completeCheckRun(
   });
 }
 
-async function readGateRecords(repository, prNumber, currentHead) {
+async function readGateRecords(repository, prNumber, currentHead, events, event) {
   const comments = await paginate(`/repos/${repository}/issues/${prNumber}/comments`);
   const logins = new Set();
   for (const comment of comments) {
-    const command = parseGateCommand(comment.body);
+    const command = parseWaiverCommand(comment.body);
     if (command?.headSha === currentHead && comment.user?.login) {
       logins.add(comment.user.login);
     }
+  }
+  const validationEvent = currentHumanValidationEvent(events, event, currentHead);
+  if (validationEvent?.event === "unlabeled" && validationEvent.actor?.login) {
+    logins.add(validationEvent.actor.login);
   }
   const [owner] = repository.split("/");
   const memberships = new Map(
@@ -669,7 +705,7 @@ async function readGateRecords(repository, prNumber, currentHead) {
       ]),
     ),
   );
-  return buildGateRecords({ comments, currentHead, memberships });
+  return buildGateRecords({ comments, events, event, currentHead, memberships });
 }
 
 async function readIssueReadinessState(repository, pullRequest, issue) {
@@ -772,14 +808,14 @@ function validationWasRequired(labels, events) {
 
 export function auditDescription(result, records, type) {
   if (!result.ok) return result.description;
-  const candidates = type === "human-validation" ? records.confirmations : records.waivers;
   const expectedDescription = (login) =>
     type === "human-validation"
       ? `Human validation confirmed by ${login} for current head`
       : `Claude Review infrastructure failure waived by ${login} for current head`;
+  const candidates = type === "human-validation" ? [records.validation] : records.waivers;
   const record = candidates.find(
     (candidate) =>
-      candidate.headSha && result.description === expectedDescription(candidate.actor.login),
+      candidate?.headSha && result.description === expectedDescription(candidate.actor.login),
   );
   if (!record) return result.description;
   const reason = record.reason
@@ -818,7 +854,7 @@ async function setPendingChecks(repository, pr) {
   return Object.fromEntries(checks.map((check) => [check.name, check]));
 }
 
-async function evaluatePullRequestWithChecks(repository, number, action, pr, checks) {
+async function evaluatePullRequestWithChecks(repository, number, action, pr, checks, event) {
   requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");
   let labels = pr.labels;
   const events = await paginate(`/repos/${repository}/issues/${number}/events`);
@@ -864,22 +900,19 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
       description: "Issue Readiness evaluation failed closed",
     };
   }
-  const records = await readGateRecords(repository, number, pr.head.sha);
+  const records = await readGateRecords(repository, number, pr.head.sha, events, event);
+  const humanValidationRequired =
+    validationWasRequired(labels, events) ||
+    (event?.action === "unlabeled" && event.label?.name === HUMAN_LABEL);
   const humanResult = evaluateHumanValidationGate({
     labels,
-    validationWasRequired: validationWasRequired(labels, events),
+    validationWasRequired: humanValidationRequired,
     currentHead: pr.head.sha,
-    confirmations: records.confirmations,
+    validation: records.validation,
   });
-  if (humanResult.ok && humanResult.removeLabel) {
-    await githubRequest(
-      `/repos/${repository}/issues/${number}/labels/${encodeURIComponent(HUMAN_LABEL)}`,
-      { method: "DELETE", allowNotFound: true },
-    );
-    labels = labels.filter((label) => label.name !== HUMAN_LABEL);
-  } else if (
+  if (
     !humanResult.ok &&
-    validationWasRequired(labels, events) &&
+    humanValidationRequired &&
     !labelNames(labels).includes(HUMAN_LABEL)
   ) {
     await githubRequest(`/repos/${repository}/issues/${number}/labels`, {
@@ -937,11 +970,11 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
   }
 }
 
-async function evaluatePullRequest(repository, number, action) {
+async function evaluatePullRequest(repository, number, action, event) {
   const pr = await githubRequest(`/repos/${repository}/pulls/${number}`);
   const checks = await setPendingChecks(repository, pr);
   try {
-    await evaluatePullRequestWithChecks(repository, number, action, pr, checks);
+    await evaluatePullRequestWithChecks(repository, number, action, pr, checks, event);
   } catch (error) {
     await Promise.allSettled(
       pendingGateNames().map((name) =>
@@ -963,12 +996,12 @@ async function main() {
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
 
   if (eventName === "pull_request_target") {
-    await evaluatePullRequest(repository, event.pull_request.number, event.action);
+    await evaluatePullRequest(repository, event.pull_request.number, event.action, event);
     return;
   }
 
   if (eventName === "issue_comment" && event.issue?.pull_request) {
-    await evaluatePullRequest(repository, event.issue.number, "comment-updated");
+    await evaluatePullRequest(repository, event.issue.number, "comment-updated", event);
     return;
   }
 
@@ -999,7 +1032,12 @@ async function main() {
   }
 
   if (eventName === "repository_dispatch" && event.action === "pr-gates") {
-    await evaluatePullRequest(repository, Number(event.client_payload.pr_number), "issue-updated");
+    await evaluatePullRequest(
+      repository,
+      Number(event.client_payload.pr_number),
+      "issue-updated",
+      event,
+    );
     return;
   }
 
