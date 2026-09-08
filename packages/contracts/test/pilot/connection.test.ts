@@ -238,6 +238,13 @@ describe("Connection Pilot contracts", () => {
 				},
 			}).success,
 		).toBe(false);
+		expect(
+			ConnectionActionCallProjectionV1Schema.safeParse({
+				...base,
+				actionVersionId: "github.unknown@v1",
+				status: "pending",
+			}).success,
+		).toBe(false);
 		for (const providerStatusCode of [429, 500]) {
 			expect(
 				ConnectionActionCallProjectionV1Schema.safeParse({

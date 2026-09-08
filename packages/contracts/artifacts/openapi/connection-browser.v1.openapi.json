@@ -7,8 +7,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,
@@ -52,8 +51,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,
@@ -244,8 +242,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,
@@ -340,8 +337,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,
@@ -409,8 +405,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,
@@ -459,8 +454,7 @@
             "additionalProperties": false,
             "properties": {
               "actionVersionId": {
-                "minLength": 1,
-                "type": "string"
+                "$ref": "#/components/schemas/PilotActionVersionIdV1"
               },
               "callId": {
                 "minLength": 1,

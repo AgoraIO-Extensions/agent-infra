@@ -208,7 +208,7 @@ export const ConnectionGrantListV1Schema = z.strictObject({
 const callShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	callId: OpaqueIdV1Schema,
-	actionVersionId: OpaqueIdV1Schema,
+	actionVersionId: PilotActionVersionIdV1Schema,
 	traceId: TraceIdV1Schema,
 	createdAt: Rfc3339TimestampV1Schema,
 	updatedAt: Rfc3339TimestampV1Schema,
