@@ -389,6 +389,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   适配 token budget blanket ignore 生成 Client、OpenAPI、JSON Schema、Fake、测试或其他可评审文本。
 - PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
   Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
+- PR-Agent Analysis 开启大 diff 分块，最多 3 次 chunk 调用；Action 引用固定到上游不可变
+  commit，但上游 Action 内部使用浮动容器镜像，不能据此声称实际运行代码已锁定。局部结果
+  合并不等于完整覆盖或完整跨文件推理。当前 Coverage Gate
+  仍按单次 diff 的可信 token decision 判定；即使后续分块成功，已有裁剪证据仍失败，直到
+  单独批准并实现可信的分块覆盖证据契约。本配置不构成 coverage waiver。
 - Claude 的结构化输出和可信 Publisher 校验只属于 Claude Adapter 的内部安全机制，不构成
   Automated Reviewer 的统一输出契约。
 - 只有选中 Claude 时，其 P0/P1 finding 才能进入现有无人值守 code-repair；PR-Agent finding
@@ -405,8 +410,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 PR 正文列出验证内容。
 
 - Codex 可以添加 `ready-for-human`，不能移除；Claude 只能建议。
-- 只有 CODEOWNERS Team 中的非 Bot 人员可以确认完成。可信记录绑定当前 head、actor、时间和
-  验证说明；单纯由 Bot 或非成员移除标签不能通过 Gate。
+- 完成 PR 正文列出的验证后，CODEOWNERS Team 中的非 Bot 人员通过移除 `ready-for-human`
+  确认完成，无需发布专用评论或复制 head SHA。可信 Publisher 回读实时 Team membership 和 PR
+  head，把 label event 的 actor、时间和 current head 写入 `Human Validation Gate`。
+- Bot、非 Team 成员或身份查询失败时，标签移除不能通过 Gate，`ready-for-human` 会被恢复。
+  普通 PR 评论不作为 Gate 输入。
 - 新 commit 会使确认失效并自动恢复待验证状态。
 - Approve 表示代码评审完成，人工验证表示外部验收完成，两者不能互相替代。
 
