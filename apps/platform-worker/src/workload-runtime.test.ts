@@ -19,6 +19,7 @@ import {
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import {
 	runtimeGrantFixture,
@@ -250,6 +251,23 @@ function fixture(
 	const api = fakeKubernetesApi();
 	const configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
+	let management: WorkloadReconciliationInputV1["management"] = {
+		schemaVersion: 1,
+		agentId: "agent-a",
+		applicationId: "application-a",
+		applicantId: "owner-a",
+		ownerIds: ["owner-a"],
+		availability: [],
+		decisionReason: null,
+		revision: 1,
+		workloadRevision: 1,
+		fence: 1,
+		status: "creating",
+		desiredState: "running",
+		serviceAvailability: "updating",
+		approvalRevision: 1,
+		failureCode: null,
+	};
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
 		client: api.client,
@@ -284,6 +302,12 @@ function fixture(
 		get state() {
 			return state;
 		},
+		get management() {
+			return structuredClone(management);
+		},
+		setManagement(next: WorkloadReconciliationInputV1["management"]) {
+			management = structuredClone(next);
+		},
 		async tick(times: number) {
 			for (let i = 0; i < times; i++) {
 				await createWorkloadReconciliationV1({
@@ -294,23 +318,7 @@ function fixture(
 							state = await step({
 								state,
 								configuration,
-								management: {
-									schemaVersion: 1,
-									agentId: "agent-a",
-									applicationId: "application-a",
-									applicantId: "owner-a",
-									ownerIds: ["owner-a"],
-									availability: [],
-									decisionReason: null,
-									revision: 1,
-									workloadRevision: 1,
-									fence: 1,
-									status: "creating",
-									desiredState: "running",
-									serviceAvailability: "updating",
-									approvalRevision: 1,
-									failureCode: null,
-								},
+								management,
 								requestId: "request-a",
 								traceId: "trace-a",
 								secrets: inputOverrides.secrets,
@@ -396,16 +404,58 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 		expect(f.writes).toHaveLength(0);
 
-		// retry_agent_creation starts a fresh Workload lifecycle with the same
-		// configuration, so its retained pending binding can enter preflight again.
-		const retry = fixture(
-			{},
-			{ configuration, secrets: cleanupSecrets(cleanup) },
+		const retryManagement = new FakeAgentManagementV1({
+			states: [
+				{
+					...f.management,
+					status: "creation_failed",
+					revision: 2,
+					serviceAvailability: null,
+					failureCode: "reconciliation_failed",
+				},
+			],
+		});
+		const retry = await retryManagement.executeManagementCommand(
+			{
+				schemaVersion: 1,
+				command: "retry_agent_creation",
+				agentId: f.management.agentId,
+				expectedRevision: 2,
+				idempotencyKey: "retry-pending-secret",
+				requestId: "request-retry-pending-secret",
+				traceId: "trace-retry-pending-secret",
+			},
+			{
+				schemaVersion: 1,
+				userId: "owner-a",
+				accountStatus: "active",
+				organizationIds: [],
+				isAdministrator: false,
+			},
 		);
-		await retry.tick(2);
-		expect(retry.state?.phase).toBe("closing");
+		if (retry.outcome !== "accepted") throw new Error();
+		expect(retry.writePlan.state).toMatchObject({
+			status: "creating",
+			revision: 3,
+			workloadRevision: 2,
+			fence: 2,
+			desiredState: "running",
+		});
+		f.setManagement(retry.writePlan.state);
+		await f.tick(1);
+		expect(f.state).toMatchObject({
+			phase: "preflight",
+			sourceConfigurationRevision: configuration.revision,
+			sourceLifecycleRevision: retry.writePlan.state.workloadRevision,
+			candidate: { configuration, deployment: null },
+		});
+		await f.tick(1);
+		expect(f.state?.phase).toBe("cleaning");
 		expect(cleanup.record.lifecycleState).toBe("pending");
-		expect(retry.resources.size).toBe(0);
+		expect(cleanup.claims).toBe(0);
+		expect(cleanup.commits).toBe(0);
+		expect(f.resources.size).toBe(0);
+		expect(f.writes).toHaveLength(0);
 	});
 
 	it.each(["applying", "observed"] as const)(
