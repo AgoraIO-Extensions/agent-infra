@@ -102,6 +102,14 @@ export function isolationOverallStatus(input: {
 		: "unverified";
 }
 
+export function isolationActiveThreadEvidenceStatus(input: {
+	activeThreadLeak: boolean;
+	pointEvidence: readonly boolean[];
+}): IsolationEvidenceStatus {
+	if (input.activeThreadLeak) return "fail";
+	return input.pointEvidence.every(Boolean) ? "pass" : "unverified";
+}
+
 export interface IsolationObservationHold {
 	readonly received: Promise<void>;
 	readonly observed: Promise<void>;

@@ -6,6 +6,7 @@ import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
 	evaluatePersistenceEvidence,
 	type IsolationProbe,
+	isolationActiveThreadEvidenceStatus,
 	isolationModel,
 	isolationOverallStatus,
 	isolationResultSeesMarker,
@@ -100,6 +101,27 @@ it("detects foreign markers in every model and platform result channel", () => {
 			}),
 		).toBe("fail");
 	}
+});
+
+it("requires complete active-thread evidence for an isolation pass", () => {
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: true,
+			pointEvidence: [true, true],
+		}),
+	).toBe("fail");
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: false,
+			pointEvidence: [true, true],
+		}),
+	).toBe("pass");
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: false,
+			pointEvidence: [true, false],
+		}),
+	).toBe("unverified");
 });
 
 it("returns the native tool output only after the matching tool call completes", async () => {

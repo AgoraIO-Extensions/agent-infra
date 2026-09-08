@@ -21,6 +21,7 @@ import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
 	evaluatePersistenceEvidence,
 	type IsolationProbe,
+	isolationActiveThreadEvidenceStatus,
 	isolationModel,
 	isolationOverallStatus,
 	isolationResultSeesMarker,
@@ -1025,10 +1026,27 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		const activeThreadLeak = activeThreadReadSamples.some(
 			(sample) => sample.foreignMarkerAbsent === false,
 		);
+		const activeThreadEvidence = isolationActiveThreadEvidenceStatus({
+			activeThreadLeak,
+			pointEvidence: ["after-turn-start-accepted", "after-model-observed"].map(
+				(point) =>
+					activeThreadReadSamples.some(
+						(sample) =>
+							sample.point === point &&
+							sample.category === "success" &&
+							sample.knownTurnMatches === true &&
+							sample.foreignMarkerAbsent === true,
+					),
+			),
+		});
+		report.activeThreadEvidence = { status: activeThreadEvidence };
 		report.overall = isolationOverallStatus({
 			activeThreadLeak,
 			persistenceVerified: persistenceEvidence.status === "pass",
-			scenarioStatuses: Object.values(scenarios).map((row) => row.status),
+			scenarioStatuses: [
+				...Object.values(scenarios).map((row) => row.status),
+				activeThreadEvidence,
+			],
 		});
 		console.info(JSON.stringify(report, null, 2));
 		expect(
