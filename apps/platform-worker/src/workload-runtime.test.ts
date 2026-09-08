@@ -22,6 +22,7 @@ import {
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
 import type {
+	V1Ingress,
 	V1Pod,
 	V1Secret,
 	V1Service,
@@ -619,6 +620,86 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(record.activationFence.fence).toBe(1);
 	});
 
+	it("fails closed when an active-origin Secret can no longer be verified", async () => {
+		let record = activeSecretRecord();
+		const cleanup = secretCleanupStore(record);
+		const decrypt = vi.fn(async () => ({
+			outcome: "failed" as const,
+			code: "SECRET_KEY_UNAVAILABLE" as const,
+		}));
+		const audit = vi.fn(async () => undefined);
+		const f = fixture(
+			{ decryptor: { decrypt } },
+			{
+				configuration: secretConfiguration({ revision: 2 }),
+				secrets: {
+					get bindings() {
+						return [{ materialization: "active-origin" as const, record }];
+					},
+					store: cleanup.store,
+					auditDecryption: audit,
+				},
+			},
+		);
+		await f.tick(2);
+		const deployment = validateAgentWorkloadDesiredV1(
+			f.state?.candidate.deployment,
+		);
+		const ref = deployment.secretRefs[0];
+		if (!ref) throw new Error();
+		record = validateActiveSecretRecordV1({
+			...record,
+			kubernetesSecretRef: ref,
+			activationFence: {
+				...record.activationFence,
+				kubernetesSecretName: ref.name,
+			},
+		});
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: workloadTestPolicy,
+			probe: async () => true,
+		});
+		await adapter.applyImmutableSecret(
+			deployment,
+			ref.name,
+			"BOT_TOKEN",
+			new Uint8Array([1, 2, 3]),
+		);
+		const identity = await adapter.apply(deployment);
+		if (!identity || identity === "pending") throw new Error();
+		record = validateActiveSecretRecordV1({
+			...record,
+			activationFence: {
+				...record.activationFence,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+			},
+		});
+		await adapter.bindSecretFence(
+			deployment,
+			identity,
+			ref.name,
+			record.activationFence.fence,
+		);
+
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(decrypt).not.toHaveBeenCalled();
+		f.resources.delete(`Secret/${ref.name}`);
+		const before = structuredClone(record);
+
+		await f.tick(2);
+		expect(decrypt).toHaveBeenCalledTimes(1);
+		expect(audit).toHaveBeenCalledWith("secret-a", "key-a", "rejected");
+		expect(f.state?.phase).not.toBe("ready");
+		expect(
+			(await f.client.read<V1Service>("Service", deployment.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		expect(record).toEqual(before);
+	});
+
 	it.each([
 		"missing",
 		"foreign",
@@ -792,6 +873,155 @@ describe("assembled Workload Runtime contracts", () => {
 					(object) => object.kind === "PersistentVolumeClaim",
 				)?.metadata?.uid,
 			).toBe(pvc?.metadata?.uid);
+		},
+	);
+	it.each([
+		{
+			label: "StatefulSet template image",
+			async mutate(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				const workload = await f.client.read<V1StatefulSet>(
+					"StatefulSet",
+					serviceName,
+				);
+				if (!workload) throw new Error();
+				f.resources.set(`StatefulSet/${serviceName}`, {
+					...workload,
+					spec: {
+						...workload.spec,
+						template: {
+							...workload.spec?.template,
+							spec: {
+								...workload.spec?.template.spec,
+								containers: workload.spec?.template.spec?.containers.map(
+									(container) =>
+										container.name === "agent"
+											? {
+													...container,
+													image: "registry.example.test/untrusted@sha256:bad",
+												}
+											: container,
+								),
+							},
+						},
+					},
+				} as V1StatefulSet);
+			},
+			async assertRepaired(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				expect(
+					(await f.client.read<V1StatefulSet>("StatefulSet", serviceName))?.spec
+						?.template.spec?.containers[0]?.image,
+				).toBe(
+					`${workloadTestPolicy.imageRepository}@sha256:${"a".repeat(64)}`,
+				);
+			},
+		},
+		{
+			label: "Service external IP",
+			async mutate(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				const service = await f.client.read<V1Service>("Service", serviceName);
+				if (!service) throw new Error();
+				f.resources.set(`Service/${serviceName}`, {
+					...service,
+					spec: { ...service.spec, externalIPs: ["203.0.113.10"] },
+				} as V1Service);
+			},
+			async assertRepaired(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				expect(
+					(await f.client.read<V1Service>("Service", serviceName))?.spec
+						?.externalIPs,
+				).toBeUndefined();
+			},
+		},
+		{
+			label: "Ingress controller annotation",
+			external: true,
+			async mutate(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				const route = await f.client.read<V1Ingress>("Ingress", serviceName);
+				if (!route) throw new Error();
+				f.resources.set(`Ingress/${serviceName}`, {
+					...route,
+					metadata: {
+						...route.metadata,
+						annotations: {
+							...route.metadata?.annotations,
+							"nginx.ingress.kubernetes.io/auth-url":
+								"https://untrusted.example.test/auth",
+						},
+					},
+				} as V1Ingress);
+			},
+			async assertRepaired(
+				f: ReturnType<typeof fixture>,
+				serviceName: string,
+			): Promise<void> {
+				expect(
+					(await f.client.read<V1Ingress>("Ingress", serviceName))?.metadata
+						?.annotations?.["nginx.ingress.kubernetes.io/auth-url"],
+				).toBeUndefined();
+			},
+		},
+	] as const)(
+		"closes a promoted route before replacing $label drift",
+		async ({ mutate, assertRepaired, external = false }) => {
+			let f = fixture();
+			if (external) {
+				const configuration = configurationFixture();
+				if (configuration.source.kind !== "custom") throw new Error();
+				f = fixture(
+					{ registry: workloadRegistryFixture() },
+					{
+						configuration: {
+							...configuration,
+							source: {
+								...configuration.source,
+								interactionMode: "self-managed",
+								identityResponsibility: "self-managed",
+							},
+						},
+					},
+				);
+			}
+			await f.tick(8);
+			if (f.state?.phase !== "ready") throw new Error();
+			const deployment = validateAgentWorkloadDesiredV1(
+				f.state.candidate.deployment,
+			);
+			const serviceName = deployment.service.name;
+			await mutate(f, serviceName);
+
+			await f.tick(1);
+			expect(f.state).toMatchObject({ phase: "applying", revision: 2 });
+			expect(
+				(await f.client.read<V1Service>("Service", serviceName))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+
+			await f.tick(7);
+			expect(f.state?.phase).toBe("ready");
+			expect(
+				(await f.client.read<V1Service>("Service", serviceName))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("2");
+			await assertRepaired(f, serviceName);
+			const writes = f.writes.length;
+			await f.tick(1);
+			expect(f.state?.phase).toBe("ready");
+			expect(f.writes).toHaveLength(writes);
 		},
 	);
 	it("closes an opened candidate selector before publishing its promoted route", async () => {

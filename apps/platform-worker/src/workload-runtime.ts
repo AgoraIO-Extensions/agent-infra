@@ -511,12 +511,10 @@ export function createWorkloadRuntimeV1(
 		async apply(state, stopped, input) {
 			if (stopped) return adapter.scaleDownAgent(state.agentId, state.revision);
 			const workload = desired(state);
-			for (const { materialization, record } of bindingsFor(state, input)) {
-				if (materialization === "active-origin") continue;
+			for (const { record } of bindingsFor(state, input)) {
 				const reference = recordReference(record);
 				const activationFence = activeSecretFence(record, reference);
 				if (
-					materialization === "current" &&
 					activationFence &&
 					(await adapter.observeActiveImmutableSecret(
 						workload,

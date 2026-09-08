@@ -60,6 +60,19 @@ function containsDesired(actual: unknown, expected: unknown): boolean {
 	return actual === expected;
 }
 
+function resourceFingerprint(object: KubernetesObject) {
+	const { [fingerprintAnnotation]: _fingerprint, ...annotations } =
+		object.metadata?.annotations ?? {};
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				...object,
+				metadata: { ...object.metadata, annotations },
+			}),
+		)
+		.digest("hex");
+}
+
 function agentContainerSecurityContext() {
 	return {
 		allowPrivilegeEscalation: false,
@@ -70,6 +83,16 @@ function agentContainerSecurityContext() {
 		runAsGroup: 1000,
 		seccompProfile: { type: "RuntimeDefault" },
 		procMount: "Default",
+	};
+}
+
+function agentPodSecurityContext() {
+	return {
+		runAsNonRoot: true,
+		runAsUser: 1000,
+		runAsGroup: 1000,
+		fsGroup: 1000,
+		seccompProfile: { type: "RuntimeDefault" },
 	};
 }
 
@@ -89,6 +112,31 @@ function matchesNetworkPolicySpec(
 				),
 			),
 		)
+	);
+}
+
+function matchesServiceSpec(
+	actual: V1Service["spec"] | undefined,
+	expected: V1Service["spec"] | undefined,
+) {
+	return (
+		containsDesired(actual, expected) &&
+		!actual?.externalIPs?.length &&
+		actual?.externalName === undefined &&
+		actual?.loadBalancerIP === undefined &&
+		actual?.loadBalancerClass === undefined &&
+		actual?.externalTrafficPolicy === undefined &&
+		actual?.healthCheckNodePort === undefined
+	);
+}
+
+function matchesIngress(current: V1Ingress, expected: V1Ingress) {
+	const hash = resourceFingerprint(expected);
+	return (
+		isDeepStrictEqual(current.metadata?.annotations, {
+			...expected.metadata?.annotations,
+			[fingerprintAnnotation]: hash,
+		}) && isDeepStrictEqual(current.spec, expected.spec)
 	);
 }
 
@@ -228,6 +276,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.hostNetwork === true ||
 			pod?.hostPID === true ||
 			pod?.hostIPC === true ||
+			!isDeepStrictEqual(pod?.securityContext, agentPodSecurityContext()) ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
 			pod?.containers.some((container) => {
@@ -236,12 +285,89 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(container.command?.length ?? 0) > 0 ||
 					(container.args?.length ?? 0) > 0 ||
 					Object.keys(container.lifecycle ?? {}).length > 0 ||
-					!containsDesired(securityContext, agentContainerSecurityContext()) ||
+					!isDeepStrictEqual(
+						securityContext,
+						agentContainerSecurityContext(),
+					) ||
 					securityContext?.privileged === true ||
 					(securityContext?.capabilities?.add?.length ?? 0) > 0
 				);
 			}) === true
 		);
+	}
+	function hasDriftedStatefulSetTemplate(
+		value: AgentWorkloadDesiredV1,
+		template: NonNullable<V1StatefulSet["spec"]>["template"] | undefined,
+	) {
+		const pod = template?.spec;
+		const container = pod?.containers.find((entry) => entry.name === "agent");
+		return (
+			hasDriftedPodSpec(value, pod) ||
+			!containsDesired(container, {
+				image: `${policy.imageRepository}@${value.imageDigest}`,
+				ports: [{ name: "runtime", containerPort: value.service.port }],
+				envFrom: value.secretRefs.map((ref) => ({
+					secretRef: { name: ref.name },
+				})),
+			}) ||
+			pod?.automountServiceAccountToken !== false
+		);
+	}
+	function serviceSpec(
+		value: AgentWorkloadDesiredV1,
+		selector: Readonly<Record<string, string>>,
+	): NonNullable<V1Service["spec"]> {
+		return {
+			type: "ClusterIP",
+			selector,
+			ports: [
+				{
+					name: "runtime",
+					port: value.service.port,
+					targetPort: value.service.port,
+				},
+			],
+		};
+	}
+	function ingress(value: AgentWorkloadDesiredV1): V1Ingress {
+		const name = workloadResourceNameV1(value.agentId);
+		const host = `${name}.${policy.routeHostSuffix}`;
+		return {
+			apiVersion: "networking.k8s.io/v1",
+			kind: "Ingress",
+			metadata: {
+				...metadata(value),
+				annotations: {
+					...metadata(value).annotations,
+					...(value.route.exposure === "platform-auth"
+						? policy.platformAuthAnnotations
+						: {}),
+				},
+			},
+			spec: {
+				ingressClassName: policy.ingressClassName,
+				tls: [{ hosts: [host], secretName: policy.tlsSecretName }],
+				rules: [
+					{
+						host,
+						http: {
+							paths: [
+								{
+									path: "/",
+									pathType: "Prefix",
+									backend: {
+										service: {
+											name,
+											port: { number: value.service.port },
+										},
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		};
 	}
 	function hasDriftedPodSpec(
 		value: AgentWorkloadDesiredV1,
@@ -293,9 +419,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (current.metadata?.deletionTimestamp)
 				throw new WorkloadKubernetesError("conflict");
 		}
-		const hash = createHash("sha256")
-			.update(JSON.stringify(object))
-			.digest("hex");
+		const hash = resourceFingerprint(object);
 		object.metadata = {
 			...object.metadata,
 			annotations: {
@@ -307,29 +431,59 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
+			(kind !== "Service" ||
+				matchesServiceSpec(
+					(current as V1Service).spec,
+					(object as V1Service).spec,
+				)) &&
 			(kind !== "NetworkPolicy" ||
 				matchesNetworkPolicySpec(
 					(current as V1NetworkPolicy).spec,
 					(object as V1NetworkPolicy).spec,
 				)) &&
 			(kind !== "StatefulSet" ||
-				!hasUnsafePodSpec((current as V1StatefulSet).spec?.template.spec))
+				!hasDriftedStatefulSetTemplate(
+					value,
+					(current as V1StatefulSet).spec?.template,
+				)) &&
+			(kind !== "Ingress" ||
+				matchesIngress(current as V1Ingress, object as V1Ingress))
 		)
 			return current;
+		const currentServiceSpec =
+			kind === "Service" ? (current as V1Service).spec : undefined;
 		const next = {
 			...current,
 			...object,
-			metadata: {
-				...current.metadata,
-				...object.metadata,
-				resourceVersion: current.metadata?.resourceVersion,
-				uid: current.metadata?.uid,
-			},
+			metadata:
+				kind === "Ingress"
+					? {
+							...object.metadata,
+							resourceVersion: current.metadata?.resourceVersion,
+							uid: current.metadata?.uid,
+						}
+					: {
+							...current.metadata,
+							...object.metadata,
+							resourceVersion: current.metadata?.resourceVersion,
+							uid: current.metadata?.uid,
+						},
 		};
 		if (kind === "Service")
 			(next as V1Service).spec = {
-				...(current as V1Service).spec,
 				...(object as V1Service).spec,
+				...(currentServiceSpec?.clusterIP === undefined
+					? {}
+					: { clusterIP: currentServiceSpec.clusterIP }),
+				...(currentServiceSpec?.clusterIPs === undefined
+					? {}
+					: { clusterIPs: currentServiceSpec.clusterIPs }),
+				...(currentServiceSpec?.ipFamilies === undefined
+					? {}
+					: { ipFamilies: currentServiceSpec.ipFamilies }),
+				...(currentServiceSpec?.ipFamilyPolicy === undefined
+					? {}
+					: { ipFamilyPolicy: currentServiceSpec.ipFamilyPolicy }),
 			};
 		return client.replace(next);
 	}
@@ -479,6 +633,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.workloadRevision)
 		)
 			return "drifted";
+		if (hasDriftedStatefulSetTemplate(value, current.spec?.template))
+			return "drifted";
 		const name = workloadResourceNameV1(value.agentId);
 		const serviceAccount = await client.read<V1ServiceAccount>(
 			"ServiceAccount",
@@ -487,6 +643,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const network = await client.read<V1NetworkPolicy>("NetworkPolicy", name);
 		const probe = await client.read<V1Service>("Service", `${name}-probe`);
 		const service = await client.read<V1Service>("Service", name);
+		const routeIngress = await client.read<V1Ingress>("Ingress", name);
 		if (!serviceAccount || !network || !probe || !service) return "drifted";
 		for (const ref of value.secretRefs) {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
@@ -500,8 +657,28 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		for (const resource of [serviceAccount, network, probe, service])
 			own(resource, value.agentId, value.workloadRevision);
 		if (
+			routeMode === "open" &&
+			(value.route.exposure === "internal-only"
+				? routeIngress !== null
+				: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
+		)
+			return "drifted";
+		if (routeIngress) own(routeIngress, value.agentId, value.workloadRevision);
+		const podLabels = {
+			[ownerLabel]: name,
+			[revisionLabel]: String(value.workloadRevision),
+		};
+		if (
 			serviceAccount.automountServiceAccountToken !== false ||
 			!matchesNetworkPolicySpec(network.spec, networkPolicy(value).spec) ||
+			!matchesServiceSpec(probe.spec, serviceSpec(value, podLabels)) ||
+			!matchesServiceSpec(
+				service.spec,
+				serviceSpec(
+					value,
+					routeSelector(name, value.workloadRevision, routeMode),
+				),
+			) ||
 			!isDeepStrictEqual(probe.spec?.selector, {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
@@ -509,13 +686,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			!isDeepStrictEqual(
 				service.spec?.selector,
 				routeSelector(name, value.workloadRevision, routeMode),
-			) ||
-			![probe, service].every(
-				(entry) =>
-					entry.spec?.type === "ClusterIP" &&
-					entry.spec.ports?.length === 1 &&
-					entry.spec.ports[0]?.port === value.service.port &&
-					entry.spec.ports[0]?.targetPort === value.service.port,
 			)
 		)
 			return "drifted";
@@ -806,17 +976,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				apiVersion: "v1",
 				kind: "Service",
 				metadata: metadata(value),
-				spec: {
-					type: "ClusterIP",
-					selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
-					ports: [
-						{
-							name: "runtime",
-							port: value.service.port,
-							targetPort: value.service.port,
-						},
-					],
-				},
+				spec: serviceSpec(value, {
+					[ownerLabel]: name,
+					[revisionLabel]: "closed",
+				}),
 			};
 			await put(service, value);
 			await put<V1Service>(
@@ -824,17 +987,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					apiVersion: "v1",
 					kind: "Service",
 					metadata: metadata(value, `${name}-probe`),
-					spec: {
-						type: "ClusterIP",
-						selector: podLabels,
-						ports: [
-							{
-								name: "runtime",
-								port: value.service.port,
-								targetPort: value.service.port,
-							},
-						],
-					},
+					spec: serviceSpec(value, podLabels),
 				},
 				value,
 			);
@@ -985,67 +1138,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (value.route.exposure === "internal-only") {
 				if (!(await remove("Ingress", name, value)))
 					throw new WorkloadKubernetesError("unavailable");
-			} else {
-				const host = `${name}.${policy.routeHostSuffix}`;
-				await put<V1Ingress>(
-					{
-						apiVersion: "networking.k8s.io/v1",
-						kind: "Ingress",
-						metadata: {
-							...metadata(value),
-							annotations: {
-								...metadata(value).annotations,
-								...(value.route.exposure === "platform-auth"
-									? policy.platformAuthAnnotations
-									: {}),
-							},
-						},
-						spec: {
-							ingressClassName: policy.ingressClassName,
-							tls: [{ hosts: [host], secretName: policy.tlsSecretName }],
-							rules: [
-								{
-									host,
-									http: {
-										paths: [
-											{
-												path: "/",
-												pathType: "Prefix",
-												backend: {
-													service: {
-														name,
-														port: { number: value.service.port },
-													},
-												},
-											},
-										],
-									},
-								},
-							],
-						},
-					},
-					value,
-				);
-			}
+			} else await put(ingress(value), value);
 			await put<V1Service>(
 				{
 					apiVersion: "v1",
 					kind: "Service",
 					metadata: metadata(value),
-					spec: {
-						type: "ClusterIP",
-						selector: {
-							[ownerLabel]: name,
-							[revisionLabel]: String(value.workloadRevision),
-						},
-						ports: [
-							{
-								name: "runtime",
-								port: value.service.port,
-								targetPort: value.service.port,
-							},
-						],
-					},
+					spec: serviceSpec(
+						value,
+						routeSelector(name, value.workloadRevision, "open"),
+					),
 				},
 				value,
 			);

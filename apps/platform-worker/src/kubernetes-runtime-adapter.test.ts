@@ -509,6 +509,31 @@ describe("GA Kubernetes Workload adapter", () => {
 		await adapter.promote(internal, internalIdentity);
 		expect(await f.client.read("Ingress", internal.route.name)).toBeNull();
 	});
+	it("repairs externally routable Service fields before considering a workload healthy", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		if (!service) throw new Error();
+		f.resources.set(`Service/${desired.service.name}`, {
+			...service,
+			spec: { ...service.spec, externalIPs: ["203.0.113.10"] },
+		} as V1Service);
+
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		const repaired = await adapter.apply(desired);
+		if (!repaired || repaired === "pending") throw new Error();
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.externalIPs,
+		).toBeUndefined();
+		expect(await adapter.observe(desired, repaired)).toBe("healthy");
+	});
 	it("repairs unsafe StatefulSet drift and rejects unsafe observed Pods", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -529,6 +554,10 @@ describe("GA Kubernetes Workload adapter", () => {
 					spec: {
 						...workload.spec?.template.spec,
 						hostPID: true,
+						securityContext: {
+							...workload.spec?.template.spec?.securityContext,
+							supplementalGroups: [0],
+						},
 						initContainers: [
 							{ name: "injected-init", image: "registry.example.test/init" },
 						],
@@ -536,6 +565,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				},
 			},
 		} as V1StatefulSet);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
 		const repaired = await adapter.apply(desired);
 		if (!repaired || repaired === "pending") throw new Error();
 		expect(
@@ -546,10 +576,20 @@ describe("GA Kubernetes Workload adapter", () => {
 			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
 				?.spec?.template.spec?.initContainers,
 		).toBeUndefined();
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.template.spec?.securityContext?.supplementalGroups,
+		).toBeUndefined();
 		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
 		if (!pod) throw new Error();
 		for (const unsafeSpec of [
 			{ hostIPC: true },
+			{
+				securityContext: {
+					...pod.spec?.securityContext,
+					supplementalGroups: [0],
+				},
+			},
 			{
 				initContainers: [
 					{ name: "injected-init", image: "registry.example.test/init" },
@@ -606,6 +646,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				},
 			} as unknown as V1StatefulSet);
 
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
 			const repaired = await adapter.apply(desired);
 			if (!repaired || repaired === "pending") throw new Error();
 			expect(
@@ -624,6 +665,69 @@ describe("GA Kubernetes Workload adapter", () => {
 					)
 				)?.spec?.template.spec?.containers[0],
 			).not.toMatchObject(mutation);
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+		},
+	);
+	it.each([
+		{
+			label: "image",
+			mutate: (workload: V1StatefulSet) => ({
+				...workload.spec?.template.spec,
+				containers: workload.spec?.template.spec?.containers.map((container) =>
+					container.name === "agent"
+						? {
+								...container,
+								image: "registry.example.test/untrusted@sha256:bad",
+							}
+						: container,
+				),
+			}),
+		},
+		{
+			label: "sidecar",
+			mutate: (workload: V1StatefulSet) => ({
+				...workload.spec?.template.spec,
+				containers: [
+					...(workload.spec?.template.spec?.containers ?? []),
+					{ name: "injected", image: "registry.example.test/untrusted" },
+				],
+			}),
+		},
+	] as const)(
+		"detects and replaces a drifted StatefulSet template: $label",
+		async ({ mutate }) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload || !pod) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec?.template,
+						spec: mutate(workload),
+					},
+				},
+			} as V1StatefulSet);
+
+			expect(pod.spec?.containers[0]?.image).toBe(
+				`${workloadTestPolicy.imageRepository}@${desired.imageDigest}`,
+			);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
 			expect(await adapter.observe(desired, repaired)).toBe("healthy");
 		},
 	);
