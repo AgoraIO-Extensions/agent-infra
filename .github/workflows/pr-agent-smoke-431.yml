@@ -33,6 +33,11 @@ jobs:
           if(pr.head.sha!=='ff7fb29d7da5bbfb72f222ec9734ef5298045015' || pr.state!=='open') throw new Error('Smoke target changed');
           fs.writeFileSync('.pr-agent-event.json',JSON.stringify({action:'synchronize',pull_request:pr,repository:{full_name:'AgoraIO-Extensions/agent-infra',default_branch:'main'},sender:{type:'User'}}));
           JS
+          cat > .pr-agent-smoke-entrypoint.sh <<'SH'
+          export GITHUB_EVENT_NAME=pull_request_target
+          export GITHUB_EVENT_PATH=/github/workspace/.pr-agent-event.json
+          exec /entrypoint.sh
+          SH
       - name: Review pull request
         id: pr-agent
         uses: docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
@@ -83,9 +88,7 @@ jobs:
             "ready_for_review", "review_requested"]'
         with:
           entrypoint: /bin/sh
-          args: -c 'GITHUB_EVENT_NAME=pull_request_target
-            GITHUB_EVENT_PATH=/github/workspace/.pr-agent-event.json
-            /entrypoint.sh'
+          args: /github/workspace/.pr-agent-smoke-entrypoint.sh
   publish:
     name: PR-Agent Publish Review
     needs: analyze
