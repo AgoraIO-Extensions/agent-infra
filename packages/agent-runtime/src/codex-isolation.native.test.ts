@@ -972,14 +972,22 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			workingTreeClean,
 		});
 		report.persistence = persistenceEvidence;
-		report.overall = Object.values(scenarios).some(
-			(row) => row.status === "fail",
+		const activeThreadReadSamples = Array.isArray(
+			report.activeThreadReadSamples,
 		)
-			? "fail"
-			: persistenceEvidence.status === "pass" &&
-					Object.values(scenarios).every((row) => row.status === "pass")
-				? "pass"
-				: "unverified";
+			? (report.activeThreadReadSamples as NativeReadSample[])
+			: [];
+		const activeThreadLeak = activeThreadReadSamples.some(
+			(sample) => sample.foreignMarkerAbsent === false,
+		);
+		report.overall =
+			activeThreadLeak ||
+			Object.values(scenarios).some((row) => row.status === "fail")
+				? "fail"
+				: persistenceEvidence.status === "pass" &&
+						Object.values(scenarios).every((row) => row.status === "pass")
+					? "pass"
+					: "unverified";
 		console.info(JSON.stringify(report, null, 2));
 		expect(
 			report.overall,
