@@ -6,7 +6,6 @@ describe("Worker-only Secret Store surface", () => {
 		expect(Object.keys(workerSecretStore).toSorted()).toEqual([
 			"createSecretKeyRotationCryptoV1",
 			"createSecretKeyringDecryptorV1",
-			"createSecretRevisionBindingCryptoV1",
 		]);
 	});
 });

@@ -31,6 +31,10 @@ const revisionLabel = "agent-infra.agora.io/revision";
 const agentAnnotation = "agent-infra.agora.io/agent-id";
 const fingerprintAnnotation = "agent-infra.agora.io/spec-hash";
 const desiredAnnotation = "agent-infra.agora.io/desired";
+const controllerAnnotationPrefix = "agent-infra.agora.io/";
+const secretIdAnnotation = "agent-infra.agora.io/secret-id";
+const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
+const secretConfigRevisionAnnotation = "agent-infra.agora.io/config-revision";
 
 function containsDesired(actual: unknown, expected: unknown): boolean {
 	if (Array.isArray(expected) && expected.length === 0 && actual === undefined)
@@ -98,6 +102,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		client.namespace !== policy.namespace ||
 		!Object.keys(policy.workerSelector).length ||
 		!Object.keys(policy.routeSelector).length ||
+		Object.keys(policy.platformAuthAnnotations).some((key) =>
+			key.startsWith(controllerAnnotationPrefix),
+		) ||
 		(policy.egressProxy &&
 			(!Object.keys(policy.egressProxy.selector).length ||
 				!Number.isSafeInteger(policy.egressProxy.port) ||
@@ -107,6 +114,20 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		throw new WorkloadKubernetesError("policy");
 	const selector = (agentId: string) =>
 		`${ownerLabel}=${workloadResourceNameV1(agentId)}`;
+	const isOwnedSecret = (
+		secret: V1Secret,
+		value: AgentWorkloadDesiredV1,
+		ref: AgentWorkloadDesiredV1["secretRefs"][number],
+	) =>
+		secret.metadata?.name === ref.name &&
+		secret.metadata?.annotations?.[agentAnnotation] === value.agentId &&
+		secret.metadata?.labels?.[ownerLabel] ===
+			workloadResourceNameV1(value.agentId) &&
+		secret.metadata?.annotations?.[secretIdAnnotation] === ref.secretId &&
+		secret.metadata?.annotations?.[secretVersionAnnotation] ===
+			String(ref.secretVersion) &&
+		secret.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
+			String(ref.configRevision);
 	function desired(input: unknown) {
 		const value = validateAgentWorkloadDesiredV1(input);
 		const name = workloadResourceNameV1(value.agentId);
@@ -153,6 +174,19 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (!Number.isSafeInteger(current) || current < 1 || current > revision)
 			throw new WorkloadKubernetesError("conflict");
 	}
+	function hasUnsafePodSpec(workload: V1StatefulSet) {
+		const pod = workload.spec?.template.spec;
+		return (
+			pod?.hostNetwork === true ||
+			pod?.hostPID === true ||
+			pod?.hostIPC === true ||
+			pod?.containers.some(
+				(container) =>
+					container.securityContext?.privileged === true ||
+					(container.securityContext?.capabilities?.add?.length ?? 0) > 0,
+			) === true
+		);
+	}
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: AgentWorkloadDesiredV1,
@@ -175,7 +209,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			throw new WorkloadKubernetesError("conflict");
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
-			containsDesired(current, object)
+			containsDesired(current, object) &&
+			(kind !== "StatefulSet" || !hasUnsafePodSpec(current as V1StatefulSet))
 		)
 			return current;
 		const next = {
@@ -331,6 +366,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			!current ||
 			current.metadata?.uid !== identity.uid ||
 			current.metadata.generation !== identity.generation ||
+			current.metadata?.annotations?.[agentAnnotation] !== value.agentId ||
+			current.metadata?.annotations?.[secretConfigRevisionAnnotation] !==
+				String(value.configRevision) ||
+			current.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+				String(value.fence) ||
 			current.metadata.labels?.[revisionLabel] !==
 				String(value.workloadRevision)
 		)
@@ -344,6 +384,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const probe = await client.read<V1Service>("Service", `${name}-probe`);
 		const service = await client.read<V1Service>("Service", name);
 		if (!serviceAccount || !network || !probe || !service) return "drifted";
+		for (const ref of value.secretRefs) {
+			const secret = await client.read<V1Secret>("Secret", ref.name);
+			if (
+				!secret ||
+				!isOwnedSecret(secret, value, ref) ||
+				secret.immutable !== true
+			)
+				return "drifted";
+		}
 		for (const resource of [serviceAccount, network, probe, service])
 			own(resource, value.agentId, value.workloadRevision);
 		if (
@@ -410,7 +459,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				],
 			}) ||
 			(container?.securityContext?.capabilities?.add?.length ?? 0) > 0 ||
+			container?.securityContext?.privileged === true ||
 			pod.spec?.hostNetwork === true ||
+			pod.spec?.hostPID === true ||
+			pod.spec?.hostIPC === true ||
 			!containsDesired(pod.spec?.securityContext, {
 				runAsNonRoot: true,
 				runAsUser: 1000,
@@ -556,7 +608,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				const body: V1Secret = {
 					apiVersion: "v1",
 					kind: "Secret",
-					metadata: metadata(value, ref.name),
+					metadata: {
+						...metadata(value, ref.name),
+						annotations: {
+							...metadata(value, ref.name).annotations,
+							[secretIdAnnotation]: ref.secretId,
+							[secretVersionAnnotation]: String(ref.secretVersion),
+							[secretConfigRevisionAnnotation]: String(ref.configRevision),
+						},
+					},
 					immutable: true,
 					type: "Opaque",
 					data: { [key]: Buffer.from(plaintext).toString("base64") },
@@ -566,7 +626,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					await client.create(body);
 					return;
 				}
-				own(existing, value.agentId, value.workloadRevision);
+				if (!isOwnedSecret(existing, value, ref))
+					throw new WorkloadKubernetesError("conflict");
 				if (
 					existing.immutable !== true ||
 					!isDeepStrictEqual(existing.data, body.data)
@@ -774,7 +835,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if ((await observe(value, identity)) !== "healthy")
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
-			if (value.route.exposure !== "internal-only") {
+			if (value.route.exposure === "internal-only") {
+				if (!(await remove("Ingress", name, value)))
+					throw new WorkloadKubernetesError("unavailable");
+			} else {
 				const host = `${name}.${policy.routeHostSuffix}`;
 				await put<V1Ingress>(
 					{
@@ -858,12 +922,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				"NetworkPolicy",
 			] as const)
 				if (!(await remove(kind, name, value))) return false;
-			for (const secret of await client.list<V1Secret>(
-				"Secret",
-				selector(value.agentId),
-			))
-				if (!(await remove("Secret", secret.metadata?.name ?? "", value)))
-					return false;
+			// Secret reclamation requires the Platform binding and rollback-retention
+			// decision. This adapter only owns Kubernetes state, so it must retain
+			// Agent-labelled immutable material rather than bulk-delete it.
 			if (!(await remove("Service", `${name}-probe`, value))) return false;
 			if (
 				deleteNewVolume &&

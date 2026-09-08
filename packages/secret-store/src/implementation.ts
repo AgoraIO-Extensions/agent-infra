@@ -60,14 +60,6 @@ export interface SecretReencryptionInputV1 {
 	readonly occurredAt: string;
 }
 
-export interface SecretRevisionBindingInputV1 {
-	readonly encryptionKeys: unknown;
-	readonly record: unknown;
-	readonly plaintext: Uint8Array;
-	readonly configRevision: number;
-	readonly occurredAt: string;
-}
-
 export function createSecretEncryptorV1(options: {
 	readonly encryptionKeys: unknown;
 }): SecretEncryptorV1 {
@@ -134,53 +126,6 @@ export function reencryptSecretRecordV1(
 		});
 	} catch {
 		throw new TypeError("Secret re-encryption failed");
-	} finally {
-		plaintext?.fill(0);
-	}
-}
-
-/**
- * Re-encrypts a verified Secret for a later configuration revision. The
- * original immutable Secret and its activation evidence stay untouched.
- */
-export function rebindSecretRecordV1(
-	input: SecretRevisionBindingInputV1,
-): PlatformSecretRecordV1 {
-	let plaintext: Buffer | undefined;
-	try {
-		const record = validatePlatformSecretRecordV1(input.record);
-		const activeKey = parseActiveWrappingKey(input);
-		if (
-			record.lifecycleState !== "active" ||
-			!(input.plaintext instanceof Uint8Array) ||
-			!Number.isSafeInteger(input.configRevision) ||
-			input.configRevision <= record.configRevision ||
-			!WorkloadTimestampV1Schema.safeParse(input.occurredAt).success
-		) {
-			throw new Error();
-		}
-		plaintext = Buffer.from(input.plaintext);
-		const aadBinding = SecretAadBindingV1Schema.parse({
-			...record.crypto.aadBinding,
-			configRevision: input.configRevision,
-			wrappingKeyVersion: activeKey.keyVersion,
-		});
-		return validatePlatformSecretRecordV1({
-			schemaVersion: 1,
-			secretId: record.secretId,
-			ownerType: record.ownerType,
-			ownerId: record.ownerId,
-			agentId: record.agentId,
-			name: record.name,
-			secretVersion: record.secretVersion,
-			configRevision: input.configRevision,
-			lifecycleState: "pending",
-			crypto: encryptBytes(aadBinding, plaintext, activeKey),
-			createdAt: input.occurredAt,
-			updatedAt: input.occurredAt,
-		});
-	} catch {
-		throw new TypeError("Secret revision binding failed");
 	} finally {
 		plaintext?.fill(0);
 	}
@@ -387,35 +332,6 @@ export interface SecretKeyRotationCryptoV1 {
 	>;
 }
 
-export interface SecretRevisionBindingCryptoV1 {
-	bind(input: {
-		readonly encryptedRecord: unknown;
-		readonly expectedBinding: {
-			readonly agentId: string;
-			readonly secretId: string;
-			readonly secretVersion: number;
-			readonly configRevision: number;
-			readonly ownerType: "agent-owner" | "platform";
-			readonly ownerId: string;
-			readonly name: string;
-			readonly wrappingKeyVersion: string;
-			readonly dekFingerprint: string;
-		};
-		readonly targetConfigRevision: number;
-		readonly traceId: string;
-	}): Promise<
-		| { readonly outcome: "bound"; readonly encryptedRecord: unknown }
-		| {
-				readonly outcome: "failed";
-				readonly code:
-					| "SECRET_KEY_UNAVAILABLE"
-					| "SECRET_METADATA_INVALID"
-					| "SECRET_AUTHENTICATION_FAILED"
-					| "SECRET_REVISION_BINDING_FAILED";
-		  }
-	>;
-}
-
 export function createSecretKeyringDecryptorV1(input: {
 	readonly keys: readonly {
 		readonly keyVersion: string;
@@ -423,106 +339,6 @@ export function createSecretKeyringDecryptorV1(input: {
 	}[];
 }): SecretKeyringDecryptorV1 {
 	return secretKeyringDecryptor(parsePrivateKeyring(input), false);
-}
-
-export function createSecretRevisionBindingCryptoV1(input: {
-	readonly keys: readonly {
-		readonly keyVersion: string;
-		readonly privateKeyPkcs8DerBase64: string;
-	}[];
-	readonly encryptionKeys: unknown;
-	readonly now?: () => Date;
-}): SecretRevisionBindingCryptoV1 {
-	let encryptionKeys: ReturnType<typeof validateSecretEncryptionKeySetV1>;
-	let decryptor: SecretKeyringDecryptorV1;
-	try {
-		const keyring = parsePrivateKeyring(input);
-		encryptionKeys = validateSecretEncryptionKeySetV1(input.encryptionKeys);
-		const active = encryptionKeys.keys.find(
-			({ keyVersion }) =>
-				keyVersion === encryptionKeys.activeWrappingKeyVersion,
-		);
-		const privateKey = active && keyring.get(active.keyVersion);
-		if (!active || !privateKey) throw new Error();
-		const derivedPublicKey = createPublicKey(privateKey).export({
-			format: "der",
-			type: "spki",
-		});
-		try {
-			if (
-				createHash("sha256").update(derivedPublicKey).digest("hex") !==
-				active.publicKeyFingerprint
-			) {
-				throw new Error();
-			}
-		} finally {
-			derivedPublicKey.fill(0);
-		}
-		decryptor = secretKeyringDecryptor(keyring, true);
-	} catch {
-		throw new TypeError("Secret revision binding keys are invalid");
-	}
-	const now = input.now ?? (() => new Date());
-	return {
-		async bind({
-			encryptedRecord,
-			expectedBinding,
-			targetConfigRevision,
-			traceId,
-		}) {
-			let record: ReturnType<typeof validatePlatformSecretRecordV1>;
-			try {
-				record = validatePlatformSecretRecordV1(encryptedRecord);
-				if (
-					record.lifecycleState !== "active" ||
-					record.agentId !== expectedBinding.agentId ||
-					record.secretId !== expectedBinding.secretId ||
-					record.secretVersion !== expectedBinding.secretVersion ||
-					record.configRevision !== expectedBinding.configRevision ||
-					record.ownerType !== expectedBinding.ownerType ||
-					record.ownerId !== expectedBinding.ownerId ||
-					record.name !== expectedBinding.name ||
-					record.crypto.wrappingKeyVersion !==
-						expectedBinding.wrappingKeyVersion ||
-					record.crypto.dekFingerprint !== expectedBinding.dekFingerprint ||
-					!Number.isSafeInteger(targetConfigRevision) ||
-					targetConfigRevision <= record.configRevision
-				) {
-					throw new Error();
-				}
-			} catch {
-				return { outcome: "failed", code: "SECRET_METADATA_INVALID" } as const;
-			}
-			const decrypted = await decryptor.decrypt({
-				encryptedRecord: record,
-				traceId,
-			});
-			if (decrypted.outcome === "failed") return decrypted;
-			try {
-				const occurredAt = now();
-				if (!Number.isFinite(Date.prototype.getTime.call(occurredAt))) {
-					throw new Error();
-				}
-				return {
-					outcome: "bound",
-					encryptedRecord: rebindSecretRecordV1({
-						encryptionKeys,
-						record,
-						plaintext: decrypted.plaintext,
-						configRevision: targetConfigRevision,
-						occurredAt: occurredAt.toISOString(),
-					}),
-				} as const;
-			} catch {
-				return {
-					outcome: "failed",
-					code: "SECRET_REVISION_BINDING_FAILED",
-				} as const;
-			} finally {
-				decrypted.plaintext.fill(0);
-			}
-		},
-	};
 }
 
 export function createSecretKeyRotationCryptoV1(input: {

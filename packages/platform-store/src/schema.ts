@@ -437,6 +437,11 @@ export const platformSecretRecords = platformSchema.table(
 		uniqueIndex("secret_record_dek_fingerprint_unique").on(
 			table.dekFingerprint,
 		),
+		uniqueIndex("secret_record_agent_secret_version_unique").on(
+			table.agentId,
+			table.secretId,
+			table.secretVersion,
+		),
 		index("secret_record_wrapping_key_version_idx").on(
 			table.wrappingKeyVersion,
 		),

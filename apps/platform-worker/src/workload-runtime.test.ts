@@ -73,12 +73,6 @@ function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
 				code: "SECRET_KEY_UNAVAILABLE",
 			}),
 		},
-		revisionBinder: {
-			bind: async () => ({
-				outcome: "failed",
-				code: "SECRET_KEY_UNAVAILABLE",
-			}),
-		},
 		fetch: vi.fn(async () => new Response("ok")),
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 		...overrides,
@@ -129,15 +123,6 @@ function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
 }
 
 describe("assembled Workload Runtime contracts", () => {
-	it("requires Worker-only Secret revision binding crypto", () => {
-		const f = fixture();
-		expect(() =>
-			createWorkloadRuntimeV1({
-				...f.options,
-				revisionBinder: undefined as never,
-			}),
-		).toThrow("Worker Secret revision binder is required");
-	});
 	it.each(["NetworkPolicy", "ServiceAccount", "Service"])(
 		"repairs a missing %s after readiness without promoting until the replacement is verified",
 		async (kind) => {

@@ -289,6 +289,22 @@ describe("platform worker lifecycle", () => {
 		expect(primary.stop).toHaveBeenCalledOnce();
 		expect(workload.stop).toHaveBeenCalledOnce();
 	});
+	it("still stops the workload loop when the existing loop throws synchronously", async () => {
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		const workload = { stop: vi.fn(async () => undefined) };
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+		});
+
+		await expect(worker.stop()).rejects.toThrow("primary shutdown failed");
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+	});
 
 	it("stops the existing loop when workload assembly fails", async () => {
 		const primary = { stop: vi.fn() };

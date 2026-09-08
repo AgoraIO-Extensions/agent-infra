@@ -185,8 +185,8 @@ export async function startPlatformWorkerFromDeploymentV1(
 		return {
 			stop() {
 				stopping ??= Promise.all([
-					Promise.resolve(primary.stop()),
-					workload.stop(),
+					Promise.resolve().then(() => primary.stop()),
+					Promise.resolve().then(() => workload.stop()),
 				]).then(() => undefined);
 				return stopping;
 			},

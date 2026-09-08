@@ -1,5 +1,6 @@
 import type {
 	V1Ingress,
+	V1Pod,
 	V1Secret,
 	V1Service,
 	V1StatefulSet,
@@ -25,6 +26,21 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("rejects deployment annotations in the controller-owned namespace", () => {
+		const f = fixture();
+		expect(() =>
+			createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy: {
+					...workloadTestPolicy,
+					platformAuthAnnotations: {
+						"agent-infra.agora.io/agent-id": "overridden",
+					},
+				},
+				probe: f.probe,
+			}),
+		).toThrow();
+	});
 	it("creates isolated resources, keeps candidates unrouted, and exposes exactly one verified target", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -166,6 +182,56 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(await adapter.cleanupAgent(desired.agentId, 1, true)).toBe(true);
 		expect(f.resources.size).toBe(0);
 	});
+	it("removes a stale Ingress before opening an internal-only Service", async () => {
+		const f = fixture();
+		const external = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const externalIdentity = await adapter.apply(external);
+		if (!externalIdentity || externalIdentity === "pending") throw new Error();
+		await adapter.promote(external, externalIdentity);
+		expect(await f.client.read("Ingress", external.route.name)).not.toBeNull();
+
+		const internal = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const internalIdentity = await adapter.apply(internal);
+		if (!internalIdentity || internalIdentity === "pending") throw new Error();
+		await adapter.promote(internal, internalIdentity);
+		expect(await f.client.read("Ingress", internal.route.name)).toBeNull();
+	});
+	it("repairs privileged StatefulSet drift and rejects privileged observed Pods", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		if (!workload) throw new Error();
+		f.resources.set(`StatefulSet/${desired.service.name}`, {
+			...workload,
+			spec: {
+				...workload.spec,
+				template: {
+					...workload.spec?.template,
+					spec: { ...workload.spec?.template.spec, hostPID: true },
+				},
+			},
+		} as V1StatefulSet);
+		const repaired = await adapter.apply(desired);
+		if (!repaired || repaired === "pending") throw new Error();
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.template.spec?.hostPID,
+		).not.toBe(true);
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!pod) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: { ...pod.spec, hostIPC: true },
+		} as V1Pod);
+		expect(await adapter.observe(desired, repaired)).toBe("drifted");
+	});
 	it("creates immutable Agent/version Secret refs and refuses to mutate their value", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -206,5 +272,62 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect((await f.client.read<V1Secret>("Secret", ref.name))?.data).toEqual(
 			existing?.data,
 		);
+	});
+	it("detects missing, foreign, or mutable Secret references before reporting healthy", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+
+		f.resources.delete(`Secret/${ref.name}`);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+
+		const secret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!secret) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, {
+			...secret,
+			immutable: false,
+		} as V1Secret);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		f.resources.set(`Secret/${ref.name}`, {
+			...secret,
+			metadata: {
+				...secret.metadata,
+				annotations: {
+					...secret.metadata?.annotations,
+					"agent-infra.agora.io/agent-id": "agent-b",
+				},
+			},
+		} as V1Secret);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
 	});
 });
