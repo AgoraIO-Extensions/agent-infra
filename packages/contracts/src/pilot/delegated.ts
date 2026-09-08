@@ -469,6 +469,156 @@ export const pilotDelegatedSchemasV1 = {
 	ExecutionGrantV1: ExecutionGrantV1Schema,
 };
 
+const SchemaVersionV2Schema = z.literal(2);
+const delegatedErrorShapeV2 = {
+	schemaVersion: SchemaVersionV2Schema,
+	traceId: TraceIdV1Schema,
+};
+const delegatedErrorV2 = (code: string, message: string, retryable: boolean) =>
+	z.strictObject({
+		...delegatedErrorShapeV2,
+		code: z.literal(code),
+		message: z.literal(message),
+		retryable: z.literal(retryable),
+	});
+
+export const DelegatedActionErrorV2Schema = z.union([
+	delegatedErrorV2("CONNECTION_UNAVAILABLE", "Connection is unavailable", true),
+	delegatedErrorV2(
+		"PROVIDER_RATE_LIMITED",
+		"Provider rate limit reached",
+		true,
+	),
+	delegatedErrorV2(
+		"DEPENDENCY_UNAVAILABLE",
+		"Connection dependency is unavailable",
+		true,
+	),
+	delegatedErrorV2("INTERNAL_ERROR", "Delegated Action failed", true),
+	delegatedErrorV2(
+		"CONNECTION_AUTHORIZATION_REQUIRED",
+		"Connection authorization is required",
+		false,
+	),
+	delegatedErrorV2("ACTION_UNAVAILABLE", "Action is unavailable", false),
+	delegatedErrorV2("PROVIDER_REJECTED", "Provider rejected the Action", false),
+	delegatedErrorV2(
+		"DELEGATED_RESULT_REJECTED",
+		"Delegated result was rejected",
+		false,
+	),
+	z.strictObject({
+		...delegatedErrorShapeV2,
+		code: z.literal("PROVIDER_FAILED"),
+		message: z.literal("Provider rejected the Action"),
+		retryable: z.literal(false),
+		providerStatusCode: z.number().int().min(400).max(599),
+		providerRequestId: nonEmptyString().nullable(),
+	}),
+]);
+
+export const DelegatedActionRequestV2Schema =
+	DelegatedActionRequestV1Schema.extend({
+		schemaVersion: SchemaVersionV2Schema,
+	});
+const delegatedResultShapeV2 = {
+	schemaVersion: SchemaVersionV2Schema,
+	requestId: RequestIdV1Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
+	traceId: TraceIdV1Schema,
+	actionId: OpaqueIdV1Schema,
+	actionVersion: nonEmptyString(),
+	callId: OpaqueIdV1Schema,
+};
+export const DelegatedActionSucceededV2Schema = z.strictObject({
+	...delegatedResultShapeV2,
+	status: z.literal("succeeded"),
+	completedAt: Rfc3339TimestampV1Schema,
+	output: DelegatedJsonV1Schema,
+});
+export const DelegatedActionFailedV2Schema = z.strictObject({
+	...delegatedResultShapeV2,
+	status: z.literal("failed"),
+	completedAt: Rfc3339TimestampV1Schema,
+	error: DelegatedActionErrorV2Schema,
+});
+export const DelegatedActionResultPendingV2Schema = z.strictObject({
+	...delegatedResultShapeV2,
+	status: z.literal("result_pending"),
+	updatedAt: Rfc3339TimestampV1Schema,
+	uncertainty: z.strictObject({
+		reason: z.enum([
+			"provider_response_lost",
+			"terminal_result_persistence_failed",
+			"process_interrupted",
+		]),
+		reconcileUntil: Rfc3339TimestampV1Schema,
+	}),
+});
+export const DelegatedActionResultV2Schema = z.discriminatedUnion("status", [
+	DelegatedActionSucceededV2Schema,
+	DelegatedActionFailedV2Schema,
+	DelegatedActionResultPendingV2Schema,
+]);
+
+export function validateDelegatedActionResultV2(
+	requestInput: unknown,
+	resultInput: unknown,
+	context: { validateOutput: DelegatedPayloadValidatorV1 },
+) {
+	const request = DelegatedActionRequestV2Schema.parse(requestInput);
+	const result = DelegatedActionResultV2Schema.parse(resultInput);
+	if (
+		result.requestId !== request.requestId ||
+		result.idempotencyKey !== request.idempotencyKey ||
+		result.traceId !== request.traceId ||
+		result.actionId !== request.action.actionId ||
+		result.actionVersion !== request.action.actionVersion ||
+		(result.status === "failed" && result.error.traceId !== result.traceId)
+	) {
+		throw new Error("Delegated Action result correlation mismatch");
+	}
+	if (result.status === "succeeded") {
+		return {
+			...result,
+			output: DelegatedJsonV1Schema.parse(
+				context.validateOutput(result.output),
+			),
+		};
+	}
+	return result;
+}
+
+export const pilotDelegatedOpenApiPathsV2 = {
+	"/internal/v2/delegated-actions": {
+		post: {
+			operationId: "executeDelegatedActionV2",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: DelegatedActionRequestV2Schema },
+				},
+			},
+			responses: {
+				"200": delegatedJsonResponse(
+					"Delegated Action result",
+					DelegatedActionResultV2Schema,
+				),
+				"400": delegatedJsonResponse(
+					"Invalid delegated request",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
+};
+
+export const pilotDelegatedSchemasV2 = {
+	DelegatedActionErrorV2: DelegatedActionErrorV2Schema,
+	DelegatedActionRequestV2: DelegatedActionRequestV2Schema,
+	DelegatedActionResultV2: DelegatedActionResultV2Schema,
+};
+
 export type ExecutionGrantClaimsV1 = z.infer<
 	typeof ExecutionGrantClaimsV1Schema
 >;
@@ -487,5 +637,11 @@ export type DelegatedActionResultV1 = z.infer<
 >;
 export type DelegatedActionErrorV1 = z.infer<
 	typeof DelegatedActionErrorV1Schema
+>;
+export type DelegatedActionRequestV2 = z.infer<
+	typeof DelegatedActionRequestV2Schema
+>;
+export type DelegatedActionResultV2 = z.infer<
+	typeof DelegatedActionResultV2Schema
 >;
 export type DelegatedPayloadValidatorV1 = (input: unknown) => unknown;

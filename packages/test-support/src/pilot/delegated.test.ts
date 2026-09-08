@@ -1,11 +1,13 @@
 import {
 	DelegatedActionResultV1Schema,
+	DelegatedActionResultV2Schema,
 	validateDelegatedActionResultV1,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import {
 	fakeDelegatedActionFailureV1,
+	fakeDelegatedActionPendingV2,
 	fakeDelegatedActionSuccessV1,
 } from "./delegated.js";
 
@@ -112,5 +114,22 @@ describe("delegated Action Fakes", () => {
 				validateIssueOutput,
 			),
 		).toThrow();
+	});
+
+	it("returns a schema-valid unknown result without retrying the write", () => {
+		const result = fakeDelegatedActionPendingV2(
+			{ ...request, schemaVersion: 2 },
+			{
+				reason: "provider_response_lost",
+				reconcileUntil: "2026-08-29T10:00:00Z",
+			},
+		);
+
+		expect(DelegatedActionResultV2Schema.parse(result)).toEqual(result);
+		expect(result).toMatchObject({
+			status: "result_pending",
+			callId: `call-${request.requestId}`,
+			uncertainty: { reason: "provider_response_lost" },
+		});
 	});
 });

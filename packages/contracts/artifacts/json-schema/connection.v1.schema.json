@@ -1,0 +1,1087 @@
+{
+  "$defs": {
+    "ConnectionActionCallProjectionV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "pending",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "submission_started",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "error": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "PROVIDER_FAILED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Provider rejected the Action",
+                  "type": "string"
+                },
+                "providerRequestId": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "providerStatusCode": {
+                  "maximum": 599,
+                  "minimum": 400,
+                  "type": "integer"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "retryable",
+                "providerStatusCode",
+                "providerRequestId"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "provider_failed",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "result_pending",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "uncertainty": {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "provider_response_lost",
+                    "terminal_result_persistence_failed",
+                    "process_interrupted"
+                  ],
+                  "type": "string"
+                },
+                "reconcileUntil": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "reconcileUntil"
+              ],
+              "type": "object"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "uncertainty"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "evidenceSummary": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "needs_manual_review",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "evidenceSummary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "resolvedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "unresolved",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "resolvedAt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnectionBrowserSessionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principalId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "uid": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "principalId",
+            "uid",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "principal"
+      ],
+      "type": "object"
+    },
+    "ConnectionCatalogV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "__schema1": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "catalogVersion": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "providers": {
+          "prefixItems": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "actions": {
+                  "prefixItems": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionId": {
+                          "const": "github.get_current_user",
+                          "type": "string"
+                        },
+                        "actionVersionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "effect": {
+                          "const": "read",
+                          "type": "string"
+                        },
+                        "inputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "outputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "requiredScopes": {
+                          "prefixItems": [
+                            {
+                              "const": "read:user",
+                              "type": "string"
+                            }
+                          ],
+                          "type": "array"
+                        },
+                        "status": {
+                          "enum": [
+                            "published",
+                            "disabled"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "actionVersionId",
+                        "status",
+                        "inputSchema",
+                        "outputSchema",
+                        "actionId",
+                        "effect",
+                        "requiredScopes"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionId": {
+                          "const": "github.list_my_repositories",
+                          "type": "string"
+                        },
+                        "actionVersionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "effect": {
+                          "const": "read",
+                          "type": "string"
+                        },
+                        "inputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "outputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "requiredScopes": {
+                          "prefixItems": [
+                            {
+                              "const": "repo",
+                              "type": "string"
+                            }
+                          ],
+                          "type": "array"
+                        },
+                        "status": {
+                          "enum": [
+                            "published",
+                            "disabled"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "actionVersionId",
+                        "status",
+                        "inputSchema",
+                        "outputSchema",
+                        "actionId",
+                        "effect",
+                        "requiredScopes"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionId": {
+                          "const": "github.create_pull_request",
+                          "type": "string"
+                        },
+                        "actionVersionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "effect": {
+                          "const": "write",
+                          "type": "string"
+                        },
+                        "inputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "outputSchema": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "requiredScopes": {
+                          "prefixItems": [
+                            {
+                              "const": "repo",
+                              "type": "string"
+                            }
+                          ],
+                          "type": "array"
+                        },
+                        "status": {
+                          "enum": [
+                            "published",
+                            "disabled"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "actionVersionId",
+                        "status",
+                        "inputSchema",
+                        "outputSchema",
+                        "actionId",
+                        "effect",
+                        "requiredScopes"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "displayName": {
+                  "const": "GitHub",
+                  "type": "string"
+                },
+                "providerId": {
+                  "const": "github",
+                  "type": "string"
+                },
+                "providerReleaseId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "published",
+                    "disabled"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "providerId",
+                "providerReleaseId",
+                "displayName",
+                "status",
+                "actions"
+              ],
+              "type": "object"
+            }
+          ],
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "catalogVersion",
+        "providers"
+      ],
+      "type": "object"
+    },
+    "ConnectionGrantCreateRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actionVersionIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "connectionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "consumerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "consumerId",
+        "actorId",
+        "connectionId",
+        "actionVersionIds"
+      ],
+      "type": "object"
+    },
+    "ConnectionGrantProjectionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actionVersionIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "actorId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "connectionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "consumerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "grantId",
+        "consumerId",
+        "actorId",
+        "connectionId",
+        "actionVersionIds",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ConnectionLoginRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "password": {
+          "minLength": 1,
+          "type": "string",
+          "writeOnly": true
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "username": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "username",
+        "password"
+      ],
+      "type": "object"
+    },
+    "ConnectionProviderRevokeProjectionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "connectionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "credentialVersionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "not_requested",
+            "pending",
+            "succeeded",
+            "retryable_failure",
+            "terminal_failure"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "attemptId",
+        "connectionId",
+        "credentialVersionId",
+        "status",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ConnectionProviderRevokeStatusV1": {
+      "enum": [
+        "not_requested",
+        "pending",
+        "succeeded",
+        "retryable_failure",
+        "terminal_failure"
+      ],
+      "type": "string"
+    },
+    "GitHubCreatePullRequestInputV1": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "head": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "repositoryId": {
+          "pattern": "^\\d+$",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "head",
+        "base",
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "GitHubCreatePullRequestOutputV1": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "pullRequestId": {
+          "pattern": "^\\d+$",
+          "type": "string"
+        },
+        "url": {
+          "pattern": "^https:\\/\\/github\\.com\\/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pullRequestId",
+        "number",
+        "url"
+      ],
+      "type": "object"
+    },
+    "GitHubGetCurrentUserInputV1": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "GitHubGetCurrentUserOutputV1": {
+      "additionalProperties": false,
+      "properties": {
+        "accountId": {
+          "pattern": "^\\d+$",
+          "type": "string"
+        },
+        "login": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId",
+        "login"
+      ],
+      "type": "object"
+    },
+    "GitHubListMyRepositoriesInputV1": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "GitHubListMyRepositoriesOutputV1": {
+      "additionalProperties": false,
+      "properties": {
+        "repositories": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "owner": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "private": {
+                "const": true,
+                "type": "boolean"
+              },
+              "repositoryId": {
+                "pattern": "^\\d+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "repositoryId",
+              "owner",
+              "name",
+              "private"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "repositories"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Connection Pilot Contracts V1"
+}

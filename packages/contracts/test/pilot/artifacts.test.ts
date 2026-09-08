@@ -4,12 +4,17 @@ import { z } from "zod";
 import { createDocument } from "zod-openapi";
 
 import {
+	connectionBrowserOpenApiPathsV1,
+	connectionCatalogOpenApiPathsV1,
+	connectionSchemasV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
 	pilotBrowserSchemasV2,
 	pilotDelegatedOpenApiPathsV1,
+	pilotDelegatedOpenApiPathsV2,
 	pilotDelegatedSchemasV1,
+	pilotDelegatedSchemasV2,
 	pilotSseSchemasV1,
 } from "../../src/pilot/index.js";
 
@@ -26,6 +31,34 @@ function generateJsonSchema(schemas: Record<string, z.ZodType>) {
 }
 
 describe("Pilot standard artifacts", () => {
+	it("generates separate Connection Browser, Catalog, and JSON contracts", () => {
+		const browser = createDocument({
+			openapi: "3.1.0",
+			info: { title: "Connection Pilot Browser API", version: "1.0.0" },
+			paths: connectionBrowserOpenApiPathsV1,
+			components: { schemas: connectionSchemasV1 },
+		});
+		const catalog = createDocument({
+			openapi: "3.1.0",
+			info: { title: "Connection Pilot Catalog API", version: "1.0.0" },
+			paths: connectionCatalogOpenApiPathsV1,
+			components: { schemas: connectionSchemasV1 },
+		});
+		const schemas = generateJsonSchema(connectionSchemasV1);
+
+		expect(browser.paths).toHaveProperty("/connection/api/v1/session");
+		expect(browser.paths).not.toHaveProperty("/connection/internal/v1/catalog");
+		expect(catalog.paths).toHaveProperty("/connection/internal/v1/catalog.get");
+		expect(catalog.paths).not.toHaveProperty("/connection/api/v1/grants");
+		expect(schemas.ConnectionLoginRequestV1).toHaveProperty(
+			"properties.password.writeOnly",
+			true,
+		);
+		expect(schemas.ConnectionCatalogV1).not.toHaveProperty(
+			"properties.connections",
+		);
+	});
+
 	it("generates browser OpenAPI 3.1 from the Zod-authored HTTP schemas", () => {
 		const document = createDocument({
 			openapi: "3.1.0",
@@ -223,5 +256,23 @@ describe("Pilot standard artifacts", () => {
 		expect(document.paths).toHaveProperty(
 			"/internal/v1/delegated-actions.post.responses.200",
 		);
+	});
+
+	it("publishes indeterminate writes only through delegated v2", () => {
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Agent Infra Pilot Delegated Action API",
+				version: "2.0.0",
+			},
+			paths: pilotDelegatedOpenApiPathsV2,
+			components: { schemas: pilotDelegatedSchemasV2 },
+		});
+
+		expect(document.paths).toHaveProperty(
+			"/internal/v2/delegated-actions.post.operationId",
+			"executeDelegatedActionV2",
+		);
+		expect(document.paths).not.toHaveProperty("/internal/v1/delegated-actions");
 	});
 });

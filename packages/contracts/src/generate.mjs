@@ -17,13 +17,18 @@ import {
 	TraceIdV1Schema,
 } from "./index.ts";
 import {
+	connectionBrowserOpenApiPathsV1,
+	connectionCatalogOpenApiPathsV1,
+	connectionSchemasV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
 	pilotBrowserSchemasV2,
 	pilotBrowserSseOpenApiPathsV1,
 	pilotDelegatedOpenApiPathsV1,
+	pilotDelegatedOpenApiPathsV2,
 	pilotDelegatedSchemasV1,
+	pilotDelegatedSchemasV2,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
 import {
@@ -66,6 +71,18 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	connectionJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/connection.v1.schema.json",
+	),
+	connectionBrowserOpenapi: resolve(
+		artifactRoot,
+		"openapi/connection-browser.v1.openapi.json",
+	),
+	connectionCatalogOpenapi: resolve(
+		artifactRoot,
+		"openapi/connection-catalog.v1.openapi.json",
+	),
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
 	pilotBrowserOpenapi: resolve(
@@ -80,9 +97,17 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/pilot-delegated.v1.schema.json",
 	),
+	pilotDelegatedJsonSchemaV2: resolve(
+		artifactRoot,
+		"json-schema/pilot-delegated.v2.schema.json",
+	),
 	pilotDelegatedOpenapi: resolve(
 		artifactRoot,
 		"openapi/pilot-delegated.v1.openapi.json",
+	),
+	pilotDelegatedOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/pilot-delegated.v2.openapi.json",
 	),
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
@@ -227,6 +252,48 @@ function postOperation(operationId, requestSchema, responseSchema, mediaType) {
 }
 
 function buildArtifacts() {
+	const connectionJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json",
+		title: "Connection Pilot Contracts V1",
+		definitions: connectionSchemasV1,
+	});
+	const connectionBrowserOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Connection Pilot Browser API", version: "1.0.0" },
+		paths: connectionBrowserOpenApiPathsV1,
+		components: {
+			securitySchemes: {
+				ConnectionBrowserSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "connection_session",
+				},
+				ConnectionCsrf: { type: "apiKey", in: "header", name: "X-CSRF-Token" },
+			},
+			schemas: connectionSchemasV1,
+		},
+	});
+	const connectionCatalogOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Connection Pilot Catalog API", version: "1.0.0" },
+		paths: connectionCatalogOpenApiPathsV1,
+		components: {
+			securitySchemes: {
+				ConnectionCatalogCredential: {
+					type: "oauth2",
+					flows: {
+						clientCredentials: {
+							tokenUrl: "/oauth/token",
+							scopes: {
+								"catalog:read": "Read the published Connection catalog",
+							},
+						},
+					},
+				},
+			},
+			schemas: connectionSchemasV1,
+		},
+	});
 	const openapi = createDocument({
 		openapi: "3.1.0",
 		info: {
@@ -415,6 +482,20 @@ function buildArtifacts() {
 		paths: pilotDelegatedOpenApiPathsV1,
 		components: { schemas: pilotDelegatedSchemasV1 },
 	});
+	const pilotDelegatedJsonSchemaV2 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-delegated.v2.schema.json",
+		title: "Agent Infra Pilot Delegated Contracts V2",
+		definitions: pilotDelegatedSchemasV2,
+	});
+	const pilotDelegatedOpenapiV2 = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Delegated Action API",
+			version: "2.0.0",
+		},
+		paths: pilotDelegatedOpenApiPathsV2,
+		components: { schemas: pilotDelegatedSchemasV2 },
+	});
 	const registryManifestJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",
 		title: "Agent Infra Registry and Runtime Manifest Contracts V1",
@@ -440,12 +521,17 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		connectionJsonSchema,
+		connectionBrowserOpenapi,
+		connectionCatalogOpenapi,
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,
 		pilotBrowserOpenapiV2,
 		pilotDelegatedJsonSchema,
+		pilotDelegatedJsonSchemaV2,
 		pilotDelegatedOpenapi,
+		pilotDelegatedOpenapiV2,
 		pilotSseJsonSchema,
 		kubernetesWorkloadJsonSchema,
 		registryManifestJsonSchema,

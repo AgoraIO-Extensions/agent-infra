@@ -1,3 +1,4 @@
+export * from "./connection.ts";
 export * from "./delegated.ts";
 export * from "./mock-server.ts";
 

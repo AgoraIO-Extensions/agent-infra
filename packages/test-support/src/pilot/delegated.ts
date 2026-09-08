@@ -1,9 +1,12 @@
 import {
 	type DelegatedActionErrorV1,
 	DelegatedActionRequestV1Schema,
+	DelegatedActionRequestV2Schema,
 	type DelegatedActionResultV1,
+	type DelegatedActionResultV2,
 	type DelegatedPayloadValidatorV1,
 	validateDelegatedActionResultV1,
+	validateDelegatedActionResultV2,
 } from "@agent-infra/contracts/pilot";
 
 const completedAt = "2026-08-28T10:00:01Z";
@@ -86,6 +89,34 @@ export function fakeDelegatedActionFailureV1(
 				schemaVersion: 1,
 				traceId: request.traceId,
 			},
+		},
+		{ validateOutput: validateAcceptedOutput },
+	);
+}
+
+type DelegatedPendingReason =
+	| "provider_response_lost"
+	| "terminal_result_persistence_failed"
+	| "process_interrupted";
+
+export function fakeDelegatedActionPendingV2(
+	requestInput: unknown,
+	options: { reason: DelegatedPendingReason; reconcileUntil: string },
+): DelegatedActionResultV2 {
+	const request = DelegatedActionRequestV2Schema.parse(requestInput);
+	return validateDelegatedActionResultV2(
+		request,
+		{
+			schemaVersion: 2,
+			requestId: request.requestId,
+			idempotencyKey: request.idempotencyKey,
+			traceId: request.traceId,
+			actionId: request.action.actionId,
+			actionVersion: request.action.actionVersion,
+			callId: `call-${request.requestId}`,
+			status: "result_pending",
+			updatedAt: completedAt,
+			uncertainty: options,
 		},
 		{ validateOutput: validateAcceptedOutput },
 	);

@@ -37,6 +37,18 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./json-schema/pilot-delegated.v1"]).toBe(
 			"./artifacts/json-schema/pilot-delegated.v1.schema.json",
 		);
+		expect(manifest.exports["./json-schema/pilot-delegated.v2"]).toBe(
+			"./artifacts/json-schema/pilot-delegated.v2.schema.json",
+		);
+		expect(manifest.exports["./json-schema/connection.v1"]).toBe(
+			"./artifacts/json-schema/connection.v1.schema.json",
+		);
+		expect(manifest.exports["./openapi/connection-browser.v1"]).toBe(
+			"./artifacts/openapi/connection-browser.v1.openapi.json",
+		);
+		expect(manifest.exports["./openapi/connection-catalog.v1"]).toBe(
+			"./artifacts/openapi/connection-catalog.v1.openapi.json",
+		);
 		expect(manifest.exports["./json-schema/pilot-sse.v1"]).toBe(
 			"./artifacts/json-schema/pilot-sse.v1.schema.json",
 		);
@@ -57,6 +69,9 @@ describe("contracts package surface", () => {
 		);
 		expect(manifest.exports["./openapi/pilot-delegated.v1"]).toBe(
 			"./artifacts/openapi/pilot-delegated.v1.openapi.json",
+		);
+		expect(manifest.exports["./openapi/pilot-delegated.v2"]).toBe(
+			"./artifacts/openapi/pilot-delegated.v2.openapi.json",
 		);
 		expect(manifest.exports["./json-schema/runtime.v1"]).toBe(
 			"./artifacts/json-schema/runtime.v1.schema.json",
@@ -86,6 +101,18 @@ describe("contracts package surface", () => {
 			"artifacts/json-schema/pilot-delegated.v1.schema.json",
 		);
 		expect(packedFiles).toContain(
+			"artifacts/json-schema/pilot-delegated.v2.schema.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/connection.v1.schema.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/openapi/connection-browser.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/openapi/connection-catalog.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
 			"artifacts/json-schema/pilot-sse.v1.schema.json",
 		);
 		expect(packedFiles).toContain(
@@ -105,6 +132,9 @@ describe("contracts package surface", () => {
 		);
 		expect(packedFiles).toContain(
 			"artifacts/openapi/pilot-delegated.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/openapi/pilot-delegated.v2.openapi.json",
 		);
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/runtime.v1.schema.json",

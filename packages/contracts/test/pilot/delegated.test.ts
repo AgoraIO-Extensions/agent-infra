@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
 	DelegatedActionRequestV1Schema,
 	DelegatedActionResultV1Schema,
+	DelegatedActionResultV2Schema,
 	DelegatedPayloadMaximumDepthV1,
 	ExecutionGrantClaimsV1Schema,
 	ExecutionGrantCommandV1Schema,
@@ -132,6 +133,47 @@ const forbiddenCredentialKeys = [
 ] as const;
 
 describe("Pilot delegated contracts", () => {
+	it("distinguishes known Provider failure from an indeterminate write", () => {
+		const base = {
+			schemaVersion: 1,
+			requestId: validRequest.requestId,
+			idempotencyKey: validRequest.idempotencyKey,
+			traceId: validRequest.traceId,
+			actionId: validRequest.action.actionId,
+			actionVersion: validRequest.action.actionVersion,
+			callId: "call-1",
+		};
+		expect(
+			DelegatedActionResultV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				status: "failed",
+				completedAt: "2026-09-08T02:00:01Z",
+				error: {
+					schemaVersion: 2,
+					traceId: validRequest.traceId,
+					code: "PROVIDER_FAILED",
+					message: "Provider rejected the Action",
+					retryable: false,
+					providerStatusCode: 403,
+					providerRequestId: "github-request-1",
+				},
+			}),
+		).toBeTruthy();
+		expect(
+			DelegatedActionResultV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				status: "result_pending",
+				updatedAt: "2026-09-08T02:00:01Z",
+				uncertainty: {
+					reason: "provider_response_lost",
+					reconcileUntil: "2026-09-09T02:00:00Z",
+				},
+			}),
+		).toBeTruthy();
+	});
+
 	it("validates already-verified RuntimeHost claims without caller-only binding context", () => {
 		for (const command of [
 			"session.status",
