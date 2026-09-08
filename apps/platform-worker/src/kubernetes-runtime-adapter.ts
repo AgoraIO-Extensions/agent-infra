@@ -15,6 +15,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1PodSpec,
 	V1Secret,
 	V1Service,
 	V1ServiceAccount,
@@ -174,12 +175,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (!Number.isSafeInteger(current) || current < 1 || current > revision)
 			throw new WorkloadKubernetesError("conflict");
 	}
-	function hasUnsafePodSpec(workload: V1StatefulSet) {
-		const pod = workload.spec?.template.spec;
+	function hasUnsafePodSpec(pod: V1PodSpec | undefined) {
 		return (
 			pod?.hostNetwork === true ||
 			pod?.hostPID === true ||
 			pod?.hostIPC === true ||
+			(pod?.initContainers?.length ?? 0) > 0 ||
+			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
 			pod?.containers.some(
 				(container) =>
 					container.securityContext?.privileged === true ||
@@ -210,7 +212,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
-			(kind !== "StatefulSet" || !hasUnsafePodSpec(current as V1StatefulSet))
+			(kind !== "StatefulSet" ||
+				!hasUnsafePodSpec((current as V1StatefulSet).spec?.template.spec))
 		)
 			return current;
 		const next = {
@@ -423,6 +426,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod.metadata.labels?.[revisionLabel] !== String(value.workloadRevision)
 		)
 			return "pending";
+		if (hasUnsafePodSpec(pod.spec)) return "drifted";
 		const container = pod.spec?.containers.find(
 			(entry) => entry.name === "agent",
 		);
@@ -933,6 +937,32 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return false;
 			return true;
 		},
+		async removeImmutableSecret(
+			input: unknown,
+			ref: AgentWorkloadDesiredV1["secretRefs"][number],
+		): Promise<boolean> {
+			const value = desired(input);
+			if (
+				!value.secretRefs.some(
+					(candidate) =>
+						candidate.agentId === ref.agentId &&
+						candidate.secretId === ref.secretId &&
+						candidate.secretVersion === ref.secretVersion &&
+						candidate.configRevision === ref.configRevision &&
+						candidate.ownerType === ref.ownerType &&
+						candidate.ownerId === ref.ownerId &&
+						candidate.wrappingKeyVersion === ref.wrappingKeyVersion &&
+						candidate.name === ref.name,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
+			const secret = await client.read<V1Secret>("Secret", ref.name);
+			if (!secret) return true;
+			if (!isOwnedSecret(secret, value, ref) || secret.immutable !== true)
+				throw new WorkloadKubernetesError("policy");
+			await client.delete(secret);
+			return (await client.read<V1Secret>("Secret", ref.name)) === null;
+		},
 	};
 	return {
 		...adapter,
@@ -1130,7 +1160,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									serviceAccount: true,
 									networkPolicy: true,
 									configuration: true,
-									secrets: true,
+									secrets: false,
 									persistentVolume:
 										request.persistentVolumeIntent === "delete-new",
 								},

@@ -8,6 +8,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import type { ImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
+	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
 	immutableSecretNameV1,
 	type SecretActivationDecryptorPortV1,
@@ -250,6 +251,58 @@ export function createWorkloadRuntimeV1(
 					}
 				: { state: "absent" },
 		});
+	}
+	async function cleanupUnactivatedSecrets(
+		state: WorkloadReconciliationStateV1,
+		input: WorkloadReconciliationInputV1,
+	): Promise<boolean> {
+		const bindings = bindingsFor(state, input).filter(
+			({ materialization, record }) =>
+				materialization === "current" && record.lifecycleState === "pending",
+		);
+		if (!bindings.length) return true;
+		if (!input.secrets) return false;
+		const workload = desired(state);
+		for (const { record } of bindings) {
+			const reference = recordReference(record);
+			const removed = await cleanupUnactivatedSecretCandidateV1(
+				{
+					store: input.secrets.store,
+					kubernetes: {
+						async removeCandidate(candidate) {
+							if (
+								candidate.agentId !== record.agentId ||
+								candidate.secretId !== record.secretId ||
+								candidate.secretVersion !== record.secretVersion ||
+								candidate.configRevision !== record.configRevision ||
+								candidate.ownerType !== record.ownerType ||
+								candidate.ownerId !== record.ownerId ||
+								candidate.name !== record.name ||
+								candidate.wrappingKeyVersion !==
+									record.crypto.wrappingKeyVersion
+							)
+								return false;
+							return adapter.removeImmutableSecret(workload, reference);
+						},
+					},
+				},
+				{
+					schemaVersion: 1,
+					agentId: record.agentId,
+					secretId: record.secretId,
+					secretVersion: record.secretVersion,
+					configRevision: record.configRevision,
+					ownerType: record.ownerType,
+					ownerId: record.ownerId,
+					name: record.name,
+					wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+					workerId: options.workerId,
+					traceId: input.traceId,
+				},
+			);
+			if (!removed) return false;
+		}
+		return true;
 	}
 	return {
 		async capabilities(state) {
@@ -510,7 +563,8 @@ export function createWorkloadRuntimeV1(
 			if (result.status !== "completed")
 				throw new Error("Workload route is unavailable");
 		},
-		async cleanup(state, deleteNewVolume) {
+		async cleanup(state, deleteNewVolume, input) {
+			let resourcesRemoved: boolean;
 			if (state.identity) {
 				// An apply can advance generation before its database step commits.
 				// Refresh only this UID; cleanup still fences every resource revision.
@@ -535,13 +589,15 @@ export function createWorkloadRuntimeV1(
 						? "delete-new"
 						: "retain-existing",
 				});
-				return result.status === "completed";
+				resourcesRemoved = result.status === "completed";
+			} else {
+				resourcesRemoved = await adapter.cleanupAgent(
+					state.agentId,
+					state.revision,
+					deleteNewVolume,
+				);
 			}
-			return adapter.cleanupAgent(
-				state.agentId,
-				state.revision,
-				deleteNewVolume,
-			);
+			return resourcesRemoved && cleanupUnactivatedSecrets(state, input);
 		},
 	};
 }

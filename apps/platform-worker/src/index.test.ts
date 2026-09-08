@@ -306,6 +306,39 @@ describe("platform worker lifecycle", () => {
 		expect(workload.stop).toHaveBeenCalledOnce();
 	});
 
+	it("waits for workload shutdown to drain before surfacing a primary failure", async () => {
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		let finishWorkloadStop: (() => void) | undefined;
+		const workload = {
+			stop: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishWorkloadStop = resolve;
+					}),
+			),
+		};
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+		});
+
+		let settled = false;
+		const stopping = worker.stop().finally(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+		expect(settled).toBe(false);
+		finishWorkloadStop?.();
+		await expect(stopping).rejects.toThrow("primary shutdown failed");
+	});
+
 	it("stops the existing loop when workload assembly fails", async () => {
 		const primary = { stop: vi.fn() };
 		await expect(

@@ -184,10 +184,16 @@ export async function startPlatformWorkerFromDeploymentV1(
 		let stopping: Promise<void> | undefined;
 		return {
 			stop() {
-				stopping ??= Promise.all([
+				stopping ??= Promise.allSettled([
 					Promise.resolve().then(() => primary.stop()),
 					Promise.resolve().then(() => workload.stop()),
-				]).then(() => undefined);
+				]).then((results) => {
+					const failure = results.find(
+						(result): result is PromiseRejectedResult =>
+							result.status === "rejected",
+					);
+					if (failure) throw failure.reason;
+				});
 				return stopping;
 			},
 		};

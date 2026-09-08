@@ -13877,7 +13877,6 @@
                           "type": "boolean"
                         },
                         "secrets": {
-                          "const": true,
                           "type": "boolean"
                         },
                         "service": {
@@ -13998,7 +13997,6 @@
                           "type": "boolean"
                         },
                         "secrets": {
-                          "const": true,
                           "type": "boolean"
                         },
                         "service": {

@@ -237,6 +237,20 @@ export interface SecretActivationUseCaseV1 {
 	): Promise<SecretActivationDecisionV1>;
 }
 
+export interface CleanupSecretCandidateCommandV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly secretId: string;
+	readonly secretVersion: number;
+	readonly configRevision: number;
+	readonly ownerType: "agent-owner" | "platform";
+	readonly ownerId: string;
+	readonly name: string;
+	readonly wrappingKeyVersion: string;
+	readonly workerId: string;
+	readonly traceId: string;
+}
+
 export class SecretActivationError extends Error {
 	readonly code: "invalid_input" | "unavailable";
 
@@ -333,6 +347,79 @@ function parseCommand(input: unknown): ActivateSecretCandidateCommandV1 {
 			secretId: value.secretId as string,
 			secretVersion: value.secretVersion as number,
 			configRevision: value.configRevision as number,
+			workerId: value.workerId as string,
+			traceId: value.traceId as string,
+		};
+	} catch {
+		throw new SecretActivationError("invalid_input");
+	}
+}
+
+function parseCleanupCommand(input: unknown): CleanupSecretCandidateCommandV1 {
+	try {
+		if (
+			!input ||
+			typeof input !== "object" ||
+			Array.isArray(input) ||
+			types.isProxy(input) ||
+			Object.getPrototypeOf(input) !== Object.prototype
+		)
+			throw new Error();
+		const keys = [
+			"schemaVersion",
+			"agentId",
+			"secretId",
+			"secretVersion",
+			"configRevision",
+			"ownerType",
+			"ownerId",
+			"name",
+			"wrappingKeyVersion",
+			"workerId",
+			"traceId",
+		] as const;
+		const descriptors = Object.getOwnPropertyDescriptors(input);
+		if (
+			Reflect.ownKeys(descriptors).length !== keys.length ||
+			keys.some((key) => {
+				const descriptor = descriptors[key];
+				return (
+					descriptor?.enumerable !== true ||
+					!Object.hasOwn(descriptor, "value") ||
+					Object.hasOwn(descriptor, "get") ||
+					Object.hasOwn(descriptor, "set")
+				);
+			})
+		)
+			throw new Error();
+		const value = input as Record<string, unknown>;
+		if (
+			value.schemaVersion !== 1 ||
+			![
+				value.agentId,
+				value.secretId,
+				value.ownerId,
+				value.name,
+				value.wrappingKeyVersion,
+				value.workerId,
+				value.traceId,
+			].every(validText) ||
+			![value.secretVersion, value.configRevision].every(
+				(entry) => Number.isSafeInteger(entry) && (entry as number) >= 1,
+			) ||
+			(value.ownerType !== "agent-owner" && value.ownerType !== "platform")
+		)
+			throw new Error();
+		return {
+			schemaVersion: 1,
+			agentId: value.agentId as string,
+			secretId: value.secretId as string,
+			secretVersion: value.secretVersion as number,
+			configRevision: value.configRevision as number,
+			ownerType: value.ownerType,
+			ownerId: value.ownerId as string,
+			name: value.name as string,
+			wrappingKeyVersion: value.wrappingKeyVersion as string,
 			workerId: value.workerId as string,
 			traceId: value.traceId as string,
 		};
@@ -532,6 +619,76 @@ function result(
 		secretVersion: command.secretVersion,
 		configRevision: command.configRevision,
 	};
+}
+
+function cleanupCandidateMatches(
+	command: CleanupSecretCandidateCommandV1,
+	candidate: SecretActivationCandidateV1,
+): boolean {
+	return (
+		candidate.agentId === command.agentId &&
+		candidate.secretId === command.secretId &&
+		candidate.secretVersion === command.secretVersion &&
+		candidate.configRevision === command.configRevision &&
+		candidate.ownerType === command.ownerType &&
+		candidate.ownerId === command.ownerId &&
+		candidate.name === command.name &&
+		candidate.wrappingKeyVersion === command.wrappingKeyVersion &&
+		candidate.lifecycleState === "pending"
+	);
+}
+
+/**
+ * Reclaims only a Store-authorized, still-current candidate that has never
+ * reached activation. The existing pending -> failed transition preserves the
+ * immutable record for a fenced retry while the caller removes its Kubernetes
+ * material between the claim and transition.
+ */
+export async function cleanupUnactivatedSecretCandidateV1(
+	dependencies: {
+		readonly store: SecretActivationStorePortV1;
+		readonly kubernetes: {
+			removeCandidate(candidate: SecretActivationCandidateV1): Promise<boolean>;
+		};
+	},
+	input: CleanupSecretCandidateCommandV1,
+): Promise<boolean> {
+	const command = parseCleanupCommand(input);
+	const decision = await dependencies.store.claimCandidate(
+		{
+			schemaVersion: 1,
+			agentId: command.agentId,
+			secretId: command.secretId,
+			secretVersion: command.secretVersion,
+			configRevision: command.configRevision,
+			workerId: command.workerId,
+			// The surrounding Workload transaction already locks the Agent. Retain
+			// the standard bounded lease while the Worker deletes Kubernetes state.
+			leaseDurationMs: 30_000,
+		},
+		(state) =>
+			state.currentConfigurationRevision === command.configRevision &&
+			cleanupCandidateMatches(command, state.candidate)
+				? { outcome: "claim" }
+				: { outcome: "stale" },
+	);
+	if (decision.outcome !== "claimed") return false;
+	const claim = validatedClaim(decision.claim, command);
+	if (!cleanupCandidateMatches(command, claim.candidate)) {
+		throw new SecretActivationError("unavailable");
+	}
+	if (!(await dependencies.kubernetes.removeCandidate(claim.candidate)))
+		return false;
+	return dependencies.store.commitTransition({
+		claim,
+		plan: transitionPlan({
+			expectedLifecycleStates: ["pending"],
+			next: {
+				lifecycleState: "failed",
+				error: failure("SECRET_ACTIVATION_FAILED", command.traceId),
+			},
+		}),
+	});
 }
 
 export function createSecretActivationUseCaseV1(

@@ -111,6 +111,7 @@ export interface WorkloadRuntimePortV1 {
 	cleanup(
 		state: WorkloadReconciliationStateV1,
 		deleteNewVolume: boolean,
+		input: WorkloadReconciliationInputV1,
 	): Promise<boolean>;
 }
 
@@ -286,7 +287,9 @@ export function createWorkloadReconciliationV1(dependencies: {
 									rollback: true,
 								});
 							}
-							if (!(await runtime.cleanup(state, state.verified === null)))
+							if (
+								!(await runtime.cleanup(state, state.verified === null, input))
+							)
 								return state;
 							return advance("failed", { identity: null });
 						case "stopped":
@@ -295,7 +298,9 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return state;
 						case "failed":
 							await runtime.closeRoute(state);
-							if (!(await runtime.cleanup(state, state.verified === null)))
+							if (
+								!(await runtime.cleanup(state, state.verified === null, input))
+							)
 								return advance("cleaning");
 							return state;
 					}

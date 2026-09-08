@@ -197,7 +197,7 @@ describe("GA Kubernetes Workload adapter", () => {
 		await adapter.promote(internal, internalIdentity);
 		expect(await f.client.read("Ingress", internal.route.name)).toBeNull();
 	});
-	it("repairs privileged StatefulSet drift and rejects privileged observed Pods", async () => {
+	it("repairs unsafe StatefulSet drift and rejects unsafe observed Pods", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const adapter = f.adapter();
@@ -214,7 +214,13 @@ describe("GA Kubernetes Workload adapter", () => {
 				...workload.spec,
 				template: {
 					...workload.spec?.template,
-					spec: { ...workload.spec?.template.spec, hostPID: true },
+					spec: {
+						...workload.spec?.template.spec,
+						hostPID: true,
+						initContainers: [
+							{ name: "injected-init", image: "registry.example.test/init" },
+						],
+					},
 				},
 			},
 		} as V1StatefulSet);
@@ -224,13 +230,34 @@ describe("GA Kubernetes Workload adapter", () => {
 			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
 				?.spec?.template.spec?.hostPID,
 		).not.toBe(true);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.template.spec?.initContainers,
+		).toBeUndefined();
 		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
 		if (!pod) throw new Error();
-		f.resources.set(`Pod/${desired.service.name}-0`, {
-			...pod,
-			spec: { ...pod.spec, hostIPC: true },
-		} as V1Pod);
-		expect(await adapter.observe(desired, repaired)).toBe("drifted");
+		for (const unsafeSpec of [
+			{ hostIPC: true },
+			{
+				initContainers: [
+					{ name: "injected-init", image: "registry.example.test/init" },
+				],
+			},
+			{
+				ephemeralContainers: [
+					{
+						name: "injected-debug",
+						image: "registry.example.test/debug",
+					},
+				],
+			},
+		]) {
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: { ...pod.spec, ...unsafeSpec },
+			} as V1Pod);
+			expect(await adapter.observe(desired, repaired)).toBe("drifted");
+		}
 	});
 	it("creates immutable Agent/version Secret refs and refuses to mutate their value", async () => {
 		const f = fixture();

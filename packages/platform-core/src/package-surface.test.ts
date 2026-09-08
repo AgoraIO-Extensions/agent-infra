@@ -45,6 +45,7 @@ describe("platform-core package surface", () => {
 			"PlatformIdempotencyError",
 			"SecretActivationError",
 			"SecretKeyRotationError",
+			"cleanupUnactivatedSecretCandidateV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",

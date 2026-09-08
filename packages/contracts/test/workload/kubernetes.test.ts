@@ -638,6 +638,15 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(WorkloadCleanupRequestV1Schema.parse(request)).toEqual(request);
 		expect(WorkloadCleanupResultV1Schema.parse(result)).toEqual(result);
 		expect(validateWorkloadCleanupResultV1(request, result)).toEqual(result);
+		expect(
+			validateWorkloadCleanupResultV1(request, {
+				...result,
+				removed: { ...result.removed, secrets: false },
+			}),
+		).toMatchObject({
+			status: "completed",
+			removed: { secrets: false },
+		});
 		expect(() =>
 			validateWorkloadCleanupResultV1(request, {
 				...result,

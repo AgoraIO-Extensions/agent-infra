@@ -225,7 +225,13 @@ describe("durable Workload reconciliation", () => {
 		expect(f.state?.phase).toBe("cleaning");
 		await f.tick();
 		expect(f.state?.phase).toBe("failed");
-		expect(f.runtime.cleanup).toHaveBeenLastCalledWith(expect.anything(), true);
+		expect(f.runtime.cleanup).toHaveBeenLastCalledWith(
+			expect.anything(),
+			true,
+			expect.objectContaining({
+				configuration: expect.objectContaining({ revision: 1 }),
+			}),
+		);
 		expect(JSON.stringify(f.state)).not.toContain("private provider response");
 	});
 	it("supersedes an in-flight candidate before promotion when newer desired state arrives", async () => {

@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	createWorkloadReconciliationV1,
+	immutableSecretNameV1,
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
@@ -24,6 +25,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "../../../apps/platform-worker/src/kubernetes.fixture.js";
+import { WorkloadKubernetesError } from "../../../apps/platform-worker/src/kubernetes-client.js";
 import { createWorkloadRuntimeV1 } from "../../../apps/platform-worker/src/workload-runtime.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { migratePlatformDatabase } from "./migrate.js";
@@ -478,6 +480,157 @@ describe("PostgreSQL Workload steps", () => {
 		expect(
 			await sql`select * from platform.secret_records where configuration_revision = 7`,
 		).toHaveLength(0);
+	});
+	it("reclaims only a failed current pending Secret after Kubernetes cleanup", async () => {
+		const crypto = secretCryptoFixture();
+		const origin = crypto.encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "origin-key",
+			ownerType: "agent-owner",
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			name: "ORIGIN_KEY",
+			secretVersion: 1,
+			configRevision: 1,
+			plaintext: "synthetic-origin-value",
+			occurredAt: "2026-09-08T00:00:00Z",
+		});
+		const activeOrigin = validatePlatformSecretRecordV1({
+			...materializedRecord(origin, "observed"),
+			lifecycleState: "active",
+		});
+		const pending = crypto.encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "candidate-key",
+			ownerType: "agent-owner",
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			name: "CANDIDATE_KEY",
+			secretVersion: 1,
+			configRevision: 2,
+			plaintext: "synthetic-candidate-value",
+			occurredAt: "2026-09-08T00:00:00Z",
+		});
+		const [base] = await sql<
+			{ configuration: Record<string, unknown>; source_reference: string }[]
+		>`select configuration, source_reference from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+		const originReference = {
+			secretId: origin.secretId,
+			name: origin.name,
+			version: origin.secretVersion,
+			isSet: true,
+		};
+		const candidateReference = {
+			secretId: pending.secretId,
+			name: pending.name,
+			version: pending.secretVersion,
+			isSet: true,
+		};
+		const originConfiguration = {
+			...base?.configuration,
+			secrets: [originReference],
+		};
+		const originSource = base?.configuration.source;
+		if (
+			!originSource ||
+			typeof originSource !== "object" ||
+			Array.isArray(originSource)
+		)
+			throw new Error("Fixture configuration is unavailable");
+		const candidateConfiguration = {
+			...originConfiguration,
+			revision: 2,
+			source: {
+				...originSource,
+				imageDigest: `sha256:${"b".repeat(64)}`,
+			},
+			secrets: [originReference, candidateReference],
+		};
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(originConfiguration)} where agent_id = 'agent-a' and revision = 1`;
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${candidateConfiguration.source.imageDigest}, ${sql.json(candidateConfiguration)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+		await insertSecretRecord(activeOrigin);
+		await insertSecretRecord(pending);
+
+		const api = fakeKubernetesApi();
+		const originName = immutableSecretNameV1({
+			schemaVersion: 1,
+			agentId: activeOrigin.agentId,
+			secretId: activeOrigin.secretId,
+			secretVersion: activeOrigin.secretVersion,
+			configRevision: activeOrigin.configRevision,
+			ownerType: activeOrigin.ownerType,
+			ownerId: activeOrigin.ownerId,
+			name: activeOrigin.name,
+			wrappingKeyVersion: activeOrigin.crypto.wrappingKeyVersion,
+			lifecycleState: "active",
+			failureRetryable: null,
+			encryptedRecord: activeOrigin,
+		});
+		api.resources.set(`Secret/${originName}`, {
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: { name: originName },
+		});
+		const client = {
+			...api.client,
+			async create(object: Parameters<typeof api.client.create>[0]) {
+				if (object.kind !== "Secret")
+					throw new WorkloadKubernetesError("unavailable");
+				return api.client.create(object);
+			},
+		} as typeof api.client;
+		const runtime = createWorkloadRuntimeV1({
+			workerId: "worker-cleanup",
+			client,
+			policy: workloadTestPolicy,
+			registry: workloadRegistryFixture(),
+			admissionPolicyRef: "policy-a",
+			registrySubjectRef: "subject-a",
+			decryptor: crypto.decryptor,
+			fetch: async () => new Response("ok"),
+			probeRuntime: async () => ({ core: "passed", capabilities: {} }),
+		});
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime,
+			maximumAttempts: 2,
+		});
+		for (let i = 0; i < 6; i++) await worker.tick("worker-cleanup");
+
+		expect(
+			(await sql`select state from platform.workload_reconciliations`)[0]
+				?.state,
+		).toMatchObject({ phase: "failed", sourceConfigurationRevision: 2 });
+		expect(
+			await sql<
+				{ secret_id: string; lifecycle_state: string; record: unknown }[]
+			>`select secret_id, lifecycle_state, record from platform.secret_records order by secret_id`,
+		).toEqual([
+			{
+				secret_id: "candidate-key",
+				lifecycle_state: "failed",
+				record: expect.anything(),
+			},
+			{
+				secret_id: "origin-key",
+				lifecycle_state: "active",
+				record: expect.anything(),
+			},
+		]);
+		expect(
+			(
+				await sql`select record from platform.secret_records where secret_id = 'candidate-key'`
+			)[0]?.record,
+		).toMatchObject({
+			lifecycleState: "failed",
+			error: { code: "SECRET_ACTIVATION_FAILED", retryable: true },
+		});
+		expect(
+			[...api.resources.values()]
+				.filter((resource) => resource.kind === "Secret")
+				.map((resource) => resource.metadata?.name),
+		).toEqual([originName]);
 	});
 	it("rejects foreign owner, foreign Agent, retired, and mismatched Secret material", async () => {
 		const crypto = secretCryptoFixture();

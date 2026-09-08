@@ -514,7 +514,9 @@ const cleanupResourcesV1Shape = {
 	serviceAccount: z.literal(true),
 	networkPolicy: z.literal(true),
 	configuration: z.literal(true),
-	secrets: z.literal(true),
+	// Generic Kubernetes cleanup intentionally retains immutable Secret material
+	// until the Store-authorized candidate reclamation step has run.
+	secrets: z.boolean(),
 } as const;
 
 const pendingCleanupResourcesV1Schema = z.strictObject({
