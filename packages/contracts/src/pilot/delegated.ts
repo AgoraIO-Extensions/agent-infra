@@ -480,6 +480,7 @@ const delegatedErrorV2 = (code: string, message: string, retryable: boolean) =>
 		code: z.literal(code),
 		message: z.literal(message),
 		retryable: z.literal(retryable),
+		...(retryable ? { submissionStarted: z.literal(false) } : {}),
 	});
 
 export const DelegatedActionErrorV2Schema = z.union([
@@ -595,6 +596,7 @@ export const pilotDelegatedOpenApiPathsV2 = {
 	"/internal/v2/delegated-actions": {
 		post: {
 			operationId: "executeDelegatedActionV2",
+			security: [{ ConnectionDelegatedCredential: ["actions:invoke"] }],
 			requestBody: {
 				required: true,
 				content: {

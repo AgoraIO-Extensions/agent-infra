@@ -503,7 +503,22 @@ function buildArtifacts() {
 			version: "2.0.0",
 		},
 		paths: pilotDelegatedOpenApiPathsV2,
-		components: { schemas: pilotDelegatedSchemasV2 },
+		components: {
+			securitySchemes: {
+				ConnectionDelegatedCredential: {
+					type: "oauth2",
+					flows: {
+						clientCredentials: {
+							tokenUrl: "/oauth/token",
+							scopes: {
+								"actions:invoke": "Invoke delegated Connection Actions",
+							},
+						},
+					},
+				},
+			},
+			schemas: pilotDelegatedSchemasV2,
+		},
 	});
 	const registryManifestJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",

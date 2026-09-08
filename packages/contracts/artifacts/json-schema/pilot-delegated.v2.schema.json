@@ -21,6 +21,10 @@
               "const": 2,
               "type": "number"
             },
+            "submissionStarted": {
+              "const": false,
+              "type": "boolean"
+            },
             "traceId": {
               "minLength": 1,
               "type": "string"
@@ -31,7 +35,8 @@
             "traceId",
             "code",
             "message",
-            "retryable"
+            "retryable",
+            "submissionStarted"
           ],
           "type": "object"
         },
@@ -54,6 +59,10 @@
               "const": 2,
               "type": "number"
             },
+            "submissionStarted": {
+              "const": false,
+              "type": "boolean"
+            },
             "traceId": {
               "minLength": 1,
               "type": "string"
@@ -64,7 +73,8 @@
             "traceId",
             "code",
             "message",
-            "retryable"
+            "retryable",
+            "submissionStarted"
           ],
           "type": "object"
         },
@@ -87,6 +97,10 @@
               "const": 2,
               "type": "number"
             },
+            "submissionStarted": {
+              "const": false,
+              "type": "boolean"
+            },
             "traceId": {
               "minLength": 1,
               "type": "string"
@@ -97,7 +111,8 @@
             "traceId",
             "code",
             "message",
-            "retryable"
+            "retryable",
+            "submissionStarted"
           ],
           "type": "object"
         },
@@ -120,6 +135,10 @@
               "const": 2,
               "type": "number"
             },
+            "submissionStarted": {
+              "const": false,
+              "type": "boolean"
+            },
             "traceId": {
               "minLength": 1,
               "type": "string"
@@ -130,7 +149,8 @@
             "traceId",
             "code",
             "message",
-            "retryable"
+            "retryable",
+            "submissionStarted"
           ],
           "type": "object"
         },
@@ -1418,6 +1438,10 @@
                       "const": 2,
                       "type": "number"
                     },
+                    "submissionStarted": {
+                      "const": false,
+                      "type": "boolean"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -1428,7 +1452,8 @@
                     "traceId",
                     "code",
                     "message",
-                    "retryable"
+                    "retryable",
+                    "submissionStarted"
                   ],
                   "type": "object"
                 },
@@ -1451,6 +1476,10 @@
                       "const": 2,
                       "type": "number"
                     },
+                    "submissionStarted": {
+                      "const": false,
+                      "type": "boolean"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -1461,7 +1490,8 @@
                     "traceId",
                     "code",
                     "message",
-                    "retryable"
+                    "retryable",
+                    "submissionStarted"
                   ],
                   "type": "object"
                 },
@@ -1484,6 +1514,10 @@
                       "const": 2,
                       "type": "number"
                     },
+                    "submissionStarted": {
+                      "const": false,
+                      "type": "boolean"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -1494,7 +1528,8 @@
                     "traceId",
                     "code",
                     "message",
-                    "retryable"
+                    "retryable",
+                    "submissionStarted"
                   ],
                   "type": "object"
                 },
@@ -1517,6 +1552,10 @@
                       "const": 2,
                       "type": "number"
                     },
+                    "submissionStarted": {
+                      "const": false,
+                      "type": "boolean"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -1527,7 +1566,8 @@
                     "traceId",
                     "code",
                     "message",
-                    "retryable"
+                    "retryable",
+                    "submissionStarted"
                   ],
                   "type": "object"
                 },

@@ -22,6 +22,10 @@
                 "const": 2,
                 "type": "number"
               },
+              "submissionStarted": {
+                "const": false,
+                "type": "boolean"
+              },
               "traceId": {
                 "minLength": 1,
                 "type": "string"
@@ -32,7 +36,8 @@
               "traceId",
               "code",
               "message",
-              "retryable"
+              "retryable",
+              "submissionStarted"
             ],
             "type": "object"
           },
@@ -55,6 +60,10 @@
                 "const": 2,
                 "type": "number"
               },
+              "submissionStarted": {
+                "const": false,
+                "type": "boolean"
+              },
               "traceId": {
                 "minLength": 1,
                 "type": "string"
@@ -65,7 +74,8 @@
               "traceId",
               "code",
               "message",
-              "retryable"
+              "retryable",
+              "submissionStarted"
             ],
             "type": "object"
           },
@@ -88,6 +98,10 @@
                 "const": 2,
                 "type": "number"
               },
+              "submissionStarted": {
+                "const": false,
+                "type": "boolean"
+              },
               "traceId": {
                 "minLength": 1,
                 "type": "string"
@@ -98,7 +112,8 @@
               "traceId",
               "code",
               "message",
-              "retryable"
+              "retryable",
+              "submissionStarted"
             ],
             "type": "object"
           },
@@ -121,6 +136,10 @@
                 "const": 2,
                 "type": "number"
               },
+              "submissionStarted": {
+                "const": false,
+                "type": "boolean"
+              },
               "traceId": {
                 "minLength": 1,
                 "type": "string"
@@ -131,7 +150,8 @@
               "traceId",
               "code",
               "message",
-              "retryable"
+              "retryable",
+              "submissionStarted"
             ],
             "type": "object"
           },
@@ -1521,6 +1541,19 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "ConnectionDelegatedCredential": {
+        "flows": {
+          "clientCredentials": {
+            "scopes": {
+              "actions:invoke": "Invoke delegated Connection Actions"
+            },
+            "tokenUrl": "/oauth/token"
+          }
+        },
+        "type": "oauth2"
+      }
     }
   },
   "info": {
@@ -1653,7 +1686,14 @@
             },
             "description": "Invalid delegated request"
           }
-        }
+        },
+        "security": [
+          {
+            "ConnectionDelegatedCredential": [
+              "actions:invoke"
+            ]
+          }
+        ]
       }
     }
   }

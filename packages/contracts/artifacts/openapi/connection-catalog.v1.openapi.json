@@ -528,97 +528,37 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "AGENT_BUSY",
-                            "AGENT_STARTING",
-                            "AGENT_UPDATING",
-                            "RUNTIME_UNAVAILABLE",
-                            "CONNECTION_UNAVAILABLE",
-                            "PROVIDER_RATE_LIMITED",
-                            "DEPENDENCY_UNAVAILABLE",
-                            "INTERNAL_ERROR"
-                          ],
-                          "type": "string"
-                        },
-                        "message": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "retryable": {
-                          "const": true,
-                          "type": "boolean"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "traceId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "message",
-                        "traceId",
-                        "code",
-                        "retryable"
-                      ],
-                      "type": "object"
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "AUTHENTICATION_REQUIRED",
+                      "type": "string"
                     },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "INVALID_REQUEST",
-                            "AUTHENTICATION_REQUIRED",
-                            "RESOURCE_UNAVAILABLE",
-                            "AUTHORIZATION_REVOKED",
-                            "CONVERSATION_UNAVAILABLE",
-                            "EXECUTION_FAILED",
-                            "MODEL_SELECTION_INVALID",
-                            "CONNECTION_AUTHORIZATION_REQUIRED",
-                            "ACTION_UNAVAILABLE",
-                            "PROVIDER_REJECTED",
-                            "DELEGATED_RESULT_REJECTED",
-                            "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
-                          ],
-                          "type": "string"
-                        },
-                        "message": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "retryable": {
-                          "const": false,
-                          "type": "boolean"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "traceId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "message",
-                        "traceId",
-                        "code",
-                        "retryable"
-                      ],
-                      "type": "object"
+                    "message": {
+                      "const": "Authentication is required",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
                 }
               }
             },

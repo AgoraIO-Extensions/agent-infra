@@ -52,6 +52,13 @@ describe("Pilot standard artifacts", () => {
 		expect(browser.paths).not.toHaveProperty("/connection/internal/v1/catalog");
 		expect(catalog.paths).toHaveProperty("/connection/internal/v1/catalog.get");
 		expect(catalog.paths).not.toHaveProperty("/connection/api/v1/grants");
+		expect(
+			JSON.stringify(
+				catalog.paths?.["/connection/internal/v1/catalog"]?.get?.responses?.[
+					"401"
+				],
+			),
+		).toContain("AUTHENTICATION_REQUIRED");
 		const catalogSchemaNames = Object.keys(catalog.components?.schemas ?? {});
 		expect(catalogSchemaNames).toContain("ConnectionCatalogV1");
 		expect(catalogSchemaNames).not.toContain("ConnectionLoginRequestV1");
@@ -295,5 +302,9 @@ describe("Pilot standard artifacts", () => {
 			"executeDelegatedActionV2",
 		);
 		expect(document.paths).not.toHaveProperty("/internal/v1/delegated-actions");
+		expect(document.paths).toHaveProperty(
+			"/internal/v2/delegated-actions.post.security",
+			[{ ConnectionDelegatedCredential: ["actions:invoke"] }],
+		);
 	});
 });

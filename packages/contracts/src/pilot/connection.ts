@@ -48,6 +48,14 @@ const browserErrors = {
 	"503": jsonResponse("Dependency is unavailable", PilotProtocolErrorV1Schema),
 };
 
+const AuthenticationRequiredErrorV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	code: z.literal("AUTHENTICATION_REQUIRED"),
+	message: z.literal("Authentication is required"),
+	retryable: z.literal(false),
+	traceId: TraceIdV1Schema,
+});
+
 export const GitHubGetCurrentUserInputV1Schema = z.strictObject({});
 export const GitHubGetCurrentUserOutputV1Schema = z.strictObject({
 	accountId: numericId(),
@@ -457,6 +465,10 @@ export const connectionCatalogOpenApiPathsV1 = {
 			responses: {
 				"200": ok("Published Connection catalog", ConnectionCatalogV1Schema),
 				...browserErrors,
+				"401": jsonResponse(
+					"Authentication required",
+					AuthenticationRequiredErrorV1Schema,
+				),
 			},
 		},
 	},

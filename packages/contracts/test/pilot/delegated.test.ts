@@ -208,6 +208,36 @@ describe("Pilot delegated contracts", () => {
 		).toBe(false);
 	});
 
+	it("requires retryable v2 failures to prove submission never started", () => {
+		const result = {
+			schemaVersion: 2,
+			requestId: validRequest.requestId,
+			idempotencyKey: validRequest.idempotencyKey,
+			traceId: validRequest.traceId,
+			actionId: validRequest.action.actionId,
+			actionVersion: validRequest.action.actionVersion,
+			callId: "call-1",
+			status: "failed",
+			completedAt: "2026-09-08T02:00:01Z",
+			error: {
+				schemaVersion: 2,
+				traceId: validRequest.traceId,
+				code: "CONNECTION_UNAVAILABLE",
+				message: "Connection is unavailable",
+				retryable: true,
+				submissionStarted: false,
+			},
+		};
+		expect(DelegatedActionResultV2Schema.parse(result)).toEqual(result);
+		const { submissionStarted: _omitted, ...errorWithoutProof } = result.error;
+		expect(
+			DelegatedActionResultV2Schema.safeParse({
+				...result,
+				error: errorWithoutProof,
+			}).success,
+		).toBe(false);
+	});
+
 	it("validates already-verified RuntimeHost claims without caller-only binding context", () => {
 		for (const command of [
 			"session.status",
