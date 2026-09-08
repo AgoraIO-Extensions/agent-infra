@@ -1,4 +1,5 @@
 import type {
+	KubernetesObject,
 	V1Ingress,
 	V1Pod,
 	V1Secret,
@@ -11,6 +12,10 @@ import {
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import type {
+	WorkerKubernetesClientV1,
+	WorkloadResourceKind,
+} from "./kubernetes-client.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 
 function fixture() {
@@ -307,6 +312,138 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.selector?.["agent-infra.agora.io/revision"],
 		).toBe("closed");
 		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+	});
+	it("closes the exact target route before reporting a post-promotion failure", async () => {
+		const f = fixture();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		let hidePromotedServiceOnce = true;
+		const client: WorkerKubernetesClientV1 = {
+			...f.client,
+			async read<T extends KubernetesObject>(
+				kind: WorkloadResourceKind,
+				name: string,
+			) {
+				const current = await f.client.read<T>(kind, name);
+				if (
+					kind === "Service" &&
+					name === desired.service.name &&
+					hidePromotedServiceOnce &&
+					(current as V1Service | null)?.spec?.selector?.[
+						"agent-infra.agora.io/revision"
+					] === String(desired.workloadRevision)
+				) {
+					hidePromotedServiceOnce = false;
+					return null;
+				}
+				return current;
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+
+		const result = await adapter.switchRoute({
+			schemaVersion: 1,
+			requestId: `${desired.requestId}-route`,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote",
+			candidateValidated: true,
+			candidateRoute: {
+				routeRef: desired.route.name,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				workloadRevision: desired.workloadRevision,
+			},
+		});
+		expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		expect(service?.spec?.selector?.["agent-infra.agora.io/revision"]).toBe(
+			"closed",
+		);
+		expect(service?.metadata?.labels?.["agent-infra.agora.io/revision"]).toBe(
+			String(desired.workloadRevision),
+		);
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+	});
+	it("propagates route-closure failure for retry instead of claiming no exposure", async () => {
+		const f = fixture();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		let hidePromotedServiceOnce = true;
+		let failRouteClosure = false;
+		const client: WorkerKubernetesClientV1 = {
+			...f.client,
+			async read<T extends KubernetesObject>(
+				kind: WorkloadResourceKind,
+				name: string,
+			) {
+				const current = await f.client.read<T>(kind, name);
+				if (
+					kind === "Service" &&
+					name === desired.service.name &&
+					hidePromotedServiceOnce &&
+					(current as V1Service | null)?.spec?.selector?.[
+						"agent-infra.agora.io/revision"
+					] === String(desired.workloadRevision)
+				) {
+					hidePromotedServiceOnce = false;
+					failRouteClosure = true;
+					return null;
+				}
+				return current;
+			},
+			async delete(object) {
+				if (failRouteClosure && object.kind === "Ingress")
+					throw new Error("route closure unavailable");
+				return f.client.delete(object);
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const request = {
+			schemaVersion: 1 as const,
+			requestId: `${desired.requestId}-route`,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote" as const,
+			candidateValidated: true,
+			candidateRoute: {
+				routeRef: desired.route.name,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				workloadRevision: desired.workloadRevision,
+			},
+		};
+
+		await expect(adapter.switchRoute(request)).rejects.toThrow(
+			"route closure unavailable",
+		);
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		expect(await f.client.read("Ingress", desired.route.name)).not.toBeNull();
+
+		const retry = await adapter.switchRoute(request);
+		expect(retry).toMatchObject({ status: "completed" });
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe(String(desired.workloadRevision));
 	});
 	it("creates immutable Agent/version Secret refs and refuses to mutate their value", async () => {
 		const f = fixture();

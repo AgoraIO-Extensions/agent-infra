@@ -1058,12 +1058,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				fence: request.fence,
 				action: request.action,
 			};
+			const target =
+				request.action === "promote"
+					? request.candidateRoute
+					: request.previousRoute;
 			let promoting = false;
 			try {
-				const target =
-					request.action === "promote"
-						? request.candidateRoute
-						: request.previousRoute;
 				const current = await client.read<V1StatefulSet>(
 					"StatefulSet",
 					workloadResourceNameV1(request.agentId),
@@ -1107,10 +1107,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					routedWorkloads: [target],
 				});
 			} catch {
-				if (promoting)
-					await closeAgent(request.agentId, request.fence).catch(
-						() => undefined,
-					);
+				if (
+					promoting &&
+					!(await closeAgent(request.agentId, target.workloadRevision))
+				)
+					throw new WorkloadKubernetesError("unavailable");
 				return validateWorkloadRouteSwitchResultV1(request, {
 					...correlation,
 					status: "failed",
