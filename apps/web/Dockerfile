@@ -8,7 +8,7 @@ RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web build
 
-FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 AS runner
+FROM nginx:1.31.5-alpine3.24@sha256:a9ae6f6d078d477e21323310498e5196cb2b7c0aedd9e07b7306612077227d7c AS runner
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
