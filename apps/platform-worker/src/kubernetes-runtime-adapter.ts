@@ -177,6 +177,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}
 	function hasUnsafePodSpec(pod: V1PodSpec | undefined) {
 		return (
+			(pod?.containers.length ?? 0) !== 1 ||
+			pod?.containers[0]?.name !== "agent" ||
 			pod?.hostNetwork === true ||
 			pod?.hostPID === true ||
 			pod?.hostIPC === true ||

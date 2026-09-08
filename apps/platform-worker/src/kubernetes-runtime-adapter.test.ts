@@ -259,6 +259,55 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, repaired)).toBe("drifted");
 		}
 	});
+	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!pod) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				containers: [
+					...(pod.spec?.containers ?? []),
+					{
+						name: "injected-sidecar",
+						image: "registry.example.test/sidecar",
+						securityContext: {
+							runAsUser: 0,
+							readOnlyRootFilesystem: false,
+						},
+					},
+				],
+			},
+		} as V1Pod);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+
+		const result = await adapter.switchRoute({
+			schemaVersion: 1,
+			requestId: `${desired.requestId}-route`,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote",
+			candidateValidated: true,
+			candidateRoute: {
+				routeRef: desired.route.name,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				workloadRevision: desired.workloadRevision,
+			},
+		});
+		expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+	});
 	it("creates immutable Agent/version Secret refs and refuses to mutate their value", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
