@@ -717,11 +717,12 @@
         "properties": {
           "actionVersionIds": {
             "items": {
-              "minLength": 1,
-              "type": "string"
+              "$ref": "#/components/schemas/PilotActionVersionIdV1"
             },
+            "maxItems": 3,
             "minItems": 1,
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "actorId": {
             "minLength": 1,
@@ -754,11 +755,12 @@
         "properties": {
           "actionVersionIds": {
             "items": {
-              "minLength": 1,
-              "type": "string"
+              "$ref": "#/components/schemas/PilotActionVersionIdV1"
             },
+            "maxItems": 3,
             "minItems": 1,
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "actorId": {
             "minLength": 1,
@@ -1007,6 +1009,14 @@
           "repositories"
         ],
         "type": "object"
+      },
+      "PilotActionVersionIdV1": {
+        "enum": [
+          "github.get_current_user@v1",
+          "github.list_my_repositories@v1",
+          "github.create_pull_request@v1"
+        ],
+        "type": "string"
       },
       "__schema0": {
         "anyOf": [

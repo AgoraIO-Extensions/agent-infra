@@ -178,6 +178,20 @@ describe("Connection Pilot contracts", () => {
 				principalId: "caller-selected",
 			}).success,
 		).toBe(false);
+		for (const actionVersionIds of [
+			["github.unknown@v1"],
+			["github.get_current_user@v1", "github.get_current_user@v1"],
+		]) {
+			expect(
+				ConnectionGrantCreateRequestV1Schema.safeParse({
+					schemaVersion: 1,
+					consumerId: "agent-platform",
+					actorId: "agent-1",
+					connectionId: "connection-1",
+					actionVersionIds,
+				}).success,
+			).toBe(false);
+		}
 	});
 
 	it("cannot confuse a known Provider rejection with an unknown write", () => {
@@ -269,6 +283,10 @@ describe("Connection Pilot contracts", () => {
 		expect(connectionBrowserOpenApiPathsV1).toHaveProperty(
 			"/connection/api/v1/admin/action-calls/{callId}/resolution.post.operationId",
 			"resolveConnectionActionCall",
+		);
+		expect(connectionBrowserOpenApiPathsV1).toHaveProperty(
+			"/connection/api/v1/admin/action-calls/{callId}/resolution.post.security",
+			[{ ConnectionAdminSession: [], ConnectionCsrf: [] }],
 		);
 		expect(connectionCatalogOpenApiPathsV1).toHaveProperty(
 			"/connection/internal/v1/catalog.get.operationId",

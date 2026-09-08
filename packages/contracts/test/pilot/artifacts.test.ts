@@ -61,6 +61,10 @@ describe("Pilot standard artifacts", () => {
 			"properties.providers.allOf.1.minItems",
 			1,
 		);
+		expect(schemas.ConnectionGrantCreateRequestV1).toHaveProperty(
+			"properties.actionVersionIds.uniqueItems",
+			true,
+		);
 		expect(schemas.ConnectionCatalogV1).toHaveProperty(
 			"properties.providers.allOf.1.maxItems",
 			1,

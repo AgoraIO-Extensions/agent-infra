@@ -168,12 +168,25 @@ export const ConnectionOAuthStartV1Schema = z.strictObject({
 		.url()
 		.regex(/^https:\/\/github\.com\//),
 });
+export const PilotActionVersionIdV1Schema = z.enum([
+	"github.get_current_user@v1",
+	"github.list_my_repositories@v1",
+	"github.create_pull_request@v1",
+]);
+export const PilotActionVersionIdsV1Schema = z
+	.array(PilotActionVersionIdV1Schema)
+	.min(1)
+	.max(3)
+	.refine((ids) => new Set(ids).size === ids.length, {
+		message: "Action version IDs must be unique",
+	})
+	.meta({ uniqueItems: true });
 export const ConnectionGrantCreateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	consumerId: OpaqueIdV1Schema,
 	actorId: OpaqueIdV1Schema,
 	connectionId: OpaqueIdV1Schema,
-	actionVersionIds: z.array(OpaqueIdV1Schema).min(1),
+	actionVersionIds: PilotActionVersionIdsV1Schema,
 });
 export const ConnectionGrantProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
@@ -181,7 +194,7 @@ export const ConnectionGrantProjectionV1Schema = z.strictObject({
 	consumerId: OpaqueIdV1Schema,
 	actorId: OpaqueIdV1Schema,
 	connectionId: OpaqueIdV1Schema,
-	actionVersionIds: z.array(OpaqueIdV1Schema).min(1),
+	actionVersionIds: PilotActionVersionIdsV1Schema,
 	status: z.enum(["active", "revoked"]),
 	createdAt: Rfc3339TimestampV1Schema,
 	updatedAt: Rfc3339TimestampV1Schema,
@@ -280,6 +293,7 @@ export const ConnectionCommandAcceptedV1Schema = z.strictObject({
 const ok = (description: string, schema: z.ZodType) =>
 	jsonResponse(description, schema);
 const browserSecurity = [{ ConnectionBrowserSession: [], ConnectionCsrf: [] }];
+const adminSecurity = [{ ConnectionAdminSession: [], ConnectionCsrf: [] }];
 
 export const connectionBrowserOpenApiPathsV1 = {
 	"/connection/api/v1/session": {
@@ -397,7 +411,7 @@ export const connectionBrowserOpenApiPathsV1 = {
 	"/connection/api/v1/admin/action-calls/{callId}/resolution": {
 		post: {
 			operationId: "resolveConnectionActionCall",
-			security: browserSecurity,
+			security: adminSecurity,
 			requestParams: { path: z.strictObject({ callId: OpaqueIdV1Schema }) },
 			requestBody: requiredJsonBody(ConnectionManualResolutionRequestV1Schema),
 			responses: {
@@ -431,6 +445,7 @@ export const connectionSchemasV1 = {
 	ConnectionGrantCreateRequestV1: ConnectionGrantCreateRequestV1Schema,
 	ConnectionGrantProjectionV1: ConnectionGrantProjectionV1Schema,
 	ConnectionLoginRequestV1: ConnectionLoginRequestV1Schema,
+	PilotActionVersionIdV1: PilotActionVersionIdV1Schema,
 	ConnectionProviderRevokeStatusV1: ConnectionProviderRevokeStatusV1Schema,
 	ConnectionProviderRevokeProjectionV1:
 		ConnectionProviderRevokeProjectionV1Schema,

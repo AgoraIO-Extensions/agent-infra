@@ -263,6 +263,13 @@ function buildArtifacts() {
 		paths: connectionBrowserOpenApiPathsV1,
 		components: {
 			securitySchemes: {
+				ConnectionAdminSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "connection_session",
+					description:
+						"Requires the server to revalidate the current AdministratorRole binding.",
+				},
 				ConnectionBrowserSession: {
 					type: "apiKey",
 					in: "cookie",
