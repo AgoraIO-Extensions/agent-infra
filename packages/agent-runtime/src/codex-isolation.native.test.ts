@@ -114,6 +114,12 @@ class RawNativeClient {
 			await client.close();
 			throw new Error("Native raw probe initialization unavailable");
 		}
+		try {
+			await bridge.send({ method: "initialized" });
+		} catch {
+			await client.close();
+			throw new Error("Native raw probe initialization unavailable");
+		}
 		return client;
 	}
 
