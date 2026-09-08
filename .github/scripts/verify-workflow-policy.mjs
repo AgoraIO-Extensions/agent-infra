@@ -172,7 +172,7 @@ const UPLOAD_ARTIFACT_ACTION =
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const PR_AGENT_ACTION =
-  "The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6";
+  "The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36";
 const PR_AGENT_SECRETS = [
   "PR_AGENT_API_KEY",
   "PR_AGENT_API_BASE",
@@ -1667,6 +1667,8 @@ export function validateWorkflowDocuments(workflows) {
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
+      "pr_reviewer.enable_large_pr_chunking": "true",
+      "pr_reviewer.max_number_of_calls": "3",
       "pr_reviewer.num_max_findings": "10",
       "pr_reviewer.require_can_be_split_review": "false",
       "pr_reviewer.require_estimate_contribution_time_cost": "false",
