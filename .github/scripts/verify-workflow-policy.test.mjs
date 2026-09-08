@@ -906,7 +906,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(suggestionsAction["continue-on-error"], true);
   assert.equal(
     reviewAction.uses,
-    "The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6",
+    "The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36",
   );
   assert.equal(suggestionsAction.uses, reviewAction.uses);
   assert.equal(reviewAction.env.OPENAI__KEY, "${{ secrets.PR_AGENT_API_KEY }}");
@@ -991,6 +991,47 @@ test("uses pinned PR-Agent official inline publishing", async () => {
       error.includes("official inline publishing"),
     ),
   );
+});
+
+test("requires bounded PR-Agent review chunking and matching immutable versions", async () => {
+  const expected = {
+    "pr_reviewer.enable_large_pr_chunking": "true",
+    "pr_reviewer.max_number_of_calls": "3",
+  };
+  const workflows = await actualWorkflows();
+  const review = workflows["pr-agent-review.yml"].jobs.analyze.steps.find(
+    (step) => step.id === "pr-agent",
+  );
+  for (const [key, value] of Object.entries(expected)) {
+    assert.equal(review.env[key], value);
+    for (const invalid of [undefined, "false", "0", "4"]) {
+      if (invalid === undefined) delete review.env[key];
+      else review.env[key] = invalid;
+      assert.ok(
+        validateWorkflowDocuments(workflows).some((error) =>
+          error.includes("official inline publishing"),
+        ),
+        `${key}=${invalid} must be rejected`,
+      );
+    }
+    review.env[key] = value;
+  }
+  assert.deepEqual(validateWorkflowDocuments(workflows), []);
+  for (const job of ["analyze", "suggestions"]) {
+    const action = workflows["pr-agent-review.yml"].jobs[job].steps.find(
+      (step) => step.uses?.startsWith("The-PR-Agent/pr-agent@"),
+    );
+    const pinned = action.uses;
+    for (const invalid of ["main", "ab6ec54bfeb37933ddb74259338752e9272016c6"]) {
+      action.uses = `The-PR-Agent/pr-agent@${invalid}`;
+      assert.ok(
+        validateWorkflowDocuments(workflows).some((error) =>
+          error.includes("official inline publishing"),
+        ),
+      );
+    }
+    action.uses = pinned;
+  }
 });
 
 test("forces HTTPS PR-Agent calls through streaming Responses", async () => {

@@ -37,7 +37,7 @@ jobs:
       - name: Review pull request
         id: pr-agent
         # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6 # v0.44.0
+        uses: The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36 # post-v0.45.0, upstream #3080
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
@@ -60,6 +60,8 @@ jobs:
           pr_code_suggestions.commitable_code_suggestions: "true"
           pr_reviewer.enable_review_labels_effort: "false"
           pr_reviewer.enable_review_labels_security: "false"
+          pr_reviewer.enable_large_pr_chunking: "true"
+          pr_reviewer.max_number_of_calls: "3"
           pr_reviewer.num_max_findings: "10"
           pr_reviewer.require_can_be_split_review: "false"
           pr_reviewer.require_estimate_contribution_time_cost: "false"
@@ -93,7 +95,7 @@ jobs:
         id: pr-agent-suggestions
         continue-on-error: true
         # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6 # v0.44.0
+        uses: The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36 # post-v0.45.0, upstream #3080
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
