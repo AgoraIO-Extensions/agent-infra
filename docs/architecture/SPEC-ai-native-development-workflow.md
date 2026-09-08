@@ -375,7 +375,10 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   闭环；Review 摘要不阻塞合并。
 - provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选
   Reviewer 的可信 current-head evidence：PR-Agent 使用当前 workflow run 中 `PR-Agent Analysis` job
-  的确定性 token decision log，Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
+  的确定性 token decision log，以及同一 run/attempt 的原生 Review 发布回执。可信发布器校验
+  官方结构化输出，将 findings 发布为当前 head 的 Review threads；空列表发布明确的无问题结论。
+  Gate 回读 Review 与 comments，校验作者、提交、run/attempt、问题数量和内容摘要；模型输出缺失、
+  格式无效或发布失败不能通过。Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
   完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回失败 Check 和稳定 reason code。
 - `Automated Review Coverage` 只由隔离的 check-only App 发布到精确 head；provider workflow 中的
@@ -389,8 +392,9 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   适配 token budget blanket ignore 生成 Client、OpenAPI、JSON Schema、Fake、测试或其他可评审文本。
 - PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
   Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
-- PR-Agent Analysis 开启大 diff 分块，最多 3 次 chunk 调用；Action 引用固定到上游不可变
-  commit，但上游 Action 内部使用浮动容器镜像，不能据此声称实际运行代码已锁定。局部结果
+- PR-Agent Analysis 与 Suggestions 使用固定 digest 的官方容器镜像，不通过可变镜像标签执行。
+  Analysis 只使用官方结构化输出，关闭上游评论发布与持久 finding state，发布交由可信步骤完成。
+  Analysis 开启大 diff 分块，最多 3 次 chunk 调用。局部结果
   合并不等于完整覆盖或完整跨文件推理。当前 Coverage Gate
   仍按单次 diff 的可信 token decision 判定；即使后续分块成功，已有裁剪证据仍失败，直到
   单独批准并实现可信的分块覆盖证据契约。本配置不构成 coverage waiver。
