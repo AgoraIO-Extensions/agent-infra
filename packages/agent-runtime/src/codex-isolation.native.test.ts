@@ -174,7 +174,7 @@ class RawNativeClient {
 		const id = frame.id;
 		if (typeof id !== "number") return;
 		const resolve = this.pending.get(id);
-		if (!resolve) return;
+		if (!resolve || (!("error" in frame) && !("result" in frame))) return;
 		this.pending.delete(id);
 		if ("error" in frame) {
 			const error = frame.error;
@@ -184,10 +184,6 @@ class RawNativeClient {
 						? "unsupported"
 						: "native-json-rpc-error",
 			});
-			return;
-		}
-		if (!("result" in frame)) {
-			resolve({ category: "invalid-native-response" });
 			return;
 		}
 		resolve({ category: "success", result: frame.result });
@@ -972,12 +968,21 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							entry.method === "thread/resume",
 					)
 					.map((entry) => {
-						const sandbox = entry.result?.sandbox as
+						const thread = entry.result?.thread as
+							| {
+									approvalPolicy?: string;
+									sandbox?: {
+										type?: string;
+										networkAccess?: boolean;
+									};
+							  }
+							| undefined;
+						const sandbox = thread?.sandbox as
 							| { type?: string; networkAccess?: boolean }
 							| undefined;
 						return {
 							method: entry.method,
-							approvalPolicy: entry.result?.approvalPolicy,
+							approvalPolicy: thread?.approvalPolicy,
 							sandboxType: sandbox?.type,
 							networkAccess: sandbox?.networkAccess,
 							requestKeys: Object.keys(entry.params ?? {}),
