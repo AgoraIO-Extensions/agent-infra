@@ -26,6 +26,7 @@ import {
 	isolationOverallStatus,
 	isolationResultSeesMarker,
 	isolationScenarioStatus,
+	type NativeObservation,
 	nativeIsolationLauncher,
 	nativeLaunchDirectoryRelations,
 	nativeObservationErrorCategory,
@@ -77,6 +78,13 @@ type NativeReadCategory =
 interface RawNativeReply {
 	category: NativeReadCategory;
 	result?: unknown;
+	error?: unknown;
+}
+
+interface RawForeignMarkerControl {
+	status: "pass" | "unverified";
+	category: NativeReadCategory;
+	markerObserved: boolean;
 }
 
 interface NativeReadSample {
@@ -106,6 +114,133 @@ function containsMarker(value: unknown, marker: string): boolean {
 		isPlainRecord(value) &&
 		Object.values(value).some((entry) => containsMarker(entry, marker))
 	);
+}
+
+function rawNativeReply(
+	frame: CodexAppServerFrame,
+): RawNativeReply | undefined {
+	if ("error" in frame) {
+		const error = frame.error;
+		return {
+			category:
+				isPlainRecord(error) && error.code === -32601
+					? "unsupported"
+					: "native-json-rpc-error",
+			error,
+		};
+	}
+	if ("result" in frame) return { category: "success", result: frame.result };
+	return undefined;
+}
+
+function receiveRawNativeReply(
+	pending: Map<number, (reply: RawNativeReply) => void>,
+	frame: CodexAppServerFrame,
+) {
+	const id = frame.id;
+	if (typeof id !== "number") return false;
+	const resolve = pending.get(id);
+	const reply = rawNativeReply(frame);
+	if (!resolve || !reply) return false;
+	pending.delete(id);
+	resolve(reply);
+	return true;
+}
+
+function rawForeignMarkerControl(
+	sample: NativeReadSample | undefined,
+	fallbackCategory: NativeReadCategory = "invalid-native-response",
+): RawForeignMarkerControl {
+	const markerObserved = sample?.foreignMarkerAbsent === false;
+	return {
+		status:
+			sample?.category === "success" &&
+			sample.knownTurnMatches === true &&
+			markerObserved
+				? "pass"
+				: "unverified",
+		category: sample?.category ?? fallbackCategory,
+		markerObserved,
+	};
+}
+
+function gateRawActiveThreadEvidence(
+	evidence: ReturnType<typeof evaluateActiveThreadEvidence>,
+	control: Pick<RawForeignMarkerControl, "status">,
+): Status {
+	if (evidence.status === "fail") return "fail";
+	return control.status === "pass" ? evidence.status : "unverified";
+}
+
+function nativeThreadId(entry: Pick<NativeObservation, "result">) {
+	const thread = isPlainRecord(entry.result) ? entry.result.thread : undefined;
+	return isPlainRecord(thread) && typeof thread.id === "string"
+		? thread.id
+		: undefined;
+}
+
+function nativeRestartSessionEvidence(
+	observations: readonly NativeObservation[],
+	rawThreadIds: ReadonlySet<string>,
+) {
+	const restartLaunchIndex = observations.findLastIndex(
+		(entry) => entry.method === "launch",
+	);
+	const resumedAfterRestart = observations
+		.slice(restartLaunchIndex + 1)
+		.filter((entry) => entry.method === "thread/resume");
+	const formalStarts = observations.filter(
+		(entry) =>
+			entry.method === "thread/start" &&
+			!rawThreadIds.has(nativeThreadId(entry) ?? ""),
+	);
+	const formalIds = formalStarts.map(nativeThreadId);
+	const resumed = formalIds.every(
+		(id) =>
+			typeof id === "string" &&
+			resumedAfterRestart.some(
+				(entry) =>
+					nativeThreadId(entry) === id && entry.params?.threadId === id,
+			),
+	);
+	return {
+		status:
+			restartLaunchIndex >= 0 &&
+			formalStarts.length === 2 &&
+			new Set(formalIds).size === 2 &&
+			resumed
+				? ("pass" as const)
+				: ("unverified" as const),
+	};
+}
+
+const activeThreadPoints = [
+	"after-turn-start-accepted",
+	"after-model-observed",
+] as const satisfies readonly NativeReadSample["point"][];
+
+function evaluateActiveThreadEvidence(samples: readonly NativeReadSample[]) {
+	const activeThreadLeak = samples.some(
+		(sample) => sample.foreignMarkerAbsent === false,
+	);
+	const pointEvidence = activeThreadPoints.map((point) =>
+		samples.some(
+			(sample) =>
+				sample.point === point &&
+				sample.method === "thread/turns/list" &&
+				sample.category === "success" &&
+				sample.knownTurnMatches === true &&
+				sample.foreignMarkerAbsent === true,
+		),
+	);
+	return {
+		activeThreadLeak,
+		pointEvidence,
+		status: isolationActiveThreadEvidenceStatus({
+			activeThreadLeak,
+			pointEvidence,
+		}),
+	};
 }
 
 function effectiveThreadConfiguration(
@@ -292,22 +427,7 @@ class RawNativeClient {
 	}
 
 	private receive(frame: CodexAppServerFrame) {
-		const id = frame.id;
-		if (typeof id !== "number") return;
-		const resolve = this.pending.get(id);
-		if (!resolve || (!("error" in frame) && !("result" in frame))) return;
-		this.pending.delete(id);
-		if ("error" in frame) {
-			const error = frame.error;
-			resolve({
-				category:
-					isPlainRecord(error) && error.code === -32601
-						? "unsupported"
-						: "native-json-rpc-error",
-			});
-			return;
-		}
-		resolve({ category: "success", result: frame.result });
+		receiveRawNativeReply(this.pending, frame);
 	}
 }
 
@@ -319,17 +439,23 @@ function nativeReadSample(
 	knownTurnId: string,
 	foreignMarker: string,
 ): NativeReadSample {
+	const markerObserved = containsMarker(
+		reply.category === "success" ? reply.result : reply.error,
+		foreignMarker,
+	);
 	const sample: NativeReadSample = {
 		point,
 		method,
 		options,
 		category: reply.category,
-		...(reply.category === "success"
-			? { foreignMarkerAbsent: !containsMarker(reply.result, foreignMarker) }
-			: {
-					knownTurnMatches: "unavailable" as const,
-					foreignMarkerAbsent: "unavailable" as const,
-				}),
+		...(markerObserved
+			? { foreignMarkerAbsent: false }
+			: reply.category === "success"
+				? { foreignMarkerAbsent: true }
+				: {
+						knownTurnMatches: "unavailable" as const,
+						foreignMarkerAbsent: "unavailable" as const,
+					}),
 	};
 	if (reply.category !== "success") return sample;
 	if (method === "thread/read") {
@@ -372,28 +498,323 @@ function nativeReadSample(
 	};
 }
 
+it("requires canonical active-history samples at both lifecycle points", () => {
+	const knownTurnId = "synthetic-turn";
+	const foreignMarker = "SYNTH_FOREIGN_MARKER";
+	const canonical = (point: NativeReadSample["point"], reply: RawNativeReply) =>
+		nativeReadSample(
+			point,
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			reply,
+			knownTurnId,
+			foreignMarker,
+		);
+	const validCanonical = activeThreadPoints.map((point) =>
+		canonical(point, {
+			category: "success",
+			result: { data: [{ id: knownTurnId }] },
+		}),
+	);
+	const supplementalUnavailable = activeThreadPoints.map((point) => ({
+		point,
+		method: "thread/read" as const,
+		options: { includeTurns: false },
+		category: "unsupported" as const,
+		knownTurnMatches: "unavailable" as const,
+		foreignMarkerAbsent: "unavailable" as const,
+	}));
+
+	expect(evaluateActiveThreadEvidence(supplementalUnavailable).status).toBe(
+		"unverified",
+	);
+	expect(
+		evaluateActiveThreadEvidence([
+			...supplementalUnavailable,
+			...validCanonical,
+		]),
+	).toMatchObject({
+		activeThreadLeak: false,
+		pointEvidence: [true, true],
+		status: "pass",
+	});
+	expect(
+		evaluateActiveThreadEvidence([
+			canonical("after-turn-start-accepted", {
+				category: "success",
+				result: { data: [{ id: knownTurnId }] },
+			}),
+		]).status,
+	).toBe("unverified");
+});
+
 it("fails malformed successful native results that contain a foreign marker", () => {
 	const marker = "SYNTH_FOREIGN_MARKER";
-	const sample = nativeReadSample(
+	const knownTurnId = "synthetic-turn";
+	const malformed = nativeReadSample(
 		"after-turn-start-accepted",
-		"thread/read",
-		{ includeTurns: true },
+		"thread/turns/list",
+		{ itemsView: "notLoaded" },
 		{ category: "success", result: { unexpected: { marker } } },
-		"synthetic-turn",
+		knownTurnId,
 		marker,
 	);
-	expect(sample).toMatchObject({
+	const otherwiseHealthy = activeThreadPoints.map((point) =>
+		nativeReadSample(
+			point,
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			{ category: "success", result: { data: [{ id: knownTurnId }] } },
+			knownTurnId,
+			marker,
+		),
+	);
+	expect(malformed).toMatchObject({
 		category: "invalid-native-response",
 		knownTurnMatches: "unavailable",
 		foreignMarkerAbsent: false,
 	});
+	expect(
+		evaluateActiveThreadEvidence([...otherwiseHealthy, malformed]).status,
+	).toBe("fail");
+});
+
+it("requires an observable raw marker control before accepting active history", () => {
+	const knownTurnId = "synthetic-turn";
+	const foreignMarker = "SYNTH_FOREIGN_MARKER";
+	const canonical = (
+		point: NativeReadSample["point"],
+		result: unknown = { data: [{ id: knownTurnId }] },
+	) =>
+		nativeReadSample(
+			point,
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			{ category: "success", result },
+			knownTurnId,
+			foreignMarker,
+		);
+	const targetEvidence = evaluateActiveThreadEvidence(
+		activeThreadPoints.map((point) => canonical(point)),
+	);
+	const observableControl = rawForeignMarkerControl(
+		canonical("after-turn-start-accepted", {
+			data: [{ id: knownTurnId, content: foreignMarker }],
+		}),
+	);
+	expect(gateRawActiveThreadEvidence(targetEvidence, observableControl)).toBe(
+		"pass",
+	);
+
+	const unavailableControl = rawForeignMarkerControl(
+		canonical("after-turn-start-accepted"),
+	);
+	expect(gateRawActiveThreadEvidence(targetEvidence, unavailableControl)).toBe(
+		"unverified",
+	);
+	const targetLeak = evaluateActiveThreadEvidence([
+		...activeThreadPoints.map((point) => canonical(point)),
+		canonical("after-model-observed", {
+			data: [{ id: knownTurnId, content: foreignMarker }],
+		}),
+	]);
+	expect(gateRawActiveThreadEvidence(targetLeak, unavailableControl)).toBe(
+		"fail",
+	);
+});
+
+it("fails raw active history evidence when JSON-RPC errors contain a foreign marker", () => {
+	const knownTurnId = "synthetic-turn";
+	const foreignMarker = "SYNTH_FOREIGN_MARKER";
+	const receive = (frame: CodexAppServerFrame) => {
+		let reply: RawNativeReply | undefined;
+		const pending = new Map<number, (value: RawNativeReply) => void>();
+		pending.set(42, (value) => {
+			reply = value;
+		});
+		expect(receiveRawNativeReply(pending, frame)).toBe(true);
+		if (!reply) throw new Error("Raw reply was not received");
+		return reply;
+	};
+	const healthy = activeThreadPoints.map((point) =>
+		nativeReadSample(
+			point,
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			{ category: "success", result: { data: [{ id: knownTurnId }] } },
+			knownTurnId,
+			foreignMarker,
+		),
+	);
+	const control = rawForeignMarkerControl(
+		nativeReadSample(
+			"after-turn-start-accepted",
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			{
+				category: "success",
+				result: { data: [{ id: knownTurnId, content: foreignMarker }] },
+			},
+			knownTurnId,
+			foreignMarker,
+		),
+	);
+	for (const error of [
+		{ code: -32_000, message: `native failure ${foreignMarker}` },
+		{ code: -32_000, data: { observed: foreignMarker } },
+	] as const) {
+		const sample = nativeReadSample(
+			"after-turn-start-accepted",
+			"thread/turns/list",
+			{ itemsView: "notLoaded" },
+			receive({ id: 42, error }),
+			knownTurnId,
+			foreignMarker,
+		);
+		const evidence = evaluateActiveThreadEvidence([...healthy, sample]);
+		expect(sample.foreignMarkerAbsent).toBe(false);
+		expect(gateRawActiveThreadEvidence(evidence, control)).toBe("fail");
+		expect(
+			isolationOverallStatus({
+				activeThreadLeak: evidence.activeThreadLeak,
+				persistenceVerified: true,
+				scenarioStatuses: [evidence.status],
+			}),
+		).toBe("fail");
+	}
+	const ordinaryError = nativeReadSample(
+		"after-turn-start-accepted",
+		"thread/turns/list",
+		{ itemsView: "notLoaded" },
+		receive({ id: 42, error: { code: -32_000, message: "native failure" } }),
+		knownTurnId,
+		foreignMarker,
+	);
+	const ordinaryEvidence = evaluateActiveThreadEvidence([
+		healthy[1] as NativeReadSample,
+		ordinaryError,
+	]);
+	expect(ordinaryError.foreignMarkerAbsent).toBe("unavailable");
+	expect(gateRawActiveThreadEvidence(ordinaryEvidence, control)).toBe(
+		"unverified",
+	);
+	expect(
+		isolationOverallStatus({
+			activeThreadLeak: ordinaryEvidence.activeThreadLeak,
+			persistenceVerified: true,
+			scenarioStatuses: [ordinaryEvidence.status],
+		}),
+	).toBe("unverified");
+});
+
+it("matches only the two formal sessions after an interleaved raw probe restart", () => {
+	const rawThreadIds = new Set(["raw-control", "raw-target"]);
+	const threadStart = (id: string): NativeObservation => ({
+		method: "thread/start",
+		result: { thread: { id } },
+	});
+	const resumed = (id: string, threadId = id): NativeObservation => ({
+		method: "thread/resume",
+		params: { threadId },
+		result: { thread: { id } },
+	});
+	const complete = [
+		{ method: "launch" },
+		threadStart("raw-control"),
+		threadStart("formal-a"),
+		threadStart("raw-target"),
+		threadStart("formal-b"),
+		{ method: "launch" },
+		resumed("formal-a"),
+		resumed("formal-b"),
+	] satisfies NativeObservation[];
+	expect(nativeRestartSessionEvidence(complete, rawThreadIds).status).toBe(
+		"pass",
+	);
+
+	for (const observations of [
+		complete.filter((entry) =>
+			entry.method === "thread/resume"
+				? entry.params?.threadId !== "formal-b"
+				: true,
+		),
+		complete.map((entry) =>
+			entry.method === "thread/resume" && entry.params?.threadId === "formal-b"
+				? resumed("formal-b", "different-thread")
+				: entry,
+		),
+		[
+			...complete.slice(0, -2),
+			threadStart("formal-c"),
+			resumed("formal-a"),
+			resumed("formal-b"),
+			resumed("formal-c"),
+		],
+	])
+		expect(
+			nativeRestartSessionEvidence(observations, rawThreadIds).status,
+		).toBe("unverified");
+});
+
+it("retains pending numeric replies through colliding server requests", () => {
+	const pending = new Map<number, (value: RawNativeReply) => void>();
+	let one: RawNativeReply | undefined;
+	let ten: RawNativeReply | undefined;
+	let oneCallbacks = 0;
+	let tenCallbacks = 0;
+	pending.set(1, (value) => {
+		oneCallbacks += 1;
+		one = value;
+	});
+	pending.set(10, (value) => {
+		tenCallbacks += 1;
+		ten = value;
+	});
+	for (const id of [1, 10]) {
+		expect(
+			receiveRawNativeReply(pending, {
+				id,
+				method: "server/request",
+				params: {},
+			}),
+		).toBe(false);
+	}
+	expect(pending.size).toBe(2);
+	expect(
+		receiveRawNativeReply(pending, { id: 1, result: { request: "one" } }),
+	).toBe(true);
+	expect(
+		receiveRawNativeReply(pending, {
+			id: 10,
+			error: { code: -32_000, message: "request ten failed" },
+		}),
+	).toBe(true);
+	expect(oneCallbacks).toBe(1);
+	expect(tenCallbacks).toBe(1);
+	expect(one).toMatchObject({
+		category: "success",
+		result: { request: "one" },
+	});
+	expect(ten).toMatchObject({ category: "native-json-rpc-error" });
+	expect(
+		receiveRawNativeReply(pending, { id: 1, result: { request: "one" } }),
+	).toBe(false);
+	expect(
+		receiveRawNativeReply(pending, {
+			id: 10,
+			error: { code: -32_000, message: "request ten failed" },
+		}),
+	).toBe(false);
+	expect(oneCallbacks).toBe(1);
+	expect(tenCallbacks).toBe(1);
+	expect(pending.size).toBe(0);
 });
 
 it("records effective thread settings from the native result root", () => {
 	expect(
 		effectiveThreadConfiguration({
 			approvalPolicy: "on-request",
-			sandbox: { type: "workspace-write", networkAccess: false },
+			sandbox: { type: "workspaceWrite", networkAccess: false },
 			thread: {
 				approvalPolicy: "nested-value-must-not-be-used",
 				sandbox: { type: "nested-value-must-not-be-used", networkAccess: true },
@@ -401,7 +822,7 @@ it("records effective thread settings from the native result root", () => {
 		}),
 	).toEqual({
 		approvalPolicy: "on-request",
-		sandboxType: "workspace-write",
+		sandboxType: "workspaceWrite",
 		networkAccess: false,
 	});
 });
@@ -620,7 +1041,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		let rawProbeLaunches = 0;
 		let bootstrapDriverLaunches = 0;
 		let activeDriver: CodexRuntimeDriver | undefined;
-		let sampledNativeThreadId = "";
+		const rawNativeThreadIds = new Set<string>();
+		let rawActiveThreadControl = rawForeignMarkerControl(undefined);
 		let stage = "startup";
 		const record = (key: string, status: Status, reason: string) => {
 			scenarios[key] = { status, reason };
@@ -798,8 +1220,64 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				),
 			];
 		}
+		async function sampleRawForeignMarkerControl(
+			client: RawNativeClient,
+			foreignMarker: string,
+			probeId: string,
+		): Promise<RawForeignMarkerControl> {
+			const threadStarted = await client.request("thread/start", {});
+			const thread = isPlainRecord(threadStarted.result)
+				? threadStarted.result.thread
+				: undefined;
+			if (
+				threadStarted.category !== "success" ||
+				!isPlainRecord(thread) ||
+				typeof thread.id !== "string"
+			)
+				return rawForeignMarkerControl(undefined, threadStarted.category);
+			rawNativeThreadIds.add(thread.id);
+
+			const turnStarted = await client.request("turn/start", {
+				threadId: thread.id,
+				clientUserMessageId: randomUUID(),
+				input: [
+					{
+						type: "text",
+						text: `ISOLATION_PROBE:${probeId} ${foreignMarker}`,
+					},
+				],
+				model: "gpt-5.3-codex",
+				effort: "high",
+			});
+			const turn = isPlainRecord(turnStarted.result)
+				? turnStarted.result.turn
+				: undefined;
+			if (
+				turnStarted.category !== "success" ||
+				!isPlainRecord(turn) ||
+				typeof turn.id !== "string"
+			)
+				return rawForeignMarkerControl(undefined, turnStarted.category);
+
+			const turns = await client.request("thread/turns/list", {
+				threadId: thread.id,
+				itemsView: "notLoaded",
+			});
+			return rawForeignMarkerControl(
+				nativeReadSample(
+					"after-turn-start-accepted",
+					"thread/turns/list",
+					{ itemsView: "notLoaded" },
+					turns,
+					turn.id,
+					foreignMarker,
+				),
+				turns.category,
+			);
+		}
 		async function sampleActiveThreadHistory() {
 			if (!model || !launcher) throw new Error("No native isolation fixture");
+			const controlProbe = model.probe();
 			const probe = model.probe();
 			const foreignMarker = users.at(1)?.context;
 			if (!foreignMarker) throw new Error("Missing foreign isolation marker");
@@ -810,6 +1288,11 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			let client: RawNativeClient | undefined;
 			try {
 				client = await RawNativeClient.open(`${rawDriverPath}.native`);
+				rawActiveThreadControl = await sampleRawForeignMarkerControl(
+					client,
+					foreignMarker,
+					controlProbe.id,
+				);
 				const threadStarted = await client.request("thread/start", {});
 				const nativeThread = isPlainRecord(threadStarted.result)
 					? threadStarted.result.thread
@@ -838,7 +1321,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				) {
 					throw new Error("Native turn not accepted");
 				}
-				sampledNativeThreadId = nativeThread.id;
+				rawNativeThreadIds.add(nativeThread.id);
 				report.activeThreadReadSamples = await snapshotActiveThread(
 					"after-turn-start-accepted",
 					client,
@@ -1203,37 +1686,18 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						);
 					}
 				}
-				const starts = observations.filter(
-					(entry) => entry.method === "thread/start",
+				const restartEvidence = nativeRestartSessionEvidence(
+					observations,
+					rawNativeThreadIds,
 				);
-				const restartLaunchIndex = observations.findLastIndex(
-					(entry) => entry.method === "launch",
-				);
-				const resumedAfterRestart = observations
-					.slice(restartLaunchIndex + 1)
-					.filter((entry) => entry.method === "thread/resume");
-				const nativeId = (entry: (typeof observations)[number]) =>
-					(entry.result?.thread as { id?: string } | undefined)?.id;
-				const originalStarts = starts.filter(
-					(entry) => nativeId(entry) !== sampledNativeThreadId,
-				);
-				const originalIds = originalStarts.map(nativeId);
-				const sameSessions =
-					restartLaunchIndex >= 0 &&
-					originalStarts.length === 2 &&
-					new Set(originalIds).size === 2 &&
-					originalIds.every(
-						(id) =>
-							typeof id === "string" &&
-							resumedAfterRestart.some(
-								(entry) =>
-									nativeId(entry) === id && entry.params?.threadId === id,
-							),
-					);
 				const restarted =
 					observations.filter((entry) => entry.method === "launch").length ===
 					2 + rawProbeLaunches + bootstrapDriverLaunches;
-				if (stage === "restart-resume" && sameSessions && restarted)
+				if (
+					stage === "restart-resume" &&
+					restartEvidence.status === "pass" &&
+					restarted
+				)
 					record(
 						"restart-resume.original-native-sessions",
 						"pass",
@@ -1299,29 +1763,27 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		)
 			? (report.activeThreadReadSamples as NativeReadSample[])
 			: [];
-		const activeThreadLeak = activeThreadReadSamples.some(
-			(sample) => sample.foreignMarkerAbsent === false,
+		const rawActiveThreadEvidence = evaluateActiveThreadEvidence(
+			activeThreadReadSamples,
 		);
-		const activeThreadEvidence = isolationActiveThreadEvidenceStatus({
-			activeThreadLeak,
-			pointEvidence: ["after-turn-start-accepted", "after-model-observed"].map(
-				(point) =>
-					activeThreadReadSamples.some(
-						(sample) =>
-							sample.point === point &&
-							sample.category === "success" &&
-							sample.knownTurnMatches === true &&
-							sample.foreignMarkerAbsent === true,
-					),
+		const activeThreadEvidence = {
+			...rawActiveThreadEvidence,
+			status: gateRawActiveThreadEvidence(
+				rawActiveThreadEvidence,
+				rawActiveThreadControl,
 			),
-		});
-		report.activeThreadEvidence = { status: activeThreadEvidence };
+		};
+		report.activeThreadEvidence = {
+			status: activeThreadEvidence.status,
+			pointEvidence: activeThreadEvidence.pointEvidence,
+			rawForeignMarkerControl: rawActiveThreadControl,
+		};
 		report.overall = isolationOverallStatus({
-			activeThreadLeak,
+			activeThreadLeak: activeThreadEvidence.activeThreadLeak,
 			persistenceVerified: persistenceEvidence.status === "pass",
 			scenarioStatuses: [
 				...Object.values(scenarios).map((row) => row.status),
-				activeThreadEvidence,
+				activeThreadEvidence.status,
 			],
 		});
 		console.info(JSON.stringify(report, null, 2));
