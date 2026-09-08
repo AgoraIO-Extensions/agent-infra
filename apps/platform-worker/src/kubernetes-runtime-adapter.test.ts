@@ -146,11 +146,6 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(
 			reusedPvc?.metadata?.annotations?.["agent-infra.agora.io/fence"],
 		).toBe("3");
-		await expect(f.client.delete(pvc)).rejects.toThrow();
-		expect(
-			(await f.client.read("PersistentVolumeClaim", a.persistentVolume.name))
-				?.metadata?.uid,
-		).toBe(pvc.metadata?.uid);
 		await adapter.promote(b, identityB);
 		await expect(adapter.apply(a)).rejects.toThrow();
 		await expect(adapter.closeAgent(a.agentId, 1)).rejects.toThrow();
@@ -169,6 +164,55 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.template.spec?.containers[0]?.image,
 		).toContain(a.imageDigest);
 	});
+	it("fences a lost PVC cleanup delete after a later revision reuses it", async () => {
+		const f = fixture();
+		const a = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identityA = await adapter.apply(a);
+		if (!identityA || identityA === "pending") throw new Error();
+		const pvc = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			a.persistentVolume.name,
+		);
+		if (!pvc) throw new Error();
+
+		f.loseNextDelete("PersistentVolumeClaim", a.persistentVolume.name);
+		await expect(
+			adapter.cleanupAgent(a.agentId, a.workloadRevision, true),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(f.deferredDelete()).toMatchObject({
+			kind: "PersistentVolumeClaim",
+			metadata: {
+				uid: pvc.metadata?.uid,
+				resourceVersion: pvc.metadata?.resourceVersion,
+			},
+		});
+		expect(await f.client.read("StatefulSet", a.service.name)).toBeNull();
+
+		const b = workloadDesiredFixture(3);
+		const identityB = await adapter.apply(b);
+		if (!identityB || identityB === "pending") throw new Error();
+		const reusedPvc = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			a.persistentVolume.name,
+		);
+		if (!reusedPvc) throw new Error();
+		expect(reusedPvc.metadata?.uid).toBe(pvc.metadata?.uid);
+		expect(reusedPvc.metadata?.resourceVersion).not.toBe(
+			pvc.metadata?.resourceVersion,
+		);
+		expect(reusedPvc.spec).toStrictEqual(pvc.spec);
+
+		await expect(f.completeDeferredDelete()).rejects.toMatchObject({
+			code: "conflict",
+		});
+		const afterDeferredDelete = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			a.persistentVolume.name,
+		);
+		expect(afterDeferredDelete?.metadata?.uid).toBe(pvc.metadata?.uid);
+		expect(afterDeferredDelete?.spec).toStrictEqual(pvc.spec);
+	});
 	it("does not attach a reused PVC while its previous delete is still in progress", async () => {
 		const f = fixture();
 		const a = workloadDesiredFixture();
@@ -180,6 +224,8 @@ describe("GA Kubernetes Workload adapter", () => {
 			a.persistentVolume.name,
 		);
 		if (!pvc) throw new Error();
+		const b = workloadDesiredFixture(3);
+		expect(await adapter.apply(b)).toBe("pending");
 		f.resources.set(`PersistentVolumeClaim/${a.persistentVolume.name}`, {
 			...pvc,
 			metadata: {
@@ -187,8 +233,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				deletionTimestamp: new Date("2026-09-08T00:00:00Z"),
 			},
 		});
-		const b = workloadDesiredFixture(3);
-		expect(await adapter.apply(b)).toBe("pending");
+		await expect(adapter.apply(b)).rejects.toMatchObject({ code: "conflict" });
 		expect(
 			(
 				await f.client.read<V1PersistentVolumeClaim>(
@@ -197,6 +242,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				)
 			)?.metadata?.deletionTimestamp,
 		).toEqual(new Date("2026-09-08T00:00:00Z"));
+		expect(await f.client.read("Pod", `${a.service.name}-0`)).toBeNull();
 
 		// Kubernetes completed the old deletion. A retry starts a new claim instead
 		// of attaching the current Workload to the terminating PVC.

@@ -169,6 +169,26 @@ export function fakeKubernetesApi() {
 	let version = 0;
 	let failAt = -1;
 	let writeCount = 0;
+	let lostDeleteTarget: string | undefined;
+	let lostDelete: KubernetesObject | undefined;
+	function resourceKey(object: KubernetesObject) {
+		return `${object.kind}/${object.metadata?.name}`;
+	}
+	function checkDelete(object: KubernetesObject) {
+		const current = resources.get(resourceKey(object));
+		if (
+			!current ||
+			object.metadata?.resourceVersion !== current.metadata?.resourceVersion ||
+			object.metadata?.uid !== current.metadata?.uid
+		)
+			throw new WorkloadKubernetesError("conflict");
+	}
+	function deleteResource(object: KubernetesObject) {
+		checkDelete(object);
+		resources.delete(resourceKey(object));
+		if (object.kind === "StatefulSet")
+			resources.delete(`Pod/${object.metadata?.name}-0`);
+	}
 	function save<T extends KubernetesObject>(object: T, existing?: T): T {
 		if (++writeCount === failAt)
 			throw new WorkloadKubernetesError("unavailable");
@@ -268,19 +288,19 @@ export function fakeKubernetesApi() {
 			return save(object, old);
 		},
 		async delete(object) {
-			const current = resources.get(`${object.kind}/${object.metadata?.name}`);
-			if (
-				!current ||
-				object.metadata?.resourceVersion !==
-					current.metadata?.resourceVersion ||
-				object.metadata?.uid !== current.metadata?.uid
-			)
-				throw new WorkloadKubernetesError("conflict");
+			const key = resourceKey(object);
+			if (lostDeleteTarget === key) {
+				// The client loses the response after submitting this legal delete.
+				// Its UID/resourceVersion preconditions are evaluated only when the
+				// simulated API server later completes the captured request.
+				checkDelete(object);
+				lostDelete = structuredClone(object);
+				lostDeleteTarget = undefined;
+				throw new WorkloadKubernetesError("unavailable");
+			}
 			if (++writeCount === failAt)
 				throw new WorkloadKubernetesError("unavailable");
-			resources.delete(`${object.kind}/${object.metadata?.name}`);
-			if (object.kind === "StatefulSet")
-				resources.delete(`Pod/${object.metadata?.name}-0`);
+			deleteResource(object);
 		},
 	};
 	return {
@@ -289,6 +309,18 @@ export function fakeKubernetesApi() {
 		writes,
 		failAfter(writes: number) {
 			failAt = writeCount + writes;
+		},
+		loseNextDelete(kind: WorkloadResourceKind, name: string) {
+			lostDeleteTarget = `${kind}/${name}`;
+		},
+		deferredDelete() {
+			return structuredClone(lostDelete);
+		},
+		async completeDeferredDelete() {
+			if (!lostDelete) throw new Error("no deferred delete");
+			const request = lostDelete;
+			lostDelete = undefined;
+			deleteResource(request);
 		},
 	};
 }
