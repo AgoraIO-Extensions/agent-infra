@@ -668,13 +668,13 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							...unavailableModelObservationSamples("after-model-observed"),
 						];
 			} finally {
+				hold.allowObservation();
+				hold.releaseResponse();
+				await client?.close().catch(() => {});
 				const afterRawClient = (await launcher.observations()).filter(
 					(entry) => entry.method === "launch",
 				).length;
 				rawProbeLaunches += afterRawClient - beforeRawClient;
-				hold.allowObservation();
-				hold.releaseResponse();
-				await client?.close();
 			}
 		}
 		async function pair(
@@ -729,20 +729,31 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			const ownerReads = await pair(
 				users.map((user) => `cat ${quote(filePath(user, "private.txt"))}`),
 			);
-			const canRead = ownerReads.map(
-				(result, index) =>
-					result.probe.outputs.some((output) =>
-						output.includes(users[index]?.file ?? "MISSING"),
-					) && result.events.includes(users[index]?.file ?? "MISSING"),
-			);
-			for (const [index, user] of users.entries())
+			const ownerReadEvidence = ownerReads.map((result, index) => {
+				const user = users[index];
+				const other = users[1 - index];
+				if (!user || !other) throw new Error("Missing owner-read user");
+				return {
+					control:
+						result.probe.outputs.some((output) => output.includes(user.file)) &&
+						result.events.includes(user.file),
+					leaked: sees(result, other.file) || sees(result, other.context),
+				};
+			});
+			const canRead = ownerReadEvidence.map((evidence) => evidence.control);
+			for (const [index, user] of users.entries()) {
+				const evidence = ownerReadEvidence[index];
+				if (!evidence) throw new Error("Missing owner-read evidence");
 				record(
 					[name, user.id, "owner-file-read"].join("."),
-					canRead[index] ? "pass" : "unverified",
-					canRead[index]
-						? "native-tool-and-result-contain-owner-marker"
-						: "owner-read-control-failed",
+					evidence.leaked ? "fail" : evidence.control ? "pass" : "unverified",
+					evidence.leaked
+						? "foreign-marker-reached-model-input-or-result"
+						: evidence.control
+							? "native-tool-and-result-contain-owner-marker"
+							: "owner-read-control-failed",
 				);
+			}
 			for (const behavior of [
 				"cross-file-read",
 				"cross-file-search",
