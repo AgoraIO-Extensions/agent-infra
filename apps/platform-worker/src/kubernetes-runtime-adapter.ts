@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
+	type SecretActivationFenceV1,
 	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
 	validateWorkloadCleanupResultV1,
@@ -942,6 +943,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		async removeImmutableSecret(
 			input: unknown,
 			ref: AgentWorkloadDesiredV1["secretRefs"][number],
+			activationFence?: SecretActivationFenceV1,
 		): Promise<boolean> {
 			const value = desired(input);
 			if (
@@ -958,6 +960,22 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)
 			)
 				throw new WorkloadKubernetesError("policy");
+			if (activationFence) {
+				const current = await statefulSet(value);
+				const key = `agent-infra.agora.io/secret-${createHash("sha256").update(ref.name).digest("hex").slice(0, 32)}`;
+				if (
+					activationFence.agentId !== ref.agentId ||
+					activationFence.secretId !== ref.secretId ||
+					activationFence.secretVersion !== ref.secretVersion ||
+					activationFence.configRevision !== ref.configRevision ||
+					activationFence.kubernetesSecretName !== ref.name ||
+					!current ||
+					current.metadata?.uid !== activationFence.workloadUid ||
+					current.metadata.generation !== activationFence.workloadGeneration ||
+					current.metadata.annotations?.[key] !== String(activationFence.fence)
+				)
+					return false;
+			}
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret) return true;
 			if (!isOwnedSecret(secret, value, ref) || secret.immutable !== true)

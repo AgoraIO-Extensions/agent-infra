@@ -349,6 +349,56 @@ describe("GA Kubernetes Workload adapter", () => {
 			existing?.data,
 		);
 	});
+	it("removes a materialized Secret only with its current Workload fence", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.bindSecretFence(desired, identity, ref.name, 7);
+		const activationFence = {
+			schemaVersion: 1 as const,
+			agentId: ref.agentId,
+			secretId: ref.secretId,
+			secretVersion: ref.secretVersion,
+			configRevision: ref.configRevision,
+			kubernetesSecretName: ref.name,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 7,
+		};
+		expect(
+			await adapter.removeImmutableSecret(desired, ref, {
+				...activationFence,
+				fence: 8,
+			}),
+		).toBe(false);
+		expect(await f.client.read<V1Secret>("Secret", ref.name)).not.toBeNull();
+		expect(
+			await adapter.removeImmutableSecret(desired, ref, activationFence),
+		).toBe(true);
+		expect(await f.client.read<V1Secret>("Secret", ref.name)).toBeNull();
+	});
 	it("detects missing, foreign, or mutable Secret references before reporting healthy", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

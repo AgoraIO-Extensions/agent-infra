@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeSecretActivationKubernetesV1 } from "./fake-secret-activation.js";
 import { FakeSecretActivationDecryptorV1 } from "./fake-secret-decryptor.js";
@@ -558,32 +558,88 @@ describe("Secret candidate activation", () => {
 });
 
 describe("unactivated Secret candidate cleanup", () => {
-	it("reclaims one exact current pending candidate and leaves retryable failure state", async () => {
-		const store = new FakeActivationStore();
-		const removed: SecretActivationCandidateV1[] = [];
-		await expect(
-			cleanupUnactivatedSecretCandidateV1(
-				{
-					store,
-					kubernetes: {
-						async removeCandidate(candidate) {
-							removed.push(candidate);
-							return true;
+	it.each(["pending", "applying", "observed"] as const)(
+		"reclaims one exact current %s candidate and leaves retryable failure state",
+		async (lifecycleState) => {
+			const store = new FakeActivationStore({
+				candidate: { ...candidate, lifecycleState },
+			});
+			const removed: SecretActivationCandidateV1[] = [];
+			await expect(
+				cleanupUnactivatedSecretCandidateV1(
+					{
+						store,
+						kubernetes: {
+							async removeCandidate(candidate) {
+								removed.push(candidate);
+								return true;
+							},
 						},
 					},
-				},
+					cleanupCommand(),
+				),
+			).resolves.toBe(true);
+			expect(removed).toHaveLength(1);
+			expect(store.currentCandidate).toMatchObject({
+				lifecycleState: "failed",
+				failureRetryable: true,
+			});
+			expect(store.currentError).toMatchObject({
+				code: "SECRET_ACTIVATION_FAILED",
+				retryable: true,
+			});
+		},
+	);
+
+	it("retries after candidate deletion or failure-transition errors", async () => {
+		const deletionStore = new FakeActivationStore({
+			candidate: { ...candidate, lifecycleState: "applying" },
+		});
+		const removeCandidate = vi
+			.fn<(candidate: SecretActivationCandidateV1) => Promise<boolean>>()
+			.mockResolvedValueOnce(false)
+			.mockResolvedValue(true);
+		const deletionDependencies = {
+			store: deletionStore,
+			kubernetes: { removeCandidate },
+		};
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				deletionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(false);
+		expect(deletionStore.transitions).toEqual([]);
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				deletionDependencies,
 				cleanupCommand(),
 			),
 		).resolves.toBe(true);
-		expect(removed).toHaveLength(1);
-		expect(store.currentCandidate).toMatchObject({
-			lifecycleState: "failed",
-			failureRetryable: true,
+		expect(removeCandidate).toHaveBeenCalledTimes(2);
+
+		const transitionStore = new FakeActivationStore({
+			candidate: { ...candidate, lifecycleState: "observed" },
 		});
-		expect(store.currentError).toMatchObject({
-			code: "SECRET_ACTIVATION_FAILED",
-			retryable: true,
-		});
+		const commitTransition = vi.spyOn(transitionStore, "commitTransition");
+		commitTransition.mockResolvedValueOnce(false);
+		const transitionDependencies = {
+			store: transitionStore,
+			kubernetes: { removeCandidate: async () => true },
+		};
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				transitionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(false);
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				transitionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(true);
+		expect(transitionStore.currentCandidate.lifecycleState).toBe("failed");
 	});
 
 	it.each([

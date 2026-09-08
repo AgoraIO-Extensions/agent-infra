@@ -634,15 +634,14 @@ function cleanupCandidateMatches(
 		candidate.ownerId === command.ownerId &&
 		candidate.name === command.name &&
 		candidate.wrappingKeyVersion === command.wrappingKeyVersion &&
-		candidate.lifecycleState === "pending"
+		["pending", "applying", "observed"].includes(candidate.lifecycleState)
 	);
 }
 
 /**
- * Reclaims only a Store-authorized, still-current candidate that has never
- * reached activation. The existing pending -> failed transition preserves the
- * immutable record for a fenced retry while the caller removes its Kubernetes
- * material between the claim and transition.
+ * Reclaims only a Store-authorized, still-current, non-active candidate. The
+ * caller verifies materialized candidates against the current Workload before
+ * removal; this transition preserves the immutable record for a fenced retry.
  */
 export async function cleanupUnactivatedSecretCandidateV1(
 	dependencies: {
@@ -682,7 +681,7 @@ export async function cleanupUnactivatedSecretCandidateV1(
 	return dependencies.store.commitTransition({
 		claim,
 		plan: transitionPlan({
-			expectedLifecycleStates: ["pending"],
+			expectedLifecycleStates: [claim.candidate.lifecycleState],
 			next: {
 				lifecycleState: "failed",
 				error: failure("SECRET_ACTIVATION_FAILED", command.traceId),

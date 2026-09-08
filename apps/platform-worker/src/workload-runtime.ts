@@ -70,6 +70,48 @@ function recordReference(
 	};
 }
 
+function referencesMatch(
+	expected: SecretActivationReferenceV1,
+	actual: SecretActivationReferenceV1,
+): boolean {
+	return (
+		expected.schemaVersion === actual.schemaVersion &&
+		expected.ownerType === actual.ownerType &&
+		expected.ownerId === actual.ownerId &&
+		expected.agentId === actual.agentId &&
+		expected.secretId === actual.secretId &&
+		expected.secretVersion === actual.secretVersion &&
+		expected.configRevision === actual.configRevision &&
+		expected.algorithmVersion === actual.algorithmVersion &&
+		expected.wrappingAlgorithmVersion === actual.wrappingAlgorithmVersion &&
+		expected.wrappingKeyVersion === actual.wrappingKeyVersion &&
+		expected.name === actual.name
+	);
+}
+
+function cleanupActivationFence(
+	record: PlatformSecretRecordV1,
+	reference: SecretActivationReferenceV1,
+) {
+	if (record.lifecycleState === "pending") return undefined;
+	if (
+		record.lifecycleState !== "applying" &&
+		record.lifecycleState !== "observed"
+	)
+		return null;
+	const { kubernetesSecretRef, activationFence } = record;
+	if (
+		!referencesMatch(reference, kubernetesSecretRef) ||
+		activationFence.agentId !== reference.agentId ||
+		activationFence.secretId !== reference.secretId ||
+		activationFence.secretVersion !== reference.secretVersion ||
+		activationFence.configRevision !== reference.configRevision ||
+		activationFence.kubernetesSecretName !== reference.name
+	)
+		return null;
+	return activationFence;
+}
+
 function expectedSecrets(state: WorkloadReconciliationStateV1): readonly {
 	readonly secretId: string;
 	readonly version: number;
@@ -258,13 +300,16 @@ export function createWorkloadRuntimeV1(
 	): Promise<boolean> {
 		const bindings = bindingsFor(state, input).filter(
 			({ materialization, record }) =>
-				materialization === "current" && record.lifecycleState === "pending",
+				materialization === "current" &&
+				["pending", "applying", "observed"].includes(record.lifecycleState),
 		);
 		if (!bindings.length) return true;
 		if (!input.secrets) return false;
 		const workload = desired(state);
 		for (const { record } of bindings) {
 			const reference = recordReference(record);
+			const activationFence = cleanupActivationFence(record, reference);
+			if (activationFence === null) return false;
 			const removed = await cleanupUnactivatedSecretCandidateV1(
 				{
 					store: input.secrets.store,
@@ -279,10 +324,15 @@ export function createWorkloadRuntimeV1(
 								candidate.ownerId !== record.ownerId ||
 								candidate.name !== record.name ||
 								candidate.wrappingKeyVersion !==
-									record.crypto.wrappingKeyVersion
+									record.crypto.wrappingKeyVersion ||
+								candidate.lifecycleState !== record.lifecycleState
 							)
 								return false;
-							return adapter.removeImmutableSecret(workload, reference);
+							return adapter.removeImmutableSecret(
+								workload,
+								reference,
+								activationFence,
+							);
 						},
 					},
 				},
@@ -564,6 +614,8 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is unavailable");
 		},
 		async cleanup(state, deleteNewVolume, input) {
+			if (deleteNewVolume && !(await cleanupUnactivatedSecrets(state, input)))
+				return false;
 			let resourcesRemoved: boolean;
 			if (state.identity) {
 				// An apply can advance generation before its database step commits.
@@ -597,7 +649,7 @@ export function createWorkloadRuntimeV1(
 					deleteNewVolume,
 				);
 			}
-			return resourcesRemoved && cleanupUnactivatedSecrets(state, input);
+			return resourcesRemoved;
 		},
 	};
 }
