@@ -9,6 +9,7 @@ import {
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type PlatformSecretRecordV1,
+	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
@@ -20,7 +21,12 @@ import {
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
-import type { V1Pod, V1Service, V1StatefulSet } from "@kubernetes/client-node";
+import type {
+	V1Pod,
+	V1Secret,
+	V1Service,
+	V1StatefulSet,
+} from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import {
 	runtimeGrantFixture,
@@ -32,6 +38,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
@@ -145,12 +152,23 @@ function materializedSecretRecord(
 	});
 }
 
-function activeSecretRecord(): PlatformSecretRecordV1 {
+function activeSecretRecord(): ActiveSecretRecordV1 {
 	const record = materializedSecretRecord("observed");
-	return validatePlatformSecretRecordV1({
+	return validateActiveSecretRecordV1({
 		...record,
 		lifecycleState: "active",
 	});
+}
+
+type ActiveSecretRecordV1 = Extract<
+	PlatformSecretRecordV1,
+	{ readonly lifecycleState: "active" }
+>;
+
+function validateActiveSecretRecordV1(input: unknown): ActiveSecretRecordV1 {
+	const record = validatePlatformSecretRecordV1(input);
+	if (record.lifecycleState !== "active") throw new Error();
+	return record;
 }
 
 function secretCleanupStore(
@@ -397,7 +415,7 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(2);
 		expect(f.state?.phase).toBe("cleaning");
 		expect(f.state?.candidate.deployment).toBeNull();
-		await f.tick(1);
+		await f.tick(2);
 		expect(f.state?.phase).toBe("failed");
 		expect(cleanup.record.lifecycleState).toBe("pending");
 		expect(cleanup.claims).toBe(0);
@@ -526,6 +544,178 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
+	it("reuses an exact current active Secret without decrypting it again", async () => {
+		let record = activeSecretRecord();
+		if (record.lifecycleState !== "active") throw new Error();
+		const cleanup = secretCleanupStore(record);
+		const decrypt = vi.fn(async () => ({
+			outcome: "failed" as const,
+			code: "SECRET_KEY_UNAVAILABLE" as const,
+		}));
+		const audit = vi.fn(async () => undefined);
+		const f = fixture(
+			{ decryptor: { decrypt } },
+			{
+				configuration: secretConfiguration(),
+				secrets: {
+					get bindings() {
+						return [{ materialization: "current" as const, record }];
+					},
+					store: cleanup.store,
+					auditDecryption: audit,
+				},
+			},
+		);
+		await f.tick(2);
+		const deployment = validateAgentWorkloadDesiredV1(
+			f.state?.candidate.deployment,
+		);
+		const ref = deployment.secretRefs[0];
+		if (!ref) throw new Error();
+		record = validateActiveSecretRecordV1({
+			...record,
+			kubernetesSecretRef: ref,
+			activationFence: {
+				...record.activationFence,
+				kubernetesSecretName: ref.name,
+			},
+		});
+		expect(record.kubernetesSecretRef).toEqual(ref);
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: workloadTestPolicy,
+			probe: async () => true,
+		});
+		await adapter.applyImmutableSecret(
+			deployment,
+			ref.name,
+			"BOT_TOKEN",
+			new Uint8Array([1, 2, 3]),
+		);
+		const identity = await adapter.apply(deployment);
+		if (!identity || identity === "pending") throw new Error();
+		record = validateActiveSecretRecordV1({
+			...record,
+			activationFence: {
+				...record.activationFence,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+			},
+		});
+		await adapter.bindSecretFence(
+			deployment,
+			identity,
+			ref.name,
+			record.activationFence.fence,
+		);
+
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(audit).not.toHaveBeenCalled();
+		expect(cleanup.claims).toBe(0);
+		expect(cleanup.commits).toBe(0);
+		expect(record.kubernetesSecretRef).toEqual(ref);
+		expect(record.activationFence.fence).toBe(1);
+	});
+
+	it.each(["missing", "foreign", "mutable"] as const)(
+		"does not reuse a %s current active Secret when decryption is unavailable",
+		async (mutation) => {
+			let record = activeSecretRecord();
+			const cleanup = secretCleanupStore(record);
+			const decrypt = vi.fn(async () => ({
+				outcome: "failed" as const,
+				code: "SECRET_KEY_UNAVAILABLE" as const,
+			}));
+			const audit = vi.fn(async () => undefined);
+			const f = fixture(
+				{ decryptor: { decrypt } },
+				{
+					configuration: secretConfiguration(),
+					secrets: {
+						get bindings() {
+							return [{ materialization: "current" as const, record }];
+						},
+						store: cleanup.store,
+						auditDecryption: audit,
+					},
+				},
+			);
+			await f.tick(2);
+			const deployment = validateAgentWorkloadDesiredV1(
+				f.state?.candidate.deployment,
+			);
+			const ref = deployment.secretRefs[0];
+			if (!ref) throw new Error();
+			record = validateActiveSecretRecordV1({
+				...record,
+				kubernetesSecretRef: ref,
+				activationFence: {
+					...record.activationFence,
+					kubernetesSecretName: ref.name,
+				},
+			});
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy: workloadTestPolicy,
+				probe: async () => true,
+			});
+			await adapter.applyImmutableSecret(
+				deployment,
+				ref.name,
+				"BOT_TOKEN",
+				new Uint8Array([1, 2, 3]),
+			);
+			const identity = await adapter.apply(deployment);
+			if (!identity || identity === "pending") throw new Error();
+			record = validateActiveSecretRecordV1({
+				...record,
+				activationFence: {
+					...record.activationFence,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+				},
+			});
+			await adapter.bindSecretFence(
+				deployment,
+				identity,
+				ref.name,
+				record.activationFence.fence,
+			);
+			const secret = await f.client.read<V1Secret>("Secret", ref.name);
+			if (!secret) throw new Error();
+			if (mutation === "missing") f.resources.delete(`Secret/${ref.name}`);
+			if (mutation === "foreign")
+				f.resources.set(`Secret/${ref.name}`, {
+					...secret,
+					metadata: {
+						...secret.metadata,
+						annotations: {
+							...secret.metadata?.annotations,
+							"agent-infra.agora.io/agent-id": "agent-other",
+						},
+					},
+				} as V1Secret);
+			if (mutation === "mutable")
+				f.resources.set(`Secret/${ref.name}`, {
+					...secret,
+					immutable: false,
+				} as V1Secret);
+			const before = structuredClone(record);
+
+			await f.tick(2);
+			expect(decrypt).toHaveBeenCalledTimes(1);
+			expect(audit).toHaveBeenCalledWith("secret-a", "key-a", "rejected");
+			expect(f.state?.phase).not.toBe("ready");
+			expect(
+				(await f.client.read<V1Service>("Service", deployment.service.name))
+					?.spec?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+			expect(record).toEqual(before);
+		},
+	);
+
 	it.each(["NetworkPolicy", "ServiceAccount", "Service"])(
 		"repairs a missing %s after readiness without promoting until the replacement is verified",
 		async (kind) => {
@@ -552,51 +742,127 @@ describe("assembled Workload Runtime contracts", () => {
 			).toBe(pvc?.metadata?.uid);
 		},
 	);
-	it("closes a promoted route before replacing a drifted owned Pod", async () => {
-		const f = fixture();
-		await f.tick(8);
-		expect(f.state?.phase).toBe("ready");
-		const service = [...f.resources.values()].find(
-			(resource) =>
-				resource.kind === "Service" &&
-				!resource.metadata?.name?.endsWith("-probe"),
-		) as V1Service | undefined;
-		const serviceName = service?.metadata?.name;
-		if (!service || !serviceName) throw new Error();
-		const pod = await f.client.read<V1Pod>("Pod", `${serviceName}-0`);
-		if (!pod) throw new Error();
-		expect(service.spec?.selector?.["agent-infra.agora.io/revision"]).toBe("1");
-		f.resources.set(`Pod/${serviceName}-0`, {
-			...pod,
-			spec: {
-				...pod.spec,
-				securityContext: { ...pod.spec?.securityContext, fsGroup: 2000 },
+	it.each([
+		{
+			label: "fsGroup",
+			mutate: (pod: V1Pod): V1Pod => {
+				if (!pod.spec) throw new Error();
+				return {
+					...pod,
+					spec: {
+						...pod.spec,
+						securityContext: { ...pod.spec.securityContext, fsGroup: 2000 },
+					},
+				};
 			},
-		} as V1Pod);
+			assertSafe: (pod: V1Pod) =>
+				expect(pod.spec?.securityContext?.fsGroup).toBe(1000),
+		},
+		{
+			label: "command",
+			mutate: (pod: V1Pod): V1Pod => {
+				if (!pod.spec) throw new Error();
+				return {
+					...pod,
+					spec: {
+						...pod.spec,
+						containers: pod.spec.containers.map((container) =>
+							container.name === "agent"
+								? { ...container, command: ["/unexpected"] }
+								: container,
+						),
+					},
+				};
+			},
+			assertSafe: (pod: V1Pod) =>
+				expect(pod.spec?.containers[0]?.command).toBeUndefined(),
+		},
+		{
+			label: "args",
+			mutate: (pod: V1Pod): V1Pod => {
+				if (!pod.spec) throw new Error();
+				return {
+					...pod,
+					spec: {
+						...pod.spec,
+						containers: pod.spec.containers.map((container) =>
+							container.name === "agent"
+								? { ...container, args: ["--unexpected"] }
+								: container,
+						),
+					},
+				};
+			},
+			assertSafe: (pod: V1Pod) =>
+				expect(pod.spec?.containers[0]?.args).toBeUndefined(),
+		},
+		{
+			label: "lifecycle",
+			mutate: (pod: V1Pod): V1Pod => {
+				if (!pod.spec) throw new Error();
+				return {
+					...pod,
+					spec: {
+						...pod.spec,
+						containers: pod.spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										lifecycle: {
+											postStart: { exec: { command: ["/unexpected"] } },
+										},
+									}
+								: container,
+						),
+					},
+				};
+			},
+			assertSafe: (pod: V1Pod) =>
+				expect(pod.spec?.containers[0]?.lifecycle).toBeUndefined(),
+		},
+	] as const)(
+		"closes a promoted route before replacing a drifted owned Pod: $label",
+		async ({ mutate, assertSafe }) => {
+			const f = fixture();
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			const service = [...f.resources.values()].find(
+				(resource) =>
+					resource.kind === "Service" &&
+					!resource.metadata?.name?.endsWith("-probe"),
+			) as V1Service | undefined;
+			const serviceName = service?.metadata?.name;
+			if (!service || !serviceName) throw new Error();
+			const pod = await f.client.read<V1Pod>("Pod", `${serviceName}-0`);
+			if (!pod) throw new Error();
+			expect(service.spec?.selector?.["agent-infra.agora.io/revision"]).toBe(
+				"1",
+			);
+			f.resources.set(`Pod/${serviceName}-0`, mutate(pod));
 
-		await f.tick(1);
-		expect(f.state).toMatchObject({ phase: "applying", revision: 2 });
-		expect(
-			(await f.client.read<V1Service>("Service", serviceName))?.spec
-				?.selector?.["agent-infra.agora.io/revision"],
-		).toBe("closed");
+			await f.tick(1);
+			expect(f.state).toMatchObject({ phase: "applying", revision: 2 });
+			expect(
+				(await f.client.read<V1Service>("Service", serviceName))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
 
-		await f.tick(1);
-		expect(
-			(await f.client.read<V1StatefulSet>("StatefulSet", serviceName))?.spec
-				?.replicas,
-		).toBe(0);
-		await f.tick(5);
-		expect(f.state?.phase).toBe("ready");
-		expect(
-			(await f.client.read<V1Service>("Service", serviceName))?.spec
-				?.selector?.["agent-infra.agora.io/revision"],
-		).toBe("2");
-		expect(
-			(await f.client.read<V1Pod>("Pod", `${serviceName}-0`))?.spec
-				?.securityContext?.fsGroup,
-		).toBe(1000);
-	});
+			await f.tick(1);
+			expect(
+				(await f.client.read<V1StatefulSet>("StatefulSet", serviceName))?.spec
+					?.replicas,
+			).toBe(0);
+			await f.tick(5);
+			expect(f.state?.phase).toBe("ready");
+			expect(
+				(await f.client.read<V1Service>("Service", serviceName))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("2");
+			const replacement = await f.client.read<V1Pod>("Pod", `${serviceName}-0`);
+			if (!replacement) throw new Error();
+			assertSafe(replacement);
+		},
+	);
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({
 			probeRuntime: async () => ({

@@ -540,6 +540,62 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, repaired)).toBe("drifted");
 		}
 	});
+	it.each([
+		["command", { command: ["/unexpected"] }],
+		["args", { args: ["--unexpected"] }],
+		[
+			"lifecycle",
+			{ lifecycle: { postStart: { exec: { command: ["/unexpected"] } } } },
+		],
+	] as const)(
+		"repairs unexpected agent %s in a StatefulSet template",
+		async (_field, mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const container = workload?.spec?.template.spec?.containers[0];
+			if (!workload || !container) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec?.template,
+						spec: {
+							...workload.spec?.template.spec,
+							containers: [{ ...container, ...mutation }],
+						},
+					},
+				},
+			} as unknown as V1StatefulSet);
+
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.spec?.template.spec?.containers[0],
+			).toMatchObject({ name: "agent" });
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.spec?.template.spec?.containers[0],
+			).not.toMatchObject(mutation);
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+		},
+	);
 	it("repairs and rejects container security-context overrides", async () => {
 		const overrides = [
 			{ label: "runAsNonRoot", securityContext: { runAsNonRoot: false } },
@@ -797,6 +853,47 @@ describe("GA Kubernetes Workload adapter", () => {
 												? { ...entry, value: "debug" }
 												: entry,
 										),
+									}
+								: container,
+						),
+					})),
+			},
+			{
+				label: "agent command",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? { ...container, command: ["/unexpected"] }
+								: container,
+						),
+					})),
+			},
+			{
+				label: "agent args",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? { ...container, args: ["--unexpected"] }
+								: container,
+						),
+					})),
+			},
+			{
+				label: "agent lifecycle",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										lifecycle: {
+											postStart: { exec: { command: ["/unexpected"] } },
+										},
 									}
 								: container,
 						),

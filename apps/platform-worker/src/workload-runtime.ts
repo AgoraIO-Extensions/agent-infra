@@ -112,6 +112,24 @@ function cleanupActivationFence(
 	return activationFence;
 }
 
+function activeSecretFence(
+	record: PlatformSecretRecordV1,
+	reference: SecretActivationReferenceV1,
+) {
+	if (record.lifecycleState !== "active") return null;
+	const { kubernetesSecretRef, activationFence } = record;
+	if (
+		!referencesMatch(reference, kubernetesSecretRef) ||
+		activationFence.agentId !== reference.agentId ||
+		activationFence.secretId !== reference.secretId ||
+		activationFence.secretVersion !== reference.secretVersion ||
+		activationFence.configRevision !== reference.configRevision ||
+		activationFence.kubernetesSecretName !== reference.name
+	)
+		return null;
+	return activationFence;
+}
+
 function expectedSecrets(state: WorkloadReconciliationStateV1): readonly {
 	readonly secretId: string;
 	readonly version: number;
@@ -495,6 +513,18 @@ export function createWorkloadRuntimeV1(
 			const workload = desired(state);
 			for (const { materialization, record } of bindingsFor(state, input)) {
 				if (materialization === "active-origin") continue;
+				const reference = recordReference(record);
+				const activationFence = activeSecretFence(record, reference);
+				if (
+					materialization === "current" &&
+					activationFence &&
+					(await adapter.observeActiveImmutableSecret(
+						workload,
+						reference,
+						activationFence,
+					))
+				)
+					continue;
 				const decryption = await options.decryptor.decrypt({
 					encryptedRecord: record,
 					traceId: input.traceId,
@@ -515,7 +545,7 @@ export function createWorkloadRuntimeV1(
 					);
 					await adapter.applyImmutableSecret(
 						workload,
-						recordReference(record).name,
+						reference.name,
 						record.name,
 						decryption.plaintext,
 					);

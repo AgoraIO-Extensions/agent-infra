@@ -228,6 +228,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.containers.some((container) => {
 				const securityContext = container.securityContext;
 				return (
+					(container.command?.length ?? 0) > 0 ||
+					(container.args?.length ?? 0) > 0 ||
+					Object.keys(container.lifecycle ?? {}).length > 0 ||
 					!containsDesired(securityContext, agentContainerSecurityContext()) ||
 					securityContext?.privileged === true ||
 					(securityContext?.capabilities?.add?.length ?? 0) > 0
@@ -651,6 +654,55 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			return (
 				current?.metadata?.annotations?.[key] === String(fence) &&
 				(await observe(value, identity)) === "healthy"
+			);
+		},
+		async observeActiveImmutableSecret(
+			input: unknown,
+			ref: AgentWorkloadDesiredV1["secretRefs"][number],
+			activationFence: SecretActivationFenceV1,
+		): Promise<boolean> {
+			const value = desired(input);
+			if (
+				!value.secretRefs.some(
+					(candidate) =>
+						candidate.agentId === ref.agentId &&
+						candidate.secretId === ref.secretId &&
+						candidate.secretVersion === ref.secretVersion &&
+						candidate.configRevision === ref.configRevision &&
+						candidate.ownerType === ref.ownerType &&
+						candidate.ownerId === ref.ownerId &&
+						candidate.wrappingKeyVersion === ref.wrappingKeyVersion &&
+						candidate.name === ref.name,
+				) ||
+				activationFence.agentId !== ref.agentId ||
+				activationFence.secretId !== ref.secretId ||
+				activationFence.secretVersion !== ref.secretVersion ||
+				activationFence.configRevision !== ref.configRevision ||
+				activationFence.kubernetesSecretName !== ref.name
+			)
+				return false;
+			const current = await client.read<V1StatefulSet>(
+				"StatefulSet",
+				workloadResourceNameV1(value.agentId),
+			);
+			const key = `agent-infra.agora.io/secret-${createHash("sha256").update(ref.name).digest("hex").slice(0, 32)}`;
+			if (
+				!current ||
+				current.metadata?.uid !== activationFence.workloadUid ||
+				current.metadata.generation !== activationFence.workloadGeneration ||
+				current.metadata?.annotations?.[key] !== String(activationFence.fence)
+			)
+				return false;
+			try {
+				own(current, value.agentId, value.workloadRevision);
+			} catch {
+				return false;
+			}
+			const secret = await client.read<V1Secret>("Secret", ref.name);
+			return Boolean(
+				secret &&
+					isOwnedSecret(secret, value, ref) &&
+					secret.immutable === true,
 			);
 		},
 		async applyImmutableSecret(
