@@ -8,6 +8,7 @@ import {
   auditDescription,
   buildCheckRunPayload,
   buildGateRecords,
+  buildHumanValidationConfirmation,
   buildReviewState,
   claudeReviewGateUpdate,
   evaluateClaudeReviewGate,
@@ -344,13 +345,8 @@ test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evi
   );
 });
 
-test("parses current-head validation and waiver commands with non-empty reasons", () => {
+test("parses only current-head Claude waiver commands with non-empty reasons", () => {
   const headSha = "a".repeat(40);
-  assert.deepEqual(parseGateCommand(`/human-validation ${headSha}\nTested in staging.`), {
-    type: "human-validation",
-    headSha,
-    reason: "Tested in staging.",
-  });
   assert.deepEqual(
     parseGateCommand(`/claude-review-waiver ${headSha}\nProvider timeout.`),
     {
@@ -359,29 +355,16 @@ test("parses current-head validation and waiver commands with non-empty reasons"
       reason: "Provider timeout.",
     },
   );
-  assert.deepEqual(
-    parseGateCommand(`/human-validation ${headSha}\r\nVerified in the browser.`),
-    {
-      type: "human-validation",
-      headSha,
-      reason: "Verified in the browser.",
-    },
-  );
+  assert.equal(parseGateCommand(`/human-validation ${headSha}\nTested in staging.`), null);
   assert.equal(parseGateCommand(`/human-validation ${headSha}`), null);
   assert.equal(parseGateCommand("looks good"), null);
 });
 
-test("builds auditable gate records only for current-head comment commands", () => {
+test("builds auditable Gate records only for current-head waiver commands", () => {
   const currentHead = "a".repeat(40);
   const oldHead = "b".repeat(40);
   const records = buildGateRecords({
     comments: [
-      {
-        body: `/human-validation ${currentHead}\nTested in staging.`,
-        created_at: "2026-08-06T00:00:00Z",
-        html_url: "https://github.com/example/repo/pull/1#issuecomment-1",
-        user: { login: "owner", type: "User" },
-      },
       {
         body: `/claude-review-waiver ${oldHead}\nOld failure.`,
         html_url: "https://github.com/example/repo/pull/1#issuecomment-2",
@@ -396,64 +379,41 @@ test("builds auditable gate records only for current-head comment commands", () 
     currentHead,
     memberships: new Map([["owner", { state: "active", role: "member" }]]),
   });
-  assert.deepEqual(records, {
-    confirmations: [
-      {
-        actor: { login: "owner", type: "User" },
-        headSha: currentHead,
-        membership: { state: "active", role: "member" },
-        reason: "Tested in staging.",
-        recordedAt: "2026-08-06T00:00:00Z",
-        url: "https://github.com/example/repo/pull/1#issuecomment-1",
-      },
-    ],
-    waivers: [],
-  });
+  assert.deepEqual(records, { waivers: [] });
 });
 
-test("binds audit evidence to the exact actor selected by the Gate", () => {
-  const records = {
-    confirmations: [
-      {
-        actor: { login: "alice" },
-        headSha: "a".repeat(40),
-        reason: "Wrong record",
-        recordedAt: "2026-08-06T00:00:00Z",
-        url: "https://example.test/alice",
-      },
-      {
-        actor: { login: "malice" },
-        headSha: "a".repeat(40),
-        reason: "Right record",
-        recordedAt: "2026-08-06T00:01:00Z",
-        url: "https://example.test/malice",
-      },
-    ],
-    waivers: [],
-  };
+test("binds label-removal audit evidence to the exact actor and current head", () => {
+  const confirmation = buildHumanValidationConfirmation({
+    action: "unlabeled",
+    label: { name: "ready-for-human" },
+    sender: { login: "owner", type: "User" },
+    eventHeadSha: "a".repeat(40),
+    currentHead: "a".repeat(40),
+    eventTime: "2026-08-06T00:01:00Z",
+    membership: { state: "active", role: "member" },
+    url: "https://example.test/pull/1",
+  });
   assert.equal(
     auditDescription(
       {
         ok: true,
-        description: "Human validation confirmed by malice for current head",
+        description: "Human validation confirmed by owner for current head",
       },
-      records,
+      { waivers: [] },
       "human-validation",
+      confirmation,
     ),
-    "Human validation confirmed by malice for current head\n\n" +
-      "Reason: Right record\n\n" +
-      "Recorded at: 2026-08-06T00:01:00Z\n\n" +
-      "Evidence: https://example.test/malice",
+    "Human validation confirmed by owner for current head\n\n" +
+      "Recorded at: 2026-08-06T00:01:00Z\n\nEvidence: https://example.test/pull/1",
   );
 });
 
-test("Human Validation Gate requires a current-head active Team member record", () => {
+test("Human Validation Gate requires a current-head active Team label removal", () => {
   const currentHead = "a".repeat(40);
   const valid = {
     actor: { login: "owner", type: "User" },
     headSha: currentHead,
     membership: { state: "active", role: "member" },
-    reason: "Tested in staging.",
     recordedAt: "2026-08-06T00:00:00Z",
     url: "https://github.com/example/repo/pull/1#issuecomment-1",
   };
@@ -462,11 +422,11 @@ test("Human Validation Gate requires a current-head active Team member record", 
       labels: [{ name: "ready-for-human" }],
       validationWasRequired: true,
       currentHead,
-      confirmations: [valid],
+      confirmation: valid,
     }),
     {
       ok: true,
-      removeLabel: true,
+      removeLabel: false,
       description: "Human validation confirmed by owner for current head",
     },
   );
@@ -482,7 +442,7 @@ test("Human Validation Gate requires a current-head active Team member record", 
         labels: [],
         validationWasRequired: true,
         currentHead,
-        confirmations: [invalid],
+        confirmation: invalid,
       }).ok,
       false,
     );
@@ -492,10 +452,46 @@ test("Human Validation Gate requires a current-head active Team member record", 
       labels: [],
       validationWasRequired: false,
       currentHead,
-      confirmations: [],
+      confirmation: undefined,
     }),
     { ok: true, removeLabel: false, description: "Human validation is not required" },
   );
+});
+
+test("label confirmation rejects bots, non-label events, stale heads, and missing membership", () => {
+  const currentHead = "a".repeat(40);
+  const base = {
+    action: "unlabeled",
+    label: { name: "ready-for-human" },
+    sender: { login: "owner", type: "User" },
+    eventHeadSha: currentHead,
+    currentHead,
+    eventTime: "2026-08-06T00:00:00Z",
+    membership: { state: "active", role: "member" },
+    url: "https://example.test/pull/1",
+  };
+  assert.equal(buildHumanValidationConfirmation(base)?.headSha, currentHead);
+  for (const input of [
+    { ...base, action: "labeled" },
+    { ...base, label: { name: "bug" } },
+    { ...base, eventHeadSha: "b".repeat(40) },
+  ]) {
+    assert.equal(buildHumanValidationConfirmation(input), undefined);
+  }
+  for (const confirmation of [
+    buildHumanValidationConfirmation({ ...base, sender: { login: "bot[bot]", type: "Bot" } }),
+    buildHumanValidationConfirmation({ ...base, membership: undefined }),
+  ]) {
+    assert.equal(
+      evaluateHumanValidationGate({
+        labels: [],
+        validationWasRequired: true,
+        currentHead,
+        confirmation,
+      }).ok,
+      false,
+    );
+  }
 });
 
 test("Claude Review Gate accepts only current-head success or a bounded infrastructure waiver", () => {

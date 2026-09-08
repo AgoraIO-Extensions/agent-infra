@@ -812,6 +812,11 @@ export function validateTrustedScriptSources(sources) {
     '"Human Validation Gate"',
     '"Claude Review Gate"',
     'blockerStatus(blocker) !== "completed"',
+    "buildHumanValidationConfirmation({",
+    'action !== "unlabeled"',
+    "event?.label?.name !== HUMAN_LABEL",
+    "eventHeadSha !== currentHead",
+    "await teamRequest(",
   ];
   const reviewRequirements = [
     "/check-runs",
@@ -1335,6 +1340,12 @@ export function validateWorkflowDocuments(workflows) {
   }
 
   const prGates = workflows["pr-gates.yml"];
+  if (
+    !prGates?.on?.pull_request_target?.types?.includes("unlabeled") ||
+    !prGates?.on?.pull_request_target?.types?.includes("synchronize")
+  ) {
+    errors.push("PR Gates must observe trusted label removal and head updates");
+  }
   if (
     JSON.stringify(prGates?.on?.issue_comment?.types) !==
       JSON.stringify(["created", "edited", "deleted"])

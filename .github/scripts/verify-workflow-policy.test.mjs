@@ -2039,7 +2039,7 @@ test("rejects legacy status publication in trusted Gate scripts", async () => {
 
 test("requires all Gate Check Runs to stay bound to current PR heads", async () => {
   const sources = await actualTrustedScriptSources();
-  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replace(
+  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replaceAll(
     "headSha: pr.head.sha",
     "headSha: pr.base.sha",
   );
@@ -2085,6 +2085,27 @@ test("fails closed when Team membership configuration is unavailable", async () 
   );
   assert.equal(mint["continue-on-error"], true);
   assert.equal(evaluate.if, "always()");
+});
+
+test("requires trusted label removal to bind human validation to the live head", async () => {
+  const sources = await actualTrustedScriptSources();
+  sources["pr-gates.mjs"] = sources["pr-gates.mjs"].replaceAll(
+    "eventHeadSha !== currentHead",
+    "false",
+  );
+  assert.ok(
+    validateTrustedScriptSources(sources).some((error) =>
+      error.includes("Gate publishers must bind Check Runs to current heads"),
+    ),
+  );
+
+  const workflows = await actualWorkflows();
+  workflows["pr-gates.yml"].on.pull_request_target.types = ["opened"];
+  assert.ok(
+    validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("PR Gates must observe trusted label removal and head updates"),
+    ),
+  );
 });
 
 test("rejects orphaned pending checks in Issue dispatch", async () => {

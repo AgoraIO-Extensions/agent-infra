@@ -198,17 +198,15 @@ export function parseGateCommand(body = "") {
   if (typeof body !== "string" || Buffer.byteLength(body, "utf8") > 8 * 1024) return null;
   const match = body
     .trim()
-    .match(
-      /^\/(human-validation|claude-review-waiver) ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/,
-    );
+    .match(/^\/claude-review-waiver ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/);
   if (!match) return null;
-  const reason = match[3].trim();
+  const reason = match[2].trim();
   if (!reason) return null;
-  return { type: match[1], headSha: match[2], reason };
+  return { type: "claude-review-waiver", headSha: match[1], reason };
 }
 
 export function buildGateRecords({ comments = [], currentHead, memberships = new Map() }) {
-  const records = { confirmations: [], waivers: [] };
+  const records = { waivers: [] };
   for (const comment of comments) {
     const command = parseGateCommand(comment.body);
     const login = comment.user?.login;
@@ -221,10 +219,36 @@ export function buildGateRecords({ comments = [], currentHead, memberships = new
       recordedAt: comment.updated_at ?? comment.created_at,
       url: comment.html_url,
     };
-    if (command.type === "human-validation") records.confirmations.push(record);
-    if (command.type === "claude-review-waiver") records.waivers.push(record);
+    records.waivers.push(record);
   }
   return records;
+}
+
+export function buildHumanValidationConfirmation({
+  action,
+  label,
+  sender,
+  eventHeadSha,
+  currentHead,
+  eventTime,
+  membership,
+  url,
+}) {
+  if (
+    action !== "unlabeled" ||
+    label?.name !== HUMAN_LABEL ||
+    eventHeadSha !== currentHead ||
+    !sender?.login
+  ) {
+    return undefined;
+  }
+  return {
+    actor: { login: sender.login, type: sender.type },
+    headSha: currentHead,
+    membership,
+    recordedAt: eventTime,
+    url,
+  };
 }
 
 function isActiveTeamMember(record) {
@@ -250,7 +274,7 @@ export function evaluateHumanValidationGate({
   labels = [],
   validationWasRequired = false,
   currentHead,
-  confirmations = [],
+  confirmation,
 }) {
   const required = validationWasRequired || labelNames(labels).includes(HUMAN_LABEL);
   if (!required) {
@@ -260,13 +284,10 @@ export function evaluateHumanValidationGate({
       description: "Human validation is not required",
     };
   }
-  const confirmation = confirmations.find(
-    (candidate) =>
-      candidate.headSha === currentHead &&
-      boundedCheckValue(candidate.reason, 4_000) &&
-      isActiveTeamMember(candidate),
-  );
-  if (!confirmation) {
+  if (
+    confirmation?.headSha !== currentHead ||
+    !isActiveTeamMember(confirmation)
+  ) {
     return {
       ok: false,
       removeLabel: false,
@@ -275,7 +296,7 @@ export function evaluateHumanValidationGate({
   }
   return {
     ok: true,
-    removeLabel: labelNames(labels).includes(HUMAN_LABEL),
+    removeLabel: false,
     description: `Human validation confirmed by ${confirmation.actor.login} for current head`,
   };
 }
@@ -665,11 +686,59 @@ async function readGateRecords(repository, prNumber, currentHead) {
         login,
         await teamRequest(
           `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
-        ),
+        ).catch(() => undefined),
       ]),
     ),
   );
   return buildGateRecords({ comments, currentHead, memberships });
+}
+
+async function readHumanValidationConfirmation({
+  repository,
+  action,
+  event,
+  currentHead,
+  events,
+  url,
+}) {
+  const eventHeadSha = event?.pull_request?.head?.sha;
+  const sender = event?.sender;
+  if (
+    action !== "unlabeled" ||
+    event?.label?.name !== HUMAN_LABEL ||
+    eventHeadSha !== currentHead ||
+    !sender?.login
+  ) {
+    return undefined;
+  }
+  const matchingEvent = events
+    .filter(
+      (candidate) =>
+        candidate.event === "unlabeled" &&
+        candidate.label?.name === HUMAN_LABEL &&
+        candidate.actor?.login === sender.login,
+    )
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+  if (!matchingEvent) return undefined;
+  const [owner] = repository.split("/");
+  let membership;
+  try {
+    membership = await teamRequest(
+      `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(sender.login)}`,
+    );
+  } catch {
+    membership = undefined;
+  }
+  return buildHumanValidationConfirmation({
+    action,
+    label: event.label,
+    sender,
+    eventHeadSha,
+    currentHead,
+    eventTime: matchingEvent.created_at,
+    membership,
+    url,
+  });
 }
 
 async function readIssueReadinessState(repository, pullRequest, issue) {
@@ -770,9 +839,9 @@ function validationWasRequired(labels, events) {
   );
 }
 
-export function auditDescription(result, records, type) {
+export function auditDescription(result, records, type, confirmation) {
   if (!result.ok) return result.description;
-  const candidates = type === "human-validation" ? records.confirmations : records.waivers;
+  const candidates = type === "human-validation" ? [confirmation] : records.waivers;
   const expectedDescription = (login) =>
     type === "human-validation"
       ? `Human validation confirmed by ${login} for current head`
@@ -782,6 +851,9 @@ export function auditDescription(result, records, type) {
       candidate.headSha && result.description === expectedDescription(candidate.actor.login),
   );
   if (!record) return result.description;
+  if (type === "human-validation") {
+    return `${result.description}\n\nRecorded at: ${record.recordedAt}\n\nEvidence: ${record.url}`;
+  }
   const reason = record.reason
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replaceAll("<!--", "&lt;!--")
@@ -818,8 +890,19 @@ async function setPendingChecks(repository, pr) {
   return Object.fromEntries(checks.map((check) => [check.name, check]));
 }
 
-async function evaluatePullRequestWithChecks(repository, number, action, pr, checks) {
-  requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");
+async function evaluatePullRequestWithChecks(
+  repository,
+  number,
+  action,
+  pr,
+  checks,
+  confirmationEvent,
+) {
+  try {
+    requiredEnvironment("TEAM_MEMBERSHIP_TOKEN");
+  } catch {
+    // A missing membership token produces no confirmation and restores the label below.
+  }
   let labels = pr.labels;
   const events = await paginate(`/repos/${repository}/issues/${number}/events`);
   if (action === "synchronize" && !labelNames(labels).includes(HUMAN_LABEL)) {
@@ -864,22 +947,29 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
       description: "Issue Readiness evaluation failed closed",
     };
   }
-  const records = await readGateRecords(repository, number, pr.head.sha);
+  const [records, confirmation] = await Promise.all([
+    readGateRecords(repository, number, pr.head.sha),
+    readHumanValidationConfirmation({
+      repository,
+      action,
+      event: confirmationEvent,
+      currentHead: pr.head.sha,
+      events,
+      url: targetUrl,
+    }),
+  ]);
+  const humanValidationRequired =
+    validationWasRequired(labels, events) ||
+    (action === "unlabeled" && confirmationEvent?.label?.name === HUMAN_LABEL);
   const humanResult = evaluateHumanValidationGate({
     labels,
-    validationWasRequired: validationWasRequired(labels, events),
+    validationWasRequired: humanValidationRequired,
     currentHead: pr.head.sha,
-    confirmations: records.confirmations,
+    confirmation,
   });
-  if (humanResult.ok && humanResult.removeLabel) {
-    await githubRequest(
-      `/repos/${repository}/issues/${number}/labels/${encodeURIComponent(HUMAN_LABEL)}`,
-      { method: "DELETE", allowNotFound: true },
-    );
-    labels = labels.filter((label) => label.name !== HUMAN_LABEL);
-  } else if (
+  if (
     !humanResult.ok &&
-    validationWasRequired(labels, events) &&
+    humanValidationRequired &&
     !labelNames(labels).includes(HUMAN_LABEL)
   ) {
     await githubRequest(`/repos/${repository}/issues/${number}/labels`, {
@@ -916,7 +1006,7 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
       repository,
       checks["Human Validation Gate"],
       humanResult.ok ? "success" : "failure",
-      auditDescription(humanResult, records, "human-validation"),
+      auditDescription(humanResult, records, "human-validation", confirmation),
     ),
   ]);
   const reviewUpdate = claudeReviewGateUpdate({
@@ -937,11 +1027,18 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
   }
 }
 
-async function evaluatePullRequest(repository, number, action) {
+async function evaluatePullRequest(repository, number, action, confirmationEvent) {
   const pr = await githubRequest(`/repos/${repository}/pulls/${number}`);
   const checks = await setPendingChecks(repository, pr);
   try {
-    await evaluatePullRequestWithChecks(repository, number, action, pr, checks);
+    await evaluatePullRequestWithChecks(
+      repository,
+      number,
+      action,
+      pr,
+      checks,
+      confirmationEvent,
+    );
   } catch (error) {
     await Promise.allSettled(
       pendingGateNames().map((name) =>
@@ -963,7 +1060,7 @@ async function main() {
   const eventName = requiredEnvironment("GITHUB_EVENT_NAME");
 
   if (eventName === "pull_request_target") {
-    await evaluatePullRequest(repository, event.pull_request.number, event.action);
+    await evaluatePullRequest(repository, event.pull_request.number, event.action, event);
     return;
   }
 
