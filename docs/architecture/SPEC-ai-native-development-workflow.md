@@ -389,6 +389,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   适配 token budget blanket ignore 生成 Client、OpenAPI、JSON Schema、Fake、测试或其他可评审文本。
 - PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
   Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
+- PR-Agent Analysis 开启大 diff 分块，最多 3 次 chunk 调用；Action 引用固定到上游不可变
+  commit，但上游 Action 内部使用浮动容器镜像，不能据此声称实际运行代码已锁定。局部结果
+  合并不等于完整覆盖或完整跨文件推理。当前 Coverage Gate
+  仍按单次 diff 的可信 token decision 判定；即使后续分块成功，已有裁剪证据仍失败，直到
+  单独批准并实现可信的分块覆盖证据契约。本配置不构成 coverage waiver。
 - Claude 的结构化输出和可信 Publisher 校验只属于 Claude Adapter 的内部安全机制，不构成
   Automated Reviewer 的统一输出契约。
 - 只有选中 Claude 时，其 P0/P1 finding 才能进入现有无人值守 code-repair；PR-Agent finding
