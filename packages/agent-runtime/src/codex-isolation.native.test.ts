@@ -278,27 +278,33 @@ function crossFileModifyEvidence(input: {
 	changed: boolean;
 	ownerWriteSucceeded: boolean;
 	outputs: readonly string[];
-	appliedMarker: string;
-	deniedMarker: string;
 }): Evidence {
 	const completeOutput = completeToolOutput(input.outputs);
-	const applied = input.outputs.some((output) =>
-		output.includes(input.appliedMarker),
-	);
-	const denied = input.outputs.some((output) =>
-		output.includes(input.deniedMarker),
-	);
 	if (input.changed) return { status: "fail", reason: "foreign-file-modified" };
 	if (!input.ownerWriteSucceeded)
 		return { status: "unverified", reason: "owner-write-control-failed" };
 	if (!completeOutput)
 		return { status: "unverified", reason: "foreign-write-output-incomplete" };
-	if (denied && !applied)
-		return {
-			status: "pass",
-			reason: "owner-write-succeeded-foreign-write-denied",
-		};
-	return { status: "unverified", reason: "foreign-write-denial-unconfirmed" };
+	return { status: "unverified", reason: "foreign-write-denial-unclassified" };
+}
+
+function foreignWriteCommand(input: {
+	mutation: string;
+	target: string;
+	appliedMarker: string;
+	deniedMarker: string;
+}) {
+	return (
+		"if printf %s " +
+		quote(input.mutation) +
+		" > " +
+		quote(input.target) +
+		"; then printf '%s\\n' " +
+		quote(input.appliedMarker) +
+		"; else printf '%s\\n' " +
+		quote(input.deniedMarker) +
+		"; fi"
+	);
 }
 
 function historyOutputLines(outputs: readonly string[]) {
@@ -946,7 +952,7 @@ it("keeps incomplete and failed history commands unverified", () => {
 	}
 });
 
-it("requires completed cross-write denial evidence before passing modification isolation", () => {
+it("keeps unclassified cross-write outcomes from passing modification isolation", async () => {
 	const appliedMarker = "SYNTH_FOREIGN_WRITE_APPLIED";
 	const deniedMarker = "SYNTH_FOREIGN_WRITE_DENIED";
 	const evidence = (
@@ -956,10 +962,30 @@ it("requires completed cross-write denial evidence before passing modification i
 			changed: false,
 			ownerWriteSucceeded: true,
 			outputs: [],
-			appliedMarker,
-			deniedMarker,
 			...input,
 		});
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-cross-write-"));
+	let genericFailureOutput = "";
+	try {
+		const target = join(directory, "not-a-file");
+		await mkdir(target);
+		genericFailureOutput = execFileSync(
+			"sh",
+			[
+				"-c",
+				foreignWriteCommand({
+					mutation: "SYNTH_MUTATION",
+					target,
+					appliedMarker,
+					deniedMarker,
+				}),
+			],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+	expect(genericFailureOutput).toContain(deniedMarker);
 	const statuses: Status[] = [];
 	for (const [input, expected] of [
 		[
@@ -967,11 +993,8 @@ it("requires completed cross-write denial evidence before passing modification i
 			{ status: "fail", reason: "foreign-file-modified" },
 		],
 		[
-			{ outputs: [JSON.stringify(deniedMarker)] },
-			{
-				status: "pass",
-				reason: "owner-write-succeeded-foreign-write-denied",
-			},
+			{ outputs: [JSON.stringify(genericFailureOutput)] },
+			{ status: "unverified", reason: "foreign-write-denial-unclassified" },
 		],
 		[
 			{ outputs: [] },
@@ -987,7 +1010,7 @@ it("requires completed cross-write denial evidence before passing modification i
 		],
 		[
 			{ outputs: [JSON.stringify("native command failed")] },
-			{ status: "unverified", reason: "foreign-write-denial-unconfirmed" },
+			{ status: "unverified", reason: "foreign-write-denial-unclassified" },
 		],
 	] as const) {
 		const result = evidence(input);
@@ -1003,7 +1026,7 @@ it("requires completed cross-write denial evidence before passing modification i
 	}
 	expect(statuses).toEqual([
 		"fail",
-		"pass",
+		"unverified",
 		"unverified",
 		"unverified",
 		"unverified",
@@ -1644,17 +1667,12 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					const marker = foreignWriteMarkers[index];
 					if (!other) throw new Error("Missing other user");
 					if (!marker) throw new Error("Missing foreign-write marker");
-					return (
-						"if printf %s " +
-						quote(mutation) +
-						" > " +
-						quote(filePath(other, "foreign-write.txt")) +
-						"; then printf '%s\\n' " +
-						quote(`${marker}_APPLIED`) +
-						"; else printf '%s\\n' " +
-						quote(`${marker}_DENIED`) +
-						"; fi"
-					);
+					return foreignWriteCommand({
+						mutation,
+						target: filePath(other, "foreign-write.txt"),
+						appliedMarker: `${marker}_APPLIED`,
+						deniedMarker: `${marker}_DENIED`,
+					});
 				}),
 			);
 			for (const [index, user] of users.entries()) {
@@ -1671,8 +1689,6 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					changed,
 					ownerWriteSucceeded: canWrite[index] === true,
 					outputs: foreignWrite.probe.outputs,
-					appliedMarker: `${marker}_APPLIED`,
-					deniedMarker: `${marker}_DENIED`,
 				});
 				record(
 					[name, user.id, "cross-file-modify"].join("."),
