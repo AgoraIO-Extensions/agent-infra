@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ConnectionActionCallProjectionV1": {
-      "oneOf": [
+      "anyOf": [
         {
           "additionalProperties": false,
           "properties": {
@@ -96,7 +96,7 @@
           "additionalProperties": false,
           "properties": {
             "actionVersionId": {
-              "minLength": 1,
+              "const": "github.get_current_user@v1",
               "type": "string"
             },
             "callId": {
@@ -109,91 +109,179 @@
               "type": "string"
             },
             "result": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "accountId": {
-                      "pattern": "^\\d+$",
-                      "type": "string"
-                    },
-                    "login": {
-                      "minLength": 1,
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "accountId",
-                    "login"
-                  ],
-                  "type": "object"
+              "additionalProperties": false,
+              "properties": {
+                "accountId": {
+                  "pattern": "^\\d+$",
+                  "type": "string"
                 },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "repositories": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "name": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "owner": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "private": {
-                            "const": true,
-                            "description": "The repository was revalidated against the Pilot private-repository policy before projection.",
-                            "type": "boolean"
-                          },
-                          "repositoryId": {
-                            "pattern": "^\\d+$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "repositoryId",
-                          "owner",
-                          "name",
-                          "private"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "repositories"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "number": {
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991,
-                      "type": "integer"
-                    },
-                    "pullRequestId": {
-                      "pattern": "^\\d+$",
-                      "type": "string"
-                    },
-                    "url": {
-                      "pattern": "^https:\\/\\/github\\.com\\/",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "pullRequestId",
-                    "number",
-                    "url"
-                  ],
-                  "type": "object"
+                "login": {
+                  "minLength": 1,
+                  "type": "string"
                 }
-              ]
+              },
+              "required": [
+                "accountId",
+                "login"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "const": "github.list_my_repositories@v1",
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "repositories": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "owner": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "private": {
+                        "const": true,
+                        "description": "The repository was revalidated against the Pilot private-repository policy before projection.",
+                        "type": "boolean"
+                      },
+                      "repositoryId": {
+                        "pattern": "^\\d+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "repositoryId",
+                      "owner",
+                      "name",
+                      "private"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "repositories"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "succeeded",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "callId",
+            "actionVersionId",
+            "traceId",
+            "createdAt",
+            "updatedAt",
+            "status",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionVersionId": {
+              "const": "github.create_pull_request@v1",
+              "type": "string"
+            },
+            "callId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "number": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "pullRequestId": {
+                  "pattern": "^\\d+$",
+                  "type": "string"
+                },
+                "url": {
+                  "pattern": "^https:\\/\\/github\\.com\\/",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pullRequestId",
+                "number",
+                "url"
+              ],
+              "type": "object"
             },
             "schemaVersion": {
               "const": 1,

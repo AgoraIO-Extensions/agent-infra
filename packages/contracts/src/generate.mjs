@@ -18,7 +18,9 @@ import {
 } from "./index.ts";
 import {
 	connectionBrowserOpenApiPathsV1,
+	connectionBrowserSchemasV1,
 	connectionCatalogOpenApiPathsV1,
+	connectionCatalogSchemasV1,
 	connectionSchemasV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
@@ -277,7 +279,7 @@ function buildArtifacts() {
 				},
 				ConnectionCsrf: { type: "apiKey", in: "header", name: "X-CSRF-Token" },
 			},
-			schemas: connectionSchemasV1,
+			schemas: connectionBrowserSchemasV1,
 		},
 	});
 	const connectionCatalogOpenapi = createDocument({
@@ -298,7 +300,7 @@ function buildArtifacts() {
 					},
 				},
 			},
-			schemas: connectionSchemasV1,
+			schemas: connectionCatalogSchemasV1,
 		},
 	});
 	const openapi = createDocument({

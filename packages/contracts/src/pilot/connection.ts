@@ -236,34 +236,41 @@ export const ConnectionResultPendingV1Schema = z.strictObject({
 		reconcileUntil: Rfc3339TimestampV1Schema,
 	}),
 });
-export const ConnectionActionCallProjectionV1Schema = z.discriminatedUnion(
-	"status",
-	[
-		z.strictObject({ ...callShape, status: z.literal("pending") }),
-		z.strictObject({ ...callShape, status: z.literal("submission_started") }),
-		z.strictObject({
-			...callShape,
-			status: z.literal("succeeded"),
-			result: z.union([
-				GitHubGetCurrentUserOutputV1Schema,
-				GitHubListMyRepositoriesOutputV1Schema,
-				GitHubCreatePullRequestOutputV1Schema,
-			]),
-		}),
-		ConnectionProviderFailedV1Schema,
-		ConnectionResultPendingV1Schema,
-		z.strictObject({
-			...callShape,
-			status: z.literal("needs_manual_review"),
-			evidenceSummary: nonEmptyString(),
-		}),
-		z.strictObject({
-			...callShape,
-			status: z.literal("unresolved"),
-			resolvedAt: Rfc3339TimestampV1Schema,
-		}),
-	],
-);
+const succeededCall = (actionVersionId: string, result: z.ZodType) =>
+	z.strictObject({
+		...callShape,
+		actionVersionId: z.literal(actionVersionId),
+		status: z.literal("succeeded"),
+		result,
+	});
+export const ConnectionActionCallProjectionV1Schema = z.union([
+	z.strictObject({ ...callShape, status: z.literal("pending") }),
+	z.strictObject({ ...callShape, status: z.literal("submission_started") }),
+	succeededCall(
+		"github.get_current_user@v1",
+		GitHubGetCurrentUserOutputV1Schema,
+	),
+	succeededCall(
+		"github.list_my_repositories@v1",
+		GitHubListMyRepositoriesOutputV1Schema,
+	),
+	succeededCall(
+		"github.create_pull_request@v1",
+		GitHubCreatePullRequestOutputV1Schema,
+	),
+	ConnectionProviderFailedV1Schema,
+	ConnectionResultPendingV1Schema,
+	z.strictObject({
+		...callShape,
+		status: z.literal("needs_manual_review"),
+		evidenceSummary: nonEmptyString(),
+	}),
+	z.strictObject({
+		...callShape,
+		status: z.literal("unresolved"),
+		resolvedAt: Rfc3339TimestampV1Schema,
+	}),
+]);
 export const ConnectionActionCallListV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	calls: z.array(ConnectionActionCallProjectionV1Schema),
@@ -442,10 +449,13 @@ export const connectionCatalogOpenApiPathsV1 = {
 	},
 };
 
-export const connectionSchemasV1 = {
+export const connectionCatalogSchemasV1 = {
+	ConnectionCatalogV1: ConnectionCatalogV1Schema,
+};
+
+export const connectionBrowserSchemasV1 = {
 	ConnectionActionCallProjectionV1: ConnectionActionCallProjectionV1Schema,
 	ConnectionBrowserSessionV1: ConnectionBrowserSessionV1Schema,
-	ConnectionCatalogV1: ConnectionCatalogV1Schema,
 	ConnectionGrantCreateRequestV1: ConnectionGrantCreateRequestV1Schema,
 	ConnectionGrantProjectionV1: ConnectionGrantProjectionV1Schema,
 	ConnectionLoginRequestV1: ConnectionLoginRequestV1Schema,
@@ -453,12 +463,17 @@ export const connectionSchemasV1 = {
 	ConnectionProviderRevokeStatusV1: ConnectionProviderRevokeStatusV1Schema,
 	ConnectionProviderRevokeProjectionV1:
 		ConnectionProviderRevokeProjectionV1Schema,
-	GitHubCreatePullRequestInputV1: GitHubCreatePullRequestInputV1Schema,
 	GitHubCreatePullRequestOutputV1: GitHubCreatePullRequestOutputV1Schema,
-	GitHubGetCurrentUserInputV1: GitHubGetCurrentUserInputV1Schema,
 	GitHubGetCurrentUserOutputV1: GitHubGetCurrentUserOutputV1Schema,
-	GitHubListMyRepositoriesInputV1: GitHubListMyRepositoriesInputV1Schema,
 	GitHubListMyRepositoriesOutputV1: GitHubListMyRepositoriesOutputV1Schema,
+};
+
+export const connectionSchemasV1 = {
+	...connectionBrowserSchemasV1,
+	...connectionCatalogSchemasV1,
+	GitHubCreatePullRequestInputV1: GitHubCreatePullRequestInputV1Schema,
+	GitHubGetCurrentUserInputV1: GitHubGetCurrentUserInputV1Schema,
+	GitHubListMyRepositoriesInputV1: GitHubListMyRepositoriesInputV1Schema,
 };
 
 export type ConnectionCatalogV1 = z.infer<typeof ConnectionCatalogV1Schema>;

@@ -260,6 +260,36 @@ describe("Connection Pilot contracts", () => {
 				result: { accessToken: "must-not-leak" },
 			}).success,
 		).toBe(false);
+		expect(
+			ConnectionActionCallProjectionV1Schema.safeParse({
+				...base,
+				actionVersionId: "github.get_current_user@v1",
+				status: "succeeded",
+				result: {
+					pullRequestId: "123",
+					number: 1,
+					url: "https://github.com/AgoraIO-Extensions/agent-infra/pull/1",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			ConnectionActionCallProjectionV1Schema.safeParse({
+				...base,
+				status: "succeeded",
+				result: { accountId: "53285945", login: "pilot-alice" },
+			}).success,
+		).toBe(false);
+		expect(
+			ConnectionActionCallProjectionV1Schema.safeParse({
+				...base,
+				status: "succeeded",
+				result: {
+					pullRequestId: "4469849339",
+					number: 426,
+					url: "https://github.com/AgoraIO-Extensions/agent-infra/pull/426",
+				},
+			}).success,
+		).toBe(true);
 	});
 
 	it("publishes separate authenticated Browser and read-only Catalog paths", () => {

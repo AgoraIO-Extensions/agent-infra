@@ -5,7 +5,9 @@ import { createDocument } from "zod-openapi";
 
 import {
 	connectionBrowserOpenApiPathsV1,
+	connectionBrowserSchemasV1,
 	connectionCatalogOpenApiPathsV1,
+	connectionCatalogSchemasV1,
 	connectionSchemasV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
@@ -36,13 +38,13 @@ describe("Pilot standard artifacts", () => {
 			openapi: "3.1.0",
 			info: { title: "Connection Pilot Browser API", version: "1.0.0" },
 			paths: connectionBrowserOpenApiPathsV1,
-			components: { schemas: connectionSchemasV1 },
+			components: { schemas: connectionBrowserSchemasV1 },
 		});
 		const catalog = createDocument({
 			openapi: "3.1.0",
 			info: { title: "Connection Pilot Catalog API", version: "1.0.0" },
 			paths: connectionCatalogOpenApiPathsV1,
-			components: { schemas: connectionSchemasV1 },
+			components: { schemas: connectionCatalogSchemasV1 },
 		});
 		const schemas = generateJsonSchema(connectionSchemasV1);
 
@@ -50,6 +52,13 @@ describe("Pilot standard artifacts", () => {
 		expect(browser.paths).not.toHaveProperty("/connection/internal/v1/catalog");
 		expect(catalog.paths).toHaveProperty("/connection/internal/v1/catalog.get");
 		expect(catalog.paths).not.toHaveProperty("/connection/api/v1/grants");
+		const catalogSchemaNames = Object.keys(catalog.components?.schemas ?? {});
+		expect(catalogSchemaNames).toContain("ConnectionCatalogV1");
+		expect(catalogSchemaNames).not.toContain("ConnectionLoginRequestV1");
+		expect(catalogSchemaNames).not.toContain("ConnectionGrantCreateRequestV1");
+		expect(browser.components?.schemas).not.toHaveProperty(
+			"ConnectionCatalogV1",
+		);
 		expect(schemas.ConnectionLoginRequestV1).toHaveProperty(
 			"properties.password.writeOnly",
 			true,
