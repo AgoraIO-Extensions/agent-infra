@@ -48,6 +48,17 @@ export interface WorkloadReconciliationStateV1 {
 	readonly capabilities?: Readonly<Record<string, boolean>>;
 }
 
+/**
+ * Store-derived material for the exact configuration the reconciler may mount.
+ * Historical material is only reusable after it has completed its own
+ * activation; the Worker never selects arbitrary Secret history.
+ */
+export interface WorkloadSecretBindingV1 {
+	readonly materialization: "current" | "active-origin";
+	/** The Worker validates the Store-derived record before materializing it. */
+	readonly record: unknown;
+}
+
 export interface WorkloadReconciliationInputV1 {
 	readonly management: AgentManagementStateV1;
 	readonly configuration: AgentConfigurationRecordV1;
@@ -55,12 +66,8 @@ export interface WorkloadReconciliationInputV1 {
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly secrets?: {
-		readonly records: readonly unknown[];
+		readonly bindings: readonly WorkloadSecretBindingV1[];
 		readonly store: SecretActivationStorePortV1;
-		persistCurrentRevisionRecord(record: unknown): Promise<{
-			readonly outcome: "inserted" | "exists";
-			readonly record: unknown;
-		}>;
 		auditDecryption(
 			secretId: string,
 			wrappingKeyVersion: string,

@@ -1,14 +1,9 @@
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 
-import {
-	type PlatformSecretRecordV1,
-	validatePlatformSecretRecordV1,
-} from "@agent-infra/contracts/workload";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import {
 	createSecretKeyRotationCryptoV1,
 	createSecretKeyringDecryptorV1,
-	createSecretRevisionBindingCryptoV1,
 } from "@agent-infra/secret-store/worker";
 import { describe, expect, it } from "vitest";
 import { secretActivationDecryptorConformanceV1 } from "../../../packages/platform-core/src/secret-decryptor.conformance.js";
@@ -85,56 +80,6 @@ function encryptedRecord() {
 	};
 }
 
-function activeRecord(
-	fixture: ReturnType<typeof encryptedRecord>,
-): Extract<PlatformSecretRecordV1, { readonly lifecycleState: "active" }> {
-	const record = validatePlatformSecretRecordV1({
-		...fixture.record,
-		lifecycleState: "active",
-		kubernetesSecretRef: {
-			schemaVersion: 1,
-			ownerType: fixture.record.ownerType,
-			ownerId: fixture.record.ownerId,
-			agentId: fixture.record.agentId,
-			secretId: fixture.record.secretId,
-			secretVersion: fixture.record.secretVersion,
-			configRevision: fixture.record.configRevision,
-			algorithmVersion: fixture.record.crypto.algorithmVersion,
-			wrappingAlgorithmVersion: fixture.record.crypto.wrappingAlgorithmVersion,
-			wrappingKeyVersion: fixture.record.crypto.wrappingKeyVersion,
-			name: "agent-secret-v2-r7",
-		},
-		activationFence: {
-			schemaVersion: 1,
-			agentId: fixture.record.agentId,
-			secretId: fixture.record.secretId,
-			secretVersion: fixture.record.secretVersion,
-			configRevision: fixture.record.configRevision,
-			kubernetesSecretName: "agent-secret-v2-r7",
-			workloadUid: "workload_01",
-			workloadGeneration: 1,
-			fence: 1,
-		},
-	});
-	if (record.lifecycleState !== "active")
-		throw new Error("Expected active record");
-	return record;
-}
-
-function expectedBinding(record: ReturnType<typeof activeRecord>) {
-	return {
-		agentId: record.agentId,
-		secretId: record.secretId,
-		secretVersion: record.secretVersion,
-		configRevision: record.configRevision,
-		ownerType: record.ownerType,
-		ownerId: record.ownerId,
-		name: record.name,
-		wrappingKeyVersion: record.crypto.wrappingKeyVersion,
-		dekFingerprint: record.crypto.dekFingerprint,
-	};
-}
-
 secretActivationDecryptorConformanceV1("Worker", () => {
 	const fixture = encryptedRecord();
 	return {
@@ -196,162 +141,6 @@ describe("Worker Secret decryptor", () => {
 			outcome: "failed",
 			code: "SECRET_AUTHENTICATION_FAILED",
 		});
-	});
-});
-
-describe("Worker Secret revision binding crypto", () => {
-	it("binds only an exact active record and leaves it usable when binding fails", async () => {
-		const source = encryptedRecord();
-		const active = activeRecord(source);
-		const target = generateKeyPairSync("rsa", { modulusLength: 3072 });
-		const targetPublic = target.publicKey.export({
-			format: "der",
-			type: "spki",
-		});
-		const targetPrivate = target.privateKey.export({
-			format: "der",
-			type: "pkcs8",
-		});
-		const encryptionKeys = {
-			schemaVersion: 1 as const,
-			activeWrappingKeyVersion: "key_target",
-			keys: [
-				{
-					schemaVersion: 1 as const,
-					keyVersion: source.keyVersion,
-					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-					publicKeySpkiDerBase64: source.publicKeySpkiDerBase64,
-					publicKeyFingerprint: source.publicKeyFingerprint,
-					rsaModulusBits: 3072,
-					status: "retiring" as const,
-				},
-				{
-					schemaVersion: 1 as const,
-					keyVersion: "key_target",
-					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-					publicKeySpkiDerBase64: targetPublic.toString("base64"),
-					publicKeyFingerprint: createHash("sha256")
-						.update(targetPublic)
-						.digest("hex"),
-					rsaModulusBits: 3072,
-					status: "active" as const,
-				},
-			],
-		};
-		const sourceKey = {
-			keyVersion: source.keyVersion,
-			privateKeyPkcs8DerBase64: source.privateKeyPkcs8DerBase64,
-		};
-		const targetKey = {
-			keyVersion: "key_target",
-			privateKeyPkcs8DerBase64: targetPrivate.toString("base64"),
-		};
-		const keys = [sourceKey, targetKey];
-		const binding = expectedBinding(active);
-		const crypto = createSecretRevisionBindingCryptoV1({
-			keys,
-			encryptionKeys,
-			now: () => new Date("2026-09-08T00:00:00Z"),
-		});
-		const before = JSON.stringify(active);
-
-		const bound = await crypto.bind({
-			encryptedRecord: active,
-			expectedBinding: binding,
-			targetConfigRevision: 8,
-			traceId: "trace-bind-01",
-		});
-		expect(bound).toMatchObject({
-			outcome: "bound",
-			encryptedRecord: {
-				configRevision: 8,
-				lifecycleState: "pending",
-				crypto: {
-					wrappingKeyVersion: "key_target",
-					aadBinding: { configRevision: 8 },
-				},
-			},
-		});
-		expect(JSON.stringify(active)).toBe(before);
-
-		const missingSourceKey = createSecretRevisionBindingCryptoV1({
-			keys: [targetKey],
-			encryptionKeys,
-		});
-		await expect(
-			missingSourceKey.bind({
-				encryptedRecord: active,
-				expectedBinding: binding,
-				targetConfigRevision: 8,
-				traceId: "trace-bind-02",
-			}),
-		).resolves.toEqual({
-			outcome: "failed",
-			code: "SECRET_KEY_UNAVAILABLE",
-		});
-		await expect(
-			crypto.bind({
-				encryptedRecord: {
-					...active,
-					crypto: {
-						...active.crypto,
-						ciphertext: `${active.crypto.ciphertext.slice(0, -4)}AAAA`,
-					},
-				},
-				expectedBinding: binding,
-				targetConfigRevision: 8,
-				traceId: "trace-bind-03",
-			}),
-		).resolves.toEqual({
-			outcome: "failed",
-			code: "SECRET_AUTHENTICATION_FAILED",
-		});
-		await expect(
-			crypto.bind({
-				encryptedRecord: {
-					...active,
-					agentId: "agent_02",
-					kubernetesSecretRef: {
-						...active.kubernetesSecretRef,
-						agentId: "agent_02",
-					},
-					activationFence: {
-						...active.activationFence,
-						agentId: "agent_02",
-					},
-					crypto: {
-						...active.crypto,
-						aadBinding: {
-							...active.crypto.aadBinding,
-							agentId: "agent_02",
-						},
-					},
-				},
-				expectedBinding: binding,
-				targetConfigRevision: 8,
-				traceId: "trace-bind-04",
-			}),
-		).resolves.toEqual({
-			outcome: "failed",
-			code: "SECRET_METADATA_INVALID",
-		});
-		const failedEncryption = createSecretRevisionBindingCryptoV1({
-			keys,
-			encryptionKeys,
-			now: () => new Date(Number.NaN),
-		});
-		await expect(
-			failedEncryption.bind({
-				encryptedRecord: active,
-				expectedBinding: binding,
-				targetConfigRevision: 8,
-				traceId: "trace-bind-05",
-			}),
-		).resolves.toEqual({
-			outcome: "failed",
-			code: "SECRET_REVISION_BINDING_FAILED",
-		});
-		expect(JSON.stringify(active)).toBe(before);
 	});
 });
 

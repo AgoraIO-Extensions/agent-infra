@@ -1,1 +1,0 @@
-DROP INDEX "platform"."secret_record_agent_secret_version_unique";

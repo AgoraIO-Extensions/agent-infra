@@ -457,7 +457,6 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				"StatefulSet",
 				"Service",
 				"ServiceAccount",
-				"Secret",
 				"PersistentVolumeClaim",
 				"NetworkPolicy",
 				"Ingress",
@@ -468,6 +467,12 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						`agent-infra.agora.io/agent=${a.service.name}`,
 					),
 				).toHaveLength(0);
+			expect(
+				await client.list(
+					"Secret",
+					`agent-infra.agora.io/agent=${a.service.name}`,
+				),
+			).toHaveLength(1);
 		}, 900_000);
 	},
 );

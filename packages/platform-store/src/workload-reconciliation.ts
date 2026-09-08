@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import {
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
+	type WorkloadSecretBindingV1,
 	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -16,14 +18,113 @@ import {
 } from "./agent-management.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
-import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 
-const workloadLeaseMs = 300_000;
+const defaultWorkloadLeaseMs = 300_000;
+
+function secretReferenceKey(input: {
+	readonly name: string;
+	readonly secretId: string;
+	readonly secretVersion: number;
+}) {
+	return `${input.name}\0${input.secretId}\0${input.secretVersion}`;
+}
+
+function expectedSecretReferences(configuration: {
+	readonly secrets: readonly {
+		readonly name: string;
+		readonly secretId: string;
+		readonly version: number;
+		readonly isSet: boolean;
+	}[];
+	readonly modelConfiguration: {
+		readonly options: readonly {
+			readonly optionId: string;
+			readonly credential: {
+				readonly secretId: string;
+				readonly version: number;
+				readonly isSet: boolean;
+			};
+		}[];
+	} | null;
+}) {
+	const references = [
+		...configuration.secrets
+			.filter(({ isSet }) => isSet)
+			.map(({ name, secretId, version }) => ({
+				name,
+				secretId,
+				secretVersion: version,
+			})),
+		...(configuration.modelConfiguration?.options
+			.filter(({ credential }) => credential.isSet)
+			.map(({ optionId, credential }) => ({
+				name: `model:${optionId}`,
+				secretId: credential.secretId,
+				secretVersion: credential.version,
+			})) ?? []),
+	];
+	if (
+		references.length > 160 ||
+		new Set(references.map(secretReferenceKey)).size !== references.length
+	)
+		throw new Error();
+	return references;
+}
+
+function resolveSecretBindings(
+	records: readonly ReturnType<typeof validatePlatformSecretRecordV1>[],
+	configuration: {
+		readonly revision: number;
+		readonly secrets: readonly {
+			readonly name: string;
+			readonly secretId: string;
+			readonly version: number;
+			readonly isSet: boolean;
+		}[];
+		readonly modelConfiguration: {
+			readonly options: readonly {
+				readonly optionId: string;
+				readonly credential: {
+					readonly secretId: string;
+					readonly version: number;
+					readonly isSet: boolean;
+				};
+			}[];
+		} | null;
+	},
+	ownerIds: readonly string[],
+	retiredWrappingKeys: ReadonlySet<string>,
+): readonly WorkloadSecretBindingV1[] {
+	return expectedSecretReferences(configuration).map((reference) => {
+		const matches = records.filter(
+			(record) =>
+				record.secretId === reference.secretId &&
+				record.secretVersion === reference.secretVersion,
+		);
+		if (matches.length !== 1) throw new Error();
+		const record = matches[0];
+		if (
+			!record ||
+			record.name !== reference.name ||
+			record.ownerType !== "agent-owner" ||
+			!ownerIds.includes(record.ownerId) ||
+			retiredWrappingKeys.has(record.crypto.wrappingKeyVersion) ||
+			record.configRevision > configuration.revision
+		)
+			throw new Error();
+		if (record.configRevision < configuration.revision) {
+			if (record.lifecycleState !== "active") throw new Error();
+			return { materialization: "active-origin", record } as const;
+		}
+		return { materialization: "current", record } as const;
+	});
+}
 
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
 	readonly retryDelayMs?: number;
 	readonly monitorDelayMs?: number;
+	readonly workloadLeaseMs?: number;
 }): WorkloadReconciliationStorePortV1 & { close(): Promise<void> } {
 	const client = postgres(
 		platformDatabaseUrlFromEnvironment({
@@ -33,10 +134,14 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 	);
 	const retryDelayMs = options.retryDelayMs ?? 1000;
 	const monitorDelayMs = options.monitorDelayMs ?? 30_000;
+	const workloadLeaseMs = options.workloadLeaseMs ?? defaultWorkloadLeaseMs;
 	if (
 		![retryDelayMs, monitorDelayMs].every(
 			(n) => Number.isSafeInteger(n) && n >= 0 && n <= 300_000,
-		)
+		) ||
+		!Number.isSafeInteger(workloadLeaseMs) ||
+		workloadLeaseMs < 1 ||
+		workloadLeaseMs > 300_000
 	)
 		throw new TypeError("Invalid Workload poll interval");
 	return {
@@ -57,7 +162,8 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						where ap.approval_revision is not null and (
 							(w.agent_id is null and ap.status <> 'creation_failed')
 							or w.next_attempt_at <= clock_timestamp()
-							or exists (select 1 from platform.outbox_items o where o.scope_id = a.id
+							or exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
+								and o.scope_id = a.id
 								and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
 								and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
 									or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
@@ -99,7 +205,8 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					const [candidate] = await sql<
 						{ id: string; delivery_fence: string }[]
 					>`
-							select id, delivery_fence::text from platform.outbox_items where scope_id = ${agent.id}
+							select id, delivery_fence::text from platform.outbox_items where scope_type = 'agent'
+							and scope_id = ${agent.id}
 							and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
 							and ((status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
 								or (status = 'processing' and lease_expires_at <= clock_timestamp()))
@@ -141,11 +248,51 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					}
 					const requestId = task?.request_id ?? `workload-${agent.id}`;
 					const traceId = task?.trace_id ?? requestId;
+					let secretConfiguration = configuration;
+					if (state?.rollback) {
+						if (
+							!state.verified ||
+							state.candidate.configuration.revision !==
+								state.verified.configuration.revision
+						)
+							throw new Error();
+						const [rollbackConfigurationRow] = await sql<
+							{ configuration: unknown }[]
+						>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${state.candidate.configuration.revision}`;
+						const rollbackConfiguration = decodeAgentConfigurationRecord(
+							rollbackConfigurationRow?.configuration,
+						);
+						if (
+							!isDeepStrictEqual(
+								rollbackConfiguration,
+								state.candidate.configuration,
+							)
+						)
+							throw new Error();
+						secretConfiguration = rollbackConfiguration;
+					}
 					const rows = await sql<
 						{ record: unknown }[]
 					>`select record from platform.secret_records where agent_id = ${agent.id}`;
 					const records = rows.map((row) =>
 						validatePlatformSecretRecordV1(row.record),
+					);
+					const wrappingKeyVersions = [
+						...new Set(
+							records.map((record) => record.crypto.wrappingKeyVersion),
+						),
+					];
+					const retired = wrappingKeyVersions.length
+						? await sql<{ key_version: string }[]>`
+								select key_version from platform.retired_secret_wrapping_keys
+								where key_version = any(${sql.array(wrappingKeyVersions)})
+							`
+						: [];
+					const bindings = resolveSecretBindings(
+						records,
+						secretConfiguration,
+						management.ownerIds,
+						new Set(retired.map(({ key_version }) => key_version)),
 					);
 					const input: WorkloadReconciliationInputV1 = {
 						management,
@@ -154,93 +301,18 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						requestId,
 						traceId,
 						secrets: {
-							records,
+							bindings,
 							store: new PostgresSecretActivationStoreV1({ transaction: sql }),
-							async persistCurrentRevisionRecord(record) {
-								const candidate = validatePlatformSecretRecordV1(record);
-								const expected = [
-									...configuration.secrets.map(
-										({ name, secretId, version }) => ({
-											name,
-											secretId,
-											secretVersion: version,
-										}),
-									),
-									...(configuration.modelConfiguration?.options.map(
-										({ optionId, credential }) => ({
-											name: `model:${optionId}`,
-											secretId: credential.secretId,
-											secretVersion: credential.version,
-										}),
-									) ?? []),
-								];
-								if (
-									candidate.lifecycleState !== "pending" ||
-									candidate.agentId !== agent.id ||
-									candidate.configRevision !== configuration.revision ||
-									candidate.ownerType !== "agent-owner" ||
-									!management.ownerIds.includes(candidate.ownerId) ||
-									!expected.some(
-										(secret) =>
-											secret.name === candidate.name &&
-											secret.secretId === candidate.secretId &&
-											secret.secretVersion === candidate.secretVersion,
-									)
-								) {
-									throw new Error();
-								}
-								await sql`select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${secretKeyAdvisoryLockName(candidate.crypto.wrappingKeyVersion)}, 0))`;
-								const retired = await sql<{ key_version: string }[]>`
-									select key_version from platform.retired_secret_wrapping_keys
-									where key_version = ${candidate.crypto.wrappingKeyVersion}
-								`;
-								if (retired.length !== 0) throw new Error();
-								const inserted = await sql<{ agent_id: string }[]>`
-									insert into platform.secret_records
-										(agent_id, secret_id, secret_version, configuration_revision,
-										 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
-										 wrapping_key_version, record, created_at, updated_at)
-									values
-									(${candidate.agentId}, ${candidate.secretId}, ${candidate.secretVersion},
-										 ${candidate.configRevision}, ${candidate.ownerType}, ${candidate.ownerId},
-										 ${candidate.name}, ${candidate.lifecycleState}, ${candidate.crypto.dekFingerprint},
-										 ${candidate.crypto.wrappingKeyVersion}, ${sql.json(candidate)},
-										 ${candidate.createdAt}, ${candidate.updatedAt})
-									on conflict (agent_id, secret_id, secret_version, configuration_revision)
-									do nothing returning agent_id
-								`;
-								if (inserted.length !== 0)
-									return { outcome: "inserted" as const, record: candidate };
-								const [existing] = await sql<{ record: unknown }[]>`
-									select record from platform.secret_records where agent_id = ${candidate.agentId}
-										and secret_id = ${candidate.secretId}
-										and secret_version = ${candidate.secretVersion}
-										and configuration_revision = ${candidate.configRevision}
-								`;
-								if (!existing) throw new Error();
-								const persisted = validatePlatformSecretRecordV1(
-									existing.record,
-								);
-								if (
-									persisted.agentId !== candidate.agentId ||
-									persisted.secretId !== candidate.secretId ||
-									persisted.secretVersion !== candidate.secretVersion ||
-									persisted.configRevision !== candidate.configRevision ||
-									persisted.ownerType !== candidate.ownerType ||
-									persisted.ownerId !== candidate.ownerId ||
-									persisted.name !== candidate.name
-								)
-									throw new Error();
-								return { outcome: "exists" as const, record: persisted };
-							},
 							async auditDecryption(secretId, wrappingKeyVersion, outcome) {
 								if (
-									!records.some(
-										(record) =>
-											record.agentId === agent.id &&
-											record.secretId === secretId &&
-											record.crypto.wrappingKeyVersion === wrappingKeyVersion,
-									)
+									!bindings.some(({ record }) => {
+										const binding = validatePlatformSecretRecordV1(record);
+										return (
+											binding.agentId === agent.id &&
+											binding.secretId === secretId &&
+											binding.crypto.wrappingKeyVersion === wrappingKeyVersion
+										);
+									})
 								)
 									throw new Error();
 								await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details) values (${randomUUID()}, ${traceId}, 'system', ${workerId}, 'secret.decrypt', 'secret', ${secretId}, ${outcome}, ${requestId}, ${agent.id}, ${sql.json({ wrappingKeyVersion, operation: "decrypt", result: outcome })})`;
@@ -290,7 +362,6 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 									updated_at = clock_timestamp()
 								where id = ${task.id} and status = 'processing'
 									and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
-									and lease_expires_at > clock_timestamp()
 								returning id, trace_id, attempt_count, delivery_fence::text
 							`;
 						if (!completed) throw new Error();
