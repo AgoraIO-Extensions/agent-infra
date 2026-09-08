@@ -5,6 +5,10 @@ import {
 	ConnectionCatalogV1Schema,
 } from "@agent-infra/contracts/pilot";
 
+const schemaRef = (name: string) => ({
+	$ref: `https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/${name}`,
+});
+
 export function fakeConnectionCatalogV1(): ConnectionCatalogV1 {
 	return ConnectionCatalogV1Schema.parse({
 		schemaVersion: 1,
@@ -22,8 +26,8 @@ export function fakeConnectionCatalogV1(): ConnectionCatalogV1 {
 						effect: "read",
 						requiredScopes: ["read:user"],
 						status: "published",
-						inputSchema: { type: "object", additionalProperties: false },
-						outputSchema: { type: "object" },
+						inputSchema: schemaRef("GitHubGetCurrentUserInputV1"),
+						outputSchema: schemaRef("GitHubGetCurrentUserOutputV1"),
 					},
 					{
 						actionId: "github.list_my_repositories",
@@ -31,8 +35,8 @@ export function fakeConnectionCatalogV1(): ConnectionCatalogV1 {
 						effect: "read",
 						requiredScopes: ["repo"],
 						status: "published",
-						inputSchema: { type: "object", additionalProperties: false },
-						outputSchema: { type: "object" },
+						inputSchema: schemaRef("GitHubListMyRepositoriesInputV1"),
+						outputSchema: schemaRef("GitHubListMyRepositoriesOutputV1"),
 					},
 					{
 						actionId: "github.create_pull_request",
@@ -40,8 +44,8 @@ export function fakeConnectionCatalogV1(): ConnectionCatalogV1 {
 						effect: "write",
 						requiredScopes: ["repo"],
 						status: "published",
-						inputSchema: { type: "object" },
-						outputSchema: { type: "object" },
+						inputSchema: schemaRef("GitHubCreatePullRequestInputV1"),
+						outputSchema: schemaRef("GitHubCreatePullRequestOutputV1"),
 					},
 				],
 			},

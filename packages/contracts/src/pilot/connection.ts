@@ -9,13 +9,19 @@ import {
 } from "../index.ts";
 
 const nonEmptyString = () => z.string().min(1);
-const numericId = () => z.string().regex(/^\d+$/);
+const numericId = () => z.string().regex(/^[1-9]\d*$/);
 const providerTerminalRejectionStatus = () =>
 	z.union([
-		z.number().int().min(400).max(428),
+		z.number().int().min(400).max(407),
+		z.number().int().min(409).max(428),
 		z.number().int().min(430).max(499),
 	]);
-const jsonSchema = () => z.record(z.string(), z.json());
+const connectionSchemaReference = (name: string) =>
+	z.strictObject({
+		$ref: z.literal(
+			`https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/${name}`,
+		),
+	});
 const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -115,13 +121,13 @@ export const GitHubCreatePullRequestOutputV1Schema = z.strictObject({
 
 const catalogActionShape = {
 	status: z.enum(["published", "disabled"]),
-	inputSchema: jsonSchema(),
-	outputSchema: jsonSchema(),
 };
 export const GitHubGetCurrentUserCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.get_current_user"),
 	actionVersionId: z.literal("github.get_current_user@v1"),
+	inputSchema: connectionSchemaReference("GitHubGetCurrentUserInputV1"),
+	outputSchema: connectionSchemaReference("GitHubGetCurrentUserOutputV1"),
 	effect: z.literal("read"),
 	requiredScopes: z.array(z.literal("read:user")).length(1),
 });
@@ -129,6 +135,8 @@ export const GitHubListMyRepositoriesCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.list_my_repositories"),
 	actionVersionId: z.literal("github.list_my_repositories@v1"),
+	inputSchema: connectionSchemaReference("GitHubListMyRepositoriesInputV1"),
+	outputSchema: connectionSchemaReference("GitHubListMyRepositoriesOutputV1"),
 	effect: z.literal("read"),
 	requiredScopes: z.array(z.literal("repo")).length(1),
 });
@@ -136,6 +144,8 @@ export const GitHubCreatePullRequestCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.create_pull_request"),
 	actionVersionId: z.literal("github.create_pull_request@v1"),
+	inputSchema: connectionSchemaReference("GitHubCreatePullRequestInputV1"),
+	outputSchema: connectionSchemaReference("GitHubCreatePullRequestOutputV1"),
 	effect: z.literal("write"),
 	requiredScopes: z.array(z.literal("repo")).length(1),
 });
@@ -214,9 +224,10 @@ export const PilotActionVersionIdsV1Schema = z
 	.meta({ uniqueItems: true });
 export const ConnectionGrantCreateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
-	consumerId: OpaqueIdV1Schema,
-	actorId: OpaqueIdV1Schema,
-	connectionId: OpaqueIdV1Schema,
+	grantOfferId: OpaqueIdV1Schema.meta({
+		description:
+			"Server-issued offer binding the current Principal to one authorized Consumer, Actor, and Connection.",
+	}),
 	actionVersionIds: PilotActionVersionIdsV1Schema,
 });
 export const ConnectionGrantProjectionV1Schema = z.strictObject({

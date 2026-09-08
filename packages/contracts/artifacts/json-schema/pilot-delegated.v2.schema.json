@@ -278,8 +278,13 @@
             "providerStatusCode": {
               "anyOf": [
                 {
-                  "maximum": 428,
+                  "maximum": 407,
                   "minimum": 400,
+                  "type": "integer"
+                },
+                {
+                  "maximum": 428,
+                  "minimum": 409,
                   "type": "integer"
                 },
                 {
@@ -1695,8 +1700,13 @@
                     "providerStatusCode": {
                       "anyOf": [
                         {
-                          "maximum": 428,
+                          "maximum": 407,
                           "minimum": 400,
+                          "type": "integer"
+                        },
+                        {
+                          "maximum": 428,
+                          "minimum": 409,
                           "type": "integer"
                         },
                         {

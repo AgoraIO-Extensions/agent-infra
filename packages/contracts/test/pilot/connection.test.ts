@@ -14,6 +14,10 @@ import {
 	GitHubListMyRepositoriesOutputV1Schema,
 } from "../../src/pilot/connection.js";
 
+const schemaRef = (name: string) => ({
+	$ref: `https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/${name}`,
+});
+
 const catalog = {
 	schemaVersion: 1,
 	catalogVersion: "catalog-2026-09-08",
@@ -30,8 +34,8 @@ const catalog = {
 					effect: "read",
 					requiredScopes: ["read:user"],
 					status: "published",
-					inputSchema: { type: "object", additionalProperties: false },
-					outputSchema: { type: "object" },
+					inputSchema: schemaRef("GitHubGetCurrentUserInputV1"),
+					outputSchema: schemaRef("GitHubGetCurrentUserOutputV1"),
 				},
 				{
 					actionId: "github.list_my_repositories",
@@ -39,8 +43,8 @@ const catalog = {
 					effect: "read",
 					requiredScopes: ["repo"],
 					status: "published",
-					inputSchema: { type: "object", additionalProperties: false },
-					outputSchema: { type: "object" },
+					inputSchema: schemaRef("GitHubListMyRepositoriesInputV1"),
+					outputSchema: schemaRef("GitHubListMyRepositoriesOutputV1"),
 				},
 				{
 					actionId: "github.create_pull_request",
@@ -48,8 +52,8 @@ const catalog = {
 					effect: "write",
 					requiredScopes: ["repo"],
 					status: "published",
-					inputSchema: { type: "object" },
-					outputSchema: { type: "object" },
+					inputSchema: schemaRef("GitHubCreatePullRequestInputV1"),
+					outputSchema: schemaRef("GitHubCreatePullRequestOutputV1"),
 				},
 			],
 		},
@@ -69,6 +73,23 @@ describe("Connection Pilot contracts", () => {
 							{
 								...catalog.providers[0].actions[0],
 								actionVersionId: "github.get_current_user@v2",
+							},
+							...catalog.providers[0].actions.slice(1),
+						],
+					},
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			ConnectionCatalogV1Schema.safeParse({
+				...catalog,
+				providers: [
+					{
+						...catalog.providers[0],
+						actions: [
+							{
+								...catalog.providers[0].actions[0],
+								outputSchema: schemaRef("GitHubCreatePullRequestOutputV1"),
 							},
 							...catalog.providers[0].actions.slice(1),
 						],
@@ -107,6 +128,14 @@ describe("Connection Pilot contracts", () => {
 	});
 
 	it("validates repository-bound Action input and stable numeric identities", () => {
+		for (const accountId of ["0", "01"]) {
+			expect(
+				GitHubGetCurrentUserOutputV1Schema.safeParse({
+					accountId,
+					login: "pilot-alice",
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			GitHubGetCurrentUserOutputV1Schema.parse({
 				accountId: "53285945",

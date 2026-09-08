@@ -278,8 +278,13 @@
                   "providerStatusCode": {
                     "anyOf": [
                       {
-                        "maximum": 428,
+                        "maximum": 407,
                         "minimum": 400,
+                        "type": "integer"
+                      },
+                      {
+                        "maximum": 428,
+                        "minimum": 409,
                         "type": "integer"
                       },
                       {
@@ -666,15 +671,8 @@
             "type": "array",
             "uniqueItems": true
           },
-          "actorId": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "connectionId": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "consumerId": {
+          "grantOfferId": {
+            "description": "Server-issued offer binding the current Principal to one authorized Consumer, Actor, and Connection.",
             "minLength": 1,
             "type": "string"
           },
@@ -685,9 +683,7 @@
         },
         "required": [
           "schemaVersion",
-          "consumerId",
-          "actorId",
-          "connectionId",
+          "grantOfferId",
           "actionVersionIds"
         ],
         "type": "object"
@@ -836,7 +832,7 @@
             "type": "integer"
           },
           "pullRequestId": {
-            "pattern": "^\\d+$",
+            "pattern": "^[1-9]\\d*$",
             "type": "string"
           },
           "url": {
@@ -855,7 +851,7 @@
         "additionalProperties": false,
         "properties": {
           "accountId": {
-            "pattern": "^\\d+$",
+            "pattern": "^[1-9]\\d*$",
             "type": "string"
           },
           "login": {
@@ -890,7 +886,7 @@
                   "type": "boolean"
                 },
                 "repositoryId": {
-                  "pattern": "^\\d+$",
+                  "pattern": "^[1-9]\\d*$",
                   "type": "string"
                 }
               },
@@ -1688,7 +1684,7 @@
                             "additionalProperties": false,
                             "properties": {
                               "accountId": {
-                                "pattern": "^\\d+$",
+                                "pattern": "^[1-9]\\d*$",
                                 "type": "string"
                               },
                               "login": {

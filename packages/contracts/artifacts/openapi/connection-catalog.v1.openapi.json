@@ -35,21 +35,29 @@
                                     "type": "string"
                                   },
                                   "inputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema2"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubGetCurrentUserInputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "outputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema3"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubGetCurrentUserOutputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "requiredScopes": {
@@ -71,10 +79,10 @@
                                 },
                                 "required": [
                                   "status",
-                                  "inputSchema",
-                                  "outputSchema",
                                   "actionId",
                                   "actionVersionId",
+                                  "inputSchema",
+                                  "outputSchema",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -96,21 +104,29 @@
                                     "type": "string"
                                   },
                                   "inputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema2"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubListMyRepositoriesInputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "outputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema3"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubListMyRepositoriesOutputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "requiredScopes": {
@@ -132,10 +148,10 @@
                                 },
                                 "required": [
                                   "status",
-                                  "inputSchema",
-                                  "outputSchema",
                                   "actionId",
                                   "actionVersionId",
+                                  "inputSchema",
+                                  "outputSchema",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -157,21 +173,29 @@
                                     "type": "string"
                                   },
                                   "inputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema2"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubCreatePullRequestInputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "outputSchema": {
-                                    "additionalProperties": {
-                                      "$ref": "#/components/schemas/__schema3"
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "$ref": {
+                                        "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubCreatePullRequestOutputV1",
+                                        "type": "string"
+                                      }
                                     },
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
+                                    "required": [
+                                      "$ref"
+                                    ],
                                     "type": "object"
                                   },
                                   "requiredScopes": {
@@ -193,10 +217,10 @@
                                 },
                                 "required": [
                                   "status",
-                                  "inputSchema",
-                                  "outputSchema",
                                   "actionId",
                                   "actionVersionId",
+                                  "inputSchema",
+                                  "outputSchema",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -264,130 +288,6 @@
           "providers"
         ],
         "type": "object"
-      },
-      "__schema0": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      },
-      "__schema1": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/__schema1"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/__schema1"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      },
-      "__schema2": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/__schema2"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/__schema2"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      },
-      "__schema3": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/__schema3"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/__schema3"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
       }
     },
     "securitySchemes": {

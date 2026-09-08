@@ -120,7 +120,7 @@
               "additionalProperties": false,
               "properties": {
                 "accountId": {
-                  "pattern": "^\\d+$",
+                  "pattern": "^[1-9]\\d*$",
                   "type": "string"
                 },
                 "login": {
@@ -201,7 +201,7 @@
                         "type": "boolean"
                       },
                       "repositoryId": {
-                        "pattern": "^\\d+$",
+                        "pattern": "^[1-9]\\d*$",
                         "type": "string"
                       }
                     },
@@ -276,7 +276,7 @@
                   "type": "integer"
                 },
                 "pullRequestId": {
-                  "pattern": "^\\d+$",
+                  "pattern": "^[1-9]\\d*$",
                   "type": "string"
                 },
                 "url": {
@@ -366,8 +366,13 @@
                 "providerStatusCode": {
                   "anyOf": [
                     {
-                      "maximum": 428,
+                      "maximum": 407,
                       "minimum": 400,
+                      "type": "integer"
+                    },
+                    {
+                      "maximum": 428,
+                      "minimum": 409,
                       "type": "integer"
                     },
                     {
@@ -768,70 +773,6 @@
       "type": "object"
     },
     "ConnectionCatalogV1": {
-      "$defs": {
-        "__schema0": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
-              },
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "__schema1": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
-              },
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
       "additionalProperties": false,
       "properties": {
         "catalogVersion": {
@@ -865,21 +806,29 @@
                                   "type": "string"
                                 },
                                 "inputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubGetCurrentUserInputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "outputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubGetCurrentUserOutputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "requiredScopes": {
@@ -901,10 +850,10 @@
                               },
                               "required": [
                                 "status",
-                                "inputSchema",
-                                "outputSchema",
                                 "actionId",
                                 "actionVersionId",
+                                "inputSchema",
+                                "outputSchema",
                                 "effect",
                                 "requiredScopes"
                               ],
@@ -926,21 +875,29 @@
                                   "type": "string"
                                 },
                                 "inputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubListMyRepositoriesInputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "outputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubListMyRepositoriesOutputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "requiredScopes": {
@@ -962,10 +919,10 @@
                               },
                               "required": [
                                 "status",
-                                "inputSchema",
-                                "outputSchema",
                                 "actionId",
                                 "actionVersionId",
+                                "inputSchema",
+                                "outputSchema",
                                 "effect",
                                 "requiredScopes"
                               ],
@@ -987,21 +944,29 @@
                                   "type": "string"
                                 },
                                 "inputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema0"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubCreatePullRequestInputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "outputSchema": {
-                                  "additionalProperties": {
-                                    "$ref": "#/$defs/ConnectionCatalogV1/$defs/__schema1"
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "$ref": {
+                                      "const": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/connection.v1.schema.json#/$defs/GitHubCreatePullRequestOutputV1",
+                                      "type": "string"
+                                    }
                                   },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
+                                  "required": [
+                                    "$ref"
+                                  ],
                                   "type": "object"
                                 },
                                 "requiredScopes": {
@@ -1023,10 +988,10 @@
                               },
                               "required": [
                                 "status",
-                                "inputSchema",
-                                "outputSchema",
                                 "actionId",
                                 "actionVersionId",
+                                "inputSchema",
+                                "outputSchema",
                                 "effect",
                                 "requiredScopes"
                               ],
@@ -1112,15 +1077,8 @@
           "type": "array",
           "uniqueItems": true
         },
-        "actorId": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "connectionId": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "consumerId": {
+        "grantOfferId": {
+          "description": "Server-issued offer binding the current Principal to one authorized Consumer, Actor, and Connection.",
           "minLength": 1,
           "type": "string"
         },
@@ -1131,9 +1089,7 @@
       },
       "required": [
         "schemaVersion",
-        "consumerId",
-        "actorId",
-        "connectionId",
+        "grantOfferId",
         "actionVersionIds"
       ],
       "type": "object"
@@ -1300,7 +1256,7 @@
           "type": "string"
         },
         "repositoryId": {
-          "pattern": "^\\d+$",
+          "pattern": "^[1-9]\\d*$",
           "type": "string"
         },
         "title": {
@@ -1326,7 +1282,7 @@
           "type": "integer"
         },
         "pullRequestId": {
-          "pattern": "^\\d+$",
+          "pattern": "^[1-9]\\d*$",
           "type": "string"
         },
         "url": {
@@ -1350,7 +1306,7 @@
       "additionalProperties": false,
       "properties": {
         "accountId": {
-          "pattern": "^\\d+$",
+          "pattern": "^[1-9]\\d*$",
           "type": "string"
         },
         "login": {
@@ -1390,7 +1346,7 @@
                 "type": "boolean"
               },
               "repositoryId": {
-                "pattern": "^\\d+$",
+                "pattern": "^[1-9]\\d*$",
                 "type": "string"
               }
             },
