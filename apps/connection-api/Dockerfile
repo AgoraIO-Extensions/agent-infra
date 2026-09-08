@@ -1,5 +1,6 @@
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS builder
-RUN npm install -g pnpm@11.20.0
+RUN npm install --global npm@11.19.1 \
+	&& npm install --global pnpm@11.20.0
 WORKDIR /app
 
 COPY . .
@@ -10,6 +11,7 @@ RUN pnpm --filter @agent-infra/connection-api build
 RUN pnpm --filter @agent-infra/connection-api deploy --prod --legacy /prod/connection-api
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
+RUN npm install --global npm@11.19.1
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/connection-api/ ./

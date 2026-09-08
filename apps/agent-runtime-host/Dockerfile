@@ -1,5 +1,6 @@
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS builder
-RUN npm install -g pnpm@11.20.0
+RUN npm install --global npm@11.19.1 \
+	&& npm install --global pnpm@11.20.0
 WORKDIR /app
 
 COPY . .
@@ -19,6 +20,7 @@ RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
     && mv /prod/agent-runtime-host-normalized /prod/agent-runtime-host
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
+RUN npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 WORKDIR /app
