@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 import { AdminAgentApplicationsWorkflow } from "../../features/agent-administration/admin-agent-applications-workflow.js";
 
@@ -12,7 +13,7 @@ function AdminApprovalsRoute() {
 			<div className="space-y-6">
 				<nav aria-label="Agent navigation">
 					<Link
-						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						className={buttonVariants({ variant: "link", className: "px-0" })}
 						to="/agents"
 					>
 						Agents

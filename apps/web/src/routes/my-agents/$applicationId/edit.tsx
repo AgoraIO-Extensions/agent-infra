@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
@@ -52,7 +53,7 @@ function EditAgentApplicationRoute() {
 						Application is not editable
 					</h1>
 					<Link
-						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ applicationId }}
 						to="/my-agents/$applicationId"
 					>

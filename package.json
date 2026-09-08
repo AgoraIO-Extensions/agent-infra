@@ -12,7 +12,7 @@
 	"scripts": {
 		"dev": "turbo run dev",
 		"build": "turbo run build",
-		"check": "biome check .",
+		"check": "biome check . && node tests/support/web-ui-policy.mjs",
 		"check-types": "turbo run check-types",
 		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test",
 		"smoke": "node tests/smoke.mjs",

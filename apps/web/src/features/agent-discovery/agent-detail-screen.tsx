@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
@@ -68,7 +69,7 @@ export function AgentDetailScreen({
 						: "This Agent is unavailable."}
 				</p>
 				<Link
-					className="text-slate-700 text-sm underline underline-offset-4"
+					className={buttonVariants({ variant: "link", className: "px-0" })}
 					to="/agents"
 				>
 					Back to Agents
@@ -173,14 +174,14 @@ export function AgentDetailScreen({
 			</dl>
 			<div className="flex flex-wrap gap-4">
 				<Link
-					className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+					className={buttonVariants({ variant: "link", className: "px-0" })}
 					to="/agents"
 				>
 					Back to Agents
 				</Link>
 				{ownerSettings ? (
 					<Link
-						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ agentId: ownerSettings.agentId }}
 						to="/agents/$agentId/configuration"
 					>
@@ -189,7 +190,7 @@ export function AgentDetailScreen({
 				) : null}
 				{interactionUrl ? (
 					<a
-						className="inline-flex min-h-11 items-center text-slate-700 text-sm underline underline-offset-4"
+						className={buttonVariants({ variant: "link", className: "px-0" })}
 						href={interactionUrl}
 						rel="noopener noreferrer"
 						target="_blank"
