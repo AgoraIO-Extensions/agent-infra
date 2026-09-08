@@ -589,15 +589,141 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, repaired)).toBe("healthy");
 		}
 	});
-	it("does not scale down for an unsafe Pod owned by another StatefulSet", async () => {
+	it("recreates current owned Pods that drift from their safe template", async () => {
+		const mutatePodSpec = (
+			pod: V1Pod,
+			mutate: (spec: NonNullable<V1Pod["spec"]>) => NonNullable<V1Pod["spec"]>,
+		): V1Pod => {
+			if (!pod.spec) throw new Error();
+			return { ...pod, spec: mutate(pod.spec) };
+		};
+		const mutations: {
+			readonly label: string;
+			readonly mutate: (pod: V1Pod) => V1Pod;
+		}[] = [
+			{
+				label: "pod fsGroup",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						securityContext: {
+							...spec.securityContext,
+							fsGroup: 2000,
+						},
+					})),
+			},
+			{
+				label: "service account",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						serviceAccountName: "unexpected",
+					})),
+			},
+			{
+				label: "agent environment",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										env: container.env?.map((entry) =>
+											entry.name === "LOG_LEVEL"
+												? { ...entry, value: "debug" }
+												: entry,
+										),
+									}
+								: container,
+						),
+					})),
+			},
+			{
+				label: "agent volume mount",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										volumeMounts: container.volumeMounts?.map((mount) =>
+											mount.name === "data"
+												? { ...mount, mountPath: "/unexpected" }
+												: mount,
+										),
+									}
+								: container,
+						),
+					})),
+			},
+			{
+				label: "pod volume",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						volumes: spec.volumes?.map((volume) =>
+							volume.name === "data"
+								? {
+										...volume,
+										persistentVolumeClaim: { claimName: "unexpected-data" },
+									}
+								: volume,
+						),
+					})),
+			},
+		];
+		for (const { label, mutate } of mutations) {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!pod) throw new Error();
+			f.resources.set(`Pod/${desired.service.name}-0`, mutate(pod));
+
+			expect(await adapter.observe(desired, identity), label).toBe("drifted");
+			expect(await adapter.apply(desired), label).toBe("pending");
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.spec?.replicas,
+				label,
+			).toBe(0);
+
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			const recreated = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			expect(recreated?.metadata?.uid, label).not.toBe(pod.metadata?.uid);
+			expect(recreated?.spec, label).toStrictEqual(
+				workload?.spec?.template.spec,
+			);
+			expect(await adapter.observe(desired, repaired), label).toBe("healthy");
+		}
+	});
+	it("does not scale down a drifted Pod owned by another StatefulSet", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const adapter = f.adapter();
 		const identity = await adapter.apply(desired);
 		if (!identity || identity === "pending") throw new Error();
 		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
-		const container = pod?.spec?.containers[0];
-		if (!pod || !container) throw new Error();
+		if (!pod) throw new Error();
 		f.resources.set(`Pod/${desired.service.name}-foreign`, {
 			...pod,
 			metadata: {
@@ -615,15 +741,10 @@ describe("GA Kubernetes Workload adapter", () => {
 			},
 			spec: {
 				...pod.spec,
-				containers: [
-					{
-						...container,
-						securityContext: {
-							...container.securityContext,
-							runAsUser: 0,
-						},
-					},
-				],
+				securityContext: {
+					...pod.spec?.securityContext,
+					fsGroup: 2000,
+				},
 			},
 		} as V1Pod);
 
@@ -632,6 +753,21 @@ describe("GA Kubernetes Workload adapter", () => {
 			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
 				?.spec?.replicas,
 		).toBe(1);
+	});
+	it("does not scale down a safe current owned Pod", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const writes = f.writes.length;
+
+		expect(await adapter.apply(desired)).toMatchObject({ uid: identity.uid });
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.replicas,
+		).toBe(1);
+		expect(f.writes).toHaveLength(writes);
 	});
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();

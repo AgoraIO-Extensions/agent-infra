@@ -208,6 +208,45 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}) === true
 		);
 	}
+	function hasDriftedPodSpec(
+		value: AgentWorkloadDesiredV1,
+		pod: V1PodSpec | undefined,
+	) {
+		if (hasUnsafePodSpec(pod)) return true;
+		const container = pod?.containers.find((entry) => entry.name === "agent");
+		return (
+			!containsDesired(container, {
+				env: Object.entries(value.env).map(([name, value]) => ({
+					name,
+					value,
+				})),
+				resources: policy.resources,
+				readinessProbe: {
+					httpGet: { path: value.health.path, port: value.service.port },
+					timeoutSeconds: value.health.timeoutSeconds,
+					failureThreshold: value.health.failureThreshold,
+				},
+				securityContext: agentContainerSecurityContext(),
+				volumeMounts: [
+					{ name: "data", mountPath: value.persistentVolume.mountPath },
+				],
+			}) ||
+			!containsDesired(pod?.securityContext, {
+				runAsNonRoot: true,
+				runAsUser: 1000,
+				runAsGroup: 1000,
+				fsGroup: 1000,
+				seccompProfile: { type: "RuntimeDefault" },
+			}) ||
+			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
+			!containsDesired(pod?.volumes, [
+				{
+					name: "data",
+					persistentVolumeClaim: { claimName: value.persistentVolume.name },
+				},
+			])
+		);
+	}
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: AgentWorkloadDesiredV1,
@@ -462,44 +501,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod.spec?.automountServiceAccountToken !== false
 		)
 			return "unhealthy";
-		if (
-			!containsDesired(container, {
-				env: Object.entries(value.env).map(([name, value]) => ({
-					name,
-					value,
-				})),
-				resources: policy.resources,
-				readinessProbe: {
-					httpGet: { path: value.health.path, port: value.service.port },
-					timeoutSeconds: value.health.timeoutSeconds,
-					failureThreshold: value.health.failureThreshold,
-				},
-				securityContext: agentContainerSecurityContext(),
-				volumeMounts: [
-					{ name: "data", mountPath: value.persistentVolume.mountPath },
-				],
-			}) ||
-			(container?.securityContext?.capabilities?.add?.length ?? 0) > 0 ||
-			container?.securityContext?.privileged === true ||
-			pod.spec?.hostNetwork === true ||
-			pod.spec?.hostPID === true ||
-			pod.spec?.hostIPC === true ||
-			!containsDesired(pod.spec?.securityContext, {
-				runAsNonRoot: true,
-				runAsUser: 1000,
-				runAsGroup: 1000,
-				fsGroup: 1000,
-				seccompProfile: { type: "RuntimeDefault" },
-			}) ||
-			pod.spec?.serviceAccountName !== name ||
-			!containsDesired(pod.spec?.volumes, [
-				{
-					name: "data",
-					persistentVolumeClaim: { claimName: value.persistentVolume.name },
-				},
-			])
-		)
-			return "drifted";
+		if (hasDriftedPodSpec(value, pod.spec)) return "drifted";
 		if (
 			current.status?.observedGeneration !== identity.generation ||
 			current.status.readyReplicas !== 1 ||
@@ -664,13 +666,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const current = await statefulSet(value);
 			if (!current && value.replicas === 0) return null;
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
-			const unsafeOwnedPod =
+			const driftedOwnedPod =
 				current &&
 				pods.some(
 					(pod) =>
 						pod.metadata?.ownerReferences?.some(
 							(owner) => owner.uid === current.metadata?.uid,
-						) && hasUnsafePodSpec(pod.spec),
+						) && hasDriftedPodSpec(value, pod.spec),
 				);
 			const changing =
 				current &&
@@ -678,7 +680,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					String(value.workloadRevision);
 			if (
 				current &&
-				(changing || unsafeOwnedPod || value.replicas === 0) &&
+				(changing || driftedOwnedPod || value.replicas === 0) &&
 				(current.spec?.replicas !== 0 || pods.length > 0)
 			) {
 				if (current.spec?.replicas !== 0)
