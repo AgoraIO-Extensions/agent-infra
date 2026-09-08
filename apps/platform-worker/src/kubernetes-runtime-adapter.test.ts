@@ -1,6 +1,7 @@
 import type {
 	KubernetesObject,
 	V1Ingress,
+	V1PersistentVolumeClaim,
 	V1Pod,
 	V1Secret,
 	V1SecurityContext,
@@ -124,6 +125,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			"PersistentVolumeClaim",
 			a.persistentVolume.name,
 		);
+		if (!pvc) throw new Error();
 		await adapter.closeAgent(a.agentId, 2);
 		expect(await adapter.scaleDownAgent(a.agentId, 2)).toBe("pending");
 		expect(await adapter.scaleDownAgent(a.agentId, 2)).toMatchObject({
@@ -133,6 +135,22 @@ describe("GA Kubernetes Workload adapter", () => {
 		const identityB = await adapter.apply(b);
 		if (!identityB || identityB === "pending") throw new Error();
 		expect(identityB.uid).toBe(identityA.uid);
+		const reusedPvc = await f.client.read(
+			"PersistentVolumeClaim",
+			a.persistentVolume.name,
+		);
+		expect(reusedPvc?.metadata?.uid).toBe(pvc.metadata?.uid);
+		expect(reusedPvc?.metadata?.labels?.["agent-infra.agora.io/revision"]).toBe(
+			"3",
+		);
+		expect(
+			reusedPvc?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("3");
+		await expect(f.client.delete(pvc)).rejects.toThrow();
+		expect(
+			(await f.client.read("PersistentVolumeClaim", a.persistentVolume.name))
+				?.metadata?.uid,
+		).toBe(pvc.metadata?.uid);
 		await adapter.promote(b, identityB);
 		await expect(adapter.apply(a)).rejects.toThrow();
 		await expect(adapter.closeAgent(a.agentId, 1)).rejects.toThrow();
@@ -145,11 +163,55 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(
 			(await f.client.read("PersistentVolumeClaim", a.persistentVolume.name))
 				?.metadata?.uid,
-		).toBe(pvc?.metadata?.uid);
+		).toBe(pvc.metadata?.uid);
 		expect(
 			(await f.client.read<V1StatefulSet>("StatefulSet", a.service.name))?.spec
 				?.template.spec?.containers[0]?.image,
 		).toContain(a.imageDigest);
+	});
+	it("does not attach a reused PVC while its previous delete is still in progress", async () => {
+		const f = fixture();
+		const a = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identityA = await adapter.apply(a);
+		if (!identityA || identityA === "pending") throw new Error();
+		const pvc = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			a.persistentVolume.name,
+		);
+		if (!pvc) throw new Error();
+		f.resources.set(`PersistentVolumeClaim/${a.persistentVolume.name}`, {
+			...pvc,
+			metadata: {
+				...pvc.metadata,
+				deletionTimestamp: new Date("2026-09-08T00:00:00Z"),
+			},
+		});
+		const b = workloadDesiredFixture(3);
+		expect(await adapter.apply(b)).toBe("pending");
+		expect(
+			(
+				await f.client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					a.persistentVolume.name,
+				)
+			)?.metadata?.deletionTimestamp,
+		).toEqual(new Date("2026-09-08T00:00:00Z"));
+
+		// Kubernetes completed the old deletion. A retry starts a new claim instead
+		// of attaching the current Workload to the terminating PVC.
+		f.resources.delete(`PersistentVolumeClaim/${a.persistentVolume.name}`);
+		await adapter.apply(b);
+		const identityB = await adapter.apply(b);
+		if (!identityB || identityB === "pending") throw new Error();
+		expect(
+			(
+				await f.client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					a.persistentVolume.name,
+				)
+			)?.metadata?.uid,
+		).not.toBe(pvc.metadata?.uid);
 	});
 	it("rejects cross-Agent names and preserves foreign resources during cleanup", async () => {
 		const f = fixture();

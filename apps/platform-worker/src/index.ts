@@ -198,7 +198,11 @@ export async function startPlatformWorkerFromDeploymentV1(
 			},
 		};
 	} catch (error) {
-		primary.stop();
+		try {
+			primary.stop();
+		} catch {
+			// Preserve the workload assembly error; primary cleanup is best effort here.
+		}
 		throw error;
 	}
 }

@@ -351,4 +351,21 @@ describe("platform worker lifecycle", () => {
 		).rejects.toThrow("deployment unavailable");
 		expect(primary.stop).toHaveBeenCalledOnce();
 	});
+	it("preserves the workload assembly failure when primary cleanup also fails", async () => {
+		const deploymentFailure = new Error("deployment unavailable");
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		await expect(
+			startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw deploymentFailure;
+				},
+			}),
+		).rejects.toBe(deploymentFailure);
+		expect(primary.stop).toHaveBeenCalledOnce();
+	});
 });

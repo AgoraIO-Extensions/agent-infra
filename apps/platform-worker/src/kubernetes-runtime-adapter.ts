@@ -755,8 +755,33 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				"PersistentVolumeClaim",
 				value.persistentVolume.name,
 			);
-			if (pvc) own(pvc, value.agentId, value.workloadRevision);
-			else
+			if (pvc) {
+				own(pvc, value.agentId, value.workloadRevision);
+				if (pvc.metadata?.deletionTimestamp)
+					throw new WorkloadKubernetesError("conflict");
+				const desiredMetadata = metadata(value, value.persistentVolume.name);
+				if (
+					pvc.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence)
+				) {
+					await client.replace({
+						...pvc,
+						metadata: {
+							...pvc.metadata,
+							labels: {
+								...pvc.metadata?.labels,
+								...desiredMetadata.labels,
+							},
+							annotations: {
+								...pvc.metadata?.annotations,
+								...desiredMetadata.annotations,
+							},
+						},
+					});
+				}
+			} else
 				await put<V1PersistentVolumeClaim>(
 					{
 						apiVersion: "v1",

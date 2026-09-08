@@ -305,6 +305,48 @@ export function createWorkloadRuntimeV1(
 		);
 		if (!bindings.length) return true;
 		if (!input.secrets) return false;
+		if (state.candidate.deployment === null) {
+			if (bindings.some(({ record }) => record.lifecycleState !== "pending"))
+				return false;
+			for (const { record } of bindings) {
+				const removed = await cleanupUnactivatedSecretCandidateV1(
+					{
+						store: input.secrets.store,
+						kubernetes: {
+							async removeCandidate(candidate) {
+								return (
+									candidate.agentId === record.agentId &&
+									candidate.secretId === record.secretId &&
+									candidate.secretVersion === record.secretVersion &&
+									candidate.configRevision === record.configRevision &&
+									candidate.ownerType === record.ownerType &&
+									candidate.ownerId === record.ownerId &&
+									candidate.name === record.name &&
+									candidate.wrappingKeyVersion ===
+										record.crypto.wrappingKeyVersion &&
+									candidate.lifecycleState === "pending"
+								);
+							},
+						},
+					},
+					{
+						schemaVersion: 1,
+						agentId: record.agentId,
+						secretId: record.secretId,
+						secretVersion: record.secretVersion,
+						configRevision: record.configRevision,
+						ownerType: record.ownerType,
+						ownerId: record.ownerId,
+						name: record.name,
+						wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+						workerId: options.workerId,
+						traceId: input.traceId,
+					},
+				);
+				if (!removed) return false;
+			}
+			return true;
+		}
 		const workload = desired(state);
 		for (const { record } of bindings) {
 			const reference = recordReference(record);

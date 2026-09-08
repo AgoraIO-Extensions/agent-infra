@@ -8,7 +8,15 @@ import {
 } from "@agent-infra/agent-runtime";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
+	type PlatformSecretRecordV1,
+	validatePlatformSecretRecordV1,
+} from "@agent-infra/contracts/workload";
+import {
+	type AgentConfigurationRecordV1,
 	createWorkloadReconciliationV1,
+	type SecretActivationCandidateV1,
+	type SecretActivationStorePortV1,
+	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
@@ -27,10 +35,11 @@ import {
 	type WorkloadRuntimeOptionsV1,
 } from "./workload-runtime.js";
 
-function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
-	const api = fakeKubernetesApi();
-	const configuration = {
-		schemaVersion: 1 as const,
+function configurationFixture(
+	overrides: Partial<AgentConfigurationRecordV1> = {},
+): AgentConfigurationRecordV1 {
+	return {
+		schemaVersion: 1,
 		actions: [],
 		actionSetRevision: "actions-a",
 		channels: [],
@@ -41,13 +50,190 @@ function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
 		secrets: [],
 		environment: [],
 		source: {
-			kind: "custom" as const,
+			kind: "custom",
 			imageDigest: `sha256:${"a".repeat(64)}`,
 			admissionRevision: "admission-a",
-			interactionMode: "platform-adapter" as const,
-			connectionEnabled: false as const,
+			interactionMode: "platform-adapter",
+			connectionEnabled: false,
+		},
+		...overrides,
+	};
+}
+
+function pendingSecretRecord(): PlatformSecretRecordV1 {
+	return validatePlatformSecretRecordV1({
+		schemaVersion: 1,
+		secretId: "secret-a",
+		ownerType: "agent-owner",
+		ownerId: "owner-a",
+		agentId: "agent-a",
+		name: "BOT_TOKEN",
+		secretVersion: 1,
+		configRevision: 1,
+		lifecycleState: "pending",
+		crypto: {
+			schemaVersion: 1,
+			algorithmVersion: "aes-256-gcm:v1",
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+			wrappingKeyVersion: "key-a",
+			aadBinding: {
+				schemaVersion: 1,
+				aadVersion: "platform-secret-aad:v1",
+				secretId: "secret-a",
+				ownerType: "agent-owner",
+				ownerId: "owner-a",
+				agentId: "agent-a",
+				name: "BOT_TOKEN",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1",
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+				wrappingKeyVersion: "key-a",
+			},
+			dekFingerprint: "a".repeat(64),
+			nonce: "AAAAAAAAAAAAAAAA",
+			ciphertext: "YWJjZA==",
+			authenticationTag: "AAAAAAAAAAAAAAAAAAAAAA==",
+			wrappedDek: "A".repeat(512),
+		},
+		createdAt: "2026-09-08T00:00:00.000Z",
+		updatedAt: "2026-09-08T00:00:00.000Z",
+	});
+}
+
+function materializedSecretRecord(
+	lifecycleState: "applying" | "observed",
+): PlatformSecretRecordV1 {
+	const record = pendingSecretRecord();
+	const reference = {
+		schemaVersion: 1 as const,
+		ownerType: record.ownerType,
+		ownerId: record.ownerId,
+		agentId: record.agentId,
+		secretId: record.secretId,
+		secretVersion: record.secretVersion,
+		configRevision: record.configRevision,
+		algorithmVersion: record.crypto.algorithmVersion,
+		wrappingAlgorithmVersion: record.crypto.wrappingAlgorithmVersion,
+		wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+		name: "agent-aaaaaaaaaaaaaaaa.secret-aaaaaaaaaaaaaaaa-v1-r1",
+	};
+	return validatePlatformSecretRecordV1({
+		...record,
+		lifecycleState,
+		kubernetesSecretRef: reference,
+		activationFence: {
+			schemaVersion: 1,
+			agentId: record.agentId,
+			secretId: record.secretId,
+			secretVersion: record.secretVersion,
+			configRevision: record.configRevision,
+			kubernetesSecretName: reference.name,
+			workloadUid: "workload-a",
+			workloadGeneration: 1,
+			fence: 1,
+		},
+	});
+}
+
+function secretCleanupStore(
+	record: PlatformSecretRecordV1,
+	options: {
+		readonly currentConfigurationRevision?: number;
+		readonly storedOwnerId?: string;
+		readonly failTransitionOnce?: boolean;
+	} = {},
+) {
+	let persistedRecord = structuredClone(record);
+	let candidate: SecretActivationCandidateV1 = {
+		schemaVersion: 1,
+		agentId: record.agentId,
+		secretId: record.secretId,
+		secretVersion: record.secretVersion,
+		configRevision: record.configRevision,
+		ownerType: record.ownerType,
+		ownerId: options.storedOwnerId ?? record.ownerId,
+		name: record.name,
+		wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+		lifecycleState: record.lifecycleState,
+		failureRetryable: null,
+		encryptedRecord: record,
+	};
+	let claimFence = 0;
+	let claimCount = 0;
+	let commitCount = 0;
+	let transitionFailed = options.failTransitionOnce ?? false;
+	const store = {
+		async claimCandidate(input, decide) {
+			claimCount += 1;
+			const plan = decide({
+				schemaVersion: 1,
+				currentConfigurationRevision:
+					options.currentConfigurationRevision ?? record.configRevision,
+				candidate: structuredClone(candidate),
+			});
+			if (plan.outcome !== "claim") return plan;
+			claimFence += 1;
+			return {
+				outcome: "claimed" as const,
+				claim: {
+					schemaVersion: 1 as const,
+					workerId: input.workerId,
+					fence: claimFence,
+					leaseExpiresAt: new Date(Date.now() + input.leaseDurationMs),
+					candidate: structuredClone(candidate),
+				},
+			};
+		},
+		async recordAudit() {
+			return true;
+		},
+		async commitTransition(input) {
+			commitCount += 1;
+			if (transitionFailed) {
+				transitionFailed = false;
+				return false;
+			}
+			if (
+				input.claim.fence !== claimFence ||
+				input.plan.next.lifecycleState !== "failed"
+			)
+				return false;
+			candidate = {
+				...candidate,
+				lifecycleState: "failed",
+				failureRetryable: input.plan.next.error.retryable,
+			};
+			persistedRecord = validatePlatformSecretRecordV1({
+				...persistedRecord,
+				lifecycleState: "failed",
+				error: input.plan.next.error,
+			});
+			return true;
+		},
+	} satisfies SecretActivationStorePortV1;
+	return {
+		store,
+		get record() {
+			return persistedRecord;
+		},
+		get commits() {
+			return commitCount;
+		},
+		get claims() {
+			return claimCount;
 		},
 	};
+}
+
+function fixture(
+	overrides: Partial<WorkloadRuntimeOptionsV1> = {},
+	inputOverrides: Partial<
+		Pick<WorkloadReconciliationInputV1, "configuration" | "secrets">
+	> = {},
+) {
+	const api = fakeKubernetesApi();
+	const configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
@@ -112,6 +298,7 @@ function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
 								},
 								requestId: "request-a",
 								traceId: "trace-a",
+								secrets: inputOverrides.secrets,
 							});
 							return "advanced";
 						},
@@ -122,7 +309,123 @@ function fixture(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
 	};
 }
 
+function rejectedRegistry(): WorkloadRuntimeOptionsV1["registry"] {
+	return {
+		async admit(request) {
+			return {
+				schemaVersion: 1,
+				status: "rejected",
+				requestId: request.requestId,
+				traceId: request.traceId,
+				error: {
+					schemaVersion: 1,
+					code: "IMAGE_NOT_ADMITTED",
+					message: "The image is not admitted by deployment policy",
+					retryable: false,
+					traceId: request.traceId,
+				},
+			};
+		},
+	};
+}
+
+function secretConfiguration(): AgentConfigurationRecordV1 {
+	return configurationFixture({
+		secrets: [
+			{
+				name: "BOT_TOKEN",
+				secretId: "secret-a",
+				version: 1,
+				isSet: true,
+			},
+		],
+	});
+}
+
+function cleanupSecrets(
+	input: ReturnType<typeof secretCleanupStore>,
+): NonNullable<WorkloadReconciliationInputV1["secrets"]> {
+	return {
+		get bindings() {
+			return [{ materialization: "current" as const, record: input.record }];
+		},
+		store: input.store,
+		async auditDecryption() {},
+	};
+}
+
 describe("assembled Workload Runtime contracts", () => {
+	it("finishes rejected preflight after exact pending Secret cleanup without Kubernetes material", async () => {
+		const record = pendingSecretRecord();
+		const cleanup = secretCleanupStore(record, { failTransitionOnce: true });
+		const f = fixture(
+			{ registry: rejectedRegistry() },
+			{
+				configuration: secretConfiguration(),
+				secrets: cleanupSecrets(cleanup),
+			},
+		);
+		await f.tick(2);
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.deployment).toBeNull();
+		await f.tick(1);
+		expect(f.state?.phase).toBe("cleaning");
+		expect(cleanup.record.lifecycleState).toBe("pending");
+		await f.tick(1);
+		expect(cleanup.claims).toBe(2);
+		expect(cleanup.commits).toBe(2);
+		expect(cleanup.record).toMatchObject({
+			lifecycleState: "failed",
+			error: { code: "SECRET_ACTIVATION_FAILED", retryable: true },
+		});
+		expect(f.state?.phase).toBe("failed");
+		expect(f.resources.size).toBe(0);
+		expect(f.writes).toHaveLength(0);
+		await f.tick(1);
+		expect(f.state?.phase).toBe("failed");
+	});
+
+	it.each(["applying", "observed"] as const)(
+		"keeps a preflight-rejected %s Secret fenced until a deployment exists",
+		async (lifecycleState) => {
+			const record = materializedSecretRecord(lifecycleState);
+			const cleanup = secretCleanupStore(record);
+			const f = fixture(
+				{ registry: rejectedRegistry() },
+				{
+					configuration: secretConfiguration(),
+					secrets: cleanupSecrets(cleanup),
+				},
+			);
+			await f.tick(3);
+			expect(f.state?.phase).toBe("cleaning");
+			expect(cleanup.record.lifecycleState).toBe(lifecycleState);
+			expect(f.resources.size).toBe(0);
+		},
+	);
+
+	it.each([
+		["foreign", { storedOwnerId: "owner-b" }],
+		["newer", { currentConfigurationRevision: 2 }],
+	] as const)(
+		"keeps a %s pending Secret claim fenced during rejected preflight",
+		async (_condition, options) => {
+			const record = pendingSecretRecord();
+			const cleanup = secretCleanupStore(record, options);
+			const f = fixture(
+				{ registry: rejectedRegistry() },
+				{
+					configuration: secretConfiguration(),
+					secrets: cleanupSecrets(cleanup),
+				},
+			);
+			await f.tick(3);
+			expect(f.state?.phase).toBe("cleaning");
+			expect(cleanup.record.lifecycleState).toBe("pending");
+			expect(f.resources.size).toBe(0);
+		},
+	);
+
 	it.each(["NetworkPolicy", "ServiceAccount", "Service"])(
 		"repairs a missing %s after readiness without promoting until the replacement is verified",
 		async (kind) => {
