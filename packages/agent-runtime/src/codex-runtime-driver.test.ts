@@ -34,11 +34,6 @@ const drivers: CodexRuntimeDriver[] = [];
 
 type CodexTurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
-interface TestTurnsListPage {
-	data: { id: string; status: CodexTurnStatus }[];
-	nextCursor?: string | null;
-}
-
 interface TestItemsListPage {
 	data: {
 		turnId: string;
@@ -51,13 +46,29 @@ interface StoredEventJournal {
 	events: Record<string, unknown>[];
 }
 
+interface StoredCodexExecution {
+	status?: unknown;
+}
+
 interface StoredCodexSession {
 	eventSequence?: number;
 	journals?: Record<string, StoredEventJournal>;
+	executions?: Record<string, StoredCodexExecution>;
 }
 
 interface StoredCodexDriverState {
 	sessions: Record<string, StoredCodexSession>;
+}
+
+async function persistedExecutionStatus(
+	path: string,
+	nativeSessionRef: string,
+	executionId: string,
+) {
+	const state = JSON.parse(
+		await readFile(path, "utf8"),
+	) as StoredCodexDriverState;
+	return state.sessions[nativeSessionRef]?.executions?.[executionId]?.status;
 }
 
 // Narrow fixtures copied from the generated schema pinned by the Bridge provenance.
@@ -336,12 +347,15 @@ class TestCodexBridge {
 	private holdTurnStartResponses = false;
 	private holdTurnsListResponses = false;
 	private holdTurnsListSend = false;
-	private turnsListPages?: TestTurnsListPage[];
+	private turnsListResult?: unknown;
+	private turnsListError?: { code: number; message: string };
+	private nextTurnsListError?: { code: number; message: string };
 	private itemsListPages?: TestItemsListPage[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
 	private dropThreadResumeResponse = false;
+	private terminalStatusOnThreadResume?: Exclude<CodexTurnStatus, "inProgress">;
 	private dropInterruptResponse = false;
 	private nextTurnStartError?: { code: number; message: string };
 	private interruptTerminalStatus?: Exclude<CodexTurnStatus, "inProgress">;
@@ -393,6 +407,17 @@ class TestCodexBridge {
 				await this.close();
 				return;
 			}
+			if (this.terminalStatusOnThreadResume) {
+				const status = this.terminalStatusOnThreadResume;
+				this.terminalStatusOnThreadResume = undefined;
+				this.push({
+					method: "turn/completed",
+					params: {
+						threadId: this.nativeThreadId,
+						turn: { id: this.nativeTurnId, status, items: [] },
+					},
+				});
+			}
 			this.respond(id, { thread: { id: this.nativeThreadId } });
 			return;
 		}
@@ -431,6 +456,13 @@ class TestCodexBridge {
 			this.respond(id, {
 				turn: { id: nativeTurnId, status: "inProgress" },
 			});
+			this.push({
+				method: "turn/started",
+				params: {
+					threadId: this.nativeThreadId,
+					turn: { id: nativeTurnId, status: "inProgress", items: [] },
+				},
+			});
 			return;
 		}
 		if (method === "turn/interrupt") {
@@ -452,8 +484,18 @@ class TestCodexBridge {
 		this.turnStatus = status;
 	}
 
-	setTurnsListPages(pages: TestTurnsListPage[]) {
-		this.turnsListPages = structuredClone(pages);
+	setTurnsListResult(result: unknown) {
+		this.turnsListResult = structuredClone(result);
+		this.turnsListError = undefined;
+	}
+
+	setTurnsListError(error: { code: number; message: string }) {
+		this.turnsListError = { ...error };
+		this.turnsListResult = undefined;
+	}
+
+	rejectNextTurnsList(error: { code: number; message: string }) {
+		this.nextTurnsListError = { ...error };
 	}
 
 	setConfigReadResult(result: Record<string, unknown>) {
@@ -478,6 +520,10 @@ class TestCodexBridge {
 
 	dropNextThreadResumeResponse() {
 		this.dropThreadResumeResponse = true;
+	}
+
+	completeOnThreadResume(status: Exclude<CodexTurnStatus, "inProgress">) {
+		this.terminalStatusOnThreadResume = status;
 	}
 
 	dropNextInterruptResponse() {
@@ -531,7 +577,7 @@ class TestCodexBridge {
 
 	respondToHeldTurnsList(kind: "error" | "missing-result") {
 		const id = this.heldTurnsListRequestIds.shift();
-		if (id === undefined) throw new Error("No held turns-list request");
+		if (id === undefined) throw new Error("No held thread/turns/list request");
 		if (kind === "error") {
 			this.push({
 				id,
@@ -542,17 +588,26 @@ class TestCodexBridge {
 		this.push({ id });
 	}
 
+	respondToHeldTurnsListWithError(
+		error: { code: number; message: string },
+		index = 0,
+	) {
+		const id = this.heldTurnsListRequestIds.splice(index, 1)[0];
+		if (id === undefined) throw new Error("No held thread/turns/list request");
+		this.push({ id, error: { ...error } });
+	}
+
 	respondToHeldTurnsListWithStatus(status: CodexTurnStatus, index = 0) {
 		const id = this.heldTurnsListRequestIds.splice(index, 1)[0];
-		if (id === undefined) throw new Error("No held turns-list request");
-		this.respondTurnsListPage(id, {
-			data: [{ id: this.nativeTurnId, status }],
+		if (id === undefined) throw new Error("No held thread/turns/list request");
+		this.respond(id, {
+			data: [{ id: this.nativeTurnId, status, items: [] }],
 		});
 	}
 
 	respondToHeldTurnsListWithInvalidData(index = 0) {
 		const id = this.heldTurnsListRequestIds.splice(index, 1)[0];
-		if (id === undefined) throw new Error("No held turns-list request");
+		if (id === undefined) throw new Error("No held thread/turns/list request");
 		this.respond(id, { data: "invalid" });
 	}
 
@@ -643,17 +698,22 @@ class TestCodexBridge {
 	}
 
 	private respondTurnsList(id: number) {
-		const page = this.turnsListPages?.shift() ?? {
-			data: [{ id: this.nativeTurnId, status: this.turnStatus }],
-		};
-		this.respondTurnsListPage(id, page);
-	}
-
-	private respondTurnsListPage(id: number, page: TestTurnsListPage) {
-		this.respond(id, {
-			data: page.data.map((turn) => ({ ...turn, items: [] })),
-			...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-		});
+		if (this.nextTurnsListError) {
+			const error = this.nextTurnsListError;
+			this.nextTurnsListError = undefined;
+			this.push({ id, error });
+			return;
+		}
+		if (this.turnsListError) {
+			this.push({ id, error: this.turnsListError });
+			return;
+		}
+		this.respond(
+			id,
+			this.turnsListResult ?? {
+				data: [{ id: this.nativeTurnId, status: this.turnStatus, items: [] }],
+			},
+		);
 	}
 
 	private respondItemsList(id: number) {
@@ -808,6 +868,7 @@ describe("Codex Runtime Driver", () => {
 			"thread/turns/list",
 		]);
 		expect(bridge.requests[1]?.params).toEqual({ includeLayers: false });
+		expect(bridge.requests[2]?.params).toEqual({ historyMode: "paginated" });
 		expect(bridge.requests[4]?.params).toEqual({
 			threadId: bridge.nativeThreadId,
 			itemsView: "notLoaded",
@@ -1277,7 +1338,10 @@ describe("Codex Runtime Driver", () => {
 			expect(bridge.requests).toEqual([
 				{
 					method: "initialize",
-					params: { clientInfo: { name: "agent-infra-runtime", version: "1" } },
+					params: {
+						clientInfo: { name: "agent-infra-runtime", version: "1" },
+						capabilities: { experimentalApi: true },
+					},
 				},
 				{ method: "config/read", params: { includeLayers: false } },
 			]);
@@ -2085,6 +2149,47 @@ describe("Codex Runtime Driver", () => {
 		expect(JSON.stringify(events)).not.toContain("codex-native-item-private");
 	});
 
+	it("uses a terminal notification persisted while resuming before recovering history", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const resumedBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		resumedBridge.completeOnThreadResume("completed");
+		const resumedDriver = await openDriver(path, resumedBridge);
+		drivers.push(resumedDriver);
+
+		const events = await resumedDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.at(-1)).toMatchObject({
+			type: "completed",
+			payload: { status: "completed" },
+		});
+		expect(
+			resumedBridge.requests.filter(
+				({ method }) => method === "thread/turns/list",
+			),
+		).toHaveLength(0);
+		expect(
+			resumedBridge.requests.filter(
+				({ method }) => method === "thread/items/list",
+			),
+		).toHaveLength(1);
+		expect(
+			resumedBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+	});
+
 	it("fails closed with a redacted error when persisted item recovery is malformed", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -2245,7 +2350,16 @@ describe("Codex Runtime Driver", () => {
 		const firstBridge = new TestCodexBridge();
 		const firstDriver = await openDriver(path, firstBridge);
 		drivers.push(firstDriver);
-		await firstDriver.execute(submitCommand());
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await vi.waitFor(async () => {
+			expect(
+				await firstDriver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toHaveLength(1);
+		});
 		await firstDriver.close();
 		const state = JSON.parse(await readFile(path, "utf8")) as {
 			sessions: Record<
@@ -2822,7 +2936,7 @@ describe("Codex Runtime Driver", () => {
 		).toEqual({ outcome: "accepted", status: "running" });
 	});
 
-	it("returns a persisted terminal status when native Turn history is unavailable", async () => {
+	it("returns a persisted terminal status without rereading native history", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -2833,55 +2947,441 @@ describe("Codex Runtime Driver", () => {
 		expect(
 			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
 		).toBe("completed");
-		bridge.setTurnsListPages([{ data: [], nextCursor: null }]);
+		const reads = bridge.requests.filter(
+			({ method }) => method === "thread/turns/list",
+		).length;
 
 		expect(
 			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
 		).toBe("completed");
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(reads);
 	});
 
-	it("paginates to the requested historical native Turn status", async () => {
+	it("uses the validated bounded native status page", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
+		bridge.setTurnsListResult({
+			data: [
+				{
+					id: bridge.nativeTurnId,
+					status: "inProgress",
+					items: [],
+				},
+			],
+		});
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const command = submitCommand();
 		const accepted = await driver.execute(command);
-		bridge.setTurnsListPages([
-			{
-				data: [
-					{
-						id: "codex-native-later-turn-private",
-						status: "completed",
-					},
-				],
-				nextCursor: "next-turn-page-private",
-			},
-			{
-				data: [{ id: bridge.nativeTurnId, status: "completed" }],
-				nextCursor: null,
-			},
-		]);
 
 		expect(
 			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
-		).toBe("completed");
-		const turnsListRequests = bridge.requests.filter(
-			({ method }) => method === "thread/turns/list",
-		);
-		expect(turnsListRequests).toHaveLength(2);
-		expect(turnsListRequests[0]?.params).toEqual({
-			threadId: bridge.nativeThreadId,
-			itemsView: "notLoaded",
-			limit: 100,
-		});
-		expect(turnsListRequests[1]?.params).toEqual({
-			threadId: bridge.nativeThreadId,
-			itemsView: "notLoaded",
-			limit: 100,
-			cursor: "next-turn-page-private",
-		});
+		).toBe("running");
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(1);
 	});
+
+	it.each([
+		[-32_601, "list_turns is not supported yet"],
+		[
+			-32_600,
+			"thread opaque is not materialized yet; thread/turns/list is unavailable before first user message",
+		],
+	] as const)(
+		"retries a bounded native history read after initial paginated history reports %i",
+		async (code, message) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.rejectNextTurnsList({
+				code,
+				message,
+			});
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("running");
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+			).toHaveLength(2);
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/read"),
+			).toHaveLength(0);
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/start"),
+			).toHaveLength(1);
+		},
+	);
+
+	it("fails closed for unrelated native thread/turns/list invalid requests", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.setTurnsListError({
+			code: -32_600,
+			message: "synthetic unrelated invalid request",
+		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await expect(
+			driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(1);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/read"),
+		).toHaveLength(0);
+	});
+
+	it.each([
+		["a malformed page", { data: "invalid" }, "RUNTIME_CODEX_PROTOCOL_INVALID"],
+		[
+			"duplicate target Turns",
+			{
+				data: [
+					{
+						id: "codex-native-turn-private",
+						status: "inProgress",
+						items: [],
+					},
+					{
+						id: "codex-native-turn-private",
+						status: "completed",
+						items: [],
+					},
+				],
+			},
+			"RUNTIME_CODEX_PROTOCOL_INVALID",
+		],
+		[
+			"an unknown target status",
+			{
+				data: [
+					{
+						id: "codex-native-turn-private",
+						status: "unknown",
+						items: [],
+					},
+				],
+			},
+			"RUNTIME_CODEX_PROTOCOL_INVALID",
+		],
+		[
+			"a malformed target Turn",
+			{ data: [{ id: "codex-native-turn-private", status: "inProgress" }] },
+			"RUNTIME_CODEX_PROTOCOL_INVALID",
+		],
+		["a missing target Turn", { data: [] }, "RUNTIME_CODEX_UNAVAILABLE"],
+	] as const)(
+		"fails closed for %s from the bounded native status page",
+		async (_name, result, code) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.setTurnsListResult(result);
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code });
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/start"),
+			).toHaveLength(1);
+		},
+	);
+
+	it.each([
+		[-32_601, "another native method is not supported"],
+		[-32_600, "synthetic unrelated invalid request"],
+	] as const)(
+		"fails closed without retrying an unrelated native history error %i",
+		async (code, message) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.rejectNextTurnsList({ code, message });
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+			).toHaveLength(1);
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/start"),
+			).toHaveLength(1);
+		},
+	);
+
+	it("fails closed when the exact native history error remains after turn/started", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.rejectNextTurnsList({
+			code: -32601,
+			message: "list_turns is not supported yet",
+		});
+		bridge.setTurnsListError({
+			code: -32601,
+			message: "list_turns is not supported yet",
+		});
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		await expect(
+			driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(2);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/read"),
+		).toHaveLength(0);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("returns a matching persisted terminal notification when the second native history read races it", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnsList();
+		const path = join(directory, "driver.json");
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const status = driver.getStatus(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const exactHistoryError = {
+			code: -32_601,
+			message: "list_turns is not supported yet",
+		};
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(1);
+		});
+		bridge.respondToHeldTurnsListWithError(exactHistoryError);
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(1);
+		});
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+		});
+		bridge.respondToHeldTurnsListWithError(exactHistoryError);
+
+		expect(await status).toBe("completed");
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(2);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/read"),
+		).toHaveLength(0);
+	});
+
+	it("recovers matching persisted terminal events when the second native history read races them", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const bridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		bridge.holdTurnsList();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const replay = driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const exactHistoryError = {
+			code: -32_601,
+			message: "list_turns is not supported yet",
+		};
+
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(1);
+		});
+		bridge.respondToHeldTurnsListWithError(exactHistoryError);
+		await bridge.emitNotification();
+		await vi.waitFor(() => {
+			expect(bridge.pendingTurnsListCount()).toBe(1);
+		});
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+		});
+		bridge.respondToHeldTurnsListWithError(exactHistoryError);
+
+		expect(await replay).toContainEqual(
+			expect.objectContaining({
+				executionId: command.executionId,
+				type: "completed",
+				payload: { status: "completed" },
+			}),
+		);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+		).toHaveLength(2);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(0);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/read"),
+		).toHaveLength(0);
+	});
+
+	it.each([
+		[
+			"a wrong Thread",
+			"wrong-native-thread-private",
+			"codex-native-turn-private",
+		],
+		[
+			"a wrong Turn",
+			"codex-native-thread-private",
+			"wrong-native-turn-private",
+		],
+	] as const)(
+		"fails closed when the second native history read follows %s terminal notification",
+		async (_name, threadId, nativeTurnId) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.holdTurnsList();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const status = driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const exactHistoryError = {
+				code: -32_601,
+				message: "list_turns is not supported yet",
+			};
+
+			await vi.waitFor(() => {
+				expect(bridge.pendingTurnsListCount()).toBe(1);
+			});
+			bridge.respondToHeldTurnsListWithError(exactHistoryError);
+			await vi.waitFor(() => {
+				expect(bridge.pendingTurnsListCount()).toBe(1);
+			});
+			await bridge.emitFrame({
+				method: "turn/completed",
+				params: {
+					threadId,
+					turn: { id: nativeTurnId, status: "completed", items: [] },
+				},
+			});
+			bridge.respondToHeldTurnsListWithError(exactHistoryError);
+
+			await expect(status).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+			).toHaveLength(2);
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/read"),
+			).toHaveLength(0);
+		},
+	);
+
+	it.each(["malformed", "unrelated error"] as const)(
+		"fails closed when the second native history read is %s after a terminal notification",
+		async (response) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.holdTurnsList();
+			const path = join(directory, "driver.json");
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const status = driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const exactHistoryError = {
+				code: -32_601,
+				message: "list_turns is not supported yet",
+			};
+
+			await vi.waitFor(() => {
+				expect(bridge.pendingTurnsListCount()).toBe(1);
+			});
+			bridge.respondToHeldTurnsListWithError(exactHistoryError);
+			await vi.waitFor(() => {
+				expect(bridge.pendingTurnsListCount()).toBe(1);
+			});
+			await bridge.emitTurnCompleted("completed");
+			await vi.waitFor(async () => {
+				expect(
+					await persistedExecutionStatus(
+						path,
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed");
+			});
+			if (response === "malformed") {
+				bridge.respondToHeldTurnsListWithInvalidData();
+			} else {
+				bridge.respondToHeldTurnsListWithError({
+					code: -32_600,
+					message: "synthetic unrelated invalid request",
+				});
+			}
+
+			await expect(status).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/turns/list"),
+			).toHaveLength(2);
+			expect(
+				bridge.requests.filter(({ method }) => method === "thread/read"),
+			).toHaveLength(0);
+		},
+	);
 
 	it("keeps polling after a persisted app-server notification", async () => {
 		const directory = await runtimeDirectory();
@@ -3181,7 +3681,7 @@ describe("Codex Runtime Driver", () => {
 	);
 
 	it.each(["error", "missing-result"] as const)(
-		"fails all pending requests for a malformed turns-list %s response",
+		"fails all pending requests for a malformed thread/turns/list %s response",
 		async (kind) => {
 			const directory = await runtimeDirectory();
 			const bridge = new TestCodexBridge();
@@ -3212,7 +3712,7 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-	it("fails all pending requests for a structurally invalid turns-list result", async () => {
+	it("fails all pending requests for a structurally invalid thread/turns/list result", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -3241,7 +3741,7 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
-	it("fails all pending requests when a turns-list response times out", async () => {
+	it("fails all pending requests when a thread/turns/list response times out", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);

@@ -100,6 +100,7 @@ interface CodexSession {
 	conversationId: string;
 	sessionGeneration: number;
 	threadId?: string;
+	historyMode?: "paginated";
 	activeExecutionId?: string;
 	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
@@ -127,6 +128,7 @@ interface PendingRequest {
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	nativeSelectionRejection: boolean;
+	allowHistoryMaterializationRetry: boolean;
 }
 
 type CodexNotificationHandler = (frame: CodexAppServerFrame) => Promise<void>;
@@ -139,10 +141,10 @@ const capabilities: RuntimeCapabilitiesV1 = {
 	supplementaryInstruction: false,
 };
 
-const turnsListPageSize = 100;
-const maximumTurnsListPages = 8;
 const itemsListPageSize = 100;
 const maximumItemsListPages = 8;
+const turnsListPageSize = 100;
+const maximumTurnsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
 const containedServerRequestMethods = new Set([
 	"item/tool/call",
@@ -268,6 +270,19 @@ function isNativeSelectionRejection(value: unknown) {
 		value.code === -32_600 &&
 		nonEmptyString(value.message) &&
 		value.message.startsWith("invalid thread settings override:")
+	);
+}
+
+function isHistoryNotMaterializedError(value: unknown) {
+	if (!isPlainRecord(value) || !Number.isSafeInteger(value.code)) return false;
+	if (value.code === -32_601)
+		return value.message === "list_turns is not supported yet";
+	return (
+		value.code === -32_600 &&
+		typeof value.message === "string" &&
+		value.message.endsWith(
+			"thread/turns/list is unavailable before first user message",
+		)
 	);
 }
 
@@ -409,6 +424,7 @@ function isCodexSession(
 			"conversationId",
 			"sessionGeneration",
 			"threadId",
+			"historyMode",
 			"activeExecutionId",
 			"acceptanceUncertainOperationKey",
 			"eventSequence",
@@ -422,6 +438,7 @@ function isCodexSession(
 		!Number.isSafeInteger(value.sessionGeneration) ||
 		value.sessionGeneration < 1 ||
 		(value.threadId !== undefined && !nonEmptyString(value.threadId)) ||
+		(value.historyMode !== undefined && value.historyMode !== "paginated") ||
 		(value.activeExecutionId !== undefined &&
 			!nonEmptyString(value.activeExecutionId)) ||
 		(value.acceptanceUncertainOperationKey !== undefined &&
@@ -733,6 +750,13 @@ class CodexModelSelectionRejectedError extends Error {
 	}
 }
 
+class CodexHistoryNotMaterializedError extends Error {
+	constructor() {
+		super("Codex Runtime history is not materialized");
+		this.name = "CodexHistoryNotMaterializedError";
+	}
+}
+
 function driverRecord(
 	command: RuntimeDriverCommand,
 	value: unknown,
@@ -883,6 +907,7 @@ function turnCompletedNotification(frame: CodexAppServerFrame) {
 
 class CodexRpc {
 	private readonly pending = new Map<number, PendingRequest>();
+	private readonly consuming: Promise<void>;
 	private nextRequestId = 1;
 	private failed = false;
 
@@ -890,7 +915,7 @@ class CodexRpc {
 		private readonly bridge: CodexAppServerTransport,
 		private readonly onNotification: CodexNotificationHandler,
 	) {
-		void this.consume();
+		this.consuming = this.consume();
 	}
 
 	async request<T>(
@@ -898,6 +923,7 @@ class CodexRpc {
 		params: Record<string, unknown>,
 		parse: (value: unknown) => T,
 		nativeSelectionRejection = false,
+		allowHistoryMaterializationRetry = false,
 	) {
 		if (this.failed) unavailable();
 		const id = this.nextRequestId++;
@@ -907,6 +933,7 @@ class CodexRpc {
 				resolve: (value) => resolve(parse(value)),
 				reject,
 				nativeSelectionRejection,
+				allowHistoryMaterializationRetry,
 			});
 		});
 		void response.catch(() => {});
@@ -925,6 +952,7 @@ class CodexRpc {
 			this.pending.delete(id);
 			if (error instanceof CodexModelSelectionRejectedError) throw error;
 			if (error instanceof CodexSessionUnavailableError) throw error;
+			if (error instanceof CodexHistoryNotMaterializedError) throw error;
 			const failure =
 				error instanceof RuntimeHostError ? error : unavailableError();
 			this.fail(failure);
@@ -941,6 +969,7 @@ class CodexRpc {
 		} catch {
 			// Closing a failed bridge cannot change a completed Driver result.
 		}
+		await this.consuming;
 	}
 
 	private async consume() {
@@ -996,6 +1025,14 @@ class CodexRpc {
 			return;
 		}
 		if ("error" in frame) {
+			if (
+				pending.allowHistoryMaterializationRetry &&
+				isHistoryNotMaterializedError(frame.error)
+			) {
+				pending.reject(new CodexHistoryNotMaterializedError());
+				this.pending.delete(frame.id);
+				return;
+			}
 			if (
 				pending.method === "thread/resume" &&
 				isPlainRecord(frame.error) &&
@@ -1054,6 +1091,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
 	private readonly recoveredEventExecutions = new Set<string>();
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
+	private readonly observedNativeTurnStarts = new Set<string>();
+	private readonly nativeTurnStartWaiters = new Map<string, Set<() => void>>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
@@ -1128,7 +1167,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			await driver.rpc.request(
 				"initialize",
-				{ clientInfo: { name: "agent-infra-runtime", version: "1" } },
+				{
+					clientInfo: { name: "agent-infra-runtime", version: "1" },
+					capabilities: { experimentalApi: true },
+				},
 				(value) => {
 					if (!isPlainRecord(value)) protocolInvalid();
 				},
@@ -1362,15 +1404,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
-		const session = this.session(nativeSessionRef);
-		const execution = ownRecordValue(session.executions, executionId);
+		let session = this.session(nativeSessionRef);
+		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		if (execution.status !== "running") return execution.status;
 		await this.resumeSession(nativeSessionRef);
-		const status = await this.readNativeTurnStatus(
-			session.threadId,
-			execution.nativeTurnId,
-		);
+		session = this.session(nativeSessionRef);
+		execution = ownRecordValue(session.executions, executionId);
+		if (!execution || !session.threadId) unavailable();
+		if (execution.status !== "running") return execution.status;
+		const status = await this.readNativeTurnStatus(session, execution);
 		return this.updateExecutionStatus(
 			nativeSessionRef,
 			executionId,
@@ -1509,6 +1552,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						)
 					: undefined;
 			});
+			this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
@@ -1542,6 +1586,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						)
 					: undefined;
 			});
+			this.recordNativeTurnCompleted(
+				completed.threadId,
+				completed.nativeTurnId,
+			);
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
@@ -1737,6 +1785,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return JSON.stringify([nativeSessionRef, executionId]);
 	}
 
+	private nativeTurnKey(threadId: string, nativeTurnId: string) {
+		return JSON.stringify([threadId, nativeTurnId]);
+	}
+
+	private recordNativeTurnStarted(threadId: string, nativeTurnId: string) {
+		const key = this.nativeTurnKey(threadId, nativeTurnId);
+		this.observedNativeTurnStarts.add(key);
+		for (const wake of this.nativeTurnStartWaiters.get(key) ?? []) wake();
+		this.nativeTurnStartWaiters.delete(key);
+	}
+
+	private recordNativeTurnCompleted(threadId: string, nativeTurnId: string) {
+		const key = this.nativeTurnKey(threadId, nativeTurnId);
+		this.observedNativeTurnStarts.delete(key);
+		for (const wake of this.nativeTurnStartWaiters.get(key) ?? []) wake();
+		this.nativeTurnStartWaiters.delete(key);
+	}
+
 	private isExecutionTerminal(nativeSessionRef: string, executionId: string) {
 		const execution = ownRecordValue(
 			this.session(nativeSessionRef).executions,
@@ -1805,14 +1871,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 	) {
-		const session = this.session(nativeSessionRef);
-		const execution = ownRecordValue(session.executions, executionId);
+		let session = this.session(nativeSessionRef);
+		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		await this.resumeSession(nativeSessionRef);
-		const status = await this.readNativeTurnStatus(
-			session.threadId,
-			execution.nativeTurnId,
-		);
+		session = this.session(nativeSessionRef);
+		execution = ownRecordValue(session.executions, executionId);
+		if (!execution || !session.threadId) unavailable();
+		const status =
+			execution.status === "running"
+				? await this.readNativeTurnStatus(session, execution)
+				: execution.status;
 		const items = await this.readNativeAgentMessageItems(
 			session.threadId,
 			execution.nativeTurnId,
@@ -1921,7 +1990,84 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (streamKey) this.notifyEventStream(streamKey);
 	}
 
-	private async readNativeTurnStatus(threadId: string, nativeTurnId: string) {
+	private async readNativeTurnStatus(
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		if (!session.threadId) unavailable();
+		try {
+			return await this.readNativeTurnStatusPage(
+				session.threadId,
+				execution.nativeTurnId,
+			);
+		} catch (error) {
+			if (
+				!(error instanceof CodexHistoryNotMaterializedError) ||
+				!this.canReadLiveTurnHistory(session, execution)
+			) {
+				if (error instanceof CodexHistoryNotMaterializedError)
+					protocolInvalid();
+				throw error;
+			}
+			const current = ownRecordValue(
+				this.session(session.nativeSessionRef).executions,
+				execution.executionId,
+			);
+			if (!current) unavailable();
+			if (current.status !== "running") return current.status;
+			const started = await this.waitForNativeTurnStarted(
+				session.threadId,
+				execution.nativeTurnId,
+			);
+			if (!started) {
+				const completed = ownRecordValue(
+					this.session(session.nativeSessionRef).executions,
+					execution.executionId,
+				);
+				if (completed?.status && completed.status !== "running")
+					return completed.status;
+				unavailable();
+			}
+			try {
+				return await this.readNativeTurnStatusPage(
+					session.threadId,
+					execution.nativeTurnId,
+				);
+			} catch (retryError) {
+				if (!(retryError instanceof CodexHistoryNotMaterializedError)) {
+					throw retryError;
+				}
+				const persistedSession = this.session(session.nativeSessionRef);
+				if (persistedSession.threadId !== session.threadId) stateInvalid();
+				const persistedExecution = ownRecordValue(
+					persistedSession.executions,
+					execution.executionId,
+				);
+				if (!persistedExecution) unavailable();
+				if (persistedExecution.nativeTurnId !== execution.nativeTurnId) {
+					stateInvalid();
+				}
+				if (persistedExecution.status === "running") protocolInvalid();
+				return persistedExecution.status;
+			}
+		}
+	}
+
+	private canReadLiveTurnHistory(
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		return (
+			session.historyMode === "paginated" &&
+			session.activeExecutionId === execution.executionId &&
+			Object.keys(session.executions).length === 1
+		);
+	}
+
+	private async readNativeTurnStatusPage(
+		threadId: string,
+		nativeTurnId: string,
+	) {
 		let cursor: string | undefined;
 		const seenCursors = new Set<string>();
 		for (let page = 0; page < maximumTurnsListPages; page += 1) {
@@ -1934,6 +2080,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...(cursor === undefined ? {} : { cursor }),
 				},
 				(value) => this.statusFromTurnsList(value, nativeTurnId),
+				false,
+				page === 0,
 			);
 			if (result.status !== undefined) return result.status;
 			if (result.nextCursor === undefined) unavailable();
@@ -1942,6 +2090,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			cursor = result.nextCursor;
 		}
 		unavailable();
+	}
+
+	private async waitForNativeTurnStarted(
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		const key = this.nativeTurnKey(threadId, nativeTurnId);
+		if (this.observedNativeTurnStarts.has(key)) return true;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let wake: () => void = () => undefined;
+		try {
+			await new Promise<void>((resolve) => {
+				wake = resolve;
+				const waiters = this.nativeTurnStartWaiters.get(key) ?? new Set();
+				this.nativeTurnStartWaiters.set(key, waiters);
+				if (this.observedNativeTurnStarts.has(key)) {
+					resolve();
+					return;
+				}
+				waiters.add(wake);
+				timer = setTimeout(wake, rpcRequestTimeoutMs);
+			});
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			const waiters = this.nativeTurnStartWaiters.get(key);
+			if (waiters) {
+				waiters.delete(wake);
+				if (waiters.size === 0) this.nativeTurnStartWaiters.delete(key);
+			}
+		}
+		if (this.observedNativeTurnStarts.has(key)) return true;
+		return false;
 	}
 
 	private statusFromTurnsList(value: unknown, nativeTurnId: string) {
@@ -2208,17 +2388,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
 		}
-		const threadId = await this.rpc.request("thread/start", {}, (value) => {
-			const thread = isPlainRecord(value) ? value.thread : undefined;
-			if (
-				!isPlainRecord(thread) ||
-				typeof thread.id !== "string" ||
-				thread.id.length === 0
-			) {
-				protocolInvalid();
-			}
-			return thread.id;
-		});
+		const threadId = await this.rpc.request(
+			"thread/start",
+			{ historyMode: "paginated" },
+			(value) => {
+				const thread = isPlainRecord(value) ? value.thread : undefined;
+				if (
+					!isPlainRecord(thread) ||
+					typeof thread.id !== "string" ||
+					thread.id.length === 0
+				) {
+					protocolInvalid();
+				}
+				return thread.id;
+			},
+		);
 		await this.update((state) => {
 			const stored = ownRecordValue(state.sessions, nativeSessionRef);
 			if (!stored || stored.threadId) protocolInvalid();
@@ -2232,6 +2416,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				protocolInvalid();
 			}
 			stored.threadId = threadId;
+			stored.historyMode = "paginated";
 		});
 		this.resumedSessions.add(nativeSessionRef);
 		return this.session(nativeSessionRef);
