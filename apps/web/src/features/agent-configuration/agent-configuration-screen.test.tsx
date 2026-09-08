@@ -3,7 +3,13 @@ import {
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
@@ -145,5 +151,36 @@ describe("AgentConfigurationScreen", () => {
 			"Your permission or this Agent changed. Refresh the page.",
 		);
 		expect(screen.queryByText("private transport detail")).toBeNull();
+	});
+
+	it("focuses a completion only when it belongs to the displayed Agent", async () => {
+		const commandResult = { ...agent, managementStatus: "creating" as const };
+		const otherAgent = { ...agent, agentId: "agent-pilot-2" };
+		const { rerender } = render(
+			<AgentConfigurationScreen
+				agent={otherAgent}
+				commandResult={commandResult}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.queryByRole("status")).toBeNull();
+
+		rerender(
+			<AgentConfigurationScreen
+				agent={agent}
+				commandResult={commandResult}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		const status = screen.getByRole("status");
+		await waitFor(() => expect(document.activeElement).toBe(status));
 	});
 });

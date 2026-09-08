@@ -16,6 +16,8 @@
 			"!**/dist",
 			"!**/.turbo",
 			"!**/routeTree.gen.ts",
+			"!apps/web/playwright-report",
+			"!apps/web/test-results",
 			"!apps/web/src/pilot/generated",
 			"!apps/web/src/pilot/generated-v2",
 			"!packages/contracts/artifacts",

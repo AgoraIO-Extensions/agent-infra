@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Badge } from "@/components/ui/badge";
 
 import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentDiscoveryState } from "./agent-discovery.js";
@@ -75,9 +76,9 @@ export function AgentDiscoveryScreen({ state }: AgentDiscoveryScreenProps) {
 							</span>
 						</Link>
 						{agent.serviceAvailability ? (
-							<span className="self-start border border-slate-300 px-2 py-1 text-slate-700 text-xs sm:self-auto">
+							<Badge variant="outline" className="self-start sm:self-auto">
 								{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-							</span>
+							</Badge>
 						) : null}
 					</li>
 				))}
