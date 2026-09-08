@@ -813,6 +813,13 @@ export function validateTrustedScriptSources(sources) {
     '"Claude Review Gate"',
     'blockerStatus(blocker) !== "completed"',
   ];
+  const humanValidationRequirements = [
+    "buildHumanValidationConfirmation({ event, currentHead, membership })",
+    'event?.action !== "unlabeled"',
+    'event.label?.name !== HUMAN_LABEL',
+    "readHumanValidationCheck(repository, prNumber, currentHead)",
+    "priorHumanValidationCheck",
+  ];
   const reviewRequirements = [
     "/check-runs",
     'tokenEnvironment: "GATE_CHECK_TOKEN"',
@@ -844,7 +851,9 @@ export function validateTrustedScriptSources(sources) {
     coverageRequirements.some(
       (requirement) => !coverageSource.includes(requirement),
     ) ||
-    contractRequirements.some((requirement) => !contractSource.includes(requirement))
+    contractRequirements.some((requirement) => !contractSource.includes(requirement)) ||
+    humanValidationRequirements.some((requirement) => !gateSource.includes(requirement)) ||
+    gateSource.includes("/human-validation")
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
   }

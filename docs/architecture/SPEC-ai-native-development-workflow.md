@@ -405,8 +405,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 PR 正文列出验证内容。
 
 - Codex 可以添加 `ready-for-human`，不能移除；Claude 只能建议。
-- 只有 CODEOWNERS Team 中的非 Bot 人员可以确认完成。可信记录绑定当前 head、actor、时间和
-  验证说明；单纯由 Bot 或非成员移除标签不能通过 Gate。
+- 完成 PR 正文列出的验证后，CODEOWNERS Team 中的非 Bot 人员移除 PR 的
+  `ready-for-human` 标签即为唯一确认动作。受信 `pull_request_target: unlabeled` 回读 live
+  PR head 和 Team membership，并以绑定 PR identity、当前 head 和 check-only App 的
+  `Human Validation Gate` Check Run 保存 actor、event time 与 head；不解析人工评论。
+  Bot、非成员、身份查询失败或非该标签的移除一律 fail closed 并恢复标签。
 - 新 commit 会使确认失效并自动恢复待验证状态。
 - Approve 表示代码评审完成，人工验证表示外部验收完成，两者不能互相替代。
 
