@@ -195,12 +195,31 @@ describe("Connection Pilot contracts", () => {
 				},
 			}).success,
 		).toBe(false);
+		for (const providerStatusCode of [429, 500]) {
+			expect(
+				ConnectionActionCallProjectionV1Schema.safeParse({
+					...base,
+					status: "provider_failed",
+					error: {
+						code: "PROVIDER_FAILED",
+						message: "Provider rejected the Action",
+						retryable: false,
+						providerStatusCode,
+						providerRequestId: null,
+					},
+				}).success,
+			).toBe(false);
+		}
 	});
 
 	it("publishes separate authenticated Browser and read-only Catalog paths", () => {
 		expect(connectionBrowserOpenApiPathsV1).toHaveProperty(
 			"/connection/api/v1/session.post.operationId",
 			"loginConnectionSession",
+		);
+		expect(connectionBrowserOpenApiPathsV1).toHaveProperty(
+			"/connection/api/v1/session.post.security",
+			[{ ConnectionCsrf: [] }],
 		);
 		expect(connectionBrowserOpenApiPathsV1).toHaveProperty(
 			"/connection/api/v1/grants.post.operationId",

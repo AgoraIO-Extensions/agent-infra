@@ -181,9 +181,18 @@
                     ]
                   },
                   "providerStatusCode": {
-                    "maximum": 599,
-                    "minimum": 400,
-                    "type": "integer"
+                    "anyOf": [
+                      {
+                        "maximum": 428,
+                        "minimum": 400,
+                        "type": "integer"
+                      },
+                      {
+                        "maximum": 499,
+                        "minimum": 430,
+                        "type": "integer"
+                      }
+                    ]
                   },
                   "retryable": {
                     "const": false,
@@ -447,229 +456,249 @@
             "type": "string"
           },
           "providers": {
-            "prefixItems": [
+            "allOf": [
               {
-                "additionalProperties": false,
-                "properties": {
-                  "actions": {
-                    "prefixItems": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "actionId": {
-                            "const": "github.get_current_user",
-                            "type": "string"
-                          },
-                          "actionVersionId": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "effect": {
-                            "const": "read",
-                            "type": "string"
-                          },
-                          "inputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema3"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "outputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema4"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "requiredScopes": {
+                "prefixItems": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "actions": {
+                        "allOf": [
+                          {
                             "prefixItems": [
                               {
-                                "const": "read:user",
-                                "type": "string"
+                                "additionalProperties": false,
+                                "properties": {
+                                  "actionId": {
+                                    "const": "github.get_current_user",
+                                    "type": "string"
+                                  },
+                                  "actionVersionId": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "effect": {
+                                    "const": "read",
+                                    "type": "string"
+                                  },
+                                  "inputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema3"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "outputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema4"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "requiredScopes": {
+                                    "items": {
+                                      "const": "read:user",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 1,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "status": {
+                                    "enum": [
+                                      "published",
+                                      "disabled"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "actionVersionId",
+                                  "status",
+                                  "inputSchema",
+                                  "outputSchema",
+                                  "actionId",
+                                  "effect",
+                                  "requiredScopes"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "actionId": {
+                                    "const": "github.list_my_repositories",
+                                    "type": "string"
+                                  },
+                                  "actionVersionId": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "effect": {
+                                    "const": "read",
+                                    "type": "string"
+                                  },
+                                  "inputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema3"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "outputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema4"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "requiredScopes": {
+                                    "items": {
+                                      "const": "repo",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 1,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "status": {
+                                    "enum": [
+                                      "published",
+                                      "disabled"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "actionVersionId",
+                                  "status",
+                                  "inputSchema",
+                                  "outputSchema",
+                                  "actionId",
+                                  "effect",
+                                  "requiredScopes"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "actionId": {
+                                    "const": "github.create_pull_request",
+                                    "type": "string"
+                                  },
+                                  "actionVersionId": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "effect": {
+                                    "const": "write",
+                                    "type": "string"
+                                  },
+                                  "inputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema3"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "outputSchema": {
+                                    "additionalProperties": {
+                                      "$ref": "#/components/schemas/__schema4"
+                                    },
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "requiredScopes": {
+                                    "items": {
+                                      "const": "repo",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 1,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "status": {
+                                    "enum": [
+                                      "published",
+                                      "disabled"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "actionVersionId",
+                                  "status",
+                                  "inputSchema",
+                                  "outputSchema",
+                                  "actionId",
+                                  "effect",
+                                  "requiredScopes"
+                                ],
+                                "type": "object"
                               }
                             ],
                             "type": "array"
                           },
-                          "status": {
-                            "enum": [
-                              "published",
-                              "disabled"
-                            ],
-                            "type": "string"
+                          {
+                            "items": {},
+                            "maxItems": 3,
+                            "minItems": 3,
+                            "type": "array"
                           }
-                        },
-                        "required": [
-                          "actionVersionId",
-                          "status",
-                          "inputSchema",
-                          "outputSchema",
-                          "actionId",
-                          "effect",
-                          "requiredScopes"
-                        ],
-                        "type": "object"
+                        ]
                       },
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "actionId": {
-                            "const": "github.list_my_repositories",
-                            "type": "string"
-                          },
-                          "actionVersionId": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "effect": {
-                            "const": "read",
-                            "type": "string"
-                          },
-                          "inputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema3"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "outputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema4"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "requiredScopes": {
-                            "prefixItems": [
-                              {
-                                "const": "repo",
-                                "type": "string"
-                              }
-                            ],
-                            "type": "array"
-                          },
-                          "status": {
-                            "enum": [
-                              "published",
-                              "disabled"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "actionVersionId",
-                          "status",
-                          "inputSchema",
-                          "outputSchema",
-                          "actionId",
-                          "effect",
-                          "requiredScopes"
-                        ],
-                        "type": "object"
+                      "displayName": {
+                        "const": "GitHub",
+                        "type": "string"
                       },
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "actionId": {
-                            "const": "github.create_pull_request",
-                            "type": "string"
-                          },
-                          "actionVersionId": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "effect": {
-                            "const": "write",
-                            "type": "string"
-                          },
-                          "inputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema3"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "outputSchema": {
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/__schema4"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          },
-                          "requiredScopes": {
-                            "prefixItems": [
-                              {
-                                "const": "repo",
-                                "type": "string"
-                              }
-                            ],
-                            "type": "array"
-                          },
-                          "status": {
-                            "enum": [
-                              "published",
-                              "disabled"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "actionVersionId",
-                          "status",
-                          "inputSchema",
-                          "outputSchema",
-                          "actionId",
-                          "effect",
-                          "requiredScopes"
+                      "providerId": {
+                        "const": "github",
+                        "type": "string"
+                      },
+                      "providerReleaseId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "published",
+                          "disabled"
                         ],
-                        "type": "object"
+                        "type": "string"
                       }
+                    },
+                    "required": [
+                      "providerId",
+                      "providerReleaseId",
+                      "displayName",
+                      "status",
+                      "actions"
                     ],
-                    "type": "array"
-                  },
-                  "displayName": {
-                    "const": "GitHub",
-                    "type": "string"
-                  },
-                  "providerId": {
-                    "const": "github",
-                    "type": "string"
-                  },
-                  "providerReleaseId": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "status": {
-                    "enum": [
-                      "published",
-                      "disabled"
-                    ],
-                    "type": "string"
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "providerId",
-                  "providerReleaseId",
-                  "displayName",
-                  "status",
-                  "actions"
                 ],
-                "type": "object"
+                "type": "array"
+              },
+              {
+                "items": {},
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array"
               }
-            ],
-            "type": "array"
+            ]
           },
           "schemaVersion": {
             "const": 1,

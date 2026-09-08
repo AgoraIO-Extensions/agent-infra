@@ -512,7 +512,10 @@ export const DelegatedActionErrorV2Schema = z.union([
 		code: z.literal("PROVIDER_FAILED"),
 		message: z.literal("Provider rejected the Action"),
 		retryable: z.literal(false),
-		providerStatusCode: z.number().int().min(400).max(599),
+		providerStatusCode: z.union([
+			z.number().int().min(400).max(428),
+			z.number().int().min(430).max(499),
+		]),
 		providerRequestId: nonEmptyString().nullable(),
 	}),
 ]);

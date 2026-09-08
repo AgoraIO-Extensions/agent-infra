@@ -14,6 +14,11 @@ import {
 
 const nonEmptyString = () => z.string().min(1);
 const numericId = () => z.string().regex(/^\d+$/);
+const providerTerminalRejectionStatus = () =>
+	z.union([
+		z.number().int().min(400).max(428),
+		z.number().int().min(430).max(499),
+	]);
 const jsonSchema = () => z.record(z.string(), z.json());
 const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
@@ -84,36 +89,40 @@ export const GitHubGetCurrentUserCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.get_current_user"),
 	effect: z.literal("read"),
-	requiredScopes: z.tuple([z.literal("read:user")]),
+	requiredScopes: z.array(z.literal("read:user")).length(1),
 });
 export const GitHubListMyRepositoriesCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.list_my_repositories"),
 	effect: z.literal("read"),
-	requiredScopes: z.tuple([z.literal("repo")]),
+	requiredScopes: z.array(z.literal("repo")).length(1),
 });
 export const GitHubCreatePullRequestCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.create_pull_request"),
 	effect: z.literal("write"),
-	requiredScopes: z.tuple([z.literal("repo")]),
+	requiredScopes: z.array(z.literal("repo")).length(1),
 });
 export const ConnectionCatalogV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	catalogVersion: nonEmptyString(),
-	providers: z.tuple([
-		z.strictObject({
-			providerId: z.literal("github"),
-			providerReleaseId: nonEmptyString(),
-			displayName: z.literal("GitHub"),
-			status: z.enum(["published", "disabled"]),
-			actions: z.tuple([
-				GitHubGetCurrentUserCatalogActionV1Schema,
-				GitHubListMyRepositoriesCatalogActionV1Schema,
-				GitHubCreatePullRequestCatalogActionV1Schema,
-			]),
-		}),
-	]),
+	providers: z
+		.tuple([
+			z.strictObject({
+				providerId: z.literal("github"),
+				providerReleaseId: nonEmptyString(),
+				displayName: z.literal("GitHub"),
+				status: z.enum(["published", "disabled"]),
+				actions: z
+					.tuple([
+						GitHubGetCurrentUserCatalogActionV1Schema,
+						GitHubListMyRepositoriesCatalogActionV1Schema,
+						GitHubCreatePullRequestCatalogActionV1Schema,
+					])
+					.and(z.array(z.unknown()).length(3)),
+			}),
+		])
+		.and(z.array(z.unknown()).length(1)),
 });
 
 export const ConnectionLoginRequestV1Schema = z.strictObject({
@@ -193,7 +202,7 @@ export const ConnectionProviderFailedV1Schema = z.strictObject({
 		code: z.literal("PROVIDER_FAILED"),
 		message: z.literal("Provider rejected the Action"),
 		retryable: z.literal(false),
-		providerStatusCode: z.number().int().min(400).max(599),
+		providerStatusCode: providerTerminalRejectionStatus(),
 		providerRequestId: nonEmptyString().nullable(),
 	}),
 });
@@ -279,6 +288,7 @@ export const connectionBrowserOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "loginConnectionSession",
+			security: [{ ConnectionCsrf: [] }],
 			requestBody: requiredJsonBody(ConnectionLoginRequestV1Schema),
 			responses: {
 				"200": ok("Authenticated session", ConnectionBrowserSessionV1Schema),

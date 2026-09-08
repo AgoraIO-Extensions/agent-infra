@@ -289,9 +289,18 @@
               ]
             },
             "providerStatusCode": {
-              "maximum": 599,
-              "minimum": 400,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "maximum": 428,
+                  "minimum": 400,
+                  "type": "integer"
+                },
+                {
+                  "maximum": 499,
+                  "minimum": 430,
+                  "type": "integer"
+                }
+              ]
             },
             "retryable": {
               "const": false,
@@ -1710,9 +1719,18 @@
                       ]
                     },
                     "providerStatusCode": {
-                      "maximum": 599,
-                      "minimum": 400,
-                      "type": "integer"
+                      "anyOf": [
+                        {
+                          "maximum": 428,
+                          "minimum": 400,
+                          "type": "integer"
+                        },
+                        {
+                          "maximum": 499,
+                          "minimum": 430,
+                          "type": "integer"
+                        }
+                      ]
                     },
                     "retryable": {
                       "const": false,

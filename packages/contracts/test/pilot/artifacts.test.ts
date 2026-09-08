@@ -57,6 +57,14 @@ describe("Pilot standard artifacts", () => {
 		expect(schemas.ConnectionCatalogV1).not.toHaveProperty(
 			"properties.connections",
 		);
+		expect(schemas.ConnectionCatalogV1).toHaveProperty(
+			"properties.providers.allOf.1.minItems",
+			1,
+		);
+		expect(schemas.ConnectionCatalogV1).toHaveProperty(
+			"properties.providers.allOf.1.maxItems",
+			1,
+		);
 	});
 
 	it("generates browser OpenAPI 3.1 from the Zod-authored HTTP schemas", () => {
