@@ -349,6 +349,22 @@ export function nativeObservationErrorCategory(
 	return "read-error";
 }
 
+export function nativeLaunchDirectoryRelations(input: {
+	home: string;
+	codexHome: string;
+	cwd: string;
+}) {
+	const homeEqualsCwd = input.home === input.cwd;
+	const codexHomeEqualsCwd = input.codexHome === input.cwd;
+	const homeEqualsCodexHome = input.home === input.codexHome;
+	return {
+		homeEqualsCwd,
+		codexHomeEqualsCwd,
+		homeEqualsCodexHome,
+		isolated: !homeEqualsCwd && !codexHomeEqualsCwd && !homeEqualsCodexHome,
+	};
+}
+
 export async function nativeIsolationLauncher(
 	directory: string,
 	executable: string,

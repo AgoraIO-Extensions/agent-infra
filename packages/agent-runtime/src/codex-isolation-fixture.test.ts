@@ -8,6 +8,7 @@ import {
 	type IsolationProbe,
 	isolationModel,
 	nativeIsolationLauncher,
+	nativeLaunchDirectoryRelations,
 } from "./codex-isolation.test-support.js";
 
 const servers: Awaited<ReturnType<typeof isolationModel>>[] = [];
@@ -182,6 +183,37 @@ it("reports terminal native observation failures without treating them as empty"
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+it("rejects overlapping synthetic launch directories", () => {
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/home",
+			codexHome: "/synthetic/codex-home",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ isolated: true });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/workspace",
+			codexHome: "/synthetic/codex-home",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ homeEqualsCwd: true, isolated: false });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/home",
+			codexHome: "/synthetic/workspace",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ codexHomeEqualsCwd: true, isolated: false });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/codex-home",
+			codexHome: "/synthetic/codex-home",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ homeEqualsCodexHome: true, isolated: false });
 });
 
 it("rejects unrelated, missing, and dirty persistence evidence", () => {

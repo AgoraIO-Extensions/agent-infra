@@ -23,6 +23,7 @@ import {
 	type IsolationProbe,
 	isolationModel,
 	nativeIsolationLauncher,
+	nativeLaunchDirectoryRelations,
 	nativeObservationErrorCategory,
 } from "./codex-isolation.test-support.js";
 import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
@@ -807,8 +808,14 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			workspace = launch.cwd;
 			const ownedRoot = await realpath(directory);
 			const temporaryRoot = await realpath(tmpdir());
-			for (const path of [nativeHome, workspace]) {
-				const resolved = await realpath(path);
+			const resolvedHome = await realpath(launch.home);
+			const resolvedNativeHome = await realpath(nativeHome);
+			const resolvedWorkspace = await realpath(workspace);
+			for (const resolved of [
+				resolvedHome,
+				resolvedNativeHome,
+				resolvedWorkspace,
+			]) {
 				if (
 					!resolved.startsWith(`${ownedRoot}${sep}`) &&
 					!(
@@ -818,12 +825,14 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				)
 					throw new Error("Native directory is not synthetic");
 			}
-			report.launchConfiguration = {
-				homeEqualsCwd:
-					(await realpath(launch.home)) === (await realpath(workspace)),
-				codexHomeEqualsCwd:
-					(await realpath(nativeHome)) === (await realpath(workspace)),
-			};
+			const launchConfiguration = nativeLaunchDirectoryRelations({
+				home: resolvedHome,
+				codexHome: resolvedNativeHome,
+				cwd: resolvedWorkspace,
+			});
+			report.launchConfiguration = launchConfiguration;
+			if (!launchConfiguration.isolated)
+				throw new Error("Native HOME, CODEX_HOME, and cwd overlap");
 			const memoryDisabled = /^memories\s+\S+\s+false$/m.test(
 				launcher.features(nativeHome),
 			);
