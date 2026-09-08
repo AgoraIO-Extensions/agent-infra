@@ -59,6 +59,7 @@ test("accepts a complete current-head PR-Agent review", () => {
       runResult: "success",
       analysisJobConclusion: "success",
       analysisLog: completeLog,
+      publicationVerified: true,
     }),
     {
       conclusion: "success",
@@ -110,6 +111,7 @@ test("rejects missing, malformed, or mismatched PR-Agent job evidence", () => {
     },
     {
       analysisLog: completeLog,
+      publicationVerified: true,
       analysisJobConclusion: "failure",
       reasonCode: "review-output-invalid",
     },
@@ -257,6 +259,7 @@ test("publishes the required Gate through a current-head dedicated App path", as
     runResult: "success",
     analysisJobConclusion: "success",
     analysisLog: completeLog,
+    publicationVerified: true,
   });
 
   await publishCoverageCheck({
@@ -329,4 +332,11 @@ test("renders a bounded Job Summary from coverage facts", () => {
       "",
     ].join("\n"),
   );
+});
+
+test("rejects the #422 false green: full diff and successful job without published review evidence", () => {
+  assert.equal(evaluateReviewCoverage({
+    provider: "pr-agent", expectedHead: head, runResult: "success",
+    analysisJobConclusion: "success", analysisLog: completeLog,
+  }).conclusion, "failure");
 });
