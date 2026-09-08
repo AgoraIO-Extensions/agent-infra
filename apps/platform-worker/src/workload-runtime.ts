@@ -298,55 +298,25 @@ export function createWorkloadRuntimeV1(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
 	): Promise<boolean> {
-		const bindings = bindingsFor(state, input).filter(
+		const resolvedBindings = bindingsFor(state, input);
+		if (state.candidate.deployment === null) {
+			// Preflight has not materialized a Kubernetes Secret. Retain the exact
+			// current pending record so retry_agent_creation can activate it later.
+			return resolvedBindings.every(
+				({ materialization, record }) =>
+					materialization === "current" &&
+					record.lifecycleState === "pending" &&
+					record.ownerType === "agent-owner" &&
+					input.management.ownerIds.includes(record.ownerId),
+			);
+		}
+		const bindings = resolvedBindings.filter(
 			({ materialization, record }) =>
 				materialization === "current" &&
 				["pending", "applying", "observed"].includes(record.lifecycleState),
 		);
 		if (!bindings.length) return true;
 		if (!input.secrets) return false;
-		if (state.candidate.deployment === null) {
-			if (bindings.some(({ record }) => record.lifecycleState !== "pending"))
-				return false;
-			for (const { record } of bindings) {
-				const removed = await cleanupUnactivatedSecretCandidateV1(
-					{
-						store: input.secrets.store,
-						kubernetes: {
-							async removeCandidate(candidate) {
-								return (
-									candidate.agentId === record.agentId &&
-									candidate.secretId === record.secretId &&
-									candidate.secretVersion === record.secretVersion &&
-									candidate.configRevision === record.configRevision &&
-									candidate.ownerType === record.ownerType &&
-									candidate.ownerId === record.ownerId &&
-									candidate.name === record.name &&
-									candidate.wrappingKeyVersion ===
-										record.crypto.wrappingKeyVersion &&
-									candidate.lifecycleState === "pending"
-								);
-							},
-						},
-					},
-					{
-						schemaVersion: 1,
-						agentId: record.agentId,
-						secretId: record.secretId,
-						secretVersion: record.secretVersion,
-						configRevision: record.configRevision,
-						ownerType: record.ownerType,
-						ownerId: record.ownerId,
-						name: record.name,
-						wrappingKeyVersion: record.crypto.wrappingKeyVersion,
-						workerId: options.workerId,
-						traceId: input.traceId,
-					},
-				);
-				if (!removed) return false;
-			}
-			return true;
-		}
 		const workload = desired(state);
 		for (const { record } of bindings) {
 			const reference = recordReference(record);
