@@ -640,6 +640,45 @@ describe("GA Kubernetes Workload adapter", () => {
 					})),
 			},
 			{
+				label: "agent resources",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										resources: {
+											...container.resources,
+											requests: {
+												...container.resources?.requests,
+												cpu: "50m",
+											},
+										},
+									}
+								: container,
+						),
+					})),
+			},
+			{
+				label: "agent readiness probe",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({
+						...spec,
+						containers: spec.containers.map((container) =>
+							container.name === "agent"
+								? {
+										...container,
+										readinessProbe: {
+											...container.readinessProbe,
+											timeoutSeconds: 1,
+										},
+									}
+								: container,
+						),
+					})),
+			},
+			{
 				label: "agent volume mount",
 				mutate: (pod) =>
 					mutatePodSpec(pod, (spec) => ({
