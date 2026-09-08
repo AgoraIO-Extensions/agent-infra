@@ -7,10 +7,6 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
-import {
-	PilotInternalErrorV1Schema,
-	PilotProtocolErrorV1Schema,
-} from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const numericId = () => z.string().regex(/^\d+$/);
@@ -35,26 +31,53 @@ const requiredJsonBody = (schema: z.ZodType) => ({
 	required: true,
 	...jsonContent(schema),
 });
+const fixedError = (code: string, message: string, retryable: boolean) =>
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		code: z.literal(code),
+		message: z.literal(message),
+		retryable: z.literal(retryable),
+		traceId: TraceIdV1Schema,
+	});
+const AuthenticationRequiredErrorV1Schema = fixedError(
+	"AUTHENTICATION_REQUIRED",
+	"Authentication is required",
+	false,
+);
 const browserErrors = {
-	"400": jsonResponse("Invalid request", PilotProtocolErrorV1Schema),
-	"401": jsonResponse("Authentication required", PilotProtocolErrorV1Schema),
-	"403": jsonResponse("Request is not authorized", PilotProtocolErrorV1Schema),
-	"404": jsonResponse("Resource is unavailable", PilotProtocolErrorV1Schema),
+	"400": jsonResponse(
+		"Invalid request",
+		fixedError("INVALID_REQUEST", "Invalid request", false),
+	),
+	"401": jsonResponse(
+		"Authentication required",
+		AuthenticationRequiredErrorV1Schema,
+	),
+	"403": jsonResponse(
+		"Request is not authorized",
+		fixedError("AUTHORIZATION_REVOKED", "Authorization was revoked", false),
+	),
+	"404": jsonResponse(
+		"Resource is unavailable",
+		fixedError("RESOURCE_UNAVAILABLE", "Resource is unavailable", false),
+	),
 	"409": jsonResponse(
 		"Request conflicts with current state",
-		PilotProtocolErrorV1Schema,
+		fixedError(
+			"INVALID_REQUEST",
+			"Request conflicts with current state",
+			false,
+		),
 	),
-	"500": jsonResponse("Internal error", PilotInternalErrorV1Schema),
-	"503": jsonResponse("Dependency is unavailable", PilotProtocolErrorV1Schema),
+	"500": jsonResponse(
+		"Internal error",
+		fixedError("INTERNAL_ERROR", "Connection request failed", true),
+	),
+	"503": jsonResponse(
+		"Dependency is unavailable",
+		fixedError("DEPENDENCY_UNAVAILABLE", "Dependency is unavailable", true),
+	),
 };
-
-const AuthenticationRequiredErrorV1Schema = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	code: z.literal("AUTHENTICATION_REQUIRED"),
-	message: z.literal("Authentication is required"),
-	retryable: z.literal(false),
-	traceId: TraceIdV1Schema,
-});
 
 export const GitHubGetCurrentUserInputV1Schema = z.strictObject({});
 export const GitHubGetCurrentUserOutputV1Schema = z.strictObject({
