@@ -381,7 +381,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBeNull();
 		}
 	});
-	it("replaces an unsafe owned Pod when its template already matches", async () => {
+	it("scales down an unsafe owned Pod before recreating it from the safe template", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const adapter = f.adapter();
@@ -407,19 +407,66 @@ describe("GA Kubernetes Workload adapter", () => {
 		} as V1Pod);
 		expect(await adapter.observe(desired, identity)).toBe("drifted");
 
+		expect(await adapter.apply(desired)).toBe("pending");
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.replicas,
+		).toBe(0);
 		const repaired = await adapter.apply(desired);
 		if (!repaired || repaired === "pending") throw new Error();
 		expect(
 			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
-				?.spec?.template.metadata?.annotations?.[
-				"agent-infra.agora.io/pod-rollout"
-			],
-		).toBe(pod.metadata.uid);
+				?.spec?.template.spec?.containers[0]?.securityContext?.runAsUser,
+		).toBe(1000);
 		expect(
 			(await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`))?.spec
 				?.containers[0]?.securityContext?.runAsUser,
 		).toBe(1000);
 		expect(await adapter.observe(desired, repaired)).toBe("healthy");
+	});
+	it("does not scale down for an unsafe Pod owned by another StatefulSet", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		const container = pod?.spec?.containers[0];
+		if (!pod || !container) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-foreign`, {
+			...pod,
+			metadata: {
+				...pod.metadata,
+				name: `${desired.service.name}-foreign`,
+				uid: "foreign-pod",
+				ownerReferences: [
+					{
+						apiVersion: "apps/v1",
+						kind: "StatefulSet",
+						name: "foreign",
+						uid: "foreign-statefulset",
+					},
+				],
+			},
+			spec: {
+				...pod.spec,
+				containers: [
+					{
+						...container,
+						securityContext: {
+							...container.securityContext,
+							runAsUser: 0,
+						},
+					},
+				],
+			},
+		} as V1Pod);
+
+		expect(await adapter.apply(desired)).toMatchObject({ uid: identity.uid });
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.replicas,
+		).toBe(1);
 	});
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();

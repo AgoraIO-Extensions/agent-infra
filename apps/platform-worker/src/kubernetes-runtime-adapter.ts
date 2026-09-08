@@ -33,7 +33,6 @@ const revisionLabel = "agent-infra.agora.io/revision";
 const agentAnnotation = "agent-infra.agora.io/agent-id";
 const fingerprintAnnotation = "agent-infra.agora.io/spec-hash";
 const desiredAnnotation = "agent-infra.agora.io/desired";
-const podRolloutAnnotation = "agent-infra.agora.io/pod-rollout";
 const controllerAnnotationPrefix = "agent-infra.agora.io/";
 const secretIdAnnotation = "agent-infra.agora.io/secret-id";
 const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
@@ -215,32 +214,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			own(current, value.agentId, value.workloadRevision);
 			if (current.metadata?.deletionTimestamp)
 				throw new WorkloadKubernetesError("conflict");
-			if (kind === "StatefulSet") {
-				const workload = object as V1StatefulSet;
-				const template = workload.spec?.template;
-				if (!template) throw new WorkloadKubernetesError("policy");
-				const unsafePod = (
-					await client.list<V1Pod>("Pod", selector(value.agentId))
-				).find(
-					(pod) =>
-						pod.metadata?.ownerReferences?.some(
-							(owner) => owner.uid === current.metadata?.uid,
-						) && hasUnsafePodSpec(pod.spec),
-				);
-				const marker =
-					unsafePod?.metadata?.uid ??
-					(current as V1StatefulSet).spec?.template.metadata?.annotations?.[
-						podRolloutAnnotation
-					];
-				if (marker)
-					template.metadata = {
-						...template.metadata,
-						annotations: {
-							...template.metadata?.annotations,
-							[podRolloutAnnotation]: marker,
-						},
-					};
-			}
 		}
 		const hash = createHash("sha256")
 			.update(JSON.stringify(object))
@@ -696,13 +669,21 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const current = await statefulSet(value);
 			if (!current && value.replicas === 0) return null;
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+			const unsafeOwnedPod =
+				current &&
+				pods.some(
+					(pod) =>
+						pod.metadata?.ownerReferences?.some(
+							(owner) => owner.uid === current.metadata?.uid,
+						) && hasUnsafePodSpec(pod.spec),
+				);
 			const changing =
 				current &&
 				current.spec?.template.metadata?.labels?.[revisionLabel] !==
 					String(value.workloadRevision);
 			if (
 				current &&
-				(changing || value.replicas === 0) &&
+				(changing || unsafeOwnedPod || value.replicas === 0) &&
 				(current.spec?.replicas !== 0 || pods.length > 0)
 			) {
 				if (current.spec?.replicas !== 0)
