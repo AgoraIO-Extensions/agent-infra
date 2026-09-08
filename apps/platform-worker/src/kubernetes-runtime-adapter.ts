@@ -81,7 +81,12 @@ function matchesNetworkPolicySpec(
 		containsDesired(actual, expected) &&
 		![actual?.ingress, actual?.egress].some((rules) =>
 			rules?.some((rule) =>
-				rule.ports?.some((port) => port.endPort !== undefined),
+				rule.ports?.some(
+					(port) =>
+						typeof port.port === "number" &&
+						port.endPort !== undefined &&
+						port.endPort > port.port,
+				),
 			),
 		)
 	);

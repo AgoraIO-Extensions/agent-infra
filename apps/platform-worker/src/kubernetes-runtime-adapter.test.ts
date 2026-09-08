@@ -263,6 +263,39 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBeNull();
 
 			await adapter.apply(desired);
+			const repaired = await f.client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				desired.service.name,
+			);
+			expect(
+				repaired?.spec?.[direction]?.[0]?.ports?.[0]?.endPort,
+				direction,
+			).toBeUndefined();
+			expect(await adapter.observe(desired, identity), direction).toBe(
+				"healthy",
+			);
+			const port = repaired?.spec?.[direction]?.[0]?.ports?.[0]?.port;
+			if (!repaired || typeof port !== "number") throw new Error();
+			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
+				...repaired,
+				spec: {
+					...repaired.spec,
+					[direction]: repaired.spec?.[direction]?.map((rule, index) =>
+						index === 0
+							? {
+									...rule,
+									ports: rule.ports?.map((entry, portIndex) =>
+										portIndex === 0 ? { ...entry, endPort: port } : entry,
+									),
+								}
+							: rule,
+					),
+				},
+			} as V1NetworkPolicy);
+			expect(await adapter.observe(desired, identity), direction).toBe(
+				"healthy",
+			);
+			await adapter.apply(desired);
 			expect(
 				(
 					await f.client.read<V1NetworkPolicy>(
@@ -271,10 +304,7 @@ describe("GA Kubernetes Workload adapter", () => {
 					)
 				)?.spec?.[direction]?.[0]?.ports?.[0]?.endPort,
 				direction,
-			).toBeUndefined();
-			expect(await adapter.observe(desired, identity), direction).toBe(
-				"healthy",
-			);
+			).toBe(port);
 		}
 	});
 	it("reuses StatefulSet and PVC across stop, restart, upgrade and rollback; refuses stale work", async () => {
