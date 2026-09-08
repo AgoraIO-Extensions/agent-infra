@@ -71,6 +71,20 @@ function agentContainerSecurityContext() {
 	};
 }
 
+function matchesNetworkPolicySpec(
+	actual: V1NetworkPolicy["spec"] | undefined,
+	expected: V1NetworkPolicy["spec"] | undefined,
+) {
+	return (
+		containsDesired(actual, expected) &&
+		![actual?.ingress, actual?.egress].some((rules) =>
+			rules?.some((rule) =>
+				rule.ports?.some((port) => port.endPort !== undefined),
+			),
+		)
+	);
+}
+
 export function workloadResourceNameV1(agentId: string): string {
 	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
 }
@@ -272,6 +286,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
+			(kind !== "NetworkPolicy" ||
+				matchesNetworkPolicySpec(
+					(current as V1NetworkPolicy).spec,
+					(object as V1NetworkPolicy).spec,
+				)) &&
 			(kind !== "StatefulSet" ||
 				!hasUnsafePodSpec((current as V1StatefulSet).spec?.template.spec))
 		)
@@ -460,7 +479,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			own(resource, value.agentId, value.workloadRevision);
 		if (
 			serviceAccount.automountServiceAccountToken !== false ||
-			!containsDesired(network.spec, networkPolicy(value).spec) ||
+			!matchesNetworkPolicySpec(network.spec, networkPolicy(value).spec) ||
 			!isDeepStrictEqual(probe.spec?.selector, {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),

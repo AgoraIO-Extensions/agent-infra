@@ -1,6 +1,7 @@
 import type {
 	KubernetesObject,
 	V1Ingress,
+	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
 	V1Secret,
@@ -112,6 +113,97 @@ describe("GA Kubernetes Workload adapter", () => {
 					(object) => object.kind === "PersistentVolumeClaim",
 				),
 			).toHaveLength(1);
+		}
+	});
+	it("repairs widened NetworkPolicy ports before a candidate can route", async () => {
+		for (const direction of ["ingress", "egress"] as const) {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy:
+					direction === "egress"
+						? {
+								...workloadTestPolicy,
+								egressProxy: {
+									namespace: "egress-proxy",
+									selector: { component: "proxy" },
+									port: 8443,
+								},
+							}
+						: workloadTestPolicy,
+				probe: f.probe,
+			});
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const network = await f.client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				desired.service.name,
+			);
+			const ports = network?.spec?.[direction]?.[0]?.ports;
+			if (!network || !ports?.[0]) throw new Error();
+			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
+				...network,
+				spec: {
+					...network.spec,
+					[direction]: network.spec?.[direction]?.map((rule, index) =>
+						index === 0
+							? {
+									...rule,
+									ports: rule.ports?.map((port, portIndex) =>
+										portIndex === 0 ? { ...port, endPort: 65_535 } : port,
+									),
+								}
+							: rule,
+					),
+				},
+			} as V1NetworkPolicy);
+
+			expect(await adapter.observe(desired, identity), direction).toBe(
+				"drifted",
+			);
+			const result = await adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-${direction}-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: true,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			});
+			expect(result, direction).toMatchObject({
+				status: "failed",
+				routedWorkloads: [],
+			});
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+				direction,
+			).toBe("closed");
+			expect(
+				await f.client.read("Ingress", desired.route.name),
+				direction,
+			).toBeNull();
+
+			await adapter.apply(desired);
+			expect(
+				(
+					await f.client.read<V1NetworkPolicy>(
+						"NetworkPolicy",
+						desired.service.name,
+					)
+				)?.spec?.[direction]?.[0]?.ports?.[0]?.endPort,
+				direction,
+			).toBeUndefined();
+			expect(await adapter.observe(desired, identity), direction).toBe(
+				"healthy",
+			);
 		}
 	});
 	it("reuses StatefulSet and PVC across stop, restart, upgrade and rollback; refuses stale work", async () => {

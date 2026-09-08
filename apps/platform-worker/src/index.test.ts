@@ -383,6 +383,9 @@ describe("platform worker lifecycle", () => {
 		const onUnhandled = (error: unknown) => unhandled.push(error);
 		const once = vi.spyOn(process, "once");
 		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		const error = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
 		try {
 			vi.resetModules();
 			vi.doMock("./workload-worker.js", () => ({
@@ -406,14 +409,19 @@ describe("platform worker lifecycle", () => {
 				{ service: "platform-worker", status: "ready" },
 				{ service: "platform-worker", status: "stopped" },
 			]);
+			expect(error).not.toHaveBeenCalled();
 		} finally {
 			process.off("unhandledRejection", onUnhandled);
+			for (const [signal, listener] of once.mock.calls)
+				if (signal === "SIGINT" || signal === "SIGTERM")
+					process.off(signal, listener);
 			if (originalArgv === undefined) process.argv.splice(1, 1);
 			else process.argv[1] = originalArgv;
 			process.exitCode = originalExitCode;
 			vi.doUnmock("./workload-worker.js");
 			once.mockRestore();
 			info.mockRestore();
+			error.mockRestore();
 		}
 	});
 });
