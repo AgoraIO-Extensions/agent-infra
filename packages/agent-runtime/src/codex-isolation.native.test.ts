@@ -639,7 +639,9 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				const other = users[1 - index];
 				if (!own || !other) throw new Error("Missing pair");
 				const positive =
-					sees(own, user.context) && own.events.includes(user.context);
+					own.probe.inputs.some((input) => input.includes(user.context)) &&
+					own.probe.answer.includes(user.context) &&
+					own.events.includes(user.context);
 				record(
 					[name, user.id, "thread-context"].join("."),
 					sees(own, other.context) ? "fail" : positive ? "pass" : "unverified",
@@ -702,14 +704,21 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					const preexisting = result.probe.inputs[0]?.includes(
 						history ? other.context : other.file,
 					);
+					const searchControl = searchControls?.[index];
 					const control = search
-						? searchControls?.[index]?.probe.outputs.some((output) =>
-								output.includes(user.file),
+						? Boolean(
+								searchControl?.probe.outputs.some((output) =>
+									output.includes(user.file),
+								) &&
+									searchControl.probe.answer.includes(user.file) &&
+									searchControl.events.includes(user.file),
 							)
 						: history
 							? result.probe.outputs.some((output) =>
 									output.includes(user.context),
-								)
+								) &&
+								result.probe.answer.includes(user.context) &&
+								result.events.includes(user.context)
 							: canRead[index];
 					const completeOutput =
 						result.probe.outputs.length > 0 &&
