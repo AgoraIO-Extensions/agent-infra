@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const CODEX_ISOLATION_PERSISTENCE_EVIDENCE = Object.freeze({
 	// #403 was squash-merged as #414, so the source commit is not an ancestor.
@@ -394,14 +394,35 @@ export function nativeLaunchDirectoryRelations(input: {
 	codexHome: string;
 	cwd: string;
 }) {
-	const homeEqualsCwd = input.home === input.cwd;
-	const codexHomeEqualsCwd = input.codexHome === input.cwd;
-	const homeEqualsCodexHome = input.home === input.codexHome;
+	const home = resolve(input.home);
+	const codexHome = resolve(input.codexHome);
+	const cwd = resolve(input.cwd);
+	const contains = (left: string, right: string) => {
+		const pathFromLeft = relative(left, right);
+		return (
+			pathFromLeft === "" ||
+			(!pathFromLeft.startsWith(`..${sep}`) &&
+				pathFromLeft !== ".." &&
+				!isAbsolute(pathFromLeft))
+		);
+	};
+	const overlaps = (left: string, right: string) =>
+		contains(left, right) || contains(right, left);
+	const homeEqualsCwd = home === cwd;
+	const codexHomeEqualsCwd = codexHome === cwd;
+	const homeEqualsCodexHome = home === codexHome;
+	const homeOverlapsCwd = overlaps(home, cwd);
+	const codexHomeOverlapsCwd = overlaps(codexHome, cwd);
+	const homeOverlapsCodexHome = overlaps(home, codexHome);
 	return {
 		homeEqualsCwd,
 		codexHomeEqualsCwd,
 		homeEqualsCodexHome,
-		isolated: !homeEqualsCwd && !codexHomeEqualsCwd && !homeEqualsCodexHome,
+		homeOverlapsCwd,
+		codexHomeOverlapsCwd,
+		homeOverlapsCodexHome,
+		isolated:
+			!homeOverlapsCwd && !codexHomeOverlapsCwd && !homeOverlapsCodexHome,
 	};
 }
 

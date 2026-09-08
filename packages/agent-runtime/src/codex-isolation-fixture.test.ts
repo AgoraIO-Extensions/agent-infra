@@ -251,6 +251,27 @@ it("rejects overlapping synthetic launch directories", () => {
 			cwd: "/synthetic/workspace",
 		}),
 	).toMatchObject({ homeEqualsCodexHome: true, isolated: false });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/home",
+			codexHome: "/synthetic/codex-home",
+			cwd: "/synthetic/home/workspace",
+		}),
+	).toMatchObject({ homeOverlapsCwd: true, isolated: false });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/home",
+			codexHome: "/synthetic/workspace/.codex-home",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ codexHomeOverlapsCwd: true, isolated: false });
+	expect(
+		nativeLaunchDirectoryRelations({
+			home: "/synthetic/home/codex-home",
+			codexHome: "/synthetic/home",
+			cwd: "/synthetic/workspace",
+		}),
+	).toMatchObject({ homeOverlapsCodexHome: true, isolated: false });
 });
 
 it("rejects unrelated, missing, and dirty persistence evidence", () => {
