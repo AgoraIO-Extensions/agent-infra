@@ -374,6 +374,77 @@ describe("GA Kubernetes Workload adapter", () => {
 		);
 		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 	});
+	it("does not overwrite a newer route while closing a failed stale target", async () => {
+		const f = fixture();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		let replacePromotedServiceWithNewerRevision = true;
+		const client: WorkerKubernetesClientV1 = {
+			...f.client,
+			async read<T extends KubernetesObject>(
+				kind: WorkloadResourceKind,
+				name: string,
+			) {
+				const current = await f.client.read<T>(kind, name);
+				if (
+					kind === "Service" &&
+					name === desired.service.name &&
+					replacePromotedServiceWithNewerRevision &&
+					(current as V1Service | null)?.spec?.selector?.[
+						"agent-infra.agora.io/revision"
+					] === String(desired.workloadRevision)
+				) {
+					replacePromotedServiceWithNewerRevision = false;
+					f.resources.set(`Service/${name}`, {
+						...(current as V1Service),
+						metadata: {
+							...(current as V1Service).metadata,
+							labels: {
+								...(current as V1Service).metadata?.labels,
+								"agent-infra.agora.io/revision": "2",
+							},
+						},
+					});
+					return null;
+				}
+				return current;
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+
+		await expect(
+			adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: true,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			}),
+		).rejects.toThrow();
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		expect(service?.metadata?.labels?.["agent-infra.agora.io/revision"]).toBe(
+			"2",
+		);
+		expect(service?.spec?.selector?.["agent-infra.agora.io/revision"]).toBe(
+			String(desired.workloadRevision),
+		);
+	});
 	it("propagates route-closure failure for retry instead of claiming no exposure", async () => {
 		const f = fixture();
 		const desired = { ...workloadDesiredFixture(), fence: 9 };
