@@ -1,3 +1,4 @@
+import { verifyPrAgentPublication } from "./pr-agent-review.mjs";
 import { pathToFileURL } from "node:url";
 import { appendFile, readFile } from "node:fs/promises";
 
@@ -63,6 +64,7 @@ function evaluatePrAgent({
   runResult,
   analysisJobConclusion,
   analysisLog,
+  publicationVerified,
 }) {
   const failed = runFailure("pr-agent", expectedHead, runResult);
   if (failed) return failed;
@@ -84,6 +86,7 @@ function evaluatePrAgent({
     PRUNED_DIFF_PATTERN.test(message),
   );
   if (completeMatches.length === 1 && prunedMatches.length === 0) {
+    if (publicationVerified !== true) return result("pr-agent", expectedHead, "failure", "review-output-invalid");
     return result("pr-agent", expectedHead, "success", "complete");
   }
   if (prunedMatches.length === 1 && completeMatches.length === 0) {
@@ -345,6 +348,12 @@ async function collectEvidence({ repository, prNumber, expectedHead, provider })
     );
     if (jobs.length !== 1) return {};
     return {
+      publicationVerified: await verifyPrAgentPublication({
+        repository, prNumber, expectedHead, runId,
+        attempt: requiredEnvironment("GITHUB_RUN_ATTEMPT"),
+        receipt: JSON.parse(requiredEnvironment("PR_AGENT_REVIEW_RECEIPT")),
+        request: githubRequest,
+      }),
       analysisJobConclusion: jobs[0].conclusion,
       analysisLog: await githubTextRequest(
         `/repos/${repository}/actions/jobs/${jobs[0].id}/logs`,

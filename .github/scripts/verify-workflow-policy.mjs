@@ -118,7 +118,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "pr-agent-review.yml": {
-    needs: ["analyze", "suggestions"],
+    needs: ["analyze", "publish", "suggestions"],
     operation: "pr-agent-review",
   },
   "pr-gates.yml": {
@@ -172,7 +172,7 @@ const UPLOAD_ARTIFACT_ACTION =
 const DOWNLOAD_ARTIFACT_ACTION =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const PR_AGENT_ACTION =
-  "The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36";
+  "docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6";
 const PR_AGENT_SECRETS = [
   "PR_AGENT_API_KEY",
   "PR_AGENT_API_BASE",
@@ -1198,7 +1198,7 @@ export function validateWorkflowDocuments(workflows) {
         );
       }
       for (const step of job.steps ?? []) {
-        if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses)) {
+        if (step.uses && !step.uses.startsWith("./") && !FULL_SHA_ACTION.test(step.uses) && step.uses !== PR_AGENT_ACTION) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
         }
         validateStepSecrets(errors, name, jobName, step);
@@ -1524,6 +1524,7 @@ export function validateWorkflowDocuments(workflows) {
   const prAgent = workflows["pr-agent-review.yml"];
   const prAgentAnalyze = prAgent?.jobs?.analyze;
   const prAgentCoverage = prAgent?.jobs?.coverage;
+  const prAgentPublish = prAgent?.jobs?.publish;
   const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
   const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
@@ -1607,7 +1608,7 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCoverageCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCoverageCondition.includes("github.event.pull_request.draft == false") ||
-    !sameObject(prAgentAnalyze?.permissions, prAgentPermissions) ||
+    !sameObject(prAgentAnalyze?.permissions, { contents: "read", "pull-requests": "read" }) ||
     !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
     !sameObject(prAgentCoverage?.permissions, {
       actions: "read",
@@ -1616,11 +1617,25 @@ export function validateWorkflowDocuments(workflows) {
       "pull-requests": "read",
     }) ||
     prAgentCoverage?.name !== "Publish Automated Review Coverage" ||
-    prAgentCoverage?.needs !== "analyze" ||
+    JSON.stringify(prAgentCoverage?.needs) !== JSON.stringify(["analyze", "publish"]) ||
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
-      ["analyze", "coverage", "outcome", "suggestions"].join("\0") ||
+      ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
     prAgentAnalyze?.steps?.length !== 2 ||
+    !sameObject(prAgentAnalyze?.outputs, { review: "${{ steps.pr-agent.outputs.review }}" }) ||
+    !sameObject(prAgentPublish, {
+      name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
+      permissions: { contents: "read", "pull-requests": "write" },
+      outputs: { review_receipt: "${{ steps.publish-review.outputs.receipt }}" },
+      steps: [
+        { name: "Checkout trusted default branch", uses: CHECKOUT_ACTION,
+          with: { ref: "${{ github.event.repository.default_branch }}", "fetch-depth": 1, "persist-credentials": false } },
+        { name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: { "node-version": 24 } },
+        { name: "Validate and publish Review", id: "publish-review",
+          env: { GITHUB_TOKEN: "${{ github.token }}", PR_AGENT_REVIEW: "${{ needs.analyze.outputs.review }}" },
+          run: "node .github/scripts/pr-agent-review.mjs" },
+      ],
+    }) ||
     prAgentCoverageSteps.length !== 4 ||
     prAgentSuggestions?.steps?.length !== 1 ||
     prAgentAnalyzeCheckout?.uses !==
@@ -1654,16 +1669,22 @@ export function validateWorkflowDocuments(workflows) {
       GITHUB_TOKEN: "${{ github.token }}",
       PR_NUMBER: "${{ github.event.pull_request.number }}",
       REVIEW_PROVIDER: "pr-agent",
-      REVIEW_RUN_RESULT: "${{ needs.analyze.result }}",
+      REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
+      PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
     }) ||
     JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
-      JSON.stringify(["analyze", "suggestions"]) ||
+      JSON.stringify(["analyze", "publish", "suggestions"]) ||
     gatePublisherTokenReferences(prAgent).length !== 1 ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.["continue-on-error"] !== true ||
     !sameObject(prAgentAction?.env, {
       ...prAgentCommonEnv,
+      "config.publish_output": "false",
+      "github_action_config.enable_output": "true",
+      "pr_reviewer.persistent_comment": "false",
+      "pr_reviewer.persistent_finding_state": "false",
+      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level.",
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",
@@ -1689,7 +1710,7 @@ export function validateWorkflowDocuments(workflows) {
     })
   ) {
     errors.push(
-      "PR-Agent Review must use the pinned Action with official inline publishing settings",
+      "PR-Agent Review must use the pinned runtime with validated output and official inline publishing settings",
     );
   }
   const implementText = JSON.stringify(implement ?? {});

@@ -15,6 +15,8 @@ concurrency:
 jobs:
   analyze:
     name: PR-Agent Analysis
+    outputs:
+      review: ${{ steps.pr-agent.outputs.review }}
     if: >-
       vars.PR_REVIEW_PROVIDER != 'claude' &&
       github.event.sender.type != 'Bot' &&
@@ -24,8 +26,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      pull-requests: read
     steps:
       - name: Checkout trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,8 +37,8 @@ jobs:
 
       - name: Review pull request
         id: pr-agent
-        # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36 # post-v0.45.0, upstream #3080
+        # Official PR-Agent runtime observed in run 34196006005; pin the executable image.
+        uses: docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
@@ -45,7 +46,14 @@ jobs:
           OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
           config.model: ${{ secrets.PR_AGENT_MODEL }}
           config.propagate_tool_errors: "true"
-          config.publish_output: "true"
+          config.publish_output: "false"
+          github_action_config.enable_output: "true"
+          pr_reviewer.persistent_comment: "false"
+          pr_reviewer.persistent_finding_state: "false"
+          pr_reviewer.extra_instructions: >-
+            Return exactly one YAML object with the top-level key review.
+            Nest key_issues_to_review under review, including when it is an empty list.
+            Never return key_issues_to_review at the top level.
           config.publish_output_progress: "false"
           config.restricted_mode: "true"
           config.use_repo_settings_file: "false"
@@ -77,6 +85,36 @@ jobs:
           github_action_config.pr_actions: >-
             ["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]
 
+  publish:
+    name: PR-Agent Publish Review
+    needs: analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      review_receipt: ${{ steps.publish-review.outputs.receipt }}
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Validate and publish Review
+        id: publish-review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_AGENT_REVIEW: ${{ needs.analyze.outputs.review }}
+        run: node .github/scripts/pr-agent-review.mjs
+
   suggestions:
     name: PR-Agent Suggestions
     if: >-
@@ -94,8 +132,8 @@ jobs:
       - name: Generate optional code suggestions
         id: pr-agent-suggestions
         continue-on-error: true
-        # qodo-ai/pr-agent redirects to The-PR-Agent/pr-agent (repository 662766482).
-        uses: The-PR-Agent/pr-agent@7f01680f2e6836053b873f9390f018a496dabe36 # post-v0.45.0, upstream #3080
+        # Official PR-Agent runtime observed in run 34196006005; pin the executable image.
+        uses: docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
@@ -124,7 +162,7 @@ jobs:
 
   coverage:
     name: Publish Automated Review Coverage
-    needs: analyze
+    needs: [analyze, publish]
     continue-on-error: true
     if: >-
       always() &&
@@ -169,12 +207,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEW_PROVIDER: pr-agent
-          REVIEW_RUN_RESULT: ${{ needs.analyze.result }}
+          REVIEW_RUN_RESULT: ${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}
+          PR_AGENT_REVIEW_RECEIPT: ${{ needs.publish.outputs.review_receipt }}
         run: node .github/scripts/review-coverage.mjs
 
   outcome:
     name: Publish terminal outcome
-    needs: [analyze, suggestions]
+    needs: [analyze, publish, suggestions]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1
