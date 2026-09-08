@@ -9,6 +9,7 @@ import {
 	KubeConfig,
 	type V1PersistentVolumeClaim,
 	type V1Pod,
+	type V1StatefulSet,
 } from "@kubernetes/client-node";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
@@ -302,18 +303,93 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				"FIXTURE_VALUE",
 				new TextEncoder().encode("synthetic-workload-proof"),
 			);
-			const identityA = await eventually(
+			const initialIdentityA = await eventually(
 				() => adapter.apply(a),
 				(value) => value !== "pending",
 			);
-			if (!identityA || identityA === "pending") throw new Error();
+			if (!initialIdentityA || initialIdentityA === "pending")
+				throw new Error();
 			await eventually(
-				() => adapter.observe(a, identityA),
+				() => adapter.observe(a, initialIdentityA),
 				(value) => value === "healthy",
 			);
 			const url = `http://${a.service.name}:${a.service.port}`;
 			await waitForClosedRoute(url);
-			await adapter.promote(a, identityA);
+			const unsafeWorkload = await client.read<V1StatefulSet>(
+				"StatefulSet",
+				a.service.name,
+			);
+			const unsafeContainer =
+				unsafeWorkload?.spec?.template.spec?.containers[0];
+			if (!unsafeWorkload || !unsafeContainer) throw new Error();
+			const unsafeIdentity = await client.replace({
+				...unsafeWorkload,
+				spec: {
+					...unsafeWorkload.spec,
+					template: {
+						...unsafeWorkload.spec?.template,
+						spec: {
+							...unsafeWorkload.spec?.template.spec,
+							containers: [
+								{
+									...unsafeContainer,
+									securityContext: {
+										...unsafeContainer.securityContext,
+										runAsUser: 0,
+									},
+								},
+							],
+						},
+					},
+				},
+			});
+			if (!unsafeIdentity.metadata?.uid || !unsafeIdentity.metadata.generation)
+				throw new Error();
+			await eventually(
+				() =>
+					client.list<V1Pod>(
+						"Pod",
+						`agent-infra.agora.io/agent=${a.service.name}`,
+					),
+				(pods) =>
+					pods[0]?.spec?.containers[0]?.securityContext?.runAsUser === 0,
+			);
+			expect(
+				await adapter.observe(a, {
+					uid: unsafeIdentity.metadata.uid,
+					generation: unsafeIdentity.metadata.generation,
+				}),
+			).toBe("drifted");
+			expect(
+				await adapter.switchRoute({
+					schemaVersion: 1,
+					requestId: `${a.requestId}-unsafe-route`,
+					traceId: a.traceId,
+					agentId: a.agentId,
+					fence: a.fence,
+					action: "promote",
+					candidateValidated: true,
+					candidateRoute: {
+						routeRef: a.route.name,
+						workloadUid: unsafeIdentity.metadata.uid,
+						workloadGeneration: unsafeIdentity.metadata.generation,
+						workloadRevision: a.workloadRevision,
+					},
+				}),
+			).toMatchObject({ status: "failed", routedWorkloads: [] });
+			await waitForClosedRoute(url);
+			const repairedIdentityA = await eventually(
+				() => adapter.apply(a),
+				(value) => value !== "pending",
+			);
+			if (!repairedIdentityA || repairedIdentityA === "pending")
+				throw new Error();
+			await waitForReadyPods();
+			await eventually(
+				() => adapter.observe(a, repairedIdentityA),
+				(value) => value === "healthy",
+			);
+			await adapter.promote(a, repairedIdentityA);
 			expect(await waitForRoute(url, "A")).toMatchObject({
 				version: "A",
 				marker: "retained",

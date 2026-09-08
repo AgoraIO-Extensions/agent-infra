@@ -185,11 +185,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.hostIPC === true ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
-			pod?.containers.some(
-				(container) =>
-					container.securityContext?.privileged === true ||
-					(container.securityContext?.capabilities?.add?.length ?? 0) > 0,
-			) === true
+			pod?.containers.some((container) => {
+				const securityContext = container.securityContext;
+				return (
+					securityContext?.privileged === true ||
+					(securityContext?.capabilities?.add?.length ?? 0) > 0 ||
+					(securityContext?.runAsNonRoot !== undefined &&
+						securityContext.runAsNonRoot !== true) ||
+					(securityContext?.runAsUser !== undefined &&
+						securityContext.runAsUser !== 1000) ||
+					(securityContext?.runAsGroup !== undefined &&
+						securityContext.runAsGroup !== 1000) ||
+					(securityContext?.seccompProfile !== undefined &&
+						securityContext.seccompProfile.type !== "RuntimeDefault") ||
+					(securityContext?.procMount !== undefined &&
+						securityContext.procMount !== "Default")
+				);
+			}) === true
 		);
 	}
 	async function put<T extends KubernetesObject>(

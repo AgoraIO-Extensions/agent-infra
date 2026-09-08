@@ -264,6 +264,114 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, repaired)).toBe("drifted");
 		}
 	});
+	it("repairs and rejects container security-context overrides", async () => {
+		const overrides = [
+			{ label: "runAsNonRoot", securityContext: { runAsNonRoot: false } },
+			{ label: "runAsUser", securityContext: { runAsUser: 0 } },
+			{ label: "runAsGroup", securityContext: { runAsGroup: 0 } },
+			{
+				label: "seccompProfile",
+				securityContext: { seccompProfile: { type: "Unconfined" } },
+			},
+			{ label: "procMount", securityContext: { procMount: "Unmasked" } },
+		] as const;
+		for (const { label, securityContext } of overrides) {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const container = workload?.spec?.template.spec?.containers[0];
+			if (!workload || !container) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec?.template,
+						spec: {
+							...workload.spec?.template.spec,
+							containers: [
+								{
+									...container,
+									securityContext: {
+										...container.securityContext,
+										...securityContext,
+									},
+								},
+							],
+						},
+					},
+				},
+			} as V1StatefulSet);
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.spec?.template.spec?.containers[0]?.securityContext,
+				`repairs ${label}`,
+			).not.toMatchObject(securityContext);
+
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			const podContainer = pod?.spec?.containers[0];
+			if (!pod || !podContainer) throw new Error();
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: {
+					...pod.spec,
+					containers: [
+						{
+							...podContainer,
+							securityContext: {
+								...podContainer.securityContext,
+								...securityContext,
+							},
+						},
+					],
+				},
+			} as V1Pod);
+			expect(await adapter.observe(desired, repaired), label).toBe("drifted");
+			const result = await adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-${label}-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: true,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: repaired.uid,
+					workloadGeneration: repaired.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			});
+			expect(result, label).toMatchObject({
+				status: "failed",
+				routedWorkloads: [],
+			});
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+				label,
+			).toBe("closed");
+			expect(
+				await f.client.read("Ingress", desired.route.name),
+				label,
+			).toBeNull();
+		}
+	});
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
