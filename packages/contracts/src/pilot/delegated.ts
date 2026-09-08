@@ -501,7 +501,6 @@ export const DelegatedActionErrorV2Schema = z.union([
 		false,
 	),
 	delegatedErrorV2("ACTION_UNAVAILABLE", "Action is unavailable", false),
-	delegatedErrorV2("PROVIDER_REJECTED", "Provider rejected the Action", false),
 	delegatedErrorV2(
 		"DELEGATED_RESULT_REJECTED",
 		"Delegated result was rejected",

@@ -474,7 +474,7 @@
                                     "type": "string"
                                   },
                                   "actionVersionId": {
-                                    "minLength": 1,
+                                    "const": "github.get_current_user@v1",
                                     "type": "string"
                                   },
                                   "effect": {
@@ -517,11 +517,11 @@
                                   }
                                 },
                                 "required": [
-                                  "actionVersionId",
                                   "status",
                                   "inputSchema",
                                   "outputSchema",
                                   "actionId",
+                                  "actionVersionId",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -535,7 +535,7 @@
                                     "type": "string"
                                   },
                                   "actionVersionId": {
-                                    "minLength": 1,
+                                    "const": "github.list_my_repositories@v1",
                                     "type": "string"
                                   },
                                   "effect": {
@@ -578,11 +578,11 @@
                                   }
                                 },
                                 "required": [
-                                  "actionVersionId",
                                   "status",
                                   "inputSchema",
                                   "outputSchema",
                                   "actionId",
+                                  "actionVersionId",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -596,7 +596,7 @@
                                     "type": "string"
                                   },
                                   "actionVersionId": {
-                                    "minLength": 1,
+                                    "const": "github.create_pull_request@v1",
                                     "type": "string"
                                   },
                                   "effect": {
@@ -639,11 +639,11 @@
                                   }
                                 },
                                 "required": [
-                                  "actionVersionId",
                                   "status",
                                   "inputSchema",
                                   "outputSchema",
                                   "actionId",
+                                  "actionVersionId",
                                   "effect",
                                   "requiredScopes"
                                 ],
@@ -984,6 +984,7 @@
                 },
                 "private": {
                   "const": true,
+                  "description": "The repository was revalidated against the Pilot private-repository policy before projection.",
                   "type": "boolean"
                 },
                 "repositoryId": {

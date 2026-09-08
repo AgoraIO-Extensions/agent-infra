@@ -58,7 +58,10 @@ export const GitHubRepositoryV1Schema = z.strictObject({
 	repositoryId: numericId(),
 	owner: nonEmptyString(),
 	name: nonEmptyString(),
-	private: z.literal(true),
+	private: z.literal(true).meta({
+		description:
+			"The repository was revalidated against the Pilot private-repository policy before projection.",
+	}),
 });
 export const GitHubListMyRepositoriesOutputV1Schema = z.strictObject({
 	repositories: z.array(GitHubRepositoryV1Schema),
@@ -80,7 +83,6 @@ export const GitHubCreatePullRequestOutputV1Schema = z.strictObject({
 });
 
 const catalogActionShape = {
-	actionVersionId: nonEmptyString(),
 	status: z.enum(["published", "disabled"]),
 	inputSchema: jsonSchema(),
 	outputSchema: jsonSchema(),
@@ -88,18 +90,21 @@ const catalogActionShape = {
 export const GitHubGetCurrentUserCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.get_current_user"),
+	actionVersionId: z.literal("github.get_current_user@v1"),
 	effect: z.literal("read"),
 	requiredScopes: z.array(z.literal("read:user")).length(1),
 });
 export const GitHubListMyRepositoriesCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.list_my_repositories"),
+	actionVersionId: z.literal("github.list_my_repositories@v1"),
 	effect: z.literal("read"),
 	requiredScopes: z.array(z.literal("repo")).length(1),
 });
 export const GitHubCreatePullRequestCatalogActionV1Schema = z.strictObject({
 	...catalogActionShape,
 	actionId: z.literal("github.create_pull_request"),
+	actionVersionId: z.literal("github.create_pull_request@v1"),
 	effect: z.literal("write"),
 	requiredScopes: z.array(z.literal("repo")).length(1),
 });

@@ -62,6 +62,23 @@ describe("Connection Pilot contracts", () => {
 		expect(
 			ConnectionCatalogV1Schema.safeParse({
 				...catalog,
+				providers: [
+					{
+						...catalog.providers[0],
+						actions: [
+							{
+								...catalog.providers[0].actions[0],
+								actionVersionId: "github.get_current_user@v2",
+							},
+							...catalog.providers[0].actions.slice(1),
+						],
+					},
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			ConnectionCatalogV1Schema.safeParse({
+				...catalog,
 				connections: [{ connectionId: "must-not-leak" }],
 			}).success,
 		).toBe(false);
@@ -108,6 +125,18 @@ describe("Connection Pilot contracts", () => {
 				],
 			}),
 		).toBeTruthy();
+		expect(
+			GitHubListMyRepositoriesOutputV1Schema.safeParse({
+				repositories: [
+					{
+						repositoryId: "1316991471",
+						owner: "AgoraIO-Extensions",
+						name: "agent-infra-pilot",
+						private: false,
+					},
+				],
+			}).success,
+		).toBe(false);
 		expect(
 			GitHubCreatePullRequestInputV1Schema.safeParse({
 				repositoryId: "1316991471",

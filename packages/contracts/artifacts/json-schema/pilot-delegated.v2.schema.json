@@ -204,39 +204,6 @@
           "additionalProperties": false,
           "properties": {
             "code": {
-              "const": "PROVIDER_REJECTED",
-              "type": "string"
-            },
-            "message": {
-              "const": "Provider rejected the Action",
-              "type": "string"
-            },
-            "retryable": {
-              "const": false,
-              "type": "boolean"
-            },
-            "schemaVersion": {
-              "const": 2,
-              "type": "number"
-            },
-            "traceId": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "schemaVersion",
-            "traceId",
-            "code",
-            "message",
-            "retryable"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "code": {
               "const": "DELEGATED_RESULT_REJECTED",
               "type": "string"
             },
@@ -1606,39 +1573,6 @@
                     },
                     "message": {
                       "const": "Action is unavailable",
-                      "type": "string"
-                    },
-                    "retryable": {
-                      "const": false,
-                      "type": "boolean"
-                    },
-                    "schemaVersion": {
-                      "const": 2,
-                      "type": "number"
-                    },
-                    "traceId": {
-                      "minLength": 1,
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "schemaVersion",
-                    "traceId",
-                    "code",
-                    "message",
-                    "retryable"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "code": {
-                      "const": "PROVIDER_REJECTED",
-                      "type": "string"
-                    },
-                    "message": {
-                      "const": "Provider rejected the Action",
                       "type": "string"
                     },
                     "retryable": {

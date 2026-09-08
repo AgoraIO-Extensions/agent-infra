@@ -191,6 +191,21 @@ describe("Pilot delegated contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			DelegatedActionResultV2Schema.safeParse({
+				...base,
+				schemaVersion: 2,
+				status: "failed",
+				completedAt: "2026-09-08T02:00:01Z",
+				error: {
+					schemaVersion: 2,
+					traceId: validRequest.traceId,
+					code: "PROVIDER_REJECTED",
+					message: "Provider rejected the Action",
+					retryable: false,
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	it("validates already-verified RuntimeHost claims without caller-only binding context", () => {
