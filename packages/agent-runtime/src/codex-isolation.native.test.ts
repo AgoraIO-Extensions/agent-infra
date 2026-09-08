@@ -699,7 +699,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						if (!other) throw new Error("Missing other user");
 						return history
 							? "grep -R -h -o 'SYNTH_CONTEXT_[A-Z0-9_]*' " +
-									quote(join(nativeHome, "sessions"))
+									quote(join(nativeHome, "sessions")) +
+									" | sort -u"
 							: (search ? "grep -R -F SYNTH_PRIVATE_ " : "cat ") +
 									quote(filePath(other, "private.txt"));
 					}),
