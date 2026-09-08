@@ -364,4 +364,26 @@ describe("Connection Pilot contracts", () => {
 			}).success,
 		).toBe(false);
 	});
+
+	it("represents every administrator resolution with retained evidence", () => {
+		for (const status of [
+			"confirmed_succeeded",
+			"confirmed_failed",
+			"unresolved",
+		] as const) {
+			expect(
+				ConnectionActionCallProjectionV1Schema.parse({
+					schemaVersion: 1,
+					callId: "call-1",
+					actionVersionId: "github.create_pull_request@v1",
+					traceId: "trace-1",
+					createdAt: "2026-09-08T02:00:00Z",
+					updatedAt: "2026-09-08T02:00:01Z",
+					status,
+					resolvedAt: "2026-09-08T03:00:00Z",
+					evidenceReference: "audit-evidence-1",
+				}),
+			).toBeTruthy();
+		}
+	});
 });

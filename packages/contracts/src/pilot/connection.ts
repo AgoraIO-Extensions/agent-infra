@@ -267,8 +267,21 @@ export const ConnectionActionCallProjectionV1Schema = z.union([
 	}),
 	z.strictObject({
 		...callShape,
+		status: z.literal("confirmed_succeeded"),
+		resolvedAt: Rfc3339TimestampV1Schema,
+		evidenceReference: nonEmptyString(),
+	}),
+	z.strictObject({
+		...callShape,
+		status: z.literal("confirmed_failed"),
+		resolvedAt: Rfc3339TimestampV1Schema,
+		evidenceReference: nonEmptyString(),
+	}),
+	z.strictObject({
+		...callShape,
 		status: z.literal("unresolved"),
 		resolvedAt: Rfc3339TimestampV1Schema,
+		evidenceReference: nonEmptyString(),
 	}),
 ]);
 export const ConnectionActionCallListV1Schema = z.strictObject({
