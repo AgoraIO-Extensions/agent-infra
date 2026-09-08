@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -367,5 +368,52 @@ describe("platform worker lifecycle", () => {
 			}),
 		).rejects.toBe(deploymentFailure);
 		expect(primary.stop).toHaveBeenCalledOnce();
+	});
+
+	it("handles a rejecting workload shutdown from SIGTERM", async () => {
+		const originalArgv = process.argv[1];
+		const originalExitCode = process.exitCode;
+		const workload = {
+			stop: vi.fn(async () => {
+				throw new Error("synthetic shutdown failure");
+			}),
+		};
+		const startWorkload = vi.fn(async () => workload);
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown) => unhandled.push(error);
+		const once = vi.spyOn(process, "once");
+		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		try {
+			vi.resetModules();
+			vi.doMock("./workload-worker.js", () => ({
+				startPlatformWorkloadWorkerFromDeploymentV1: startWorkload,
+			}));
+			process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
+			process.exitCode = undefined;
+			process.on("unhandledRejection", onUnhandled);
+
+			await import("./index.js");
+			process.emit("SIGTERM");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			expect(startWorkload).toHaveBeenCalledOnce();
+			expect(workload.stop).toHaveBeenCalledOnce();
+			expect(process.exitCode).toBe(1);
+			expect(unhandled).toEqual([]);
+			expect(
+				info.mock.calls.map(([message]) => JSON.parse(String(message))),
+			).toEqual([
+				{ service: "platform-worker", status: "ready" },
+				{ service: "platform-worker", status: "stopped" },
+			]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+			if (originalArgv === undefined) process.argv.splice(1, 1);
+			else process.argv[1] = originalArgv;
+			process.exitCode = originalExitCode;
+			vi.doUnmock("./workload-worker.js");
+			once.mockRestore();
+			info.mockRestore();
+		}
 	});
 });

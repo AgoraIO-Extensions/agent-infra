@@ -210,10 +210,11 @@ export async function startPlatformWorkerFromDeploymentV1(
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const worker = await startPlatformWorkerFromDeploymentV1();
-	process.once("SIGINT", () => {
-		void worker.stop();
-	});
-	process.once("SIGTERM", () => {
-		void worker.stop();
-	});
+	const stop = () => {
+		void worker.stop().catch(() => {
+			process.exitCode = 1;
+		});
+	};
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
 }
