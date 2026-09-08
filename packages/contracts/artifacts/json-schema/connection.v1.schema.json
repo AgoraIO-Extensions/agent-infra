@@ -1,39 +1,6 @@
 {
   "$defs": {
     "ConnectionActionCallProjectionV1": {
-      "$defs": {
-        "__schema0": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
-              },
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
       "oneOf": [
         {
           "additionalProperties": false,
@@ -142,7 +109,91 @@
               "type": "string"
             },
             "result": {
-              "$ref": "#/$defs/ConnectionActionCallProjectionV1/$defs/__schema0"
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "accountId": {
+                      "pattern": "^\\d+$",
+                      "type": "string"
+                    },
+                    "login": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "login"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repositories": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "owner": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "private": {
+                            "const": true,
+                            "description": "The repository was revalidated against the Pilot private-repository policy before projection.",
+                            "type": "boolean"
+                          },
+                          "repositoryId": {
+                            "pattern": "^\\d+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "repositoryId",
+                          "owner",
+                          "name",
+                          "private"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "repositories"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "number": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "pullRequestId": {
+                      "pattern": "^\\d+$",
+                      "type": "string"
+                    },
+                    "url": {
+                      "pattern": "^https:\\/\\/github\\.com\\/",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pullRequestId",
+                    "number",
+                    "url"
+                  ],
+                  "type": "object"
+                }
+              ]
             },
             "schemaVersion": {
               "const": 1,

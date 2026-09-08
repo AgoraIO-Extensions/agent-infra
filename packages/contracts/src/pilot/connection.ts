@@ -244,7 +244,11 @@ export const ConnectionActionCallProjectionV1Schema = z.discriminatedUnion(
 		z.strictObject({
 			...callShape,
 			status: z.literal("succeeded"),
-			result: z.json(),
+			result: z.union([
+				GitHubGetCurrentUserOutputV1Schema,
+				GitHubListMyRepositoriesOutputV1Schema,
+				GitHubCreatePullRequestOutputV1Schema,
+			]),
 		}),
 		ConnectionProviderFailedV1Schema,
 		ConnectionResultPendingV1Schema,

@@ -253,6 +253,13 @@ describe("Connection Pilot contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			ConnectionActionCallProjectionV1Schema.safeParse({
+				...base,
+				status: "succeeded",
+				result: { accessToken: "must-not-leak" },
+			}).success,
+		).toBe(false);
 	});
 
 	it("publishes separate authenticated Browser and read-only Catalog paths", () => {
