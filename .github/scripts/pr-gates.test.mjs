@@ -19,6 +19,7 @@ import {
   githubRequest,
   parseGateCommand,
   pendingGateNames,
+  parseTrustedHumanValidationConfirmation,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
 import { buildAcceptanceCriteriaEvidenceMarker } from "./worker-contract.mjs";
@@ -405,6 +406,55 @@ test("binds label-removal audit evidence to the exact actor and current head", (
     ),
     "Human validation confirmed by owner for current head\n\n" +
       "Recorded at: 2026-08-06T00:01:00Z\n\nEvidence: https://example.test/pull/1",
+  );
+});
+
+test("renders a non-required human validation result without confirmation evidence", () => {
+  assert.equal(
+    auditDescription(
+      { ok: true, description: "Human validation is not required" },
+      { waivers: [] },
+      "human-validation",
+      undefined,
+    ),
+    "Human validation is not required",
+  );
+});
+
+test("parses only completed successful persisted human validation evidence", () => {
+  const currentHead = "a".repeat(40);
+  const check = {
+    status: "completed",
+    conclusion: "success",
+    head_sha: currentHead,
+    output: {
+      summary:
+        "Human validation confirmed by owner for current head\n\n" +
+        "Recorded at: 2026-09-08T02:47:17Z\n\n" +
+        "Evidence: https://github.com/example/repo/pull/1",
+    },
+  };
+  assert.deepEqual(
+    parseTrustedHumanValidationConfirmation(
+      check,
+      currentHead,
+      { state: "active", role: "member" },
+    ),
+    {
+      actor: { login: "owner", type: "User" },
+      headSha: currentHead,
+      membership: { state: "active", role: "member" },
+      recordedAt: "2026-09-08T02:47:17Z",
+      url: "https://github.com/example/repo/pull/1",
+    },
+  );
+  assert.equal(
+    parseTrustedHumanValidationConfirmation(
+      { ...check, conclusion: "failure" },
+      currentHead,
+      { state: "active", role: "member" },
+    ),
+    undefined,
   );
 });
 

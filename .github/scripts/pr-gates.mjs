@@ -698,7 +698,6 @@ async function readHumanValidationConfirmation({
   action,
   event,
   currentHead,
-  events,
   url,
 }) {
   const eventHeadSha = event?.pull_request?.head?.sha;
@@ -711,15 +710,8 @@ async function readHumanValidationConfirmation({
   ) {
     return undefined;
   }
-  const matchingEvent = events
-    .filter(
-      (candidate) =>
-        candidate.event === "unlabeled" &&
-        candidate.label?.name === HUMAN_LABEL &&
-        candidate.actor?.login === sender.login,
-    )
-    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
-  if (!matchingEvent) return undefined;
+  const eventTime = event?.pull_request?.updated_at;
+  if (!validAuditTimestamp(eventTime)) return undefined;
   const [owner] = repository.split("/");
   let membership;
   try {
@@ -735,10 +727,73 @@ async function readHumanValidationConfirmation({
     sender,
     eventHeadSha,
     currentHead,
-    eventTime: matchingEvent.created_at,
+    eventTime,
     membership,
     url,
   });
+}
+
+export function parseTrustedHumanValidationConfirmation(check, currentHead, membership) {
+  if (
+    check?.status !== "completed" ||
+    check.conclusion !== "success" ||
+    check.head_sha !== currentHead
+  ) {
+    return undefined;
+  }
+  const match = check.output?.summary?.match(
+    /^Human validation confirmed by ([A-Za-z0-9-]+) for current head\n\nRecorded at: ([^\n]+)\n\nEvidence: (https:\/\/github\.com\/[^\s]+)$/,
+  );
+  if (!match) return undefined;
+  return {
+    actor: { login: match[1], type: "User" },
+    headSha: currentHead,
+    membership,
+    recordedAt: match[2],
+    url: match[3],
+  };
+}
+
+async function readTrustedHumanValidationConfirmation({
+  repository,
+  prNumber,
+  currentHead,
+  pendingCheckId,
+}) {
+  const encodedName = encodeURIComponent("Human Validation Gate");
+  const response = await githubRequest(
+    `/repos/${repository}/commits/${currentHead}/check-runs?check_name=${encodedName}&filter=all&per_page=100`,
+  );
+  const externalId = gateExternalId({
+    name: "Human Validation Gate",
+    headSha: currentHead,
+    prNumber,
+  });
+  const previousCheck = [...(response.check_runs ?? [])]
+    .filter(
+      (check) =>
+        check.id !== pendingCheckId &&
+        check.name === "Human Validation Gate" &&
+        check.head_sha === currentHead &&
+        check.app?.id === GATE_PUBLISHER_APP_ID &&
+        check.external_id === externalId,
+    )
+    .sort((left, right) => right.id - left.id)[0];
+  if (!previousCheck) return undefined;
+  const login = previousCheck.output?.summary?.match(
+    /^Human validation confirmed by ([A-Za-z0-9-]+) for current head\n\n/,
+  )?.[1];
+  if (!login) return undefined;
+  const [owner] = repository.split("/");
+  let membership;
+  try {
+    membership = await teamRequest(
+      `/orgs/${encodeURIComponent(owner)}/teams/${WORKER_OWNERS_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
+    );
+  } catch {
+    membership = undefined;
+  }
+  return parseTrustedHumanValidationConfirmation(previousCheck, currentHead, membership);
 }
 
 async function readIssueReadinessState(repository, pullRequest, issue) {
@@ -841,7 +896,8 @@ function validationWasRequired(labels, events) {
 
 export function auditDescription(result, records, type, confirmation) {
   if (!result.ok) return result.description;
-  const candidates = type === "human-validation" ? [confirmation] : records.waivers;
+  const candidates =
+    type === "human-validation" ? (confirmation ? [confirmation] : []) : records.waivers;
   const expectedDescription = (login) =>
     type === "human-validation"
       ? `Human validation confirmed by ${login} for current head`
@@ -947,17 +1003,23 @@ async function evaluatePullRequestWithChecks(
       description: "Issue Readiness evaluation failed closed",
     };
   }
-  const [records, confirmation] = await Promise.all([
+  const [records, eventConfirmation, persistedConfirmation] = await Promise.all([
     readGateRecords(repository, number, pr.head.sha),
     readHumanValidationConfirmation({
       repository,
       action,
       event: confirmationEvent,
       currentHead: pr.head.sha,
-      events,
       url: targetUrl,
     }),
+    readTrustedHumanValidationConfirmation({
+      repository,
+      prNumber: number,
+      currentHead: pr.head.sha,
+      pendingCheckId: checks["Human Validation Gate"].id,
+    }),
   ]);
+  const confirmation = eventConfirmation ?? persistedConfirmation;
   const humanValidationRequired =
     validationWasRequired(labels, events) ||
     (action === "unlabeled" && confirmationEvent?.label?.name === HUMAN_LABEL);
