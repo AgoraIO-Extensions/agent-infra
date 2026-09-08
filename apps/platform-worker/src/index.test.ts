@@ -370,58 +370,63 @@ describe("platform worker lifecycle", () => {
 		expect(primary.stop).toHaveBeenCalledOnce();
 	});
 
-	it("handles a rejecting workload shutdown from SIGTERM", async () => {
-		const originalArgv = process.argv[1];
-		const originalExitCode = process.exitCode;
-		const workload = {
-			stop: vi.fn(async () => {
-				throw new Error("synthetic shutdown failure");
-			}),
-		};
-		const startWorkload = vi.fn(async () => workload);
-		const unhandled: unknown[] = [];
-		const onUnhandled = (error: unknown) => unhandled.push(error);
-		const once = vi.spyOn(process, "once");
-		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-		const error = vi
-			.spyOn(console, "error")
-			.mockImplementation(() => undefined);
-		try {
-			vi.resetModules();
-			vi.doMock("./workload-worker.js", () => ({
-				startPlatformWorkloadWorkerFromDeploymentV1: startWorkload,
-			}));
-			process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
-			process.exitCode = undefined;
-			process.on("unhandledRejection", onUnhandled);
+	it.each(["SIGINT", "SIGTERM"] as const)(
+		"handles a rejecting workload shutdown from %s",
+		async (signal) => {
+			const originalArgv = process.argv[1];
+			const originalExitCode = process.exitCode;
+			const workload = {
+				stop: vi.fn(async () => {
+					throw new Error("synthetic shutdown failure");
+				}),
+			};
+			const startWorkload = vi.fn(async () => workload);
+			const unhandled: unknown[] = [];
+			const onUnhandled = (error: unknown) => unhandled.push(error);
+			const once = vi.spyOn(process, "once");
+			const info = vi
+				.spyOn(console, "info")
+				.mockImplementation(() => undefined);
+			const error = vi
+				.spyOn(console, "error")
+				.mockImplementation(() => undefined);
+			try {
+				vi.resetModules();
+				vi.doMock("./workload-worker.js", () => ({
+					startPlatformWorkloadWorkerFromDeploymentV1: startWorkload,
+				}));
+				process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
+				process.exitCode = undefined;
+				process.on("unhandledRejection", onUnhandled);
 
-			await import("./index.js");
-			process.emit("SIGTERM");
-			await new Promise<void>((resolve) => setImmediate(resolve));
+				await import("./index.js");
+				process.emit(signal);
+				await new Promise<void>((resolve) => setImmediate(resolve));
 
-			expect(startWorkload).toHaveBeenCalledOnce();
-			expect(workload.stop).toHaveBeenCalledOnce();
-			expect(process.exitCode).toBe(1);
-			expect(unhandled).toEqual([]);
-			expect(
-				info.mock.calls.map(([message]) => JSON.parse(String(message))),
-			).toEqual([
-				{ service: "platform-worker", status: "ready" },
-				{ service: "platform-worker", status: "stopped" },
-			]);
-			expect(error).not.toHaveBeenCalled();
-		} finally {
-			process.off("unhandledRejection", onUnhandled);
-			for (const [signal, listener] of once.mock.calls)
-				if (signal === "SIGINT" || signal === "SIGTERM")
-					process.off(signal, listener);
-			if (originalArgv === undefined) process.argv.splice(1, 1);
-			else process.argv[1] = originalArgv;
-			process.exitCode = originalExitCode;
-			vi.doUnmock("./workload-worker.js");
-			once.mockRestore();
-			info.mockRestore();
-			error.mockRestore();
-		}
-	});
+				expect(startWorkload).toHaveBeenCalledOnce();
+				expect(workload.stop).toHaveBeenCalledOnce();
+				expect(process.exitCode).toBe(1);
+				expect(unhandled).toEqual([]);
+				expect(
+					info.mock.calls.map(([message]) => JSON.parse(String(message))),
+				).toEqual([
+					{ service: "platform-worker", status: "ready" },
+					{ service: "platform-worker", status: "stopped" },
+				]);
+				expect(error).not.toHaveBeenCalled();
+			} finally {
+				process.off("unhandledRejection", onUnhandled);
+				for (const [signal, listener] of once.mock.calls)
+					if (signal === "SIGINT" || signal === "SIGTERM")
+						process.off(signal, listener);
+				if (originalArgv === undefined) process.argv.splice(1, 1);
+				else process.argv[1] = originalArgv;
+				process.exitCode = originalExitCode;
+				vi.doUnmock("./workload-worker.js");
+				once.mockRestore();
+				info.mockRestore();
+				error.mockRestore();
+			}
+		},
+	);
 });
