@@ -62,6 +62,46 @@ export interface IsolationProbe {
 	concurrent: boolean;
 }
 
+export function isolationResultSeesMarker(input: {
+	probe: Pick<IsolationProbe, "inputs" | "outputs" | "answer">;
+	events: string;
+	marker: string;
+}) {
+	return (
+		input.probe.inputs.some((value) => value.includes(input.marker)) ||
+		input.probe.outputs.some((value) => value.includes(input.marker)) ||
+		input.probe.answer.includes(input.marker) ||
+		input.events.includes(input.marker)
+	);
+}
+
+export type IsolationEvidenceStatus = "pass" | "fail" | "unverified";
+
+export function isolationScenarioStatus(input: {
+	foreignMarkerObserved: boolean;
+	positiveControl: boolean;
+	completeOutput: boolean;
+}): IsolationEvidenceStatus {
+	if (input.foreignMarkerObserved) return "fail";
+	return input.positiveControl && input.completeOutput ? "pass" : "unverified";
+}
+
+export function isolationOverallStatus(input: {
+	activeThreadLeak: boolean;
+	persistenceVerified: boolean;
+	scenarioStatuses: readonly IsolationEvidenceStatus[];
+}): IsolationEvidenceStatus {
+	if (
+		input.activeThreadLeak ||
+		input.scenarioStatuses.some((status) => status === "fail")
+	)
+		return "fail";
+	return input.persistenceVerified &&
+		input.scenarioStatuses.every((status) => status === "pass")
+		? "pass"
+		: "unverified";
+}
+
 export interface IsolationObservationHold {
 	readonly received: Promise<void>;
 	readonly observed: Promise<void>;

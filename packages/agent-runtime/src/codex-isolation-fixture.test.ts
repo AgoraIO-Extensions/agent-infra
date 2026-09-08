@@ -7,6 +7,9 @@ import {
 	evaluatePersistenceEvidence,
 	type IsolationProbe,
 	isolationModel,
+	isolationOverallStatus,
+	isolationResultSeesMarker,
+	isolationScenarioStatus,
 	nativeIsolationLauncher,
 	nativeLaunchDirectoryRelations,
 } from "./codex-isolation.test-support.js";
@@ -63,6 +66,40 @@ it("never copies one probe's synthetic context to the other model response", asy
 	expect(second.answer).toBe("NO_CONTEXT_MARKER");
 	expect(second.inputs.join("")).not.toContain("SYNTH_CONTEXT_A_PRIVATE");
 	expect(first.concurrent && second.concurrent).toBe(true);
+});
+
+it("detects foreign markers in every model and platform result channel", () => {
+	const marker = "SYNTH_FOREIGN_MARKER";
+	const base = {
+		inputs: [],
+		outputs: [],
+		answer: "",
+		events: "",
+	};
+	for (const result of [
+		{ ...base, outputs: [marker] },
+		{ ...base, answer: marker },
+	]) {
+		const foreignMarkerObserved = isolationResultSeesMarker({
+			probe: result,
+			events: result.events,
+			marker,
+		});
+		expect(foreignMarkerObserved).toBe(true);
+		const scenarioStatus = isolationScenarioStatus({
+			foreignMarkerObserved,
+			positiveControl: true,
+			completeOutput: true,
+		});
+		expect(scenarioStatus).toBe("fail");
+		expect(
+			isolationOverallStatus({
+				activeThreadLeak: false,
+				persistenceVerified: true,
+				scenarioStatuses: ["pass", scenarioStatus],
+			}),
+		).toBe("fail");
+	}
 });
 
 it("returns the native tool output only after the matching tool call completes", async () => {

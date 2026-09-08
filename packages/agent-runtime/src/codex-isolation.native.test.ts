@@ -22,6 +22,9 @@ import {
 	evaluatePersistenceEvidence,
 	type IsolationProbe,
 	isolationModel,
+	isolationOverallStatus,
+	isolationResultSeesMarker,
+	isolationScenarioStatus,
 	nativeIsolationLauncher,
 	nativeLaunchDirectoryRelations,
 	nativeObservationErrorCategory,
@@ -632,8 +635,11 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			});
 		}
 		const sees = (result: Awaited<ReturnType<typeof run>>, marker: string) =>
-			result.probe.inputs.some((input) => input.includes(marker)) ||
-			result.events.includes(marker);
+			isolationResultSeesMarker({
+				probe: result.probe,
+				events: result.events,
+				marker,
+			});
 		async function phase(name: string) {
 			const context = await pair();
 			for (const [index, user] of users.entries()) {
@@ -727,9 +733,14 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						!result.probe.outputs.some((output) =>
 							/truncated|Process running with session ID/i.test(output),
 						);
+					const scenarioStatus = isolationScenarioStatus({
+						foreignMarkerObserved: leaked,
+						positiveControl: Boolean(control),
+						completeOutput,
+					});
 					record(
 						[name, user.id, behavior].join("."),
-						leaked ? "fail" : control && completeOutput ? "pass" : "unverified",
+						scenarioStatus,
 						leaked
 							? preexisting
 								? "foreign-marker-already-in-history"
@@ -1008,14 +1019,11 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		const activeThreadLeak = activeThreadReadSamples.some(
 			(sample) => sample.foreignMarkerAbsent === false,
 		);
-		report.overall =
-			activeThreadLeak ||
-			Object.values(scenarios).some((row) => row.status === "fail")
-				? "fail"
-				: persistenceEvidence.status === "pass" &&
-						Object.values(scenarios).every((row) => row.status === "pass")
-					? "pass"
-					: "unverified";
+		report.overall = isolationOverallStatus({
+			activeThreadLeak,
+			persistenceVerified: persistenceEvidence.status === "pass",
+			scenarioStatuses: Object.values(scenarios).map((row) => row.status),
+		});
 		console.info(JSON.stringify(report, null, 2));
 		expect(
 			report.overall,
