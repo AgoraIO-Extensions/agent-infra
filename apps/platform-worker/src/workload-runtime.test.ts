@@ -791,8 +791,29 @@ describe("assembled Workload Runtime contracts", () => {
 				?.selector?.["agent-infra.agora.io/revision"],
 		).toBe(String(state.revision));
 	});
-	it("closes an opened candidate selector before cleaning a failed promotion", async () => {
-		const f = fixture();
+	it("recovers a partially published candidate route before durable promotion", async () => {
+		const f = fixture(
+			{
+				registry: workloadRegistryFixture({
+					schemaVersion: 1,
+					interactionMode: "self-managed",
+					service: { port: 8080 },
+					health: { path: "/healthz" },
+				}),
+			},
+			{
+				configuration: configurationFixture({
+					source: {
+						kind: "custom",
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						admissionRevision: "admission-a",
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+						connectionEnabled: false,
+					},
+				}),
+			},
+		);
 		await f.tick(6);
 		const state = f.state;
 		if (state?.phase !== "promoting" || !state.identity) throw new Error();
@@ -804,23 +825,49 @@ describe("assembled Workload Runtime contracts", () => {
 			deployment.service.name,
 		);
 		if (!service?.metadata?.name) throw new Error();
-		f.resources.set(`Service/${service.metadata.name}`, {
-			...service,
-			spec: {
-				...service.spec,
-				selector: {
-					"agent-infra.agora.io/agent": service.metadata.name,
-					"agent-infra.agora.io/revision": String(state.revision),
-				},
-			},
-		} as V1Service);
-
-		await f.tick(1);
-		expect(f.state).toMatchObject({ phase: "cleaning" });
+		await createWorkloadRuntimeV1(f.options).promote(state);
 		expect(
 			(await f.client.read<V1Service>("Service", service.metadata.name))?.spec
 				?.selector?.["agent-infra.agora.io/revision"],
-		).toBe("closed");
+		).toBe(String(state.revision));
+		expect(
+			[...f.resources.values()].some(
+				(resource) =>
+					resource.kind === "Ingress" &&
+					resource.metadata?.name === service.metadata?.name,
+			),
+		).toBe(true);
+		const before = f.writes.length;
+		await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "ready" });
+		const writes = f.writes.slice(before);
+		const closed = writes.findIndex(
+			(resource) =>
+				resource.kind === "Service" &&
+				(resource as V1Service).spec?.selector?.[
+					"agent-infra.agora.io/revision"
+				] === "closed",
+		);
+		const opened = writes.findIndex(
+			(resource) =>
+				resource.kind === "Service" &&
+				(resource as V1Service).spec?.selector?.[
+					"agent-infra.agora.io/revision"
+				] === String(state.revision),
+		);
+		expect(closed).toBeGreaterThanOrEqual(0);
+		expect(opened).toBeGreaterThan(closed);
+		expect(
+			writes.some(
+				(resource) =>
+					resource.kind === "Ingress" &&
+					resource.metadata?.name === service.metadata?.name,
+			),
+		).toBe(true);
+		expect(
+			(await f.client.read<V1Service>("Service", service.metadata.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe(String(state.revision));
 	});
 	it.each([
 		{

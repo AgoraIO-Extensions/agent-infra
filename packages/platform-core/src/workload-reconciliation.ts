@@ -245,11 +245,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return { ...state, attempts: state.attempts + 1 };
 						}
 						case "promoting":
-							// Recheck the exact observed identity immediately before exposure.
-							if ((await runtime.observe(state)) !== "healthy") {
-								await runtime.closeRoute(state);
+							// Re-establish a closed route before rechecking a partially published candidate.
+							await runtime.closeRoute(state);
+							if ((await runtime.observe(state)) !== "healthy")
 								return failed("health_check_failed");
-							}
 							{
 								const capabilities = await runtime.capabilities(state);
 								await runtime.promote(state);

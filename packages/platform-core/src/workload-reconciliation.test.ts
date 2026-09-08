@@ -234,16 +234,40 @@ describe("durable Workload reconciliation", () => {
 		);
 		expect(JSON.stringify(f.state)).not.toContain("private provider response");
 	});
-	it("closes a drifted candidate route before cleaning promotion", async () => {
+	it("recloses a partial candidate route before reobserving and promoting", async () => {
 		const f = fixture();
 		await f.tick(6);
 		expect(f.state?.phase).toBe("promoting");
 		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.observe).mockClear();
+		vi.mocked(f.runtime.promote).mockClear();
+		await f.tick();
+		expect(f.state?.phase).toBe("ready");
+		const close = vi.mocked(f.runtime.closeRoute).mock.invocationCallOrder[0];
+		const observe = vi.mocked(f.runtime.observe).mock.invocationCallOrder[0];
+		const promote = vi.mocked(f.runtime.promote).mock.invocationCallOrder[0];
+		if (close === undefined || observe === undefined || promote === undefined)
+			throw new Error();
+		expect(close).toBeLessThan(observe);
+		expect(observe).toBeLessThan(promote);
+	});
+	it("fails closed when a candidate remains drifted after route closure", async () => {
+		const f = fixture();
+		await f.tick(6);
+		expect(f.state?.phase).toBe("promoting");
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.observe).mockClear();
+		vi.mocked(f.runtime.promote).mockClear();
 		vi.mocked(f.runtime.observe).mockResolvedValueOnce("drifted");
 		await f.tick();
 		expect(f.runtime.closeRoute).toHaveBeenCalledWith(
 			expect.objectContaining({ phase: "promoting" }),
 		);
+		const close = vi.mocked(f.runtime.closeRoute).mock.invocationCallOrder[0];
+		const observe = vi.mocked(f.runtime.observe).mock.invocationCallOrder[0];
+		if (close === undefined || observe === undefined) throw new Error();
+		expect(close).toBeLessThan(observe);
+		expect(f.runtime.promote).not.toHaveBeenCalled();
 		expect(f.state).toMatchObject({
 			phase: "cleaning",
 			failureCode: "health_check_failed",
@@ -253,12 +277,13 @@ describe("durable Workload reconciliation", () => {
 		const f = fixture();
 		await f.tick(6);
 		expect(f.state?.phase).toBe("promoting");
-		vi.mocked(f.runtime.observe).mockResolvedValueOnce("drifted");
+		vi.mocked(f.runtime.observe).mockClear();
 		vi.mocked(f.runtime.closeRoute).mockRejectedValueOnce(
 			new Error("route close failed"),
 		);
 		await f.tick();
 		expect(f.state).toMatchObject({ phase: "promoting", attempts: 1 });
+		expect(f.runtime.observe).not.toHaveBeenCalled();
 	});
 	it("supersedes an in-flight candidate before promotion when newer desired state arrives", async () => {
 		const f = fixture();
