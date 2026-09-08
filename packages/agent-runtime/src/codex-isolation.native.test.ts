@@ -38,6 +38,20 @@ import {
 import { FileRuntimeStore, RuntimeHost } from "./index.js";
 
 type Status = "pass" | "fail" | "unverified";
+type HistoryMembership = "present" | "absent" | "error" | "unavailable";
+
+interface HistoryScanEvidence {
+	owner: HistoryMembership;
+	foreign: HistoryMembership;
+	completeOutput: boolean;
+}
+
+interface HistoryScenarioEvidence extends HistoryScanEvidence {
+	foreignMarkerObserved: boolean;
+	positiveControl: boolean;
+	status: Status;
+}
+
 const behaviors = [
 	"thread-context",
 	"owner-file-read",
@@ -123,6 +137,81 @@ function completeToolOutput(
 		(!completionMarker ||
 			outputs.some((output) => output.includes(completionMarker)))
 	);
+}
+
+function historyOutputLines(outputs: readonly string[]) {
+	return outputs.flatMap((output) => {
+		try {
+			const parsed: unknown = JSON.parse(output);
+			return typeof parsed === "string" ? parsed.split(/\r?\n/) : [];
+		} catch {
+			return [];
+		}
+	});
+}
+
+function historyMembership(
+	lines: readonly string[],
+	name: "OWNER" | "FOREIGN",
+): HistoryMembership {
+	const matches = lines.filter((line) =>
+		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|error)$/.test(line),
+	);
+	const value = `SYNTH_HISTORY_${name}=`;
+	const matching = matches.filter((line) => line.startsWith(value));
+	if (matching.length !== 1) return "unavailable";
+	return matching[0]?.slice(value.length) as Exclude<
+		HistoryMembership,
+		"unavailable"
+	>;
+}
+
+function historyScanEvidence(outputs: readonly string[]): HistoryScanEvidence {
+	const lines = historyOutputLines(outputs);
+	const owner = historyMembership(lines, "OWNER");
+	const foreign = historyMembership(lines, "FOREIGN");
+	const expectedLine =
+		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|error)$/;
+	const completed = lines.filter(
+		(line) => line === "SYNTH_HISTORY_SCAN_COMPLETE",
+	).length;
+	const unexpectedOutput = lines.some(
+		(line) =>
+			line.length > 0 &&
+			line !== "SYNTH_HISTORY_SCAN_COMPLETE" &&
+			!expectedLine.test(line),
+	);
+	return {
+		owner,
+		foreign,
+		completeOutput:
+			completed === 1 &&
+			!unexpectedOutput &&
+			owner !== "unavailable" &&
+			foreign !== "unavailable" &&
+			owner !== "error" &&
+			foreign !== "error",
+	};
+}
+
+function historyScenarioEvidence(input: {
+	outputs: readonly string[];
+	foreignMarkerObserved: boolean;
+}): HistoryScenarioEvidence {
+	const evidence = historyScanEvidence(input.outputs);
+	const foreignMarkerObserved =
+		input.foreignMarkerObserved || evidence.foreign === "present";
+	const positiveControl = evidence.owner === "present";
+	return {
+		...evidence,
+		foreignMarkerObserved,
+		positiveControl,
+		status: isolationScenarioStatus({
+			foreignMarkerObserved,
+			positiveControl,
+			completeOutput: evidence.completeOutput,
+		}),
+	};
 }
 
 // This peer preserves JSON-RPC errors as test evidence instead of teaching the
@@ -317,12 +406,96 @@ it("records effective thread settings from the native result root", () => {
 	});
 });
 
-it("requires the history scan completion marker before accepting its output", () => {
-	const marker = "SYNTH_HISTORY_SCAN_COMPLETE_user-a";
-	expect(completeToolOutput(["SYNTH_CONTEXT_USER_A"], marker)).toBe(false);
-	expect(completeToolOutput(["SYNTH_CONTEXT_USER_A", marker], marker)).toBe(
-		true,
-	);
+it("uses bounded exact membership evidence for the history positive control", async () => {
+	const owner = "SYNTH_CONTEXT_OWNER_ABC";
+	const foreign = "SYNTH_CONTEXT_FOREIGN_DEF";
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-history-"));
+	try {
+		const sessions = join(directory, "sessions");
+		await mkdir(sessions);
+		await writeFile(join(sessions, "owner-history.json"), owner);
+		const command = historyScanCommand({
+			ownerMarker: owner,
+			foreignMarker: foreign,
+			directory: sessions,
+		});
+		expect(command).toContain("grep -R -F -l --");
+		expect(command).not.toContain("sort -u");
+		expect(command).not.toContain(owner);
+		expect(command).not.toContain(foreign);
+		const evidence = historyScenarioEvidence({
+			outputs: [
+				JSON.stringify(
+					execFileSync("sh", ["-c", command], { encoding: "utf8" }),
+				),
+			],
+			foreignMarkerObserved: false,
+		});
+		expect(evidence).toMatchObject({
+			owner: "present",
+			foreign: "absent",
+			completeOutput: true,
+			status: "pass",
+		});
+		expect(
+			isolationOverallStatus({
+				activeThreadLeak: false,
+				persistenceVerified: true,
+				scenarioStatuses: ["pass", evidence.status],
+			}),
+		).toBe("pass");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("fails history evidence when a late foreign membership is present", () => {
+	const evidence = historyScenarioEvidence({
+		outputs: [
+			JSON.stringify(
+				"SYNTH_CONTEXT_OWNER\n".repeat(4_000) +
+					"SYNTH_HISTORY_OWNER=present\n" +
+					"SYNTH_HISTORY_FOREIGN=present\n" +
+					"SYNTH_HISTORY_SCAN_COMPLETE\n",
+			),
+		],
+		foreignMarkerObserved: false,
+	});
+	expect(evidence.status).toBe("fail");
+	expect(
+		isolationOverallStatus({
+			activeThreadLeak: false,
+			persistenceVerified: true,
+			scenarioStatuses: ["pass", evidence.status],
+		}),
+	).toBe("fail");
+});
+
+it("keeps incomplete and failed history commands unverified", () => {
+	for (const outputs of [
+		[],
+		[JSON.stringify("native command failed after writing output")],
+		[
+			JSON.stringify(
+				"SYNTH_HISTORY_OWNER=present\n" +
+					"SYNTH_HISTORY_FOREIGN=error\n" +
+					"SYNTH_HISTORY_SCAN_COMPLETE\n",
+			),
+		],
+	]) {
+		const evidence = historyScenarioEvidence({
+			outputs,
+			foreignMarkerObserved: false,
+		});
+		expect(evidence.status).toBe("unverified");
+		expect(
+			isolationOverallStatus({
+				activeThreadLeak: false,
+				persistenceVerified: true,
+				scenarioStatuses: ["pass", evidence.status],
+			}),
+		).toBe("unverified");
+	}
 });
 
 function unavailableModelObservationSamples(
@@ -358,6 +531,29 @@ function unavailableModelObservationSamples(
 
 function quote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function historyScanCommand(input: {
+	ownerMarker: string;
+	foreignMarker: string;
+	directory: string;
+}) {
+	const octalEscapes = (value: string) =>
+		[...Buffer.from(value, "utf8")]
+			.map((byte) => `\\${byte.toString(8).padStart(3, "0")}`)
+			.join("");
+	const marker = (value: string) =>
+		`$(printf '%b' ${quote(octalEscapes(value))})`;
+	return [
+		`owner_marker=${marker(input.ownerMarker)}`,
+		`foreign_marker=${marker(input.foreignMarker)}`,
+		'history_scan_marker() { if grep -R -F -l -- "$1" ' +
+			quote(input.directory) +
+			' >/dev/null 2>&1; then printf \'%s=present\\n\' "$2"; else status=$?; case "$status" in 1) printf \'%s=absent\\n\' "$2";; *) printf \'%s=error\\n\' "$2";; esac; fi; }',
+		'history_scan_marker "$owner_marker" SYNTH_HISTORY_OWNER',
+		'history_scan_marker "$foreign_marker" SYNTH_HISTORY_FOREIGN',
+		"printf 'SYNTH_HISTORY_SCAN_COMPLETE\\n'",
+	].join("; ");
 }
 
 // A skipped native suite is never isolation acceptance evidence.
@@ -775,11 +971,11 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 						const other = users[1 - index];
 						if (!other) throw new Error("Missing other user");
 						return history
-							? "set -o pipefail; grep -R -h -o 'SYNTH_CONTEXT_[A-Z0-9_]*' " +
-									quote(join(nativeHome, "sessions")) +
-									" | sort -u && printf '\\nSYNTH_HISTORY_SCAN_COMPLETE_" +
-									user.id +
-									"\\n'"
+							? historyScanCommand({
+									ownerMarker: user.context,
+									foreignMarker: other.context,
+									directory: join(nativeHome, "sessions"),
+								})
 							: (search ? "grep -R -F SYNTH_PRIVATE_ " : "cat ") +
 									quote(filePath(other, "private.txt"));
 					}),
@@ -788,7 +984,19 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					const user = users[index];
 					const other = users[1 - index];
 					if (!user || !other) throw new Error("Missing user");
-					const leaked = sees(result, history ? other.context : other.file);
+					const rawForeignMarkerObserved = sees(
+						result,
+						history ? other.context : other.file,
+					);
+					const historyEvidence = history
+						? historyScenarioEvidence({
+								outputs: result.probe.outputs,
+								foreignMarkerObserved: rawForeignMarkerObserved,
+							})
+						: undefined;
+					const leaked = historyEvidence
+						? historyEvidence.foreignMarkerObserved
+						: rawForeignMarkerObserved;
 					const preexisting = result.probe.inputs[0]?.includes(
 						history ? other.context : other.file,
 					);
@@ -802,21 +1010,18 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 									searchControl.events.includes(user.file),
 							)
 						: history
-							? result.probe.outputs.some((output) =>
-									output.includes(user.context),
-								) &&
-								result.probe.answer.includes(user.context) &&
-								result.events.includes(user.context)
+							? historyEvidence?.positiveControl
 							: canRead[index];
-					const completeOutput = completeToolOutput(
-						result.probe.outputs,
-						history ? `SYNTH_HISTORY_SCAN_COMPLETE_${user.id}` : undefined,
-					);
-					const scenarioStatus = isolationScenarioStatus({
-						foreignMarkerObserved: leaked,
-						positiveControl: Boolean(control),
-						completeOutput,
-					});
+					const completeOutput =
+						historyEvidence?.completeOutput ??
+						completeToolOutput(result.probe.outputs);
+					const scenarioStatus = historyEvidence
+						? historyEvidence.status
+						: isolationScenarioStatus({
+								foreignMarkerObserved: leaked,
+								positiveControl: Boolean(control),
+								completeOutput,
+							});
 					record(
 						[name, user.id, behavior].join("."),
 						scenarioStatus,
@@ -824,11 +1029,14 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							? preexisting
 								? "foreign-marker-already-in-history"
 								: "foreign-marker-reached-model-input-or-result"
-							: !completeOutput
-								? "tool-output-incomplete"
-								: control
-									? "foreign-marker-absent"
-									: "matching-positive-control-failed",
+							: historyEvidence?.owner === "error" ||
+									historyEvidence?.foreign === "error"
+								? "history-membership-command-error"
+								: !completeOutput
+									? "tool-output-incomplete"
+									: control
+										? "foreign-marker-absent"
+										: "matching-positive-control-failed",
 					);
 				}
 			}
