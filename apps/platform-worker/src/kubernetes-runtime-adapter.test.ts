@@ -211,14 +211,15 @@ describe("GA Kubernetes Workload adapter", () => {
 				"NetworkPolicy",
 				desired.service.name,
 			);
-			const ports = network?.spec?.[direction]?.[0]?.ports;
+			const ruleIndex = direction === "egress" ? 1 : 0;
+			const ports = network?.spec?.[direction]?.[ruleIndex]?.ports;
 			if (!network || !ports?.[0]) throw new Error();
 			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
 				...network,
 				spec: {
 					...network.spec,
 					[direction]: network.spec?.[direction]?.map((rule, index) =>
-						index === 0
+						index === ruleIndex
 							? {
 									...rule,
 									ports: rule.ports?.map((port, portIndex) =>
@@ -268,20 +269,20 @@ describe("GA Kubernetes Workload adapter", () => {
 				desired.service.name,
 			);
 			expect(
-				repaired?.spec?.[direction]?.[0]?.ports?.[0]?.endPort,
+				repaired?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.endPort,
 				direction,
 			).toBeUndefined();
 			expect(await adapter.observe(desired, identity), direction).toBe(
 				"healthy",
 			);
-			const port = repaired?.spec?.[direction]?.[0]?.ports?.[0]?.port;
+			const port = repaired?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.port;
 			if (!repaired || typeof port !== "number") throw new Error();
 			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
 				...repaired,
 				spec: {
 					...repaired.spec,
 					[direction]: repaired.spec?.[direction]?.map((rule, index) =>
-						index === 0
+						index === ruleIndex
 							? {
 									...rule,
 									ports: rule.ports?.map((entry, portIndex) =>
@@ -302,7 +303,7 @@ describe("GA Kubernetes Workload adapter", () => {
 						"NetworkPolicy",
 						desired.service.name,
 					)
-				)?.spec?.[direction]?.[0]?.ports?.[0]?.endPort,
+				)?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.endPort,
 				direction,
 			).toBe(port);
 		}

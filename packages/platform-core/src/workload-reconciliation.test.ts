@@ -234,6 +234,32 @@ describe("durable Workload reconciliation", () => {
 		);
 		expect(JSON.stringify(f.state)).not.toContain("private provider response");
 	});
+	it("closes a drifted candidate route before cleaning promotion", async () => {
+		const f = fixture();
+		await f.tick(6);
+		expect(f.state?.phase).toBe("promoting");
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.observe).mockResolvedValueOnce("drifted");
+		await f.tick();
+		expect(f.runtime.closeRoute).toHaveBeenCalledWith(
+			expect.objectContaining({ phase: "promoting" }),
+		);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "health_check_failed",
+		});
+	});
+	it("retries promoting when candidate route closure fails", async () => {
+		const f = fixture();
+		await f.tick(6);
+		expect(f.state?.phase).toBe("promoting");
+		vi.mocked(f.runtime.observe).mockResolvedValueOnce("drifted");
+		vi.mocked(f.runtime.closeRoute).mockRejectedValueOnce(
+			new Error("route close failed"),
+		);
+		await f.tick();
+		expect(f.state).toMatchObject({ phase: "promoting", attempts: 1 });
+	});
 	it("supersedes an in-flight candidate before promotion when newer desired state arrives", async () => {
 		const f = fixture();
 		await f.tick(7);

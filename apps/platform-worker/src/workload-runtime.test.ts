@@ -791,6 +791,37 @@ describe("assembled Workload Runtime contracts", () => {
 				?.selector?.["agent-infra.agora.io/revision"],
 		).toBe(String(state.revision));
 	});
+	it("closes an opened candidate selector before cleaning a failed promotion", async () => {
+		const f = fixture();
+		await f.tick(6);
+		const state = f.state;
+		if (state?.phase !== "promoting" || !state.identity) throw new Error();
+		const deployment = validateAgentWorkloadDesiredV1(
+			state.candidate.deployment,
+		);
+		const service = await f.client.read<V1Service>(
+			"Service",
+			deployment.service.name,
+		);
+		if (!service?.metadata?.name) throw new Error();
+		f.resources.set(`Service/${service.metadata.name}`, {
+			...service,
+			spec: {
+				...service.spec,
+				selector: {
+					"agent-infra.agora.io/agent": service.metadata.name,
+					"agent-infra.agora.io/revision": String(state.revision),
+				},
+			},
+		} as V1Service);
+
+		await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "cleaning" });
+		expect(
+			(await f.client.read<V1Service>("Service", service.metadata.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+	});
 	it.each([
 		{
 			label: "fsGroup",
