@@ -472,6 +472,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					allowPrivilegeEscalation: false,
 					readOnlyRootFilesystem: true,
 					capabilities: { drop: ["ALL"] },
+					runAsNonRoot: true,
+					runAsUser: 1000,
+					runAsGroup: 1000,
+					seccompProfile: { type: "RuntimeDefault" },
+					procMount: "Default",
 				},
 				volumeMounts: [
 					{ name: "data", mountPath: value.persistentVolume.mountPath },
@@ -817,6 +822,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										allowPrivilegeEscalation: false,
 										readOnlyRootFilesystem: true,
 										capabilities: { drop: ["ALL"] },
+										runAsNonRoot: true,
+										runAsUser: 1000,
+										runAsGroup: 1000,
+										seccompProfile: { type: "RuntimeDefault" },
+										procMount: "Default",
 									},
 									volumeMounts: [
 										{

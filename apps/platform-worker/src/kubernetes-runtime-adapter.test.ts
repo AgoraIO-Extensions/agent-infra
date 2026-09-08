@@ -318,7 +318,16 @@ describe("GA Kubernetes Workload adapter", () => {
 					)
 				)?.spec?.template.spec?.containers[0]?.securityContext,
 				`repairs ${label}`,
-			).not.toMatchObject(securityContext);
+			).toMatchObject({
+				allowPrivilegeEscalation: false,
+				readOnlyRootFilesystem: true,
+				capabilities: { drop: ["ALL"] },
+				runAsNonRoot: true,
+				runAsUser: 1000,
+				runAsGroup: 1000,
+				seccompProfile: { type: "RuntimeDefault" },
+				procMount: "Default",
+			});
 
 			const pod = await f.client.read<V1Pod>(
 				"Pod",
