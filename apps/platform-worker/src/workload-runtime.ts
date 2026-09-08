@@ -647,6 +647,11 @@ export function createWorkloadRuntimeV1(
 		},
 		async promote(state) {
 			if (!state.identity) throw new Error();
+			if (
+				state.phase === "promoting" &&
+				!(await adapter.closeAgent(state.agentId, state.revision))
+			)
+				throw new Error("Workload route is closing");
 			const workload = desired(state);
 			const result = await adapter.switchRoute(
 				{

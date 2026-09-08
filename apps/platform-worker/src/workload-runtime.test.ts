@@ -742,6 +742,55 @@ describe("assembled Workload Runtime contracts", () => {
 			).toBe(pvc?.metadata?.uid);
 		},
 	);
+	it("closes an opened candidate selector before publishing its promoted route", async () => {
+		const f = fixture();
+		await f.tick(6);
+		const state = f.state;
+		if (state?.phase !== "promoting" || !state.identity) throw new Error();
+		const deployment = validateAgentWorkloadDesiredV1(
+			state.candidate.deployment,
+		);
+		const service = await f.client.read<V1Service>(
+			"Service",
+			deployment.service.name,
+		);
+		if (!service?.metadata?.name) throw new Error();
+		f.resources.set(`Service/${service.metadata.name}`, {
+			...service,
+			spec: {
+				...service.spec,
+				selector: {
+					"agent-infra.agora.io/agent": service.metadata.name,
+					"agent-infra.agora.io/revision": String(state.revision),
+				},
+			},
+		} as V1Service);
+		const before = f.writes.length;
+
+		await createWorkloadRuntimeV1(f.options).promote(state);
+
+		const writes = f.writes.slice(before);
+		const closed = writes.findIndex(
+			(resource) =>
+				resource.kind === "Service" &&
+				(resource as V1Service).spec?.selector?.[
+					"agent-infra.agora.io/revision"
+				] === "closed",
+		);
+		const opened = writes.findIndex(
+			(resource) =>
+				resource.kind === "Service" &&
+				(resource as V1Service).spec?.selector?.[
+					"agent-infra.agora.io/revision"
+				] === String(state.revision),
+		);
+		expect(closed).toBeGreaterThanOrEqual(0);
+		expect(opened).toBeGreaterThan(closed);
+		expect(
+			(await f.client.read<V1Service>("Service", service.metadata.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe(String(state.revision));
+	});
 	it.each([
 		{
 			label: "fsGroup",
