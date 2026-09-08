@@ -619,7 +619,15 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(record.activationFence.fence).toBe(1);
 	});
 
-	it.each(["missing", "foreign", "mutable"] as const)(
+	it.each([
+		"missing",
+		"foreign",
+		"mutable",
+		"activation fence mismatch",
+		"StatefulSet UID mismatch",
+		"StatefulSet generation mismatch",
+		"Secret fence annotation mismatch",
+	] as const)(
 		"does not reuse a %s current active Secret when decryption is unavailable",
 		async (mutation) => {
 			let record = activeSecretRecord();
@@ -683,6 +691,30 @@ describe("assembled Workload Runtime contracts", () => {
 				ref.name,
 				record.activationFence.fence,
 			);
+			if (mutation === "activation fence mismatch")
+				record = validateActiveSecretRecordV1({
+					...record,
+					activationFence: {
+						...record.activationFence,
+						fence: record.activationFence.fence + 1,
+					},
+				});
+			if (mutation === "StatefulSet UID mismatch")
+				record = validateActiveSecretRecordV1({
+					...record,
+					activationFence: {
+						...record.activationFence,
+						workloadUid: "workload-other",
+					},
+				});
+			if (mutation === "StatefulSet generation mismatch")
+				record = validateActiveSecretRecordV1({
+					...record,
+					activationFence: {
+						...record.activationFence,
+						workloadGeneration: record.activationFence.workloadGeneration + 1,
+					},
+				});
 			const secret = await f.client.read<V1Secret>("Secret", ref.name);
 			if (!secret) throw new Error();
 			if (mutation === "missing") f.resources.delete(`Secret/${ref.name}`);
@@ -702,6 +734,26 @@ describe("assembled Workload Runtime contracts", () => {
 					...secret,
 					immutable: false,
 				} as V1Secret);
+			if (mutation === "Secret fence annotation mismatch") {
+				const statefulSet = await f.client.read<V1StatefulSet>(
+					"StatefulSet",
+					deployment.service.name,
+				);
+				const fenceAnnotation = Object.keys(
+					statefulSet?.metadata?.annotations ?? {},
+				).find((key) => key.startsWith("agent-infra.agora.io/secret-"));
+				if (!statefulSet?.metadata?.name || !fenceAnnotation) throw new Error();
+				f.resources.set(`StatefulSet/${statefulSet.metadata.name}`, {
+					...statefulSet,
+					metadata: {
+						...statefulSet.metadata,
+						annotations: {
+							...statefulSet.metadata.annotations,
+							[fenceAnnotation]: "2",
+						},
+					},
+				} as V1StatefulSet);
+			}
 			const before = structuredClone(record);
 
 			await f.tick(2);
