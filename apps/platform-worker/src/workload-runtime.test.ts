@@ -20,6 +20,7 @@ import {
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
+import type { V1Pod, V1Service, V1StatefulSet } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import {
 	runtimeGrantFixture,
@@ -551,6 +552,51 @@ describe("assembled Workload Runtime contracts", () => {
 			).toBe(pvc?.metadata?.uid);
 		},
 	);
+	it("closes a promoted route before replacing a drifted owned Pod", async () => {
+		const f = fixture();
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		const service = [...f.resources.values()].find(
+			(resource) =>
+				resource.kind === "Service" &&
+				!resource.metadata?.name?.endsWith("-probe"),
+		) as V1Service | undefined;
+		const serviceName = service?.metadata?.name;
+		if (!service || !serviceName) throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${serviceName}-0`);
+		if (!pod) throw new Error();
+		expect(service.spec?.selector?.["agent-infra.agora.io/revision"]).toBe("1");
+		f.resources.set(`Pod/${serviceName}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				securityContext: { ...pod.spec?.securityContext, fsGroup: 2000 },
+			},
+		} as V1Pod);
+
+		await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "applying", revision: 2 });
+		expect(
+			(await f.client.read<V1Service>("Service", serviceName))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+
+		await f.tick(1);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", serviceName))?.spec
+				?.replicas,
+		).toBe(0);
+		await f.tick(5);
+		expect(f.state?.phase).toBe("ready");
+		expect(
+			(await f.client.read<V1Service>("Service", serviceName))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("2");
+		expect(
+			(await f.client.read<V1Pod>("Pod", `${serviceName}-0`))?.spec
+				?.securityContext?.fsGroup,
+		).toBe(1000);
+	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({
 			probeRuntime: async () => ({
