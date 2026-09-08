@@ -23,6 +23,7 @@ import {
 	type IsolationProbe,
 	isolationModel,
 	nativeIsolationLauncher,
+	nativeObservationErrorCategory,
 } from "./codex-isolation.test-support.js";
 import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
 import {
@@ -875,8 +876,26 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			try {
 				await driver?.close().catch(() => {});
 				await model?.close().catch(() => {});
-				const observations =
-					(await launcher?.observations().catch(() => [])) ?? [];
+				let observations: Awaited<
+					ReturnType<NonNullable<typeof launcher>["observations"]>
+				> = [];
+				if (!launcher) {
+					report.nativeObservation = { category: "launcher-unavailable" };
+				} else {
+					try {
+						observations = await launcher.observations();
+						report.nativeObservation = { category: "success" };
+					} catch (error) {
+						report.nativeObservation = {
+							category: nativeObservationErrorCategory(error),
+						};
+						record(
+							"restart-resume.original-native-sessions",
+							"unverified",
+							"native-observation-unavailable",
+						);
+					}
+				}
 				const starts = observations.filter(
 					(entry) => entry.method === "thread/start",
 				);

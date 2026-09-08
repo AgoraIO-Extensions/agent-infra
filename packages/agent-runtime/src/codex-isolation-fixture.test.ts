@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -122,7 +122,10 @@ it("retries pre-launch and incomplete native observation reads", async () => {
 			"http://127.0.0.1:1/v1",
 		);
 		const observationFile = join(directory, "observations.jsonl");
-		const preLaunch = launcher.observations();
+		await expect(launcher.observations()).rejects.toMatchObject({
+			category: "missing",
+		});
+		const preLaunch = launcher.observations({ allowEmptyBeforeLaunch: true });
 		await new Promise<void>((resolve) => setTimeout(resolve, 5));
 		await writeFile(observationFile, '{"method":"launch"}\n');
 		await expect(preLaunch).resolves.toEqual([{ method: "launch" }]);
@@ -148,6 +151,37 @@ it("binds a final isolation result to the exact clean #403 merge", () => {
 		status: "pass",
 		reason: "required-403-merge-reachable-clean-head",
 	});
+});
+
+it("reports terminal native observation failures without treating them as empty", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-observation-"));
+	try {
+		const launcher = await nativeIsolationLauncher(
+			directory,
+			process.execPath,
+			"http://127.0.0.1:1/v1",
+		);
+		const observationFile = join(directory, "observations.jsonl");
+		await writeFile(observationFile, "");
+		await expect(launcher.observations()).rejects.toMatchObject({
+			category: "empty",
+		});
+		await writeFile(observationFile, '{"method":"launch"}');
+		await expect(launcher.observations()).rejects.toMatchObject({
+			category: "incomplete",
+		});
+		await writeFile(observationFile, "not-json\n");
+		await expect(launcher.observations()).rejects.toMatchObject({
+			category: "invalid-json",
+		});
+		await rm(observationFile);
+		await mkdir(observationFile);
+		await expect(launcher.observations()).rejects.toMatchObject({
+			category: "read-error",
+		});
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 it("rejects unrelated, missing, and dirty persistence evidence", () => {

@@ -326,6 +326,29 @@ export interface NativeObservation {
 	error?: { code: number; message: string };
 }
 
+export type NativeObservationErrorCategory =
+	| "empty"
+	| "incomplete"
+	| "invalid-json"
+	| "missing"
+	| "read-error";
+
+export class NativeObservationError extends Error {
+	constructor(readonly category: NativeObservationErrorCategory) {
+		super("Native observation unavailable");
+	}
+}
+
+export function nativeObservationErrorCategory(
+	error: unknown,
+): NativeObservationErrorCategory {
+	if (error instanceof NativeObservationError) return error.category;
+	if (error instanceof SyntaxError) return "invalid-json";
+	if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT")
+		return "missing";
+	return "read-error";
+}
+
 export async function nativeIsolationLauncher(
 	directory: string,
 	executable: string,
@@ -382,21 +405,27 @@ child.on("close", (code) => process.exit(code ?? 1));
 	await chmod(join(bin, "codex"), 0o700);
 	return {
 		bin,
-		async observations(): Promise<NativeObservation[]> {
+		async observations(options: { allowEmptyBeforeLaunch?: boolean } = {}) {
 			for (let attempt = 0; attempt < 5; attempt += 1) {
 				try {
 					const content = await readFile(observations, "utf8");
-					if (content.length === 0) return [];
+					if (content.length === 0) throw new NativeObservationError("empty");
 					if (!content.endsWith("\n"))
-						throw new Error("Incomplete native observation");
+						throw new NativeObservationError("incomplete");
 					return content
 						.split("\n")
 						.filter(Boolean)
 						.map((line) => JSON.parse(line) as NativeObservation);
 				} catch (error) {
 					if (attempt === 4) {
-						if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-						throw error;
+						if (
+							options.allowEmptyBeforeLaunch &&
+							(error as NodeJS.ErrnoException).code === "ENOENT"
+						)
+							return [];
+						throw new NativeObservationError(
+							nativeObservationErrorCategory(error),
+						);
 					}
 					await new Promise<void>((resolve) => setTimeout(resolve, 20));
 				}
