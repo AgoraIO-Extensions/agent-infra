@@ -394,8 +394,10 @@ child.on("close", (code) => process.exit(code ?? 1));
 						.filter(Boolean)
 						.map((line) => JSON.parse(line) as NativeObservation);
 				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-					if (attempt === 4) throw error;
+					if (attempt === 4) {
+						if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+						throw error;
+					}
 					await new Promise<void>((resolve) => setTimeout(resolve, 20));
 				}
 			}

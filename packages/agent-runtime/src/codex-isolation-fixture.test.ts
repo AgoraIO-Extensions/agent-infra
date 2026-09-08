@@ -113,7 +113,7 @@ it("holds synthetic request observation and response at separate probe points", 
 	expect((await response).status).toBe(200);
 });
 
-it("waits for a complete native observation line while allowing pre-launch reads", async () => {
+it("retries pre-launch and incomplete native observation reads", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-observation-"));
 	try {
 		const launcher = await nativeIsolationLauncher(
@@ -121,8 +121,11 @@ it("waits for a complete native observation line while allowing pre-launch reads
 			process.execPath,
 			"http://127.0.0.1:1/v1",
 		);
-		await expect(launcher.observations()).resolves.toEqual([]);
 		const observationFile = join(directory, "observations.jsonl");
+		const preLaunch = launcher.observations();
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		await writeFile(observationFile, '{"method":"launch"}\n');
+		await expect(preLaunch).resolves.toEqual([{ method: "launch" }]);
 		await writeFile(observationFile, '{"method":"launch"}');
 		const snapshot = launcher.observations();
 		await new Promise<void>((resolve) => setTimeout(resolve, 5));
