@@ -76,6 +76,72 @@ function hasSameStructure(actual: unknown, expected: unknown): boolean {
 	);
 }
 
+// Compare quantities without float rounding or rejecting API-server canonical units.
+function quantityRatio(value: string): readonly [bigint, bigint] | undefined {
+	if (value.length > 128) return undefined;
+	const match =
+		/^([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(n|u|m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei|[eE][+-]?[0-9]+)?$/.exec(
+			value,
+		);
+	if (!match?.[1]) return undefined;
+	const [integer, fraction = ""] = match[1].replace(/^\+/, "").split(".");
+	let numerator = BigInt(`${integer || "0"}${fraction}`);
+	let denominator = 10n ** BigInt(fraction.length);
+	const suffix = match[2] ?? "";
+	if (suffix.endsWith("i")) {
+		numerator *=
+			1024n ** BigInt(["Ki", "Mi", "Gi", "Ti", "Pi", "Ei"].indexOf(suffix) + 1);
+	} else {
+		const powers: Readonly<Record<string, number>> = {
+			"": 0,
+			n: -9,
+			u: -6,
+			m: -3,
+			k: 3,
+			M: 6,
+			G: 9,
+			T: 12,
+			P: 15,
+			E: 18,
+		};
+		const exponent = powers[suffix] ?? Number(suffix.slice(1));
+		if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 30)
+			return undefined;
+		if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
+		else numerator *= 10n ** BigInt(exponent);
+	}
+	return [numerator, denominator];
+}
+
+function matchesResources(
+	actual: V1PodSpec["containers"][number]["resources"],
+	expected: KubernetesWorkloadPolicyV1["resources"],
+) {
+	if (
+		!actual ||
+		!hasSameStructure(Object.keys(actual).sort(), ["limits", "requests"])
+	)
+		return false;
+	return (["limits", "requests"] as const).every((kind) => {
+		const values = actual[kind];
+		if (
+			!values ||
+			!hasSameStructure(
+				Object.keys(values).sort(),
+				Object.keys(expected[kind]).sort(),
+			)
+		)
+			return false;
+		return Object.entries(expected[kind]).every(([key, value]) => {
+			const observed = values[key];
+			if (typeof observed !== "string") return false;
+			const a = quantityRatio(observed);
+			const b = quantityRatio(value);
+			return a !== undefined && b !== undefined && a[0] * b[1] === b[0] * a[1];
+		});
+	});
+}
+
 function containsDesired(actual: unknown, expected: unknown): boolean {
 	if (Array.isArray(expected) && expected.length === 0 && actual === undefined)
 		return true;
@@ -564,6 +630,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		const probe = container?.readinessProbe;
+		const ports = container?.ports?.map((port) => ({
+			...port,
+			protocol: port.protocol ?? "TCP",
+		}));
 		// API-server defaults are allowed; additional handlers and HTTP overrides are not.
 		const expectedProbe = {
 			httpGet: {
@@ -578,6 +648,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			successThreshold: 1,
 		};
 		return (
+			!hasSameStructure(ports, [
+				{ name: "runtime", containerPort: value.service.port, protocol: "TCP" },
+			]) ||
+			!matchesResources(container?.resources, policy.resources) ||
 			!hasSameStructure(
 				{
 					...probe,
@@ -596,7 +670,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					name,
 					value,
 				})),
-				resources: policy.resources,
 				readinessProbe: {
 					httpGet: { path: value.health.path, port: value.service.port },
 					timeoutSeconds: value.health.timeoutSeconds,
@@ -752,6 +825,19 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const service = await client.read<V1Service>("Service", name);
 		if (service) {
 			own(service, value.agentId, value.workloadRevision, value.fence);
+			const safeServiceSpec = {
+				type: "ClusterIP",
+				selector: service.spec?.selector,
+				ports: service.spec?.ports?.map((port) => ({
+					name: port.name,
+					port: port.port,
+					targetPort: port.targetPort,
+				})),
+			};
+			if (!matchesServiceSpec(service.spec, safeServiceSpec)) {
+				if (!(await remove("Service", name, value))) return false;
+				return remove("Ingress", name, value);
+			}
 			if (
 				!hasSameStructure(service.spec?.selector, {
 					[ownerLabel]: name,
@@ -781,6 +867,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
 					},
 				});
+			}
+			const closed = await client.read<V1Service>("Service", name);
+			if (closed) {
+				own(closed, value.agentId, value.workloadRevision, value.fence);
+				if (
+					!matchesServiceSpec(closed.spec, {
+						...safeServiceSpec,
+						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
+					})
+				)
+					return false;
 			}
 		}
 		return remove("Ingress", name, value);

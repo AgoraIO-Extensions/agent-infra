@@ -2027,6 +2027,196 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBe(1);
 		expect(f.writes).toHaveLength(writes);
 	});
+	it.each([
+		{ type: "ExternalName", externalName: "foreign.test" },
+		{ externalIPs: ["203.0.113.5"] },
+		{ type: "LoadBalancer" },
+	])(
+		"deletes bypassing Services before reporting route closure %j",
+		async (override) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.promote(desired, identity);
+			const service = await f.client.read<V1Service>(
+				"Service",
+				desired.service.name,
+			);
+			if (!service) throw new Error();
+			f.resources.set(`Service/${desired.service.name}`, {
+				...service,
+				spec: { ...service.spec, ...override },
+			} as V1Service);
+			expect(
+				await adapter.closeAgent(
+					desired.agentId,
+					desired.workloadRevision,
+					desired.fence,
+				),
+			).toBe(true);
+			expect(await f.client.read("Service", desired.service.name)).toBeNull();
+			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+		},
+	);
+	it("does not report closure while an unsafe Service deletion remains pending", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: {
+				...f.client,
+				async delete(object) {
+					if (object.kind !== "Service") await f.client.delete(object);
+				},
+			},
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		if (!service) throw new Error();
+		f.resources.set(`Service/${desired.service.name}`, {
+			...service,
+			spec: {
+				...service.spec,
+				type: "ExternalName",
+				externalName: "foreign.test",
+			},
+		} as V1Service);
+		expect(
+			await adapter.closeAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				desired.fence,
+			),
+		).toBe(false);
+		expect(await f.client.read("Service", desired.service.name)).not.toBeNull();
+	});
+	it("does not publish a healthy candidate without caller validation", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await expect(
+			adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: false,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			}),
+		).rejects.toThrow();
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+	});
+	it.each(["hostPort", "hostIP", "protocol", "claims", "device", "quantity"])(
+		"rejects container port/resource override %s in template and Pod",
+		async (mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const spec = workload?.spec?.template.spec;
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec || !spec || !pod?.spec) throw new Error();
+			const mutate = (container: V1PodSpec["containers"][number]) => ({
+				...container,
+				...(["hostPort", "hostIP", "protocol"].includes(mutation)
+					? {
+							ports: container.ports?.map((port) => ({
+								...port,
+								[mutation]:
+									mutation === "hostPort"
+										? 8080
+										: mutation === "hostIP"
+											? "0.0.0.0"
+											: "UDP",
+							})),
+						}
+					: {
+							resources: {
+								...container.resources,
+								...(mutation === "claims"
+									? { claims: [{ name: "foreign-device" }] }
+									: {
+											limits: {
+												...container.resources?.limits,
+												...(mutation === "device"
+													? { "vendor.test/device": "1" }
+													: { memory: "129Mi" }),
+											},
+										}),
+							},
+						}),
+			});
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec.template,
+						spec: { ...spec, containers: spec.containers.map(mutate) },
+					},
+				},
+			} as V1StatefulSet);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: { ...pod.spec, containers: pod.spec.containers.map(mutate) },
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		},
+	);
+	it("accepts default TCP ports and equivalent canonical resource quantities", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!pod?.spec) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				containers: pod.spec.containers.map((container) => ({
+					...container,
+					ports: container.ports?.map((port) => ({ ...port, protocol: "TCP" })),
+					resources: {
+						requests: { cpu: "0.025", memory: "33554432" },
+						limits: { cpu: "1e-1", memory: "0.125Gi" },
+					},
+				})),
+			},
+		} as V1Pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

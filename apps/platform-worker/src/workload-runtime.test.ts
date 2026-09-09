@@ -1245,7 +1245,7 @@ describe("assembled Workload Runtime contracts", () => {
 		},
 	] as const)(
 		"closes a promoted route before replacing $label drift",
-		async ({ mutate, assertRepaired, external = false }) => {
+		async ({ label, mutate, assertRepaired, external = false }) => {
 			let f = fixture();
 			if (external) {
 				const configuration = configurationFixture();
@@ -1274,10 +1274,15 @@ describe("assembled Workload Runtime contracts", () => {
 
 			await f.tick(1);
 			expect(f.state).toMatchObject({ phase: "applying", revision: 2 });
-			expect(
-				(await f.client.read<V1Service>("Service", serviceName))?.spec
-					?.selector?.["agent-infra.agora.io/revision"],
-			).toBe("closed");
+			const closedService = await f.client.read<V1Service>(
+				"Service",
+				serviceName,
+			);
+			if (label === "Service external IP") expect(closedService).toBeNull();
+			else
+				expect(
+					closedService?.spec?.selector?.["agent-infra.agora.io/revision"],
+				).toBe("closed");
 
 			await f.tick(7);
 			expect(f.state?.phase).toBe("ready");
