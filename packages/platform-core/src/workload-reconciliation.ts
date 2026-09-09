@@ -305,6 +305,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 								await runtime.promote(state);
 								return state;
 							}
+							await runtime.closeRoute(state);
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});

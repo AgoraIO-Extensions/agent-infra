@@ -191,6 +191,73 @@ describe("durable Workload reconciliation", () => {
 		expect(f.state?.verified?.configuration.source.imageDigest).toBe("image-a");
 		expect(f.runtime.cleanup).not.toHaveBeenCalled();
 	});
+	it.each(["pending", "drifted"] as const)(
+		"closes a rejected workload route before persisting repair for %s health",
+		async (health) => {
+			const f = fixture();
+			await f.tick(7);
+			f.upgrade("image-b");
+			vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
+				new WorkloadPreflightRejectedErrorV1(),
+			);
+			await f.tick(2);
+			expect(f.state?.phase).toBe("rejected");
+			vi.mocked(f.runtime.observe).mockResolvedValue(health);
+			vi.mocked(f.runtime.closeRoute).mockClear();
+			vi.mocked(f.runtime.closeRoute).mockRejectedValueOnce(
+				new Error("unavailable"),
+			);
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "rejected",
+				revision: 2,
+				attempts: 1,
+			});
+			let release: () => void = () => {};
+			vi.mocked(f.runtime.closeRoute).mockImplementationOnce(
+				() =>
+					new Promise<void>((resolve) => {
+						release = resolve;
+					}),
+			);
+			const repair = f.tick();
+			await vi.waitFor(() =>
+				expect(f.runtime.closeRoute).toHaveBeenCalledTimes(2),
+			);
+			expect(f.state).toMatchObject({ phase: "rejected", revision: 2 });
+			release();
+			await repair;
+			expect(f.state).toMatchObject({ phase: "closing", revision: 3 });
+		},
+	);
+	it("keeps retrying rejected route closure in cleanup after the attempt budget expires", async () => {
+		const f = fixture();
+		await f.tick(7);
+		f.upgrade("image-b");
+		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
+			new WorkloadPreflightRejectedErrorV1(),
+		);
+		await f.tick(2);
+		vi.mocked(f.runtime.observe).mockResolvedValue("drifted");
+		vi.mocked(f.runtime.closeRoute)
+			.mockClear()
+			.mockRejectedValue(new Error("unavailable"));
+		vi.mocked(f.runtime.promote).mockClear();
+		vi.mocked(f.runtime.apply).mockClear();
+		await f.tick(3);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+		});
+		expect(f.runtime.closeRoute).toHaveBeenCalledTimes(3);
+		await f.tick(4);
+		expect(f.state).toMatchObject({ phase: "cleaning", attempts: 3 });
+		expect(f.runtime.closeRoute).toHaveBeenCalledTimes(7);
+		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+		expect(f.runtime.discardUnactivatedSecrets).not.toHaveBeenCalled();
+		expect(f.runtime.promote).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+	});
 	it("rejects invalid C without mutating verified B and restarts B after rejection", async () => {
 		const f = fixture();
 		await f.tick(7);

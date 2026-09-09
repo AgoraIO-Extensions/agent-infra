@@ -501,6 +501,59 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.metadata?.annotations?.["agent-infra.agora.io/fence"],
 		).toBe("11");
 	});
+	it.each([
+		"PersistentVolumeClaim",
+		"Service",
+		"ProbeService",
+		"ServiceAccount",
+		"NetworkPolicy",
+		"StatefulSet",
+	] as const)(
+		"preflights an isolated existing %s before any apply writes",
+		async (resourceKind) => {
+			for (const blocker of [
+				"fence",
+				"revision",
+				"terminating",
+				"foreign",
+			] as const) {
+				const f = fixture();
+				const desired = workloadDesiredFixture();
+				const adapter = f.adapter();
+				await adapter.apply(desired);
+				const kind = resourceKind === "ProbeService" ? "Service" : resourceKind;
+				const name =
+					resourceKind === "PersistentVolumeClaim"
+						? desired.persistentVolume.name
+						: resourceKind === "ProbeService"
+							? `${desired.service.name}-probe`
+							: desired.service.name;
+				const resource = await f.client.read(kind, name);
+				if (!resource?.metadata?.annotations || !resource.metadata.labels)
+					throw new Error();
+				if (blocker === "fence")
+					resource.metadata.annotations["agent-infra.agora.io/fence"] = String(
+						desired.fence + 1,
+					);
+				if (blocker === "revision")
+					resource.metadata.labels["agent-infra.agora.io/revision"] = String(
+						desired.workloadRevision + 1,
+					);
+				if (blocker === "terminating")
+					resource.metadata.deletionTimestamp = new Date();
+				if (blocker === "foreign")
+					resource.metadata.annotations["agent-infra.agora.io/agent-id"] =
+						"other-agent";
+				f.resources.clear();
+				f.resources.set(`${kind}/${name}`, resource);
+				const writes = f.writes.length;
+				await expect(adapter.apply(desired)).rejects.toMatchObject({
+					code: blocker === "foreign" ? "policy" : "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+			}
+		},
+	);
 	it("fences an already-stopped workload before reporting newer convergence", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

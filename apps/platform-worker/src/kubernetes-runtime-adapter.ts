@@ -1593,6 +1593,26 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const value = desired(input);
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
+			// Reject stale work before any partial creation or scale-down. Per-write
+			// ownership and resourceVersion checks still protect subsequent races.
+			const existingPvc = await client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				value.persistentVolume.name,
+			);
+			const existingResources = await Promise.all([
+				client.read("Service", name),
+				client.read("Service", `${name}-probe`),
+				client.read("ServiceAccount", name),
+				client.read("NetworkPolicy", name),
+			]);
+			for (const resource of [current, existingPvc, ...existingResources]) {
+				if (!resource) continue;
+				own(resource, value.agentId, value.workloadRevision, value.fence);
+				if (resource.metadata?.deletionTimestamp)
+					throw new WorkloadKubernetesError("conflict");
+			}
+			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
+				throw new WorkloadKubernetesError("conflict");
 			if (!current && value.replicas === 0) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",
