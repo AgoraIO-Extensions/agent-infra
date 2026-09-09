@@ -38,6 +38,10 @@ const secretIdAnnotation = "agent-infra.agora.io/secret-id";
 const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
 const secretConfigRevisionAnnotation = "agent-infra.agora.io/config-revision";
 
+function secretFenceAnnotation(secretName: string) {
+	return `agent-infra.agora.io/secret-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
+}
+
 type RouteSelectorMode = "closed" | "open";
 
 function containsDesired(actual: unknown, expected: unknown): boolean {
@@ -102,6 +106,7 @@ function matchesNetworkPolicySpec(
 ) {
 	return (
 		containsDesired(actual, expected) &&
+		isDeepStrictEqual(actual?.podSelector, expected?.podSelector) &&
 		![actual?.ingress, actual?.egress].some((rules) =>
 			rules?.some((rule) =>
 				rule.ports?.some(
@@ -119,14 +124,40 @@ function matchesServiceSpec(
 	actual: V1Service["spec"] | undefined,
 	expected: V1Service["spec"] | undefined,
 ) {
+	if (!actual || !expected) return actual === expected;
+	const allowedSpecFields = new Set([
+		"clusterIP",
+		"clusterIPs",
+		"internalTrafficPolicy",
+		"ipFamilies",
+		"ipFamilyPolicy",
+		"ports",
+		"selector",
+		"sessionAffinity",
+		"type",
+	]);
+	const allowedPortFields = new Set(["name", "port", "protocol", "targetPort"]);
+	const actualPort = actual.ports?.[0];
+	const expectedPort = expected.ports?.[0];
 	return (
-		containsDesired(actual, expected) &&
-		!actual?.externalIPs?.length &&
-		actual?.externalName === undefined &&
-		actual?.loadBalancerIP === undefined &&
-		actual?.loadBalancerClass === undefined &&
-		actual?.externalTrafficPolicy === undefined &&
-		actual?.healthCheckNodePort === undefined
+		Object.keys(actual).every((key) => allowedSpecFields.has(key)) &&
+		actual.type === expected.type &&
+		isDeepStrictEqual(actual.selector, expected.selector) &&
+		actual.ports?.length === 1 &&
+		expected.ports?.length === 1 &&
+		actualPort !== undefined &&
+		expectedPort !== undefined &&
+		Object.keys(actualPort).every((key) => allowedPortFields.has(key)) &&
+		actualPort.name === expectedPort.name &&
+		actualPort.port === expectedPort.port &&
+		actualPort.targetPort === expectedPort.targetPort &&
+		(actualPort.protocol === undefined || actualPort.protocol === "TCP") &&
+		(actual.sessionAffinity === undefined ||
+			actual.sessionAffinity === "None") &&
+		(actual.internalTrafficPolicy === undefined ||
+			actual.internalTrafficPolicy === "Cluster") &&
+		actual.clusterIP !== "None" &&
+		!actual.clusterIPs?.includes("None")
 	);
 }
 
@@ -329,6 +360,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			],
 		};
 	}
+	function persistentVolumeClaimSpec(): NonNullable<
+		V1PersistentVolumeClaim["spec"]
+	> {
+		return {
+			accessModes: ["ReadWriteOnce"],
+			...(policy.storageClassName
+				? { storageClassName: policy.storageClassName }
+				: {}),
+			resources: { requests: { storage: policy.storageSize } },
+		};
+	}
 	function ingress(value: AgentWorkloadDesiredV1): V1Ingress {
 		const name = workloadResourceNameV1(value.agentId);
 		const host = `${name}.${policy.routeHostSuffix}`;
@@ -452,6 +494,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			return current;
 		const currentServiceSpec =
 			kind === "Service" ? (current as V1Service).spec : undefined;
+		const secretFenceAnnotations =
+			kind === "StatefulSet"
+				? Object.fromEntries(
+						value.secretRefs.flatMap((ref) => {
+							const key = secretFenceAnnotation(ref.name);
+							const fence = current.metadata?.annotations?.[key];
+							return fence === undefined ? [] : [[key, fence]];
+						}),
+					)
+				: {};
 		const next = {
 			...current,
 			...object,
@@ -465,6 +517,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					: {
 							...current.metadata,
 							...object.metadata,
+							annotations: {
+								...object.metadata?.annotations,
+								...secretFenceAnnotations,
+							},
 							resourceVersion: current.metadata?.resourceVersion,
 							uid: current.metadata?.uid,
 						},
@@ -804,7 +860,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				fence < 1
 			)
 				throw new WorkloadKubernetesError("conflict");
-			const key = `agent-infra.agora.io/secret-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
+			const key = secretFenceAnnotation(secretName);
 			if (current.metadata.annotations?.[key] === String(fence)) return;
 			await client.replace({
 				...current,
@@ -825,7 +881,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		) {
 			const value = desired(input);
 			const current = await statefulSet(value);
-			const key = `agent-infra.agora.io/secret-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
+			const key = secretFenceAnnotation(secretName);
 			return (
 				current?.metadata?.annotations?.[key] === String(fence) &&
 				(await observe(value, identity)) === "healthy"
@@ -860,11 +916,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				"StatefulSet",
 				workloadResourceNameV1(value.agentId),
 			);
-			const key = `agent-infra.agora.io/secret-${createHash("sha256").update(ref.name).digest("hex").slice(0, 32)}`;
+			const key = secretFenceAnnotation(ref.name);
 			if (
 				!current ||
 				current.metadata?.uid !== activationFence.workloadUid ||
-				current.metadata.generation !== activationFence.workloadGeneration ||
+				!Number.isSafeInteger(current.metadata.generation) ||
+				(current.metadata.generation ?? 0) <
+					activationFence.workloadGeneration ||
 				current.metadata?.annotations?.[key] !== String(activationFence.fence)
 			)
 				return false;
@@ -1006,7 +1064,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			);
 			if (pvc) {
 				own(pvc, value.agentId, value.workloadRevision);
-				if (pvc.metadata?.deletionTimestamp)
+				if (
+					pvc.metadata?.deletionTimestamp ||
+					!containsDesired(pvc.spec, persistentVolumeClaimSpec())
+				)
 					throw new WorkloadKubernetesError("conflict");
 				const desiredMetadata = metadata(value, value.persistentVolume.name);
 				if (
@@ -1036,13 +1097,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						apiVersion: "v1",
 						kind: "PersistentVolumeClaim",
 						metadata: metadata(value, value.persistentVolume.name),
-						spec: {
-							accessModes: ["ReadWriteOnce"],
-							...(policy.storageClassName
-								? { storageClassName: policy.storageClassName }
-								: {}),
-							resources: { requests: { storage: policy.storageSize } },
-						},
+						spec: persistentVolumeClaimSpec(),
 					},
 					value,
 				);
@@ -1346,9 +1401,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					"Service",
 					value.service.name,
 				);
+				const routeIngress = await client.read<V1Ingress>(
+					"Ingress",
+					value.route.name,
+				);
+				const expectedSelector = routeSelector(
+					workloadResourceNameV1(value.agentId),
+					value.workloadRevision,
+					"open",
+				);
 				if (
-					service?.spec?.selector?.[revisionLabel] !==
-					String(target.workloadRevision)
+					!matchesServiceSpec(
+						service?.spec,
+						serviceSpec(value, expectedSelector),
+					) ||
+					(value.route.exposure === "internal-only"
+						? routeIngress !== null
+						: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
 				)
 					throw new WorkloadKubernetesError("conflict");
 				return validateWorkloadRouteSwitchResultV1(request, {

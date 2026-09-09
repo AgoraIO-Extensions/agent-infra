@@ -74,17 +74,21 @@ function pendingSecretRecord(
 	overrides: {
 		readonly ownerId?: string;
 		readonly configRevision?: number;
+		readonly name?: string;
+		readonly secretId?: string;
 	} = {},
 ): PlatformSecretRecordV1 {
 	const ownerId = overrides.ownerId ?? "owner-a";
 	const configRevision = overrides.configRevision ?? 1;
+	const name = overrides.name ?? "BOT_TOKEN";
+	const secretId = overrides.secretId ?? "secret-a";
 	return validatePlatformSecretRecordV1({
 		schemaVersion: 1,
-		secretId: "secret-a",
+		secretId,
 		ownerType: "agent-owner",
 		ownerId,
 		agentId: "agent-a",
-		name: "BOT_TOKEN",
+		name,
 		secretVersion: 1,
 		configRevision,
 		lifecycleState: "pending",
@@ -96,11 +100,11 @@ function pendingSecretRecord(
 			aadBinding: {
 				schemaVersion: 1,
 				aadVersion: "platform-secret-aad:v1",
-				secretId: "secret-a",
+				secretId,
 				ownerType: "agent-owner",
 				ownerId,
 				agentId: "agent-a",
-				name: "BOT_TOKEN",
+				name,
 				secretVersion: 1,
 				configRevision,
 				algorithmVersion: "aes-256-gcm:v1",
@@ -402,6 +406,59 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("materializes model credentials under stable environment keys", async () => {
+		const optionId = "model:primary/with punctuation";
+		const name = `model:${optionId}`;
+		const record = pendingSecretRecord({ name, secretId: "model-secret-a" });
+		const configuration = configurationFixture({
+			modelConfiguration: {
+				catalogRevision: "catalog-a",
+				options: [
+					{
+						optionId,
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["medium"],
+						credential: {
+							secretId: record.secretId,
+							version: record.secretVersion,
+							isSet: true,
+						},
+					},
+				],
+				defaultOptionId: optionId,
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const cleanup = secretCleanupStore(record);
+		const f = fixture(
+			{
+				decryptor: {
+					decrypt: async () => ({
+						outcome: "decrypted" as const,
+						plaintext: new Uint8Array([1, 2, 3]),
+					}),
+				},
+			},
+			{
+				configuration,
+				secrets: {
+					bindings: [{ materialization: "current", record }],
+					store: cleanup.store,
+					async auditDecryption() {},
+				},
+			},
+		);
+
+		await f.tick(4);
+		const secret = [...f.resources.values()].find(
+			(object): object is V1Secret => object.kind === "Secret",
+		);
+		const keys = Object.keys(secret?.data ?? {});
+		expect(keys).toHaveLength(1);
+		expect(keys[0]).toMatch(/^MODEL_CREDENTIAL_[A-F0-9]{64}$/);
+	});
+
 	it("retains the exact pending Secret when rejected preflight has no Kubernetes material", async () => {
 		const record = pendingSecretRecord();
 		const cleanup = secretCleanupStore(record);

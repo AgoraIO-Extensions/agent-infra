@@ -308,6 +308,40 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBe(port);
 		}
 	});
+	it("repairs a NetworkPolicy selector that no longer covers the workload", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const network = await f.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		if (!network) throw new Error();
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, {
+			...network,
+			spec: {
+				...network.spec,
+				podSelector: {
+					...network.spec?.podSelector,
+					matchExpressions: [{ key: "isolation-disabled", operator: "Exists" }],
+				},
+			},
+		} as V1NetworkPolicy);
+
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		await adapter.apply(desired);
+		expect(
+			(
+				await f.client.read<V1NetworkPolicy>(
+					"NetworkPolicy",
+					desired.service.name,
+				)
+			)?.spec?.podSelector?.matchExpressions,
+		).toBeUndefined();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
 	it("reuses StatefulSet and PVC across stop, restart, upgrade and rollback; refuses stale work", async () => {
 		const f = fixture();
 		const a = workloadDesiredFixture();
@@ -407,6 +441,56 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(afterDeferredDelete?.metadata?.uid).toBe(pvc.metadata?.uid);
 		expect(afterDeferredDelete?.spec).toStrictEqual(pvc.spec);
 	});
+	it.each([
+		["access mode", undefined, { accessModes: ["ReadWriteMany"] }],
+		[
+			"storage class",
+			"approved-storage",
+			{ storageClassName: "untrusted-storage" },
+		],
+		[
+			"requested capacity",
+			undefined,
+			{ resources: { requests: { storage: "1Ti" } } },
+		],
+	] as const)(
+		"rejects reused PVC %s drift",
+		async (_label, storageClassName, drift) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy: { ...workloadTestPolicy, storageClassName },
+				probe: f.probe,
+			});
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const pvc = await f.client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				desired.persistentVolume.name,
+			);
+			if (!pvc) throw new Error();
+			f.resources.set(
+				`PersistentVolumeClaim/${desired.persistentVolume.name}`,
+				{
+					...pvc,
+					spec: { ...pvc.spec, ...drift },
+				} as V1PersistentVolumeClaim,
+			);
+
+			await expect(adapter.apply(desired)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(
+				(
+					await f.client.read<V1PersistentVolumeClaim>(
+						"PersistentVolumeClaim",
+						desired.persistentVolume.name,
+					)
+				)?.spec,
+			).toMatchObject(drift);
+		},
+	);
 	it("does not attach a reused PVC while its previous delete is still in progress", async () => {
 		const f = fixture();
 		const a = workloadDesiredFixture();
@@ -531,6 +615,31 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(
 			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
 				?.externalIPs,
+		).toBeUndefined();
+		expect(await adapter.observe(desired, repaired)).toBe("healthy");
+	});
+	it("repairs a Service that publishes unready endpoints", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const service = await f.client.read<V1Service>(
+			"Service",
+			desired.service.name,
+		);
+		if (!service) throw new Error();
+		f.resources.set(`Service/${desired.service.name}`, {
+			...service,
+			spec: { ...service.spec, publishNotReadyAddresses: true },
+		} as V1Service);
+
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		const repaired = await adapter.apply(desired);
+		if (!repaired || repaired === "pending") throw new Error();
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.publishNotReadyAddresses,
 		).toBeUndefined();
 		expect(await adapter.observe(desired, repaired)).toBe("healthy");
 	});
@@ -1313,6 +1422,93 @@ describe("GA Kubernetes Workload adapter", () => {
 		);
 		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 	});
+	it.each(["service selector", "ingress"] as const)(
+		"closes a route when post-promotion %s verification detects drift",
+		async (mutation) => {
+			const f = fixture();
+			const desired = { ...workloadDesiredFixture(), fence: 9 };
+			let mutateOnce = true;
+			const client: WorkerKubernetesClientV1 = {
+				...f.client,
+				async read<T extends KubernetesObject>(
+					kind: WorkloadResourceKind,
+					name: string,
+				) {
+					const current = await f.client.read<T>(kind, name);
+					if (!mutateOnce || !current) return current;
+					if (
+						mutation === "service selector" &&
+						kind === "Service" &&
+						name === desired.service.name &&
+						(current as V1Service).spec?.selector?.[
+							"agent-infra.agora.io/revision"
+						] === String(desired.workloadRevision)
+					) {
+						mutateOnce = false;
+						const drifted = {
+							...(current as V1Service),
+							spec: {
+								...(current as V1Service).spec,
+								selector: {
+									"agent-infra.agora.io/revision": String(
+										desired.workloadRevision,
+									),
+								},
+							},
+						} as V1Service;
+						f.resources.set(`Service/${name}`, drifted);
+						return drifted as T;
+					}
+					if (
+						mutation === "ingress" &&
+						kind === "Ingress" &&
+						name === desired.route.name
+					) {
+						mutateOnce = false;
+						const drifted = {
+							...(current as V1Ingress),
+							spec: { ...(current as V1Ingress).spec, rules: [] },
+						} as V1Ingress;
+						f.resources.set(`Ingress/${name}`, drifted);
+						return drifted as T;
+					}
+					return current;
+				},
+			};
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client,
+				policy: workloadTestPolicy,
+				probe: f.probe,
+			});
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+
+			const result = await adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: true,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			});
+			expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector,
+			).toEqual({
+				"agent-infra.agora.io/agent": desired.service.name,
+				"agent-infra.agora.io/revision": "closed",
+			});
+			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+		},
+	);
 	it("does not overwrite a newer route while closing a failed stale target", async () => {
 		const f = fixture();
 		const desired = { ...workloadDesiredFixture(), fence: 9 };
@@ -1545,6 +1741,70 @@ describe("GA Kubernetes Workload adapter", () => {
 			await adapter.removeImmutableSecret(desired, ref, activationFence),
 		).toBe(true);
 		expect(await f.client.read<V1Secret>("Secret", ref.name)).toBeNull();
+	});
+	it("preserves an active Secret fence across a StatefulSet rollout", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.bindSecretFence(desired, identity, ref.name, 7);
+		const activationFence = {
+			schemaVersion: 1 as const,
+			agentId: ref.agentId,
+			secretId: ref.secretId,
+			secretVersion: ref.secretVersion,
+			configRevision: ref.configRevision,
+			kubernetesSecretName: ref.name,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 7,
+		};
+		const upgraded = workloadDesiredFixture(2);
+		upgraded.secretRefs = [ref];
+		upgraded.expectedWorkload = {
+			state: "present",
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+		};
+		let upgradedIdentity = await adapter.apply(upgraded);
+		for (
+			let attempt = 0;
+			upgradedIdentity === "pending" && attempt < 3;
+			attempt++
+		)
+			upgradedIdentity = await adapter.apply(upgraded);
+		expect(upgradedIdentity).toMatchObject({
+			uid: identity.uid,
+			generation: expect.any(Number),
+		});
+		expect(
+			await adapter.observeActiveImmutableSecret(
+				upgraded,
+				ref,
+				activationFence,
+			),
+		).toBe(true);
 	});
 	it("detects missing, foreign, or mutable Secret references before reporting healthy", async () => {
 		const f = fixture();

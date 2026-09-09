@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -158,6 +159,14 @@ type ResolvedWorkloadSecretBindingV1 = {
 	readonly materialization: WorkloadSecretBindingV1["materialization"];
 	readonly record: PlatformSecretRecordV1;
 };
+
+function secretDataKey(name: string): string {
+	if (!name.startsWith("model:")) return name;
+	return `MODEL_CREDENTIAL_${createHash("sha256")
+		.update(name)
+		.digest("hex")
+		.toUpperCase()}`;
+}
 
 function bindingsFor(
 	state: WorkloadReconciliationStateV1,
@@ -544,7 +553,7 @@ export function createWorkloadRuntimeV1(
 					await adapter.applyImmutableSecret(
 						workload,
 						reference.name,
-						record.name,
+						secretDataKey(record.name),
 						decryption.plaintext,
 					);
 				} finally {
@@ -592,7 +601,7 @@ export function createWorkloadRuntimeV1(
 						await adapter.applyImmutableSecret(
 							workload,
 							candidate.kubernetesSecretRef.name,
-							candidate.secretKey,
+							secretDataKey(candidate.secretKey),
 							candidate.plaintext,
 						);
 						await adapter.bindSecretFence(
