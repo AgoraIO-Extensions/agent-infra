@@ -693,6 +693,205 @@ describe("Codex model transport", () => {
 		expect(text).not.toContain("synthetic-");
 		expect(text).not.toContain("response.completed");
 	});
+	it.each([
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				role: "assistant",
+				content: [
+					{ type: "output_text", text: credential.slice(0, 12) },
+					{ type: "output_text", text: credential.slice(12) },
+				],
+			},
+		},
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "reasoning",
+				summary: [{ type: "summary_text", text: credential.slice(0, 12) }],
+				content: [{ type: "reasoning_text", text: credential.slice(12) }],
+			},
+		},
+		{
+			type: "response.completed",
+			response: {
+				id: "response-a",
+				status: "completed",
+				output: [
+					{
+						type: "message",
+						role: "assistant",
+						content: [{ type: "output_text", text: credential.slice(0, 12) }],
+					},
+					{
+						type: "message",
+						role: "assistant",
+						content: [{ type: "output_text", text: credential.slice(12) }],
+					},
+				],
+			},
+		},
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "tool_search_call",
+				execution: "client",
+				arguments: {
+					first: credential.slice(0, 12),
+					nested: { second: credential.slice(12) },
+				},
+			},
+		},
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "function_call",
+				name: "synthetic",
+				call_id: "call-a",
+				arguments: JSON.stringify({
+					first: credential.slice(0, 12),
+					nested: [credential.slice(12)],
+				}),
+			},
+		},
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "custom_tool_call",
+				name: "synthetic",
+				call_id: "call-a",
+				input: JSON.stringify([credential.slice(0, 12), credential.slice(12)]),
+			},
+		},
+	])(
+		"rejects semantic credential fragments within one event %j",
+		async (unsafe) => {
+			const target = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(
+						event(unsafe) +
+							(unsafe.type === "response.completed" ? "" : completedEvent()),
+					);
+				}),
+			);
+			const value = await transport(target);
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(502);
+			expect(await response.text()).toBe(
+				'{"error":{"message":"Model request failed"}}',
+			);
+		},
+	);
+	it("does not let an extra item mask completed output credential fragments", async () => {
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.completed",
+						item: {
+							type: "message",
+							role: "assistant",
+							content: [{ type: "output_text", text: "benign" }],
+						},
+						response: {
+							id: "response-a",
+							status: "completed",
+							output: [
+								{
+									type: "message",
+									role: "assistant",
+									content: [
+										{ type: "output_text", text: credential.slice(0, 12) },
+										{ type: "output_text", text: credential.slice(12) },
+									],
+								},
+							],
+						},
+					}),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+	it("does not concatenate protocol identifiers into semantic content", async () => {
+		const valid = {
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				id: credential.slice(0, 12),
+				role: "assistant",
+				content: [{ type: "output_text", text: credential.slice(12) }],
+			},
+		};
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(event(valid) + completedEvent());
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(event(valid) + completedEvent());
+	});
+	it("preserves adjacent benign text parts without subsequence matching", async () => {
+		const valid = {
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				role: "assistant",
+				content: [
+					{ type: "output_text", text: credential.slice(0, 12) },
+					{ type: "output_text", text: "!" },
+					{ type: "output_text", text: credential.slice(12) },
+				],
+			},
+		};
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(event(valid) + completedEvent());
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(event(valid) + completedEvent());
+	});
+	it("bounds decoded tool argument nesting before native delivery", async () => {
+		let nested: unknown = "ordinary";
+		for (let i = 0; i < 34; i += 1) nested = { value: nested };
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.output_item.done",
+						item: {
+							type: "function_call",
+							name: "synthetic",
+							call_id: "call-a",
+							arguments: JSON.stringify(nested),
+						},
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
 	it("drops SSE comments without changing the validated event stream", async () => {
 		const target = await listen(
 			createServer((_incoming, response) => {

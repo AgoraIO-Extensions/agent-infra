@@ -484,6 +484,116 @@ const ignoredPinnedCodexEvents = new Set([
 	"response.reasoning_summary_part.done",
 ]);
 
+function hasUnsafeSemanticPayload(
+	event: Record<string, unknown>,
+	credentials: readonly string[],
+) {
+	let visited = 0;
+	let bytes = 0;
+	const channels = new Map<string, string[]>();
+	const collect = (channel: string, root: unknown): boolean => {
+		const pending = [{ value: root, depth: 0 }];
+		const strings = channels.get(channel) ?? [];
+		channels.set(channel, strings);
+		while (pending.length > 0) {
+			const entry = pending.pop();
+			if (!entry) break;
+			if (++visited > 16384 || entry.depth > 32) return false;
+			const value = entry.value;
+			if (typeof value === "string") {
+				bytes += Buffer.byteLength(value);
+				if (bytes > maximumEventBytes || containsCredential(value, credentials))
+					return false;
+				strings.push(value);
+			} else if (Array.isArray(value)) {
+				for (let index = value.length - 1; index >= 0; index -= 1)
+					pending.push({ value: value[index], depth: entry.depth + 1 });
+			} else if (isPlainRecord(value)) {
+				const entries = Object.entries(value);
+				for (let index = entries.length - 1; index >= 0; index -= 1) {
+					const pair = entries[index];
+					if (!pair || containsCredential(pair[0], credentials)) return false;
+					pending.push({ value: pair[1], depth: entry.depth + 1 });
+				}
+			}
+		}
+		return true;
+	};
+	const argumentsPayload = (value: unknown) => {
+		if (typeof value !== "string") return collect("tool-arguments", value);
+		let decoded: unknown;
+		try {
+			decoded = JSON.parse(value);
+		} catch {
+			return collect("tool-arguments", value);
+		}
+		return collect("tool-arguments", decoded);
+	};
+	const textItems = (value: unknown) =>
+		Array.isArray(value)
+			? value.map((entry) => (isPlainRecord(entry) ? entry.text : undefined))
+			: [];
+	const items =
+		event.type === "response.completed"
+			? isPlainRecord(event.response) && Array.isArray(event.response.output)
+				? event.response.output
+				: []
+			: (event.type === "response.output_item.added" ||
+						event.type === "response.output_item.done") &&
+					isPlainRecord(event.item)
+				? [event.item]
+				: [];
+	for (const candidate of items) {
+		if (!isPlainRecord(candidate)) continue;
+		switch (candidate.type) {
+			case "message":
+				if (!collect("message", textItems(candidate.content))) return true;
+				break;
+			case "reasoning":
+				if (
+					!collect("reasoning", [
+						textItems(candidate.summary),
+						textItems(candidate.content),
+					])
+				)
+					return true;
+				break;
+			case "function_call":
+				if (
+					!argumentsPayload(candidate.arguments) ||
+					!collect("encrypted-arguments", candidate.encrypted_function_args)
+				)
+					return true;
+				break;
+			case "custom_tool_call":
+				if (!argumentsPayload(candidate.input)) return true;
+				break;
+			case "tool_search_call":
+				if (!argumentsPayload(candidate.arguments)) return true;
+				break;
+			case "web_search_call":
+				if (
+					isPlainRecord(candidate.action) &&
+					!collect("search", [
+						candidate.action.query,
+						candidate.action.url,
+						candidate.action.pattern,
+						candidate.action.queries,
+					])
+				)
+					return true;
+				break;
+			case "image_generation_call":
+				if (!collect("image", [candidate.result, candidate.revised_prompt]))
+					return true;
+				break;
+		}
+	}
+	return [...channels.values()].some((strings) =>
+		containsCredential(strings.join(""), credentials),
+	);
+}
+
 function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentials: readonly string[],
@@ -504,7 +614,8 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		containsUnsafeModelData(value, credentials)
+		containsUnsafeModelData(value, credentials) ||
+		hasUnsafeSemanticPayload(value, credentials)
 	) {
 		return { state: "invalid" as const };
 	}
