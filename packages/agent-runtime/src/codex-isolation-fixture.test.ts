@@ -112,6 +112,14 @@ it("detects foreign markers in every model and platform result channel", () => {
 });
 
 it("requires complete active-thread evidence for an isolation pass", () => {
+	for (const activeThreadLeak of [false, true]) {
+		expect(
+			isolationActiveThreadEvidenceStatus({
+				activeThreadLeak,
+				pointEvidence: [],
+			}),
+		).toBe(activeThreadLeak ? "fail" : "unverified");
+	}
 	expect(
 		isolationActiveThreadEvidenceStatus({
 			activeThreadLeak: true,
@@ -130,6 +138,24 @@ it("requires complete active-thread evidence for an isolation pass", () => {
 			pointEvidence: [true, false],
 		}),
 	).toBe("unverified");
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: false,
+			pointEvidence: [true],
+		}),
+	).toBe("unverified");
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: false,
+			pointEvidence: [true, true, true],
+		}),
+	).toBe("unverified");
+	expect(
+		isolationActiveThreadEvidenceStatus({
+			activeThreadLeak: true,
+			pointEvidence: [true, true, true],
+		}),
+	).toBe("fail");
 });
 
 it("returns the native tool output only after the matching tool call completes", async () => {

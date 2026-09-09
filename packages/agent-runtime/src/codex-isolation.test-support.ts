@@ -77,6 +77,8 @@ export function isolationResultSeesMarker(input: {
 
 export type IsolationEvidenceStatus = "pass" | "fail" | "unverified";
 
+export const ACTIVE_THREAD_LIFECYCLE_OBSERVATION_POINT_COUNT = 2;
+
 export function isolationScenarioStatus(input: {
 	foreignMarkerObserved: boolean;
 	positiveControl: boolean;
@@ -107,6 +109,11 @@ export function isolationActiveThreadEvidenceStatus(input: {
 	pointEvidence: readonly boolean[];
 }): IsolationEvidenceStatus {
 	if (input.activeThreadLeak) return "fail";
+	if (
+		input.pointEvidence.length !==
+		ACTIVE_THREAD_LIFECYCLE_OBSERVATION_POINT_COUNT
+	)
+		return "unverified";
 	return input.pointEvidence.every(Boolean) ? "pass" : "unverified";
 }
 

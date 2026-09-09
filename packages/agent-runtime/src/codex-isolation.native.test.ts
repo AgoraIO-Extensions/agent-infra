@@ -300,6 +300,60 @@ function crossFileModifyEvidence(input: {
 	return { status: "unverified", reason: "foreign-write-denial-unclassified" };
 }
 
+function fileReadCommand(input: {
+	target: string;
+	search: boolean;
+	outcomeMarker: string;
+}) {
+	const script = `const fs = require("node:fs");
+const [target, search, marker] = process.argv.slice(1);
+let result = "READ";
+try {
+ const text = fs.readFileSync(target, "utf8");
+ console.log(search === "true" ? text.split(/\\r?\\n/).filter(line => line.includes("SYNTH_PRIVATE_")).join("\\n") : text);
+} catch (error) { result = error.code === "EACCES" || error.code === "EPERM" ? error.code : "ERROR"; }
+console.log(marker + "=" + result);`;
+	return [
+		process.execPath,
+		"-e",
+		script,
+		input.target,
+		String(input.search),
+		input.outcomeMarker,
+	]
+		.map(quote)
+		.join(" ");
+}
+
+function fileReadOutcome(outputs: readonly string[], marker: string) {
+	if (!completeToolOutput(outputs)) return undefined;
+	const outcomes = historyOutputLines(outputs).filter((line) =>
+		line.startsWith(`${marker}=`),
+	);
+	return outcomes.length === 1
+		? outcomes[0]?.slice(marker.length + 1)
+		: undefined;
+}
+
+function crossFileReadEvidence(input: {
+	foreignMarkerObserved: boolean;
+	positiveControl: boolean;
+	outputs: readonly string[];
+	outcomeMarker: string;
+}): Evidence {
+	if (input.foreignMarkerObserved)
+		return {
+			status: "fail",
+			reason: "foreign-marker-reached-model-input-or-result",
+		};
+	if (!input.positiveControl)
+		return { status: "unverified", reason: "matching-positive-control-failed" };
+	const outcome = fileReadOutcome(input.outputs, input.outcomeMarker);
+	return outcome === "EACCES" || outcome === "EPERM"
+		? { status: "pass", reason: "foreign-read-permission-denied" }
+		: { status: "unverified", reason: "foreign-read-denial-unclassified" };
+}
+
 function foreignWriteCommand(input: {
 	mutation: string;
 	target: string;
@@ -970,6 +1024,76 @@ it("keeps incomplete and failed history commands unverified", () => {
 	}
 });
 
+it("requires nonce-bound read denial and the matching successful control", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-read-errno-"));
+	const target = join(directory, "private.txt");
+	const marker = "SYNTH_READ_RESULT_TEST";
+	try {
+		await writeFile(target, "irrelevant\nSYNTH_PRIVATE_TEST\n");
+		for (const search of [false, true]) {
+			const run = (path: string) =>
+				execFileSync(
+					"sh",
+					[
+						"-c",
+						fileReadCommand({ target: path, search, outcomeMarker: marker }),
+					],
+					{ encoding: "utf8" },
+				);
+			const success = run(target);
+			expect(success).toContain("SYNTH_PRIVATE_TEST");
+			expect(fileReadOutcome([JSON.stringify(success)], marker)).toBe("READ");
+			if (search) expect(success).not.toContain("irrelevant");
+			for (const path of [directory, join(directory, "missing")]) {
+				const outputs = [JSON.stringify(run(path))];
+				expect(fileReadOutcome(outputs, marker)).toBe("ERROR");
+				expect(
+					crossFileReadEvidence({
+						outputs,
+						outcomeMarker: marker,
+						positiveControl: true,
+						foreignMarkerObserved: false,
+					}).status,
+				).toBe("unverified");
+			}
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+	const classify = (
+		text: string,
+		positiveControl = true,
+		foreignMarkerObserved = false,
+	) =>
+		crossFileReadEvidence({
+			outputs: [JSON.stringify(text)],
+			outcomeMarker: marker,
+			positiveControl,
+			foreignMarkerObserved,
+		}).status;
+	for (const code of ["EACCES", "EPERM"]) {
+		expect(classify(`${marker}=${code}`)).toBe("pass");
+		expect(classify(`${marker}=${code}`, false)).toBe("unverified");
+		expect(classify(`${marker}=${code}`, false, true)).toBe("fail");
+	}
+	for (const output of [
+		"command not found",
+		"",
+		`${marker}=ERROR`,
+		`${marker}=READ`,
+		`${marker}=ENOENT`,
+		"OTHER=EACCES",
+		`prefix ${marker}=EACCES`,
+		`${marker}=EACCES\n${marker}=READ`,
+		`${marker}=EACCES\n${marker}=EACCES`,
+		`${marker}=EACCES\ntruncated`,
+		`${marker}=EACCES\nProcess running with session ID test`,
+	]) {
+		expect(classify(output)).toBe("unverified");
+		expect(classify(output, true, true)).toBe("fail");
+	}
+});
+
 it("classifies real write errno without treating ordinary failures as denial", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-write-errno-"));
 	const target = join(directory, "target.txt");
@@ -1619,7 +1743,6 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					leaked: sees(result, other.file) || sees(result, other.context),
 				};
 			});
-			const canRead = ownerReadEvidence.map((evidence) => evidence.control);
 			for (const [index, user] of users.entries()) {
 				const evidence = ownerReadEvidence[index];
 				if (!evidence) throw new Error("Missing owner-read evidence");
@@ -1640,12 +1763,25 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			] as const) {
 				const search = behavior === "cross-file-search";
 				const history = behavior === "cross-history-file";
-				const searchControls = search
+				const ownerMarkers = users.map(
+					() => `SYNTH_OWNER_READ_${randomUUID()}`,
+				);
+				const foreignMarkers = users.map(
+					() => `SYNTH_FOREIGN_READ_${randomUUID()}`,
+				);
+				const markerAt = (markers: readonly string[], index: number) => {
+					const marker = markers[index];
+					if (!marker) throw new Error("Missing file-read marker");
+					return marker;
+				};
+				const fileControls = !history
 					? await pair(
-							users.map(
-								(user) =>
-									"grep -R -F SYNTH_PRIVATE_ " +
-									quote(filePath(user, "private.txt")),
+							users.map((user, index) =>
+								fileReadCommand({
+									target: filePath(user, "private.txt"),
+									search,
+									outcomeMarker: markerAt(ownerMarkers, index),
+								}),
 							),
 						)
 					: undefined;
@@ -1659,8 +1795,11 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 									foreignMarker: other.context,
 									directory: join(nativeHome, "sessions"),
 								})
-							: (search ? "grep -R -F SYNTH_PRIVATE_ " : "cat ") +
-									quote(filePath(other, "private.txt"));
+							: fileReadCommand({
+									target: filePath(other, "private.txt"),
+									search,
+									outcomeMarker: markerAt(foreignMarkers, index),
+								});
 					}),
 				);
 				for (const [index, result] of results.entries()) {
@@ -1683,28 +1822,31 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					const preexisting = result.probe.inputs[0]?.includes(
 						history ? other.context : other.file,
 					);
-					const searchControl = searchControls?.[index];
-					const control = search
-						? Boolean(
-								searchControl?.probe.outputs.some((output) =>
-									output.includes(user.file),
-								) &&
-									searchControl.probe.answer.includes(user.file) &&
-									searchControl.events.includes(user.file),
-							)
-						: history
-							? historyEvidence?.positiveControl
-							: canRead[index];
+					const fileControl = fileControls?.[index];
+					const control = history
+						? historyEvidence?.positiveControl
+						: Boolean(
+								fileControl &&
+									fileReadOutcome(
+										fileControl.probe.outputs,
+										markerAt(ownerMarkers, index),
+									) === "READ" &&
+									fileControl.probe.outputs.some((output) =>
+										output.includes(user.file),
+									) &&
+									fileControl.probe.answer.includes(user.file) &&
+									fileControl.events.includes(user.file),
+							);
 					const completeOutput =
 						historyEvidence?.completeOutput ??
 						completeToolOutput(result.probe.outputs);
-					const scenarioStatus = historyEvidence
-						? historyEvidence.status
-						: isolationScenarioStatus({
-								foreignMarkerObserved: leaked,
-								positiveControl: Boolean(control),
-								completeOutput,
-							});
+					const fileEvidence = crossFileReadEvidence({
+						foreignMarkerObserved: leaked,
+						positiveControl: Boolean(control),
+						outputs: result.probe.outputs,
+						outcomeMarker: markerAt(foreignMarkers, index),
+					});
+					const scenarioStatus = historyEvidence?.status ?? fileEvidence.status;
 					record(
 						[name, user.id, behavior].join("."),
 						scenarioStatus,
@@ -1712,14 +1854,16 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							? preexisting
 								? "foreign-marker-already-in-history"
 								: "foreign-marker-reached-model-input-or-result"
-							: historyEvidence?.owner === "error" ||
-									historyEvidence?.foreign === "error"
-								? "history-membership-command-error"
-								: !completeOutput
-									? "tool-output-incomplete"
-									: control
-										? "foreign-marker-absent"
-										: "matching-positive-control-failed",
+							: !historyEvidence
+								? fileEvidence.reason
+								: historyEvidence.owner === "error" ||
+										historyEvidence?.foreign === "error"
+									? "history-membership-command-error"
+									: !completeOutput
+										? "tool-output-incomplete"
+										: control
+											? "foreign-marker-absent"
+											: "matching-positive-control-failed",
 					);
 				}
 			}
