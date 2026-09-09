@@ -167,9 +167,26 @@ export function createWorkloadReconciliationV1(dependencies: {
 					state.sourceLifecycleRevision !== management.workloadRevision ||
 					state.fence !== management.fence
 				) {
-					if (state?.phase === "cleaning" && !state.rollback) {
+					const supersedesUnverifiedCandidate =
+						state &&
+						state.candidate.deployment !== null &&
+						state.candidate.configuration.revision !==
+							state.verified?.configuration.revision &&
+						[
+							"closing",
+							"applying",
+							"observing",
+							"activating",
+							"promoting",
+						].includes(state.phase);
+					if (
+						state &&
+						!state.rollback &&
+						(state.phase === "cleaning" || supersedesUnverifiedCandidate)
+					) {
 						const interruptedState: WorkloadReconciliationStateV1 = {
 							...state,
+							phase: "cleaning",
 							sourceConfigurationRevision: configuration.revision,
 							sourceLifecycleRevision: management.workloadRevision,
 							fence: management.fence,

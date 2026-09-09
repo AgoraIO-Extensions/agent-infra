@@ -1029,6 +1029,49 @@ describe("GA Kubernetes Workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 		expect(await f.client.read("StatefulSet", desired.service.name)).toBeNull();
 	});
+	it.each(["ProbeService", "Service", "Ingress"] as const)(
+		"preflights %s before any route closure mutation",
+		async (resourceKind) => {
+			for (const blocker of ["fence", "revision", "foreign"] as const) {
+				const f = fixture();
+				const desired = workloadDesiredFixture();
+				const adapter = f.adapter();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				await adapter.promote(desired, identity);
+				const probeName = `${desired.service.name}-probe`;
+				const probe = await f.client.read<V1Service>("Service", probeName);
+				if (!probe?.spec) throw new Error();
+				f.resources.set(`Service/${probeName}`, {
+					...probe,
+					spec: { ...probe.spec, type: "LoadBalancer" },
+				} as V1Service);
+				const kind = resourceKind === "ProbeService" ? "Service" : resourceKind;
+				const name =
+					resourceKind === "ProbeService" ? probeName : desired.service.name;
+				const resource = await f.client.read(kind, name);
+				if (!resource?.metadata?.annotations || !resource.metadata.labels)
+					throw new Error();
+				if (blocker === "fence")
+					resource.metadata.annotations["agent-infra.agora.io/fence"] = "3";
+				if (blocker === "revision")
+					resource.metadata.labels["agent-infra.agora.io/revision"] = "3";
+				if (blocker === "foreign")
+					resource.metadata.annotations["agent-infra.agora.io/agent-id"] =
+						"other-agent";
+				f.resources.set(`${kind}/${name}`, resource);
+				const before = structuredClone(f.resources);
+				const writes = f.writes.length;
+				await expect(
+					adapter.closeAgent(desired.agentId, 2, 2),
+				).rejects.toMatchObject({
+					code: blocker === "foreign" ? "policy" : "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+				expect(f.resources).toEqual(before);
+			}
+		},
+	);
 	it("does not close or remove resources from a newer fence at the same revision", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

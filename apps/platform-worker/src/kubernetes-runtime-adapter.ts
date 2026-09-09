@@ -982,7 +982,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const name = workloadResourceNameV1(value.agentId);
 		// Probe Services must never retain an alternate externally reachable route.
 		const probeName = `${name}-probe`;
-		const probe = await client.read<V1Service>("Service", probeName);
+		const [probe, service, routeIngress] = await Promise.all([
+			client.read<V1Service>("Service", probeName),
+			client.read<V1Service>("Service", name),
+			client.read<V1Ingress>("Ingress", name),
+		]);
+		for (const resource of [probe, service, routeIngress]) {
+			if (resource)
+				own(resource, value.agentId, value.workloadRevision, value.fence);
+		}
 		if (probe) {
 			own(probe, value.agentId, value.workloadRevision, value.fence);
 			const expectedProbeSpec = {
@@ -1004,7 +1012,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return false;
 		}
 		// Remove the selected route's backend before any candidate Pod can start.
-		const service = await client.read<V1Service>("Service", name);
 		if (service) {
 			own(service, value.agentId, value.workloadRevision, value.fence);
 			const safeServiceSpec = {

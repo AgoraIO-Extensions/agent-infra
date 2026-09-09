@@ -103,6 +103,88 @@ function fixture() {
 }
 
 describe("durable Workload reconciliation", () => {
+	it.each(["stop", "restart", "configuration"] as const)(
+		"retains a materialized unactivated candidate across %s and preflight rejection",
+		async (command) => {
+			const f = fixture();
+			await f.tick(7);
+			f.start();
+			await f.tick(7);
+			expect(f.state?.phase).toBe("ready");
+			f.upgrade("image-b");
+			await f.tick(5);
+			expect(f.state?.phase).toBe("activating");
+			const candidate = structuredClone(f.state?.candidate);
+			const identity = structuredClone(f.state?.identity);
+			const revision = f.state?.revision;
+			vi.mocked(f.runtime.discardUnactivatedSecrets)
+				.mockClear()
+				.mockResolvedValueOnce(false);
+			vi.mocked(f.runtime.preflight)
+				.mockClear()
+				.mockRejectedValueOnce(new WorkloadPreflightRejectedErrorV1());
+			if (command === "stop") f.stop();
+			else if (command === "restart") f.start();
+			else f.upgrade("image-c");
+			await f.tick(2);
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				cleanupInterrupted: true,
+				candidate,
+				identity,
+				revision,
+			});
+			expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledWith(
+				expect.objectContaining({ candidate }),
+				expect.anything(),
+			);
+			expect(f.runtime.preflight).not.toHaveBeenCalled();
+			expect(f.runtime.cleanup).not.toHaveBeenCalled();
+			f.restart();
+			await f.tick();
+			expect(f.state?.phase).toBe(command === "stop" ? "closing" : "preflight");
+			expect(f.state).not.toHaveProperty("cleanupInterrupted");
+			expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledTimes(2);
+			if (command !== "stop") {
+				await f.tick();
+				expect(f.state?.phase).toBe("rejected");
+				expect(f.state?.candidate.configuration.source.imageDigest).toBe(
+					"image-a",
+				);
+			}
+		},
+	);
+	it.each(["disable", "configuration"] as const)(
+		"preserves initial materialized cleanup when %s supersedes before failure",
+		async (command) => {
+			const f = fixture();
+			await f.tick(4);
+			expect(f.state?.phase).toBe("observing");
+			const candidate = structuredClone(f.state?.candidate);
+			vi.mocked(f.runtime.cleanup).mockResolvedValueOnce(false);
+			if (command === "disable") f.stop(true);
+			else f.upgrade("image-b");
+			await f.tick(2);
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				cleanupInterrupted: true,
+				candidate,
+			});
+			expect(f.runtime.cleanup).toHaveBeenCalledWith(
+				expect.objectContaining({ candidate }),
+				true,
+				expect.anything(),
+			);
+			expect(f.runtime.discardUnactivatedSecrets).not.toHaveBeenCalled();
+			f.restart();
+			await f.tick();
+			expect(f.state?.phase).toBe(
+				command === "disable" ? "closing" : "preflight",
+			);
+			expect(f.state?.identity).toBeNull();
+			expect(f.state).not.toHaveProperty("cleanupInterrupted");
+		},
+	);
 	it("retries transient preflight durably and recovers without candidate mutation", async () => {
 		const f = fixture();
 		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
@@ -613,8 +695,11 @@ describe("durable Workload reconciliation", () => {
 		await f.tick(6);
 		expect(f.state?.phase).toBe("promoting");
 		f.stop();
+		await f.tick();
+		expect(f.state?.phase).toBe("cleaning");
 		await f.tick(3);
 		expect(f.state?.phase).toBe("stopped");
+		expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledOnce();
 		expect(vi.mocked(f.runtime.promote).mock.calls).toHaveLength(1);
 	});
 });
