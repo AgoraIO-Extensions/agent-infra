@@ -1836,7 +1836,12 @@ describe("GA Kubernetes Workload adapter", () => {
 		);
 		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 	});
-	it.each(["service selector", "ingress"] as const)(
+	it.each([
+		"service selector",
+		"service fence",
+		"ingress",
+		"ingress owner",
+	] as const)(
 		"closes a route when post-promotion %s verification detects drift",
 		async (mutation) => {
 			const f = fixture();
@@ -1851,7 +1856,7 @@ describe("GA Kubernetes Workload adapter", () => {
 					const current = await f.client.read<T>(kind, name);
 					if (!mutateOnce || !current) return current;
 					if (
-						mutation === "service selector" &&
+						(mutation === "service selector" || mutation === "service fence") &&
 						kind === "Service" &&
 						name === desired.service.name &&
 						(current as V1Service).spec?.selector?.[
@@ -1861,27 +1866,49 @@ describe("GA Kubernetes Workload adapter", () => {
 						mutateOnce = false;
 						const drifted = {
 							...(current as V1Service),
-							spec: {
-								...(current as V1Service).spec,
-								selector: {
-									"agent-infra.agora.io/revision": String(
-										desired.workloadRevision,
-									),
-								},
-							},
+							...(mutation === "service selector"
+								? {
+										spec: {
+											...(current as V1Service).spec,
+											selector: {
+												"agent-infra.agora.io/revision": String(
+													desired.workloadRevision,
+												),
+											},
+										},
+									}
+								: {
+										metadata: {
+											...(current as V1Service).metadata,
+											annotations: {
+												...(current as V1Service).metadata?.annotations,
+												"agent-infra.agora.io/fence": "10",
+											},
+										},
+									}),
 						} as V1Service;
 						f.resources.set(`Service/${name}`, drifted);
 						return drifted as T;
 					}
 					if (
-						mutation === "ingress" &&
+						(mutation === "ingress" || mutation === "ingress owner") &&
 						kind === "Ingress" &&
 						name === desired.route.name
 					) {
 						mutateOnce = false;
 						const drifted = {
 							...(current as V1Ingress),
-							spec: { ...(current as V1Ingress).spec, rules: [] },
+							...(mutation === "ingress"
+								? { spec: { ...(current as V1Ingress).spec, rules: [] } }
+								: {
+										metadata: {
+											...(current as V1Ingress).metadata,
+											labels: {
+												...(current as V1Ingress).metadata?.labels,
+												"agent-infra.agora.io/agent": "foreign",
+											},
+										},
+									}),
 						} as V1Ingress;
 						f.resources.set(`Ingress/${name}`, drifted);
 						return drifted as T;
@@ -1896,14 +1923,13 @@ describe("GA Kubernetes Workload adapter", () => {
 			});
 			const identity = await adapter.apply(desired);
 			if (!identity || identity === "pending") throw new Error();
-
-			const result = await adapter.switchRoute({
+			const request = {
 				schemaVersion: 1,
 				requestId: `${desired.requestId}-route`,
 				traceId: desired.traceId,
 				agentId: desired.agentId,
 				fence: desired.fence,
-				action: "promote",
+				action: "promote" as const,
 				candidateValidated: true,
 				candidateRoute: {
 					routeRef: desired.route.name,
@@ -1911,7 +1937,23 @@ describe("GA Kubernetes Workload adapter", () => {
 					workloadGeneration: identity.generation,
 					workloadRevision: desired.workloadRevision,
 				},
-			});
+			};
+			if (mutation === "service fence" || mutation === "ingress owner") {
+				await expect(adapter.switchRoute(request)).rejects.toThrow();
+				if (mutation === "service fence")
+					expect(
+						(await f.client.read<V1Service>("Service", desired.service.name))
+							?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+					).toBe("10");
+				else
+					expect(
+						(await f.client.read<V1Ingress>("Ingress", desired.route.name))
+							?.metadata?.labels?.["agent-infra.agora.io/agent"],
+					).toBe("foreign");
+				return;
+			}
+
+			const result = await adapter.switchRoute(request);
 			expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
 			expect(
 				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
@@ -2165,6 +2207,17 @@ describe("GA Kubernetes Workload adapter", () => {
 			}),
 		).toBe(false);
 		expect(await f.client.read<V1Secret>("Secret", ref.name)).not.toBeNull();
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		if (!workload) throw new Error();
+		f.resources.delete(`StatefulSet/${desired.service.name}`);
+		expect(
+			await adapter.removeImmutableSecret(desired, ref, activationFence),
+		).toBe(false);
+		expect(await f.client.read<V1Secret>("Secret", ref.name)).not.toBeNull();
+		f.resources.set(`StatefulSet/${desired.service.name}`, workload);
 		expect(
 			await adapter.removeImmutableSecret(desired, ref, activationFence),
 		).toBe(true);
@@ -2245,6 +2298,20 @@ describe("GA Kubernetes Workload adapter", () => {
 		await expect(
 			adapter.apply({ ...desired, requestId: "request-stale", fence: 9 }),
 		).rejects.toMatchObject({ code: "conflict" });
+		await adapter.bindSecretFence(current, identity, ref.name, 8);
+		await expect(
+			adapter.bindSecretFence(current, identity, ref.name, 7),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(
+			Object.values(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						desired.service.name,
+					)
+				)?.metadata?.annotations ?? {},
+			),
+		).toContain("8");
 	});
 	it("preserves an active Secret fence across rollout but rejects a terminating Secret", async () => {
 		const f = fixture();

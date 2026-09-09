@@ -1009,6 +1009,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("conflict");
 			const key = secretFenceAnnotation(secretName);
+			const storedFence = current.metadata.annotations?.[key];
+			if (storedFence !== undefined) {
+				const parsedFence = Number(storedFence);
+				if (
+					!Number.isSafeInteger(parsedFence) ||
+					parsedFence < 1 ||
+					parsedFence > fence
+				)
+					throw new WorkloadKubernetesError("conflict");
+			}
 			if (
 				current.metadata.annotations?.[key] === String(fence) &&
 				current.metadata.labels?.[revisionLabel] ===
@@ -1632,14 +1642,20 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					value.workloadRevision,
 					"open",
 				);
+				const expectedMetadata = metadata(value);
+				const expectedIngress = ingress(value);
 				if (
+					!service ||
+					!containsDesired(service.metadata, expectedMetadata) ||
 					!matchesServiceSpec(
 						service?.spec,
 						serviceSpec(value, expectedSelector),
 					) ||
 					(value.route.exposure === "internal-only"
 						? routeIngress !== null
-						: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
+						: !routeIngress ||
+							!containsDesired(routeIngress.metadata, expectedMetadata) ||
+							!matchesIngress(routeIngress, expectedIngress))
 				)
 					throw new WorkloadKubernetesError("conflict");
 				return validateWorkloadRouteSwitchResultV1(request, {
