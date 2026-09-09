@@ -1042,6 +1042,7 @@ async function assertPinnedModelProfiles(
 ) {
 	const profiles: PinnedModelProfile[] = [];
 	const cursors = new Set<string>();
+	const modelNames = new Set<string>();
 	let cursor: string | undefined;
 	for (let page = 0; page < maximumModelsListPages; page += 1) {
 		const result = await rpc.request(
@@ -1053,7 +1054,11 @@ async function assertPinnedModelProfiles(
 			},
 			parsePinnedModelProfiles,
 		);
-		profiles.push(...result.profiles);
+		for (const profile of result.profiles) {
+			if (modelNames.has(profile.model)) protocolInvalid();
+			modelNames.add(profile.model);
+			profiles.push(profile);
+		}
 		if (!result.nextCursor) {
 			for (const option of modelOptions.values()) {
 				const profile = profiles.reduce<PinnedModelProfile | undefined>(

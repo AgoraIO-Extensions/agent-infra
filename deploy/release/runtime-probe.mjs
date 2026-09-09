@@ -77,6 +77,8 @@ const probeStages = new Set([
 	"model-stop-request",
 	"model-cancellation",
 	"model-cancellation-request",
+	"model-cancellation-close-before-confirmation",
+	"model-cancellation-result",
 	"model-cancellation-status",
 	"model-cancellation-restart",
 	"recursive-native-storage-redaction",
@@ -155,6 +157,7 @@ export function safeRuntimeProbeFailure(stderr) {
 					"startupCode",
 					"httpStatus",
 					"responseCode",
+					"resultStatus",
 					"isolationFileKind",
 					"modelRequests",
 				].includes(key),
@@ -163,6 +166,10 @@ export function safeRuntimeProbeFailure(stderr) {
 		return;
 	const safe = { status: "failed" };
 	if (probeStages.has(value.stage)) safe.stage = value.stage;
+	if (
+		["running", "completed", "failed", "cancelled"].includes(value.resultStatus)
+	)
+		safe.resultStatus = value.resultStatus;
 	for (const key of ["startupCode", "responseCode"])
 		if (probeCodes.has(value[key])) safe[key] = value[key];
 	if (

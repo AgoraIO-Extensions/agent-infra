@@ -25,6 +25,7 @@ let stage = "model-substitute";
 let startupCode;
 let httpStatus;
 let responseCode;
+let resultStatus;
 let isolationFileKind;
 const checks = [];
 
@@ -866,6 +867,9 @@ try {
 		);
 		stage = "model-cancellation-request";
 		assert.equal(cancellationRequest.closed, false);
+		httpStatus = undefined;
+		responseCode = undefined;
+		stage = "model-cancellation-close-before-confirmation";
 		const cancelConfirmation = request("v1/generations/cancel", {
 			...cancellation.lookup,
 			requestId: "request-cancel-generation",
@@ -875,8 +879,15 @@ try {
 			cancellationRequest,
 			cancelConfirmation,
 		);
+		stage = "model-cancellation-result";
 		assert.equal(cancelResult.status, 200);
 		const cancellationResult = JSON.parse(cancelResult.text).result;
+		if (
+			["running", "completed", "failed", "cancelled"].includes(
+				cancellationResult?.status,
+			)
+		)
+			resultStatus = cancellationResult.status;
 		assert.deepEqual(cancellationResult, {
 			outcome: "accepted",
 			status: "cancelled",
@@ -932,6 +943,7 @@ try {
 			startupCode,
 			httpStatus,
 			responseCode,
+			resultStatus,
 			isolationFileKind,
 			modelRequests: requests.length,
 		}),

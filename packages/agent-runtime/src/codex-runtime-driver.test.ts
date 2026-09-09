@@ -619,6 +619,7 @@ class TestCodexBridge {
 	private turnsListError?: { code: number; message: string };
 	private nextTurnsListError?: { code: number; message: string };
 	private itemsListPages?: TestItemsListPage[];
+	modelListPages?: Record<string, unknown>[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
@@ -663,6 +664,10 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "model/list") {
+			if (this.modelListPages) {
+				this.respond(id, this.modelListPages.shift());
+				return;
+			}
 			this.respond(id, {
 				data: [
 					{
@@ -1223,6 +1228,81 @@ describe("Codex Runtime Driver", () => {
 					return bridge;
 				},
 			);
+			drivers.push(driver);
+			await driver.execute(submitCommandV2());
+			expect(
+				bridge.requests.find(({ method }) => method === "turn/start")?.params,
+			).toMatchObject({ model: internalModel("model-option-primary", model) });
+		},
+	);
+
+	it.each(["same-page", "cross-page", "unique-pages"] as const)(
+		"validates model profile identity across %s",
+		async (scenario) => {
+			const model = "gpt-5.3-codex";
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const profile = {
+				model,
+				supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+			};
+			const other = {
+				...profile,
+				model: scenario === "unique-pages" ? "gpt-5.2-codex" : model,
+				supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+			};
+			bridge.modelListPages =
+				scenario === "same-page"
+					? [{ data: [profile, other], nextCursor: null }]
+					: [
+							{ data: [profile], nextCursor: "page-two" },
+							{ data: [other], nextCursor: null },
+						];
+			const opening = openCodexRuntimeDriverForTest(
+				{
+					path: join(directory, "driver.json"),
+					configVersion: "synthetic-config-1",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							model,
+							reasoningLevels: ["high"],
+							...upstreamModelAccess,
+						},
+					],
+				},
+				async (options) => {
+					if (!options.modelAccess) throw new Error("missing loopback access");
+					bridge.setConfigReadResult(
+						modelAccessConfigReadResult(
+							options.modelAccess,
+							internalModel("model-option-primary", model),
+							"high",
+						),
+					);
+					return bridge;
+				},
+			);
+			if (scenario !== "unique-pages") {
+				await expect(opening).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+				});
+				expect(
+					bridge.requests.some(({ method }) => method === "turn/start"),
+				).toBe(false);
+				return;
+			}
+			const driver = await opening;
+			expect(
+				bridge.requests
+					.filter(({ method }) => method === "model/list")
+					.map(({ params }) => params),
+			).toEqual([
+				{ includeHidden: true, limit: 100 },
+				{ includeHidden: true, limit: 100, cursor: "page-two" },
+			]);
 			drivers.push(driver);
 			await driver.execute(submitCommandV2());
 			expect(

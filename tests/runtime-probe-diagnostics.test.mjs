@@ -82,3 +82,33 @@ test("ordinary command failures never expose stderr and successful output is unc
 		"success",
 	);
 });
+
+test("cancellation diagnostic distinguishes order from terminal result without copying arbitrary status", () => {
+	for (const stage of [
+		"model-cancellation-close-before-confirmation",
+		"model-cancellation-result",
+	]) {
+		for (const resultStatus of ["running", "completed", "failed", "cancelled"])
+			assert.deepEqual(
+				JSON.parse(
+					safeRuntimeProbeFailure(
+						JSON.stringify({ status: "failed", stage, resultStatus }),
+					),
+				),
+				{ status: "failed", stage, resultStatus },
+			);
+		for (const resultStatus of [
+			"synthetic-credential",
+			{ body: "synthetic-credential" },
+			123,
+		])
+			assert.deepEqual(
+				JSON.parse(
+					safeRuntimeProbeFailure(
+						JSON.stringify({ status: "failed", stage, resultStatus }),
+					),
+				),
+				{ status: "failed", stage },
+			);
+	}
+});
