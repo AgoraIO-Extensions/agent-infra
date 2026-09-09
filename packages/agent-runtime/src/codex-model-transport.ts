@@ -530,7 +530,60 @@ function encodeValidatedEvent(
 	if (!projected) return { state: "invalid" as const };
 	return {
 		state: "event" as const,
+		projected,
 		encoded: `${event.event ? `event: ${value.type}\n` : ""}data: ${JSON.stringify(projected)}\n\n`,
+	};
+}
+
+// KMP state retains only a possible credential prefix per semantic delta channel.
+function credentialDeltaGuard(credentials: readonly string[]) {
+	const patterns = credentials.map((text) => {
+		const failure = new Uint32Array(text.length);
+		for (let i = 1, matched = 0; i < text.length; i += 1) {
+			while (matched > 0 && text[i] !== text[matched])
+				matched = failure[matched - 1] ?? 0;
+			if (text[i] === text[matched]) matched += 1;
+			failure[i] = matched;
+		}
+		return { text, failure };
+	});
+	const channels = new Map<string, Uint32Array>();
+	return {
+		accept(value: Record<string, unknown>) {
+			if (typeof value.delta !== "string") return true;
+			const keys = ["all", String(value.type)];
+			for (const field of [
+				"item_id",
+				"call_id",
+				"summary_index",
+				"content_index",
+			]) {
+				if (value[field] !== undefined)
+					keys.push(JSON.stringify([value.type, field, value[field]]));
+			}
+			for (const key of keys) {
+				let states = channels.get(key);
+				if (!states) {
+					states = new Uint32Array(patterns.length);
+					channels.set(key, states);
+				}
+				for (let index = 0; index < patterns.length; index += 1) {
+					const pattern = patterns[index];
+					if (!pattern) continue;
+					let matched = states[index] ?? 0;
+					for (const character of value.delta) {
+						while (matched > 0 && character !== pattern.text[matched])
+							matched = pattern.failure[matched - 1] ?? 0;
+						if (character === pattern.text[matched]) matched += 1;
+						if (matched === pattern.text.length) return false;
+					}
+					states[index] = matched;
+				}
+				if (!states.some((value) => value > 0)) channels.delete(key);
+			}
+			return true;
+		},
+		pending: () => channels.size > 0,
 	};
 }
 
@@ -551,6 +604,9 @@ async function forwardValidatedStream(
 	let eventCount = 0;
 	let ending = "";
 	let queued: string[] = [];
+	let pending: string[] = [];
+	let pendingBytes = 0;
+	const guard = credentialDeltaGuard(credentials);
 	const parser = createParser({
 		maxBufferSize: maximumEventBytes,
 		onComment: () => {},
@@ -561,6 +617,7 @@ async function forwardValidatedStream(
 			failed = true;
 		},
 		onEvent: (event) => {
+			if (failed) return;
 			eventCount += 1;
 			if (eventCount > maximumStreamEvents || terminal) {
 				failed = true;
@@ -572,7 +629,23 @@ async function forwardValidatedStream(
 				return;
 			}
 			if (result.state === "completed") terminal = result.encoded;
-			else if (result.state === "event") queued.push(result.encoded);
+			else if (result.state === "event") {
+				if (!guard.accept(result.projected)) {
+					failed = true;
+					return;
+				}
+				pending.push(result.encoded);
+				pendingBytes += Buffer.byteLength(result.encoded);
+				if (pendingBytes > 2 * maximumEventBytes || pending.length > 256) {
+					failed = true;
+					return;
+				}
+				if (!guard.pending()) {
+					queued.push(...pending);
+					pending = [];
+					pendingBytes = 0;
+				}
+			}
 		},
 	});
 
@@ -584,6 +657,7 @@ async function forwardValidatedStream(
 			const decoded = decoder.decode(chunk, { stream: true });
 			ending = `${ending}${decoded}`.slice(-4);
 			if (!failed) parser.feed(decoded);
+			if (failed) break;
 			for (const encoded of queued) {
 				if (!response.headersSent) {
 					response.writeHead(200, { "content-type": "text/event-stream" });
@@ -611,6 +685,7 @@ async function forwardValidatedStream(
 	if (!response.headersSent) {
 		response.writeHead(200, { "content-type": "text/event-stream" });
 	}
+	for (const encoded of pending) await write(response, encoded);
 	await write(response, terminal);
 	response.end();
 }

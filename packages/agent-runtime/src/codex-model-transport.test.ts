@@ -501,6 +501,198 @@ describe("Codex model transport", () => {
 		expect(text).not.toContain(credential);
 	});
 
+	it.each([
+		{ type: "response.output_text.delta" },
+		{ type: "response.custom_tool_call_input.delta", item_id: "tool-a" },
+		{ type: "response.reasoning_summary_text.delta", summary_index: 0 },
+		{ type: "response.reasoning_text.delta", content_index: 0 },
+	])(
+		"withholds split credentials across %j events and transport chunks",
+		async (shape) => {
+			const prefix = credential.slice(0, 12);
+			const target = await listen(
+				createServer(async (_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					const first = event({ ...shape, delta: prefix });
+					response.write(first.slice(0, 17));
+					await delay(5);
+					response.write(first.slice(17));
+					await delay(5);
+					// An unrelated channel must not clear this channel's pending match.
+					response.write(
+						event({
+							type:
+								shape.type === "response.output_text.delta"
+									? "response.reasoning_text.delta"
+									: "response.output_text.delta",
+							content_index: 7,
+							delta: "unrelated!",
+						}),
+					);
+					await delay(5);
+					response.end(
+						event({ ...shape, delta: credential.slice(12) }) + completedEvent(),
+					);
+				}),
+			);
+			const value = await transport(target);
+			const response = await request(value.modelAccess);
+			const text = await response.text();
+			expect(response.status).toBe(502);
+			expect(text).toBe('{"error":{"message":"Model request failed"}}');
+			expect(text).not.toContain(prefix);
+		},
+	);
+	it("never resumes forwarding after a split credential match within one chunk", async () => {
+		const prefix = credential.slice(0, 12);
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_text.delta", delta: prefix }) +
+						event({
+							type: "response.output_text.delta",
+							delta: credential.slice(12),
+						}) +
+						event({ type: "response.output_text.delta", delta: "ordinary!" }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+	it("releases disambiguated prefixes incrementally without changing event order", async () => {
+		let finish: (() => void) | undefined;
+		const done = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		const target = await listen(
+			createServer(async (_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					event({ type: "response.output_text.delta", delta: "synthetic-" }),
+				);
+				await delay(5);
+				response.write(
+					event({ type: "response.output_text.delta", delta: "ordinary!" }),
+				);
+				await done;
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error();
+		const first = await reader.read();
+		const text = new TextDecoder().decode(first.value);
+		expect(text).toContain('"delta":"synthetic-"');
+		finish?.();
+		let rest = "";
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) break;
+			rest += new TextDecoder().decode(next.value);
+		}
+		expect(text + rest).toBe(
+			event({ type: "response.output_text.delta", delta: "synthetic-" }) +
+				event({ type: "response.output_text.delta", delta: "ordinary!" }) +
+				completedEvent(),
+		);
+	});
+	it("releases a benign incomplete credential prefix only after successful EOF", async () => {
+		const prefix = credential.slice(0, 12);
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_text.delta", delta: prefix }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target);
+		expect(await (await request(value.modelAccess)).text()).toBe(
+			event({ type: "response.output_text.delta", delta: prefix }) +
+				completedEvent(),
+		);
+	});
+	it("fails closed at the pending event cap without releasing a credential prefix", async () => {
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_text.delta", delta: "synthetic-" }) +
+						event({ type: "response.created", response: {} }).repeat(256) +
+						completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+	it("discards a pending credential prefix when the upstream terminates early", async () => {
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_text.delta", delta: "synthetic-" }),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+	it("discards held credential fragments when the transport is closed", async () => {
+		let sentPrefix: (() => void) | undefined;
+		const prefixSent = new Promise<void>((resolve) => {
+			sentPrefix = resolve;
+		});
+		const target = await listen(
+			createServer(async (_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					event({ type: "response.output_text.delta", delta: "visible!" }),
+				);
+				await delay(5);
+				response.write(
+					event({ type: "response.output_text.delta", delta: "synthetic-" }),
+				);
+				sentPrefix?.();
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		let text = "";
+		const content = (async () => {
+			try {
+				if (!response.body) throw new Error();
+				for await (const chunk of response.body)
+					text += new TextDecoder().decode(chunk);
+			} catch {
+				// Driver close is allowed to terminate the downstream socket.
+			}
+		})();
+		await prefixSent;
+		await value.close();
+		await content;
+		expect(text).toContain('"delta":"visible!"');
+		expect(text).not.toContain("synthetic-");
+		expect(text).not.toContain("response.completed");
+	});
 	it("drops SSE comments without changing the validated event stream", async () => {
 		const target = await listen(
 			createServer((_incoming, response) => {
@@ -757,10 +949,15 @@ describe("Codex model transport", () => {
 	);
 
 	it("replaces a failure after safe events with a sanitized SSE error", async () => {
+		let sendFailure: (() => void) | undefined;
+		const ready = new Promise<void>((resolve) => {
+			sendFailure = resolve;
+		});
 		const target = await listen(
-			createServer((_incoming, response) => {
+			createServer(async (_incoming, response) => {
 				response.writeHead(200, { "content-type": "text/event-stream" });
 				response.write(event({ type: "response.created", response: {} }));
+				await ready;
 				response.end(
 					event({
 						type: "response.failed",
@@ -771,6 +968,7 @@ describe("Codex model transport", () => {
 		);
 		const value = await transport(target);
 		const response = await request(value.modelAccess);
+		sendFailure?.();
 		const text = await response.text();
 		expect(response.status).toBe(200);
 		expect(text).toContain('"type":"response.created"');
