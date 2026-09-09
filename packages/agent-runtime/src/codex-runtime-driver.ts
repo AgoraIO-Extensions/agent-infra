@@ -131,6 +131,7 @@ interface CodexOperation {
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
 	configVersion?: string;
+	internalModel?: string;
 	// Recovery must not expose or re-register the accepted record until this clears.
 	admissionPending?: true;
 	executionId?: string;
@@ -538,6 +539,7 @@ function isCodexOperation(
 			"state",
 			"nativeSessionRef",
 			"configVersion",
+			"internalModel",
 			"admissionPending",
 			"executionId",
 			"turnId",
@@ -582,6 +584,12 @@ function isCodexOperation(
 			value.configVersion !== undefined &&
 			(typeof value.configVersion !== "string" ||
 				!codexModelPattern.test(value.configVersion))) ||
+		(value.internalModel !== undefined &&
+			(isInterruption ||
+				typeof value.internalModel !== "string" ||
+				!/^(?:[a-f0-9]{64}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
+					value.internalModel,
+				))) ||
 		(isInterruption && value.configVersion !== undefined)
 	) {
 		return false;
@@ -1346,6 +1354,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly configVersion: string,
 		private readonly beginModelTurnAdmission?: (
 			deadline: number,
+			internalModel: string,
 		) => CodexModelTurnAdmission,
 		private readonly recognizeModelTurn?: (
 			admission: CodexModelTurnAdmission,
@@ -1593,7 +1602,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const admissionKey = operationKey(command);
 		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
 		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
-		const modelAdmission = this.beginModelTurnAdmission?.(admissionDeadline);
+		if (!prepared.operation.internalModel) stateInvalid();
+		const modelAdmission = this.beginModelTurnAdmission?.(
+			admissionDeadline,
+			prepared.operation.internalModel,
+		);
 		if (modelAdmission)
 			this.modelTurnAdmissions.set(admissionKey, modelAdmission);
 		const abandonModelAdmission = () => {
@@ -1679,6 +1692,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			) {
 				abandonModelAdmission();
 				await this.cancelModelTurn?.(nativeTurn);
+				const current = this.operationRecord(command);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status !== "running"
+				) {
+					await this.confirmModelAdmission(command, session.nativeSessionRef);
+					return current.record;
+				}
 				unavailable();
 			}
 			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
@@ -1841,8 +1862,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.registerModelTurn !== undefined;
 		let restoreAdmission: CodexModelTurnAdmission | undefined;
 		if (restoreRequired) {
+			const internalModel = this.executionOperation(
+				initialState,
+				session,
+				execution,
+			).internalModel;
+			if (
+				!internalModel ||
+				![...this.modelOptions.values()].some(
+					(option) => option.internalModel === internalModel,
+				)
+			)
+				unavailable();
 			restoreAdmission = this.beginModelTurnAdmission?.(
 				Date.now() + rpcRequestTimeoutMs,
+				internalModel,
 			);
 			if (
 				restoreAdmission &&
@@ -2909,6 +2943,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				state: "prepared",
 				nativeSessionRef,
 				configVersion: this.configVersion,
+				internalModel: (command.schemaVersion === 2
+					? this.nativeSelection(command.selection)
+					: this.defaultSelection
+				)?.model,
 			};
 			state.operations[key] = operation;
 			return { operation, created: true };

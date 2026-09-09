@@ -91,8 +91,11 @@ vi.mock("./codex-model-transport.js", async (importOriginal) => {
 			const deadlines = new WeakMap<CodexModelTurnAdmission, number>();
 			return {
 				...transport,
-				beginTurnAdmission: (deadline: number) => {
-					const admission = transport.beginTurnAdmission(deadline);
+				beginTurnAdmission: (deadline: number, internalModel: string) => {
+					const admission = transport.beginTurnAdmission(
+						deadline,
+						internalModel,
+					);
 					deadlines.set(admission, deadline);
 					return admission;
 				},
@@ -137,6 +140,7 @@ interface StoredCodexExecution {
 }
 
 interface StoredCodexOperation {
+	internalModel?: string;
 	state?: unknown;
 	nativeSessionRef?: string;
 	configVersion?: unknown;
@@ -571,6 +575,7 @@ function modelRequest(
 	modelAccess: CodexModelAccess,
 	bridge: TestCodexBridge,
 	nativeTurnId = bridge.nativeTurnId,
+	model = internalModel("model-option-primary", "gpt-5.3-codex"),
 ) {
 	return fetch(`${modelAccess.endpoint}/responses`, {
 		method: "POST",
@@ -583,7 +588,7 @@ function modelRequest(
 			}),
 		},
 		body: JSON.stringify({
-			model: internalModel("model-option-primary", "gpt-5.3-codex"),
+			model,
 			stream: true,
 		}),
 	});
@@ -1803,6 +1808,84 @@ describe("Codex Runtime Driver", () => {
 			}),
 		);
 		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+	});
+
+	it("confirms a terminal result persisted after start recognition but before model registration", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		const driver = await openDriverWithModelEndpoint(path, bridge, endpoint);
+		drivers.push(driver);
+		const recognition = driver as unknown as {
+			waitForNativeTurnStarted(
+				threadId: string,
+				turnId: string,
+				deadline: number,
+			): Promise<boolean>;
+		};
+		let terminalCancelled = false;
+		modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+			await cancel();
+			terminalCancelled = true;
+		};
+		const waitForStarted = recognition.waitForNativeTurnStarted.bind(driver);
+		vi.spyOn(recognition, "waitForNativeTurnStarted").mockImplementationOnce(
+			async (...args) => {
+				const recognized = await waitForStarted(...args);
+				expect(recognized).toBe(true);
+				await bridge.emitTurnCompleted("completed");
+				await vi.waitFor(() => expect(terminalCancelled).toBe(true));
+				return recognized;
+			},
+		);
+		let registered: boolean | undefined;
+		modelTransportTestHooks.registerTurn = (_turn, _deadline, register) => {
+			registered = register();
+			return registered;
+		};
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		expect(registered).toBe(false);
+		expect(accepted.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(await driver.lookupOperation(command)).toMatchObject({
+			state: "found",
+		});
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		expect(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).toContainEqual(expect.objectContaining({ type: "completed" }));
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(
+			Object.values(stored.operations).every(
+				(operation) => operation.admissionPending === undefined,
+			),
+		).toBe(true);
+		expect(upstreamCalls).toBe(0);
+		await driver.close();
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			new TestCodexBridge(),
+			endpoint,
+		);
+		drivers.push(recovered);
+		expect((await recovered.execute(command)).result).toEqual(accepted.result);
+		expect(
+			await recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
 	});
 
 	it("keeps an expired durable model admission unavailable after restart", async () => {
@@ -4376,6 +4459,180 @@ describe("Codex Runtime Driver", () => {
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(1);
 	});
+
+	it("persists the alternate model before Turn start and restores only that route after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const upstreamModels: string[] = [];
+		const endpoint = await listen(
+			createServer(async (request, response) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of request) chunks.push(Buffer.from(chunk));
+				upstreamModels.push(JSON.parse(Buffer.concat(chunks).toString()).model);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		let bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		let driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const command = submitCommandV2({
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "model-option-alternate",
+				reasoningLevel: "low",
+			},
+		});
+		const alternate = internalModel("model-option-alternate", "gpt-5.2-codex");
+		const nativeSend = bridge.send.bind(bridge);
+		const persistedBeforeNative: string[] = [];
+		vi.spyOn(bridge, "send").mockImplementation(async (frame) => {
+			if (frame.method === "thread/start" || frame.method === "turn/start") {
+				const state = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				expect(Object.values(state.operations)).toContainEqual(
+					expect.objectContaining({
+						state: "prepared",
+						internalModel: alternate,
+					}),
+				);
+				persistedBeforeNative.push(frame.method);
+			}
+			await nativeSend(frame);
+		});
+		const submitted = driver.execute(command);
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		const stored = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({ state: "prepared", internalModel: alternate }),
+		);
+		await bridge.emitNotification();
+		bridge.respondToHeldTurnStart();
+		const accepted = await submitted;
+		expect(persistedBeforeNative).toEqual(["thread/start", "turn/start"]);
+		for (const restart of [false, true]) {
+			if (restart) {
+				await driver.close();
+				bridge = new TestCodexBridge(
+					bridge.nativeThreadId,
+					bridge.nativeTurnId,
+				);
+				driver = await openDriverWithModelEndpoint(
+					path,
+					bridge,
+					endpoint,
+					(options) => {
+						loopback = options.modelAccess;
+					},
+				);
+				drivers.push(driver);
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("running");
+			}
+			if (!loopback) throw new Error("missing model access");
+			const before = upstreamModels.length;
+			const rejected = await modelRequest(loopback, bridge);
+			expect(rejected.status).toBe(400);
+			await rejected.text();
+			expect(upstreamModels).toHaveLength(before);
+			const allowed = await modelRequest(
+				loopback,
+				bridge,
+				bridge.nativeTurnId,
+				alternate,
+			);
+			expect(allowed.status).toBe(200);
+			await allowed.text();
+			expect(upstreamModels.slice(before)).toEqual(["gpt-5.2-codex"]);
+		}
+	});
+
+	it.each(["running", "completed"] as const)(
+		"keeps legacy %s records without a model binding fail closed or terminal-readable",
+		async (status) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.end();
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			const driver = await openDriverWithModelEndpoint(path, bridge, endpoint);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			if (status === "completed") {
+				bridge.setTurnStatus("completed");
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed");
+			}
+			await driver.close();
+			const stored = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			for (const operation of Object.values(stored.operations))
+				delete operation.internalModel;
+			await writeFile(path, JSON.stringify(stored));
+			const recoveredBridge = new TestCodexBridge(
+				bridge.nativeThreadId,
+				bridge.nativeTurnId,
+			);
+			const recovered = await openDriverWithModelEndpoint(
+				path,
+				recoveredBridge,
+				endpoint,
+			);
+			drivers.push(recovered);
+			const nativeRequests = recoveredBridge.requests.length;
+			if (status === "running") {
+				await expect(
+					recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				await expect(
+					recovered.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			} else {
+				expect(
+					await recovered.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed");
+				expect((await recovered.execute(command)).result).toEqual({
+					outcome: "accepted",
+					status: "completed",
+				});
+			}
+			expect(recoveredBridge.requests.slice(nativeRequests)).toEqual([]);
+			expect(upstreamCalls).toBe(0);
+		},
+	);
 
 	it.each([false, true])(
 		"keeps running status polling authorized after restart=%s",
