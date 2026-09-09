@@ -162,8 +162,14 @@ const api = vi.hoisted(() => ({
 		],
 	})),
 	listTokens: vi.fn(async () => ({
+		consumers: [
+			{ id: "consumer-portable-pat", name: "Portable Connection PAT" },
+			{ id: "consumer-rehoboam-ai", name: "RehoboamAI" },
+		],
 		tokens: [
 			{
+				consumerId: "consumer-rehoboam-ai",
+				consumerName: "RehoboamAI",
 				createdAt: "2026-08-26T00:00:00.000Z",
 				expiresAt: "2026-11-26T00:00:00.000Z",
 				lastUsedAt: null,
@@ -382,12 +388,18 @@ describe("Connection 管理 mutation wiring", () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		renderPage(<TokensPage />);
 		await screen.findByText("现有 Token");
+		fireEvent.change(screen.getByLabelText("客户端"), {
+			target: { value: "consumer-rehoboam-ai" },
+		});
 		fireEvent.change(screen.getByLabelText("令牌名称"), {
 			target: { value: "Codex 本机" },
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "签发令牌" }));
 		await waitFor(() => expect(api.issueToken).toHaveBeenCalledOnce());
-		expect(calls(api.issueToken)[0]?.[0]).toBe("Codex 本机");
+		expect(calls(api.issueToken)[0]?.[0]).toEqual({
+			consumerId: "consumer-rehoboam-ai",
+			name: "Codex 本机",
+		});
 		fireEvent.click(screen.getByRole("button", { name: "撤销 现有 Token" }));
 		await waitFor(() => expect(api.revokeToken).toHaveBeenCalledOnce());
 		expect(calls(api.revokeToken)[0]?.[0]).toBe("token-existing");

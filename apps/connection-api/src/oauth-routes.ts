@@ -594,6 +594,7 @@ export function createConnectionOAuthApp(
 		}
 		context.header("cache-control", "no-store");
 		return context.json({
+			consumers: options.service.listPersonalAccessTokenConsumers(),
 			tokens: await options.service.listPersonalAccessTokens(
 				session.sessionToken,
 			),
@@ -626,6 +627,7 @@ export function createConnectionOAuthApp(
 				},
 				() =>
 					options.service.issuePersonalAccessToken({
+						consumerId: body.consumerId,
 						name: body.name,
 						sessionToken: session.sessionToken,
 					}),

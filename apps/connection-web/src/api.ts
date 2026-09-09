@@ -151,12 +151,12 @@ export const connectionApi = {
 		),
 	logout: () => unwrap<void>(logout({ headers: commandHeaders() })),
 	listTokens: () => unwrap<TokenList>(listTokens()),
-	issueToken: (name: string) =>
+	issueToken: (body: { consumerId?: string; name: string }) =>
 		unwrap<IssuedTokenResponse>(
 			issueToken({
 				body: parseClientInput(
 					issueTokenRequestSchema,
-					{ name },
+					body,
 					"令牌名称需为 1 到 100 个字符",
 				),
 				headers: commandHeaders(),

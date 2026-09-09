@@ -29,11 +29,14 @@ export type LoginRequest = {
 };
 
 export type IssueTokenRequest = {
+    consumerId?: string;
     name: string;
 };
 
 export type TokenRecord = {
     tokenId: string;
+    consumerId: string;
+    consumerName: string;
     name: string;
     status: string;
     createdAt: string;
@@ -42,10 +45,13 @@ export type TokenRecord = {
 };
 
 export type TokenList = {
+    consumers: Array<Consumer>;
     tokens: Array<TokenRecord>;
 };
 
 export type IssuedToken = {
+    consumerId: string;
+    consumerName: string;
     name: string;
     token: string;
     tokenId?: string;

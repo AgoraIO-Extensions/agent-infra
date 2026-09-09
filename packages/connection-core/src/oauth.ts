@@ -66,6 +66,8 @@ export type BrowserSessionIdentity = {
 };
 
 export type PersonalAccessTokenRecord = {
+	consumerId: string;
+	consumerName: string;
 	createdAt: Date;
 	expiresAt: Date;
 	lastUsedAt: Date | null;
@@ -184,6 +186,7 @@ type OAuthServiceOptions = {
 	directory: DirectoryAuthenticator;
 	identityEnvironment: string;
 	identityKey: Uint8Array;
+	patConsumers?: Array<{ id: string; name: string }>;
 	principalFreshnessMs?: number;
 	refreshTokenTtlMs?: number;
 	repository: ConnectionOAuthRepository;
@@ -199,6 +202,10 @@ const defaultRefreshTokenTtlMs = 30 * 24 * 60 * 60_000;
 const defaultPrincipalFreshnessMs = 60_000;
 const identitySubjectHashVersion = "v1";
 export const portablePatConsumerId = "consumer-portable-pat";
+export const rehoboamAiConsumer = {
+	id: "consumer-rehoboam-ai",
+	name: "RehoboamAI",
+} as const;
 
 const portablePatConsumer = {
 	id: portablePatConsumerId,
@@ -571,7 +578,12 @@ export class ConnectionOAuthService {
 		return this.options.repository.listPersonalAccessTokens(sessionHash);
 	}
 
+	listPersonalAccessTokenConsumers() {
+		return [portablePatConsumer, ...(this.options.patConsumers ?? [])];
+	}
+
 	async issuePersonalAccessToken(input: {
+		consumerId?: string;
 		name: string;
 		sessionToken: string | undefined;
 	}) {
@@ -582,6 +594,11 @@ export class ConnectionOAuthService {
 				"Token name must contain between 1 and 100 characters",
 			);
 		}
+		const consumer = this.listPersonalAccessTokenConsumers().find(
+			(entry) => entry.id === (input.consumerId ?? portablePatConsumer.id),
+		);
+		if (!consumer)
+			throw new OAuthProtocolError("invalid_request", "Unknown PAT consumer");
 		const browserSessionHash = this.browserSessionHash(input.sessionToken);
 		await this.requireBrowserSession(input.sessionToken);
 		const token = `conn_pat_${opaqueToken()}`;
@@ -589,15 +606,22 @@ export class ConnectionOAuthService {
 		const { expiresAt } =
 			await this.options.repository.issuePersonalAccessToken({
 				browserSessionHash,
-				consumerId: portablePatConsumer.id,
-				consumerName: portablePatConsumer.name,
+				consumerId: consumer.id,
+				consumerName: consumer.name,
 				instanceId: `instance-${randomUUID()}`,
 				name,
 				tokenHash: tokenHash(token),
 				tokenId,
 				ttlMs: defaultPersonalAccessTokenTtlMs,
 			});
-		return { expiresAt, name, token, tokenId };
+		return {
+			consumerId: consumer.id,
+			consumerName: consumer.name,
+			expiresAt,
+			name,
+			token,
+			tokenId,
+		};
 	}
 
 	async revokePersonalAccessToken(input: {

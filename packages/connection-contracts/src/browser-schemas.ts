@@ -14,6 +14,7 @@ export const loginRequestSchema = z.strictObject({
 });
 
 export const issueTokenRequestSchema = z.strictObject({
+	consumerId: opaqueId.optional(),
 	name: z.string().trim().min(1).max(100),
 });
 

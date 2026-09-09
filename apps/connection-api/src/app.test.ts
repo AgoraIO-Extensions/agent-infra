@@ -443,7 +443,11 @@ describe("Connection API", () => {
 		const sessionToken = `conn_session_${"B".repeat(43)}`;
 		let login: { password: string; username: string } | undefined;
 		let issuance:
-			| { name: string; sessionToken: string | undefined }
+			| {
+					consumerId?: string;
+					name: string;
+					sessionToken: string | undefined;
+			  }
 			| undefined;
 		let revokedTokenId: string | undefined;
 		const tokens: Array<{
@@ -465,6 +469,7 @@ describe("Connection API", () => {
 				};
 			},
 			issuePersonalAccessToken: async (input: {
+				consumerId?: string;
 				name: string;
 				sessionToken: string | undefined;
 			}) => {
@@ -484,6 +489,10 @@ describe("Connection API", () => {
 				};
 			},
 			listPersonalAccessTokens: async () => tokens,
+			listPersonalAccessTokenConsumers: () => [
+				{ id: "consumer-portable-pat", name: "Portable Connection PAT" },
+				{ id: "consumer-rehoboam-ai", name: "RehoboamAI" },
+			],
 			loginBrowserSession: async (input: {
 				password: string;
 				username: string;
@@ -532,9 +541,18 @@ describe("Connection API", () => {
 			headers: { cookie },
 		});
 		expect(apiTokens.status).toBe(200);
-		expect(await apiTokens.json()).toEqual({ tokens: [] });
+		expect(await apiTokens.json()).toEqual({
+			consumers: [
+				{ id: "consumer-portable-pat", name: "Portable Connection PAT" },
+				{ id: "consumer-rehoboam-ai", name: "RehoboamAI" },
+			],
+			tokens: [],
+		});
 		const apiIssued = await app.request("/api/v1/connection/tokens", {
-			body: JSON.stringify({ name: "Connection Web" }),
+			body: JSON.stringify({
+				consumerId: "consumer-rehoboam-ai",
+				name: "RehoboamAI Pilot",
+			}),
 			headers: {
 				"content-type": "application/json",
 				cookie,
@@ -545,7 +563,7 @@ describe("Connection API", () => {
 		});
 		expect(apiIssued.status).toBe(201);
 		expect(await apiIssued.json()).toMatchObject({
-			issued: { name: "Connection Web", token },
+			issued: { name: "RehoboamAI Pilot", token },
 		});
 		const listedAfterIssue = await app.request("/api/v1/connection/tokens", {
 			headers: { cookie },
@@ -569,7 +587,8 @@ describe("Connection API", () => {
 			username: "ldap-user",
 		});
 		expect(issuance).toEqual({
-			name: "Connection Web",
+			consumerId: "consumer-rehoboam-ai",
+			name: "RehoboamAI Pilot",
 			sessionToken,
 		});
 

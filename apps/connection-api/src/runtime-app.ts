@@ -3,6 +3,7 @@ import {
 	ConnectionOAuthService,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
+	rehoboamAiConsumer,
 } from "@agent-infra/connection-core";
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
@@ -57,6 +58,7 @@ export async function createConnectionRuntimeApp(
 	for (const consumer of [
 		config.directConsumer,
 		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
+		rehoboamAiConsumer,
 	]) {
 		for (const catalog of [
 			githubConnectionCatalog,
@@ -77,6 +79,7 @@ export async function createConnectionRuntimeApp(
 		directory,
 		identityEnvironment: config.publicBaseUrl,
 		identityKey: config.identityKey,
+		patConsumers: [rehoboamAiConsumer],
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
