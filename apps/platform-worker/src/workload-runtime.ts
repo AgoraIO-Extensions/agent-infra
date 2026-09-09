@@ -168,6 +168,22 @@ function secretDataKey(name: string): string {
 		.toUpperCase()}`;
 }
 
+function validateSecretDataKeys(
+	configuration: WorkloadReconciliationStateV1["candidate"]["configuration"],
+	bindings: readonly ResolvedWorkloadSecretBindingV1[],
+): void {
+	const environmentNames = new Set(
+		configuration.environment.map(({ name }) => name),
+	);
+	const secretDataKeys = new Set<string>();
+	for (const { record } of bindings) {
+		const key = secretDataKey(record.name);
+		if (environmentNames.has(key) || secretDataKeys.has(key))
+			throw new Error("Workload Secret key conflict");
+		secretDataKeys.add(key);
+	}
+}
+
 function bindingsFor(
 	state: WorkloadReconciliationStateV1,
 	input: WorkloadReconciliationInputV1,
@@ -441,6 +457,7 @@ export function createWorkloadRuntimeV1(
 			if (admission.runtimeManifest.interactionMode !== mode)
 				throw new Error("Workload interaction mode rejected");
 			const secretBindings = bindingsFor(state, input);
+			validateSecretDataKeys(configuration, secretBindings);
 			const name = workloadResourceNameV1(state.agentId);
 			const exposure =
 				mode === "platform-adapter"

@@ -392,6 +392,45 @@ function secretConfiguration(
 	});
 }
 
+const modelCredentialEnvironmentKey =
+	"MODEL_CREDENTIAL_8797B0599D5943E951FFB4D92C441B669B051F3EC38058B37737816D5C061E52";
+
+function standardModelConfiguration(
+	overrides: Partial<AgentConfigurationRecordV1> = {},
+): AgentConfigurationRecordV1 {
+	return configurationFixture({
+		source: {
+			kind: "standard",
+			templateId: "template-a",
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			admissionRevision: "admission-a",
+			allowedEnvironmentKeys: [modelCredentialEnvironmentKey],
+			allowedSecretKeys: [modelCredentialEnvironmentKey],
+			platformManagedKeys: [],
+			connectionEnabled: false,
+		},
+		modelConfiguration: {
+			catalogRevision: "catalog-a",
+			options: [
+				{
+					optionId: "primary",
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["medium"],
+					credential: {
+						secretId: "model-secret-a",
+						version: 1,
+						isSet: true,
+					},
+				},
+			],
+			defaultOptionId: "primary",
+			defaultReasoningLevel: "medium",
+		},
+		...overrides,
+	});
+}
+
 function cleanupSecrets(
 	input: ReturnType<typeof secretCleanupStore>,
 	materialization: "current" | "active-origin" = "current",
@@ -406,6 +445,92 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("rejects preflight when an explicit environment key shadows a Secret", async () => {
+		const record = pendingSecretRecord();
+		const cleanup = secretCleanupStore(record);
+		const f = fixture(
+			{},
+			{
+				configuration: secretConfiguration({
+					environment: [{ name: "BOT_TOKEN", value: "shadowed" }],
+				}),
+				secrets: cleanupSecrets(cleanup),
+			},
+		);
+
+		await f.tick(2);
+
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.deployment).toBeNull();
+		expect(f.resources.size).toBe(0);
+	});
+
+	it("rejects preflight when environment shadows a generated model credential key", async () => {
+		const record = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const cleanup = secretCleanupStore(record);
+		const f = fixture(
+			{},
+			{
+				configuration: standardModelConfiguration({
+					environment: [
+						{ name: modelCredentialEnvironmentKey, value: "shadowed" },
+					],
+				}),
+				secrets: cleanupSecrets(cleanup),
+			},
+		);
+
+		await f.tick(2);
+
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.deployment).toBeNull();
+		expect(f.resources.size).toBe(0);
+	});
+
+	it("rejects preflight when Secret bindings produce the same data key", async () => {
+		const ordinaryRecord = pendingSecretRecord({
+			name: modelCredentialEnvironmentKey,
+			secretId: "owner-secret-a",
+		});
+		const modelRecord = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const cleanup = secretCleanupStore(ordinaryRecord);
+		const f = fixture(
+			{},
+			{
+				configuration: standardModelConfiguration({
+					secrets: [
+						{
+							name: modelCredentialEnvironmentKey,
+							secretId: "owner-secret-a",
+							version: 1,
+							isSet: true,
+						},
+					],
+				}),
+				secrets: {
+					bindings: [
+						{ materialization: "current", record: ordinaryRecord },
+						{ materialization: "current", record: modelRecord },
+					],
+					store: cleanup.store,
+					async auditDecryption() {},
+				},
+			},
+		);
+
+		await f.tick(2);
+
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.deployment).toBeNull();
+		expect(f.resources.size).toBe(0);
+	});
+
 	it("materializes model credentials under stable environment keys", async () => {
 		const optionId = "model:primary/with punctuation";
 		const name = `model:${optionId}`;

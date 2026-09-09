@@ -499,6 +499,34 @@ describe("GA Kubernetes Workload adapter", () => {
 	});
 	it.each([
 		["access mode", undefined, { accessModes: ["ReadWriteMany"] }],
+		["block volume mode", undefined, { volumeMode: "Block" }],
+		[
+			"volume selector",
+			undefined,
+			{ selector: { matchLabels: { storagePool: "external" } } },
+		],
+		[
+			"data source",
+			undefined,
+			{
+				dataSource: {
+					apiGroup: "snapshot.storage.k8s.io",
+					kind: "VolumeSnapshot",
+					name: "snapshot-a",
+				},
+			},
+		],
+		[
+			"data source reference",
+			undefined,
+			{
+				dataSourceRef: {
+					apiGroup: "snapshot.storage.k8s.io",
+					kind: "VolumeSnapshot",
+					name: "snapshot-a",
+				},
+			},
+		],
 		[
 			"storage class",
 			"approved-storage",
@@ -547,6 +575,41 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toMatchObject(drift);
 		},
 	);
+	it("reuses a filesystem PVC with a Kubernetes binding", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pvc = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		if (!pvc) throw new Error();
+		f.resources.set(`PersistentVolumeClaim/${desired.persistentVolume.name}`, {
+			...pvc,
+			spec: {
+				...pvc.spec,
+				volumeMode: "Filesystem",
+				volumeName: "bound-volume-a",
+			},
+		} as V1PersistentVolumeClaim);
+
+		await expect(adapter.apply(desired)).resolves.toMatchObject({
+			uid: identity.uid,
+		});
+		expect(
+			(
+				await f.client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					desired.persistentVolume.name,
+				)
+			)?.spec,
+		).toMatchObject({
+			volumeMode: "Filesystem",
+			volumeName: "bound-volume-a",
+		});
+	});
 	it("does not attach a reused PVC while its previous delete is still in progress", async () => {
 		const f = fixture();
 		const a = workloadDesiredFixture();

@@ -414,6 +414,18 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			resources: { requests: { storage: policy.storageSize } },
 		};
 	}
+	function matchesPersistentVolumeClaimSpec(
+		actual: V1PersistentVolumeClaim["spec"] | undefined,
+	): boolean {
+		return (
+			containsDesired(actual, persistentVolumeClaimSpec()) &&
+			(actual?.volumeMode === undefined ||
+				actual.volumeMode === "Filesystem") &&
+			actual?.selector === undefined &&
+			actual?.dataSource === undefined &&
+			actual?.dataSourceRef === undefined
+		);
+	}
 	function ingress(value: AgentWorkloadDesiredV1): V1Ingress {
 		const name = workloadResourceNameV1(value.agentId);
 		const host = `${name}.${policy.routeHostSuffix}`;
@@ -1106,7 +1118,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				own(pvc, value.agentId, value.workloadRevision);
 				if (
 					pvc.metadata?.deletionTimestamp ||
-					!containsDesired(pvc.spec, persistentVolumeClaimSpec())
+					!matchesPersistentVolumeClaimSpec(pvc.spec)
 				)
 					throw new WorkloadKubernetesError("conflict");
 				const desiredMetadata = metadata(value, value.persistentVolume.name);
