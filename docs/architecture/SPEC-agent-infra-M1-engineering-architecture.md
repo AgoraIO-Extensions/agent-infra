@@ -462,7 +462,9 @@ Worker 负责目录解析和配置/SecretRef 投影，RuntimeHost 不读取目�
 固定 Codex 版本的 `turn/start` 不能切换 provider，因此 Driver 使用每选项唯一的内部模型名
 `namespace/model`，namespace 从选项身份确定性生成且仅含非空 ASCII 字母、数字、`_` 或 `-`；
 整个别名恰好一个 `/`，model 保留不含 `/` 的真实模型名。固定版本按 model 后缀最长前缀匹配
-能力元数据；多斜线、非法 namespace 或不匹配已验证 profile 的配置拒绝。父进程仅按完整
+能力元数据；Driver 准入只接受与 profile 完全相同或以 `-` 分隔后缀的模型名，并选择最长匹配
+profile 校验 reasoning；此匹配不代表供应商支持该后缀。多斜线、非法 namespace 或不匹配
+已验证 profile 的配置拒绝。父进程仅按完整
 内部模型名查询当前批准集合，将请求的 model 改回真实 model，并使用该项固定 endpoint 与
 credential；不根据模型正文、调用方 URL 或同名 model 猜测路由。该方式必须保留原模型在 pinned
 Codex 中的能力元数据，不自行生成或放宽 capability profile；无已验证 profile 的选项不准入。

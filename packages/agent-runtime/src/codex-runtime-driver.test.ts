@@ -666,6 +666,13 @@ class TestCodexBridge {
 			this.respond(id, {
 				data: [
 					{
+						model: "gpt-5.3",
+						supportedReasoningEfforts: [
+							{ reasoningEffort: "high", description: "Synthetic high" },
+							{ reasoningEffort: "ultra", description: "Synthetic ultra" },
+						],
+					},
+					{
 						model: "gpt-5.3-codex",
 						supportedReasoningEfforts: [
 							{ reasoningEffort: "high", description: "Synthetic high" },
@@ -1141,6 +1148,8 @@ describe("Codex Runtime Driver", () => {
 
 	it.each([
 		["missing model metadata", "unverified-model", "high"],
+		["unrelated prefix extension", "gpt-5.3x", "high"],
+		["numeric prefix extension", "gpt-5.30", "high"],
 		["unsupported reasoning profile", "gpt-5.3-codex", "ultra"],
 	] as const)(
 		"rejects routed configuration with %s",
@@ -1179,6 +1188,46 @@ describe("Codex Runtime Driver", () => {
 			).rejects.toMatchObject({
 				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
 			});
+		},
+	);
+
+	it.each(["gpt-5.3-codex", "gpt-5.3-codex-2026-01-01"])(
+		"admits exact or hyphen-separated model profile %s",
+		async (model) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					path: join(directory, "driver.json"),
+					configVersion: "synthetic-config-1",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							model,
+							reasoningLevels: ["high"],
+							...upstreamModelAccess,
+						},
+					],
+				},
+				async (options) => {
+					if (!options.modelAccess) throw new Error("missing loopback access");
+					bridge.setConfigReadResult(
+						modelAccessConfigReadResult(
+							options.modelAccess,
+							internalModel("model-option-primary", model),
+							"high",
+						),
+					);
+					return bridge;
+				},
+			);
+			drivers.push(driver);
+			await driver.execute(submitCommandV2());
+			expect(
+				bridge.requests.find(({ method }) => method === "turn/start")?.params,
+			).toMatchObject({ model: internalModel("model-option-primary", model) });
 		},
 	);
 

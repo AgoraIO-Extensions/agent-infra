@@ -1058,7 +1058,8 @@ async function assertPinnedModelProfiles(
 			for (const option of modelOptions.values()) {
 				const profile = profiles.reduce<PinnedModelProfile | undefined>(
 					(best, candidate) =>
-						option.model.startsWith(candidate.model) &&
+						(option.model === candidate.model ||
+							option.model.startsWith(`${candidate.model}-`)) &&
 						(!best || candidate.model.length > best.model.length)
 							? candidate
 							: best,
