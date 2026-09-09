@@ -403,6 +403,38 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.containers.some((container) => {
 				const securityContext = container.securityContext;
 				return (
+					Object.entries(container).some(
+						([key, value]) =>
+							value !== undefined &&
+							![
+								"name",
+								"image",
+								"imagePullPolicy",
+								"ports",
+								"env",
+								"envFrom",
+								"resources",
+								"readinessProbe",
+								"securityContext",
+								"volumeMounts",
+								"terminationMessagePath",
+								"terminationMessagePolicy",
+								"command",
+								"args",
+								"lifecycle",
+								"workingDir",
+								"stdin",
+								"stdinOnce",
+								"tty",
+								"volumeDevices",
+							].includes(key),
+					) ||
+					(container.imagePullPolicy !== undefined &&
+						container.imagePullPolicy !== "IfNotPresent") ||
+					(container.terminationMessagePath !== undefined &&
+						container.terminationMessagePath !== "/dev/termination-log") ||
+					(container.terminationMessagePolicy !== undefined &&
+						container.terminationMessagePolicy !== "File") ||
 					(container.command?.length ?? 0) > 0 ||
 					(container.args?.length ?? 0) > 0 ||
 					Object.keys(container.lifecycle ?? {}).length > 0 ||
@@ -531,7 +563,34 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	) {
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
+		const probe = container?.readinessProbe;
+		// API-server defaults are allowed; additional handlers and HTTP overrides are not.
+		const expectedProbe = {
+			httpGet: {
+				path: value.health.path,
+				port: value.service.port,
+				scheme: "HTTP",
+			},
+			timeoutSeconds: value.health.timeoutSeconds,
+			failureThreshold: value.health.failureThreshold,
+			initialDelaySeconds: 0,
+			periodSeconds: 10,
+			successThreshold: 1,
+		};
 		return (
+			!hasSameStructure(
+				{
+					...probe,
+					initialDelaySeconds: probe?.initialDelaySeconds ?? 0,
+					periodSeconds: probe?.periodSeconds ?? 10,
+					successThreshold: probe?.successThreshold ?? 1,
+					httpGet: {
+						...probe?.httpGet,
+						scheme: probe?.httpGet?.scheme ?? "HTTP",
+					},
+				},
+				expectedProbe,
+			) ||
 			!containsDesired(container, {
 				env: Object.entries(value.env).map(([name, value]) => ({
 					name,

@@ -232,69 +232,75 @@ export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 {
 	const fetcher = options.fetch ?? globalThis.fetch;
-	const observedCapabilities = new Map<string, Record<string, boolean>>();
-	const adapter = createKubernetesRuntimeAdapterV1({
-		client: options.client,
-		policy: options.policy,
-		async probe({ desired, serviceOrigin }) {
-			const baseUrl = serviceOrigin;
-			const response = await fetcher(`${baseUrl}${desired.health.path}`, {
-				redirect: "error",
-				signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
-			});
-			await response.body?.cancel();
-			if (!response.ok) return false;
-			if (desired.runtimeManifest.interactionMode === "self-managed") {
-				observedCapabilities.set(
-					`${desired.agentId}:${desired.workloadRevision}`,
-					RuntimeCapabilitySetV1Schema.parse({}),
-				);
-				return true;
-			}
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), 10_000);
-			let probe: Awaited<ReturnType<WorkloadRuntimeOptionsV1["probeRuntime"]>>;
-			try {
-				probe = await Promise.race([
-					options.probeRuntime({
-						agentId: desired.agentId,
-						workloadRevision: desired.workloadRevision,
-						baseUrl,
-						manifest: desired.runtimeManifest,
-						signal: controller.signal,
-					}),
-					new Promise<never>((_resolve, reject) =>
-						controller.signal.addEventListener(
-							"abort",
-							() => reject(new Error("Runtime probe timed out")),
-							{ once: true },
+	const observedCapabilities = new WeakMap<
+		WorkloadReconciliationStateV1,
+		Record<string, boolean>
+	>();
+	function createAdapter(
+		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
+	) {
+		return createKubernetesRuntimeAdapterV1({
+			client: options.client,
+			policy: options.policy,
+			async probe({ desired, serviceOrigin }) {
+				const baseUrl = serviceOrigin;
+				const response = await fetcher(`${baseUrl}${desired.health.path}`, {
+					redirect: "error",
+					signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
+				});
+				await response.body?.cancel();
+				if (!response.ok) return false;
+				if (desired.runtimeManifest.interactionMode === "self-managed") {
+					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
+					return true;
+				}
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), 10_000);
+				let probe: Awaited<
+					ReturnType<WorkloadRuntimeOptionsV1["probeRuntime"]>
+				>;
+				try {
+					probe = await Promise.race([
+						options.probeRuntime({
+							agentId: desired.agentId,
+							workloadRevision: desired.workloadRevision,
+							baseUrl,
+							manifest: desired.runtimeManifest,
+							signal: controller.signal,
+						}),
+						new Promise<never>((_resolve, reject) =>
+							controller.signal.addEventListener(
+								"abort",
+								() => reject(new Error("Runtime probe timed out")),
+								{ once: true },
+							),
 						),
+					]);
+				} finally {
+					clearTimeout(timer);
+				}
+				const optional = RuntimeCapabilitySetV1Schema.safeParse(
+					probe.capabilities,
+				);
+				const detected = optional.success
+					? optional.data
+					: RuntimeCapabilitySetV1Schema.parse({});
+				const declared = RuntimeCapabilitySetV1Schema.parse(
+					desired.runtimeManifest.capabilities ?? {},
+				);
+				recordCapabilities(
+					Object.fromEntries(
+						Object.entries(declared).map(([name, value]) => [
+							name,
+							value && detected[name as keyof typeof detected],
+						]),
 					),
-				]);
-			} finally {
-				clearTimeout(timer);
-			}
-			const optional = RuntimeCapabilitySetV1Schema.safeParse(
-				probe.capabilities,
-			);
-			const detected = optional.success
-				? optional.data
-				: RuntimeCapabilitySetV1Schema.parse({});
-			const declared = RuntimeCapabilitySetV1Schema.parse(
-				desired.runtimeManifest.capabilities ?? {},
-			);
-			observedCapabilities.set(
-				`${desired.agentId}:${desired.workloadRevision}`,
-				Object.fromEntries(
-					Object.entries(declared).map(([name, value]) => [
-						name,
-						value && detected[name as keyof typeof detected],
-					]),
-				),
-			);
-			return probe.core === "passed";
-		},
-	});
+				);
+				return probe.core === "passed";
+			},
+		});
+	}
+	const adapter = createAdapter();
 	function desired(
 		state: WorkloadReconciliationStateV1,
 		stopped = false,
@@ -418,12 +424,10 @@ export function createWorkloadRuntimeV1(
 	}
 	return {
 		async capabilities(state) {
-			const capabilities = observedCapabilities.get(
-				`${state.agentId}:${state.revision}`,
-			);
+			const capabilities = observedCapabilities.get(state);
 			if (!capabilities)
 				throw new Error("Runtime capabilities are unavailable");
-			observedCapabilities.delete(`${state.agentId}:${state.revision}`);
+			observedCapabilities.delete(state);
 			return capabilities;
 		},
 		async preflight(input, state) {
@@ -623,13 +627,20 @@ export function createWorkloadRuntimeV1(
 			return identity;
 		},
 		async observe(state) {
-			return state.identity
-				? adapter.observe(
-						desired(state),
-						state.identity,
-						routeSelectorMode(state),
-					)
-				: "pending";
+			observedCapabilities.delete(state);
+			if (!state.identity) return "pending";
+			let capabilities: Record<string, boolean> | undefined;
+			const observation = createAdapter((value) => {
+				capabilities = value;
+			});
+			const health = await observation.observe(
+				desired(state),
+				state.identity,
+				routeSelectorMode(state),
+			);
+			if (health === "healthy" && state.phase === "promoting" && capabilities)
+				observedCapabilities.set(state, capabilities);
+			return health;
 		},
 		async activateSecrets(state, input) {
 			const bindings = bindingsFor(state, input);

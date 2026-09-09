@@ -1138,6 +1138,120 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBeUndefined();
 		expect(await adapter.observe(desired, repaired)).toBe("healthy");
 	});
+	it.each([
+		{
+			livenessProbe: { exec: { command: ["sh", "-c", "touch /tmp/injected"] } },
+		},
+		{
+			startupProbe: { exec: { command: ["sh", "-c", "touch /tmp/injected"] } },
+		},
+		{ restartPolicy: "Always" },
+		{ terminationMessagePath: "/data/private" },
+		{ imagePullPolicy: "Never" },
+	])(
+		"rejects unmanaged container overrides %j in templates and live Pods",
+		async (override) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const templateSpec = workload?.spec?.template.spec;
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec || !templateSpec || !pod?.spec) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec.template,
+						spec: {
+							...templateSpec,
+							containers: templateSpec.containers.map((container) => ({
+								...container,
+								...override,
+							})),
+						},
+					},
+				},
+			} as V1StatefulSet);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: {
+					...pod.spec,
+					containers: pod.spec.containers.map((container) => ({
+						...container,
+						...override,
+					})),
+				},
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		},
+	);
+	it("accepts defaulted container probes and rejects readiness handler overrides", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!pod?.spec) throw new Error();
+		const container = pod.spec.containers[0];
+		if (!container) throw new Error();
+		const defaulted = {
+			...container,
+			imagePullPolicy: "IfNotPresent",
+			terminationMessagePath: "/dev/termination-log",
+			terminationMessagePolicy: "File",
+			readinessProbe: {
+				...container.readinessProbe,
+				initialDelaySeconds: 0,
+				periodSeconds: 10,
+				successThreshold: 1,
+				httpGet: {
+					...container.readinessProbe?.httpGet,
+					path: desired.health.path,
+					port: desired.service.port,
+					scheme: "HTTP",
+				},
+			},
+		};
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: { ...pod.spec, containers: [defaulted] },
+		} as V1Pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		for (const override of [
+			{ exec: { command: ["sh", "-c", "touch /tmp/injected"] } },
+			{
+				httpGet: { ...defaulted.readinessProbe.httpGet, host: "foreign.test" },
+			},
+			{ periodSeconds: 1 },
+		]) {
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: {
+					...pod.spec,
+					containers: [
+						{
+							...defaulted,
+							readinessProbe: { ...defaulted.readinessProbe, ...override },
+						},
+					],
+				},
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		}
+	});
 	it("repairs unsafe StatefulSet drift and rejects unsafe observed Pods", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

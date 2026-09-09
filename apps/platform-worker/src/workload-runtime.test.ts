@@ -1540,6 +1540,38 @@ describe("assembled Workload Runtime contracts", () => {
 			assertSafe(replacement);
 		},
 	);
+	it("retains capabilities only for the exact healthy promotion attempt", async () => {
+		const fetch = vi.fn(async () => new Response("ok"));
+		const f = fixture({ fetch });
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw new Error();
+		const runtime = createWorkloadRuntimeV1(f.options);
+		for (let i = 0; i < 3; i++) {
+			expect(await runtime.observe(ready)).toBe("healthy");
+			await expect(runtime.capabilities(ready)).rejects.toThrow(
+				"Runtime capabilities are unavailable",
+			);
+		}
+		const promoting = { ...ready, phase: "promoting" as const };
+		await runtime.closeRoute(promoting);
+		expect(await runtime.observe(promoting)).toBe("healthy");
+		await expect(runtime.capabilities({ ...promoting })).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+		await expect(runtime.capabilities(promoting)).resolves.toEqual(
+			ready.capabilities,
+		);
+		await expect(runtime.capabilities(promoting)).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+		expect(await runtime.observe(promoting)).toBe("healthy");
+		fetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+		expect(await runtime.observe(promoting)).toBe("unhealthy");
+		await expect(runtime.capabilities(promoting)).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({
 			probeRuntime: async () => ({
