@@ -110,6 +110,7 @@ export async function createConnectionRuntimeApp(
 	);
 	return createConnectionApp({
 		accessTokens: oauth,
+		connectionWebUrl: config.publicBaseUrl,
 		directMcpEnabled: true,
 		githubProviderEnabled: false,
 		oauthServer: {

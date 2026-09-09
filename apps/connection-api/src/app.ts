@@ -41,6 +41,7 @@ export type DelegatedIdentityVerifier = {
 
 export type ConnectionAppOptions = {
 	accessTokens?: ConnectionAccessTokenVerifier;
+	connectionWebUrl?: string;
 	delegatedIdentity?: DelegatedIdentityVerifier;
 	directMcpEnabled?: boolean;
 	githubProviderEnabled?: boolean;
@@ -233,10 +234,16 @@ function mcpToolPayload(value: unknown) {
 	};
 }
 
-function connectionWebProviderUrl(provider: string, intent: string) {
+function connectionWebProviderUrl(
+	options: ConnectionAppOptions,
+	provider: string,
+	intent: string,
+) {
 	const url = new URL(
 		"/connection/connections",
-		process.env.CONNECTION_WEB_URL ?? "http://localhost:3001",
+		options.connectionWebUrl ??
+			process.env.CONNECTION_WEB_URL ??
+			"http://localhost:3001",
 	);
 	url.searchParams.set("provider", provider);
 	url.searchParams.set("intent", intent);
@@ -268,7 +275,7 @@ async function providerGuidance(
 			messageKey: "connection.provider.not_connected",
 			nextAction: {
 				type: "OPEN_CONNECTION_WEB",
-				url: connectionWebProviderUrl(normalizedProvider, "connect"),
+				url: connectionWebProviderUrl(options, normalizedProvider, "connect"),
 			},
 			provider: normalizedProvider,
 			reasonCode: "PROVIDER_NOT_CONNECTED",
@@ -280,7 +287,11 @@ async function providerGuidance(
 			messageKey: "connection.provider.reauthorization_required",
 			nextAction: {
 				type: "OPEN_CONNECTION_WEB",
-				url: connectionWebProviderUrl(normalizedProvider, "reauthorize"),
+				url: connectionWebProviderUrl(
+					options,
+					normalizedProvider,
+					"reauthorize",
+				),
 			},
 			provider: normalizedProvider,
 			reasonCode: "PROVIDER_REAUTHORIZATION_REQUIRED",
@@ -292,7 +303,7 @@ async function providerGuidance(
 			messageKey: "connection.provider.authorization_required",
 			nextAction: {
 				type: "OPEN_CONNECTION_WEB",
-				url: connectionWebProviderUrl(normalizedProvider, "authorize"),
+				url: connectionWebProviderUrl(options, normalizedProvider, "authorize"),
 			},
 			provider: normalizedProvider,
 			reasonCode: "PROVIDER_AUTHORIZATION_REQUIRED",

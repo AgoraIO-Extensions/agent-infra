@@ -280,6 +280,7 @@ class TestRepository implements ConnectionRepository {
 function createTestApp(
 	options: {
 		actions?: ActionDefinition[];
+		connectionWebUrl?: string;
 		oauth?: GitHubOAuthProvider;
 		repository?: ConnectionRepository;
 		supportedProviders?: readonly string[];
@@ -306,6 +307,7 @@ function createTestApp(
 		managementIdentity: {
 			principalFromAuthorization: async () => "alice",
 		},
+		connectionWebUrl: options.connectionWebUrl,
 		service: new ConnectionApplicationService(
 			options.repository ?? new TestRepository(options.actions),
 			executor,
@@ -1859,6 +1861,7 @@ describe("Connection API", () => {
 
 	it("guides clients to connect a supported Provider instead of returning an unexplained empty action list", async () => {
 		const app = createTestApp({
+			connectionWebUrl: "https://agent-connector.example/",
 			supportedProviders: ["github", "jira", "confluence"],
 		});
 		for (const request of [
@@ -1905,7 +1908,7 @@ describe("Connection API", () => {
 					messageKey: "connection.provider.not_connected",
 					nextAction: {
 						type: "OPEN_CONNECTION_WEB",
-						url: "http://localhost:3001/connection/connections?provider=confluence&intent=connect",
+						url: "https://agent-connector.example/connection/connections?provider=confluence&intent=connect",
 					},
 					provider: "confluence",
 					reasonCode: "PROVIDER_NOT_CONNECTED",
