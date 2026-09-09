@@ -261,17 +261,28 @@ function effectiveThreadConfiguration(
 	};
 }
 
+function decodedToolOutput(output: string): string | undefined {
+	try {
+		const parsed: unknown = JSON.parse(output);
+		return typeof parsed === "string" ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function completeToolOutput(
 	outputs: readonly string[],
 	completionMarker?: string,
 ) {
+	const decoded = outputs.map(decodedToolOutput);
 	return (
-		outputs.length > 0 &&
-		!outputs.some((output) =>
+		decoded.length > 0 &&
+		decoded.every((output): output is string => output !== undefined) &&
+		!decoded.some((output) =>
 			/truncated|Process running with session ID/i.test(output),
 		) &&
 		(!completionMarker ||
-			outputs.some((output) => output.includes(completionMarker)))
+			decoded.some((output) => output.includes(completionMarker)))
 	);
 }
 
@@ -380,14 +391,9 @@ console.log(marker + "=" + result);`;
 }
 
 function historyOutputLines(outputs: readonly string[]) {
-	return outputs.flatMap((output) => {
-		try {
-			const parsed: unknown = JSON.parse(output);
-			return typeof parsed === "string" ? parsed.split(/\r?\n/) : [];
-		} catch {
-			return [];
-		}
-	});
+	return outputs.flatMap(
+		(output) => decodedToolOutput(output)?.split(/\r?\n/) ?? [],
+	);
 }
 
 function historyMembership(
@@ -425,6 +431,7 @@ function historyScanEvidence(outputs: readonly string[]): HistoryScanEvidence {
 		owner,
 		foreign,
 		completeOutput:
+			completeToolOutput(outputs) &&
 			completed === 1 &&
 			!unexpectedOutput &&
 			owner !== "unavailable" &&
@@ -1022,6 +1029,76 @@ it("keeps incomplete and failed history commands unverified", () => {
 			}),
 		).toBe("unverified");
 	}
+});
+
+it("rejects malformed tool frames beside otherwise valid isolation evidence", () => {
+	const marker = "SYNTH_FRAME_TEST";
+	for (const invalid of [
+		"not-json",
+		"null",
+		"42",
+		"{}",
+		"[]",
+		JSON.stringify({ output: `${marker}=EACCES` }),
+	]) {
+		const outputs = [JSON.stringify(`${marker}=EACCES`), invalid];
+		expect(
+			crossFileReadEvidence({
+				outputs,
+				outcomeMarker: marker,
+				positiveControl: true,
+				foreignMarkerObserved: false,
+			}).status,
+		).toBe("unverified");
+		expect(
+			crossFileModifyEvidence({
+				outputs,
+				outcomeMarker: marker,
+				ownerWriteSucceeded: true,
+				changed: false,
+			}).status,
+		).toBe("unverified");
+		expect(
+			historyScenarioEvidence({
+				outputs: [
+					JSON.stringify(
+						"SYNTH_HISTORY_OWNER=present\nSYNTH_HISTORY_FOREIGN=absent\nSYNTH_HISTORY_SCAN_COMPLETE",
+					),
+					invalid,
+				],
+				foreignMarkerObserved: false,
+			}).status,
+		).toBe("unverified");
+		expect(
+			crossFileReadEvidence({
+				outputs,
+				outcomeMarker: marker,
+				positiveControl: true,
+				foreignMarkerObserved: true,
+			}).status,
+		).toBe("fail");
+		expect(
+			crossFileModifyEvidence({
+				outputs,
+				outcomeMarker: marker,
+				ownerWriteSucceeded: true,
+				changed: true,
+			}).status,
+		).toBe("fail");
+	}
+	expect(
+		completeToolOutput([
+			JSON.stringify("Process running with session ID test"),
+		]),
+	).toBe(false);
+	expect(
+		completeToolOutput([
+			'"Process running with session ID test"'.replace(
+				"running",
+				"\\u0072unning",
+			),
+		]),
+	).toBe(false);
 });
 
 it("requires nonce-bound read denial and the matching successful control", async () => {
