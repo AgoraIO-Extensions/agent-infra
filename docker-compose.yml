@@ -105,6 +105,7 @@ services:
       start_period: 10s
 
   agent-runtime-host:
+    profiles: ["runtime"]
     build:
       context: .
       dockerfile: apps/agent-runtime-host/Dockerfile

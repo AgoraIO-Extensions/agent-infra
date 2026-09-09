@@ -75,7 +75,9 @@ if (args[0] === "buildx" && args[1] === "build") {
 }
 if (args[0] === "image" && args[1] === "inspect") {
   if (args.includes("{{json .}}")) {
-    console.log(JSON.stringify({ Id: "sha256:" + "a".repeat(64), Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } }));
+    const inspection = { Id: "sha256:" + "a".repeat(64), Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } };
+    if (!process.env.FAKE_RUNTIME_DIGEST_MISSING) inspection.Descriptor = { digest: "sha256:" + createHash("sha256").update(args.at(-1) + ":stable").digest("hex") };
+    console.log(JSON.stringify(inspection));
     process.exit(0);
   }
   console.log(args.at(-1).includes("/web:") ? "nginx" : "node");
@@ -499,6 +501,33 @@ test("native runtime probe failure blocks publication of every image", async () 
 		});
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /Native Codex HTTP\/SSE image probe failed/);
+		await assert.rejects(access(manifestPath));
+		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		assert.ok(!calls.some((args) => args[0] === "push"));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("native runtime probe rejects a missing inspected image digest", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-infra-native-probe-digest-"),
+	);
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {
+			FAKE_RUNTIME_DIGEST_MISSING: "1",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Codex runtime image digest does not match verified build/,
+		);
 		await assert.rejects(access(manifestPath));
 		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
 			.trim()

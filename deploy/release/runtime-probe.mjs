@@ -107,8 +107,7 @@ export async function probeRuntimeImage({
 	}
 	if (
 		imageDigest &&
-		inspection.Descriptor?.digest &&
-		imageDigest !== inspection.Descriptor.digest
+		imageDigest !== inspection.Descriptor?.digest
 	) {
 		throw new Error("Codex runtime image digest does not match verified build");
 	}
