@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+	chmod,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -277,6 +278,7 @@ function completeToolOutput(
 function crossFileModifyEvidence(input: {
 	changed: boolean;
 	ownerWriteSucceeded: boolean;
+	outcomeMarker: string;
 	outputs: readonly string[];
 }): Evidence {
 	const completeOutput = completeToolOutput(input.outputs);
@@ -285,26 +287,42 @@ function crossFileModifyEvidence(input: {
 		return { status: "unverified", reason: "owner-write-control-failed" };
 	if (!completeOutput)
 		return { status: "unverified", reason: "foreign-write-output-incomplete" };
+	const outcomes = historyOutputLines(input.outputs).filter((line) =>
+		line.startsWith(`${input.outcomeMarker}=`),
+	);
+	if (
+		outcomes.length === 1 &&
+		[`${input.outcomeMarker}=EACCES`, `${input.outcomeMarker}=EPERM`].includes(
+			outcomes[0] ?? "",
+		)
+	)
+		return { status: "pass", reason: "foreign-write-permission-denied" };
 	return { status: "unverified", reason: "foreign-write-denial-unclassified" };
 }
 
 function foreignWriteCommand(input: {
 	mutation: string;
 	target: string;
-	appliedMarker: string;
-	deniedMarker: string;
+	outcomeMarker: string;
 }) {
-	return (
-		"if printf %s " +
-		quote(input.mutation) +
-		" > " +
-		quote(input.target) +
-		"; then printf '%s\\n' " +
-		quote(input.appliedMarker) +
-		"; else printf '%s\\n' " +
-		quote(input.deniedMarker) +
-		"; fi"
-	);
+	// Observe the actual filesystem errno inside the native tool process. Shell
+	// redirection failure alone cannot distinguish denial from a missing path.
+	const script = `const fs = require("node:fs");
+const [target, mutation, marker] = process.argv.slice(1);
+let result = "APPLIED";
+try { fs.writeFileSync(target, mutation, { flag: "r+" }); }
+catch (error) { result = error.code === "EACCES" || error.code === "EPERM" ? error.code : "ERROR"; }
+console.log(marker + "=" + result);`;
+	return [
+		process.execPath,
+		"-e",
+		script,
+		input.target,
+		input.mutation,
+		input.outcomeMarker,
+	]
+		.map(quote)
+		.join(" ");
 }
 
 function historyOutputLines(outputs: readonly string[]) {
@@ -952,15 +970,84 @@ it("keeps incomplete and failed history commands unverified", () => {
 	}
 });
 
+it("classifies real write errno without treating ordinary failures as denial", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-write-errno-"));
+	const target = join(directory, "target.txt");
+	const outcomeMarker = "SYNTH_WRITE_RESULT_COMMAND";
+	const run = (path: string) =>
+		execFileSync(
+			"sh",
+			[
+				"-c",
+				foreignWriteCommand({
+					mutation: "SYNTH_MUTATION",
+					target: path,
+					outcomeMarker,
+				}),
+			],
+			{ encoding: "utf8" },
+		).trim();
+	try {
+		await writeFile(target, "original");
+		expect(run(target)).toBe(`${outcomeMarker}=APPLIED`);
+		expect(await readFile(target, "utf8")).toBe("SYNTH_MUTATION");
+		expect(run(directory)).toBe(`${outcomeMarker}=ERROR`);
+		expect(run(join(directory, "missing.txt"))).toBe(`${outcomeMarker}=ERROR`);
+		if (process.getuid?.() !== 0) {
+			await chmod(target, 0o400);
+			expect(run(target)).toBe(`${outcomeMarker}=EACCES`);
+		}
+	} finally {
+		await chmod(target, 0o600);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("accepts only a complete nonce-bound filesystem permission denial", () => {
+	const outcomeMarker = "SYNTH_WRITE_RESULT_TEST";
+	const evidence = (
+		lines: string[],
+		changed = false,
+		ownerWriteSucceeded = true,
+	) =>
+		crossFileModifyEvidence({
+			changed,
+			ownerWriteSucceeded,
+			outcomeMarker,
+			outputs: [JSON.stringify(lines.join("\n"))],
+		});
+	for (const code of ["EACCES", "EPERM"])
+		expect(evidence([`${outcomeMarker}=${code}`])).toEqual({
+			status: "pass",
+			reason: "foreign-write-permission-denied",
+		});
+	for (const lines of [
+		[`${outcomeMarker}=ERROR`],
+		[`${outcomeMarker}=APPLIED`],
+		[`${outcomeMarker}=ENOENT`],
+		["SYNTH_WRITE_RESULT_OTHER=EACCES"],
+		[`${outcomeMarker}=EACCES`, `${outcomeMarker}=APPLIED`],
+		[`${outcomeMarker}=EACCES`, `${outcomeMarker}=EACCES`],
+		[`prefix ${outcomeMarker}=EACCES`],
+		[`${outcomeMarker}=EACCES`, "Process running with session ID test"],
+	])
+		expect(evidence(lines).status).toBe("unverified");
+	expect(evidence([`${outcomeMarker}=EACCES`], true).status).toBe("fail");
+	expect(evidence([`${outcomeMarker}=EACCES`], false, false).status).toBe(
+		"unverified",
+	);
+});
+
 it("keeps unclassified cross-write outcomes from passing modification isolation", async () => {
 	const appliedMarker = "SYNTH_FOREIGN_WRITE_APPLIED";
-	const deniedMarker = "SYNTH_FOREIGN_WRITE_DENIED";
+	const outcomeMarker = "SYNTH_FOREIGN_WRITE_RESULT";
 	const evidence = (
 		input: Partial<Parameters<typeof crossFileModifyEvidence>[0]>,
 	) =>
 		crossFileModifyEvidence({
 			changed: false,
 			ownerWriteSucceeded: true,
+			outcomeMarker,
 			outputs: [],
 			...input,
 		});
@@ -976,8 +1063,7 @@ it("keeps unclassified cross-write outcomes from passing modification isolation"
 				foreignWriteCommand({
 					mutation: "SYNTH_MUTATION",
 					target,
-					appliedMarker,
-					deniedMarker,
+					outcomeMarker,
 				}),
 			],
 			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
@@ -985,7 +1071,7 @@ it("keeps unclassified cross-write outcomes from passing modification isolation"
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
-	expect(genericFailureOutput).toContain(deniedMarker);
+	expect(genericFailureOutput).toContain(`${outcomeMarker}=ERROR`);
 	const statuses: Status[] = [];
 	for (const [input, expected] of [
 		[
@@ -1646,12 +1732,12 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				for (const file of ["owner-write.txt", "foreign-write.txt"])
 					await writeFile(filePath(user, file), "SYNTH_UNCHANGED");
 			await pair(
-				users.map(
-					(user) =>
-						"printf %s " +
-						quote(mutation) +
-						" > " +
-						quote(filePath(user, "owner-write.txt")),
+				users.map((user) =>
+					foreignWriteCommand({
+						mutation,
+						target: filePath(user, "owner-write.txt"),
+						outcomeMarker: `SYNTH_OWNER_WRITE_${user.id.toUpperCase()}`,
+					}),
 				),
 			);
 			const canWrite = await Promise.all(
@@ -1670,8 +1756,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					return foreignWriteCommand({
 						mutation,
 						target: filePath(other, "foreign-write.txt"),
-						appliedMarker: `${marker}_APPLIED`,
-						deniedMarker: `${marker}_DENIED`,
+						outcomeMarker: marker,
 					});
 				}),
 			);
@@ -1688,6 +1773,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				const evidence = crossFileModifyEvidence({
 					changed,
 					ownerWriteSucceeded: canWrite[index] === true,
+					outcomeMarker: marker,
 					outputs: foreignWrite.probe.outputs,
 				});
 				record(
