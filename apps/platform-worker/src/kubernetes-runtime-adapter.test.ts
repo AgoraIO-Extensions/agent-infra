@@ -2217,6 +2217,237 @@ describe("GA Kubernetes Workload adapter", () => {
 		} as V1Pod);
 		expect(await adapter.observe(desired, identity)).toBe("healthy");
 	});
+	it.each([
+		{ labels: { "platform-worker": "true" } },
+		{ labels: { "istio-injection": "enabled" } },
+		{ annotations: { "k8s.v1.cni.cncf.io/networks": "foreign" } },
+		{ annotations: { "cni.projectcalico.org/ipAddrs": '["203.0.113.5"]' } },
+	])(
+		"rejects unmanaged Pod metadata %j in template and live Pod",
+		async (extra) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec || !pod?.spec) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec.template,
+						metadata: {
+							...workload.spec.template.metadata,
+							labels: {
+								...workload.spec.template.metadata?.labels,
+								...extra.labels,
+							},
+							annotations: extra.annotations,
+						},
+					},
+				},
+			} as V1StatefulSet);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				metadata: {
+					...pod.metadata,
+					labels: { ...pod.metadata?.labels, ...extra.labels },
+					annotations: extra.annotations,
+				},
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			expect(await adapter.apply(desired)).toBe("pending");
+		},
+	);
+	it.each([
+		{ schedulerName: "foreign-scheduler" },
+		{ priorityClassName: "system-node-critical" },
+		{ priority: 100 },
+		{ preemptionPolicy: "Never" },
+		{ nodeSelector: { pool: "privileged" } },
+		{ affinity: { nodeAffinity: {} } },
+		{ tolerations: [{ operator: "Exists" }] },
+		{ schedulingGates: [{ name: "foreign" }] },
+		{
+			topologySpreadConstraints: [
+				{
+					maxSkew: 1,
+					topologyKey: "foreign",
+					whenUnsatisfiable: "ScheduleAnyway",
+				},
+			],
+		},
+		{ resourceClaims: [{ name: "foreign", resourceClaimName: "foreign" }] },
+	])(
+		"rejects unmanaged scheduling %j in template and Pod",
+		async (override) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const spec = workload?.spec?.template.spec;
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec || !spec || !pod?.spec) throw new Error();
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec.template,
+						spec: { ...spec, ...override },
+					},
+				},
+			} as V1StatefulSet);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...pod,
+				spec: { ...pod.spec, ...override },
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		},
+	);
+	it("accepts controller labels, Calico output annotations and real scheduler defaults", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const spec = workload?.spec?.template.spec;
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!workload?.spec || !spec || !pod?.spec) throw new Error();
+		const defaults = {
+			schedulerName: "default-scheduler",
+			priority: 0,
+			preemptionPolicy: "PreemptLowerPriority",
+		};
+		const revision = `${desired.service.name}-abc123`;
+		f.resources.set(`StatefulSet/${desired.service.name}`, {
+			...workload,
+			status: { ...workload.status, updateRevision: revision },
+			spec: {
+				...workload.spec,
+				template: { ...workload.spec.template, spec: { ...spec, ...defaults } },
+			},
+		} as V1StatefulSet);
+		const observedPod: V1Pod = {
+			...pod,
+			metadata: {
+				...pod.metadata,
+				labels: {
+					...pod.metadata?.labels,
+					"statefulset.kubernetes.io/pod-name": `${desired.service.name}-0`,
+					"apps.kubernetes.io/pod-index": "0",
+					"controller-revision-hash": revision,
+				},
+				annotations: {
+					"cni.projectcalico.org/containerID": "a".repeat(64),
+					"cni.projectcalico.org/podIP": "10.244.0.10/32",
+					"cni.projectcalico.org/podIPs": "10.244.0.10/32",
+				},
+			},
+			spec: {
+				...pod.spec,
+				...defaults,
+				nodeName: "kind-worker",
+				tolerations: [
+					"node.kubernetes.io/not-ready",
+					"node.kubernetes.io/unreachable",
+				].map((key) => ({
+					key,
+					operator: "Exists",
+					effect: "NoExecute",
+					tolerationSeconds: 300,
+				})),
+			},
+		};
+		observedPod.spec?.tolerations?.push({
+			key: "node.kubernetes.io/memory-pressure",
+			operator: "Exists",
+			effect: "NoSchedule",
+		});
+		f.resources.set(`Pod/${desired.service.name}-0`, observedPod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const writesBefore = f.writes.length;
+		expect(await adapter.apply(desired)).toEqual(identity);
+		expect(f.writes).toHaveLength(writesBefore);
+		const invalidLabels: Record<string, string>[] = [
+			{ "controller-revision-hash": "foreign" },
+			{ "statefulset.kubernetes.io/pod-name": "foreign" },
+			{ "apps.kubernetes.io/pod-index": "1" },
+		];
+		for (const labels of invalidLabels) {
+			f.resources.set(`Pod/${desired.service.name}-0`, {
+				...observedPod,
+				metadata: {
+					...observedPod.metadata,
+					labels: { ...observedPod.metadata?.labels, ...labels },
+				},
+			});
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		}
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...observedPod,
+			metadata: {
+				...observedPod.metadata,
+				annotations: { "cni.projectcalico.org/podIP": "203.0.113.5/32" },
+			},
+		});
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+	it.each([
+		{ type: "LoadBalancer" },
+		{ type: "NodePort" },
+		{ externalIPs: ["203.0.113.5"] },
+		{ selector: { foreign: "true" } },
+	])(
+		"deletes unsafe probe exposure %j before closing routes",
+		async (override) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const probeName = `${desired.service.name}-probe`;
+			const probe = await f.client.read<V1Service>("Service", probeName);
+			if (!probe) throw new Error();
+			f.resources.set(`Service/${probeName}`, {
+				...probe,
+				spec: { ...probe.spec, ...override },
+			} as V1Service);
+			expect(
+				await adapter.closeAgent(
+					desired.agentId,
+					desired.workloadRevision,
+					desired.fence,
+				),
+			).toBe(true);
+			expect(await f.client.read("Service", probeName)).toBeNull();
+		},
+	);
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

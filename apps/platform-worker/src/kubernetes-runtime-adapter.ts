@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -441,6 +442,69 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.fence)
 		);
 	}
+	function hasSafePodMetadata(
+		value: AgentWorkloadDesiredV1,
+		actual: V1Pod["metadata"],
+		live?: { pod: V1Pod; workload: V1StatefulSet },
+	) {
+		const name = workloadResourceNameV1(value.agentId);
+		const expectedLabels: Record<string, string> = {
+			[ownerLabel]: name,
+			[revisionLabel]: String(value.workloadRevision),
+		};
+		if (live) {
+			const injected = {
+				"statefulset.kubernetes.io/pod-name": `${name}-0`,
+				"apps.kubernetes.io/pod-index": "0",
+				"controller-revision-hash":
+					live.workload.status?.updateRevision ??
+					live.workload.status?.currentRevision,
+			};
+			for (const [key, expected] of Object.entries(injected)) {
+				if (actual?.labels?.[key] !== undefined) {
+					if (expected === undefined || actual.labels[key] !== expected)
+						return false;
+					expectedLabels[key] = expected;
+				}
+			}
+		}
+		if (!hasSameStructure(actual?.labels, expectedLabels)) return false;
+		const annotations = Object.entries(actual?.annotations ?? {});
+		if (!live) return annotations.length === 0;
+		const podIPs =
+			live.pod.status?.podIPs?.map((entry) => entry.ip) ??
+			(live.pod.status?.podIP ? [live.pod.status.podIP] : []);
+		const cidrs = podIPs.map((ip) => `${ip}/${isIP(ip) === 6 ? 128 : 32}`);
+		const validCidr = (value: string) => {
+			const parts = value.split("/");
+			if (parts.length !== 2) return false;
+			const [ip = "", prefix] = parts;
+			return (
+				value.length <= 48 &&
+				((isIP(ip) === 4 && prefix === "32") ||
+					(isIP(ip) === 6 && prefix === "128"))
+			);
+		};
+		return annotations.every(([key, content]) => {
+			if (key === "cni.projectcalico.org/containerID")
+				return /^[a-f0-9]{64}$/.test(content);
+			if (key === "cni.projectcalico.org/podIP")
+				return (
+					content === "" ||
+					(validCidr(content) &&
+						(cidrs.length === 0 || cidrs.includes(content)))
+				);
+			if (key === "cni.projectcalico.org/podIPs")
+				return (
+					content === "" ||
+					(content.length <= 97 &&
+						content.split(",").every(validCidr) &&
+						(cidrs.length === 0 || content === cidrs.join(",")))
+				);
+			return false;
+		});
+	}
+
 	function hasUnsafePodSpec(
 		pod: V1PodSpec | undefined,
 		expectedIdentity?: {
@@ -462,6 +526,42 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			(pod?.hostAliases?.length ?? 0) > 0 ||
 			pod?.dnsConfig !== undefined ||
 			(pod?.dnsPolicy !== undefined && pod.dnsPolicy !== "ClusterFirst") ||
+			(pod?.schedulerName !== undefined &&
+				pod.schedulerName !== "default-scheduler") ||
+			(pod?.priorityClassName !== undefined && pod.priorityClassName !== "") ||
+			(pod?.priority !== undefined && pod.priority !== 0) ||
+			(pod?.preemptionPolicy !== undefined &&
+				pod.preemptionPolicy !== "PreemptLowerPriority") ||
+			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
+			pod?.affinity !== undefined ||
+			pod?.runtimeClassName !== undefined ||
+			Object.keys(pod?.overhead ?? {}).length > 0 ||
+			(pod?.resourceClaims?.length ?? 0) > 0 ||
+			(pod?.schedulingGates?.length ?? 0) > 0 ||
+			(pod?.topologySpreadConstraints?.length ?? 0) > 0 ||
+			(pod?.tolerations ?? []).some(
+				(toleration) =>
+					!expectedIdentity ||
+					![
+						{
+							key: "node.kubernetes.io/memory-pressure",
+							operator: "Exists",
+							effect: "NoSchedule",
+						},
+						{
+							key: "node.kubernetes.io/not-ready",
+							operator: "Exists",
+							effect: "NoExecute",
+							tolerationSeconds: 300,
+						},
+						{
+							key: "node.kubernetes.io/unreachable",
+							operator: "Exists",
+							effect: "NoExecute",
+							tolerationSeconds: 300,
+						},
+					].some((expected) => hasSameStructure(toleration, expected)),
+			) ||
 			hasUnexpectedIdentity ||
 			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
@@ -523,6 +623,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const pod = template?.spec;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		return (
+			!hasSafePodMetadata(value, template?.metadata) ||
 			hasDriftedPodSpec(value, pod) ||
 			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
 			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
@@ -821,6 +922,29 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		fence: number;
 	}): Promise<boolean> {
 		const name = workloadResourceNameV1(value.agentId);
+		// Probe Services must never retain an alternate externally reachable route.
+		const probeName = `${name}-probe`;
+		const probe = await client.read<V1Service>("Service", probeName);
+		if (probe) {
+			own(probe, value.agentId, value.workloadRevision, value.fence);
+			const expectedProbeSpec = {
+				type: "ClusterIP",
+				selector: {
+					[ownerLabel]: name,
+					[revisionLabel]: probe.metadata?.labels?.[revisionLabel] ?? "closed",
+				},
+				ports: probe.spec?.ports?.map((port) => ({
+					name: port.name,
+					port: port.port,
+					targetPort: port.targetPort,
+				})),
+			};
+			if (
+				!matchesServiceSpec(probe.spec, expectedProbeSpec) &&
+				!(await remove("Service", probeName, value))
+			)
+				return false;
+		}
 		// Remove the selected route's backend before any candidate Pod can start.
 		const service = await client.read<V1Service>("Service", name);
 		if (service) {
@@ -1099,7 +1223,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			hostname: `${name}-0`,
 			subdomain: name,
 		};
-		if (hasUnsafePodSpec(pod.spec, expectedPodIdentity)) return "drifted";
+		if (
+			!hasSafePodMetadata(value, pod.metadata, { pod, workload: current }) ||
+			hasUnsafePodSpec(pod.spec, expectedPodIdentity)
+		)
+			return "drifted";
 		const container = pod.spec?.containers.find(
 			(entry) => entry.name === "agent",
 		);
@@ -1480,10 +1608,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						pod.metadata?.ownerReferences?.some(
 							(owner) => owner.uid === current.metadata?.uid,
 						) &&
-						hasDriftedPodSpec(value, pod.spec, {
-							hostname: `${name}-0`,
-							subdomain: name,
-						}),
+						(!hasSafePodMetadata(value, pod.metadata, {
+							pod,
+							workload: current,
+						}) ||
+							hasDriftedPodSpec(value, pod.spec, {
+								hostname: `${name}-0`,
+								subdomain: name,
+							})),
 				);
 			const changing =
 				current &&
