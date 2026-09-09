@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 	})),
 	logout: vi.fn(async () => undefined),
 	navigate: vi.fn(async () => undefined),
+	redirect: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -39,7 +40,10 @@ vi.mock("@tanstack/react-router", () => ({
 			{children}
 		</a>
 	),
-	Navigate: () => <div>登录已失效</div>,
+	Navigate: (props: unknown) => {
+		mocks.redirect(props);
+		return <div>登录已失效</div>;
+	},
 	useNavigate: () => mocks.navigate,
 }));
 
@@ -47,10 +51,38 @@ import { ConsoleShell } from "./shell";
 
 afterEach(() => {
 	cleanup();
+	window.history.replaceState({}, "", "/");
 	vi.clearAllMocks();
 });
 
 describe("Connection 控制台 Session", () => {
+	it("未登录时把受控 Connection 深链带到登录页", async () => {
+		mocks.getSession.mockRejectedValueOnce(new Error("unauthorized"));
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=authorize",
+		);
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+
+		await screen.findByText("登录已失效");
+		expect(mocks.redirect).toHaveBeenCalledWith({
+			replace: true,
+			search: {
+				returnTo:
+					"/connection/connections?provider=confluence&intent=authorize",
+			},
+			to: "/connection/login",
+		});
+	});
+
 	it("退出按钮调用 API、清空查询并返回登录页", async () => {
 		const client = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -65,6 +97,9 @@ describe("Connection 控制台 Session", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
 		await waitFor(() => expect(mocks.logout).toHaveBeenCalledOnce());
 		expect(clear).toHaveBeenCalledOnce();
-		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/connection/login" });
+		expect(mocks.navigate).toHaveBeenCalledWith({
+			search: { returnTo: undefined },
+			to: "/connection/login",
+		});
 	});
 });

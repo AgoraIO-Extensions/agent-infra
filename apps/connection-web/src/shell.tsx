@@ -16,12 +16,21 @@ export function ConsoleShell(props: { children: ReactNode }) {
 		mutationFn: connectionApi.logout,
 		onSuccess: async () => {
 			queryClient.clear();
-			await navigate({ to: "/connection/login" });
+			await navigate({
+				search: { returnTo: undefined },
+				to: "/connection/login",
+			});
 		},
 	});
 
 	if (session.isPending) return <FullPageState>正在加载账号...</FullPageState>;
-	if (session.isError) return <Navigate to="/connection/login" replace />;
+	if (session.isError) {
+		const returnTo =
+			window.location.pathname === "/connection/connections"
+				? `${window.location.pathname}${window.location.search}`
+				: undefined;
+		return <Navigate to="/connection/login" search={{ returnTo }} replace />;
+	}
 
 	return (
 		<div className="app-shell">
