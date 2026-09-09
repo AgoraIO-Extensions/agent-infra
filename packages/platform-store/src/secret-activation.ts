@@ -184,8 +184,13 @@ function claimMatchesRow(
 	row: SecretActivationRow,
 	record: PlatformSecretRecordV1,
 	decisionAt: Date,
+	allowHistoricalConfiguration = false,
 ): boolean {
 	try {
+		const currentConfigurationRevision = integer(
+			row.current_configuration_revision,
+			1,
+		);
 		return (
 			claim.schemaVersion === 1 &&
 			claim.workerId === row.secret_activation_owner &&
@@ -194,8 +199,9 @@ function claimMatchesRow(
 				claim.leaseExpiresAt.getTime() &&
 			claim.leaseExpiresAt > decisionAt &&
 			recordMatchesCandidate(record, claim.candidate) &&
-			integer(row.current_configuration_revision, 1) ===
-				claim.candidate.configRevision
+			(allowHistoricalConfiguration
+				? currentConfigurationRevision >= claim.candidate.configRevision
+				: currentConfigurationRevision === claim.candidate.configRevision)
 		);
 	} catch {
 		return false;
@@ -273,6 +279,22 @@ function validatePlan(
 			) ||
 			!Array.isArray(plan.auditEvents) ||
 			plan.auditEvents.length > 2
+		) {
+			throw new Error();
+		}
+		if (
+			plan.historicalCandidateCleanup !== undefined &&
+			(plan.historicalCandidateCleanup !== true ||
+				plan.next.lifecycleState !== "failed" ||
+				plan.next.error.code !== "SECRET_ACTIVATION_FAILED" ||
+				plan.next.error.retryable !== true ||
+				plan.expectedActivationFence !== undefined ||
+				plan.expectedLifecycleStates.some(
+					(state) => !["pending", "applying", "observed"].includes(state),
+				) ||
+				plan.auditEvents.length !== 0 ||
+				plan.next.kubernetesSecretRef !== undefined ||
+				plan.next.activationFence !== undefined)
 		) {
 			throw new Error();
 		}
@@ -538,7 +560,13 @@ export class PostgresSecretActivationStoreV1
 				const record = parseRecord(row);
 				const decisionAt = await this.#decisionAt(sql);
 				if (
-					!claimMatchesRow(input.claim, row, record, decisionAt) ||
+					!claimMatchesRow(
+						input.claim,
+						row,
+						record,
+						decisionAt,
+						input.plan.historicalCandidateCleanup === true,
+					) ||
 					!input.plan.expectedLifecycleStates.includes(record.lifecycleState) ||
 					!currentRecordMatchesExpectedFence(record, input.plan)
 				) {

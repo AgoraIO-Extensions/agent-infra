@@ -46,12 +46,28 @@ export function createPlatformWorkloadWorkerV1(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
+	let tickTail: Promise<void> = Promise.resolve();
 	const log = options.log ?? console.info;
+	function logSafely(message: string) {
+		try {
+			log(message);
+		} catch {
+			// Logging is observational and must not stop reconciliation.
+		}
+	}
+	function enqueueTick() {
+		const result = tickTail.then(() => reconciliation.tick(workerId));
+		tickTail = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
+	}
 	async function poll() {
 		try {
-			await reconciliation.tick(workerId);
+			await enqueueTick();
 		} catch {
-			log(
+			logSafely(
 				JSON.stringify({
 					service: "platform-worker",
 					status: "retrying",
@@ -65,10 +81,16 @@ export function createPlatformWorkloadWorkerV1(
 			}, pollIntervalMs);
 	}
 	return {
-		tick: () => reconciliation.tick(workerId),
+		tick: () => {
+			if (stopped)
+				return Promise.reject(new Error("Platform Worker is stopped"));
+			return enqueueTick();
+		},
 		start() {
 			if (running || stopped) return;
-			log(JSON.stringify({ service: "platform-worker", status: "ready" }));
+			logSafely(
+				JSON.stringify({ service: "platform-worker", status: "ready" }),
+			);
 			running = poll();
 		},
 		stop() {
@@ -76,8 +98,12 @@ export function createPlatformWorkloadWorkerV1(
 			stopped = true;
 			clearTimeout(timer);
 			closing = (async () => {
-				await running;
-				await store.close();
+				try {
+					await running;
+				} finally {
+					await tickTail;
+					await store.close();
+				}
 			})();
 			return closing;
 		},

@@ -580,6 +580,7 @@ describe("unactivated Secret candidate cleanup", () => {
 				),
 			).resolves.toBe(true);
 			expect(removed).toHaveLength(1);
+			expect(removed[0]).toEqual({ ...candidate, lifecycleState });
 			expect(store.currentCandidate).toMatchObject({
 				lifecycleState: "failed",
 				failureRetryable: true,
@@ -590,6 +591,37 @@ describe("unactivated Secret candidate cleanup", () => {
 			});
 		},
 	);
+
+	it("reclaims the exact historical candidate after configuration advances", async () => {
+		const historical = { ...candidate, lifecycleState: "observed" as const };
+		const store = new FakeActivationStore({ candidate: historical });
+		store.currentConfigurationRevision += 1;
+		const removeCandidate = vi.fn(async () => true);
+
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				{ store, kubernetes: { removeCandidate } },
+				cleanupCommand(),
+			),
+		).resolves.toBe(true);
+		expect(removeCandidate).toHaveBeenCalledOnce();
+		expect(removeCandidate).toHaveBeenCalledWith(historical);
+		expect(store.currentConfigurationRevision).toBe(
+			candidate.configRevision + 1,
+		);
+		expect(store.currentCandidate).toMatchObject({
+			agentId: candidate.agentId,
+			secretId: candidate.secretId,
+			secretVersion: candidate.secretVersion,
+			configRevision: candidate.configRevision,
+			ownerType: candidate.ownerType,
+			ownerId: candidate.ownerId,
+			name: candidate.name,
+			wrappingKeyVersion: candidate.wrappingKeyVersion,
+			lifecycleState: "failed",
+			failureRetryable: true,
+		});
+	});
 
 	it("retries after candidate deletion or failure-transition errors", async () => {
 		const deletionStore = new FakeActivationStore({
@@ -643,14 +675,14 @@ describe("unactivated Secret candidate cleanup", () => {
 	});
 
 	it.each([
-		"newer configuration",
+		"older configuration",
 		"foreign owner",
 		"wrong Secret name",
 		"active origin",
 	] as const)("fails closed for a %s candidate", async (condition) => {
 		const store = new FakeActivationStore();
-		if (condition === "newer configuration")
-			store.currentConfigurationRevision += 1;
+		if (condition === "older configuration")
+			store.currentConfigurationRevision -= 1;
 		if (condition === "foreign owner")
 			store.currentCandidate = {
 				...store.currentCandidate,

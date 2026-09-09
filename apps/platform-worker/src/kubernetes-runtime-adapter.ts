@@ -976,14 +976,41 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			workloadRevision: number,
 			fence: number,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
-			const current = await client.read<V1StatefulSet>(
-				"StatefulSet",
-				workloadResourceNameV1(agentId),
-			);
-			if (!current)
+			const name = workloadResourceNameV1(agentId);
+			const current = await client.read<V1StatefulSet>("StatefulSet", name);
+			if (!current) {
+				const pvc = await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					`${name}-data`,
+				);
+				if (pvc) {
+					own(pvc, agentId, workloadRevision, fence);
+					if (
+						pvc.metadata?.labels?.[revisionLabel] !==
+							String(workloadRevision) ||
+						pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+							String(fence)
+					)
+						await client.replace({
+							...pvc,
+							metadata: {
+								...pvc.metadata,
+								labels: {
+									...pvc.metadata?.labels,
+									[revisionLabel]: String(workloadRevision),
+								},
+								annotations: {
+									...pvc.metadata?.annotations,
+									"agent-infra.agora.io/fence": String(fence),
+									[fingerprintAnnotation]: "",
+								},
+							},
+						});
+				}
 				return (await client.list("Pod", selector(agentId))).length
 					? "pending"
 					: null;
+			}
 			own(current, agentId, workloadRevision, fence);
 			if (current.spec?.replicas !== 0) {
 				await client.replace({

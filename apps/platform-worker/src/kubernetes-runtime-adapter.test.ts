@@ -696,6 +696,52 @@ describe("GA Kubernetes Workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 		expect(await f.client.read("StatefulSet", desired.service.name)).toBeNull();
 	});
+	it("fences a retained PVC when scale-down finds no StatefulSet", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const retained = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		if (!retained) throw new Error();
+		f.resources.delete(`StatefulSet/${desired.service.name}`);
+
+		expect(
+			await adapter.scaleDownAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				11,
+			),
+		).toBe("pending");
+		const fenced = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		expect(fenced?.metadata?.uid).toBe(retained.metadata?.uid);
+		expect(fenced?.metadata?.resourceVersion).not.toBe(
+			retained.metadata?.resourceVersion,
+		);
+		expect(fenced?.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe(
+			"11",
+		);
+		expect(fenced?.spec).toStrictEqual(retained.spec);
+		f.resources.delete(`Pod/${desired.service.name}-0`);
+		expect(
+			await adapter.scaleDownAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				11,
+			),
+		).toBeNull();
+
+		await expect(
+			adapter.apply({ ...desired, requestId: "request-stale-restart" }),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await f.client.read("StatefulSet", desired.service.name)).toBeNull();
+	});
 	it("does not close or remove resources from a newer fence at the same revision", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

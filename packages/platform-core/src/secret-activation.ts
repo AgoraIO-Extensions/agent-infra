@@ -120,6 +120,8 @@ export interface SecretActivationTransitionPlanV1 {
 	readonly schemaVersion: 1;
 	readonly expectedLifecycleStates: readonly SecretActivationLifecycleStateV1[];
 	readonly expectedActivationFence?: SecretActivationFenceV1;
+	/** Cleanup may finish an exact non-active candidate after configuration advances. */
+	readonly historicalCandidateCleanup?: true;
 	readonly next: SecretActivationNextStateV1;
 	readonly auditEvents: readonly SecretActivationAuditIntentV1[];
 }
@@ -557,6 +559,7 @@ function audit(
 function transitionPlan(input: {
 	readonly expectedLifecycleStates: readonly SecretActivationLifecycleStateV1[];
 	readonly expectedActivationFence?: SecretActivationFenceV1;
+	readonly historicalCandidateCleanup?: true;
 	readonly next: SecretActivationNextStateV1;
 	readonly auditEvents?: readonly SecretActivationAuditIntentV1[];
 }): SecretActivationTransitionPlanV1 {
@@ -565,6 +568,9 @@ function transitionPlan(input: {
 		expectedLifecycleStates: input.expectedLifecycleStates,
 		...(input.expectedActivationFence
 			? { expectedActivationFence: input.expectedActivationFence }
+			: {}),
+		...(input.historicalCandidateCleanup
+			? { historicalCandidateCleanup: true as const }
 			: {}),
 		next: input.next,
 		auditEvents: input.auditEvents ?? [],
@@ -639,7 +645,7 @@ function cleanupCandidateMatches(
 }
 
 /**
- * Reclaims only a Store-authorized, still-current, non-active candidate. The
+ * Reclaims only an exact Store-authorized current or historical non-active candidate. The
  * caller verifies materialized candidates against the current Workload before
  * removal; this transition preserves the immutable record for a fenced retry.
  */
@@ -666,7 +672,7 @@ export async function cleanupUnactivatedSecretCandidateV1(
 			leaseDurationMs: 30_000,
 		},
 		(state) =>
-			state.currentConfigurationRevision === command.configRevision &&
+			state.currentConfigurationRevision >= command.configRevision &&
 			cleanupCandidateMatches(command, state.candidate)
 				? { outcome: "claim" }
 				: { outcome: "stale" },
@@ -682,6 +688,7 @@ export async function cleanupUnactivatedSecretCandidateV1(
 		claim,
 		plan: transitionPlan({
 			expectedLifecycleStates: [claim.candidate.lifecycleState],
+			historicalCandidateCleanup: true,
 			next: {
 				lifecycleState: "failed",
 				error: failure("SECRET_ACTIVATION_FAILED", command.traceId),

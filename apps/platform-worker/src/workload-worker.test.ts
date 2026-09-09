@@ -80,6 +80,46 @@ describe("Workload Worker lifecycle", () => {
 			"private-provider-response",
 		);
 	});
+	it("continues polling and closes the Store when retry logging throws", async () => {
+		const options = fixture();
+		options.log.mockImplementation((message) => {
+			if (message.includes("WORKLOAD_RECONCILIATION_UNAVAILABLE"))
+				throw new Error("broken-log-sink");
+		});
+		store.runNext.mockRejectedValueOnce(new Error("polling-failure"));
+		const worker = createPlatformWorkloadWorkerV1(options);
+		worker.start();
+		await vi.advanceTimersByTimeAsync(10);
+		await expect(worker.stop()).resolves.toBeUndefined();
+		expect(store.runNext).toHaveBeenCalledTimes(2);
+		expect(store.close).toHaveBeenCalledOnce();
+	});
+	it("serializes a manual tick behind an in-flight polling tick", async () => {
+		const first = Promise.withResolvers<"idle">();
+		store.runNext.mockReturnValueOnce(first.promise);
+		const worker = createPlatformWorkloadWorkerV1(fixture());
+		worker.start();
+		const manual = worker.tick();
+		await Promise.resolve();
+		expect(store.runNext).toHaveBeenCalledOnce();
+		first.resolve("idle");
+		await expect(manual).resolves.toBe("idle");
+		expect(store.runNext).toHaveBeenCalledTimes(2);
+		await worker.stop();
+	});
+	it("drains an in-flight manual tick before closing the Store", async () => {
+		const step = Promise.withResolvers<"idle">();
+		store.runNext.mockReturnValueOnce(step.promise);
+		const worker = createPlatformWorkloadWorkerV1(fixture());
+		const manual = worker.tick();
+		const stopped = worker.stop();
+		await Promise.resolve();
+		expect(store.close).not.toHaveBeenCalled();
+		step.resolve("idle");
+		await manual;
+		await stopped;
+		expect(store.close).toHaveBeenCalledOnce();
+	});
 	it("releases the Store after startup validation fails", () => {
 		expect(() =>
 			createPlatformWorkloadWorkerV1({ ...fixture(), maximumAttempts: 0 }),
