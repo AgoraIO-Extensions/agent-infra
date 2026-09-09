@@ -37,12 +37,16 @@ export interface WorkloadReconciliationStateV1 {
 	readonly sourceConfigurationRevision: number;
 	readonly sourceLifecycleRevision: number;
 	readonly revision: number;
+	/** Management-owned fencing token; independent from the local Workload revision. */
+	readonly fence: number;
 	readonly phase: WorkloadPhaseV1;
 	readonly candidate: WorkloadVersionV1;
 	readonly verified: WorkloadVersionV1 | null;
 	readonly verifiedRevision: number | null;
 	readonly identity: WorkloadIdentityV1 | null;
 	readonly rollback: boolean;
+	/** A newer accepted intent is waiting for failed-candidate Secret cleanup. */
+	readonly cleanupInterrupted?: true;
 	readonly failureCode: "reconciliation_failed" | "health_check_failed" | null;
 	readonly attempts: number;
 	readonly capabilities?: Readonly<Record<string, boolean>>;
@@ -108,6 +112,10 @@ export interface WorkloadRuntimePortV1 {
 		input: WorkloadReconciliationInputV1,
 	): Promise<"pending" | "active" | "failed">;
 	promote(state: WorkloadReconciliationStateV1): Promise<void>;
+	discardUnactivatedSecrets(
+		state: WorkloadReconciliationStateV1,
+		input: WorkloadReconciliationInputV1,
+	): Promise<boolean>;
 	cleanup(
 		state: WorkloadReconciliationStateV1,
 		deleteNewVolume: boolean,
@@ -141,6 +149,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 				throw new TypeError("Invalid Worker identity");
 			return dependencies.store.runNext(workerId, async (input) => {
 				const { management, configuration } = input;
+				if (!Number.isSafeInteger(management.fence) || management.fence < 1)
+					throw new Error("Workload fence is unavailable");
 				let state = input.state;
 				const stopped =
 					management.desiredState === "stopped" ||
@@ -148,14 +158,31 @@ export function createWorkloadReconciliationV1(dependencies: {
 				if (
 					!state ||
 					state.sourceConfigurationRevision !== configuration.revision ||
-					state.sourceLifecycleRevision !== management.workloadRevision
+					state.sourceLifecycleRevision !== management.workloadRevision ||
+					state.fence !== management.fence
 				) {
+					if (
+						state?.phase === "cleaning" &&
+						state.verified !== null &&
+						!state.rollback
+					) {
+						const interruptedState: WorkloadReconciliationStateV1 = {
+							...state,
+							sourceConfigurationRevision: configuration.revision,
+							sourceLifecycleRevision: management.workloadRevision,
+							fence: management.fence,
+							cleanupInterrupted: true,
+						};
+						await runtime.closeRoute(interruptedState);
+						return interruptedState;
+					}
 					state = {
 						schemaVersion: 1,
 						agentId: management.agentId,
 						sourceConfigurationRevision: configuration.revision,
 						sourceLifecycleRevision: management.workloadRevision,
 						revision: nextRevision(state?.revision ?? 0),
+						fence: management.fence,
 						phase: stopped ? "closing" : "preflight",
 						candidate:
 							stopped && state
@@ -282,6 +309,22 @@ export function createWorkloadReconciliationV1(dependencies: {
 						case "cleaning":
 							await runtime.closeRoute(state);
 							if (state.verified && !state.rollback) {
+								if (!(await runtime.discardUnactivatedSecrets(state, input)))
+									return state;
+								if (state.cleanupInterrupted) {
+									const { cleanupInterrupted: _, ...retained } = state;
+									return {
+										...retained,
+										phase: stopped ? "closing" : "preflight",
+										candidate: stopped
+											? state.candidate
+											: { configuration, deployment: null },
+										revision: nextRevision(state.revision),
+										rollback: false,
+										failureCode: null,
+										attempts: 0,
+									};
+								}
 								return advance("applying", {
 									candidate: state.verified,
 									revision: nextRevision(state.revision),

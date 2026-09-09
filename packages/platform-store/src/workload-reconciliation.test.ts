@@ -5,6 +5,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
+	createAgentManagementV1,
 	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
 	type WorkloadRuntimePortV1,
@@ -31,6 +32,7 @@ import { WorkloadKubernetesError } from "../../../apps/platform-worker/src/kuber
 import { createKubernetesRuntimeAdapterV1 } from "../../../apps/platform-worker/src/kubernetes-runtime-adapter.js";
 import { createWorkloadRuntimeV1 } from "../../../apps/platform-worker/src/workload-runtime.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
+import { PostgresAgentManagementTransactionV1 } from "./agent-management.ts";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -101,6 +103,7 @@ function runtime(): WorkloadRuntimePortV1 {
 		observe: async () => "healthy",
 		activateSecrets: async () => "active",
 		promote: async () => undefined,
+		discardUnactivatedSecrets: async () => true,
 		cleanup: async () => true,
 	};
 }
@@ -242,6 +245,339 @@ async function expectResolverRejection() {
 }
 
 describe("PostgreSQL Workload steps", () => {
+	it("starts a new fenced generation after an accepted management command", async () => {
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime: runtime(),
+		});
+		for (let i = 0; i < 7; i++) await worker.tick("worker-a");
+		const [before] = await sql<
+			{
+				management_revision: string;
+				workload_revision: string;
+				fence: string;
+			}[]
+		>`select management_revision::text, workload_revision::text, fence::text from platform.agent_applications where agent_id = 'agent-a'`;
+		expect(before).toEqual({
+			management_revision: "2",
+			workload_revision: "1",
+			fence: "1",
+		});
+
+		const transaction = new PostgresAgentManagementTransactionV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			const decision = await createAgentManagementV1(
+				transaction,
+			).executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: "agent-a",
+					expectedRevision: 2,
+					idempotencyKey: "stop-after-ready",
+					requestId: "request-stop-after-ready",
+					traceId: "trace-stop-after-ready",
+				},
+				{
+					schemaVersion: 1,
+					userId: "owner-a",
+					accountStatus: "active",
+					organizationIds: [],
+					isAdministrator: false,
+				},
+			);
+			expect(decision.outcome).toBe("accepted");
+		} finally {
+			await transaction.close();
+		}
+
+		await worker.tick("worker-a");
+		const [after] = await sql<
+			{
+				workload_revision: string;
+				fence: string;
+				state: {
+					sourceLifecycleRevision: number;
+					revision: number;
+					fence: number;
+					phase: string;
+				};
+			}[]
+		>`select workload_revision::text, fence::text, (select state from platform.workload_reconciliations where agent_id = 'agent-a') state from platform.agent_applications where agent_id = 'agent-a'`;
+		expect(after).toEqual({
+			workload_revision: "2",
+			fence: "2",
+			state: expect.objectContaining({
+				sourceLifecycleRevision: 2,
+				revision: 2,
+				fence: 2,
+				phase: "closing",
+			}),
+		});
+	});
+
+	it.each([
+		{ managementFence: 3, legacyRevision: 7, expectedFence: 8 },
+		{ managementFence: 11, legacyRevision: 7, expectedFence: 12 },
+	])(
+		"takes over a legacy Workload state with management fence $managementFence",
+		async ({ managementFence, legacyRevision, expectedFence }) => {
+			const [configurationRow] = await sql<
+				{ configuration: Record<string, unknown> }[]
+			>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+			if (!configurationRow) throw new Error();
+			await sql`update platform.agent_applications set fence = ${managementFence} where agent_id = 'agent-a'`;
+			await sql`
+				insert into platform.workload_reconciliations
+					(agent_id, revision, state, next_attempt_at)
+				values (
+					'agent-a',
+					${legacyRevision},
+					${sql.json({
+						schemaVersion: 1,
+						agentId: "agent-a",
+						sourceConfigurationRevision: 1,
+						sourceLifecycleRevision: 1,
+						revision: legacyRevision,
+						phase: "preflight",
+						candidate: {
+							configuration: configurationRow.configuration,
+							deployment: null,
+						},
+						verified: null,
+						verifiedRevision: null,
+						identity: null,
+						rollback: false,
+						failureCode: null,
+						attempts: 0,
+					} as unknown as postgres.JSONValue)},
+					clock_timestamp()
+				)
+			`;
+
+			const step = vi.fn(async (input) => {
+				expect(input.management.fence).toBe(expectedFence);
+				expect(input.state).toMatchObject({
+					revision: legacyRevision,
+					fence: expectedFence,
+				});
+				if (!input.state) throw new Error();
+				return input.state;
+			});
+			expect(await first.runNext("worker-a", step)).toBe("advanced");
+			expect(step).toHaveBeenCalledOnce();
+
+			const [application] = await sql<
+				{ fence: string }[]
+			>`select fence::text from platform.agent_applications where agent_id = 'agent-a'`;
+			const [persisted] = await sql<
+				{ revision: string; state: { revision: number; fence: number } }[]
+			>`select revision::text, state from platform.workload_reconciliations where agent_id = 'agent-a'`;
+			expect(application?.fence).toBe(String(expectedFence));
+			expect(persisted).toEqual({
+				revision: String(legacyRevision),
+				state: expect.objectContaining({
+					revision: legacyRevision,
+					fence: expectedFence,
+				}),
+			});
+
+			await sql`update platform.agent_applications set fence = ${managementFence} where agent_id = 'agent-a'`;
+			await sql`update platform.workload_reconciliations set state = state - 'fence', next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+			await expect(
+				first.runNext("worker-a", async (input) => {
+					expect(input.management.fence).toBe(expectedFence);
+					throw new Error("synthetic takeover failure");
+				}),
+			).rejects.toThrow("Workload reconciliation persistence failed");
+			const [rolledBackApplication] = await sql<
+				{ fence: string }[]
+			>`select fence::text from platform.agent_applications where agent_id = 'agent-a'`;
+			const [rolledBackState] = await sql<
+				{ has_fence: boolean }[]
+			>`select state ? 'fence' as has_fence from platform.workload_reconciliations where agent_id = 'agent-a'`;
+			expect(rolledBackApplication?.fence).toBe(String(managementFence));
+			expect(rolledBackState?.has_fence).toBe(false);
+		},
+	);
+
+	it("advances a migrated legacy fence with a real stop command", async () => {
+		const [configurationRow] = await sql<
+			{ configuration: Record<string, unknown> }[]
+		>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+		if (!configurationRow) throw new Error();
+		await sql`update platform.agent_applications set status = 'available', service_availability = 'ready', fence = 3 where agent_id = 'agent-a'`;
+		await sql`
+			insert into platform.workload_reconciliations
+				(agent_id, revision, state, next_attempt_at)
+			values (
+				'agent-a',
+				7,
+				${sql.json({
+					schemaVersion: 1,
+					agentId: "agent-a",
+					sourceConfigurationRevision: 1,
+					sourceLifecycleRevision: 1,
+					revision: 7,
+					phase: "ready",
+					candidate: {
+						configuration: configurationRow.configuration,
+						deployment: { admitted: true },
+					},
+					verified: {
+						configuration: configurationRow.configuration,
+						deployment: { admitted: true },
+					},
+					verifiedRevision: 7,
+					identity: { uid: "uid-a", generation: 1 },
+					rollback: false,
+					failureCode: null,
+					attempts: 0,
+				} as unknown as postgres.JSONValue)},
+				clock_timestamp()
+			)
+		`;
+		await first.runNext("worker-migrate", async (input) => {
+			expect(input.management.fence).toBe(8);
+			if (!input.state) throw new Error();
+			return input.state;
+		});
+
+		const transaction = new PostgresAgentManagementTransactionV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			const decision = await createAgentManagementV1(
+				transaction,
+			).executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: "agent-a",
+					expectedRevision: 1,
+					idempotencyKey: "stop-after-legacy-takeover",
+					requestId: "request-stop-after-legacy-takeover",
+					traceId: "trace-stop-after-legacy-takeover",
+				},
+				{
+					schemaVersion: 1,
+					userId: "owner-a",
+					accountStatus: "active",
+					organizationIds: [],
+					isAdministrator: false,
+				},
+			);
+			expect(decision.outcome).toBe("accepted");
+		} finally {
+			await transaction.close();
+		}
+
+		await createWorkloadReconciliationV1({
+			store: first,
+			runtime: runtime(),
+		}).tick("worker-stop");
+		const [result] = await sql<
+			{
+				fence: string;
+				workload_revision: string;
+				state: {
+					fence: number;
+					revision: number;
+					sourceLifecycleRevision: number;
+					phase: string;
+				};
+			}[]
+		>`select fence::text, workload_revision::text, (select state from platform.workload_reconciliations where agent_id = 'agent-a') state from platform.agent_applications where agent_id = 'agent-a'`;
+		expect(result).toEqual({
+			fence: "9",
+			workload_revision: "2",
+			state: expect.objectContaining({
+				fence: 9,
+				revision: 8,
+				sourceLifecycleRevision: 2,
+				phase: "closing",
+			}),
+		});
+	});
+
+	it("resolves interrupted cleaning Secrets from the historical candidate", async () => {
+		const crypto = secretCryptoFixture();
+		const candidateSecret = crypto.encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "candidate-history-key",
+			ownerType: "agent-owner",
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			name: "CANDIDATE_HISTORY_KEY",
+			secretVersion: 1,
+			configRevision: 2,
+			plaintext: "synthetic-candidate-history-value",
+			occurredAt: "2026-09-09T00:00:00Z",
+		});
+		const [base] = await sql<
+			{ configuration: Record<string, unknown> }[]
+		>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+		if (!base) throw new Error();
+		const candidateConfiguration = {
+			...base.configuration,
+			revision: 2,
+			secrets: [
+				{
+					secretId: candidateSecret.secretId,
+					name: candidateSecret.name,
+					version: candidateSecret.secretVersion,
+					isSet: true,
+				},
+			],
+		};
+		const currentConfiguration = {
+			...base.configuration,
+			revision: 3,
+			source: {
+				...(base.configuration.source as Record<string, unknown>),
+				imageDigest: `sha256:${"c".repeat(64)}`,
+			},
+			secrets: [],
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, 'candidate-history', ${sql.json(candidateConfiguration)}, now()), ('agent-a', 3, ${currentConfiguration.source.imageDigest}, ${sql.json(currentConfiguration)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
+		await insertSecretRecord(candidateSecret);
+		await sql`insert into platform.workload_reconciliations(agent_id, revision, state, next_attempt_at) values ('agent-a', 2, ${sql.json(
+			{
+				schemaVersion: 1,
+				agentId: "agent-a",
+				sourceConfigurationRevision: 3,
+				sourceLifecycleRevision: 1,
+				revision: 2,
+				fence: 1,
+				phase: "cleaning",
+				candidate: { configuration: candidateConfiguration, deployment: null },
+				verified: { configuration: base.configuration, deployment: null },
+				verifiedRevision: 1,
+				identity: { uid: "uid-candidate", generation: 2 },
+				rollback: false,
+				cleanupInterrupted: true,
+				failureCode: "reconciliation_failed",
+				attempts: 0,
+			} as unknown as postgres.JSONValue,
+		)}, clock_timestamp())`;
+
+		const step = vi.fn(async (input) => {
+			expect(input.configuration.revision).toBe(3);
+			expect(input.secrets?.bindings).toHaveLength(1);
+			expect(
+				validatePlatformSecretRecordV1(input.secrets?.bindings[0]?.record)
+					.configRevision,
+			).toBe(2);
+			if (!input.state) throw new Error();
+			return input.state;
+		});
+		expect(await first.runNext("worker-history", step)).toBe("advanced");
+		expect(step).toHaveBeenCalledOnce();
+	});
+
 	it("binds unchanged Secrets to image and environment revisions without stale activation", async () => {
 		const crypto = secretCryptoFixture();
 		const record = crypto.encryptor.encrypt({
@@ -497,9 +833,14 @@ describe("PostgreSQL Workload steps", () => {
 			await sql`select * from platform.secret_records where configuration_revision = 7`,
 		).toHaveLength(0);
 	});
-	it.each(["pending", "applying", "observed"] as const)(
-		"reclaims only a failed initial-create current %s Secret after Kubernetes cleanup",
-		async (lifecycleState) => {
+	it.each([
+		["pending", false],
+		["applying", false],
+		["observed", false],
+		["observed", true],
+	] as const)(
+		"reclaims a failed current %s Secret with verified rollback %s",
+		async (lifecycleState, hasVerifiedWorkload) => {
 			const crypto = secretCryptoFixture();
 			const origin = crypto.encryptor.encrypt({
 				schemaVersion: 1,
@@ -517,6 +858,7 @@ describe("PostgreSQL Workload steps", () => {
 				...materializedRecord(origin, "observed"),
 				lifecycleState: "active",
 			});
+			if (activeOrigin.lifecycleState !== "active") throw new Error();
 			const pending = crypto.encryptor.encrypt({
 				schemaVersion: 1,
 				secretId: "candidate-key",
@@ -555,6 +897,9 @@ describe("PostgreSQL Workload steps", () => {
 				Array.isArray(originSource)
 			)
 				throw new Error("Fixture configuration is unavailable");
+			const originImageDigest = Reflect.get(originSource, "imageDigest");
+			if (typeof originImageDigest !== "string")
+				throw new Error("Fixture image is unavailable");
 			const candidateConfiguration = {
 				...originConfiguration,
 				revision: 2,
@@ -562,7 +907,7 @@ describe("PostgreSQL Workload steps", () => {
 					...originSource,
 					imageDigest: `sha256:${"b".repeat(64)}`,
 				},
-				secrets: [originReference, candidateConfigurationReference],
+				secrets: [candidateConfigurationReference, originReference],
 			};
 			await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(originConfiguration)} where agent_id = 'agent-a' and revision = 1`;
 			await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${candidateConfiguration.source.imageDigest}, ${sql.json(candidateConfiguration)}, now())`;
@@ -618,6 +963,7 @@ describe("PostgreSQL Workload steps", () => {
 			const fixtureDesired = workloadDesiredFixture(2);
 			const candidateDesired = validateAgentWorkloadDesiredV1({
 				...fixtureDesired,
+				fence: 1,
 				imageDigest: candidateConfiguration.source.imageDigest,
 				registryAdmission: {
 					...fixtureDesired.registryAdmission,
@@ -646,7 +992,7 @@ describe("PostgreSQL Workload steps", () => {
 					policy: workloadTestPolicy,
 					probe: async () => true,
 				});
-				await adapter.applyImmutableSecret(
+				const secretUid = await adapter.applyImmutableSecret(
 					candidateDesired,
 					candidateReference.name,
 					pending.name,
@@ -654,6 +1000,28 @@ describe("PostgreSQL Workload steps", () => {
 				);
 				const identity = await adapter.apply(candidateDesired);
 				if (!identity || identity === "pending") throw new Error();
+				const originDesired = validateAgentWorkloadDesiredV1({
+					...candidateDesired,
+					requestId: "request-origin",
+					configRevision: 1,
+					workloadRevision: 1,
+					fence: 1,
+					expectedWorkload: {
+						state: "present",
+						workloadUid: identity.uid,
+						workloadGeneration: identity.generation,
+					},
+					imageDigest: originImageDigest,
+					registryAdmission: {
+						...candidateDesired.registryAdmission,
+						immutableDigest: originImageDigest,
+						policyEvidence: {
+							...candidateDesired.registryAdmission.policyEvidence,
+							imageDigest: originImageDigest,
+						},
+					},
+					secretRefs: [activeOrigin.kubernetesSecretRef],
+				});
 				const activationFence = {
 					schemaVersion: 1 as const,
 					agentId: pending.agentId,
@@ -670,6 +1038,7 @@ describe("PostgreSQL Workload steps", () => {
 					identity,
 					candidateReference.name,
 					activationFence.fence,
+					secretUid,
 				);
 				await insertSecretRecord(
 					validatePlatformSecretRecordV1({
@@ -686,13 +1055,19 @@ describe("PostgreSQL Workload steps", () => {
 						sourceConfigurationRevision: 2,
 						sourceLifecycleRevision: 1,
 						revision: 2,
+						fence: 1,
 						phase: "cleaning",
 						candidate: {
 							configuration: candidateConfiguration,
 							deployment: candidateDesired,
 						},
-						verified: null,
-						verifiedRevision: null,
+						verified: hasVerifiedWorkload
+							? {
+									configuration: originConfiguration,
+									deployment: originDesired,
+								}
+							: null,
+						verifiedRevision: hasVerifiedWorkload ? 1 : null,
 						identity,
 						rollback: false,
 						failureCode: "reconciliation_failed",
@@ -723,7 +1098,17 @@ describe("PostgreSQL Workload steps", () => {
 			expect(
 				(await sql`select state from platform.workload_reconciliations`)[0]
 					?.state,
-			).toMatchObject({ phase: "failed", sourceConfigurationRevision: 2 });
+			).toMatchObject(
+				hasVerifiedWorkload
+					? {
+							phase: "applying",
+							rollback: true,
+							revision: 3,
+							sourceConfigurationRevision: 2,
+							candidate: { configuration: { revision: 1 } },
+						}
+					: { phase: "failed", sourceConfigurationRevision: 2 },
+			);
 			expect(
 				await sql<
 					{ secret_id: string; lifecycle_state: string; record: unknown }[]
@@ -753,12 +1138,24 @@ describe("PostgreSQL Workload steps", () => {
 					.filter((resource) => resource.kind === "Secret")
 					.map((resource) => resource.metadata?.name),
 			).toEqual([originName]);
-			expect(
-				[...api.resources.values()].filter(
-					(resource) =>
-						resource.kind === "Ingress" || resource.kind === "Service",
-				),
-			).toEqual([]);
+			if (hasVerifiedWorkload) {
+				expect(
+					await api.client.read("StatefulSet", candidateDesired.service.name),
+				).not.toBeNull();
+				expect(
+					await api.client.read(
+						"PersistentVolumeClaim",
+						candidateDesired.persistentVolume.name,
+					),
+				).not.toBeNull();
+			} else {
+				expect(
+					[...api.resources.values()].filter(
+						(resource) =>
+							resource.kind === "Ingress" || resource.kind === "Service",
+					),
+				).toEqual([]);
+			}
 		},
 	);
 	it("rejects foreign owner, foreign Agent, retired, and mismatched Secret material", async () => {
@@ -1035,6 +1432,7 @@ describe("PostgreSQL Workload steps", () => {
 						sourceConfigurationRevision: input.configuration.revision,
 						sourceLifecycleRevision: input.management.revision,
 						revision: input.management.workloadRevision,
+						fence: input.management.fence,
 						phase: "preflight",
 						candidate: { configuration: input.configuration, deployment: null },
 						verified: null,
@@ -1071,6 +1469,7 @@ describe("PostgreSQL Workload steps", () => {
 				sourceConfigurationRevision: 1,
 				sourceLifecycleRevision: 1,
 				revision: 1,
+				fence: input.management.fence,
 				phase: "preflight",
 				candidate: { configuration: input.configuration, deployment: null },
 				verified: null,

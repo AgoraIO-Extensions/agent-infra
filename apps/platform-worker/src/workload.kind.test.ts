@@ -440,9 +440,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					"/var/run/secrets/kubernetes.io/serviceaccount/token",
 				),
 			).rejects.toThrow();
-			await adapter.closeAgent(a.agentId, 2);
+			await adapter.closeAgent(a.agentId, 2, 2);
 			await eventually(
-				() => adapter.scaleDownAgent(a.agentId, 2),
+				() => adapter.scaleDownAgent(a.agentId, 2, 2),
 				(value) => value !== "pending",
 			);
 			expect(
@@ -493,7 +493,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				},
 				health: { ...b.health, path: "/invalid-health" },
 			});
-			await adapter.closeAgent(a.agentId, 4);
+			await adapter.closeAgent(a.agentId, 4, 4);
 			const identityC = await eventually(
 				() => adapter.apply(c),
 				(value) => value !== "pending",
@@ -527,7 +527,10 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					`agent-infra.agora.io/agent=${a.service.name}`,
 				),
 			).toHaveLength(1);
-			await eventually(() => adapter.cleanupAgent(a.agentId, 6, true), Boolean);
+			await eventually(
+				() => adapter.cleanupAgent(a.agentId, 6, 6, true),
+				Boolean,
+			);
 			for (const kind of [
 				"Pod",
 				"StatefulSet",

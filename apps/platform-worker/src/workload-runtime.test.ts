@@ -727,80 +727,164 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
-	it("reuses an exact current active Secret without decrypting it again", async () => {
-		let record = activeSecretRecord();
-		if (record.lifecycleState !== "active") throw new Error();
-		const cleanup = secretCleanupStore(record);
-		const decrypt = vi.fn(async () => ({
-			outcome: "failed" as const,
-			code: "SECRET_KEY_UNAVAILABLE" as const,
-		}));
-		const audit = vi.fn(async () => undefined);
-		const f = fixture(
-			{ decryptor: { decrypt } },
-			{
-				configuration: secretConfiguration(),
-				secrets: {
-					get bindings() {
-						return [{ materialization: "current" as const, record }];
+	it.each(["pending", "active"] as const)(
+		"discards only unactivated candidates before rollback (%s)",
+		async (lifecycle) => {
+			const cleanup = secretCleanupStore(
+				lifecycle === "pending" ? pendingSecretRecord() : activeSecretRecord(),
+			);
+			const configuration = secretConfiguration();
+			const secrets = cleanupSecrets(cleanup);
+			const f = fixture(
+				{
+					decryptor: {
+						decrypt: async () => ({
+							outcome: "decrypted",
+							plaintext: new Uint8Array([1, 2, 3]),
+						}),
 					},
-					store: cleanup.store,
-					auditDecryption: audit,
 				},
-			},
-		);
-		await f.tick(2);
-		const deployment = validateAgentWorkloadDesiredV1(
-			f.state?.candidate.deployment,
-		);
-		const ref = deployment.secretRefs[0];
-		if (!ref) throw new Error();
-		record = validateActiveSecretRecordV1({
-			...record,
-			kubernetesSecretRef: ref,
-			activationFence: {
-				...record.activationFence,
-				kubernetesSecretName: ref.name,
-			},
-		});
-		expect(record.kubernetesSecretRef).toEqual(ref);
-		const adapter = createKubernetesRuntimeAdapterV1({
-			client: f.client,
-			policy: workloadTestPolicy,
-			probe: async () => true,
-		});
-		await adapter.applyImmutableSecret(
-			deployment,
-			ref.name,
-			"BOT_TOKEN",
-			new Uint8Array([1, 2, 3]),
-		);
-		const identity = await adapter.apply(deployment);
-		if (!identity || identity === "pending") throw new Error();
-		record = validateActiveSecretRecordV1({
-			...record,
-			activationFence: {
-				...record.activationFence,
-				workloadUid: identity.uid,
-				workloadGeneration: identity.generation,
-			},
-		});
-		await adapter.bindSecretFence(
-			deployment,
-			identity,
-			ref.name,
-			record.activationFence.fence,
-		);
+				{ configuration, secrets },
+			);
+			await f.tick(4);
+			const state = f.state;
+			if (!state?.candidate.deployment) throw new Error();
+			const deployment = validateAgentWorkloadDesiredV1(
+				state.candidate.deployment,
+			);
+			const ref = deployment.secretRefs[0];
+			if (!ref) throw new Error();
+			const before = structuredClone([...f.resources.entries()]);
+			expect(before.some(([key]) => key.startsWith("StatefulSet/"))).toBe(true);
+			expect(
+				before.some(([key]) => key.startsWith("PersistentVolumeClaim/")),
+			).toBe(true);
+			const result = await createWorkloadRuntimeV1(
+				f.options,
+			).discardUnactivatedSecrets(state, {
+				state,
+				configuration,
+				management: f.management,
+				secrets,
+				requestId: "discard-a",
+				traceId: "discard-a",
+			});
+			expect(result).toBe(true);
+			expect([...f.resources.entries()]).toEqual(
+				lifecycle === "active"
+					? before
+					: before.filter(([key]) => key !== `Secret/${ref.name}`),
+			);
+			expect(cleanup.record.lifecycleState).toBe(
+				lifecycle === "active" ? "active" : "failed",
+			);
+		},
+	);
 
-		await f.tick(8);
-		expect(f.state?.phase).toBe("ready");
-		expect(decrypt).not.toHaveBeenCalled();
-		expect(audit).not.toHaveBeenCalled();
-		expect(cleanup.claims).toBe(0);
-		expect(cleanup.commits).toBe(0);
-		expect(record.kubernetesSecretRef).toEqual(ref);
-		expect(record.activationFence.fence).toBe(1);
-	});
+	it.each(["bound", "legacy missing UID"])(
+		"safely reuses an active Secret with %s identity",
+		async (binding) => {
+			let record = activeSecretRecord();
+			if (record.lifecycleState !== "active") throw new Error();
+			const cleanup = secretCleanupStore(record);
+			const decrypt = vi.fn(async () => ({
+				outcome: "decrypted" as const,
+				plaintext: new Uint8Array([1, 2, 3]),
+			}));
+			const audit = vi.fn(async () => undefined);
+			const f = fixture(
+				{ decryptor: { decrypt } },
+				{
+					configuration: secretConfiguration(),
+					secrets: {
+						get bindings() {
+							return [{ materialization: "current" as const, record }];
+						},
+						store: cleanup.store,
+						auditDecryption: audit,
+					},
+				},
+			);
+			await f.tick(2);
+			const deployment = validateAgentWorkloadDesiredV1(
+				f.state?.candidate.deployment,
+			);
+			const ref = deployment.secretRefs[0];
+			if (!ref) throw new Error();
+			record = validateActiveSecretRecordV1({
+				...record,
+				kubernetesSecretRef: ref,
+				activationFence: {
+					...record.activationFence,
+					kubernetesSecretName: ref.name,
+				},
+			});
+			expect(record.kubernetesSecretRef).toEqual(ref);
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy: workloadTestPolicy,
+				probe: async () => true,
+			});
+			const secretUid = await adapter.applyImmutableSecret(
+				deployment,
+				ref.name,
+				"BOT_TOKEN",
+				new Uint8Array([1, 2, 3]),
+			);
+			const identity = await adapter.apply(deployment);
+			if (!identity || identity === "pending") throw new Error();
+			record = validateActiveSecretRecordV1({
+				...record,
+				activationFence: {
+					...record.activationFence,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+				},
+			});
+			await adapter.bindSecretFence(
+				deployment,
+				identity,
+				ref.name,
+				record.activationFence.fence,
+				secretUid,
+			);
+
+			const resourceKey = `StatefulSet/${deployment.service.name}`;
+			const statefulSet = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				deployment.service.name,
+			);
+			if (!statefulSet?.metadata?.annotations) throw new Error();
+			const uidKey = Object.keys(statefulSet.metadata.annotations).find((key) =>
+				key.startsWith("agent-infra.agora.io/secret-uid-"),
+			);
+			if (!uidKey) throw new Error();
+			if (binding === "legacy missing UID") {
+				delete statefulSet.metadata.annotations[uidKey];
+				f.resources.set(resourceKey, statefulSet);
+			}
+			const before = structuredClone(record);
+
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			expect(decrypt).toHaveBeenCalledTimes(binding === "bound" ? 0 : 1);
+			if (binding === "bound") expect(audit).not.toHaveBeenCalled();
+			else expect(audit).toHaveBeenCalledWith("secret-a", "key-a", "succeeded");
+			expect(
+				(
+					await f.client.read<V1StatefulSet>(
+						"StatefulSet",
+						deployment.service.name,
+					)
+				)?.metadata?.annotations?.[uidKey],
+			).toBe(secretUid);
+			expect(record).toEqual(before);
+			expect(cleanup.claims).toBe(0);
+			expect(cleanup.commits).toBe(0);
+			expect(record.kubernetesSecretRef).toEqual(ref);
+			expect(record.activationFence.fence).toBe(1);
+		},
+	);
 
 	it("fails closed when an active-origin Secret can no longer be verified", async () => {
 		let record = activeSecretRecord();
@@ -842,7 +926,7 @@ describe("assembled Workload Runtime contracts", () => {
 			policy: workloadTestPolicy,
 			probe: async () => true,
 		});
-		await adapter.applyImmutableSecret(
+		const secretUid = await adapter.applyImmutableSecret(
 			deployment,
 			ref.name,
 			"BOT_TOKEN",
@@ -863,6 +947,7 @@ describe("assembled Workload Runtime contracts", () => {
 			identity,
 			ref.name,
 			record.activationFence.fence,
+			secretUid,
 		);
 
 		await f.tick(8);
@@ -932,7 +1017,7 @@ describe("assembled Workload Runtime contracts", () => {
 				policy: workloadTestPolicy,
 				probe: async () => true,
 			});
-			await adapter.applyImmutableSecret(
+			const secretUid = await adapter.applyImmutableSecret(
 				deployment,
 				ref.name,
 				"BOT_TOKEN",
@@ -953,6 +1038,7 @@ describe("assembled Workload Runtime contracts", () => {
 				identity,
 				ref.name,
 				record.activationFence.fence,
+				secretUid,
 			);
 			if (mutation === "activation fence mismatch")
 				record = validateActiveSecretRecordV1({

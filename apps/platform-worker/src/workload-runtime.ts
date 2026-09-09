@@ -313,7 +313,7 @@ export function createWorkloadRuntimeV1(
 			return validateAgentWorkloadDesiredV1({
 				...deployment,
 				workloadRevision: state.verifiedRevision,
-				fence: state.verifiedRevision,
+				fence: state.fence,
 				expectedWorkload: state.identity
 					? {
 							state: "present",
@@ -325,7 +325,7 @@ export function createWorkloadRuntimeV1(
 		return validateAgentWorkloadDesiredV1({
 			...deployment,
 			workloadRevision: state.revision,
-			fence: state.revision,
+			fence: state.fence,
 			desiredState: stopped ? "stopped" : "running",
 			replicas: stopped ? 0 : 1,
 			expectedWorkload: state.identity
@@ -473,7 +473,7 @@ export function createWorkloadRuntimeV1(
 				agentId: state.agentId,
 				configRevision: configuration.revision,
 				workloadRevision: state.revision,
-				fence: state.revision,
+				fence: state.fence,
 				expectedWorkload: state.identity
 					? {
 							state: "present",
@@ -531,12 +531,29 @@ export function createWorkloadRuntimeV1(
 			return { configuration, deployment };
 		},
 		async closeRoute(state) {
-			if (!(await adapter.closeAgent(state.agentId, state.revision)))
+			if (
+				!(await adapter.closeAgent(state.agentId, state.revision, state.fence))
+			)
 				throw new Error("Workload route is closing");
 		},
+		async discardUnactivatedSecrets(state, input) {
+			return cleanupUnactivatedSecrets(state, input);
+		},
 		async apply(state, stopped, input) {
-			if (stopped) return adapter.scaleDownAgent(state.agentId, state.revision);
+			if (stopped)
+				return adapter.scaleDownAgent(
+					state.agentId,
+					state.revision,
+					state.fence,
+				);
 			const workload = desired(state);
+			const activeBindingsToRepair: {
+				readonly reference: SecretActivationReferenceV1;
+				readonly activationFence: NonNullable<
+					ReturnType<typeof activeSecretFence>
+				>;
+				readonly secretUid: string;
+			}[] = [];
 			for (const { record } of bindingsFor(state, input)) {
 				const reference = recordReference(record);
 				const activationFence = activeSecretFence(record, reference);
@@ -567,20 +584,43 @@ export function createWorkloadRuntimeV1(
 						record.crypto.wrappingKeyVersion,
 						"succeeded",
 					);
-					await adapter.applyImmutableSecret(
+					const secretUid = await adapter.applyImmutableSecret(
 						workload,
 						reference.name,
 						secretDataKey(record.name),
 						decryption.plaintext,
 					);
+					if (activationFence)
+						activeBindingsToRepair.push({
+							reference,
+							activationFence,
+							secretUid,
+						});
 				} finally {
 					decryption.plaintext.fill(0);
 				}
 			}
 			const result = await adapter.reconcile(workload);
-			return result.status === "applied"
-				? { uid: result.workloadUid, generation: result.workloadGeneration }
-				: "pending";
+			if (result.status !== "applied") return "pending";
+			const identity = {
+				uid: result.workloadUid,
+				generation: result.workloadGeneration,
+			};
+			for (const repaired of activeBindingsToRepair) {
+				if (
+					repaired.activationFence.workloadUid !== identity.uid ||
+					identity.generation < repaired.activationFence.workloadGeneration
+				)
+					throw new Error("Active Workload Secret fence is unavailable");
+				await adapter.bindSecretFence(
+					workload,
+					identity,
+					repaired.reference.name,
+					repaired.activationFence.fence,
+					repaired.secretUid,
+				);
+			}
+			return identity;
 		},
 		async observe(state) {
 			return state.identity
@@ -615,7 +655,7 @@ export function createWorkloadRuntimeV1(
 				decryptor: options.decryptor,
 				kubernetes: {
 					async applyCandidate(candidate) {
-						await adapter.applyImmutableSecret(
+						const secretUid = await adapter.applyImmutableSecret(
 							workload,
 							candidate.kubernetesSecretRef.name,
 							secretDataKey(candidate.secretKey),
@@ -626,6 +666,7 @@ export function createWorkloadRuntimeV1(
 							identity,
 							candidate.kubernetesSecretRef.name,
 							candidate.fence,
+							secretUid,
 						);
 						return {
 							outcome: "applied",
@@ -673,7 +714,7 @@ export function createWorkloadRuntimeV1(
 			if (!state.identity) throw new Error();
 			if (
 				state.phase === "promoting" &&
-				!(await adapter.closeAgent(state.agentId, state.revision))
+				!(await adapter.closeAgent(state.agentId, state.revision, state.fence))
 			)
 				throw new Error("Workload route is closing");
 			const workload = desired(state);
@@ -718,7 +759,7 @@ export function createWorkloadRuntimeV1(
 					agentId: state.agentId,
 					configRevision: state.candidate.configuration.revision,
 					workloadRevision: state.revision,
-					fence: state.revision,
+					fence: state.fence,
 					workloadUid: state.identity.uid,
 					workloadGeneration:
 						current?.metadata?.generation ?? state.identity.generation,
@@ -731,6 +772,7 @@ export function createWorkloadRuntimeV1(
 				resourcesRemoved = await adapter.cleanupAgent(
 					state.agentId,
 					state.revision,
+					state.fence,
 					deleteNewVolume,
 				);
 			}

@@ -17,6 +17,7 @@ function fixture() {
 	let management = {
 		agentId: "agent-a",
 		workloadRevision: 1,
+		fence: 41,
 		desiredState: "running",
 		status: "creating",
 	} as AgentManagementStateV1;
@@ -32,6 +33,7 @@ function fixture() {
 		observe: vi.fn(async () => "healthy" as const),
 		activateSecrets: vi.fn(async () => "active" as const),
 		promote: vi.fn(async () => undefined),
+		discardUnactivatedSecrets: vi.fn(async () => true),
 		cleanup: vi.fn(async () => true),
 	};
 	const store = {
@@ -82,6 +84,7 @@ function fixture() {
 			management = {
 				...management,
 				workloadRevision: management.workloadRevision + 1,
+				fence: management.fence + 1,
 				desiredState: "stopped",
 				status: disabled ? "disabled" : "stopped",
 			};
@@ -90,6 +93,7 @@ function fixture() {
 			management = {
 				...management,
 				workloadRevision: management.workloadRevision + 1,
+				fence: management.fence + 1,
 				desiredState: "running",
 				status: "available",
 			};
@@ -98,6 +102,21 @@ function fixture() {
 }
 
 describe("durable Workload reconciliation", () => {
+	it("keeps the management fence independent from local Workload revisions", async () => {
+		const f = fixture();
+		await f.tick();
+		expect(f.state).toMatchObject({ revision: 1, fence: 41 });
+
+		await f.tick(6);
+		f.upgrade("image-b");
+		await f.tick();
+		expect(f.state).toMatchObject({ revision: 2, fence: 41 });
+
+		f.stop();
+		await f.tick();
+		expect(f.state).toMatchObject({ revision: 3, fence: 42 });
+	});
+
 	it("repairs the verified route after rejection and reapplies it if its workload is lost", async () => {
 		const f = fixture();
 		await f.tick(7);
@@ -191,6 +210,115 @@ describe("durable Workload reconciliation", () => {
 		).toBe(false);
 		expect(f.runtime.cleanup).not.toHaveBeenCalled();
 	});
+	it("retries unactivated Secret discard before switching to the verified rollback", async () => {
+		const f = fixture();
+		await f.tick(7);
+		f.upgrade("image-c");
+		vi.mocked(f.runtime.observe).mockImplementation(async (state) =>
+			state.candidate.configuration.source.imageDigest === "image-c"
+				? "unhealthy"
+				: "healthy",
+		);
+		vi.mocked(f.runtime.discardUnactivatedSecrets).mockResolvedValueOnce(false);
+		await f.tick(5);
+		expect(f.state?.phase).toBe("cleaning");
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.discardUnactivatedSecrets).mockClear();
+
+		await f.tick();
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.runtime.closeRoute).toHaveBeenCalledOnce();
+		expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledOnce();
+		expect(
+			vi.mocked(f.runtime.closeRoute).mock.invocationCallOrder[0],
+		).toBeLessThan(
+			vi.mocked(f.runtime.discardUnactivatedSecrets).mock
+				.invocationCallOrder[0] ?? 0,
+		);
+		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "applying",
+			rollback: true,
+			revision: 3,
+			candidate: { configuration: { source: { imageDigest: "image-a" } } },
+		});
+		expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledTimes(2);
+		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+	});
+	it.each(["stop", "disable", "restart", "configuration"] as const)(
+		"preserves candidate cleanup across %s and process restart",
+		async (command) => {
+			for (const failure of ["pending", "throw"] as const) {
+				const f = fixture();
+				await f.tick(7);
+				f.upgrade("image-c");
+				vi.mocked(f.runtime.observe).mockResolvedValue("unhealthy");
+				await f.tick(5);
+				expect(f.state?.phase).toBe("cleaning");
+				const candidate = structuredClone(f.state?.candidate);
+				const identity = structuredClone(f.state?.identity);
+				const revision = f.state?.revision;
+				if (!revision) throw new Error();
+				if (command === "stop") f.stop();
+				else if (command === "disable") f.stop(true);
+				else if (command === "restart") f.start();
+				else f.upgrade("image-d");
+				const fence = command === "configuration" ? 41 : 42;
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase: "cleaning",
+					cleanupInterrupted: true,
+					candidate,
+					identity,
+					revision,
+					fence,
+				});
+				expect(vi.mocked(f.runtime.closeRoute).mock.lastCall?.[0].fence).toBe(
+					fence,
+				);
+				f.restart();
+				if (failure === "pending")
+					vi.mocked(f.runtime.discardUnactivatedSecrets).mockResolvedValueOnce(
+						false,
+					);
+				else
+					vi.mocked(f.runtime.discardUnactivatedSecrets).mockRejectedValueOnce(
+						new Error("synthetic pending cleanup"),
+					);
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase: "cleaning",
+					cleanupInterrupted: true,
+					candidate,
+					identity,
+					revision,
+					fence,
+				});
+				expect(
+					vi.mocked(f.runtime.discardUnactivatedSecrets).mock.lastCall?.[0],
+				).toMatchObject({ candidate, identity, fence });
+				expect(f.runtime.cleanup).not.toHaveBeenCalled();
+				f.restart();
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase:
+						command === "stop" || command === "disable"
+							? "closing"
+							: "preflight",
+					revision: revision + 1,
+					fence,
+				});
+				expect(f.state).not.toHaveProperty("cleanupInterrupted");
+				expect(f.state?.candidate.configuration.source.imageDigest).toBe(
+					command === "configuration" ? "image-d" : "image-c",
+				);
+				expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledTimes(2);
+			}
+		},
+	);
+
 	it.each([false, true])(
 		"stops/disables without waiting for candidate admission and restarts on the retained volume (%s)",
 		async (disabled) => {

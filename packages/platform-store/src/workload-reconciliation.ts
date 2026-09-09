@@ -21,6 +21,62 @@ import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 
 const defaultWorkloadLeaseMs = 300_000;
 
+type LegacyWorkloadReconciliationStateV1 = Omit<
+	WorkloadReconciliationStateV1,
+	"fence"
+>;
+
+function persistedState(
+	input: unknown,
+	agentId: string,
+):
+	| { readonly state: WorkloadReconciliationStateV1; readonly legacy: false }
+	| {
+			readonly state: LegacyWorkloadReconciliationStateV1;
+			readonly legacy: true;
+	  }
+	| null {
+	if (input === null || input === undefined) return null;
+	if (typeof input !== "object" || Array.isArray(input)) throw new Error();
+	const value = input as Record<string, unknown>;
+	if (
+		value.schemaVersion !== 1 ||
+		value.agentId !== agentId ||
+		!Number.isSafeInteger(value.revision) ||
+		(value.revision as number) < 1 ||
+		(Object.hasOwn(value, "cleanupInterrupted") &&
+			value.cleanupInterrupted !== true)
+	)
+		throw new Error();
+	if (!Object.hasOwn(value, "fence"))
+		return {
+			state: value as unknown as LegacyWorkloadReconciliationStateV1,
+			legacy: true,
+		};
+	if (!Number.isSafeInteger(value.fence) || (value.fence as number) < 1)
+		throw new Error();
+	return {
+		state: value as unknown as WorkloadReconciliationStateV1,
+		legacy: false,
+	};
+}
+
+function legacyTakeoverFence(
+	managementFence: number,
+	workloadRevision: number,
+) {
+	const current = Math.max(managementFence, workloadRevision);
+	if (
+		!Number.isSafeInteger(managementFence) ||
+		managementFence < 0 ||
+		!Number.isSafeInteger(workloadRevision) ||
+		workloadRevision < 1 ||
+		current === Number.MAX_SAFE_INTEGER
+	)
+		throw new Error();
+	return current + 1;
+}
+
 function secretReferenceKey(input: {
 	readonly name: string;
 	readonly secretId: string;
@@ -183,7 +239,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						),
 						undefined,
 					);
-					const management = await readAgentManagementState(database, agent.id);
+					let management = await readAgentManagementState(database, agent.id);
 					if (!management) throw new Error();
 					const [configurationRow] = await sql<
 						{ configuration: unknown }[]
@@ -192,16 +248,34 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						configurationRow?.configuration,
 					);
 					const [persisted] = await sql<
-						{ state: WorkloadReconciliationStateV1 }[]
+						{ state: unknown }[]
 					>`select state from platform.workload_reconciliations where agent_id = ${agent.id}`;
-					const state = persisted?.state ?? null;
-					if (
-						state &&
-						(state.schemaVersion !== 1 ||
-							state.agentId !== agent.id ||
-							!Number.isSafeInteger(state.revision))
-					)
-						throw new Error();
+					const decodedState = persistedState(persisted?.state, agent.id);
+					let state: WorkloadReconciliationStateV1 | null = null;
+					if (decodedState?.legacy) {
+						// Legacy rows used the local Workload revision as the Kubernetes
+						// fence. Advance management authority under the same Agent lock
+						// before exposing a normalized state to the reconciler.
+						const fence = legacyTakeoverFence(
+							management.fence,
+							decodedState.state.revision,
+						);
+						const [updated] = await sql<{ id: string }[]>`
+								update platform.agent_applications set fence = ${fence}
+								where id = ${management.applicationId}
+									and agent_id = ${agent.id}
+									and management_revision = ${management.revision}
+									and workload_revision = ${management.workloadRevision}
+									and fence = ${management.fence}
+								returning id
+							`;
+						if (!updated) throw new Error();
+						management = { ...management, fence };
+						state = { ...decodedState.state, fence };
+					} else if (decodedState) {
+						state = decodedState.state;
+						if (state.fence > management.fence) throw new Error();
+					}
 					const [candidate] = await sql<
 						{ id: string; delivery_fence: string }[]
 					>`
@@ -249,27 +323,33 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					const requestId = task?.request_id ?? `workload-${agent.id}`;
 					const traceId = task?.trace_id ?? requestId;
 					let secretConfiguration = configuration;
-					if (state?.rollback) {
+					if (
+						state?.rollback ||
+						(state?.phase === "cleaning" &&
+							state.verified !== null &&
+							!state.rollback)
+					) {
 						if (
-							!state.verified ||
-							state.candidate.configuration.revision !==
-								state.verified.configuration.revision
+							state.rollback &&
+							(!state.verified ||
+								state.candidate.configuration.revision !==
+									state.verified.configuration.revision)
 						)
 							throw new Error();
-						const [rollbackConfigurationRow] = await sql<
+						const [candidateConfigurationRow] = await sql<
 							{ configuration: unknown }[]
 						>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${state.candidate.configuration.revision}`;
-						const rollbackConfiguration = decodeAgentConfigurationRecord(
-							rollbackConfigurationRow?.configuration,
+						const candidateConfiguration = decodeAgentConfigurationRecord(
+							candidateConfigurationRow?.configuration,
 						);
 						if (
 							!isDeepStrictEqual(
-								rollbackConfiguration,
+								candidateConfiguration,
 								state.candidate.configuration,
 							)
 						)
 							throw new Error();
-						secretConfiguration = rollbackConfiguration;
+						secretConfiguration = candidateConfiguration;
 					}
 					const rows = await sql<
 						{ record: unknown }[]
@@ -324,7 +404,12 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.agentId !== agent.id ||
 						next.sourceConfigurationRevision !== configuration.revision ||
 						next.sourceLifecycleRevision !== management.workloadRevision ||
-						next.revision < (state?.revision ?? 1)
+						next.revision < (state?.revision ?? 1) ||
+						next.fence !== management.fence ||
+						(next.cleanupInterrupted === true &&
+							(next.phase !== "cleaning" ||
+								next.verified === null ||
+								next.rollback))
 					)
 						throw new Error();
 					const observation = await workloadManagementObservationV1(

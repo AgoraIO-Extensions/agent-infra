@@ -42,6 +42,10 @@ function secretFenceAnnotation(secretName: string) {
 	return `agent-infra.agora.io/secret-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
 }
 
+function secretUidAnnotation(secretName: string) {
+	return `agent-infra.agora.io/secret-uid-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
+}
+
 type RouteSelectorMode = "closed" | "open";
 
 function hasSameStructure(actual: unknown, expected: unknown): boolean {
@@ -400,6 +404,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		return (
 			hasDriftedPodSpec(value, pod) ||
+			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
+			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
+			(pod?.tolerations?.length ?? 0) > 0 ||
+			pod?.affinity !== undefined ||
+			pod?.runtimeClassName !== undefined ||
+			pod?.nodeName !== undefined ||
 			!containsDesired(container, {
 				image: `${policy.imageRepository}@${value.imageDigest}`,
 				ports: [{ name: "runtime", containerPort: value.service.port }],
@@ -576,9 +586,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			kind === "StatefulSet"
 				? Object.fromEntries(
 						value.secretRefs.flatMap((ref) => {
-							const key = secretFenceAnnotation(ref.name);
-							const fence = current.metadata?.annotations?.[key];
-							return fence === undefined ? [] : [[key, fence]];
+							const keys = [
+								secretFenceAnnotation(ref.name),
+								secretUidAnnotation(ref.name),
+							];
+							return keys.flatMap((key) => {
+								const annotation = current.metadata?.annotations?.[key];
+								return annotation === undefined ? [] : [[key, annotation]];
+							});
 						}),
 					)
 				: {};
@@ -688,12 +703,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	async function closeAgent(
 		agentId: string,
 		workloadRevision: number,
+		fence: number,
 	): Promise<boolean> {
-		return closeAgentAtFence({
-			agentId,
-			workloadRevision,
-			fence: workloadRevision,
-		});
+		return closeAgentAtFence({ agentId, workloadRevision, fence });
 	}
 	async function cleanupAgentAtFence(
 		value: { agentId: string; workloadRevision: number; fence: number },
@@ -858,6 +870,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret || !isLiveOwnedImmutableSecret(secret, value, ref))
 				return "drifted";
+			const boundFence =
+				current.metadata.annotations?.[secretFenceAnnotation(ref.name)];
+			const boundUid =
+				current.metadata.annotations?.[secretUidAnnotation(ref.name)];
+			if (
+				(boundFence === undefined) !== (boundUid === undefined) ||
+				(boundUid !== undefined && secret.metadata?.uid !== boundUid)
+			)
+				return "drifted";
 		}
 		for (const resource of [serviceAccount, network, probe, service])
 			own(resource, value.agentId, value.workloadRevision, value.fence);
@@ -952,7 +973,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		observe,
 		async scaleDownAgent(
 			agentId: string,
-			revision: number,
+			workloadRevision: number,
+			fence: number,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const current = await client.read<V1StatefulSet>(
 				"StatefulSet",
@@ -962,7 +984,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return (await client.list("Pod", selector(agentId))).length
 					? "pending"
 					: null;
-			own(current, agentId, revision, revision);
+			own(current, agentId, workloadRevision, fence);
 			if (current.spec?.replicas !== 0) {
 				await client.replace({
 					...current,
@@ -970,11 +992,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						...current.metadata,
 						labels: {
 							...current.metadata?.labels,
-							[revisionLabel]: String(revision),
+							[revisionLabel]: String(workloadRevision),
 						},
 						annotations: {
 							...current.metadata?.annotations,
-							"agent-infra.agora.io/fence": String(revision),
+							"agent-infra.agora.io/fence": String(fence),
 							[fingerprintAnnotation]: "",
 						},
 					},
@@ -996,20 +1018,35 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			identity: { uid: string; generation: number },
 			secretName: string,
 			fence: number,
+			expectedSecretUid: string,
 		) {
 			const value = desired(input);
 			const current = await statefulSet(value);
+			const ref = value.secretRefs.find(
+				(candidate) => candidate.name === secretName,
+			);
 			if (
 				!current ||
 				current.metadata?.uid !== identity.uid ||
 				current.metadata.generation !== identity.generation ||
-				!value.secretRefs.some((ref) => ref.name === secretName) ||
+				!ref ||
 				!Number.isSafeInteger(fence) ||
-				fence < 1
+				fence < 1 ||
+				!expectedSecretUid
 			)
 				throw new WorkloadKubernetesError("conflict");
-			const key = secretFenceAnnotation(secretName);
-			const storedFence = current.metadata.annotations?.[key];
+			const secret = await client.read<V1Secret>("Secret", secretName);
+			if (
+				!secret ||
+				secret.metadata?.uid !== expectedSecretUid ||
+				!isLiveOwnedImmutableSecret(secret, value, ref)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			own(secret, value.agentId, value.workloadRevision, value.fence);
+			const fenceKey = secretFenceAnnotation(secretName);
+			const uidKey = secretUidAnnotation(secretName);
+			const storedFence = current.metadata.annotations?.[fenceKey];
+			const storedUid = current.metadata.annotations?.[uidKey];
 			if (storedFence !== undefined) {
 				const parsedFence = Number(storedFence);
 				if (
@@ -1019,8 +1056,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)
 					throw new WorkloadKubernetesError("conflict");
 			}
+			if (storedUid !== undefined && storedUid !== expectedSecretUid)
+				throw new WorkloadKubernetesError("conflict");
 			if (
-				current.metadata.annotations?.[key] === String(fence) &&
+				current.metadata.annotations?.[fenceKey] === String(fence) &&
+				current.metadata.annotations?.[uidKey] === expectedSecretUid &&
 				current.metadata.labels?.[revisionLabel] ===
 					String(value.workloadRevision) &&
 				current.metadata.annotations?.["agent-infra.agora.io/fence"] ===
@@ -1038,7 +1078,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					annotations: {
 						...current.metadata.annotations,
 						"agent-infra.agora.io/fence": String(value.fence),
-						[key]: String(fence),
+						[fenceKey]: String(fence),
+						[uidKey]: expectedSecretUid,
 					},
 				},
 			});
@@ -1051,9 +1092,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		) {
 			const value = desired(input);
 			const current = await statefulSet(value);
-			const key = secretFenceAnnotation(secretName);
+			const fenceKey = secretFenceAnnotation(secretName);
+			const uidKey = secretUidAnnotation(secretName);
+			const expectedSecretUid = current?.metadata?.annotations?.[uidKey];
+			const ref = value.secretRefs.find(
+				(candidate) => candidate.name === secretName,
+			);
+			const secret = ref
+				? await client.read<V1Secret>("Secret", secretName)
+				: null;
 			return (
-				current?.metadata?.annotations?.[key] === String(fence) &&
+				current?.metadata?.annotations?.[fenceKey] === String(fence) &&
+				Boolean(
+					expectedSecretUid &&
+						secret?.metadata?.uid === expectedSecretUid &&
+						ref &&
+						isLiveOwnedImmutableSecret(secret, value, ref),
+				) &&
 				(await observe(value, identity)) === "healthy"
 			);
 		},
@@ -1086,14 +1141,18 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				"StatefulSet",
 				workloadResourceNameV1(value.agentId),
 			);
-			const key = secretFenceAnnotation(ref.name);
+			const fenceKey = secretFenceAnnotation(ref.name);
+			const uidKey = secretUidAnnotation(ref.name);
+			const expectedSecretUid = current?.metadata?.annotations?.[uidKey];
 			if (
 				!current ||
 				current.metadata?.uid !== activationFence.workloadUid ||
 				!Number.isSafeInteger(current.metadata.generation) ||
 				(current.metadata.generation ?? 0) <
 					activationFence.workloadGeneration ||
-				current.metadata?.annotations?.[key] !== String(activationFence.fence)
+				current.metadata?.annotations?.[fenceKey] !==
+					String(activationFence.fence) ||
+				!expectedSecretUid
 			)
 				return false;
 			try {
@@ -1102,7 +1161,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return false;
 			}
 			const secret = await client.read<V1Secret>("Secret", ref.name);
-			return Boolean(secret && isLiveOwnedImmutableSecret(secret, value, ref));
+			return Boolean(
+				secret?.metadata?.uid === expectedSecretUid &&
+					isLiveOwnedImmutableSecret(secret, value, ref),
+			);
 		},
 		async applyImmutableSecret(
 			input: unknown,
@@ -1113,57 +1175,66 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const value = desired(input);
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
 				throw new WorkloadKubernetesError("policy");
-			{
-				const ref = value.secretRefs.find((entry) => entry.name === name);
-				if (!ref) throw new WorkloadKubernetesError("policy");
-				const body: V1Secret = {
-					apiVersion: "v1",
-					kind: "Secret",
-					metadata: {
-						...metadata(value, ref.name),
-						annotations: {
-							...metadata(value, ref.name).annotations,
-							[secretIdAnnotation]: ref.secretId,
-							[secretVersionAnnotation]: String(ref.secretVersion),
-							[secretConfigRevisionAnnotation]: String(ref.configRevision),
-						},
+			const ref = value.secretRefs.find((entry) => entry.name === name);
+			if (!ref) throw new WorkloadKubernetesError("policy");
+			const body: V1Secret = {
+				apiVersion: "v1",
+				kind: "Secret",
+				metadata: {
+					...metadata(value, ref.name),
+					annotations: {
+						...metadata(value, ref.name).annotations,
+						[secretIdAnnotation]: ref.secretId,
+						[secretVersionAnnotation]: String(ref.secretVersion),
+						[secretConfigRevisionAnnotation]: String(ref.configRevision),
 					},
-					immutable: true,
-					type: "Opaque",
-					data: { [key]: Buffer.from(plaintext).toString("base64") },
-				};
-				const existing = await client.read<V1Secret>("Secret", ref.name);
-				if (!existing) {
-					await client.create(body);
-					return;
-				}
+				},
+				immutable: true,
+				type: "Opaque",
+				data: { [key]: Buffer.from(plaintext).toString("base64") },
+			};
+			const existing = await client.read<V1Secret>("Secret", ref.name);
+			if (!existing) {
+				const created = await client.create(body);
+				const live = created.metadata?.uid
+					? created
+					: await client.read<V1Secret>("Secret", ref.name);
 				if (
-					!isLiveOwnedImmutableSecret(existing, value, ref) ||
-					!hasSameStructure(existing.data, body.data)
+					!live?.metadata?.uid ||
+					!isLiveOwnedImmutableSecret(live, value, ref) ||
+					!hasSameStructure(live.data, body.data)
 				)
 					throw new WorkloadKubernetesError("conflict");
-				own(existing, value.agentId, value.workloadRevision, value.fence);
-				if (
-					existing.metadata?.labels?.[revisionLabel] !==
-						String(value.workloadRevision) ||
-					existing.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(value.fence)
-				)
-					await client.replace({
-						...existing,
-						metadata: {
-							...existing.metadata,
-							labels: {
-								...existing.metadata?.labels,
-								[revisionLabel]: String(value.workloadRevision),
-							},
-							annotations: {
-								...existing.metadata?.annotations,
-								"agent-infra.agora.io/fence": String(value.fence),
-							},
-						},
-					});
+				return live.metadata.uid;
 			}
+			if (
+				!isLiveOwnedImmutableSecret(existing, value, ref) ||
+				!hasSameStructure(existing.data, body.data)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			own(existing, value.agentId, value.workloadRevision, value.fence);
+			const live =
+				existing.metadata?.labels?.[revisionLabel] !==
+					String(value.workloadRevision) ||
+				existing.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+					String(value.fence)
+					? await client.replace({
+							...existing,
+							metadata: {
+								...existing.metadata,
+								labels: {
+									...existing.metadata?.labels,
+									[revisionLabel]: String(value.workloadRevision),
+								},
+								annotations: {
+									...existing.metadata?.annotations,
+									"agent-infra.agora.io/fence": String(value.fence),
+								},
+							},
+						})
+					: existing;
+			if (!live.metadata?.uid) throw new WorkloadKubernetesError("conflict");
+			return live.metadata.uid;
 		},
 		async apply(
 			input: unknown,
@@ -1459,10 +1530,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		async cleanupAgent(
 			agentId: string,
 			workloadRevision: number,
+			fence: number,
 			deleteNewVolume: boolean,
 		) {
 			return cleanupAgentAtFence(
-				{ agentId, workloadRevision, fence: workloadRevision },
+				{ agentId, workloadRevision, fence },
 				deleteNewVolume,
 			);
 		},
@@ -1486,9 +1558,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)
 			)
 				throw new WorkloadKubernetesError("policy");
+			let expectedSecretUid: string | undefined;
 			if (activationFence) {
 				const current = await statefulSet(value);
-				const key = `agent-infra.agora.io/secret-${createHash("sha256").update(ref.name).digest("hex").slice(0, 32)}`;
+				const fenceKey = secretFenceAnnotation(ref.name);
+				const uidKey = secretUidAnnotation(ref.name);
+				expectedSecretUid = current?.metadata?.annotations?.[uidKey];
 				if (
 					activationFence.agentId !== ref.agentId ||
 					activationFence.secretId !== ref.secretId ||
@@ -1497,13 +1572,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					activationFence.kubernetesSecretName !== ref.name ||
 					!current ||
 					current.metadata?.uid !== activationFence.workloadUid ||
-					current.metadata.generation !== activationFence.workloadGeneration ||
-					current.metadata.annotations?.[key] !== String(activationFence.fence)
+					!Number.isSafeInteger(current.metadata.generation) ||
+					(current.metadata.generation ?? 0) <
+						activationFence.workloadGeneration ||
+					current.metadata.annotations?.[fenceKey] !==
+						String(activationFence.fence) ||
+					!expectedSecretUid
 				)
 					return false;
 			}
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret) return true;
+			if (
+				activationFence &&
+				(secret.metadata?.uid !== expectedSecretUid ||
+					!isLiveOwnedImmutableSecret(secret, value, ref))
+			)
+				return false;
 			if (!isOwnedSecret(secret, value, ref) || secret.immutable !== true)
 				throw new WorkloadKubernetesError("policy");
 			own(secret, value.agentId, value.workloadRevision, value.fence);
