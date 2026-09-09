@@ -631,13 +631,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.affinity !== undefined ||
 			pod?.runtimeClassName !== undefined ||
 			pod?.nodeName !== undefined ||
-			!containsDesired(container, {
-				image: `${policy.imageRepository}@${value.imageDigest}`,
-				ports: [{ name: "runtime", containerPort: value.service.port }],
-				envFrom: value.secretRefs.map((ref) => ({
-					secretRef: { name: ref.name },
-				})),
-			}) ||
+			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
 			pod?.automountServiceAccountToken !== false
 		);
 	}
@@ -766,35 +760,65 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				},
 				expectedProbe,
 			) ||
-			!containsDesired(container, {
-				env: Object.entries(value.env).map(([name, value]) => ({
-					name,
-					value,
+			!hasSameStructure(
+				(container?.env ?? []).map((entry) => ({
+					...entry,
+					value: entry.value ?? "",
 				})),
-				readinessProbe: {
-					httpGet: { path: value.health.path, port: value.service.port },
-					timeoutSeconds: value.health.timeoutSeconds,
-					failureThreshold: value.health.failureThreshold,
-				},
-				securityContext: agentContainerSecurityContext(),
-				volumeMounts: [
-					{ name: "data", mountPath: value.persistentVolume.mountPath },
+				Object.entries(value.env).map(([name, value]) => ({ name, value })),
+			) ||
+			!hasSameStructure(
+				(container?.envFrom ?? []).map((entry) => ({
+					...entry,
+					prefix: entry.prefix ?? "",
+					secretRef: {
+						...entry.secretRef,
+						optional: entry.secretRef?.optional ?? false,
+					},
+				})),
+				value.secretRefs.map((ref) => ({
+					prefix: "",
+					secretRef: { name: ref.name, optional: false },
+				})),
+			) ||
+			!hasSameStructure(
+				container?.volumeMounts?.map((mount) => ({
+					...mount,
+					readOnly: mount.readOnly ?? false,
+					subPath: mount.subPath ?? "",
+					subPathExpr: mount.subPathExpr ?? "",
+					mountPropagation: mount.mountPropagation ?? "None",
+				})),
+				[
+					{
+						name: "data",
+						mountPath: value.persistentVolume.mountPath,
+						readOnly: false,
+						subPath: "",
+						subPathExpr: "",
+						mountPropagation: "None",
+					},
 				],
-			}) ||
-			!containsDesired(pod?.securityContext, {
-				runAsNonRoot: true,
-				runAsUser: 1000,
-				runAsGroup: 1000,
-				fsGroup: 1000,
-				seccompProfile: { type: "RuntimeDefault" },
-			}) ||
+			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
-			!containsDesired(pod?.volumes, [
-				{
-					name: "data",
-					persistentVolumeClaim: { claimName: value.persistentVolume.name },
-				},
-			])
+			!hasSameStructure(
+				pod?.volumes?.map((volume) => ({
+					...volume,
+					persistentVolumeClaim: {
+						...volume.persistentVolumeClaim,
+						readOnly: volume.persistentVolumeClaim?.readOnly ?? false,
+					},
+				})),
+				[
+					{
+						name: "data",
+						persistentVolumeClaim: {
+							claimName: value.persistentVolume.name,
+							readOnly: false,
+						},
+					},
+				],
+			)
 		);
 	}
 	async function put<T extends KubernetesObject>(

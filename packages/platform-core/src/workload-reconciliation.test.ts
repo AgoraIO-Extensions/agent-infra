@@ -3,6 +3,7 @@ import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	createWorkloadReconciliationV1,
+	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 } from "./workload-reconciliation.js";
@@ -102,6 +103,59 @@ function fixture() {
 }
 
 describe("durable Workload reconciliation", () => {
+	it("retries transient preflight durably and recovers without candidate mutation", async () => {
+		const f = fixture();
+		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
+			new Error("temporary registry outage"),
+		);
+		await f.tick(2);
+		expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+		f.restart();
+		await f.tick();
+		expect(f.state).toMatchObject({ phase: "closing", attempts: 0 });
+	});
+	it("exhausts initial transient preflight budget before cleanup", async () => {
+		const f = fixture();
+		vi.mocked(f.runtime.preflight).mockRejectedValue(
+			new Error("temporary registry outage"),
+		);
+		await f.tick(3);
+		expect(f.state).toMatchObject({ phase: "preflight", attempts: 2 });
+		f.restart();
+		await f.tick();
+		expect(f.state).toMatchObject({ phase: "cleaning" });
+		expect(f.runtime.preflight).toHaveBeenCalledTimes(3);
+	});
+	it("preserves the verified route throughout transient upgrade retries and exhaustion", async () => {
+		const f = fixture();
+		await f.tick(7);
+		f.upgrade("image-b");
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.apply).mockClear();
+		vi.mocked(f.runtime.preflight).mockRejectedValue(
+			new Error("temporary registry outage"),
+		);
+		await f.tick(3);
+		expect(f.state).toMatchObject({ phase: "preflight", attempts: 2 });
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "rejected",
+			candidate: { configuration: { source: { imageDigest: "image-a" } } },
+		});
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+	});
+	it("rejects permanent initial preflight immediately", async () => {
+		const f = fixture();
+		vi.mocked(f.runtime.preflight).mockRejectedValue(
+			new WorkloadPreflightRejectedErrorV1(),
+		);
+		await f.tick(2);
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.runtime.preflight).toHaveBeenCalledOnce();
+	});
 	it("keeps the management fence independent from local Workload revisions", async () => {
 		const f = fixture();
 		await f.tick();
@@ -122,7 +176,7 @@ describe("durable Workload reconciliation", () => {
 		await f.tick(7);
 		f.upgrade("image-c");
 		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
-			new Error("invalid manifest"),
+			new WorkloadPreflightRejectedErrorV1(),
 		);
 		await f.tick(2);
 		expect(f.state?.phase).toBe("rejected");
@@ -146,7 +200,7 @@ describe("durable Workload reconciliation", () => {
 		vi.mocked(f.runtime.closeRoute).mockClear();
 		f.upgrade("image-c");
 		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
-			new Error("invalid manifest"),
+			new WorkloadPreflightRejectedErrorV1(),
 		);
 		await f.tick(3);
 		expect(f.state).toMatchObject({

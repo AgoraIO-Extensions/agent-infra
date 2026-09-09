@@ -14,6 +14,7 @@ import {
 	immutableSecretNameV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
+	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
@@ -179,7 +180,7 @@ function validateSecretDataKeys(
 	for (const { record } of bindings) {
 		const key = secretDataKey(record.name);
 		if (environmentNames.has(key) || secretDataKeys.has(key))
-			throw new Error("Workload Secret key conflict");
+			throw new WorkloadPreflightRejectedErrorV1();
 		secretDataKeys.add(key);
 	}
 }
@@ -445,21 +446,26 @@ export function createWorkloadRuntimeV1(
 						: ("custom-agent" as const),
 				admissionPolicyRef: options.admissionPolicyRef,
 			};
-			const admission = validateImageRegistryAdmissionResultV1(
-				request,
-				await options.registry.admit(request),
-			);
-			if (
-				admission.status !== "admitted" ||
-				admission.immutableDigest !== configuration.source.imageDigest
-			)
-				throw new Error("Workload admission rejected");
+			const result = await options.registry.admit(request);
+			let admission: ReturnType<typeof validateImageRegistryAdmissionResultV1>;
+			try {
+				admission = validateImageRegistryAdmissionResultV1(request, result);
+			} catch {
+				throw new WorkloadPreflightRejectedErrorV1();
+			}
+			if (admission.status === "rejected") {
+				if (admission.error.retryable)
+					throw new Error("Workload admission is unavailable");
+				throw new WorkloadPreflightRejectedErrorV1();
+			}
+			if (admission.immutableDigest !== configuration.source.imageDigest)
+				throw new WorkloadPreflightRejectedErrorV1();
 			const mode =
 				configuration.source.kind === "standard"
 					? "platform-adapter"
 					: configuration.source.interactionMode;
 			if (admission.runtimeManifest.interactionMode !== mode)
-				throw new Error("Workload interaction mode rejected");
+				throw new WorkloadPreflightRejectedErrorV1();
 			const secretBindings = bindingsFor(state, input);
 			validateSecretDataKeys(configuration, secretBindings);
 			const name = workloadResourceNameV1(state.agentId);
@@ -470,69 +476,75 @@ export function createWorkloadRuntimeV1(
 							configuration.source.identityResponsibility === "platform-managed"
 						? "platform-auth"
 						: "self-managed";
-			const deployment = validateAgentWorkloadDesiredV1({
-				schemaVersion: 1,
-				requestId: input.requestId,
-				traceId: input.traceId,
-				agentId: state.agentId,
-				configRevision: configuration.revision,
-				workloadRevision: state.revision,
-				fence: state.fence,
-				expectedWorkload: state.identity
-					? {
-							state: "present",
-							workloadUid: state.identity.uid,
-							workloadGeneration: state.identity.generation,
-						}
-					: { state: "absent" },
-				namespaceRef: options.policy.namespaceRef,
-				imageDigest: configuration.source.imageDigest,
-				registryAdmission: {
+			try {
+				const deployment = validateAgentWorkloadDesiredV1({
 					schemaVersion: 1,
-					immutableDigest: admission.immutableDigest,
+					requestId: input.requestId,
+					traceId: input.traceId,
+					agentId: state.agentId,
+					configRevision: configuration.revision,
+					workloadRevision: state.revision,
+					fence: state.fence,
+					expectedWorkload: state.identity
+						? {
+								state: "present",
+								workloadUid: state.identity.uid,
+								workloadGeneration: state.identity.generation,
+							}
+						: { state: "absent" },
+					namespaceRef: options.policy.namespaceRef,
+					imageDigest: configuration.source.imageDigest,
+					registryAdmission: {
+						schemaVersion: 1,
+						immutableDigest: admission.immutableDigest,
+						runtimeManifest: admission.runtimeManifest,
+						policyEvidence: admission.policyEvidence,
+						runtimeManifestParsingEvidence:
+							admission.runtimeManifestParsingEvidence,
+					},
 					runtimeManifest: admission.runtimeManifest,
-					policyEvidence: admission.policyEvidence,
-					runtimeManifestParsingEvidence:
-						admission.runtimeManifestParsingEvidence,
-				},
-				runtimeManifest: admission.runtimeManifest,
-				resourceProfileRef: options.policy.resourceProfileRef,
-				env: Object.fromEntries(
-					configuration.environment.map((entry) => [entry.name, entry.value]),
-				),
-				service: { name, port: admission.runtimeManifest.service.port },
-				health: {
-					path: admission.runtimeManifest.health.path,
-					timeoutSeconds: 5,
-					failureThreshold: 3,
-				},
-				persistentVolume: {
-					name: `${name}-data`,
-					mountPath: "/workspace",
-					storageProfileRef: options.policy.storageProfileRef,
-					accessMode: "ReadWriteOnce",
-					retention: "retain",
-				},
-				serviceAccount: { name, kubernetesApiAccess: false },
-				networkPolicy: {
-					deploymentPolicyRef: options.policy.networkPolicyRef,
-					ingressMode:
-						exposure === "internal-only"
-							? "runtime-host-client-only"
-							: exposure === "platform-auth"
-								? "platform-auth-route"
-								: "self-managed-route",
-					kubernetesApiAccess: false,
-					platformDatabaseAccess: false,
-					connectionDatabaseAccess: false,
-					decryptionKeyringAccess: false,
-				},
-				route: { name, exposure, tlsRequired: true },
-				secretRefs: secretBindings.map(({ record }) => recordReference(record)),
-				desiredState: "running",
-				replicas: 1,
-			});
-			return { configuration, deployment };
+					resourceProfileRef: options.policy.resourceProfileRef,
+					env: Object.fromEntries(
+						configuration.environment.map((entry) => [entry.name, entry.value]),
+					),
+					service: { name, port: admission.runtimeManifest.service.port },
+					health: {
+						path: admission.runtimeManifest.health.path,
+						timeoutSeconds: 5,
+						failureThreshold: 3,
+					},
+					persistentVolume: {
+						name: `${name}-data`,
+						mountPath: "/workspace",
+						storageProfileRef: options.policy.storageProfileRef,
+						accessMode: "ReadWriteOnce",
+						retention: "retain",
+					},
+					serviceAccount: { name, kubernetesApiAccess: false },
+					networkPolicy: {
+						deploymentPolicyRef: options.policy.networkPolicyRef,
+						ingressMode:
+							exposure === "internal-only"
+								? "runtime-host-client-only"
+								: exposure === "platform-auth"
+									? "platform-auth-route"
+									: "self-managed-route",
+						kubernetesApiAccess: false,
+						platformDatabaseAccess: false,
+						connectionDatabaseAccess: false,
+						decryptionKeyringAccess: false,
+					},
+					route: { name, exposure, tlsRequired: true },
+					secretRefs: secretBindings.map(({ record }) =>
+						recordReference(record),
+					),
+					desiredState: "running",
+					replicas: 1,
+				});
+				return { configuration, deployment };
+			} catch {
+				throw new WorkloadPreflightRejectedErrorV1();
+			}
 		},
 		async closeRoute(state) {
 			if (

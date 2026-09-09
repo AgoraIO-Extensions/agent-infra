@@ -2448,6 +2448,115 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await f.client.read("Service", probeName)).toBeNull();
 		},
 	);
+	it.each([
+		"prefix",
+		"optional",
+		"configMap",
+		"valueFrom",
+		"subPath",
+		"readOnly",
+		"propagation",
+		"claimReadOnly",
+		"hostPath",
+		"defaults",
+	])(
+		"validates exact nested environment and volume structure %s",
+		async (mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const ref = {
+				schemaVersion: 1 as const,
+				agentId: desired.agentId,
+				ownerType: "agent-owner" as const,
+				ownerId: "owner-a",
+				secretId: "secret-a",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1" as const,
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				wrappingKeyVersion: "key-a",
+				name: `${desired.service.name}-secret-1`,
+			};
+			desired.secretRefs = [ref];
+			await adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				new Uint8Array([1, 2, 3]),
+			);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const spec = workload?.spec?.template.spec;
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec || !spec || !pod?.spec) throw new Error();
+			const change = (source: V1PodSpec): V1PodSpec => ({
+				...source,
+				containers: source.containers.map((container) => ({
+					...container,
+					env: container.env?.map((entry) => ({
+						...entry,
+						...(mutation === "valueFrom"
+							? { valueFrom: { fieldRef: { fieldPath: "metadata.name" } } }
+							: {}),
+					})),
+					envFrom: container.envFrom?.map((entry) => ({
+						...entry,
+						prefix: mutation === "prefix" ? "FOREIGN_" : "",
+						secretRef: {
+							...entry.secretRef,
+							name: ref.name,
+							optional: mutation === "optional",
+						},
+						...(mutation === "configMap"
+							? { configMapRef: { name: "foreign" } }
+							: {}),
+					})),
+					volumeMounts: container.volumeMounts?.map((mount) => ({
+						...mount,
+						subPath: mutation === "subPath" ? "foreign" : "",
+						subPathExpr: "",
+						readOnly: mutation === "readOnly",
+						mountPropagation:
+							mutation === "propagation" ? "HostToContainer" : "None",
+					})),
+				})),
+				volumes: source.volumes?.map((volume) => ({
+					...volume,
+					persistentVolumeClaim: {
+						...volume.persistentVolumeClaim,
+						claimName: desired.persistentVolume.name,
+						readOnly: mutation === "claimReadOnly",
+					},
+					...(mutation === "hostPath" ? { hostPath: { path: "/host" } } : {}),
+				})),
+			});
+			const changedWorkload: V1StatefulSet = {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: { ...workload.spec.template, spec: change(spec) },
+				},
+			};
+			f.resources.set(`StatefulSet/${desired.service.name}`, changedWorkload);
+			expect(await adapter.observe(desired, identity)).toBe(
+				mutation === "defaults" ? "healthy" : "drifted",
+			);
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			const changedPod: V1Pod = { ...pod, spec: change(pod.spec) };
+			f.resources.set(`Pod/${desired.service.name}-0`, changedPod);
+			expect(await adapter.observe(desired, identity)).toBe(
+				mutation === "defaults" ? "healthy" : "drifted",
+			);
+		},
+	);
 	it("rejects an ordinary sidecar and keeps its candidate route closed", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

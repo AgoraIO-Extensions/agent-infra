@@ -445,6 +445,31 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("keeps retryable registry admission failures in preflight without Kubernetes mutations", async () => {
+		const f = fixture({
+			registry: {
+				async admit(request) {
+					return {
+						schemaVersion: 1,
+						status: "rejected",
+						requestId: request.requestId,
+						traceId: request.traceId,
+						error: {
+							schemaVersion: 1,
+							code: "IMAGE_REGISTRY_UNAVAILABLE",
+							message: "Image registry is unavailable",
+							retryable: true,
+							traceId: request.traceId,
+						},
+					};
+				},
+			},
+		});
+		await f.tick(2);
+		expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
+		expect(f.state?.candidate.deployment).toBeNull();
+		expect(f.resources.size).toBe(0);
+	});
 	it("rejects preflight when an explicit environment key shadows a Secret", async () => {
 		const record = pendingSecretRecord();
 		const cleanup = secretCleanupStore(record);

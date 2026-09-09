@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
+	type ImageRegistryAdmissionResultV1,
 	type PlatformSecretRecordV1,
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
@@ -90,6 +91,25 @@ beforeEach(async () => {
 	await sql`insert into platform.agent_owners(agent_id, owner_id, created_at) values ('agent-a', 'owner-a', now())`;
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
+
+async function rejectRegistryAdmission(request: {
+	readonly requestId: string;
+	readonly traceId: string;
+}): Promise<ImageRegistryAdmissionResultV1> {
+	return {
+		schemaVersion: 1,
+		status: "rejected",
+		requestId: request.requestId,
+		traceId: request.traceId,
+		error: {
+			schemaVersion: 1,
+			code: "IMAGE_NOT_ADMITTED",
+			message: "The image is not admitted by deployment policy",
+			retryable: false,
+			traceId: request.traceId,
+		},
+	};
+}
 
 function runtime(): WorkloadRuntimePortV1 {
 	return {
@@ -802,9 +822,7 @@ describe("PostgreSQL Workload steps", () => {
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 6, ${rejectedRevision.source.imageDigest}, ${sql.json(rejectedRevision)}, now())`;
 		await sql`update platform.agents set current_configuration_revision = 6 where id = 'agent-a'`;
 		await advance({
-			async admit() {
-				throw new Error("registry admission rejected");
-			},
+			admit: rejectRegistryAdmission,
 		});
 		expect(
 			(await sql`select state from platform.workload_reconciliations`)[0]
@@ -833,9 +851,7 @@ describe("PostgreSQL Workload steps", () => {
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 7, ${deniedRevision.source.imageDigest}, ${sql.json(deniedRevision)}, now())`;
 		await sql`update platform.agents set current_configuration_revision = 7 where id = 'agent-a'`;
 		await advance({
-			async admit() {
-				throw new Error("registry admission rejected");
-			},
+			admit: rejectRegistryAdmission,
 		});
 		expect(
 			await sql`select * from platform.secret_records where configuration_revision = 7`,
@@ -1273,7 +1289,7 @@ describe("PostgreSQL Workload steps", () => {
 			policy: workloadTestPolicy,
 			registry: {
 				admit: (request: Parameters<typeof registry.admit>[0]) => {
-					if (reject) throw new Error("private registry response");
+					if (reject) return rejectRegistryAdmission(request);
 					return registry.admit(request);
 				},
 			},

@@ -90,6 +90,12 @@ export interface WorkloadReconciliationStorePortV1 {
 	): Promise<"idle" | "advanced">;
 }
 
+export class WorkloadPreflightRejectedErrorV1 extends Error {
+	constructor() {
+		super("Workload preflight rejected");
+	}
+}
+
 export interface WorkloadRuntimePortV1 {
 	capabilities(
 		state: WorkloadReconciliationStateV1,
@@ -216,7 +222,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 								candidate.configuration.source.imageDigest !==
 								state.candidate.configuration.source.imageDigest
 							)
-								throw new Error();
+								throw new WorkloadPreflightRejectedErrorV1();
 							const previous = state.verified?.configuration.source;
 							const current = candidate.configuration.source;
 							const mode = (source: typeof current) =>
@@ -224,7 +230,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 									? "platform-adapter"
 									: source.interactionMode;
 							if (previous && mode(previous) !== mode(current))
-								throw new Error();
+								throw new WorkloadPreflightRejectedErrorV1();
 							return advance("closing", { candidate });
 						}
 						case "closing":
@@ -346,13 +352,20 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return advance("cleaning");
 							return state;
 					}
-				} catch {
-					if (state.phase === "preflight" && state.verified) {
-						return advance("rejected", {
-							candidate: state.verified,
-							rollback: true,
-							failureCode: "reconciliation_failed",
-						});
+				} catch (error) {
+					if (state.phase === "preflight") {
+						if (
+							!(error instanceof WorkloadPreflightRejectedErrorV1) &&
+							state.attempts + 1 < maximumAttempts
+						)
+							return { ...state, attempts: state.attempts + 1 };
+						if (state.verified)
+							return advance("rejected", {
+								candidate: state.verified,
+								rollback: true,
+								failureCode: "reconciliation_failed",
+							});
+						return failed("reconciliation_failed");
 					}
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
@@ -365,10 +378,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 							...state,
 							attempts: Math.min(state.attempts + 1, maximumAttempts),
 						};
-					if (
-						state.phase === "preflight" ||
-						state.attempts + 1 >= maximumAttempts
-					)
+					if (state.attempts + 1 >= maximumAttempts)
 						return failed("reconciliation_failed");
 					return { ...state, attempts: state.attempts + 1 };
 				}
