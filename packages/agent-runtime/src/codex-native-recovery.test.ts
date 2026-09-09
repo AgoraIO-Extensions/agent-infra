@@ -290,6 +290,7 @@ async function crash() {
 function driverOptions(path: string) {
 	return {
 		path,
+		configVersion: "synthetic-config-1",
 		defaultModelOptionId: "synthetic",
 		defaultReasoningLevel: "low",
 		modelOptions: [

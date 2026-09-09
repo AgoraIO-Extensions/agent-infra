@@ -2,8 +2,31 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	type CodexRuntimeDriverOptions,
+	FakeRuntimeDriver,
+} from "@agent-infra/agent-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
+const runtimeAssemblyMocks = vi.hoisted(() => ({
+	openCodexRuntimeDriver: vi.fn(),
+	verifyCodexPilotInstallation: vi.fn(),
+}));
+
+vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@agent-infra/agent-runtime")>();
+	class MockCodexRuntimeDriver extends actual.CodexRuntimeDriver {}
+	Object.defineProperty(MockCodexRuntimeDriver, "open", {
+		value: runtimeAssemblyMocks.openCodexRuntimeDriver,
+	});
+	return {
+		...actual,
+		CodexRuntimeDriver: MockCodexRuntimeDriver,
+		verifyCodexPilotInstallation:
+			runtimeAssemblyMocks.verifyCodexPilotInstallation,
+	};
+});
 
 import {
 	assembleRuntimeHost,
@@ -30,6 +53,8 @@ async function environment() {
 }
 
 afterEach(async () => {
+	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
+	runtimeAssemblyMocks.verifyCodexPilotInstallation.mockReset();
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -63,6 +88,64 @@ describe("RuntimeHost environment assembly", () => {
 		const response = await createRuntimeHostApp(runtime).request("/healthz");
 		expect(response.status).toBe(200);
 		await runtime.close();
+	});
+
+	it("passes the parsed configuration revision into the Codex Driver", async () => {
+		const values = await environment();
+		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		const originalPath = process.env.PATH;
+		let openedWith: CodexRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema-sha256",
+		});
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (options: CodexRuntimeDriverOptions) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, "codex-assembly-test.json"),
+				);
+			},
+		);
+		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+		try {
+			runtime = await assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 2,
+					configVersion: "active-revision-17",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							endpoint: "https://models.example.test/v1",
+							model: "gpt-5.3-codex",
+							reasoningLevels: ["high"],
+							credentialEnvironmentVariable:
+								"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+						},
+					],
+				}),
+			});
+			expect(openedWith).toMatchObject({
+				path: join(dataDirectory, "codex-driver.json"),
+				configVersion: "active-revision-17",
+			});
+		} finally {
+			await runtime?.close();
+			if (originalPath === undefined) {
+				delete process.env.PATH;
+			} else {
+				process.env.PATH = originalPath;
+			}
+		}
 	});
 
 	it.each([

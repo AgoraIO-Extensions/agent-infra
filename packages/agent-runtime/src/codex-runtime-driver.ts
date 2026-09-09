@@ -48,6 +48,7 @@ type OpenCodexBridge = (
 
 export interface CodexRuntimeDriverOptions {
 	readonly path: string;
+	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
@@ -129,6 +130,7 @@ interface CodexOperation {
 	schemaVersion: 1 | 2;
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
+	configVersion?: string;
 	// Recovery must not expose or re-register the accepted record until this clears.
 	admissionPending?: true;
 	executionId?: string;
@@ -535,6 +537,7 @@ function isCodexOperation(
 			"schemaVersion",
 			"state",
 			"nativeSessionRef",
+			"configVersion",
 			"admissionPending",
 			"executionId",
 			"turnId",
@@ -574,6 +577,15 @@ function isCodexOperation(
 	}
 	if (value.schemaVersion === 2 && kind !== "submit-turn") return false;
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
+	if (
+		(kind === "submit-turn" &&
+			value.configVersion !== undefined &&
+			(typeof value.configVersion !== "string" ||
+				!codexModelPattern.test(value.configVersion))) ||
+		(isInterruption && value.configVersion !== undefined)
+	) {
+		return false;
+	}
 	if (isInterruption) {
 		if (!nonEmptyString(value.executionId) || !nonEmptyString(value.turnId)) {
 			return false;
@@ -888,6 +900,12 @@ function assertContainedConfiguration(
 }
 
 function configuredModelOptions(options: CodexRuntimeDriverOptions) {
+	if (
+		typeof options.configVersion !== "string" ||
+		!codexModelPattern.test(options.configVersion)
+	) {
+		configurationInvalid();
+	}
 	const configured = new Map<string, ConfiguredCodexRuntimeModelOption>();
 	const routes: CodexModelRoute[] = [];
 	const values: unknown = options.modelOptions;
@@ -1325,6 +1343,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			ConfiguredCodexRuntimeModelOption
 		>,
 		private readonly defaultSelection: { model: string; effort: string },
+		private readonly configVersion: string,
 		private readonly beginModelTurnAdmission?: (
 			deadline: number,
 		) => CodexModelTurnAdmission,
@@ -1437,6 +1456,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			bridge,
 			modelOptions,
 			defaultSelection,
+			options.configVersion,
 			modelTransport?.beginTurnAdmission,
 			modelTransport?.recognizeTurn,
 			modelTransport?.registerTurn,
@@ -1522,15 +1542,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
-		const nativeSelection =
-			command.schemaVersion === 2
-				? this.nativeSelection(command.selection)
-				: this.defaultSelection;
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
 			if (prepared.operation.admissionPending) unavailable();
 			return prepared.operation.record;
 		}
+		if (!prepared.created) {
+			return this.unknown(command, prepared.operation.nativeSessionRef);
+		}
+		const nativeSelection =
+			command.schemaVersion === 2
+				? this.nativeSelection(command.selection)
+				: this.defaultSelection;
 		if (command.schemaVersion === 2 && !nativeSelection) {
 			return this.resolve(command, prepared.operation.nativeSessionRef, {
 				outcome: "rejected",
@@ -1538,9 +1561,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				message: "Runtime model selection is unsupported",
 				retryable: false,
 			});
-		}
-		if (!prepared.created) {
-			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
 		const hasPersistedThread =
 			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
@@ -1791,17 +1811,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		recoverEventHistory = false,
 	) {
-		let session = this.session(nativeSessionRef);
+		const initialState = this.readState();
+		let session = ownRecordValue(initialState.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status !== "running") {
+			if (
+				!this.executionConfigurationMatches(initialState, session, execution)
+			) {
+				return execution.status;
+			}
 			await this.cancelModelTurn?.({
 				threadId: session.threadId,
 				turnId: execution.nativeTurnId,
 			});
 			return execution.status;
 		}
+		this.assertExecutionConfiguration(initialState, session, execution);
 		const nativeTurn = {
 			threadId: session.threadId,
 			turnId: execution.nativeTurnId,
@@ -2013,6 +2041,46 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}),
 		);
 		if (operation?.admissionPending) unavailable();
+	}
+
+	private executionOperation(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: execution.executionId,
+			}),
+		);
+		if (!operation) stateInvalid();
+		return operation;
+	}
+
+	private executionConfigurationMatches(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		return (
+			this.executionOperation(state, session, execution).configVersion ===
+			this.configVersion
+		);
+	}
+
+	private assertExecutionConfiguration(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		if (!this.executionConfigurationMatches(state, session, execution)) {
+			unavailable();
+		}
 	}
 
 	private update<R>(change: (state: CodexDriverState) => R) {
@@ -2406,12 +2474,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 	) {
-		let session = this.session(nativeSessionRef);
+		const initialState = this.readState();
+		let session = ownRecordValue(initialState.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status === "running") {
 			await this.restoreExecutionStatus(nativeSessionRef, executionId, true);
+			return;
+		}
+		if (!this.executionConfigurationMatches(initialState, session, execution)) {
 			return;
 		}
 		await this.resumeSession(nativeSessionRef);
@@ -2812,6 +2885,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				) {
 					unavailable();
 				}
+				if (session.activeExecutionId !== undefined) {
+					const activeExecution = ownRecordValue(
+						session.executions,
+						session.activeExecutionId,
+					);
+					if (!activeExecution) stateInvalid();
+					this.assertExecutionConfiguration(state, session, activeExecution);
+				}
 			} else if (command.nativeSessionRef) {
 				unavailable();
 			} else {
@@ -2827,6 +2908,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				schemaVersion: command.schemaVersion,
 				state: "prepared",
 				nativeSessionRef,
+				configVersion: this.configVersion,
 			};
 			state.operations[key] = operation;
 			return { operation, created: true };
@@ -2853,6 +2935,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			const execution = ownRecordValue(session.executions, command.executionId);
 			if (!execution || execution.turnId !== command.turnId) unavailable();
+			this.assertExecutionConfiguration(state, session, execution);
 			const operation: CodexOperation = {
 				schemaVersion: 1,
 				state: "prepared",
@@ -2869,7 +2952,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		command: CodexInterruptionCommand,
 	) {
-		const session = this.session(nativeSessionRef);
+		const state = this.readState();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		const execution = ownRecordValue(session.executions, command.executionId);
 		if (
 			!session.threadId ||
@@ -2878,6 +2963,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) {
 			unavailable();
 		}
+		this.assertExecutionConfiguration(state, session, execution);
 		return {
 			threadId: session.threadId,
 			turnId: execution.nativeTurnId,

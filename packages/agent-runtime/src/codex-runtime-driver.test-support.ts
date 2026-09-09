@@ -347,6 +347,7 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 	const driver = await openCodexRuntimeDriverForTest(
 		{
 			path,
+			configVersion: "synthetic-config-1",
 			defaultModelOptionId: "model-option-primary",
 			defaultReasoningLevel: "high",
 			modelOptions: [

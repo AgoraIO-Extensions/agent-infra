@@ -112,6 +112,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const driver = configuration
 		? await CodexRuntimeDriver.open({
 				path: join(dataDirectory, "codex-driver.json"),
+				configVersion: configuration.configVersion,
 				defaultModelOptionId: configuration.defaultModelOptionId,
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
 				modelOptions: configuration.modelOptions,

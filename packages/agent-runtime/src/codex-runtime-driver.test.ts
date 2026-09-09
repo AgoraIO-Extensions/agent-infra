@@ -138,6 +138,8 @@ interface StoredCodexExecution {
 
 interface StoredCodexOperation {
 	state?: unknown;
+	nativeSessionRef?: string;
+	configVersion?: unknown;
 	admissionPending?: unknown;
 	record?: {
 		result?: { outcome?: unknown; status?: unknown };
@@ -145,6 +147,7 @@ interface StoredCodexOperation {
 }
 
 interface StoredCodexSession {
+	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
 	journals?: Record<string, StoredEventJournal>;
 	executions?: Record<string, StoredCodexExecution>;
@@ -379,9 +382,10 @@ function generationCancelRequest(
 	};
 }
 
-function driverOptions(path: string) {
+function driverOptions(path: string, configVersion = "synthetic-config-1") {
 	return {
 		path,
+		configVersion,
 		defaultModelOptionId: "model-option-primary",
 		defaultReasoningLevel: "high",
 		modelOptions: [
@@ -407,11 +411,15 @@ function openDriver(
 	path: string,
 	bridge: TestCodexBridge,
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+	configVersion?: string,
 ) {
-	return openCodexRuntimeDriverForTest(driverOptions(path), async (options) => {
-		onOpen?.(options);
-		return bridge;
-	});
+	return openCodexRuntimeDriverForTest(
+		driverOptions(path, configVersion),
+		async (options) => {
+			onOpen?.(options);
+			return bridge;
+		},
+	);
 }
 
 function configReadResult(
@@ -527,14 +535,16 @@ function openDriverWithModelEndpoint(
 	bridge: TestCodexBridge,
 	endpoint: string,
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+	configVersion?: string,
+	credential = upstreamModelAccess.credential,
 ) {
 	return openCodexRuntimeDriverForTest(
 		{
-			...driverOptions(path),
+			...driverOptions(path, configVersion),
 			modelOptions: driverOptions(path).modelOptions.map((option) => ({
 				...option,
 				endpoint,
-				credential: upstreamModelAccess.credential,
+				credential,
 			})),
 		},
 		async (options) => {
@@ -1136,6 +1146,7 @@ describe("Codex Runtime Driver", () => {
 				openCodexRuntimeDriverForTest(
 					{
 						path: join(directory, "driver.json"),
+						configVersion: "synthetic-config-1",
 						defaultModelOptionId: "model-option-primary",
 						defaultReasoningLevel: reasoningLevel,
 						modelOptions: [
@@ -1171,6 +1182,7 @@ describe("Codex Runtime Driver", () => {
 		const bridge = new TestCodexBridge();
 		const options: CodexRuntimeDriverOptions = {
 			path: join(directory, "driver.json"),
+			configVersion: "synthetic-config-1",
 			defaultModelOptionId: "model-option-primary",
 			defaultReasoningLevel: "high",
 			modelOptions: [
@@ -2590,6 +2602,233 @@ describe("Codex Runtime Driver", () => {
 		).toEqual({ outcome: "accepted", status: "running" });
 	});
 
+	it("fails closed before recovering a running Turn under a different configuration revision", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let firstUpstreamCalls = 0;
+		const firstEndpoint = await listen(
+			createServer((_request, response) => {
+				firstUpstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		let replacementUpstreamCalls = 0;
+		const replacementEndpoint = await listen(
+			createServer((_request, response) => {
+				replacementUpstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriverWithModelEndpoint(
+			path,
+			firstBridge,
+			firstEndpoint,
+			undefined,
+			"configuration-a",
+			"credential-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriverWithModelEndpoint(
+			path,
+			recoveredBridge,
+			replacementEndpoint,
+			undefined,
+			"configuration-b",
+			"credential-b",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRecovery = recoveredBridge.requests.length;
+
+		await expect(
+			recoveredDriver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.execute(stopCommand(accepted.nativeSessionRef)),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.execute(
+				submitCommand({
+					operationId: "execution-codex-new-config",
+					executionId: "execution-codex-new-config",
+					turnId: "turn-codex-new-config",
+					nativeSessionRef: accepted.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		expect(replacementUpstreamCalls).toBe(0);
+		await recoveredDriver.close();
+
+		const independentBridge = new TestCodexBridge(
+			"codex-native-thread-new-configuration",
+			"codex-native-turn-new-configuration",
+		);
+		let loopback: CodexModelAccess | undefined;
+		const independentDriver = await openDriverWithModelEndpoint(
+			path,
+			independentBridge,
+			replacementEndpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+			"configuration-b",
+			"credential-b",
+		);
+		drivers.push(independentDriver);
+		const independent = await independentDriver.execute(
+			submitCommand({
+				operationId: "execution-codex-independent",
+				executionId: "execution-codex-independent",
+				turnId: "turn-codex-independent",
+				conversationId: "conversation-codex-independent",
+			}),
+		);
+		expect(independent.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		if (!loopback) throw new Error("missing loopback access");
+		expect(await modelRequest(loopback, independentBridge)).toMatchObject({
+			status: 200,
+		});
+		expect(firstUpstreamCalls).toBe(0);
+		expect(replacementUpstreamCalls).toBe(1);
+	});
+
+	it("does not recover or rewrite a legacy running Turn without configuration provenance", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			path,
+			firstBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const submit = Object.values(state.operations).find(
+			(operation) => operation.record?.result?.outcome === "accepted",
+		);
+		if (!submit) throw new Error("missing submit operation");
+		delete submit.configVersion;
+		await writeFile(path, `${JSON.stringify(state)}\n`);
+		const legacyContents = await readFile(path, "utf8");
+
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriver(
+			path,
+			recoveredBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRecovery = recoveredBridge.requests.length;
+		await expect(
+			recoveredDriver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		expect(await readFile(path, "utf8")).toBe(legacyContents);
+	});
+
+	it("keeps terminal durable data readable and starts the next Turn under the current revision", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			path,
+			firstBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+		});
+		await firstDriver.close();
+
+		const recoveredBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		recoveredBridge.setTurnStatus("completed");
+		recoveredBridge.continueAfterPersistedTurn();
+		const recoveredDriver = await openDriver(
+			path,
+			recoveredBridge,
+			undefined,
+			"configuration-b",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRead = recoveredBridge.requests.length;
+		expect(
+			await recoveredDriver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("completed");
+		expect(
+			await recoveredDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "completed",
+					payload: { status: "completed" },
+				}),
+			]),
+		);
+		expect(recoveredBridge.requests.slice(beforeRead)).toEqual([]);
+
+		const next = await recoveredDriver.execute(
+			submitCommand({
+				operationId: "execution-codex-next-config",
+				executionId: "execution-codex-next-config",
+				turnId: "turn-codex-next-config",
+				nativeSessionRef: accepted.nativeSessionRef,
+			}),
+		);
+		expect(next.result).toEqual({ outcome: "accepted", status: "running" });
+		const persisted = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(
+			Object.values(persisted.operations)
+				.filter((operation) => operation.record?.result?.outcome === "accepted")
+				.map((operation) => operation.configVersion),
+		).toEqual(["configuration-a", "configuration-b"]);
+	});
+
 	it("persists a turn-start notification that races the Turn binding and replays it once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -3868,73 +4107,193 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(0);
 	});
 
-	it("keeps an unconfirmed native Turn unknown without retrying it", async () => {
-		const directory = await runtimeDirectory();
-		const command = submitCommand();
-		const interruptedBridge = new TestCodexBridge(
-			"codex-native-thread-private",
-			"codex-native-turn-private",
-			true,
-		);
-		const interruptedDriver = await openDriver(
-			join(directory, "driver.json"),
-			interruptedBridge,
-		);
-		drivers.push(interruptedDriver);
+	it.each([
+		["a different configuration revision", false, "configuration-b"],
+		["missing legacy configuration provenance", true, "configuration-a"],
+	] as const)(
+		"keeps an unconfirmed native Turn unknown under %s without retrying it",
+		async (_name, removeConfigVersion, recoveredConfigVersion) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommand();
+			const interruptedBridge = new TestCodexBridge(
+				"codex-native-thread-private",
+				"codex-native-turn-private",
+				true,
+			);
+			const interruptedDriver = await openDriver(
+				path,
+				interruptedBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(interruptedDriver);
 
-		await expect(interruptedDriver.execute(command)).rejects.toMatchObject({
-			code: "RUNTIME_CODEX_UNAVAILABLE",
-		});
-		expect(
-			interruptedBridge.requests.filter(
-				({ method }) => method === "turn/start",
-			),
-		).toHaveLength(1);
+			await expect(interruptedDriver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(
+				interruptedBridge.requests.filter(
+					({ method }) => method === "turn/start",
+				),
+			).toHaveLength(1);
+			if (removeConfigVersion) {
+				const state = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				const prepared = Object.values(state.operations).find(
+					(operation) => operation.state === "prepared",
+				);
+				if (!prepared) throw new Error("missing prepared submit operation");
+				delete prepared.configVersion;
+				await writeFile(path, `${JSON.stringify(state)}\n`);
+			}
 
-		const recoveredBridge = new TestCodexBridge();
-		const recoveredDriver = await openDriver(
-			join(directory, "driver.json"),
-			recoveredBridge,
-		);
-		drivers.push(recoveredDriver);
+			const recoveredBridge = new TestCodexBridge();
+			const recoveredDriver = await openDriver(
+				path,
+				recoveredBridge,
+				undefined,
+				recoveredConfigVersion,
+			);
+			drivers.push(recoveredDriver);
+			const beforeRecovery = recoveredBridge.requests.length;
 
-		expect(await recoveredDriver.lookupOperation(command)).toEqual({
-			state: "unknown",
-		});
-		const unknown = await recoveredDriver.execute(command);
-		expect(unknown.result).toEqual({
-			outcome: "unknown",
-			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-			message: "Runtime command acceptance could not be confirmed",
-		});
-		await expect(
-			recoveredDriver.execute(
-				submitCommand({
-					operationId: "execution-codex-after-unknown",
-					executionId: "execution-codex-after-unknown",
-					turnId: "turn-codex-after-unknown",
-					nativeSessionRef: unknown.nativeSessionRef,
-				}),
+			expect(await recoveredDriver.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			const unknown = await recoveredDriver.execute(command);
+			expect(unknown.result).toEqual({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			});
+			await expect(
+				recoveredDriver.execute(
+					submitCommand({
+						operationId: "execution-codex-after-unknown",
+						executionId: "execution-codex-after-unknown",
+						turnId: "turn-codex-after-unknown",
+						nativeSessionRef: unknown.nativeSessionRef,
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				recoveredDriver.execute(
+					submitCommand({
+						operationId: "execution-codex-replacement-after-unknown",
+						executionId: "execution-codex-replacement-after-unknown",
+						turnId: "turn-codex-replacement-after-unknown",
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(
+				recoveredBridge.requests.filter(
+					({ method }) => method === "turn/start",
+				),
+			).toHaveLength(0);
+			expect(
+				recoveredBridge.requests.filter(
+					({ method }) => method === "thread/start",
+				),
+			).toHaveLength(0);
+			expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		},
+	);
+
+	it.each([
+		[
+			"removed model option",
+			driverOptions("unused").modelOptions.filter(
+				(option) => option.modelOptionId !== "model-option-alternate",
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-		await expect(
-			recoveredDriver.execute(
-				submitCommand({
-					operationId: "execution-codex-replacement-after-unknown",
-					executionId: "execution-codex-replacement-after-unknown",
-					turnId: "turn-codex-replacement-after-unknown",
-				}),
+		],
+		[
+			"removed reasoning level",
+			driverOptions("unused").modelOptions.map((option) =>
+				option.modelOptionId === "model-option-alternate"
+					? { ...option, reasoningLevels: ["high"] }
+					: option,
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-		expect(
-			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
-		).toHaveLength(0);
-		expect(
-			recoveredBridge.requests.filter(
-				({ method }) => method === "thread/start",
-			),
-		).toHaveLength(0);
-	});
+		],
+	] as const)(
+		"keeps an uncertain V2 operation unknown after its %s",
+		async (_name, modelOptions) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommandV2({
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-alternate",
+					reasoningLevel: "low",
+				},
+			});
+			const failedBridge = new TestCodexBridge(
+				"codex-native-thread-private",
+				"codex-native-turn-private",
+				true,
+			);
+			const failedDriver = await openDriver(
+				path,
+				failedBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(failedDriver);
+			await expect(failedDriver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			const durableBeforeRecovery = await readFile(path, "utf8");
+			const durableState = JSON.parse(
+				durableBeforeRecovery,
+			) as StoredCodexDriverState;
+			const [preparedOperationKey, preparedOperation] =
+				Object.entries(durableState.operations)[0] ?? [];
+			if (!preparedOperationKey || !preparedOperation?.nativeSessionRef) {
+				throw new Error("missing prepared submit operation");
+			}
+			expect(
+				durableState.sessions[preparedOperation.nativeSessionRef]
+					?.acceptanceUncertainOperationKey,
+			).toBe(preparedOperationKey);
+
+			const recoveredBridge = new TestCodexBridge();
+			const recoveredDriver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(path, "configuration-b"),
+					modelOptions,
+				},
+				async () => recoveredBridge,
+			);
+			drivers.push(recoveredDriver);
+			const beforeRecovery = recoveredBridge.requests.length;
+
+			expect(await recoveredDriver.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			expect((await recoveredDriver.execute(command)).result).toMatchObject({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			});
+			await expect(
+				recoveredDriver.execute(
+					submitCommandV2({
+						operationId: "execution-codex-after-v2-unknown",
+						executionId: "execution-codex-after-v2-unknown",
+						turnId: "turn-codex-after-v2-unknown",
+						nativeSessionRef: preparedOperation.nativeSessionRef,
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: "model-option-primary",
+							reasoningLevel: "high",
+						},
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+			expect(await readFile(path, "utf8")).toBe(durableBeforeRecovery);
+		},
+	);
 
 	it("keeps a command unknown when its native Session start response is lost", async () => {
 		const directory = await runtimeDirectory();
