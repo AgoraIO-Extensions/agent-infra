@@ -484,7 +484,7 @@ const ignoredPinnedCodexEvents = new Set([
 	"response.reasoning_summary_part.done",
 ]);
 
-function hasUnsafeSemanticPayload(
+function semanticPayload(
 	event: Record<string, unknown>,
 	credentials: readonly string[],
 ) {
@@ -533,6 +533,21 @@ function hasUnsafeSemanticPayload(
 		Array.isArray(value)
 			? value.map((entry) => (isPlainRecord(entry) ? entry.text : undefined))
 			: [];
+	const deltaChannel =
+		event.type === "response.output_text.delta"
+			? "message"
+			: event.type === "response.custom_tool_call_input.delta"
+				? "tool-arguments"
+				: event.type === "response.reasoning_text.delta" ||
+						event.type === "response.reasoning_summary_text.delta"
+					? "reasoning"
+					: undefined;
+	if (deltaChannel && !collect(deltaChannel, event.delta)) return undefined;
+	if (
+		event.type === "response.reasoning_summary_text.done" &&
+		!collect("reasoning", event.text)
+	)
+		return undefined;
 	const items =
 		event.type === "response.completed"
 			? isPlainRecord(event.response) && Array.isArray(event.response.output)
@@ -547,7 +562,7 @@ function hasUnsafeSemanticPayload(
 		if (!isPlainRecord(candidate)) continue;
 		switch (candidate.type) {
 			case "message":
-				if (!collect("message", textItems(candidate.content))) return true;
+				if (!collect("message", textItems(candidate.content))) return undefined;
 				break;
 			case "reasoning":
 				if (
@@ -556,20 +571,27 @@ function hasUnsafeSemanticPayload(
 						textItems(candidate.content),
 					])
 				)
-					return true;
+					return undefined;
+				if (!collect("encrypted", candidate.encrypted_content))
+					return undefined;
+				break;
+			case "compaction":
+			case "compaction_summary":
+				if (!collect("encrypted", candidate.encrypted_content))
+					return undefined;
 				break;
 			case "function_call":
 				if (
 					!argumentsPayload(candidate.arguments) ||
 					!collect("encrypted-arguments", candidate.encrypted_function_args)
 				)
-					return true;
+					return undefined;
 				break;
 			case "custom_tool_call":
-				if (!argumentsPayload(candidate.input)) return true;
+				if (!argumentsPayload(candidate.input)) return undefined;
 				break;
 			case "tool_search_call":
-				if (!argumentsPayload(candidate.arguments)) return true;
+				if (!argumentsPayload(candidate.arguments)) return undefined;
 				break;
 			case "web_search_call":
 				if (
@@ -581,17 +603,15 @@ function hasUnsafeSemanticPayload(
 						candidate.action.queries,
 					])
 				)
-					return true;
+					return undefined;
 				break;
 			case "image_generation_call":
 				if (!collect("image", [candidate.result, candidate.revised_prompt]))
-					return true;
+					return undefined;
 				break;
 		}
 	}
-	return [...channels.values()].some((strings) =>
-		containsCredential(strings.join(""), credentials),
-	);
+	return channels;
 }
 
 function encodeValidatedEvent(
@@ -614,11 +634,18 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		containsUnsafeModelData(value, credentials) ||
-		hasUnsafeSemanticPayload(value, credentials)
+		containsUnsafeModelData(value, credentials)
 	) {
 		return { state: "invalid" as const };
 	}
+	const rawPayload = semanticPayload(value, credentials);
+	if (
+		!rawPayload ||
+		[...rawPayload.values()].some((strings) =>
+			containsCredential(strings.join(""), credentials),
+		)
+	)
+		return { state: "invalid" as const };
 	if (
 		value.type === "response.failed" ||
 		value.type === "response.incomplete" ||
@@ -639,15 +666,18 @@ function encodeValidatedEvent(
 	}
 	const projected = projectHandledEvent(value);
 	if (!projected) return { state: "invalid" as const };
+	const payload = semanticPayload(projected, credentials);
+	if (!payload) return { state: "invalid" as const };
 	return {
 		state: "event" as const,
 		projected,
+		payload,
 		encoded: `${event.event ? `event: ${value.type}\n` : ""}data: ${JSON.stringify(projected)}\n\n`,
 	};
 }
 
-// KMP state retains only a possible credential prefix per semantic delta channel.
-function credentialDeltaGuard(credentials: readonly string[]) {
+// KMP state retains only a possible credential prefix per semantic channel.
+function credentialStreamGuard(credentials: readonly string[]) {
 	const patterns = credentials.map((text) => {
 		const failure = new Uint32Array(text.length);
 		for (let i = 1, matched = 0; i < text.length; i += 1) {
@@ -660,37 +690,45 @@ function credentialDeltaGuard(credentials: readonly string[]) {
 	});
 	const channels = new Map<string, Uint32Array>();
 	return {
-		accept(value: Record<string, unknown>) {
-			if (typeof value.delta !== "string") return true;
-			const keys = ["all", String(value.type)];
-			for (const field of [
-				"item_id",
-				"call_id",
-				"summary_index",
-				"content_index",
-			]) {
-				if (value[field] !== undefined)
-					keys.push(JSON.stringify([value.type, field, value[field]]));
-			}
-			for (const key of keys) {
-				let states = channels.get(key);
-				if (!states) {
-					states = new Uint32Array(patterns.length);
-					channels.set(key, states);
+		accept(
+			value: Record<string, unknown>,
+			payload: ReadonlyMap<string, readonly string[]>,
+		) {
+			for (const [channel, strings] of payload) {
+				const text = strings.join("");
+				if (!text) continue;
+				const keys = ["all", channel];
+				const item = isPlainRecord(value.item) ? value.item : {};
+				const identifiers = {
+					item: value.item_id ?? item.id,
+					call: value.call_id ?? item.call_id,
+					summary_index: value.summary_index,
+					content_index: value.content_index,
+				};
+				for (const [field, identifier] of Object.entries(identifiers)) {
+					if (identifier !== undefined)
+						keys.push(JSON.stringify([channel, field, identifier]));
 				}
-				for (let index = 0; index < patterns.length; index += 1) {
-					const pattern = patterns[index];
-					if (!pattern) continue;
-					let matched = states[index] ?? 0;
-					for (const character of value.delta) {
-						while (matched > 0 && character !== pattern.text[matched])
-							matched = pattern.failure[matched - 1] ?? 0;
-						if (character === pattern.text[matched]) matched += 1;
-						if (matched === pattern.text.length) return false;
+				for (const key of keys) {
+					let states = channels.get(key);
+					if (!states) {
+						states = new Uint32Array(patterns.length);
+						channels.set(key, states);
 					}
-					states[index] = matched;
+					for (let index = 0; index < patterns.length; index += 1) {
+						const pattern = patterns[index];
+						if (!pattern) continue;
+						let matched = states[index] ?? 0;
+						for (const character of text) {
+							while (matched > 0 && character !== pattern.text[matched])
+								matched = pattern.failure[matched - 1] ?? 0;
+							if (character === pattern.text[matched]) matched += 1;
+							if (matched === pattern.text.length) return false;
+						}
+						states[index] = matched;
+					}
+					if (!states.some((value) => value > 0)) channels.delete(key);
 				}
-				if (!states.some((value) => value > 0)) channels.delete(key);
 			}
 			return true;
 		},
@@ -717,7 +755,7 @@ async function forwardValidatedStream(
 	let queued: string[] = [];
 	let pending: string[] = [];
 	let pendingBytes = 0;
-	const guard = credentialDeltaGuard(credentials);
+	const guard = credentialStreamGuard(credentials);
 	const parser = createParser({
 		maxBufferSize: maximumEventBytes,
 		onComment: () => {},
@@ -741,7 +779,7 @@ async function forwardValidatedStream(
 			}
 			if (result.state === "completed") terminal = result.encoded;
 			else if (result.state === "event") {
-				if (!guard.accept(result.projected)) {
+				if (!guard.accept(result.projected, result.payload)) {
 					failed = true;
 					return;
 				}

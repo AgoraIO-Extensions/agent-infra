@@ -152,6 +152,24 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 }
 
+export async function closeRuntimeHost(
+	server: ReturnType<typeof serve>,
+	closeRuntime: () => Promise<void>,
+	timeoutMs = 30_000,
+) {
+	const timeout = setTimeout(() => {
+		if ("closeAllConnections" in server) server.closeAllConnections();
+	}, timeoutMs);
+	try {
+		await new Promise<void>((resolve, reject) => {
+			server.close((error) => (error ? reject(error) : resolve()));
+		});
+	} finally {
+		clearTimeout(timeout);
+		await closeRuntime();
+	}
+}
+
 async function startFromEnvironment() {
 	const runtime = await assembleRuntimeHost(process.env);
 	const server = startRuntimeHost(runtime);
@@ -159,9 +177,7 @@ async function startFromEnvironment() {
 	const stop = () => {
 		if (stopping) return;
 		stopping = true;
-		server.close();
-		if ("closeAllConnections" in server) server.closeAllConnections();
-		void runtime.close().catch(() => {
+		void closeRuntimeHost(server, runtime.close).catch(() => {
 			process.exitCode = 1;
 		});
 	};

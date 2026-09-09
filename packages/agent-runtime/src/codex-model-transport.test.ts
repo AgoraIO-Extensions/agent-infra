@@ -892,6 +892,125 @@ describe("Codex model transport", () => {
 			'{"error":{"message":"Model request failed"}}',
 		);
 	});
+	it.each(["message", "function_call", "custom_tool_call", "tool_search_call"])(
+		"withholds credentials split across forwarded %s items",
+		async (type) => {
+			const itemEvent = (text: string) =>
+				event({
+					type: "response.output_item.done",
+					item:
+						type === "message"
+							? {
+									type,
+									id: "item-a",
+									role: "assistant",
+									content: [{ type: "output_text", text }],
+								}
+							: type === "tool_search_call"
+								? {
+										type,
+										id: "item-a",
+										execution: "client",
+										arguments: { text },
+									}
+								: {
+										type,
+										id: "item-a",
+										name: "synthetic",
+										call_id: "call-a",
+										...(type === "function_call"
+											? { arguments: JSON.stringify({ text }) }
+											: { input: text }),
+									},
+				});
+			const target = await listen(
+				createServer(async (_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write(itemEvent(credential.slice(0, 12)));
+					await delay(5);
+					response.write(
+						event({
+							type: "response.reasoning_text.delta",
+							content_index: 0,
+							delta: "unrelated!",
+						}),
+					);
+					await delay(5);
+					response.end(itemEvent(credential.slice(12)) + completedEvent());
+				}),
+			);
+			const value = await transport(target);
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(502);
+			expect(await response.text()).toBe(
+				'{"error":{"message":"Model request failed"}}',
+			);
+		},
+	);
+	it("shares semantic protection across delta and completed item text", async () => {
+		const target = await listen(
+			createServer(async (_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					event({
+						type: "response.output_text.delta",
+						delta: credential.slice(0, 12),
+					}),
+				);
+				await delay(5);
+				response.end(
+					event({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							role: "assistant",
+							content: [{ type: "output_text", text: credential.slice(12) }],
+						},
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+	it("does not add discarded completed output to the forwarded semantic stream", async () => {
+		const first = event({
+			type: "response.output_text.delta",
+			delta: credential.slice(0, 12),
+		});
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					first +
+						event({
+							type: "response.completed",
+							response: {
+								id: "response-synthetic",
+								status: "completed",
+								output: [
+									{
+										type: "message",
+										role: "assistant",
+										content: [
+											{ type: "output_text", text: credential.slice(12) },
+										],
+									},
+								],
+							},
+						}),
+				);
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(first + completedEvent());
+	});
 	it("drops SSE comments without changing the validated event stream", async () => {
 		const target = await listen(
 			createServer((_incoming, response) => {
