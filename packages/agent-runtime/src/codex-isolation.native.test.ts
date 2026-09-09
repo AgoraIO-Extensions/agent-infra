@@ -952,48 +952,51 @@ it("records effective thread settings from the native result root", () => {
 	});
 });
 
-it("uses bounded exact membership evidence for the history positive control", async () => {
-	const owner = "SYNTH_CONTEXT_OWNER_ABC";
-	const foreign = "SYNTH_CONTEXT_FOREIGN_DEF";
-	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-history-"));
-	try {
-		const sessions = join(directory, "sessions");
-		await mkdir(sessions);
-		await writeFile(join(sessions, "owner-history.json"), owner);
-		const command = historyScanCommand({
-			ownerMarker: owner,
-			foreignMarker: foreign,
-			directory: sessions,
-		});
-		expect(command).toContain("grep -R -F -l --");
-		expect(command).not.toContain("sort -u");
-		expect(command).not.toContain(owner);
-		expect(command).not.toContain(foreign);
-		const evidence = historyScenarioEvidence({
-			outputs: [
-				JSON.stringify(
-					execFileSync("sh", ["-c", command], { encoding: "utf8" }),
-				),
-			],
-			foreignMarkerObserved: false,
-		});
-		expect(evidence).toMatchObject({
-			owner: "present",
-			foreign: "absent",
-			completeOutput: true,
-			status: "pass",
-		});
-		expect(
-			isolationOverallStatus({
-				activeThreadLeak: false,
-				persistenceVerified: true,
-				scenarioStatuses: ["pass", evidence.status],
-			}),
-		).toBe("pass");
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
-});
+it.skipIf(process.platform === "win32")(
+	"uses bounded exact membership evidence for the history positive control",
+	async () => {
+		const owner = "SYNTH_CONTEXT_OWNER_ABC";
+		const foreign = "SYNTH_CONTEXT_FOREIGN_DEF";
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-history-"));
+		try {
+			const sessions = join(directory, "sessions");
+			await mkdir(sessions);
+			await writeFile(join(sessions, "owner-history.json"), owner);
+			const command = historyScanCommand({
+				ownerMarker: owner,
+				foreignMarker: foreign,
+				directory: sessions,
+			});
+			expect(command).toContain("grep -R -F -l --");
+			expect(command).not.toContain("sort -u");
+			expect(command).not.toContain(owner);
+			expect(command).not.toContain(foreign);
+			const evidence = historyScenarioEvidence({
+				outputs: [
+					JSON.stringify(
+						execFileSync("sh", ["-c", command], { encoding: "utf8" }),
+					),
+				],
+				foreignMarkerObserved: false,
+			});
+			expect(evidence).toMatchObject({
+				owner: "present",
+				foreign: "absent",
+				completeOutput: true,
+				status: "pass",
+			});
+			expect(
+				isolationOverallStatus({
+					activeThreadLeak: false,
+					persistenceVerified: true,
+					scenarioStatuses: ["pass", evidence.status],
+				}),
+			).toBe("pass");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);
 
 it("fails history evidence when a late foreign membership is present", () => {
 	const evidence = historyScenarioEvidence({
@@ -1114,108 +1117,120 @@ it("rejects malformed tool frames beside otherwise valid isolation evidence", ()
 	).toBe(false);
 });
 
-it("requires nonce-bound read denial and the matching successful control", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-read-errno-"));
-	const target = join(directory, "private.txt");
-	const marker = "SYNTH_READ_RESULT_TEST";
-	try {
-		await writeFile(target, "irrelevant\nSYNTH_PRIVATE_TEST\n");
-		for (const search of [false, true]) {
-			const run = (path: string) =>
-				execFileSync(
-					"sh",
-					[
-						"-c",
-						fileReadCommand({ target: path, search, outcomeMarker: marker }),
-					],
-					{ encoding: "utf8" },
-				);
-			const success = run(target);
-			expect(success).toContain("SYNTH_PRIVATE_TEST");
-			expect(fileReadOutcome([JSON.stringify(success)], marker)).toBe("READ");
-			if (search) expect(success).not.toContain("irrelevant");
-			for (const path of [directory, join(directory, "missing")]) {
-				const outputs = [JSON.stringify(run(path))];
-				expect(fileReadOutcome(outputs, marker)).toBe("ERROR");
-				expect(
-					crossFileReadEvidence({
-						outputs,
-						outcomeMarker: marker,
-						positiveControl: true,
-						foreignMarkerObserved: false,
-					}).status,
-				).toBe("unverified");
+it.skipIf(process.platform === "win32")(
+	"requires nonce-bound read denial and the matching successful control",
+	async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-read-errno-"),
+		);
+		const target = join(directory, "private.txt");
+		const marker = "SYNTH_READ_RESULT_TEST";
+		try {
+			await writeFile(target, "irrelevant\nSYNTH_PRIVATE_TEST\n");
+			for (const search of [false, true]) {
+				const run = (path: string) =>
+					execFileSync(
+						"sh",
+						[
+							"-c",
+							fileReadCommand({ target: path, search, outcomeMarker: marker }),
+						],
+						{ encoding: "utf8" },
+					);
+				const success = run(target);
+				expect(success).toContain("SYNTH_PRIVATE_TEST");
+				expect(fileReadOutcome([JSON.stringify(success)], marker)).toBe("READ");
+				if (search) expect(success).not.toContain("irrelevant");
+				for (const path of [directory, join(directory, "missing")]) {
+					const outputs = [JSON.stringify(run(path))];
+					expect(fileReadOutcome(outputs, marker)).toBe("ERROR");
+					expect(
+						crossFileReadEvidence({
+							outputs,
+							outcomeMarker: marker,
+							positiveControl: true,
+							foreignMarkerObserved: false,
+						}).status,
+					).toBe("unverified");
+				}
 			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
 		}
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
-	const classify = (
-		text: string,
-		positiveControl = true,
-		foreignMarkerObserved = false,
-	) =>
-		crossFileReadEvidence({
-			outputs: [JSON.stringify(text)],
-			outcomeMarker: marker,
-			positiveControl,
-			foreignMarkerObserved,
-		}).status;
-	for (const code of ["EACCES", "EPERM"]) {
-		expect(classify(`${marker}=${code}`)).toBe("pass");
-		expect(classify(`${marker}=${code}`, false)).toBe("unverified");
-		expect(classify(`${marker}=${code}`, false, true)).toBe("fail");
-	}
-	for (const output of [
-		"command not found",
-		"",
-		`${marker}=ERROR`,
-		`${marker}=READ`,
-		`${marker}=ENOENT`,
-		"OTHER=EACCES",
-		`prefix ${marker}=EACCES`,
-		`${marker}=EACCES\n${marker}=READ`,
-		`${marker}=EACCES\n${marker}=EACCES`,
-		`${marker}=EACCES\ntruncated`,
-		`${marker}=EACCES\nProcess running with session ID test`,
-	]) {
-		expect(classify(output)).toBe("unverified");
-		expect(classify(output, true, true)).toBe("fail");
-	}
-});
+		const classify = (
+			text: string,
+			positiveControl = true,
+			foreignMarkerObserved = false,
+		) =>
+			crossFileReadEvidence({
+				outputs: [JSON.stringify(text)],
+				outcomeMarker: marker,
+				positiveControl,
+				foreignMarkerObserved,
+			}).status;
+		for (const code of ["EACCES", "EPERM"]) {
+			expect(classify(`${marker}=${code}`)).toBe("pass");
+			expect(classify(`${marker}=${code}`, false)).toBe("unverified");
+			expect(classify(`${marker}=${code}`, false, true)).toBe("fail");
+		}
+		for (const output of [
+			"command not found",
+			"",
+			`${marker}=ERROR`,
+			`${marker}=READ`,
+			`${marker}=ENOENT`,
+			"OTHER=EACCES",
+			`prefix ${marker}=EACCES`,
+			`${marker}=EACCES\n${marker}=READ`,
+			`${marker}=EACCES\n${marker}=EACCES`,
+			`${marker}=EACCES\ntruncated`,
+			`${marker}=EACCES\nProcess running with session ID test`,
+		]) {
+			expect(classify(output)).toBe("unverified");
+			expect(classify(output, true, true)).toBe("fail");
+		}
+	},
+);
 
-it("classifies real write errno without treating ordinary failures as denial", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-write-errno-"));
-	const target = join(directory, "target.txt");
-	const outcomeMarker = "SYNTH_WRITE_RESULT_COMMAND";
-	const run = (path: string) =>
-		execFileSync(
-			"sh",
-			[
-				"-c",
-				foreignWriteCommand({
-					mutation: "SYNTH_MUTATION",
-					target: path,
-					outcomeMarker,
-				}),
-			],
-			{ encoding: "utf8" },
-		).trim();
-	try {
-		await writeFile(target, "original");
-		expect(run(target)).toBe(`${outcomeMarker}=APPLIED`);
-		expect(await readFile(target, "utf8")).toBe("SYNTH_MUTATION");
-		expect(run(directory)).toBe(`${outcomeMarker}=ERROR`);
-		expect(run(join(directory, "missing.txt"))).toBe(`${outcomeMarker}=ERROR`);
-		if (process.getuid?.() !== 0) {
-			await chmod(target, 0o400);
-			expect(run(target)).toBe(`${outcomeMarker}=EACCES`);
+it.skipIf(process.platform === "win32")(
+	"classifies real write errno without treating ordinary failures as denial",
+	async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-write-errno-"),
+		);
+		const target = join(directory, "target.txt");
+		const outcomeMarker = "SYNTH_WRITE_RESULT_COMMAND";
+		const run = (path: string) =>
+			execFileSync(
+				"sh",
+				[
+					"-c",
+					foreignWriteCommand({
+						mutation: "SYNTH_MUTATION",
+						target: path,
+						outcomeMarker,
+					}),
+				],
+				{ encoding: "utf8" },
+			).trim();
+		try {
+			await writeFile(target, "original");
+			expect(run(target)).toBe(`${outcomeMarker}=APPLIED`);
+			expect(await readFile(target, "utf8")).toBe("SYNTH_MUTATION");
+			expect(run(directory)).toBe(`${outcomeMarker}=ERROR`);
+			expect(run(join(directory, "missing.txt"))).toBe(
+				`${outcomeMarker}=ERROR`,
+			);
+			if (process.getuid?.() !== 0) {
+				await chmod(target, 0o400);
+				expect(run(target)).toBe(`${outcomeMarker}=EACCES`);
+			}
+		} finally {
+			await chmod(target, 0o600);
+			await rm(directory, { recursive: true, force: true });
 		}
-	} finally {
-		await chmod(target, 0o600);
-		await rm(directory, { recursive: true, force: true });
-	}
-});
+	},
+);
 
 it("accepts only a complete nonce-bound filesystem permission denial", () => {
 	const outcomeMarker = "SYNTH_WRITE_RESULT_TEST";
@@ -1252,86 +1267,91 @@ it("accepts only a complete nonce-bound filesystem permission denial", () => {
 	);
 });
 
-it("keeps unclassified cross-write outcomes from passing modification isolation", async () => {
-	const appliedMarker = "SYNTH_FOREIGN_WRITE_APPLIED";
-	const outcomeMarker = "SYNTH_FOREIGN_WRITE_RESULT";
-	const evidence = (
-		input: Partial<Parameters<typeof crossFileModifyEvidence>[0]>,
-	) =>
-		crossFileModifyEvidence({
-			changed: false,
-			ownerWriteSucceeded: true,
-			outcomeMarker,
-			outputs: [],
-			...input,
-		});
-	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-cross-write-"));
-	let genericFailureOutput = "";
-	try {
-		const target = join(directory, "not-a-file");
-		await mkdir(target);
-		genericFailureOutput = execFileSync(
-			"sh",
-			[
-				"-c",
-				foreignWriteCommand({
-					mutation: "SYNTH_MUTATION",
-					target,
-					outcomeMarker,
-				}),
-			],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+it.skipIf(process.platform === "win32")(
+	"keeps unclassified cross-write outcomes from passing modification isolation",
+	async () => {
+		const appliedMarker = "SYNTH_FOREIGN_WRITE_APPLIED";
+		const outcomeMarker = "SYNTH_FOREIGN_WRITE_RESULT";
+		const evidence = (
+			input: Partial<Parameters<typeof crossFileModifyEvidence>[0]>,
+		) =>
+			crossFileModifyEvidence({
+				changed: false,
+				ownerWriteSucceeded: true,
+				outcomeMarker,
+				outputs: [],
+				...input,
+			});
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-cross-write-"),
 		);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
-	expect(genericFailureOutput).toContain(`${outcomeMarker}=ERROR`);
-	const statuses: Status[] = [];
-	for (const [input, expected] of [
-		[
-			{ changed: true, outputs: [JSON.stringify(appliedMarker)] },
-			{ status: "fail", reason: "foreign-file-modified" },
-		],
-		[
-			{ outputs: [JSON.stringify(genericFailureOutput)] },
-			{ status: "unverified", reason: "foreign-write-denial-unclassified" },
-		],
-		[
-			{ outputs: [] },
-			{ status: "unverified", reason: "foreign-write-output-incomplete" },
-		],
-		[
-			{
-				outputs: [
-					JSON.stringify("Process running with session ID synthetic-session"),
+		let genericFailureOutput = "";
+		try {
+			const target = join(directory, "not-a-file");
+			await mkdir(target);
+			genericFailureOutput = execFileSync(
+				"sh",
+				[
+					"-c",
+					foreignWriteCommand({
+						mutation: "SYNTH_MUTATION",
+						target,
+						outcomeMarker,
+					}),
 				],
-			},
-			{ status: "unverified", reason: "foreign-write-output-incomplete" },
-		],
-		[
-			{ outputs: [JSON.stringify("native command failed")] },
-			{ status: "unverified", reason: "foreign-write-denial-unclassified" },
-		],
-	] as const) {
-		const result = evidence(input);
-		expect(result).toMatchObject(expected);
-		statuses.push(result.status);
-		expect(
-			isolationOverallStatus({
-				activeThreadLeak: false,
-				persistenceVerified: true,
-				scenarioStatuses: ["pass", result.status],
-			}),
-		).toBe(result.status === "fail" ? "fail" : result.status);
-	}
-	expect(statuses).toEqual([
-		"fail",
-		"unverified",
-		"unverified",
-		"unverified",
-		"unverified",
-	]);
-});
+				{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+		expect(genericFailureOutput).toContain(`${outcomeMarker}=ERROR`);
+		const statuses: Status[] = [];
+		for (const [input, expected] of [
+			[
+				{ changed: true, outputs: [JSON.stringify(appliedMarker)] },
+				{ status: "fail", reason: "foreign-file-modified" },
+			],
+			[
+				{ outputs: [JSON.stringify(genericFailureOutput)] },
+				{ status: "unverified", reason: "foreign-write-denial-unclassified" },
+			],
+			[
+				{ outputs: [] },
+				{ status: "unverified", reason: "foreign-write-output-incomplete" },
+			],
+			[
+				{
+					outputs: [
+						JSON.stringify("Process running with session ID synthetic-session"),
+					],
+				},
+				{ status: "unverified", reason: "foreign-write-output-incomplete" },
+			],
+			[
+				{ outputs: [JSON.stringify("native command failed")] },
+				{ status: "unverified", reason: "foreign-write-denial-unclassified" },
+			],
+		] as const) {
+			const result = evidence(input);
+			expect(result).toMatchObject(expected);
+			statuses.push(result.status);
+			expect(
+				isolationOverallStatus({
+					activeThreadLeak: false,
+					persistenceVerified: true,
+					scenarioStatuses: ["pass", result.status],
+				}),
+			).toBe(result.status === "fail" ? "fail" : result.status);
+		}
+		expect(statuses).toEqual([
+			"fail",
+			"unverified",
+			"unverified",
+			"unverified",
+			"unverified",
+		]);
+	},
+);
 
 function unavailableModelObservationSamples(
 	point: NativeReadSample["point"],
