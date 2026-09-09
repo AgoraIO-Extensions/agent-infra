@@ -9,6 +9,7 @@ import type {
 	V1Service,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
 import { describe, expect, it, vi } from "vitest";
 import {
 	fakeKubernetesApi,
@@ -340,6 +341,61 @@ describe("GA Kubernetes Workload adapter", () => {
 				)
 			)?.spec?.podSelector?.matchExpressions,
 		).toBeUndefined();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
+	it("accepts exact workload resources deserialized by the Kubernetes client", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const deserialize = <T extends KubernetesObject>(resource: T): T => {
+			const type = `V1${resource.kind}`;
+			const apiDocument = ObjectSerializer.serialize(resource, type, "");
+			const value = ObjectSerializer.deserialize(apiDocument, type, "") as T;
+			if (value.kind === "NetworkPolicy") {
+				const network = value as V1NetworkPolicy;
+				if (!network.spec?.podSelector) throw new Error();
+				network.spec.podSelector.matchExpressions = [];
+			}
+			return value;
+		};
+		const client: WorkerKubernetesClientV1 = {
+			...f.client,
+			async read<T extends KubernetesObject>(
+				kind: WorkloadResourceKind,
+				name: string,
+			) {
+				const resource = await f.client.read<T>(kind, name);
+				return resource ? deserialize(resource) : null;
+			},
+			async list<T extends KubernetesObject>(
+				kind: WorkloadResourceKind,
+				selector: string,
+			) {
+				return (await f.client.list<T>(kind, selector)).map(deserialize);
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const network = await client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		const workload = await client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		if (!network?.spec?.podSelector || !workload?.spec) throw new Error();
+		expect(Object.getPrototypeOf(network.spec.podSelector)).not.toBe(
+			Object.prototype,
+		);
+		expect(
+			Object.getPrototypeOf(workload.spec.template.spec?.securityContext),
+		).not.toBe(Object.prototype);
+
 		expect(await adapter.observe(desired, identity)).toBe("healthy");
 	});
 	it("reuses StatefulSet and PVC across stop, restart, upgrade and rollback; refuses stale work", async () => {

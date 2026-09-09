@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -13,6 +12,7 @@ import {
 import type {
 	KubernetesObject,
 	V1Ingress,
+	V1LabelSelector,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
@@ -43,6 +43,34 @@ function secretFenceAnnotation(secretName: string) {
 }
 
 type RouteSelectorMode = "closed" | "open";
+
+function hasSameStructure(actual: unknown, expected: unknown): boolean {
+	if (Object.is(actual, expected)) return true;
+	if (Array.isArray(actual) || Array.isArray(expected))
+		return (
+			Array.isArray(actual) &&
+			Array.isArray(expected) &&
+			actual.length === expected.length &&
+			actual.every((entry, index) => hasSameStructure(entry, expected[index]))
+		);
+	if (
+		actual === null ||
+		expected === null ||
+		typeof actual !== "object" ||
+		typeof expected !== "object"
+	)
+		return false;
+	const actualEntries = Object.entries(actual);
+	const expectedRecord = expected as Record<string, unknown>;
+	return (
+		actualEntries.length === Object.keys(expectedRecord).length &&
+		actualEntries.every(
+			([key, value]) =>
+				Object.hasOwn(expectedRecord, key) &&
+				hasSameStructure(value, expectedRecord[key]),
+		)
+	);
+}
 
 function containsDesired(actual: unknown, expected: unknown): boolean {
 	if (Array.isArray(expected) && expected.length === 0 && actual === undefined)
@@ -104,9 +132,27 @@ function matchesNetworkPolicySpec(
 	actual: V1NetworkPolicy["spec"] | undefined,
 	expected: V1NetworkPolicy["spec"] | undefined,
 ) {
+	const matchesPodSelector = (
+		actualSelector: V1LabelSelector | undefined,
+		expectedSelector: V1LabelSelector | undefined,
+	) => {
+		if (!actualSelector || !expectedSelector)
+			return actualSelector === expectedSelector;
+		return (
+			Object.keys(actualSelector).every(
+				(key) => key === "matchLabels" || key === "matchExpressions",
+			) &&
+			hasSameStructure(
+				actualSelector.matchLabels,
+				expectedSelector.matchLabels,
+			) &&
+			(actualSelector.matchExpressions?.length ?? 0) === 0 &&
+			(expectedSelector.matchExpressions?.length ?? 0) === 0
+		);
+	};
 	return (
 		containsDesired(actual, expected) &&
-		isDeepStrictEqual(actual?.podSelector, expected?.podSelector) &&
+		matchesPodSelector(actual?.podSelector, expected?.podSelector) &&
 		![actual?.ingress, actual?.egress].some((rules) =>
 			rules?.some((rule) =>
 				rule.ports?.some(
@@ -142,7 +188,7 @@ function matchesServiceSpec(
 	return (
 		Object.keys(actual).every((key) => allowedSpecFields.has(key)) &&
 		actual.type === expected.type &&
-		isDeepStrictEqual(actual.selector, expected.selector) &&
+		hasSameStructure(actual.selector, expected.selector) &&
 		actual.ports?.length === 1 &&
 		expected.ports?.length === 1 &&
 		actualPort !== undefined &&
@@ -164,10 +210,10 @@ function matchesServiceSpec(
 function matchesIngress(current: V1Ingress, expected: V1Ingress) {
 	const hash = resourceFingerprint(expected);
 	return (
-		isDeepStrictEqual(current.metadata?.annotations, {
+		hasSameStructure(current.metadata?.annotations, {
 			...expected.metadata?.annotations,
 			[fingerprintAnnotation]: hash,
-		}) && isDeepStrictEqual(current.spec, expected.spec)
+		}) && hasSameStructure(current.spec, expected.spec)
 	);
 }
 
@@ -307,7 +353,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod?.hostNetwork === true ||
 			pod?.hostPID === true ||
 			pod?.hostIPC === true ||
-			!isDeepStrictEqual(pod?.securityContext, agentPodSecurityContext()) ||
+			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
 			pod?.containers.some((container) => {
@@ -316,10 +362,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(container.command?.length ?? 0) > 0 ||
 					(container.args?.length ?? 0) > 0 ||
 					Object.keys(container.lifecycle ?? {}).length > 0 ||
-					!isDeepStrictEqual(
-						securityContext,
-						agentContainerSecurityContext(),
-					) ||
+					!hasSameStructure(securityContext, agentContainerSecurityContext()) ||
 					securityContext?.privileged === true ||
 					(securityContext?.capabilities?.add?.length ?? 0) > 0
 				);
@@ -569,7 +612,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (service) {
 			own(service, value.agentId, value.workloadRevision);
 			if (
-				!isDeepStrictEqual(service.spec?.selector, {
+				!hasSameStructure(service.spec?.selector, {
 					[ownerLabel]: name,
 					[revisionLabel]: "closed",
 				})
@@ -735,11 +778,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					routeSelector(name, value.workloadRevision, routeMode),
 				),
 			) ||
-			!isDeepStrictEqual(probe.spec?.selector, {
+			!hasSameStructure(probe.spec?.selector, {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
 			}) ||
-			!isDeepStrictEqual(
+			!hasSameStructure(
 				service.spec?.selector,
 				routeSelector(name, value.workloadRevision, routeMode),
 			)
@@ -765,10 +808,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			container?.envFrom?.map((entry) => entry.secretRef?.name).sort() ?? [];
 		if (
 			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
-			!isDeepStrictEqual(
-				refs,
-				value.secretRefs.map((ref) => ref.name).sort(),
-			) ||
+			!hasSameStructure(refs, value.secretRefs.map((ref) => ref.name).sort()) ||
 			pod.spec?.automountServiceAccountToken !== false
 		)
 			return "unhealthy";
@@ -975,7 +1015,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					throw new WorkloadKubernetesError("conflict");
 				if (
 					existing.immutable !== true ||
-					!isDeepStrictEqual(existing.data, body.data)
+					!hasSameStructure(existing.data, body.data)
 				)
 					throw new WorkloadKubernetesError("conflict");
 			}
