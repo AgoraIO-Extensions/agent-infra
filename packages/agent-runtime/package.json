@@ -20,12 +20,12 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
-		"@agent-infra/contracts": "workspace:*"
+		"@agent-infra/contracts": "workspace:*",
+		"eventsource-parser": "3.1.0"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
-		"eventsource-parser": "3.1.0",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"

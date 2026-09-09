@@ -1191,14 +1191,14 @@ describe("Codex Runtime Driver", () => {
 					model: "gpt-5.3-codex",
 					reasoningLevels: ["high"],
 					endpoint: "http://127.0.0.1:8080/one/v1",
-					credential: "credential-one",
+					credential: "synthetic-credential-one",
 				},
 				{
 					modelOptionId: "model-option-alternate",
 					model: "gpt-5.3-codex",
 					reasoningLevels: ["high"],
 					endpoint: "http://127.0.0.1:8080/two/v1",
-					credential: "credential-two",
+					credential: "synthetic-credential-two",
 				},
 			],
 		};
@@ -2628,7 +2628,7 @@ describe("Codex Runtime Driver", () => {
 			firstEndpoint,
 			undefined,
 			"configuration-a",
-			"credential-a",
+			"synthetic-credential-a",
 		);
 		drivers.push(firstDriver);
 		const command = submitCommand();
@@ -2642,7 +2642,7 @@ describe("Codex Runtime Driver", () => {
 			replacementEndpoint,
 			undefined,
 			"configuration-b",
-			"credential-b",
+			"synthetic-credential-b",
 		);
 		drivers.push(recoveredDriver);
 		const beforeRecovery = recoveredBridge.requests.length;
@@ -2686,7 +2686,7 @@ describe("Codex Runtime Driver", () => {
 				loopback = options.modelAccess;
 			},
 			"configuration-b",
-			"credential-b",
+			"synthetic-credential-b",
 		);
 		drivers.push(independentDriver);
 		const independent = await independentDriver.execute(

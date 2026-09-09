@@ -291,13 +291,13 @@ describe("Codex model transport", () => {
 				internalModel: "option_one/shared-model",
 				model: "shared-model",
 				endpoint: first,
-				credential: "credential-one",
+				credential: "synthetic-credential-one",
 			},
 			{
 				internalModel: "option_two/shared-model",
 				model: "shared-model",
 				endpoint: second,
-				credential: "credential-two",
+				credential: "synthetic-credential-two",
 			},
 		]);
 		admitTurn(value, defaultNativeTurn);
@@ -316,12 +316,12 @@ describe("Codex model transport", () => {
 		expect(observed).toEqual([
 			{
 				path: "first",
-				authorization: "Bearer credential-one",
+				authorization: "Bearer synthetic-credential-one",
 				model: "shared-model",
 			},
 			{
 				path: "second",
-				authorization: "Bearer credential-two",
+				authorization: "Bearer synthetic-credential-two",
 				model: "shared-model",
 			},
 		]);

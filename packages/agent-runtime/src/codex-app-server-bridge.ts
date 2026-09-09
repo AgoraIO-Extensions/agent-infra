@@ -330,14 +330,19 @@ export function validateModelAccess(
 		input.endpoint.length > 2048 ||
 		/[\s\\]/.test(input.endpoint) ||
 		typeof input.credential !== "string" ||
-		!/^[\x21-\x7e]{1,8192}$/.test(input.credential)
+		!/^[\x21-\x7e]{16,8192}$/.test(input.credential)
 	) {
 		configurationInvalid();
 	}
 	try {
 		const endpoint = new URL(input.endpoint);
+		// Match the literal authority, not URL-normalized numeric host aliases.
+		const literalLoopback =
+			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(
+				input.endpoint,
+			);
 		if (
-			!["http:", "https:"].includes(endpoint.protocol) ||
+			(endpoint.protocol !== "https:" && !literalLoopback) ||
 			endpoint.username ||
 			endpoint.password ||
 			endpoint.search ||

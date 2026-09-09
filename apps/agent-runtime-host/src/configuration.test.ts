@@ -30,6 +30,41 @@ function environment(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex Pilot deployment configuration", () => {
+	it.each([
+		"http://model.invalid/v1",
+		"http://localhost/v1",
+		"http://127.1/v1",
+	])(
+		"rejects cleartext nonliteral loopback startup endpoint %s",
+		(endpoint) => {
+			expect(() =>
+				readCodexPilotConfiguration(
+					environment({
+						modelOptions: configuration.modelOptions.map((option) => ({
+							...option,
+							endpoint,
+						})),
+					}),
+				),
+			).toThrow("RUNTIME_CONFIGURATION_INVALID");
+		},
+	);
+	it.each(["https://model.invalid/v1", "http://[::1]:8080/v1"])(
+		"accepts approved startup transport %s",
+		(endpoint) => {
+			expect(
+				readCodexPilotConfiguration(
+					environment({
+						modelOptions: configuration.modelOptions.map((option) => ({
+							...option,
+							endpoint,
+						})),
+					}),
+				).modelOptions[0]?.endpoint,
+			).toBe(endpoint);
+		},
+	);
+
 	it("consumes the injected active configuration without ambient login values", () => {
 		expect(
 			readCodexPilotConfiguration({
@@ -72,7 +107,15 @@ describe("Codex Pilot deployment configuration", () => {
 		);
 	});
 
-	it.each([undefined, "", "synthetic\ncredential", "synthetic credential"])(
+	it.each([
+		undefined,
+		"",
+		"e",
+		"x".repeat(15),
+		"x".repeat(8193),
+		"synthetic\ncredential",
+		"synthetic credential",
+	])(
 		"rejects unusable credential input without personal-login fallback",
 		(credential) => {
 			expect(() =>

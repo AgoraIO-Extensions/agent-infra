@@ -36,6 +36,7 @@ vi.mock("node:crypto", () => ({
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
+	validateModelAccess,
 } from "./codex-app-server-bridge.js";
 
 const directories: string[] = [];
@@ -854,5 +855,59 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		releaseCleanup();
 		await closing;
 		clean.mockRestore();
+	});
+});
+
+describe("model access admission", () => {
+	it.each([
+		"e",
+		"x".repeat(15),
+		"x".repeat(8193),
+		"contains a space",
+		"synthetic\ncredential",
+	])("rejects inadmissible credential length or characters", (credential) => {
+		expect(() =>
+			validateModelAccess({ endpoint: "https://model.invalid/v1", credential }),
+		).toThrow();
+	});
+	it.each(["x".repeat(16), "x".repeat(8192)])(
+		"accepts credential boundary lengths",
+		(credential) => {
+			expect(
+				validateModelAccess({
+					endpoint: "https://model.invalid/v1",
+					credential,
+				}),
+			).toEqual({ endpoint: "https://model.invalid/v1", credential });
+		},
+	);
+	it.each([
+		"http://model.invalid/v1",
+		"http://localhost/v1",
+		"http://127.1/v1",
+		"http://2130706433/v1",
+		"http://0x7f000001/v1",
+		"http://127.0.0.2/v1",
+		"http://[::ffff:127.0.0.1]/v1",
+		"http://127.0.0.1@model.invalid/v1",
+	])("rejects cleartext nonliteral loopback %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
+		"https://model.invalid/v1",
+		"http://127.0.0.1:1234/v1",
+		"http://[::1]:1234/v1",
+	])("accepts approved transport scheme %s", (endpoint) => {
+		expect(
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			})?.endpoint,
+		).toBe(endpoint);
 	});
 });

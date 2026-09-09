@@ -1,4 +1,7 @@
-import type { CodexRuntimeModelOption } from "@agent-infra/agent-runtime";
+import {
+	type CodexRuntimeModelOption,
+	validateCodexModelAccess,
+} from "@agent-infra/agent-runtime";
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
@@ -95,33 +98,25 @@ export function readCodexPilotConfiguration(
 		) {
 			runtimeConfigurationInvalid();
 		}
+		const credential = environment[option.credentialEnvironmentVariable];
+		let access: ReturnType<typeof validateCodexModelAccess>;
 		try {
-			const endpoint = new URL(option.endpoint);
-			if (
-				!["http:", "https:"].includes(endpoint.protocol) ||
-				endpoint.username ||
-				endpoint.password ||
-				endpoint.search ||
-				endpoint.hash ||
-				/[\s\\]/.test(option.endpoint)
-			) {
-				runtimeConfigurationInvalid();
-			}
+			access = validateCodexModelAccess({
+				endpoint: option.endpoint,
+				credential,
+			});
 		} catch {
 			runtimeConfigurationInvalid();
 		}
-		const credential = environment[option.credentialEnvironmentVariable];
-		if (!credential || !/^[\x21-\x7e]{1,8192}$/.test(credential)) {
-			runtimeConfigurationInvalid();
-		}
+		if (!access) runtimeConfigurationInvalid();
 		seen.add(option.modelOptionId);
 		seenCredentialEnvironmentVariables.add(
 			option.credentialEnvironmentVariable,
 		);
 		return {
 			modelOptionId: option.modelOptionId,
-			endpoint: option.endpoint,
-			credential,
+			endpoint: access.endpoint,
+			credential: access.credential,
 			model: option.model,
 			reasoningLevels: option.reasoningLevels as string[],
 		};
