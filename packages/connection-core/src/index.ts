@@ -1132,6 +1132,33 @@ export class ConnectionApplicationService {
 			: connections;
 	}
 
+	async getDirectProviderStateForIdentity(
+		identity: { consumerId: string; instanceId: string; principalId: string },
+		providerId: string,
+	) {
+		const normalizedProviderId = providerId.toLowerCase();
+		const overview = await this.repository.getOverview(identity.principalId);
+		const providerConnections = overview.connections.filter(
+			(connection) => connection.providerId === normalizedProviderId,
+		);
+		if (providerConnections.length === 0) return "NOT_CONNECTED" as const;
+		if (
+			providerConnections.every(
+				(connection) =>
+					connection.status !== "ACTIVE" || connection.requiresReconnect,
+			)
+		)
+			return "REAUTHORIZATION_REQUIRED" as const;
+		const actions = await this.listDirectActionsForIdentity(identity);
+		if (
+			!actions.some(
+				(action) => actionService(action.id) === normalizedProviderId,
+			)
+		)
+			return "AUTHORIZATION_REQUIRED" as const;
+		return "AVAILABLE" as const;
+	}
+
 	async overviewDirect(session: string | undefined) {
 		const invocation = await this.repository.resolveDirectSession(session);
 		return this.repository.getOverview(invocation.principalId);

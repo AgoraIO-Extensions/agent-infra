@@ -48,6 +48,7 @@ export type ConnectionAppOptions = {
 	managementIdentity?: ConnectionManagementIdentityVerifier;
 	oauthServer?: ConnectionOAuthServerOptions;
 	service?: ConnectionApplicationService;
+	supportedProviders?: readonly string[];
 };
 
 function actionFromRoute(value: string): ActionName {
@@ -151,7 +152,8 @@ function mcpResult(id: JsonRpcRequest["id"], result: unknown) {
 
 const openConnectorMcpTools = [
 	{
-		description: "List available provider apps with authorized action counts.",
+		description:
+			"List available provider apps with authorized action counts. Empty filtered results include safe setup guidance when available.",
 		inputSchema: {
 			additionalProperties: false,
 			properties: { query: { type: "string" } },
@@ -162,7 +164,7 @@ const openConnectorMcpTools = [
 	},
 	{
 		description:
-			"List configured provider connections and safe account profiles.",
+			"List configured provider connections and safe account profiles. Empty filtered results include safe setup guidance when available.",
 		inputSchema: {
 			additionalProperties: false,
 			properties: { service: { type: "string" } },
@@ -173,7 +175,7 @@ const openConnectorMcpTools = [
 	},
 	{
 		description:
-			"Search authorized catalog actions before requesting an action guide.",
+			"Search authorized catalog actions before requesting an action guide. Empty Provider results include safe setup or search guidance.",
 		inputSchema: {
 			additionalProperties: false,
 			properties: {
@@ -219,6 +221,7 @@ const mcpServerInstructions = [
 	"Use Connection to discover and execute authorized provider actions through a fixed tool set.",
 	"Start with list_apps or search_actions, and use list_connections to inspect the account selected by the current Connection grant.",
 	"Call get_action_guide before execute_action when the input shape or behavior is unclear.",
+	"When a filtered discovery result is empty, follow its guidance reasonCode and nextAction instead of guessing the authorization state.",
 	"Connection resolves the current user, consumer, grant, account, and credential; never pass selectors or provider credentials.",
 	"For actions that affect external systems, confirm user intent and reuse the guide's idempotencyKey for retries.",
 ].join("\n");
@@ -227,6 +230,81 @@ function mcpToolPayload(value: unknown) {
 	return {
 		content: [{ text: JSON.stringify(value), type: "text" }],
 		structuredContent: value,
+	};
+}
+
+function connectionWebProviderUrl(provider: string, intent: string) {
+	const url = new URL(
+		"/connection/connections",
+		process.env.CONNECTION_WEB_URL ?? "http://localhost:3001",
+	);
+	url.searchParams.set("provider", provider);
+	url.searchParams.set("intent", intent);
+	return url.toString();
+}
+
+async function providerGuidance(
+	options: ConnectionAppOptions,
+	identity: { consumerId: string; instanceId: string; principalId: string },
+	provider: string,
+) {
+	const normalizedProvider = provider.toLowerCase();
+	if (!options.supportedProviders?.includes(normalizedProvider)) {
+		return {
+			message: `${normalizedProvider} is not available in this Connection deployment. Contact the Connection administrator to request it.`,
+			messageKey: "connection.provider.unsupported",
+			nextAction: { type: "CONTACT_ADMIN" },
+			provider: normalizedProvider,
+			reasonCode: "PROVIDER_UNSUPPORTED",
+			retryable: false,
+		};
+	}
+	const state = await requireService(
+		options.service,
+	).getDirectProviderStateForIdentity(identity, normalizedProvider);
+	if (state === "NOT_CONNECTED")
+		return {
+			message: `Connect ${normalizedProvider} in Connection, then retry this request.`,
+			messageKey: "connection.provider.not_connected",
+			nextAction: {
+				type: "OPEN_CONNECTION_WEB",
+				url: connectionWebProviderUrl(normalizedProvider, "connect"),
+			},
+			provider: normalizedProvider,
+			reasonCode: "PROVIDER_NOT_CONNECTED",
+			retryable: false,
+		};
+	if (state === "REAUTHORIZATION_REQUIRED")
+		return {
+			message: `Reconnect ${normalizedProvider} in Connection, then retry this request.`,
+			messageKey: "connection.provider.reauthorization_required",
+			nextAction: {
+				type: "OPEN_CONNECTION_WEB",
+				url: connectionWebProviderUrl(normalizedProvider, "reauthorize"),
+			},
+			provider: normalizedProvider,
+			reasonCode: "PROVIDER_REAUTHORIZATION_REQUIRED",
+			retryable: false,
+		};
+	if (state === "AUTHORIZATION_REQUIRED")
+		return {
+			message: `Authorize ${normalizedProvider} for this client in Connection, then retry this request.`,
+			messageKey: "connection.provider.authorization_required",
+			nextAction: {
+				type: "OPEN_CONNECTION_WEB",
+				url: connectionWebProviderUrl(normalizedProvider, "authorize"),
+			},
+			provider: normalizedProvider,
+			reasonCode: "PROVIDER_AUTHORIZATION_REQUIRED",
+			retryable: false,
+		};
+	return {
+		message: `No ${normalizedProvider} actions matched this search. Refine the query and retry.`,
+		messageKey: "connection.provider.no_results",
+		nextAction: { type: "REFINE_SEARCH" },
+		provider: normalizedProvider,
+		reasonCode: "SEARCH_NO_RESULTS",
+		retryable: true,
 	};
 }
 
@@ -454,52 +532,84 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 						return context.json(mcpError(request.id, -32602, invalidInput));
 					}
 					if (tool.name === "list_apps") {
+						const query =
+							typeof input.query === "string" ? input.query : undefined;
+						const apps = await service.listDirectAppsForIdentity(
+							identity,
+							query,
+						);
 						return context.json(
 							mcpResult(
 								request.id,
 								mcpToolPayload({
-									apps: await service.listDirectAppsForIdentity(
-										identity,
-										typeof input.query === "string" ? input.query : undefined,
-									),
+									apps,
+									...(apps.length === 0 && query
+										? {
+												guidance: await providerGuidance(
+													options,
+													identity,
+													query,
+												),
+											}
+										: {}),
 								}),
 							),
 						);
 					}
 					if (tool.name === "list_connections") {
+						const serviceName =
+							typeof input.service === "string" ? input.service : undefined;
+						const connections = await service.listDirectConnectionsForIdentity(
+							identity,
+							serviceName,
+						);
 						return context.json(
 							mcpResult(
 								request.id,
 								mcpToolPayload({
-									connections: await service.listDirectConnectionsForIdentity(
-										identity,
-										typeof input.service === "string"
-											? input.service
-											: undefined,
-									),
+									connections,
+									...(connections.length === 0 && serviceName
+										? {
+												guidance: await providerGuidance(
+													options,
+													identity,
+													serviceName,
+												),
+											}
+										: {}),
 								}),
 							),
 						);
 					}
 					if (tool.name === "search_actions") {
+						const serviceName =
+							typeof input.service === "string" ? input.service : undefined;
+						const actions = await service.searchDirectActionsForIdentity(
+							identity,
+							{
+								...(typeof input.limit === "number"
+									? { limit: input.limit }
+									: {}),
+								...(typeof input.query === "string"
+									? { query: input.query }
+									: {}),
+								...(serviceName ? { service: serviceName } : {}),
+							},
+						);
 						return context.json(
 							mcpResult(
 								request.id,
 								mcpToolPayload({
-									actions: await service.searchDirectActionsForIdentity(
-										identity,
-										{
-											...(typeof input.limit === "number"
-												? { limit: input.limit }
-												: {}),
-											...(typeof input.query === "string"
-												? { query: input.query }
-												: {}),
-											...(typeof input.service === "string"
-												? { service: input.service }
-												: {}),
-										},
-									),
+									actions,
+									...(actions.length === 0 && serviceName
+										? {
+												guidance: await providerGuidance(
+													options,
+													identity,
+													serviceName,
+												),
+											}
+										: {}),
 								}),
 							),
 						);

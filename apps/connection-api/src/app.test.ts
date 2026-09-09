@@ -278,7 +278,12 @@ class TestRepository implements ConnectionRepository {
 }
 
 function createTestApp(
-	options: { actions?: ActionDefinition[]; oauth?: GitHubOAuthProvider } = {},
+	options: {
+		actions?: ActionDefinition[];
+		oauth?: GitHubOAuthProvider;
+		repository?: ConnectionRepository;
+		supportedProviders?: readonly string[];
+	} = {},
 ) {
 	const executor: GitHubExecutor = {
 		execute: async ({ action, input }) =>
@@ -302,10 +307,11 @@ function createTestApp(
 			principalFromAuthorization: async () => "alice",
 		},
 		service: new ConnectionApplicationService(
-			new TestRepository(options.actions),
+			options.repository ?? new TestRepository(options.actions),
 			executor,
 			options.oauth,
 		),
+		supportedProviders: options.supportedProviders,
 	});
 }
 
@@ -1849,6 +1855,185 @@ describe("Connection API", () => {
 			).result.structuredContent.actions.map((action) => action.actionId),
 		).toContain("github.listBranches");
 		expect(call.status).toBe(200);
+	});
+
+	it("guides clients to connect a supported Provider instead of returning an unexplained empty action list", async () => {
+		const app = createTestApp({
+			supportedProviders: ["github", "jira", "confluence"],
+		});
+		for (const request of [
+			{
+				arguments: { query: "confluence" },
+				emptyField: "apps",
+				name: "list_apps",
+			},
+			{
+				arguments: { service: "confluence" },
+				emptyField: "connections",
+				name: "list_connections",
+			},
+			{
+				arguments: { service: "confluence" },
+				emptyField: "actions",
+				name: "search_actions",
+			},
+		] as const) {
+			const response = await app.request("/mcp", {
+				body: JSON.stringify({
+					id: 1,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: {
+						arguments: request.arguments,
+						name: request.name,
+					},
+				}),
+				headers: {
+					authorization: "Bearer test",
+					"content-type": "application/json",
+				},
+				method: "POST",
+			});
+			const payload = (await response.json()) as {
+				result: { structuredContent: Record<string, unknown> };
+			};
+
+			expect(response.status).toBe(200);
+			expect(payload.result.structuredContent).toMatchObject({
+				[request.emptyField]: [],
+				guidance: {
+					messageKey: "connection.provider.not_connected",
+					nextAction: {
+						type: "OPEN_CONNECTION_WEB",
+						url: "http://localhost:3001/connection/connections?provider=confluence&intent=connect",
+					},
+					provider: "confluence",
+					reasonCode: "PROVIDER_NOT_CONNECTED",
+					retryable: false,
+				},
+			});
+			expect(payload.result.structuredContent).not.toHaveProperty(
+				"guidance.nextAction.connectionId",
+			);
+		}
+	});
+
+	it("distinguishes an unsupported Provider without exposing account state", async () => {
+		const app = createTestApp({ supportedProviders: ["github"] });
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 1,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: { service: "unknown-provider" },
+					name: "search_actions",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		const payload = await response.json();
+		expect(payload).toMatchObject({
+			result: {
+				structuredContent: {
+					actions: [],
+					guidance: {
+						messageKey: "connection.provider.unsupported",
+						nextAction: { type: "CONTACT_ADMIN" },
+						provider: "unknown-provider",
+						reasonCode: "PROVIDER_UNSUPPORTED",
+						retryable: false,
+					},
+				},
+			},
+		});
+		expect(JSON.stringify(payload)).not.toContain("connection-alice");
+	});
+
+	it("distinguishes reauthorization, missing client authorization, and an empty search", async () => {
+		const repository = new (class extends TestRepository {
+			override async getOverview() {
+				const overview = await super.getOverview();
+				return {
+					...overview,
+					connections: [
+						...overview.connections,
+						{
+							actionVersionIds: ["jira.get_issue@v1"],
+							displayName: "Alice Jira",
+							externalAccount: "alice",
+							id: "connection-jira",
+							ownerType: "PERSONAL" as const,
+							providerId: "jira",
+							requiresReconnect: false,
+							status: "ACTIVE" as const,
+						},
+						{
+							actionVersionIds: ["confluence.get_page@v1"],
+							displayName: "Alice Confluence",
+							externalAccount: "alice",
+							id: "connection-confluence",
+							ownerType: "PERSONAL" as const,
+							providerId: "confluence",
+							requiresReconnect: true,
+							status: "ACTIVE" as const,
+						},
+					],
+				};
+			}
+		})();
+		const app = createTestApp({
+			repository,
+			supportedProviders: ["github", "jira", "confluence"],
+		});
+		const call = async (service: string, query?: string) => {
+			const response = await app.request("/mcp", {
+				body: JSON.stringify({
+					id: 1,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: {
+						arguments: { ...(query ? { query } : {}), service },
+						name: "search_actions",
+					},
+				}),
+				headers: {
+					authorization: "Bearer test",
+					"content-type": "application/json",
+				},
+				method: "POST",
+			});
+			return (await response.json()) as {
+				result: { structuredContent: { guidance: Record<string, unknown> } };
+			};
+		};
+
+		expect(
+			(await call("jira")).result.structuredContent.guidance,
+		).toMatchObject({
+			messageKey: "connection.provider.authorization_required",
+			reasonCode: "PROVIDER_AUTHORIZATION_REQUIRED",
+		});
+		expect(
+			(await call("confluence")).result.structuredContent.guidance,
+		).toMatchObject({
+			messageKey: "connection.provider.reauthorization_required",
+			reasonCode: "PROVIDER_REAUTHORIZATION_REQUIRED",
+		});
+		expect(
+			(await call("github", "does-not-exist")).result.structuredContent
+				.guidance,
+		).toMatchObject({
+			messageKey: "connection.provider.no_results",
+			nextAction: { type: "REFINE_SEARCH" },
+			reasonCode: "SEARCH_NO_RESULTS",
+			retryable: true,
+		});
 	});
 
 	it("publishes the write idempotency key in the action guide", async () => {

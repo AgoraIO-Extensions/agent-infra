@@ -9,7 +9,7 @@ import {
 	ShieldOff,
 	X,
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -47,6 +47,15 @@ export function ConnectionsPage() {
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
+	useEffect(() => {
+		const search = new URLSearchParams(window.location.search);
+		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
+			return;
+		const provider = search.get("provider");
+		if (provider === "bitbucket") setBitbucketOpen(true);
+		if (provider === "confluence") setConfluenceOpen(true);
+		if (provider === "jira") setJiraOpen(true);
+	}, []);
 	const overview = useQuery({
 		queryKey: ["connections"],
 		queryFn: connectionApi.getConnections,

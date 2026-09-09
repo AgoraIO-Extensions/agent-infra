@@ -186,6 +186,7 @@ import { TokensPage } from "./tokens-page";
 
 afterEach(() => {
 	cleanup();
+	window.history.replaceState({}, "", "/");
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
 });
@@ -204,6 +205,19 @@ function calls(mock: unknown) {
 }
 
 describe("Connection 管理 mutation wiring", () => {
+	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect",
+		);
+		renderPage(<ConnectionsPage />);
+
+		expect(
+			await screen.findByRole("heading", { name: "连接公司 Confluence" }),
+		).toBeTruthy();
+	});
+
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const popup = {

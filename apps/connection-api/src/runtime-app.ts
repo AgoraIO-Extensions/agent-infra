@@ -126,5 +126,11 @@ export async function createConnectionRuntimeApp(
 			service: oauth,
 		},
 		service,
+		supportedProviders: [
+			githubConnectionCatalog.provider,
+			bitbucketServerConnectionCatalog.provider,
+			jiraServerConnectionCatalog.provider,
+			confluenceServerConnectionCatalog.provider,
+		],
 	});
 }
