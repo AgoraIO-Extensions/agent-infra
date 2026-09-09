@@ -484,6 +484,8 @@ pending 启动；识别只允许模型请求等待，不能转发。只有匹配
 关闭或期限到期均拒绝等待请求，并阻断该 Turn 的迟到准入；过期操作按现有 unavailable 或
 acceptance-uncertain 路径收敛，不能在期限后恢复普通准入。其他 Thread 不受影响。
 
+模型传输入口仅保存待准入和运行中的正向授权。准入能力绑定提交 operation 与精确 native Turn，使用后或取消、完成、过期时失效；迟到请求和旧能力不能恢复授权，不以 TTL/LRU 驱逐永久拒绝记录来换取放行。恢复转发走独立路径，先确认持久准入已完成，且回读的原生状态与持久执行状态均为 running；保持原始准入期限和取消排空要求。
+
 RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威边界和 #403 的原生
 持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。

@@ -23,6 +23,7 @@ import {
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexModelRoute,
+	type CodexModelTurnAdmission,
 	type CodexNativeTurn,
 	openCodexModelTransport,
 } from "./codex-model-transport.js";
@@ -1307,6 +1308,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly observedNativeTurnStarts = new Set<string>();
 	private readonly nativeTurnStartWaiters = new Map<string, Set<() => void>>();
 	private readonly modelAdmissionDeadlines = new Map<string, number>();
+	private readonly modelTurnAdmissions = new Map<
+		string,
+		CodexModelTurnAdmission
+	>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
@@ -1320,14 +1325,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			ConfiguredCodexRuntimeModelOption
 		>,
 		private readonly defaultSelection: { model: string; effort: string },
-		private readonly recognizeModelTurn?: (
-			turn: CodexNativeTurn,
+		private readonly beginModelTurnAdmission?: (
 			deadline: number,
-		) => void,
-		private readonly registerModelTurn?: (
+		) => CodexModelTurnAdmission,
+		private readonly recognizeModelTurn?: (
+			admission: CodexModelTurnAdmission,
 			turn: CodexNativeTurn,
-			deadline?: number,
 		) => boolean,
+		private readonly registerModelTurn?: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) => boolean,
+		private readonly abandonModelTurnAdmission?: (
+			admission: CodexModelTurnAdmission,
+		) => void,
 		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
@@ -1426,8 +1437,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			bridge,
 			modelOptions,
 			defaultSelection,
+			modelTransport?.beginTurnAdmission,
 			modelTransport?.recognizeTurn,
 			modelTransport?.registerTurn,
+			modelTransport?.abandonTurnAdmission,
 			modelTransport?.cancelTurn,
 		);
 		try {
@@ -1560,6 +1573,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const admissionKey = operationKey(command);
 		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
 		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
+		const modelAdmission = this.beginModelTurnAdmission?.(admissionDeadline);
+		if (modelAdmission)
+			this.modelTurnAdmissions.set(admissionKey, modelAdmission);
+		const abandonModelAdmission = () => {
+			if (!modelAdmission) return;
+			this.abandonModelTurnAdmission?.(modelAdmission);
+			if (this.modelTurnAdmissions.get(admissionKey) === modelAdmission) {
+				this.modelTurnAdmissions.delete(admissionKey);
+			}
+		};
 		let candidateModelTurn: CodexNativeTurn | undefined;
 		try {
 			const turn = await this.rpc.request(
@@ -1604,6 +1627,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				record.result.outcome !== "accepted" ||
 				record.result.status !== "running"
 			) {
+				abandonModelAdmission();
 				await this.cancelModelTurn?.(nativeTurn);
 				return record;
 			}
@@ -1618,23 +1642,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					current?.record?.result.outcome === "accepted" &&
 					current.record.result.status !== "running"
 				) {
+					abandonModelAdmission();
 					await this.cancelModelTurn?.(nativeTurn);
 					await this.confirmModelAdmission(command, session.nativeSessionRef);
 					return current.record;
 				}
+				abandonModelAdmission();
 				await this.cancelModelTurn?.(nativeTurn);
 				unavailable();
 			}
 			if (
 				Date.now() >= admissionDeadline ||
-				this.registerModelTurn?.(nativeTurn, admissionDeadline) === false
+				(this.registerModelTurn !== undefined &&
+					(!modelAdmission ||
+						this.registerModelTurn(modelAdmission, nativeTurn) === false))
 			) {
+				abandonModelAdmission();
 				await this.cancelModelTurn?.(nativeTurn);
 				unavailable();
 			}
+			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
 			await this.confirmModelAdmission(command, session.nativeSessionRef);
 			return record;
 		} catch (error) {
+			abandonModelAdmission();
 			const pendingModelTurn = this.pendingModelTurn(
 				command,
 				session.nativeSessionRef,
@@ -1663,6 +1694,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			throw error;
 		} finally {
+			abandonModelAdmission();
 			if (
 				this.modelAdmissionDeadlines.get(admissionKey) === admissionDeadline
 			) {
@@ -1685,13 +1717,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		let status = await this.getStatus(
-			prepared.operation.nativeSessionRef,
-			command.executionId,
-		);
 		const nativeTurn = this.interruptionNativeTurn(
 			prepared.operation.nativeSessionRef,
 			command,
+		);
+		await this.cancelModelTurn?.(nativeTurn);
+		let status = await this.getStatus(
+			prepared.operation.nativeSessionRef,
+			command.executionId,
 		);
 		if (status === "running") {
 			try {
@@ -1728,6 +1761,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (operation.admissionPending) return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
+		await this.cancelModelTurn?.(
+			this.interruptionNativeTurn(operation.nativeSessionRef, command),
+		);
 		const status = await this.getStatus(
 			operation.nativeSessionRef,
 			command.executionId,
@@ -1747,20 +1783,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
+		return this.restoreExecutionStatus(nativeSessionRef, executionId);
+	}
+
+	private async restoreExecutionStatus(
+		nativeSessionRef: string,
+		executionId: string,
+		recoverEventHistory = false,
+	) {
 		let session = this.session(nativeSessionRef);
 		let execution = ownRecordValue(session.executions, executionId);
-		if (!execution || !session.threadId) unavailable();
-		this.assertModelAdmissionConfirmed(session, execution);
-		if (execution.status !== "running") {
-			await this.cancelModelTurn?.({
-				threadId: session.threadId,
-				turnId: execution.nativeTurnId,
-			});
-			return execution.status;
-		}
-		await this.resumeSession(nativeSessionRef);
-		session = this.session(nativeSessionRef);
-		execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status !== "running") {
@@ -1774,18 +1806,90 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			threadId: session.threadId,
 			turnId: execution.nativeTurnId,
 		};
-		this.registerModelTurn?.(nativeTurn);
-		const status = await this.readNativeTurnStatus(session, execution);
-		const persistedStatus = await this.updateExecutionStatus(
-			nativeSessionRef,
-			executionId,
-			execution.nativeTurnId,
-			status,
-		);
-		if (persistedStatus !== "running") {
-			await this.cancelModelTurn?.(nativeTurn);
+		const restoreRequired =
+			!this.hasInterruption(nativeSessionRef, executionId) &&
+			this.beginModelTurnAdmission !== undefined &&
+			this.recognizeModelTurn !== undefined &&
+			this.registerModelTurn !== undefined;
+		let restoreAdmission: CodexModelTurnAdmission | undefined;
+		if (restoreRequired) {
+			restoreAdmission = this.beginModelTurnAdmission?.(
+				Date.now() + rpcRequestTimeoutMs,
+			);
+			if (
+				restoreAdmission &&
+				this.recognizeModelTurn?.(restoreAdmission, nativeTurn) === false
+			) {
+				this.abandonModelTurnAdmission?.(restoreAdmission);
+				restoreAdmission = undefined;
+			}
 		}
-		return persistedStatus;
+		try {
+			await this.resumeSession(nativeSessionRef);
+			session = this.session(nativeSessionRef);
+			execution = ownRecordValue(session.executions, executionId);
+			if (!execution || !session.threadId) unavailable();
+			this.assertModelAdmissionConfirmed(session, execution);
+			if (execution.status !== "running") {
+				await this.cancelModelTurn?.({
+					threadId: session.threadId,
+					turnId: execution.nativeTurnId,
+				});
+				if (recoverEventHistory) {
+					const items = await this.readNativeAgentMessageItems(
+						session.threadId,
+						execution.nativeTurnId,
+					);
+					await this.persistRecoveredAgentMessageItems(
+						nativeSessionRef,
+						executionId,
+						execution.nativeTurnId,
+						items,
+					);
+				}
+				return execution.status;
+			}
+			if (
+				session.threadId !== nativeTurn.threadId ||
+				execution.nativeTurnId !== nativeTurn.turnId
+			) {
+				stateInvalid();
+			}
+			const status = await this.readNativeTurnStatus(session, execution);
+			if (recoverEventHistory) {
+				const items = await this.readNativeAgentMessageItems(
+					session.threadId,
+					execution.nativeTurnId,
+				);
+				await this.persistRecoveredAgentMessageItems(
+					nativeSessionRef,
+					executionId,
+					execution.nativeTurnId,
+					items,
+				);
+			}
+			const persistedStatus = await this.updateExecutionStatus(
+				nativeSessionRef,
+				executionId,
+				execution.nativeTurnId,
+				status,
+			);
+			if (persistedStatus !== "running") {
+				await this.cancelModelTurn?.(nativeTurn);
+			} else if (
+				restoreRequired &&
+				(!restoreAdmission ||
+					this.hasInterruption(nativeSessionRef, executionId) ||
+					this.registerModelTurn?.(restoreAdmission, nativeTurn) !== true)
+			) {
+				unavailable();
+			}
+			return persistedStatus;
+		} finally {
+			if (restoreAdmission) {
+				this.abandonModelTurnAdmission?.(restoreAdmission);
+			}
+		}
 	}
 
 	async getCapabilities() {
@@ -1797,6 +1901,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 	): Promise<RuntimeEventV1[]> {
+		const existingSession = this.session(nativeSessionRef);
+		const existingExecution = ownRecordValue(
+			existingSession.executions,
+			executionId,
+		);
+		if (!existingExecution) unavailable();
+		this.assertModelAdmissionConfirmed(existingSession, existingExecution);
 		await this.recoverEventHistory(nativeSessionRef, executionId);
 		const session = this.session(nativeSessionRef);
 		const execution = ownRecordValue(session.executions, executionId);
@@ -1943,14 +2054,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const admissionDeadline = recorded?.pendingOperationKey
 				? this.modelAdmissionDeadlines.get(recorded.pendingOperationKey)
 				: undefined;
-			if (admissionDeadline !== undefined) {
-				this.recognizeModelTurn?.(
-					{
-						threadId: started.threadId,
-						turnId: started.nativeTurnId,
-					},
-					admissionDeadline,
-				);
+			const modelAdmission = recorded?.pendingOperationKey
+				? this.modelTurnAdmissions.get(recorded.pendingOperationKey)
+				: undefined;
+			if (admissionDeadline !== undefined && modelAdmission !== undefined) {
+				this.recognizeModelTurn?.(modelAdmission, {
+					threadId: started.threadId,
+					turnId: started.nativeTurnId,
+				});
 			}
 			if (recorded) {
 				this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
@@ -2141,6 +2252,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeItemId: string,
 		delta: string,
 	) {
+		this.assertJournalOpen(journal);
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
 		const event: CodexJournalTextEvent = {
 			cursor,
@@ -2150,11 +2262,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			type: "text",
 			payload: { delta },
 		};
-		const completedIndex = journal.events.findIndex(
-			(candidate) => candidate.type === "completed",
-		);
-		if (completedIndex === -1) journal.events.push(event);
-		else journal.events.splice(completedIndex, 0, event);
+		journal.events.push(event);
 	}
 
 	private appendCompletedEvent(
@@ -2301,14 +2409,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let session = this.session(nativeSessionRef);
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
+		if (execution.status === "running") {
+			await this.restoreExecutionStatus(nativeSessionRef, executionId, true);
+			return;
+		}
 		await this.resumeSession(nativeSessionRef);
 		session = this.session(nativeSessionRef);
 		execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
-		const status =
-			execution.status === "running"
-				? await this.readNativeTurnStatus(session, execution)
-				: execution.status;
+		this.assertModelAdmissionConfirmed(session, execution);
 		const items = await this.readNativeAgentMessageItems(
 			session.threadId,
 			execution.nativeTurnId,
@@ -2318,12 +2428,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 			execution.nativeTurnId,
 			items,
-		);
-		await this.updateExecutionStatus(
-			nativeSessionRef,
-			executionId,
-			execution.nativeTurnId,
-			status,
 		);
 	}
 
@@ -2802,6 +2906,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private hasPendingModelAdmission(command: CodexSubmitTurnCommand) {
 		return this.operationRecord(command)?.admissionPending === true;
+	}
+
+	private hasInterruption(nativeSessionRef: string, executionId: string) {
+		return Object.values(this.readState().operations).some(
+			(operation) =>
+				operation.nativeSessionRef === nativeSessionRef &&
+				operation.executionId === executionId &&
+				operation.turnId !== undefined,
+		);
 	}
 
 	private async confirmModelAdmission(

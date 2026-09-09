@@ -2,7 +2,7 @@ import { once } from "node:events";
 import {
 	createServer,
 	request as httpRequest,
-	type Server,
+	Server,
 	type ServerResponse,
 } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
@@ -54,9 +54,19 @@ async function transport(endpoint: string, registerDefaultTurn = true) {
 			credential,
 		},
 	]);
-	if (registerDefaultTurn) value.registerTurn(defaultNativeTurn);
+	if (registerDefaultTurn) admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
 	return value;
+}
+
+function admitTurn(
+	transport: Awaited<ReturnType<typeof openCodexModelTransport>>,
+	turn: CodexNativeTurn,
+) {
+	const admission = transport.beginTurnAdmission(Date.now() + 1_000);
+	expect(transport.recognizeTurn(admission, turn)).toBe(true);
+	expect(transport.registerTurn(admission, turn)).toBe(true);
+	return admission;
 }
 
 function event(value: unknown) {
@@ -107,6 +117,30 @@ afterEach(async () => {
 });
 
 describe("Codex model transport", () => {
+	it("removes its startup error listener after listening", async () => {
+		const target = await listen(
+			createServer((_request, response) => response.end()),
+		);
+		const once = vi.spyOn(Server.prototype, "once");
+		try {
+			await transport(target);
+			const calls = once.mock.calls as unknown as [
+				string | symbol,
+				...unknown[],
+			][];
+			const errorListenerCall = calls.findIndex(([event]) => event === "error");
+			const server = once.mock.instances[errorListenerCall] as
+				| Server
+				| undefined;
+
+			expect(errorListenerCall).toBeGreaterThanOrEqual(0);
+			expect(server).toBeInstanceOf(Server);
+			expect(server?.listenerCount("error")).toBe(0);
+		} finally {
+			once.mockRestore();
+		}
+	});
+
 	it("forwards the selected model and reasoning over the fixed upstream path", async () => {
 		let observed: unknown;
 		const target = await listen(
@@ -266,7 +300,7 @@ describe("Codex model transport", () => {
 				credential: "credential-two",
 			},
 		]);
-		value.registerTurn(defaultNativeTurn);
+		admitTurn(value, defaultNativeTurn);
 		close.push(value.close);
 		for (const model of [
 			"option_one/shared-model",
@@ -563,11 +597,13 @@ describe("Codex model transport", () => {
 			}),
 		);
 		const value = await transport(target, false);
+		const admission = value.beginTurnAdmission(Date.now() + 1_000);
 		const pending = request(value.modelAccess);
 		await delay(25);
 		expect(calls).toBe(0);
 
-		value.registerTurn(defaultNativeTurn);
+		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(true);
+		expect(value.registerTurn(admission, defaultNativeTurn)).toBe(true);
 		const response = await pending;
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe(completedEvent());
@@ -604,9 +640,10 @@ describe("Codex model transport", () => {
 		const value = await transport(target, false);
 		const expiringTurn = { threadId: "thread-expiring", turnId: "turn-one" };
 		const unrelatedTurn = { threadId: "thread-unrelated", turnId: "turn-one" };
-		value.recognizeTurn(expiringTurn, Date.now() + 50);
+		const admission = value.beginTurnAdmission(Date.now() + 50);
+		expect(value.recognizeTurn(admission, expiringTurn)).toBe(true);
 		const expiringRequest = request(value.modelAccess, {}, expiringTurn);
-		value.registerTurn(unrelatedTurn);
+		admitTurn(value, unrelatedTurn);
 
 		const unrelatedResponse = await request(
 			value.modelAccess,
@@ -617,10 +654,49 @@ describe("Codex model transport", () => {
 		expect(await unrelatedResponse.text()).toBe(completedEvent());
 		const expiredResponse = await expiringRequest;
 		expect(expiredResponse.status).toBe(409);
-		expect(value.registerTurn(expiringTurn)).toBe(false);
+		expect(value.registerTurn(admission, expiringTurn)).toBe(false);
+		expect(value.recognizeTurn(admission, expiringTurn)).toBe(false);
 		const lateResponse = await request(value.modelAccess, {}, expiringTurn);
 		expect(lateResponse.status).toBe(409);
 		expect(calls).toBe(1);
+	});
+
+	it("never reuses concurrent pending admissions after cancellation", async () => {
+		let calls = 0;
+		const target = await listen(
+			createServer((_incoming, response) => {
+				calls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, false);
+		const firstAdmission = value.beginTurnAdmission(Date.now() + 5_000);
+		const secondAdmission = value.beginTurnAdmission(Date.now() + 5_000);
+		expect(value.recognizeTurn(firstAdmission, defaultNativeTurn)).toBe(true);
+		expect(value.recognizeTurn(secondAdmission, defaultNativeTurn)).toBe(true);
+
+		await value.cancelTurn(defaultNativeTurn);
+
+		expect(value.registerTurn(firstAdmission, defaultNativeTurn)).toBe(false);
+		expect(value.registerTurn(secondAdmission, defaultNativeTurn)).toBe(false);
+		expect(value.recognizeTurn(firstAdmission, defaultNativeTurn)).toBe(false);
+		const late = await request(value.modelAccess);
+		expect(late.status).toBe(409);
+		expect(calls).toBe(0);
+	});
+
+	it("never reuses an abandoned admission", async () => {
+		const target = await listen(
+			createServer((_incoming, response) => response.end()),
+		);
+		const value = await transport(target, false);
+		const admission = value.beginTurnAdmission(Date.now() + 5_000);
+
+		value.abandonTurnAdmission(admission);
+
+		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(false);
+		expect(value.registerTurn(admission, defaultNativeTurn)).toBe(false);
 	});
 
 	it.each([
@@ -759,8 +835,10 @@ describe("Codex model transport", () => {
 			}),
 		);
 		const value = await transport(target, false);
-		value.registerTurn(firstTurn);
-		value.registerTurn(otherTurn);
+		const cancelledAdmission = value.beginTurnAdmission(Date.now() + 1_000);
+		expect(value.recognizeTurn(cancelledAdmission, firstTurn)).toBe(true);
+		expect(value.registerTurn(cancelledAdmission, firstTurn)).toBe(true);
+		admitTurn(value, otherTurn);
 		const firstResponsePromise = request(
 			value.modelAccess,
 			{
@@ -793,8 +871,10 @@ describe("Codex model transport", () => {
 		expect(await late.text()).toBe(
 			'{"error":{"message":"Model request failed"}}',
 		);
+		expect(value.registerTurn(cancelledAdmission, firstTurn)).toBe(false);
+		expect(value.recognizeTurn(cancelledAdmission, firstTurn)).toBe(false);
 
-		value.registerTurn(laterTurn);
+		admitTurn(value, laterTurn);
 		const laterResponsePromise = request(
 			value.modelAccess,
 			{

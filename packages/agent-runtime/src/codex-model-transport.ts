@@ -47,6 +47,12 @@ export interface CodexNativeTurn {
 	readonly turnId: string;
 }
 
+declare const codexModelTurnAdmissionBrand: unique symbol;
+
+export interface CodexModelTurnAdmission {
+	readonly [codexModelTurnAdmissionBrand]: true;
+}
+
 interface ActiveTurnRequest {
 	readonly terminate: () => void;
 	readonly completion: Promise<void>;
@@ -57,9 +63,11 @@ interface AdmissionWaiter {
 	readonly settle: (admitted: boolean) => void;
 }
 
-interface RecognizedTurn {
+interface ModelTurnAdmissionState {
+	state: "open" | "consumed" | "closed";
 	readonly deadline: number;
-	readonly timer: ReturnType<typeof setTimeout>;
+	turnKey?: string;
+	timer?: ReturnType<typeof setTimeout>;
 }
 
 function reject(response: ServerResponse, status = 502) {
@@ -691,8 +699,11 @@ export async function openCodexModelTransport(
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
 	const admittedTurns = new Set<string>();
-	const recognizedTurns = new Map<string, RecognizedTurn>();
-	const blockedTurns = new Set<string>();
+	const recognizedTurns = new Map<string, Set<CodexModelTurnAdmission>>();
+	const admissions = new WeakMap<
+		CodexModelTurnAdmission,
+		ModelTurnAdmissionState
+	>();
 	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
 	let closing = false;
 	const settleAdmissionWaiters = (key: string, admitted: boolean) => {
@@ -701,35 +712,56 @@ export async function openCodexModelTransport(
 		admissionWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(admitted);
 	};
-	const blockTurn = (key: string) => {
+	const closeAdmission = (admission: CodexModelTurnAdmission) => {
+		const state = admissions.get(admission);
+		if (state?.state !== "open") return;
+		state.state = "closed";
+		if (state.timer !== undefined) clearTimeout(state.timer);
+		if (state.turnKey !== undefined) {
+			const recognized = recognizedTurns.get(state.turnKey);
+			if (recognized) {
+				recognized.delete(admission);
+				if (recognized.size === 0) recognizedTurns.delete(state.turnKey);
+			}
+			if (
+				!recognizedTurns.has(state.turnKey) &&
+				!admittedTurns.has(state.turnKey)
+			) {
+				settleAdmissionWaiters(state.turnKey, false);
+			}
+		}
+	};
+	const revokeTurn = (key: string) => {
 		const recognized = recognizedTurns.get(key);
-		if (recognized) clearTimeout(recognized.timer);
-		recognizedTurns.delete(key);
+		for (const admission of [...(recognized ?? [])]) {
+			closeAdmission(admission);
+		}
 		admittedTurns.delete(key);
-		blockedTurns.add(key);
 		settleAdmissionWaiters(key, false);
 	};
-	const recognizeAdmissionWaiters = (key: string, deadline: number) => {
-		const existing = recognizedTurns.get(key);
-		const effectiveDeadline = Math.min(
-			existing?.deadline ?? deadline,
-			deadline,
-		);
-		if (existing) clearTimeout(existing.timer);
-		if (effectiveDeadline <= Date.now()) {
-			blockTurn(key);
-			return;
+	const recognizeAdmissionWaiters = (
+		admission: CodexModelTurnAdmission,
+		key: string,
+	) => {
+		const state = admissions.get(admission);
+		if (state?.state !== "open" || state.deadline <= Date.now()) {
+			closeAdmission(admission);
+			return false;
 		}
-		const timer = setTimeout(
-			() => blockTurn(key),
-			effectiveDeadline - Date.now(),
-		);
-		recognizedTurns.set(key, { deadline: effectiveDeadline, timer });
+		if (state.turnKey !== undefined && state.turnKey !== key) {
+			closeAdmission(admission);
+			return false;
+		}
+		state.turnKey = key;
+		const recognized = recognizedTurns.get(key) ?? new Set();
+		recognizedTurns.set(key, recognized);
+		recognized.add(admission);
 		for (const waiter of admissionWaiters.get(key) ?? []) waiter.recognize();
+		return true;
 	};
 	const waitForAdmission = (key: string, signal: AbortSignal) => {
 		if (admittedTurns.has(key)) return Promise.resolve(true);
-		if (closing || blockedTurns.has(key) || signal.aborted) {
+		if (closing || signal.aborted) {
 			return Promise.resolve(false);
 		}
 		return new Promise<boolean>((resolve) => {
@@ -757,8 +789,7 @@ export async function openCodexModelTransport(
 				timer = setTimeout(() => settle(false), turnAdmissionTimeoutMs);
 			}
 			if (admittedTurns.has(key)) settle(true);
-			else if (closing || blockedTurns.has(key) || signal.aborted)
-				settle(false);
+			else if (closing || signal.aborted) settle(false);
 			else if (recognizedTurns.has(key)) recognize();
 		});
 	};
@@ -885,8 +916,17 @@ export async function openCodexModelTransport(
 	server.requestTimeout = requestTimeoutMs;
 	server.headersTimeout = 10_000;
 	await new Promise<void>((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", resolve);
+		const onError = (error: Error) => {
+			server.off("listening", onListening);
+			reject(error);
+		};
+		const onListening = () => {
+			server.off("error", onError);
+			resolve();
+		};
+		server.once("error", onError);
+		server.once("listening", onListening);
+		server.listen(0, "127.0.0.1");
 	});
 	const address = server.address();
 	if (!address || typeof address === "string") {
@@ -899,35 +939,63 @@ export async function openCodexModelTransport(
 			endpoint: `http://127.0.0.1:${address.port}`,
 			credential: token,
 		},
-		recognizeTurn: (turn: CodexNativeTurn, deadline: number) => {
-			const key = nativeTurnKey(turn);
-			if (closing || blockedTurns.has(key) || admittedTurns.has(key)) return;
-			recognizeAdmissionWaiters(key, deadline);
+		beginTurnAdmission: (deadline: number) => {
+			const admission = Object.freeze({}) as CodexModelTurnAdmission;
+			const state: ModelTurnAdmissionState = {
+				state: deadline > Date.now() && !closing ? "open" : "closed",
+				deadline,
+			};
+			if (state.state === "open") {
+				state.timer = setTimeout(
+					() => closeAdmission(admission),
+					deadline - Date.now(),
+				);
+			}
+			admissions.set(admission, state);
+			return admission;
 		},
-		registerTurn: (turn: CodexNativeTurn, deadline?: number) => {
+		recognizeTurn: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) => {
 			const key = nativeTurnKey(turn);
+			if (closing) return false;
+			return recognizeAdmissionWaiters(admission, key);
+		},
+		registerTurn: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) => {
+			const key = nativeTurnKey(turn);
+			const state = admissions.get(admission);
 			const recognized = recognizedTurns.get(key);
-			if (deadline !== undefined && recognized === undefined) {
-				blockTurn(key);
+			if (
+				state?.state !== "open" ||
+				state.turnKey !== key ||
+				!recognized?.has(admission)
+			) {
 				return false;
 			}
-			const effectiveDeadline = Math.min(
-				recognized?.deadline ?? Number.POSITIVE_INFINITY,
-				deadline ?? Number.POSITIVE_INFINITY,
-			);
-			if (closing || blockedTurns.has(key) || effectiveDeadline <= Date.now()) {
-				blockTurn(key);
+			if (closing || state.deadline <= Date.now()) {
+				closeAdmission(admission);
 				return false;
 			}
-			if (recognized) clearTimeout(recognized.timer);
-			recognizedTurns.delete(key);
+			if (state.timer !== undefined) clearTimeout(state.timer);
+			state.state = "consumed";
+			if (recognized) {
+				recognized.delete(admission);
+				if (recognized.size === 0) recognizedTurns.delete(key);
+			}
 			admittedTurns.add(key);
 			settleAdmissionWaiters(key, true);
 			return true;
 		},
+		abandonTurnAdmission: (admission: CodexModelTurnAdmission) => {
+			closeAdmission(admission);
+		},
 		cancelTurn: async (turn: CodexNativeTurn) => {
 			const key = nativeTurnKey(turn);
-			blockTurn(key);
+			revokeTurn(key);
 			const requests = [...(activeTurns.get(key) ?? [])];
 			for (const request of requests) request.terminate();
 			await Promise.all(requests.map(({ completion }) => completion));
@@ -936,7 +1004,9 @@ export async function openCodexModelTransport(
 			closePromise ??= (async () => {
 				closing = true;
 				for (const recognized of recognizedTurns.values()) {
-					clearTimeout(recognized.timer);
+					for (const admission of [...recognized]) {
+						closeAdmission(admission);
+					}
 				}
 				recognizedTurns.clear();
 				for (const key of admissionWaiters.keys()) {
