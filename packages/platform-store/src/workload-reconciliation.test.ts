@@ -1588,6 +1588,64 @@ describe("PostgreSQL Workload steps", () => {
 		await writer;
 		expect(updated).toBe(true);
 	});
+	it("rotates past a malformed Agent after rollback and revisits it after repair", async () => {
+		const [source] =
+			await sql`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a'`;
+		if (!source) throw new Error();
+		const healthy = { ...source.configuration, agentId: "agent-b" };
+		await sql`insert into platform.agents(id, current_configuration_revision, authorization_revision) values ('agent-b', 1, 'authorization-b')`;
+		await sql`insert into platform.agent_applications(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, workload_revision, fence) values ('application-b', 'agent-b', 'owner-b', 'Agent B', 'Fixture', 'creating', 'trace-b', 'request-b', now(), 1, 1, 'running', 1, 1)`;
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-b', 1, ${healthy.source.imageDigest}, ${sql.json(healthy)}, now())`;
+		await sql`insert into platform.agent_owners(agent_id, owner_id, created_at) values ('agent-b', 'owner-b', now())`;
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1 })} where agent_id = 'agent-a'`;
+		const store = openPostgresWorkloadReconciliationStoreV1({
+			...database,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+		const seen: string[] = [];
+		const worker = createWorkloadReconciliationV1({
+			store,
+			runtime: {
+				...runtime(),
+				preflight: async (input, state) => {
+					seen.push(input.configuration.agentId);
+					return { ...state.candidate, deployment: { admitted: true } };
+				},
+			},
+		});
+		try {
+			for (let step = 0; step < 7; step++) {
+				await expect(worker.tick("single-worker")).rejects.toThrow(
+					"Workload reconciliation persistence failed",
+				);
+				await worker.tick("single-worker");
+			}
+			expect(seen).toEqual(["agent-b"]);
+			expect(
+				(
+					await sql`select status from platform.agent_applications where agent_id = 'agent-b'`
+				)[0]?.status,
+			).toBe("available");
+			expect(
+				await sql`select * from platform.workload_reconciliations where agent_id = 'agent-a'`,
+			).toHaveLength(0);
+			expect(
+				(
+					await sql`select status, attempt_count from platform.outbox_items where id = 'task-a'`
+				)[0],
+			).toMatchObject({ status: "pending", attempt_count: 0 });
+			await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(source.configuration)} where agent_id = 'agent-a'`;
+			await worker.tick("single-worker");
+			expect(
+				(
+					await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+				)[0]?.state.phase,
+			).toBe("preflight");
+		} finally {
+			await store.close();
+		}
+	});
 	it("recovers from a Worker crash without consuming the outbox or storing partial progress", async () => {
 		await expect(
 			first.runNext("worker-a", async () => {

@@ -203,6 +203,8 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		workloadLeaseMs > 300_000
 	)
 		throw new TypeError("Invalid Workload poll interval");
+	// Fairness is local to this live poller; restart begins a new rotation.
+	let lastSelectedAgentId: string | null = null;
 	return {
 		async close() {
 			await client.end();
@@ -226,10 +228,15 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 								and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
 								and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
 									or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
-						) order by w.next_attempt_at nulls first, a.id
+						) order by
+							case when ${lastSelectedAgentId}::text is null or a.id > ${lastSelectedAgentId} then 0 else 1 end,
+							a.id
 						limit 1 for update of a skip locked
 					`;
 					if (!agent) return "idle" as const;
+					// Selection advances even when decoding or persistence rolls back,
+					// so a malformed Agent cannot starve the rest of this poller.
+					lastSelectedAgentId = agent.id;
 					const dialect = new PgDialect();
 					// Drizzle's session uses the transaction's query API; its public
 					// generic incorrectly requires pool-only methods as well.

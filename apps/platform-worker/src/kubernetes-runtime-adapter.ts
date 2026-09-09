@@ -1182,6 +1182,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		input: unknown,
 		identity: { uid: string; generation: number },
 		routeMode: RouteSelectorMode = "closed",
+		secretBindingMode: "activation" | "required" = "required",
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
 		const current = await statefulSet(value);
@@ -1219,8 +1220,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const boundUid =
 				current.metadata.annotations?.[secretUidAnnotation(ref.name)];
 			if (
+				(secretBindingMode === "required" &&
+					(boundFence === undefined || boundUid === undefined)) ||
 				(boundFence === undefined) !== (boundUid === undefined) ||
-				(boundUid !== undefined && secret.metadata?.uid !== boundUid)
+				(boundFence !== undefined &&
+					(!Number.isSafeInteger(Number(boundFence)) ||
+						Number(boundFence) < 1 ||
+						String(Number(boundFence)) !== boundFence)) ||
+				(boundUid !== undefined &&
+					(!boundUid || secret.metadata?.uid !== boundUid))
 			)
 				return "drifted";
 		}
@@ -1500,7 +1508,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						ref &&
 						isLiveOwnedImmutableSecret(secret, value, ref),
 				) &&
-				(await observe(value, identity)) === "healthy"
+				(await observe(value, identity, "closed", "activation")) === "healthy"
 			);
 		},
 		async observeActiveImmutableSecret(
@@ -1926,7 +1934,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			routeMode: RouteSelectorMode = "closed",
 		) {
 			const value = desired(input);
-			if ((await observe(value, identity, routeMode)) !== "healthy")
+			if ((await observe(value, identity, routeMode, "required")) !== "healthy")
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
 			if (value.route.exposure === "internal-only") {
@@ -2122,6 +2130,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							generation: target.workloadGeneration,
 						},
 						routeMode,
+						"required",
 					)) !== "healthy"
 				)
 					throw new WorkloadKubernetesError("conflict");

@@ -150,6 +150,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			});
 			const chart = new URL("../../../deploy/helm/agent-infra", import.meta.url)
 				.pathname;
+			// Only extract Worker RBAC; this fixture does not deploy its production module.
 			const rendered = await execFile("helm", [
 				"template",
 				"workload",
@@ -158,8 +159,12 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				namespace,
 				"--set-string",
 				`images.platformWorker.digest=${imageDigest}`,
+				"--set-string",
+				`images.runtimeHost.digest=${imageDigest}`,
 				"--set",
 				"migration.enabled=false",
+				"--set",
+				"workloadTopology.enabled=true",
 			]);
 			for (const document of parseAllDocuments(rendered.stdout)) {
 				const value = document.toJSON();
@@ -297,7 +302,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					`--as=system:serviceaccount:${namespace}:${workerAccount}`,
 				),
 			).rejects.toThrow();
-			await adapter.applyImmutableSecret(
+			const secretUid = await adapter.applyImmutableSecret(
 				a,
 				a.secretRefs[0]?.name ?? "",
 				"FIXTURE_VALUE",
@@ -309,6 +314,17 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			);
 			if (!initialIdentityA || initialIdentityA === "pending")
 				throw new Error();
+			await eventually(
+				() => adapter.observe(a, initialIdentityA, "closed", "activation"),
+				(value) => value === "healthy",
+			);
+			await adapter.bindSecretFence(
+				a,
+				initialIdentityA,
+				a.secretRefs[0]?.name ?? "",
+				1,
+				secretUid,
+			);
 			await eventually(
 				() => adapter.observe(a, initialIdentityA),
 				(value) => value === "healthy",

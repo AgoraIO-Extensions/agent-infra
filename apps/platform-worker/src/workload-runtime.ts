@@ -649,6 +649,7 @@ export function createWorkloadRuntimeV1(
 				desired(state),
 				state.identity,
 				routeSelectorMode(state),
+				state.phase === "observing" ? "activation" : "required",
 			);
 			if (health === "healthy" && state.phase === "promoting" && capabilities)
 				observedCapabilities.set(state, capabilities);

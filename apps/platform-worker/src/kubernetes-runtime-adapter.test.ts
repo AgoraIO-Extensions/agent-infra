@@ -2684,7 +2684,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				name: `${desired.service.name}-secret-1`,
 			};
 			desired.secretRefs = [ref];
-			await adapter.applyImmutableSecret(
+			const secretUid = await adapter.applyImmutableSecret(
 				desired,
 				ref.name,
 				"API_KEY",
@@ -2692,6 +2692,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			);
 			const identity = await adapter.apply(desired);
 			if (!identity || identity === "pending") throw new Error();
+			await adapter.bindSecretFence(desired, identity, ref.name, 7, secretUid);
 			const workload = await f.client.read<V1StatefulSet>(
 				"StatefulSet",
 				desired.service.name,
@@ -3589,6 +3590,122 @@ describe("GA Kubernetes Workload adapter", () => {
 			),
 		).toBe(false);
 	});
+	it.each([
+		"missing-both",
+		"empty-uid",
+		"zero",
+		"noncanonical",
+		"unsafe-integer",
+		"wrong-uid",
+	] as const)(
+		"requires every Secret binding before readiness or promotion: %s",
+		async (mutation) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			desired.secretRefs = [1, 2].map((index) => ({
+				schemaVersion: 1,
+				agentId: desired.agentId,
+				ownerType: "agent-owner",
+				ownerId: "owner-a",
+				secretId: `secret-${index}`,
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1",
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+				wrappingKeyVersion: "key-a",
+				name: `${desired.service.name}-secret-${index}`,
+			}));
+			const uids = await Promise.all(
+				desired.secretRefs.map((ref) =>
+					adapter.applyImmutableSecret(
+						desired,
+						ref.name,
+						ref.secretId.replace("-", "_"),
+						new Uint8Array([1]),
+					),
+				),
+			);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			expect(
+				await adapter.observe(desired, identity, "closed", "activation"),
+			).toBe("healthy");
+			for (const [index, ref] of desired.secretRefs.entries()) {
+				const uid = uids[index];
+				if (!uid) throw new Error();
+				await adapter.bindSecretFence(desired, identity, ref.name, 7, uid);
+				// Initial activation observes one bound Secret while others remain unbound.
+				expect(
+					await adapter.observeSecretFence(desired, identity, ref.name, 7),
+				).toBe(true);
+			}
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const ref = desired.secretRefs[1];
+			if (!workload?.metadata?.annotations || !ref) throw new Error();
+			const annotations = { ...workload.metadata.annotations };
+			const uidKey = Object.keys(annotations).find(
+				(key) =>
+					key.startsWith("agent-infra.agora.io/secret-uid-") &&
+					annotations[key] === uids[1],
+			);
+			if (!uidKey) throw new Error();
+			const fenceKey = uidKey.replace("/secret-uid-", "/secret-");
+			if (mutation === "missing-both") {
+				delete annotations[uidKey];
+				delete annotations[fenceKey];
+				const secret = await f.client.read<V1Secret>("Secret", ref.name);
+				if (!secret) throw new Error();
+				f.resources.set(`Secret/${ref.name}`, {
+					...secret,
+					metadata: { ...secret.metadata, uid: "unverified-replacement" },
+					data: { secret_2: "Ag==" },
+				} as V1Secret);
+			} else if (mutation === "empty-uid") annotations[uidKey] = "";
+			else if (mutation === "wrong-uid") annotations[uidKey] = "foreign-uid";
+			else
+				annotations[fenceKey] =
+					mutation === "zero"
+						? "0"
+						: mutation === "noncanonical"
+							? "07"
+							: "9007199254740992";
+			f.resources.set(`StatefulSet/${desired.service.name}`, {
+				...workload,
+				metadata: { ...workload.metadata, annotations },
+			});
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(
+				await adapter.switchRoute({
+					schemaVersion: 1,
+					requestId: desired.requestId,
+					traceId: desired.traceId,
+					agentId: desired.agentId,
+					fence: desired.fence,
+					action: "promote",
+					candidateValidated: true,
+					candidateRoute: {
+						routeRef: desired.route.name,
+						workloadUid: identity.uid,
+						workloadGeneration: identity.generation,
+						workloadRevision: desired.workloadRevision,
+					},
+				}),
+			).toMatchObject({ status: "failed" });
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+		},
+	);
 	it("detects missing, terminating, foreign, or mutable Secret refs before reporting healthy", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -3615,7 +3732,9 @@ describe("GA Kubernetes Workload adapter", () => {
 		);
 		const identity = await adapter.apply(desired);
 		if (!identity || identity === "pending") throw new Error();
-		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("healthy");
 		const liveSecret = await f.client.read<V1Secret>("Secret", ref.name);
 		if (!liveSecret) throw new Error();
 		f.resources.set(`Secret/${ref.name}`, {
@@ -3625,18 +3744,24 @@ describe("GA Kubernetes Workload adapter", () => {
 				deletionTimestamp: new Date("2026-09-09T00:00:00Z"),
 			},
 		} as V1Secret);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
 		f.resources.set(`Secret/${ref.name}`, liveSecret);
 
 		f.resources.delete(`Secret/${ref.name}`);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
 		await adapter.applyImmutableSecret(
 			desired,
 			ref.name,
 			"API_KEY",
 			new Uint8Array([1, 2, 3]),
 		);
-		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("healthy");
 
 		const secret = await f.client.read<V1Secret>("Secret", ref.name);
 		if (!secret) throw new Error();
@@ -3644,7 +3769,9 @@ describe("GA Kubernetes Workload adapter", () => {
 			...secret,
 			immutable: false,
 		} as V1Secret);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
 		f.resources.set(`Secret/${ref.name}`, {
 			...secret,
 			metadata: {
@@ -3655,6 +3782,8 @@ describe("GA Kubernetes Workload adapter", () => {
 				},
 			},
 		} as V1Secret);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
 	});
 });
