@@ -44,12 +44,15 @@ for node in $("$kind_bin" get nodes --name "$cluster_name"); do
   docker exec "$node" crictl pull "$WORKLOAD_KIND_REPOSITORY@$WORKLOAD_KIND_IMAGE_B"
 done
 curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-  https://raw.githubusercontent.com/projectcalico/calico/v3.30.3/manifests/calico.yaml \
+  https://raw.githubusercontent.com/projectcalico/calico/3302e8bfd48e6375013d1d79ccb2c693306400a9/manifests/calico.yaml \
   --output "$state_dir/calico.yaml" || \
   curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
     -H 'Accept: application/vnd.github.raw+json' \
-    'https://api.github.com/repos/projectcalico/calico/contents/manifests/calico.yaml?ref=v3.30.3' \
+    'https://api.github.com/repos/projectcalico/calico/contents/manifests/calico.yaml?ref=3302e8bfd48e6375013d1d79ccb2c693306400a9' \
     --output "$state_dir/calico.yaml"
+printf '%s  %s\n' \
+  9382d2b27a76f40c170454b408653e6d71e2205ef0aef069e942bb690e7381d0 \
+  "$state_dir/calico.yaml" | shasum -a 256 --check --status
 kubectl create --request-timeout=60s -f "$state_dir/calico.yaml"
 kubectl rollout status daemonset/calico-node --namespace kube-system --timeout=300s
 kubectl wait nodes --all --for=condition=Ready --timeout=300s

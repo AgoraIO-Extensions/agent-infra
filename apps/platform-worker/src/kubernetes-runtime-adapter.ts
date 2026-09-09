@@ -257,12 +257,6 @@ export interface KubernetesWorkloadPolicyV1 {
 	readonly tlsSecretName: string;
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
-	/** Deployment-owned proxy enforces the permitted model/Connection destinations. */
-	readonly egressProxy?: {
-		readonly namespace: string;
-		readonly selector: Readonly<Record<string, string>>;
-		readonly port: number;
-	};
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
@@ -280,12 +274,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		!Object.keys(policy.routeSelector).length ||
 		Object.keys(policy.platformAuthAnnotations).some((key) =>
 			key.startsWith(controllerAnnotationPrefix),
-		) ||
-		(policy.egressProxy &&
-			(!Object.keys(policy.egressProxy.selector).length ||
-				!Number.isSafeInteger(policy.egressProxy.port) ||
-				policy.egressProxy.port < 1 ||
-				policy.egressProxy.port > 65535))
+		)
 	)
 		throw new WorkloadKubernetesError("policy");
 	const selector = (agentId: string) =>
@@ -373,13 +362,41 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		)
 			throw new WorkloadKubernetesError("conflict");
 	}
-	function hasUnsafePodSpec(pod: V1PodSpec | undefined) {
+	function hasCurrentMetadata(
+		object: KubernetesObject,
+		value: AgentWorkloadDesiredV1,
+	) {
+		return (
+			object.metadata?.labels?.[revisionLabel] ===
+				String(value.workloadRevision) &&
+			object.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
+				String(value.configRevision) &&
+			object.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence)
+		);
+	}
+	function hasUnsafePodSpec(
+		pod: V1PodSpec | undefined,
+		expectedIdentity?: {
+			readonly hostname: string;
+			readonly subdomain: string;
+		},
+	) {
+		const hasUnexpectedIdentity = expectedIdentity
+			? pod?.hostname !== expectedIdentity.hostname ||
+				pod?.subdomain !== expectedIdentity.subdomain
+			: pod?.hostname !== undefined || pod?.subdomain !== undefined;
 		return (
 			(pod?.containers.length ?? 0) !== 1 ||
 			pod?.containers[0]?.name !== "agent" ||
 			pod?.hostNetwork === true ||
 			pod?.hostPID === true ||
 			pod?.hostIPC === true ||
+			pod?.shareProcessNamespace === true ||
+			(pod?.hostAliases?.length ?? 0) > 0 ||
+			pod?.dnsConfig !== undefined ||
+			(pod?.dnsPolicy !== undefined && pod.dnsPolicy !== "ClusterFirst") ||
+			hasUnexpectedIdentity ||
 			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
@@ -389,6 +406,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(container.command?.length ?? 0) > 0 ||
 					(container.args?.length ?? 0) > 0 ||
 					Object.keys(container.lifecycle ?? {}).length > 0 ||
+					container.workingDir !== undefined ||
+					container.stdin === true ||
+					container.stdinOnce === true ||
+					container.tty === true ||
+					(container.volumeDevices?.length ?? 0) > 0 ||
 					!hasSameStructure(securityContext, agentContainerSecurityContext()) ||
 					securityContext?.privileged === true ||
 					(securityContext?.capabilities?.add?.length ?? 0) > 0
@@ -502,8 +524,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	function hasDriftedPodSpec(
 		value: AgentWorkloadDesiredV1,
 		pod: V1PodSpec | undefined,
+		expectedIdentity?: {
+			readonly hostname: string;
+			readonly subdomain: string;
+		},
 	) {
-		if (hasUnsafePodSpec(pod)) return true;
+		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		return (
 			!containsDesired(container, {
@@ -811,26 +837,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 								},
 							]),
 				],
-				egress: policy.egressProxy
-					? [
-							{
-								to: [peer("kube-system", { "k8s-app": "kube-dns" })],
-								ports: [
-									{ protocol: "UDP", port: 53 },
-									{ protocol: "TCP", port: 53 },
-								],
-							},
-							{
-								to: [
-									peer(
-										policy.egressProxy.namespace,
-										policy.egressProxy.selector,
-									),
-								],
-								ports: [{ protocol: "TCP", port: policy.egressProxy.port }],
-							},
-						]
-					: [],
+				egress: [],
 			},
 		};
 	}
@@ -880,8 +887,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				return "drifted";
 		}
-		for (const resource of [serviceAccount, network, probe, service])
+		for (const resource of [serviceAccount, network, probe, service]) {
 			own(resource, value.agentId, value.workloadRevision, value.fence);
+			if (!hasCurrentMetadata(resource, value)) return "drifted";
+		}
 		if (
 			routeMode === "open" &&
 			(value.route.exposure === "internal-only"
@@ -889,8 +898,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
 		)
 			return "drifted";
-		if (routeIngress)
+		if (routeIngress) {
 			own(routeIngress, value.agentId, value.workloadRevision, value.fence);
+			if (!hasCurrentMetadata(routeIngress, value)) return "drifted";
+		}
 		const podLabels = {
 			[ownerLabel]: name,
 			[revisionLabel]: String(value.workloadRevision),
@@ -928,7 +939,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod.metadata.labels?.[revisionLabel] !== String(value.workloadRevision)
 		)
 			return "pending";
-		if (hasUnsafePodSpec(pod.spec)) return "drifted";
+		const expectedPodIdentity = {
+			hostname: `${name}-0`,
+			subdomain: name,
+		};
+		if (hasUnsafePodSpec(pod.spec, expectedPodIdentity)) return "drifted";
 		const container = pod.spec?.containers.find(
 			(entry) => entry.name === "agent",
 		);
@@ -940,7 +955,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod.spec?.automountServiceAccountToken !== false
 		)
 			return "unhealthy";
-		if (hasDriftedPodSpec(value, pod.spec)) return "drifted";
+		if (hasDriftedPodSpec(value, pod.spec, expectedPodIdentity))
+			return "drifted";
 		if (
 			current.status?.observedGeneration !== identity.generation ||
 			current.status.readyReplicas !== 1 ||
@@ -1307,7 +1323,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(pod) =>
 						pod.metadata?.ownerReferences?.some(
 							(owner) => owner.uid === current.metadata?.uid,
-						) && hasDriftedPodSpec(value, pod.spec),
+						) &&
+						hasDriftedPodSpec(value, pod.spec, {
+							hostname: `${name}-0`,
+							subdomain: name,
+						}),
 				);
 			const changing =
 				current &&

@@ -168,6 +168,61 @@ describe("GA Kubernetes Workload adapter", () => {
 		} as V1Service);
 		expect(await adapter.observe(desired, identity, "open")).toBe("drifted");
 	});
+	it("requires exact controller metadata on every observed resource", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture(2);
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.promote(desired, identity);
+		expect(await adapter.observe(desired, identity, "open")).toBe("healthy");
+		const resources = [
+			{ kind: "ServiceAccount", name: desired.serviceAccount.name },
+			{ kind: "NetworkPolicy", name: desired.service.name },
+			{ kind: "Service", name: `${desired.service.name}-probe` },
+			{ kind: "Service", name: desired.service.name },
+			{ kind: "Ingress", name: desired.route.name },
+		] as const;
+		const mutations = [
+			{
+				label: "revision",
+				mutate(resource: KubernetesObject) {
+					if (!resource.metadata?.labels) throw new Error();
+					resource.metadata.labels["agent-infra.agora.io/revision"] = "1";
+				},
+			},
+			{
+				label: "configuration revision",
+				mutate(resource: KubernetesObject) {
+					if (!resource.metadata?.annotations) throw new Error();
+					resource.metadata.annotations[
+						"agent-infra.agora.io/config-revision"
+					] = "1";
+				},
+			},
+			{
+				label: "fence",
+				mutate(resource: KubernetesObject) {
+					if (!resource.metadata?.annotations) throw new Error();
+					resource.metadata.annotations["agent-infra.agora.io/fence"] = "1";
+				},
+			},
+		] as const;
+		for (const { kind, name } of resources) {
+			const current = await f.client.read<KubernetesObject>(kind, name);
+			if (!current) throw new Error();
+			for (const { label, mutate } of mutations) {
+				const stale = structuredClone(current);
+				mutate(stale);
+				f.resources.set(`${kind}/${name}`, stale);
+				expect(
+					await adapter.observe(desired, identity, "open"),
+					`${kind} ${label}`,
+				).toBe("drifted");
+				f.resources.set(`${kind}/${name}`, current);
+			}
+		}
+	});
 	it("replays creation after every partial apply without duplicating resources", async () => {
 		for (let stage = 1; stage <= 6; stage++) {
 			const f = fixture();
@@ -188,127 +243,106 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toHaveLength(1);
 		}
 	});
-	it("repairs widened NetworkPolicy ports before a candidate can route", async () => {
-		for (const direction of ["ingress", "egress"] as const) {
-			const f = fixture();
-			const desired = workloadDesiredFixture();
-			const adapter = createKubernetesRuntimeAdapterV1({
-				client: f.client,
-				policy:
-					direction === "egress"
+	it("repairs widened NetworkPolicy ingress ports before a candidate can route", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: workloadTestPolicy,
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const network = await f.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		expect(network?.spec?.egress, "DNS and other egress remain denied").toEqual(
+			[],
+		);
+		const ruleIndex = 0;
+		const ports = network?.spec?.ingress?.[ruleIndex]?.ports;
+		if (!network || !ports?.[0]) throw new Error();
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, {
+			...network,
+			spec: {
+				...network.spec,
+				ingress: network.spec?.ingress?.map((rule, index) =>
+					index === ruleIndex
 						? {
-								...workloadTestPolicy,
-								egressProxy: {
-									namespace: "egress-proxy",
-									selector: { component: "proxy" },
-									port: 8443,
-								},
+								...rule,
+								ports: rule.ports?.map((port, portIndex) =>
+									portIndex === 0 ? { ...port, endPort: 65_535 } : port,
+								),
 							}
-						: workloadTestPolicy,
-				probe: f.probe,
-			});
-			const identity = await adapter.apply(desired);
-			if (!identity || identity === "pending") throw new Error();
-			const network = await f.client.read<V1NetworkPolicy>(
-				"NetworkPolicy",
-				desired.service.name,
-			);
-			const ruleIndex = direction === "egress" ? 1 : 0;
-			const ports = network?.spec?.[direction]?.[ruleIndex]?.ports;
-			if (!network || !ports?.[0]) throw new Error();
-			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
-				...network,
-				spec: {
-					...network.spec,
-					[direction]: network.spec?.[direction]?.map((rule, index) =>
-						index === ruleIndex
-							? {
-									...rule,
-									ports: rule.ports?.map((port, portIndex) =>
-										portIndex === 0 ? { ...port, endPort: 65_535 } : port,
-									),
-								}
-							: rule,
-					),
-				},
-			} as V1NetworkPolicy);
+						: rule,
+				),
+			},
+		} as V1NetworkPolicy);
 
-			expect(await adapter.observe(desired, identity), direction).toBe(
-				"drifted",
-			);
-			const result = await adapter.switchRoute({
-				schemaVersion: 1,
-				requestId: `${desired.requestId}-${direction}-route`,
-				traceId: desired.traceId,
-				agentId: desired.agentId,
-				fence: desired.fence,
-				action: "promote",
-				candidateValidated: true,
-				candidateRoute: {
-					routeRef: desired.route.name,
-					workloadUid: identity.uid,
-					workloadGeneration: identity.generation,
-					workloadRevision: desired.workloadRevision,
-				},
-			});
-			expect(result, direction).toMatchObject({
-				status: "failed",
-				routedWorkloads: [],
-			});
-			expect(
-				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
-					?.selector?.["agent-infra.agora.io/revision"],
-				direction,
-			).toBe("closed");
-			expect(
-				await f.client.read("Ingress", desired.route.name),
-				direction,
-			).toBeNull();
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		const result = await adapter.switchRoute({
+			schemaVersion: 1,
+			requestId: `${desired.requestId}-ingress-route`,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			fence: desired.fence,
+			action: "promote",
+			candidateValidated: true,
+			candidateRoute: {
+				routeRef: desired.route.name,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				workloadRevision: desired.workloadRevision,
+			},
+		});
+		expect(result).toMatchObject({
+			status: "failed",
+			routedWorkloads: [],
+		});
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 
-			await adapter.apply(desired);
-			const repaired = await f.client.read<V1NetworkPolicy>(
-				"NetworkPolicy",
-				desired.service.name,
-			);
-			expect(
-				repaired?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.endPort,
-				direction,
-			).toBeUndefined();
-			expect(await adapter.observe(desired, identity), direction).toBe(
-				"healthy",
-			);
-			const port = repaired?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.port;
-			if (!repaired || typeof port !== "number") throw new Error();
-			f.resources.set(`NetworkPolicy/${desired.service.name}`, {
-				...repaired,
-				spec: {
-					...repaired.spec,
-					[direction]: repaired.spec?.[direction]?.map((rule, index) =>
-						index === ruleIndex
-							? {
-									...rule,
-									ports: rule.ports?.map((entry, portIndex) =>
-										portIndex === 0 ? { ...entry, endPort: port } : entry,
-									),
-								}
-							: rule,
-					),
-				},
-			} as V1NetworkPolicy);
-			expect(await adapter.observe(desired, identity), direction).toBe(
-				"healthy",
-			);
-			await adapter.apply(desired);
-			expect(
-				(
-					await f.client.read<V1NetworkPolicy>(
-						"NetworkPolicy",
-						desired.service.name,
-					)
-				)?.spec?.[direction]?.[ruleIndex]?.ports?.[0]?.endPort,
-				direction,
-			).toBe(port);
-		}
+		await adapter.apply(desired);
+		const repaired = await f.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		expect(
+			repaired?.spec?.ingress?.[ruleIndex]?.ports?.[0]?.endPort,
+		).toBeUndefined();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const port = repaired?.spec?.ingress?.[ruleIndex]?.ports?.[0]?.port;
+		if (!repaired || typeof port !== "number") throw new Error();
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, {
+			...repaired,
+			spec: {
+				...repaired.spec,
+				ingress: repaired.spec?.ingress?.map((rule, index) =>
+					index === ruleIndex
+						? {
+								...rule,
+								ports: rule.ports?.map((entry, portIndex) =>
+									portIndex === 0 ? { ...entry, endPort: port } : entry,
+								),
+							}
+						: rule,
+				),
+			},
+		} as V1NetworkPolicy);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		await adapter.apply(desired);
+		expect(
+			(
+				await f.client.read<V1NetworkPolicy>(
+					"NetworkPolicy",
+					desired.service.name,
+				)
+			)?.spec?.ingress?.[ruleIndex]?.ports?.[0]?.endPort,
+		).toBe(port);
 	});
 	it("repairs a NetworkPolicy selector that no longer covers the workload", async () => {
 		const f = fixture();
@@ -1154,6 +1188,14 @@ describe("GA Kubernetes Workload adapter", () => {
 		if (!pod) throw new Error();
 		for (const unsafeSpec of [
 			{ hostIPC: true },
+			{ shareProcessNamespace: true },
+			{ hostAliases: [{ ip: "203.0.113.10", hostnames: ["provider.test"] }] },
+			{ dnsConfig: { nameservers: ["203.0.113.53"] } },
+			{ dnsPolicy: "Default" as const },
+			{ hostname: undefined },
+			{ subdomain: undefined },
+			{ hostname: "foreign-hostname" },
+			{ subdomain: "foreign-subdomain" },
 			{
 				securityContext: {
 					...pod.spec?.securityContext,
@@ -1173,6 +1215,12 @@ describe("GA Kubernetes Workload adapter", () => {
 					},
 				],
 			},
+			{
+				containers: pod.spec?.containers.map((container) => ({
+					...container,
+					...(container.name === "agent" ? { workingDir: "/tmp" } : {}),
+				})),
+			},
 		]) {
 			f.resources.set(`Pod/${desired.service.name}-0`, {
 				...pod,
@@ -1180,6 +1228,16 @@ describe("GA Kubernetes Workload adapter", () => {
 			} as V1Pod);
 			expect(await adapter.observe(desired, repaired)).toBe("drifted");
 		}
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				dnsPolicy: "ClusterFirst",
+				hostname: `${desired.service.name}-0`,
+				subdomain: desired.service.name,
+			},
+		} as V1Pod);
+		expect(await adapter.observe(desired, repaired)).toBe("healthy");
 	});
 	it.each([
 		["imagePullSecrets", { imagePullSecrets: [{ name: "foreign" }] }],
@@ -1188,6 +1246,8 @@ describe("GA Kubernetes Workload adapter", () => {
 		["affinity", { affinity: { nodeAffinity: {} } }],
 		["runtimeClassName", { runtimeClassName: "foreign" }],
 		["nodeName", { nodeName: "foreign" }],
+		["hostname", { hostname: "foreign-hostname" }],
+		["subdomain", { subdomain: "foreign-subdomain" }],
 	] as const)(
 		"repairs unmanaged StatefulSet scheduling field %s",
 		async (field, mutation) => {
@@ -1721,6 +1781,29 @@ describe("GA Kubernetes Workload adapter", () => {
 						),
 					})),
 			},
+			{
+				label: "missing hostname",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({ ...spec, hostname: undefined })),
+			},
+			{
+				label: "missing subdomain",
+				mutate: (pod) =>
+					mutatePodSpec(pod, (spec) => ({ ...spec, subdomain: undefined })),
+			},
+			{
+				label: "renamed Pod identity",
+				mutate: (pod) => {
+					const foreignName = `${pod.metadata?.name}-foreign`;
+					return {
+						...mutatePodSpec(pod, (spec) => ({
+							...spec,
+							hostname: foreignName,
+						})),
+						metadata: { ...pod.metadata, name: foreignName },
+					};
+				},
+			},
 		];
 		for (const { label, mutate } of mutations) {
 			const f = fixture();
@@ -1758,9 +1841,11 @@ describe("GA Kubernetes Workload adapter", () => {
 				desired.service.name,
 			);
 			expect(recreated?.metadata?.uid, label).not.toBe(pod.metadata?.uid);
-			expect(recreated?.spec, label).toStrictEqual(
-				workload?.spec?.template.spec,
-			);
+			expect(recreated?.spec, label).toStrictEqual({
+				...workload?.spec?.template.spec,
+				hostname: `${desired.service.name}-0`,
+				subdomain: desired.service.name,
+			});
 			expect(await adapter.observe(desired, repaired), label).toBe("healthy");
 		}
 	});
@@ -1808,6 +1893,17 @@ describe("GA Kubernetes Workload adapter", () => {
 		const adapter = f.adapter();
 		const identity = await adapter.apply(desired);
 		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		if (!pod) throw new Error();
+		f.resources.set(`Pod/${desired.service.name}-0`, {
+			...pod,
+			spec: {
+				...pod.spec,
+				dnsPolicy: "ClusterFirst",
+				hostname: pod.metadata?.name,
+				subdomain: desired.service.name,
+			},
+		} as V1Pod);
 		const writes = f.writes.length;
 
 		expect(await adapter.apply(desired)).toMatchObject({ uid: identity.uid });

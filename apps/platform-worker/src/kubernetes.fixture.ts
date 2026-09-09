@@ -209,6 +209,8 @@ export function fakeKubernetesApi() {
 			updated.metadata.generation = (existing.metadata?.generation ?? 1) + 1;
 		if (updated.kind === "StatefulSet") {
 			const workload = updated as V1StatefulSet;
+			const templateSpec = workload.spec?.template.spec;
+			if (!templateSpec) throw new WorkloadKubernetesError("policy");
 			workload.status = {
 				observedGeneration: updated.metadata.generation,
 				readyReplicas: workload.spec?.replicas ?? 0,
@@ -233,7 +235,11 @@ export function fakeKubernetesApi() {
 							},
 						],
 					},
-					spec: workload.spec.template.spec,
+					spec: {
+						...templateSpec,
+						hostname: podName,
+						subdomain: workload.spec.serviceName,
+					},
 					status: {
 						podIP: "10.244.0.10",
 						conditions: [{ type: "Ready", status: "True" }],

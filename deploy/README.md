@@ -82,10 +82,9 @@ Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 运行期候选失败则把已验证配置作为新的 Workload revision 调谐。新建失败清理完成后
 才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
 
-Agent 默认拒绝全部 egress。需要模型或 Connection 网络访问的部署可配置
-`KubernetesWorkloadPolicyV1.egressProxy`，仅放行指定 namespace、Pod selector 和端口
-以及集群 DNS；该部署代理必须限制获准目的地，禁止转发到 Kubernetes API、两个业务
-数据库或解密 keyring。Profile 不接受 Owner 提交的任意网络规则。
+Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站
+属于[后续生产化加固](../docs/architecture/PLAN-M1-delivery-convergence.md)，当前
+Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
 
 独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：
 
