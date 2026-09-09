@@ -1080,6 +1080,19 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			"PersistentVolumeClaim",
 			`${name}-data`,
 		);
+		// Reject a stale cleanup before advancing even the durable PVC fence.
+		const existingResources = await Promise.all([
+			client.read("StatefulSet", name),
+			client.read("Service", name),
+			client.read("Service", `${name}-probe`),
+			client.read("ServiceAccount", name),
+			client.read("NetworkPolicy", name),
+			client.read("Ingress", name),
+		]);
+		for (const resource of [pvc, ...existingResources]) {
+			if (resource)
+				own(resource, value.agentId, value.workloadRevision, value.fence);
+		}
 		if (pvc) {
 			own(pvc, value.agentId, value.workloadRevision, value.fence);
 			if (
@@ -1272,7 +1285,26 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 		)
 			return "drifted";
-		const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+		const labelledPods = await client.list<V1Pod>(
+			"Pod",
+			selector(value.agentId),
+		);
+		const ownedByExpectedWorkload = (pod: V1Pod) =>
+			pod.metadata?.ownerReferences?.some(
+				(owner) => owner.uid === identity.uid,
+			);
+		// Services select labels, not ownerReferences. A foreign Pod matching the
+		// current revision must not be hidden by the lifecycle ownership filter.
+		if (
+			labelledPods.some(
+				(pod) =>
+					!ownedByExpectedWorkload(pod) &&
+					pod.metadata?.labels?.[revisionLabel] ===
+						String(value.workloadRevision),
+			)
+		)
+			return "drifted";
+		const pods = labelledPods.filter(ownedByExpectedWorkload);
 		if (pods.length !== 1) return "pending";
 		const pod = pods[0];
 		if (
@@ -1693,6 +1725,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return null;
 			}
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+			const ownedPods = current?.metadata?.uid
+				? pods.filter((pod) =>
+						pod.metadata?.ownerReferences?.some(
+							(owner) => owner.uid === current.metadata?.uid,
+						),
+					)
+				: [];
 			const driftedOwnedPod =
 				current &&
 				pods.some(
@@ -1716,7 +1755,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (
 				current &&
 				(changing || driftedOwnedPod || value.replicas === 0) &&
-				(current.spec?.replicas !== 0 || pods.length > 0)
+				(current.spec?.replicas !== 0 || ownedPods.length > 0)
 			) {
 				if (
 					current.spec?.replicas !== 0 ||

@@ -838,6 +838,54 @@ describe("GA Kubernetes Workload adapter", () => {
 		},
 	);
 
+	it.each([
+		"PersistentVolumeClaim",
+		"Service",
+		"ProbeService",
+		"ServiceAccount",
+		"NetworkPolicy",
+		"StatefulSet",
+		"Ingress",
+	] as const)(
+		"preflights every existing %s before cleanup mutations",
+		async (resourceKind) => {
+			for (const blocker of ["fence", "revision", "foreign"] as const) {
+				const f = fixture();
+				const desired = workloadDesiredFixture();
+				const adapter = f.adapter();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				await adapter.promote(desired, identity);
+				const kind = resourceKind === "ProbeService" ? "Service" : resourceKind;
+				const name =
+					resourceKind === "PersistentVolumeClaim"
+						? desired.persistentVolume.name
+						: resourceKind === "ProbeService"
+							? `${desired.service.name}-probe`
+							: desired.service.name;
+				const resource = await f.client.read(kind, name);
+				if (!resource?.metadata?.annotations || !resource.metadata.labels)
+					throw new Error();
+				if (blocker === "fence")
+					resource.metadata.annotations["agent-infra.agora.io/fence"] = "3";
+				if (blocker === "revision")
+					resource.metadata.labels["agent-infra.agora.io/revision"] = "3";
+				if (blocker === "foreign")
+					resource.metadata.annotations["agent-infra.agora.io/agent-id"] =
+						"other-agent";
+				f.resources.set(`${kind}/${name}`, resource);
+				const before = structuredClone(f.resources);
+				const writes = f.writes.length;
+				await expect(
+					adapter.cleanupAgent(desired.agentId, 2, 2, false),
+				).rejects.toMatchObject({
+					code: blocker === "foreign" ? "policy" : "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+				expect(f.resources).toEqual(before);
+			}
+		},
+	);
 	it("fences a retained PVC after cleanup removes the other resources", async () => {
 		const f = fixture();
 		const adapter = f.adapter();
@@ -2206,6 +2254,91 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.spec?.replicas,
 		).toBe(1);
 	});
+	it.each(["old", "current"] as const)(
+		"preserves foreign Pods during upgrade and rejects current selector collisions: %s",
+		async (revision) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const previous = workloadDesiredFixture();
+			const initial = await adapter.apply(previous);
+			if (!initial || initial === "pending") throw new Error();
+			const original = await f.client.read<V1Pod>(
+				"Pod",
+				`${previous.service.name}-0`,
+			);
+			if (!original) throw new Error();
+			const foreign: V1Pod = {
+				...original,
+				metadata: {
+					...original.metadata,
+					name: `${previous.service.name}-foreign`,
+					uid: "foreign-pod",
+					labels: {
+						...original.metadata?.labels,
+						"agent-infra.agora.io/revision": revision === "old" ? "1" : "2",
+					},
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: "foreign",
+							uid: "foreign-statefulset",
+						},
+					],
+				},
+			};
+			f.resources.set(`Pod/${foreign.metadata?.name}`, foreign);
+			const desired = workloadDesiredFixture(2);
+			expect(await adapter.apply(desired)).toBe("pending");
+			const identity = await adapter.apply(desired);
+			expect(identity).toMatchObject({ uid: initial.uid });
+			if (!identity || identity === "pending") throw new Error();
+			expect(await f.client.read("Pod", foreign.metadata?.name ?? "")).toEqual(
+				foreign,
+			);
+			if (revision === "old") {
+				expect(await adapter.observe(desired, identity)).toBe("healthy");
+				await adapter.promote(desired, identity);
+				for (const name of [
+					desired.service.name,
+					`${desired.service.name}-probe`,
+				]) {
+					const service = await f.client.read<V1Service>("Service", name);
+					expect(
+						service?.spec?.selector?.["agent-infra.agora.io/revision"],
+					).toBe("2");
+				}
+			} else {
+				expect(await adapter.observe(desired, identity)).toBe("drifted");
+				await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(
+					await adapter.switchRoute({
+						schemaVersion: 1,
+						requestId: desired.requestId,
+						traceId: desired.traceId,
+						agentId: desired.agentId,
+						fence: desired.fence,
+						action: "promote",
+						candidateValidated: true,
+						candidateRoute: {
+							routeRef: desired.route.name,
+							workloadUid: identity.uid,
+							workloadGeneration: identity.generation,
+							workloadRevision: desired.workloadRevision,
+						},
+					}),
+				).toMatchObject({ status: "failed" });
+				expect(
+					(await f.client.read<V1Service>("Service", desired.service.name))
+						?.spec?.selector?.["agent-infra.agora.io/revision"],
+				).toBe("closed");
+			}
+			f.resources.delete(`Pod/${previous.service.name}-0`);
+			expect(await adapter.observe(desired, identity)).not.toBe("healthy");
+		},
+	);
 	it("does not scale down a safe current owned Pod", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
