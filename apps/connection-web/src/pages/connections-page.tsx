@@ -9,7 +9,7 @@ import {
 	ShieldOff,
 	X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -32,6 +32,7 @@ import {
 
 export function ConnectionsPage() {
 	const queryClient = useQueryClient();
+	const recoveryHandled = useRef(false);
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
 		consumerId: string;
@@ -147,6 +148,25 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin();
 
 	const data = overview.data?.overview;
+	useEffect(() => {
+		if (!data || recoveryHandled.current) return;
+		const search = new URLSearchParams(window.location.search);
+		if (search.get("intent") !== "authorize") return;
+		const provider = search.get("provider");
+		const candidates = data.connections.filter(
+			(connection) =>
+				connection.providerId === provider &&
+				connection.status === "ACTIVE" &&
+				!connection.requiresReconnect,
+		);
+		if (candidates.length !== 1 || !candidates[0]) return;
+		recoveryHandled.current = true;
+		setAuthorization({
+			connectionId: candidates[0].id,
+			consumerId: data.consumers[0]?.id ?? "",
+			preview: null,
+		});
+	}, [data]);
 	const visibleGrants = data
 		? showHistory
 			? data.grants

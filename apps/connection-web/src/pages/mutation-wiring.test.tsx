@@ -51,6 +51,16 @@ const api = vi.hoisted(() => ({
 			actions: [],
 			connections: [
 				{
+					actionVersionIds: ["confluence.get_page_by_id@v1"],
+					displayName: "Confluence",
+					externalAccount: "guoxianzhe",
+					id: "connection-confluence",
+					ownerType: "PERSONAL" as const,
+					providerId: "confluence",
+					requiresReconnect: false,
+					status: "ACTIVE",
+				},
+				{
 					actionVersionIds: [],
 					displayName: "GitHub",
 					externalAccount: "guoxianzhe",
@@ -218,6 +228,19 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 	});
 
+	it("根据 MCP 授权链接直接打开目标 Provider 的客户端授权界面", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=authorize",
+		);
+		renderPage(<ConnectionsPage />);
+
+		expect(
+			await screen.findByRole("heading", { name: "授权客户端" }),
+		).toBeTruthy();
+	});
+
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const popup = {
@@ -262,7 +285,9 @@ describe("Connection 管理 mutation wiring", () => {
 		await waitFor(() => expect(api.revokeGrant).toHaveBeenCalledOnce());
 		expect(calls(api.revokeGrant)[0]?.[0]).toBe("grant-codex");
 
-		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.click(
+			screen.getAllByRole("button", { name: "授权客户端" })[1] as HTMLElement,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "确认授权" });
 		fireEvent.click(screen.getByRole("button", { name: "确认授权" }));
