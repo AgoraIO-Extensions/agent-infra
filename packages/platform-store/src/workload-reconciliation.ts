@@ -9,7 +9,10 @@ import {
 	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { PostgresJsDatabase, PostgresJsSession } from "drizzle-orm/postgres-js";
+import {
+	PostgresJsSession,
+	PostgresJsTransaction,
+} from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
@@ -230,10 +233,10 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					const dialect = new PgDialect();
 					// Drizzle's session uses the transaction's query API; its public
 					// generic incorrectly requires pool-only methods as well.
-					const database = new PostgresJsDatabase(
+					const database = new PostgresJsTransaction(
 						dialect,
 						new PostgresJsSession(
-							sql as unknown as postgres.Sql,
+							sql as postgres.Sql & postgres.TransactionSql,
 							dialect,
 							undefined,
 						),

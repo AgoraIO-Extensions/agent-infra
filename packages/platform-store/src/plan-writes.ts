@@ -6,7 +6,7 @@ import type {
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
-import type { drizzle, PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { drizzle } from "drizzle-orm/postgres-js";
 
 import {
 	agentAvailability,
@@ -18,9 +18,9 @@ import {
 	outboxItems,
 } from "./schema.js";
 
-type Transaction =
-	| Parameters<Parameters<ReturnType<typeof drizzle>["transaction"]>[0]>[0]
-	| PostgresJsDatabase;
+type Transaction = Parameters<
+	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
+>[0];
 
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,

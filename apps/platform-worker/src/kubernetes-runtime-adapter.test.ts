@@ -8,6 +8,7 @@ import type {
 	V1Secret,
 	V1SecurityContext,
 	V1Service,
+	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
@@ -686,6 +687,157 @@ describe("GA Kubernetes Workload adapter", () => {
 			),
 		).not.toBeNull();
 	});
+	it.each(["imagePullSecrets", "secrets", "annotations"] as const)(
+		"repairs undeclared ServiceAccount %s and rejects inherited Pod credentials",
+		async (field) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const account = await f.client.read<V1ServiceAccount>(
+				"ServiceAccount",
+				desired.serviceAccount.name,
+			);
+			if (!account) throw new Error();
+			f.resources.set(
+				`ServiceAccount/${desired.serviceAccount.name}`,
+				field === "annotations"
+					? {
+							...account,
+							metadata: {
+								...account.metadata,
+								annotations: {
+									...account.metadata?.annotations,
+									"eks.amazonaws.com/role-arn": "foreign-role",
+								},
+							},
+						}
+					: { ...account, [field]: [{ name: "foreign-secret" }] },
+			);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await adapter.apply(desired);
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			const repaired = await f.client.read<V1ServiceAccount>(
+				"ServiceAccount",
+				desired.serviceAccount.name,
+			);
+			expect(repaired?.imagePullSecrets).toBeUndefined();
+			expect(repaired?.secrets).toBeUndefined();
+			expect(
+				repaired?.metadata?.annotations?.["eks.amazonaws.com/role-arn"],
+			).toBeUndefined();
+			const podName = `${desired.service.name}-0`;
+			const pod = await f.client.read<V1Pod>("Pod", podName);
+			if (!pod?.spec) throw new Error();
+			f.resources.set(`Pod/${podName}`, {
+				...pod,
+				spec: { ...pod.spec, imagePullSecrets: [{ name: "foreign-secret" }] },
+			} as V1Pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			expect(await adapter.apply(desired)).toBe("pending");
+			const replacement = await adapter.apply(desired);
+			if (!replacement || replacement === "pending") throw new Error();
+			expect(await adapter.observe(desired, replacement)).toBe("healthy");
+		},
+	);
+
+	it.each([true, false])(
+		"fences an already-zero StatefulSet before waiting for Pods: %s",
+		async (hasPod) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: {
+					...f.client,
+					async replace(object) {
+						const podKey = `Pod/${desired.service.name}-0`;
+						const pod = f.resources.get(podKey);
+						const result = await f.client.replace(object);
+						if (hasPod && pod && object.kind === "StatefulSet")
+							f.resources.set(podKey, pod);
+						return result;
+					},
+				},
+				policy: workloadTestPolicy,
+				probe: f.probe,
+			});
+			await adapter.apply(desired);
+			const current = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			if (!current?.spec) throw new Error();
+			const stopped: V1StatefulSet = {
+				...current,
+				spec: { ...current.spec, replicas: 0 },
+			};
+			f.resources.set(`StatefulSet/${desired.service.name}`, stopped);
+			if (!hasPod) f.resources.delete(`Pod/${desired.service.name}-0`);
+			const result = await adapter.scaleDownAgent(
+				desired.agentId,
+				desired.workloadRevision + 1,
+				desired.fence + 1,
+			);
+			const fenced = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			expect(
+				fenced?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+			).toBe(String(desired.fence + 1));
+			expect(fenced?.metadata?.labels?.["agent-infra.agora.io/revision"]).toBe(
+				String(desired.workloadRevision + 1),
+			);
+			if (hasPod) expect(result).toBe("pending");
+			else expect(result).toMatchObject({ uid: current.metadata?.uid });
+			const writes = f.writes.length;
+			await expect(adapter.apply(desired)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
+
+	it.each([true, false])(
+		"fences the PVC before pending cleanup for deletion intent %s",
+		async (deleteNewVolume) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			await f.adapter().apply(desired);
+			// Preserve an orphan Pod while all other objects disappear, leaving only
+			// the PVC as the durable barrier against an old apply.
+			for (const key of [...f.resources.keys()]) {
+				if (
+					!key.startsWith("PersistentVolumeClaim/") &&
+					!key.startsWith("Pod/")
+				)
+					f.resources.delete(key);
+			}
+			const adapter = f.adapter();
+			expect(
+				await adapter.cleanupAgent(
+					desired.agentId,
+					desired.workloadRevision + 1,
+					desired.fence + 1,
+					deleteNewVolume,
+				),
+			).toBe(false);
+			const pvc = await f.client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				desired.persistentVolume.name,
+			);
+			expect(pvc?.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe(
+				String(desired.fence + 1),
+			);
+			const writes = f.writes.length;
+			await expect(adapter.apply(desired)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
+
 	it("fences a retained PVC after cleanup removes the other resources", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

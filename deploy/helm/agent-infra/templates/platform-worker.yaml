@@ -84,8 +84,10 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
-              value: {{ default "deployment-platform-worker" .Values.platformWorker.deploymentModule | quote }}
+              value: {{ required "platformWorker.deploymentModule must name a module packaged in the deployment image" .Values.platformWorker.deploymentModule | quote }}
+            {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
                 secretKeyRef:

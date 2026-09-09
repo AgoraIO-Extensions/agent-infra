@@ -291,7 +291,7 @@ function requireAcceptedEnvelope(
 }
 
 export async function persistAcceptedAgentManagement(
-	transaction: Transaction | PostgresJsDatabase,
+	transaction: Transaction,
 	request: AgentManagementTransactionRequestV1,
 	current: AgentManagementStateV1,
 	decision: AcceptedDecision,

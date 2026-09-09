@@ -442,6 +442,37 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.fence)
 		);
 	}
+	function hasSafeServiceAccount(
+		value: AgentWorkloadDesiredV1,
+		account: V1ServiceAccount,
+	) {
+		const expected = metadata(value);
+		return (
+			Object.keys(account).every((key) =>
+				[
+					"apiVersion",
+					"kind",
+					"metadata",
+					"automountServiceAccountToken",
+					"secrets",
+					"imagePullSecrets",
+				].includes(key),
+			) &&
+			account.apiVersion === "v1" &&
+			account.kind === "ServiceAccount" &&
+			account.automountServiceAccountToken === false &&
+			(account.secrets?.length ?? 0) === 0 &&
+			(account.imagePullSecrets?.length ?? 0) === 0 &&
+			hasSameStructure(account.metadata?.labels, expected.labels) &&
+			containsDesired(account.metadata?.annotations, expected.annotations) &&
+			Object.keys(account.metadata?.annotations ?? {}).every(
+				(key) =>
+					key === fingerprintAnnotation ||
+					Object.hasOwn(expected.annotations, key),
+			)
+		);
+	}
+
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,
 		actual: V1Pod["metadata"],
@@ -564,6 +595,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			) ||
 			hasUnexpectedIdentity ||
 			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
+			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
 			pod?.containers.some((container) => {
@@ -844,6 +876,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
+			(kind !== "ServiceAccount" ||
+				hasSafeServiceAccount(value, current as V1ServiceAccount)) &&
 			(kind !== "Service" ||
 				matchesServiceSpec(
 					(current as V1Service).spec,
@@ -881,7 +915,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					)
 				: {};
 		const next = {
-			...current,
+			...(kind === "ServiceAccount" ? {} : current),
 			...object,
 			metadata:
 				kind === "Ingress"
@@ -1041,43 +1075,42 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		value: { agentId: string; workloadRevision: number; fence: number },
 		deleteNewVolume: boolean,
 	) {
-		if (!(await closeAgentAtFence(value))) return false;
 		const name = workloadResourceNameV1(value.agentId);
+		const pvc = await client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			`${name}-data`,
+		);
+		if (pvc) {
+			own(pvc, value.agentId, value.workloadRevision, value.fence);
+			if (
+				!pvc.metadata?.deletionTimestamp &&
+				(pvc.metadata?.labels?.[revisionLabel] !==
+					String(value.workloadRevision) ||
+					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence))
+			)
+				await client.replace({
+					...pvc,
+					metadata: {
+						...pvc.metadata,
+						labels: {
+							...pvc.metadata?.labels,
+							[revisionLabel]: String(value.workloadRevision),
+						},
+						annotations: {
+							...pvc.metadata?.annotations,
+							"agent-infra.agora.io/fence": String(value.fence),
+							[fingerprintAnnotation]: "",
+						},
+					},
+				});
+		}
+		if (!(await closeAgentAtFence(value))) return false;
 		if (
 			!(await remove("StatefulSet", name, value)) ||
 			(await client.list("Pod", selector(value.agentId))).length > 0
 		)
 			return false;
-		if (!deleteNewVolume) {
-			const pvc = await client.read<V1PersistentVolumeClaim>(
-				"PersistentVolumeClaim",
-				`${name}-data`,
-			);
-			if (pvc) {
-				own(pvc, value.agentId, value.workloadRevision, value.fence);
-				if (
-					pvc.metadata?.labels?.[revisionLabel] !==
-						String(value.workloadRevision) ||
-					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(value.fence)
-				)
-					await client.replace({
-						...pvc,
-						metadata: {
-							...pvc.metadata,
-							labels: {
-								...pvc.metadata?.labels,
-								[revisionLabel]: String(value.workloadRevision),
-							},
-							annotations: {
-								...pvc.metadata?.annotations,
-								"agent-infra.agora.io/fence": String(value.fence),
-								[fingerprintAnnotation]: "",
-							},
-						},
-					});
-			}
-		}
 		for (const kind of ["Service", "ServiceAccount", "NetworkPolicy"] as const)
 			if (!(await remove(kind, name, value))) return false;
 		// Secret reclamation requires the Platform binding and rollback-retention
@@ -1211,7 +1244,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			[revisionLabel]: String(value.workloadRevision),
 		};
 		if (
-			serviceAccount.automountServiceAccountToken !== false ||
+			!hasSafeServiceAccount(value, serviceAccount) ||
 			!matchesNetworkPolicySpec(network.spec, networkPolicy(value).spec) ||
 			!matchesServiceSpec(probe.spec, serviceSpec(value, podLabels)) ||
 			!matchesServiceSpec(
@@ -1336,31 +1369,38 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					: null;
 			}
 			own(current, agentId, workloadRevision, fence);
-			if (current.spec?.replicas !== 0) {
-				await client.replace({
-					...current,
-					metadata: {
-						...current.metadata,
-						labels: {
-							...current.metadata?.labels,
-							[revisionLabel]: String(workloadRevision),
-						},
-						annotations: {
-							...current.metadata?.annotations,
-							"agent-infra.agora.io/fence": String(fence),
-							[fingerprintAnnotation]: "",
-						},
-					},
-					spec: { ...current.spec, replicas: 0 },
-				} as V1StatefulSet);
-				return "pending";
-			}
+			const needsScaleDown = current.spec?.replicas !== 0;
+			const needsFence =
+				current.metadata?.labels?.[revisionLabel] !==
+					String(workloadRevision) ||
+				current.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+					String(fence);
+			const fenced =
+				needsScaleDown || needsFence
+					? await client.replace({
+							...current,
+							metadata: {
+								...current.metadata,
+								labels: {
+									...current.metadata?.labels,
+									[revisionLabel]: String(workloadRevision),
+								},
+								annotations: {
+									...current.metadata?.annotations,
+									"agent-infra.agora.io/fence": String(fence),
+									[fingerprintAnnotation]: "",
+								},
+							},
+							spec: { ...current.spec, replicas: 0 },
+						} as V1StatefulSet)
+					: current;
+			if (needsScaleDown) return "pending";
 			if ((await client.list("Pod", selector(agentId))).length)
 				return "pending";
-			return current.metadata?.uid
+			return fenced.metadata?.uid
 				? {
-						uid: current.metadata.uid,
-						generation: current.metadata.generation ?? 1,
+						uid: fenced.metadata.uid,
+						generation: fenced.metadata.generation ?? 1,
 					}
 				: null;
 		},

@@ -13,6 +13,7 @@ import {
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -20,6 +21,7 @@ import {
 	beforeEach,
 	describe,
 	expect,
+	expectTypeOf,
 	it,
 	vi,
 } from "vitest";
@@ -33,8 +35,18 @@ import { WorkloadKubernetesError } from "../../../apps/platform-worker/src/kuber
 import { createKubernetesRuntimeAdapterV1 } from "../../../apps/platform-worker/src/kubernetes-runtime-adapter.js";
 import { createWorkloadRuntimeV1 } from "../../../apps/platform-worker/src/workload-runtime.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
-import { PostgresAgentManagementTransactionV1 } from "./agent-management.ts";
+import {
+	PostgresAgentManagementTransactionV1,
+	type persistAcceptedAgentManagement,
+} from "./agent-management.ts";
 import { migratePlatformDatabase } from "./migrate.js";
+import type {
+	advanceAgentConfigurationRevision,
+	insertAgentConfigurationEffects,
+	insertAgentManagementEffects,
+	insertAgentManagementHistory,
+	replaceAgentAccess,
+} from "./plan-writes.js";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -1358,6 +1370,59 @@ describe("PostgreSQL Workload steps", () => {
 				(resource) => resource.kind === "PersistentVolumeClaim",
 			)?.metadata?.uid,
 		).toBe(pvc?.metadata?.uid);
+	});
+	it("requires a real transaction for atomic management and plan writes", () => {
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof persistAcceptedAgentManagement>[0]
+		>();
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof advanceAgentConfigurationRevision>[0]
+		>();
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof replaceAgentAccess>[0]
+		>();
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof insertAgentConfigurationEffects>[0]
+		>();
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof insertAgentManagementHistory>[0]
+		>();
+		expectTypeOf<PostgresJsDatabase>().not.toExtend<
+			Parameters<typeof insertAgentManagementEffects>[0]
+		>();
+	});
+	it("rolls back management, effects and reconciliation when the final idempotency write fails", async () => {
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime: runtime(),
+		});
+		for (let i = 0; i < 6; i++) await worker.tick("worker-a");
+		const snapshot = async () => ({
+			applications:
+				await sql`select * from platform.agent_applications order by id`,
+			history:
+				await sql`select * from platform.agent_management_history order by agent_id, revision`,
+			audit: await sql`select * from platform.audit_events order by id`,
+			outbox: await sql`select * from platform.outbox_items order by id`,
+			progress:
+				await sql`select * from platform.workload_reconciliations order by agent_id`,
+			idempotency:
+				await sql`select * from platform.idempotency_records order by id`,
+		});
+		const before = await snapshot();
+		await sql`alter table platform.idempotency_records add constraint reject_workload_management_test check (command_type <> 'agent.management.v1')`;
+		try {
+			await expect(worker.tick("worker-a")).rejects.toThrow(
+				"Workload reconciliation persistence failed",
+			);
+			expect(await snapshot()).toEqual(before);
+		} finally {
+			await sql`alter table platform.idempotency_records drop constraint reject_workload_management_test`;
+		}
+		await worker.tick("worker-a");
+		expect(
+			(await sql`select status from platform.agent_applications`)[0]?.status,
+		).toBe("available");
 	});
 	it("persists progress, consumes outbox once, and writes lifecycle observations with audit atomically", async () => {
 		const worker = createWorkloadReconciliationV1({

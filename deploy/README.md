@@ -68,7 +68,7 @@ image manifest 只标识当前已部署 release。
 
 ### Workload 调谐
 
-生产 Worker 通过 `platformWorker.deploymentModule` 加载部署包导出的
+生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如 `file:///app/deployment/platform-worker.mjs`；该示例不代表基础镜像包含此文件。仓库基础镜像不提供环境专属装配包，发布前必须在最终镜像内确认模块可加载并导出下述工厂。未配置路径时，生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
 `createPlatformWorkloadWorkerOptionsV1()`。部署包装配 namespace-scoped Kubernetes
 client、ImageRegistryAdapter、Worker-only Secret decryptor、资源和网络 Profile，
 以及 RuntimeHost Client 的核心与 capability 探测。探测必须绑定传入的 Agent、
