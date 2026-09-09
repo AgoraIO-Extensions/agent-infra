@@ -113,7 +113,7 @@
     "platformWorker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas", "deploymentModule"],
+      "required": ["replicas"],
       "properties": {
         "deploymentModule": { "$ref": "#/$defs/module" },
         "replicas": {

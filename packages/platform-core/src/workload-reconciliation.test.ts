@@ -319,6 +319,77 @@ describe("durable Workload reconciliation", () => {
 		},
 	);
 
+	it.each(["stop", "disable", "restart", "configuration"] as const)(
+		"preserves initial candidate cleanup across %s and process restart",
+		async (command) => {
+			for (const failure of ["pending", "throw"] as const) {
+				const f = fixture();
+				vi.mocked(f.runtime.observe).mockResolvedValue("unhealthy");
+				await f.tick(5);
+				expect(f.state?.phase).toBe("cleaning");
+				const candidate = structuredClone(f.state?.candidate);
+				const identity = structuredClone(f.state?.identity);
+				const revision = f.state?.revision;
+				if (!revision) throw new Error();
+				if (command === "stop") f.stop();
+				else if (command === "disable") f.stop(true);
+				else if (command === "restart") f.start();
+				else f.upgrade("image-d");
+				const fence = command === "configuration" ? 41 : 42;
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase: "cleaning",
+					cleanupInterrupted: true,
+					candidate,
+					identity,
+					revision,
+					fence,
+				});
+				expect(vi.mocked(f.runtime.closeRoute).mock.lastCall?.[0].fence).toBe(
+					fence,
+				);
+				f.restart();
+				if (failure === "pending")
+					vi.mocked(f.runtime.cleanup).mockResolvedValueOnce(false);
+				else
+					vi.mocked(f.runtime.cleanup).mockRejectedValueOnce(
+						new Error("synthetic pending cleanup"),
+					);
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase: "cleaning",
+					cleanupInterrupted: true,
+					candidate,
+					identity,
+					revision,
+					fence,
+				});
+				expect(vi.mocked(f.runtime.cleanup).mock.lastCall?.[0]).toMatchObject({
+					candidate,
+					identity,
+					fence,
+				});
+				expect(vi.mocked(f.runtime.cleanup).mock.lastCall?.[1]).toBe(true);
+				f.restart();
+				await f.tick();
+				expect(f.state).toMatchObject({
+					phase:
+						command === "stop" || command === "disable"
+							? "closing"
+							: "preflight",
+					revision: revision + 1,
+					fence,
+				});
+				expect(f.state).not.toHaveProperty("cleanupInterrupted");
+				expect(f.state?.identity).toBeNull();
+				expect(f.state?.candidate.configuration.source.imageDigest).toBe(
+					command === "configuration" ? "image-d" : "image-a",
+				);
+				expect(f.runtime.cleanup).toHaveBeenCalledTimes(2);
+			}
+		},
+	);
+
 	it.each([false, true])(
 		"stops/disables without waiting for candidate admission and restarts on the retained volume (%s)",
 		async (disabled) => {

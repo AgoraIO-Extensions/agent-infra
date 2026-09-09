@@ -685,3 +685,19 @@ test("kind down deletes only an owned topology cluster", async () => {
 		await rm(fixture, { force: true, recursive: true });
 	}
 });
+
+test("legacy Worker values without a deployment module retain the production entrypoint", () => {
+	const result = render("--set", "platformWorker.deploymentModule=null");
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+		).value,
+		"deployment-platform-worker",
+	);
+});

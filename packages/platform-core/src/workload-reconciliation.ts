@@ -161,11 +161,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 					state.sourceLifecycleRevision !== management.workloadRevision ||
 					state.fence !== management.fence
 				) {
-					if (
-						state?.phase === "cleaning" &&
-						state.verified !== null &&
-						!state.rollback
-					) {
+					if (state?.phase === "cleaning" && !state.rollback) {
 						const interruptedState: WorkloadReconciliationStateV1 = {
 							...state,
 							sourceConfigurationRevision: configuration.revision,
@@ -306,36 +302,38 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});
-						case "cleaning":
+						case "cleaning": {
 							await runtime.closeRoute(state);
+							const preservesResources =
+								state.verified !== null && !state.rollback;
+							const cleaned = preservesResources
+								? await runtime.discardUnactivatedSecrets(state, input)
+								: await runtime.cleanup(state, state.verified === null, input);
+							if (!cleaned) return state;
+							if (state.cleanupInterrupted) {
+								const { cleanupInterrupted: _, ...retained } = state;
+								return {
+									...retained,
+									identity: preservesResources ? state.identity : null,
+									phase: stopped ? "closing" : "preflight",
+									candidate: stopped
+										? state.candidate
+										: { configuration, deployment: null },
+									revision: nextRevision(state.revision),
+									rollback: false,
+									failureCode: null,
+									attempts: 0,
+								};
+							}
 							if (state.verified && !state.rollback) {
-								if (!(await runtime.discardUnactivatedSecrets(state, input)))
-									return state;
-								if (state.cleanupInterrupted) {
-									const { cleanupInterrupted: _, ...retained } = state;
-									return {
-										...retained,
-										phase: stopped ? "closing" : "preflight",
-										candidate: stopped
-											? state.candidate
-											: { configuration, deployment: null },
-										revision: nextRevision(state.revision),
-										rollback: false,
-										failureCode: null,
-										attempts: 0,
-									};
-								}
 								return advance("applying", {
 									candidate: state.verified,
 									revision: nextRevision(state.revision),
 									rollback: true,
 								});
 							}
-							if (
-								!(await runtime.cleanup(state, state.verified === null, input))
-							)
-								return state;
 							return advance("failed", { identity: null });
+						}
 						case "stopped":
 							await runtime.closeRoute(state);
 							await runtime.apply(state, true, input);

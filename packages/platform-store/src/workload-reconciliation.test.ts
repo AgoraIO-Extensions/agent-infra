@@ -502,81 +502,89 @@ describe("PostgreSQL Workload steps", () => {
 		});
 	});
 
-	it("resolves interrupted cleaning Secrets from the historical candidate", async () => {
-		const crypto = secretCryptoFixture();
-		const candidateSecret = crypto.encryptor.encrypt({
-			schemaVersion: 1,
-			secretId: "candidate-history-key",
-			ownerType: "agent-owner",
-			ownerId: "owner-a",
-			agentId: "agent-a",
-			name: "CANDIDATE_HISTORY_KEY",
-			secretVersion: 1,
-			configRevision: 2,
-			plaintext: "synthetic-candidate-history-value",
-			occurredAt: "2026-09-09T00:00:00Z",
-		});
-		const [base] = await sql<
-			{ configuration: Record<string, unknown> }[]
-		>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
-		if (!base) throw new Error();
-		const candidateConfiguration = {
-			...base.configuration,
-			revision: 2,
-			secrets: [
-				{
-					secretId: candidateSecret.secretId,
-					name: candidateSecret.name,
-					version: candidateSecret.secretVersion,
-					isSet: true,
-				},
-			],
-		};
-		const currentConfiguration = {
-			...base.configuration,
-			revision: 3,
-			source: {
-				...(base.configuration.source as Record<string, unknown>),
-				imageDigest: `sha256:${"c".repeat(64)}`,
-			},
-			secrets: [],
-		};
-		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, 'candidate-history', ${sql.json(candidateConfiguration)}, now()), ('agent-a', 3, ${currentConfiguration.source.imageDigest}, ${sql.json(currentConfiguration)}, now())`;
-		await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
-		await insertSecretRecord(candidateSecret);
-		await sql`insert into platform.workload_reconciliations(agent_id, revision, state, next_attempt_at) values ('agent-a', 2, ${sql.json(
-			{
+	it.each([false, true])(
+		"resolves interrupted cleaning Secrets from historical candidate, initial=%s",
+		async (initial) => {
+			const crypto = secretCryptoFixture();
+			const candidateSecret = crypto.encryptor.encrypt({
 				schemaVersion: 1,
+				secretId: "candidate-history-key",
+				ownerType: "agent-owner",
+				ownerId: "owner-a",
 				agentId: "agent-a",
-				sourceConfigurationRevision: 3,
-				sourceLifecycleRevision: 1,
+				name: "CANDIDATE_HISTORY_KEY",
+				secretVersion: 1,
+				configRevision: 2,
+				plaintext: "synthetic-candidate-history-value",
+				occurredAt: "2026-09-09T00:00:00Z",
+			});
+			const [base] = await sql<
+				{ configuration: Record<string, unknown> }[]
+			>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+			if (!base) throw new Error();
+			const candidateConfiguration = {
+				...base.configuration,
 				revision: 2,
-				fence: 1,
-				phase: "cleaning",
-				candidate: { configuration: candidateConfiguration, deployment: null },
-				verified: { configuration: base.configuration, deployment: null },
-				verifiedRevision: 1,
-				identity: { uid: "uid-candidate", generation: 2 },
-				rollback: false,
-				cleanupInterrupted: true,
-				failureCode: "reconciliation_failed",
-				attempts: 0,
-			} as unknown as postgres.JSONValue,
-		)}, clock_timestamp())`;
+				secrets: [
+					{
+						secretId: candidateSecret.secretId,
+						name: candidateSecret.name,
+						version: candidateSecret.secretVersion,
+						isSet: true,
+					},
+				],
+			};
+			const currentConfiguration = {
+				...base.configuration,
+				revision: 3,
+				source: {
+					...(base.configuration.source as Record<string, unknown>),
+					imageDigest: `sha256:${"c".repeat(64)}`,
+				},
+				secrets: [],
+			};
+			await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, 'candidate-history', ${sql.json(candidateConfiguration)}, now()), ('agent-a', 3, ${currentConfiguration.source.imageDigest}, ${sql.json(currentConfiguration)}, now())`;
+			await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
+			await insertSecretRecord(candidateSecret);
+			await sql`insert into platform.workload_reconciliations(agent_id, revision, state, next_attempt_at) values ('agent-a', 2, ${sql.json(
+				{
+					schemaVersion: 1,
+					agentId: "agent-a",
+					sourceConfigurationRevision: 3,
+					sourceLifecycleRevision: 1,
+					revision: 2,
+					fence: 1,
+					phase: "cleaning",
+					candidate: {
+						configuration: candidateConfiguration,
+						deployment: null,
+					},
+					verified: initial
+						? null
+						: { configuration: base.configuration, deployment: null },
+					verifiedRevision: initial ? null : 1,
+					identity: { uid: "uid-candidate", generation: 2 },
+					rollback: false,
+					cleanupInterrupted: true,
+					failureCode: "reconciliation_failed",
+					attempts: 0,
+				} as unknown as postgres.JSONValue,
+			)}, clock_timestamp())`;
 
-		const step = vi.fn(async (input) => {
-			expect(input.configuration.revision).toBe(3);
-			expect(input.secrets?.bindings).toHaveLength(1);
-			expect(
-				validatePlatformSecretRecordV1(input.secrets?.bindings[0]?.record)
-					.configRevision,
-			).toBe(2);
-			if (!input.state) throw new Error();
-			return input.state;
-		});
-		expect(await first.runNext("worker-history", step)).toBe("advanced");
-		expect(step).toHaveBeenCalledOnce();
-	});
+			const step = vi.fn(async (input) => {
+				expect(input.configuration.revision).toBe(3);
+				expect(input.secrets?.bindings).toHaveLength(1);
+				expect(
+					validatePlatformSecretRecordV1(input.secrets?.bindings[0]?.record)
+						.configRevision,
+				).toBe(2);
+				if (!input.state) throw new Error();
+				return input.state;
+			});
+			expect(await first.runNext("worker-history", step)).toBe("advanced");
+			expect(step).toHaveBeenCalledOnce();
+		},
+	);
 
 	it("binds unchanged Secrets to image and environment revisions without stale activation", async () => {
 		const crypto = secretCryptoFixture();

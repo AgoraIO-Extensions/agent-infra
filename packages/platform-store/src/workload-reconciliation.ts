@@ -325,9 +325,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					let secretConfiguration = configuration;
 					if (
 						state?.rollback ||
-						(state?.phase === "cleaning" &&
-							state.verified !== null &&
-							!state.rollback)
+						(state?.phase === "cleaning" && !state.rollback)
 					) {
 						if (
 							state.rollback &&
@@ -407,9 +405,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.revision < (state?.revision ?? 1) ||
 						next.fence !== management.fence ||
 						(next.cleanupInterrupted === true &&
-							(next.phase !== "cleaning" ||
-								next.verified === null ||
-								next.rollback))
+							(next.phase !== "cleaning" || next.rollback))
 					)
 						throw new Error();
 					const observation = await workloadManagementObservationV1(
