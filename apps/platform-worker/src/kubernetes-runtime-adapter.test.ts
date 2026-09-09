@@ -448,6 +448,301 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.template.spec?.containers[0]?.image,
 		).toContain(a.imageDigest);
 	});
+	it("does not overwrite resources from a newer fence at the same revision", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const current = { ...workloadDesiredFixture(), fence: 11 };
+		const stale = { ...current, requestId: "request-stale", fence: 9 };
+		const identity = await adapter.apply(current);
+		if (!identity || identity === "pending") throw new Error();
+		const writes = f.writes.length;
+
+		await expect(adapter.apply(stale)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(f.writes).toHaveLength(writes);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", current.service.name))
+				?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("11");
+	});
+	it("fences an already-stopped workload before reporting newer convergence", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const running = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(running);
+		if (!identity || identity === "pending") throw new Error();
+		const stopped = {
+			...running,
+			requestId: "request-stop",
+			desiredState: "stopped" as const,
+			replicas: 0 as const,
+		};
+		expect(await adapter.reconcile(stopped)).toMatchObject({
+			status: "failed",
+		});
+		expect(
+			await adapter.reconcile({ ...stopped, requestId: "request-stop-retry" }),
+		).toMatchObject({ status: "applied" });
+
+		const current = {
+			...stopped,
+			requestId: "request-current-stop",
+			fence: 11,
+		};
+		expect(await adapter.reconcile(current)).toMatchObject({
+			status: "applied",
+		});
+		for (const kind of ["Service", "StatefulSet"] as const)
+			expect(
+				(await f.client.read(kind, running.service.name))?.metadata
+					?.annotations?.["agent-infra.agora.io/fence"],
+			).toBe("11");
+
+		const writes = f.writes.length;
+		await expect(
+			adapter.apply({ ...running, requestId: "request-stale-restart" }),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(f.writes).toHaveLength(writes);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", running.service.name))
+				?.spec?.replicas,
+		).toBe(0);
+	});
+	it("fences a scaled-down StatefulSet while its Pod is terminating", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const running = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(running);
+		if (!identity || identity === "pending") throw new Error();
+		const pod = await f.client.read<V1Pod>("Pod", `${running.service.name}-0`);
+		if (!pod) throw new Error();
+		const stopped = {
+			...running,
+			requestId: "request-stop",
+			desiredState: "stopped" as const,
+			replicas: 0 as const,
+		};
+		expect(await adapter.apply(stopped)).toBe("pending");
+		f.resources.set(`Pod/${running.service.name}-0`, {
+			...pod,
+			metadata: {
+				...pod.metadata,
+				deletionTimestamp: new Date("2026-09-09T00:00:00Z"),
+			},
+		} as V1Pod);
+
+		expect(
+			await adapter.apply({
+				...stopped,
+				requestId: "request-current-stop",
+				fence: 11,
+			}),
+		).toBe("pending");
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", running.service.name))
+				?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("11");
+
+		const writes = f.writes.length;
+		await expect(
+			adapter.apply({ ...running, requestId: "request-stale-restart" }),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(f.writes).toHaveLength(writes);
+	});
+	it("fences a closed Service across partial cleanup before deleting a PVC", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		f.resources.delete(`StatefulSet/${desired.service.name}`);
+		const request = {
+			schemaVersion: 1,
+			requestId: "request-current-cleanup",
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 11,
+			persistentVolumeIntent: "retain-existing" as const,
+		};
+		expect(await adapter.cleanup(request)).toMatchObject({
+			status: "in-progress",
+			phase: "removing-resources",
+			routeClosed: true,
+		});
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))
+				?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("11");
+
+		f.resources.delete(`Pod/${desired.service.name}-0`);
+		const stale = await adapter.cleanup({
+			...request,
+			requestId: "request-stale-cleanup",
+			fence: 9,
+			persistentVolumeIntent: "delete-new" as const,
+		});
+		expect(stale).toMatchObject({
+			status: "failed",
+			phase: "closing-route",
+			routeClosed: false,
+		});
+		expect(
+			await f.client.read(
+				"PersistentVolumeClaim",
+				desired.persistentVolume.name,
+			),
+		).not.toBeNull();
+	});
+	it("fences a retained PVC after cleanup removes the other resources", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const request = {
+			schemaVersion: 1,
+			requestId: "request-current-cleanup",
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 11,
+			persistentVolumeIntent: "retain-existing" as const,
+		};
+		expect(await adapter.cleanup(request)).toMatchObject({
+			status: "completed",
+			removed: { persistentVolume: false },
+		});
+		expect(
+			(
+				await f.client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					desired.persistentVolume.name,
+				)
+			)?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("11");
+
+		const stale = await adapter.cleanup({
+			...request,
+			requestId: "request-stale-cleanup",
+			fence: 9,
+			persistentVolumeIntent: "delete-new" as const,
+		});
+		expect(stale).toMatchObject({ status: "failed" });
+		expect(
+			await f.client.read(
+				"PersistentVolumeClaim",
+				desired.persistentVolume.name,
+			),
+		).not.toBeNull();
+	});
+	it("fences a retained PVC when an absent workload remains stopped", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		expect(
+			await adapter.cleanup({
+				schemaVersion: 1,
+				requestId: "request-cleanup",
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				configRevision: desired.configRevision,
+				workloadRevision: desired.workloadRevision,
+				workloadUid: identity.uid,
+				workloadGeneration: identity.generation,
+				fence: desired.fence,
+				persistentVolumeIntent: "retain-existing" as const,
+			}),
+		).toMatchObject({ status: "completed" });
+		const retained = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		if (!retained) throw new Error();
+
+		const stopped = {
+			...desired,
+			requestId: "request-current-stop",
+			fence: 11,
+			desiredState: "stopped" as const,
+			replicas: 0 as const,
+		};
+		expect(await adapter.apply(stopped)).toBeNull();
+		const fenced = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		expect(fenced?.metadata?.uid).toBe(retained.metadata?.uid);
+		expect(fenced?.metadata?.resourceVersion).not.toBe(
+			retained.metadata?.resourceVersion,
+		);
+		expect(fenced?.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe(
+			"11",
+		);
+		expect(fenced?.spec).toStrictEqual(retained.spec);
+
+		await expect(
+			adapter.apply({ ...desired, requestId: "request-stale-restart" }),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await f.client.read("StatefulSet", desired.service.name)).toBeNull();
+	});
+	it("does not close or remove resources from a newer fence at the same revision", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = { ...workloadDesiredFixture(), fence: 11 };
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.promote(desired, identity);
+		const writes = f.writes.length;
+
+		const staleRequest = {
+			schemaVersion: 1,
+			requestId: "request-stale-cleanup",
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 9,
+			persistentVolumeIntent: "retain-existing" as const,
+		};
+		const result = await adapter.cleanup(staleRequest);
+
+		expect(result).toMatchObject({
+			status: "failed",
+			phase: "closing-route",
+			routeClosed: false,
+		});
+		expect(f.writes).toHaveLength(writes);
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe(String(desired.workloadRevision));
+		expect(await f.client.read("Ingress", desired.route.name)).not.toBeNull();
+		expect(
+			await f.client.read("StatefulSet", desired.service.name),
+		).not.toBeNull();
+
+		const authorized = await adapter.cleanup({
+			...staleRequest,
+			requestId: "request-current-cleanup",
+			fence: desired.fence,
+		});
+		expect(authorized).toMatchObject({
+			status: "completed",
+			routeClosed: true,
+		});
+	});
 	it("fences a lost PVC cleanup delete after a later revision reuses it", async () => {
 		const f = fixture();
 		const a = workloadDesiredFixture();
@@ -1770,7 +2065,7 @@ describe("GA Kubernetes Workload adapter", () => {
 				?.selector?.["agent-infra.agora.io/revision"],
 		).toBe(String(desired.workloadRevision));
 	});
-	it("creates immutable Agent/version Secret refs and refuses to mutate their value", async () => {
+	it("creates immutable Agent/version Secret refs and refuses terminating or changed Secret reuse", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const ref = {
@@ -1787,25 +2082,39 @@ describe("GA Kubernetes Workload adapter", () => {
 			name: `${desired.service.name}-secret-1`,
 		};
 		desired.secretRefs = [ref];
-		await f
-			.adapter()
-			.applyImmutableSecret(
+		const adapter = f.adapter();
+		await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		const existing = await f.client.read<V1Secret>("Secret", ref.name);
+		expect(existing?.immutable).toBe(true);
+		if (!existing) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, {
+			...existing,
+			metadata: {
+				...existing.metadata,
+				deletionTimestamp: new Date("2026-09-09T00:00:00Z"),
+			},
+		} as V1Secret);
+		await expect(
+			adapter.applyImmutableSecret(
 				desired,
 				ref.name,
 				"API_KEY",
 				new Uint8Array([1, 2, 3]),
-			);
-		const existing = await f.client.read<V1Secret>("Secret", ref.name);
-		expect(existing?.immutable).toBe(true);
+			),
+		).rejects.toMatchObject({ code: "conflict" });
+		f.resources.set(`Secret/${ref.name}`, existing);
 		await expect(
-			f
-				.adapter()
-				.applyImmutableSecret(
-					desired,
-					ref.name,
-					"API_KEY",
-					new Uint8Array([4]),
-				),
+			adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				new Uint8Array([4]),
+			),
 		).rejects.toThrow();
 		expect((await f.client.read<V1Secret>("Secret", ref.name))?.data).toEqual(
 			existing?.data,
@@ -1861,7 +2170,83 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBe(true);
 		expect(await f.client.read<V1Secret>("Secret", ref.name)).toBeNull();
 	});
-	it("preserves an active Secret fence across a StatefulSet rollout", async () => {
+	it("fences identical immutable Secret reuse without changing its body", async () => {
+		const f = fixture();
+		const desired = { ...workloadDesiredFixture(), fence: 9 };
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		const plaintext = new Uint8Array([1, 2, 3]);
+		await adapter.applyImmutableSecret(desired, ref.name, "API_KEY", plaintext);
+		const existing = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!existing) throw new Error();
+
+		const current = { ...desired, requestId: "request-current", fence: 11 };
+		await adapter.applyImmutableSecret(current, ref.name, "API_KEY", plaintext);
+		const reused = await f.client.read<V1Secret>("Secret", ref.name);
+		expect(reused?.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe(
+			"11",
+		);
+		expect(reused?.metadata?.uid).toBe(existing.metadata?.uid);
+		expect(reused?.metadata?.resourceVersion).not.toBe(
+			existing.metadata?.resourceVersion,
+		);
+		expect(reused?.immutable).toBe(existing.immutable);
+		expect(reused?.type).toBe(existing.type);
+		expect(reused?.data).toStrictEqual(existing.data);
+
+		await expect(
+			adapter.removeImmutableSecret(desired, ref),
+		).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(await f.client.read<V1Secret>("Secret", ref.name)).not.toBeNull();
+	});
+	it("advances the Workload fence when the bound Secret fence is unchanged", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.bindSecretFence(desired, identity, ref.name, 7);
+
+		const current = { ...desired, requestId: "request-current", fence: 11 };
+		await adapter.bindSecretFence(current, identity, ref.name, 7);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		).toBe("11");
+		await expect(
+			adapter.apply({ ...desired, requestId: "request-stale", fence: 9 }),
+		).rejects.toMatchObject({ code: "conflict" });
+	});
+	it("preserves an active Secret fence across rollout but rejects a terminating Secret", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const ref = {
@@ -1924,8 +2309,24 @@ describe("GA Kubernetes Workload adapter", () => {
 				activationFence,
 			),
 		).toBe(true);
+		const secret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!secret) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, {
+			...secret,
+			metadata: {
+				...secret.metadata,
+				deletionTimestamp: new Date("2026-09-09T00:00:00Z"),
+			},
+		} as V1Secret);
+		expect(
+			await adapter.observeActiveImmutableSecret(
+				upgraded,
+				ref,
+				activationFence,
+			),
+		).toBe(false);
 	});
-	it("detects missing, foreign, or mutable Secret references before reporting healthy", async () => {
+	it("detects missing, terminating, foreign, or mutable Secret refs before reporting healthy", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
 		const ref = {
@@ -1952,6 +2353,17 @@ describe("GA Kubernetes Workload adapter", () => {
 		const identity = await adapter.apply(desired);
 		if (!identity || identity === "pending") throw new Error();
 		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const liveSecret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!liveSecret) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, {
+			...liveSecret,
+			metadata: {
+				...liveSecret.metadata,
+				deletionTimestamp: new Date("2026-09-09T00:00:00Z"),
+			},
+		} as V1Secret);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		f.resources.set(`Secret/${ref.name}`, liveSecret);
 
 		f.resources.delete(`Secret/${ref.name}`);
 		expect(await adapter.observe(desired, identity)).toBe("drifted");

@@ -300,6 +300,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			String(ref.secretVersion) &&
 		secret.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
 			String(ref.configRevision);
+	const isLiveOwnedImmutableSecret = (
+		secret: V1Secret,
+		value: AgentWorkloadDesiredV1,
+		ref: AgentWorkloadDesiredV1["secretRefs"][number],
+	) =>
+		!secret.metadata?.deletionTimestamp &&
+		isOwnedSecret(secret, value, ref) &&
+		secret.immutable === true;
 	function desired(input: unknown) {
 		const value = validateAgentWorkloadDesiredV1(input);
 		const name = workloadResourceNameV1(value.agentId);
@@ -336,14 +344,29 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			},
 		};
 	}
-	function own(object: KubernetesObject, agentId: string, revision: number) {
+	function own(
+		object: KubernetesObject,
+		agentId: string,
+		revision: number,
+		fence: number,
+	) {
 		if (
 			object.metadata?.annotations?.[agentAnnotation] !== agentId ||
 			object.metadata.labels?.[ownerLabel] !== workloadResourceNameV1(agentId)
 		)
 			throw new WorkloadKubernetesError("policy");
-		const current = Number(object.metadata.labels[revisionLabel]);
-		if (!Number.isSafeInteger(current) || current < 1 || current > revision)
+		const currentRevision = Number(object.metadata.labels[revisionLabel]);
+		const currentFence = Number(
+			object.metadata.annotations["agent-infra.agora.io/fence"],
+		);
+		if (
+			!Number.isSafeInteger(currentRevision) ||
+			currentRevision < 1 ||
+			currentRevision > revision ||
+			!Number.isSafeInteger(currentFence) ||
+			currentFence < 1 ||
+			currentFence > fence
+		)
 			throw new WorkloadKubernetesError("conflict");
 	}
 	function hasUnsafePodSpec(pod: V1PodSpec | undefined) {
@@ -512,7 +535,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const kind = object.kind as WorkloadResourceKind;
 		const current = await client.read<T>(kind, object.metadata?.name ?? "");
 		if (current) {
-			own(current, value.agentId, value.workloadRevision);
+			own(current, value.agentId, value.workloadRevision, value.fence);
 			if (current.metadata?.deletionTimestamp)
 				throw new WorkloadKubernetesError("conflict");
 		}
@@ -601,33 +624,43 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	async function remove(
 		kind: WorkloadResourceKind,
 		name: string,
-		value: { agentId: string; workloadRevision: number },
+		value: { agentId: string; workloadRevision: number; fence: number },
 	): Promise<boolean> {
 		const current = await client.read(kind, name);
 		if (!current) return true;
-		own(current, value.agentId, value.workloadRevision);
+		own(current, value.agentId, value.workloadRevision, value.fence);
 		if (!current.metadata?.deletionTimestamp) await client.delete(current);
 		return (await client.read(kind, name)) === null;
 	}
 	async function closeRoute(input: unknown): Promise<boolean> {
 		const value = desired(input);
-		return closeAgent(value.agentId, value.workloadRevision);
+		const current = await client.read<V1StatefulSet>(
+			"StatefulSet",
+			workloadResourceNameV1(value.agentId),
+		);
+		if (current)
+			own(current, value.agentId, value.workloadRevision, value.fence);
+		return closeAgentAtFence(value);
 	}
-	async function closeAgent(
-		agentId: string,
-		workloadRevision: number,
-	): Promise<boolean> {
-		const value = { agentId, workloadRevision };
+	async function closeAgentAtFence(value: {
+		agentId: string;
+		workloadRevision: number;
+		fence: number;
+	}): Promise<boolean> {
 		const name = workloadResourceNameV1(value.agentId);
 		// Remove the selected route's backend before any candidate Pod can start.
 		const service = await client.read<V1Service>("Service", name);
 		if (service) {
-			own(service, value.agentId, value.workloadRevision);
+			own(service, value.agentId, value.workloadRevision, value.fence);
 			if (
 				!hasSameStructure(service.spec?.selector, {
 					[ownerLabel]: name,
 					[revisionLabel]: "closed",
-				})
+				}) ||
+				service.metadata?.labels?.[revisionLabel] !==
+					String(value.workloadRevision) ||
+				service.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+					String(value.fence)
 			) {
 				await client.replace({
 					...service,
@@ -635,10 +668,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						...service.metadata,
 						labels: {
 							...service.metadata?.labels,
-							[revisionLabel]: String(workloadRevision),
+							[revisionLabel]: String(value.workloadRevision),
 						},
 						annotations: {
 							...service.metadata?.annotations,
+							"agent-infra.agora.io/fence": String(value.fence),
 							[fingerprintAnnotation]: "",
 						},
 					},
@@ -651,13 +685,77 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		}
 		return remove("Ingress", name, value);
 	}
+	async function closeAgent(
+		agentId: string,
+		workloadRevision: number,
+	): Promise<boolean> {
+		return closeAgentAtFence({
+			agentId,
+			workloadRevision,
+			fence: workloadRevision,
+		});
+	}
+	async function cleanupAgentAtFence(
+		value: { agentId: string; workloadRevision: number; fence: number },
+		deleteNewVolume: boolean,
+	) {
+		if (!(await closeAgentAtFence(value))) return false;
+		const name = workloadResourceNameV1(value.agentId);
+		if (
+			!(await remove("StatefulSet", name, value)) ||
+			(await client.list("Pod", selector(value.agentId))).length > 0
+		)
+			return false;
+		if (!deleteNewVolume) {
+			const pvc = await client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				`${name}-data`,
+			);
+			if (pvc) {
+				own(pvc, value.agentId, value.workloadRevision, value.fence);
+				if (
+					pvc.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence)
+				)
+					await client.replace({
+						...pvc,
+						metadata: {
+							...pvc.metadata,
+							labels: {
+								...pvc.metadata?.labels,
+								[revisionLabel]: String(value.workloadRevision),
+							},
+							annotations: {
+								...pvc.metadata?.annotations,
+								"agent-infra.agora.io/fence": String(value.fence),
+								[fingerprintAnnotation]: "",
+							},
+						},
+					});
+			}
+		}
+		for (const kind of ["Service", "ServiceAccount", "NetworkPolicy"] as const)
+			if (!(await remove(kind, name, value))) return false;
+		// Secret reclamation requires the Platform binding and rollback-retention
+		// decision. This adapter only owns Kubernetes state, so it must retain
+		// Agent-labelled immutable material rather than bulk-delete it.
+		if (!(await remove("Service", `${name}-probe`, value))) return false;
+		if (
+			deleteNewVolume &&
+			!(await remove("PersistentVolumeClaim", `${name}-data`, value))
+		)
+			return false;
+		return true;
+	}
 	async function statefulSet(value: AgentWorkloadDesiredV1) {
 		const current = await client.read<V1StatefulSet>(
 			"StatefulSet",
 			workloadResourceNameV1(value.agentId),
 		);
 		if (current) {
-			own(current, value.agentId, value.workloadRevision);
+			own(current, value.agentId, value.workloadRevision, value.fence);
 			if (
 				value.expectedWorkload.state === "present" &&
 				current.metadata?.uid !== value.expectedWorkload.workloadUid
@@ -758,15 +856,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (!serviceAccount || !network || !probe || !service) return "drifted";
 		for (const ref of value.secretRefs) {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
-			if (
-				!secret ||
-				!isOwnedSecret(secret, value, ref) ||
-				secret.immutable !== true
-			)
+			if (!secret || !isLiveOwnedImmutableSecret(secret, value, ref))
 				return "drifted";
 		}
 		for (const resource of [serviceAccount, network, probe, service])
-			own(resource, value.agentId, value.workloadRevision);
+			own(resource, value.agentId, value.workloadRevision, value.fence);
 		if (
 			routeMode === "open" &&
 			(value.route.exposure === "internal-only"
@@ -774,7 +868,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
 		)
 			return "drifted";
-		if (routeIngress) own(routeIngress, value.agentId, value.workloadRevision);
+		if (routeIngress)
+			own(routeIngress, value.agentId, value.workloadRevision, value.fence);
 		const podLabels = {
 			[ownerLabel]: name,
 			[revisionLabel]: String(value.workloadRevision),
@@ -867,7 +962,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return (await client.list("Pod", selector(agentId))).length
 					? "pending"
 					: null;
-			own(current, agentId, revision);
+			own(current, agentId, revision, revision);
 			if (current.spec?.replicas !== 0) {
 				await client.replace({
 					...current,
@@ -879,6 +974,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						},
 						annotations: {
 							...current.metadata?.annotations,
+							"agent-infra.agora.io/fence": String(revision),
 							[fingerprintAnnotation]: "",
 						},
 					},
@@ -913,13 +1009,25 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("conflict");
 			const key = secretFenceAnnotation(secretName);
-			if (current.metadata.annotations?.[key] === String(fence)) return;
+			if (
+				current.metadata.annotations?.[key] === String(fence) &&
+				current.metadata.labels?.[revisionLabel] ===
+					String(value.workloadRevision) &&
+				current.metadata.annotations?.["agent-infra.agora.io/fence"] ===
+					String(value.fence)
+			)
+				return;
 			await client.replace({
 				...current,
 				metadata: {
 					...current.metadata,
+					labels: {
+						...current.metadata.labels,
+						[revisionLabel]: String(value.workloadRevision),
+					},
 					annotations: {
 						...current.metadata.annotations,
+						"agent-infra.agora.io/fence": String(value.fence),
 						[key]: String(fence),
 					},
 				},
@@ -979,16 +1087,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				return false;
 			try {
-				own(current, value.agentId, value.workloadRevision);
+				own(current, value.agentId, value.workloadRevision, value.fence);
 			} catch {
 				return false;
 			}
 			const secret = await client.read<V1Secret>("Secret", ref.name);
-			return Boolean(
-				secret &&
-					isOwnedSecret(secret, value, ref) &&
-					secret.immutable === true,
-			);
+			return Boolean(secret && isLiveOwnedImmutableSecret(secret, value, ref));
 		},
 		async applyImmutableSecret(
 			input: unknown,
@@ -1023,13 +1127,32 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					await client.create(body);
 					return;
 				}
-				if (!isOwnedSecret(existing, value, ref))
-					throw new WorkloadKubernetesError("conflict");
 				if (
-					existing.immutable !== true ||
+					!isLiveOwnedImmutableSecret(existing, value, ref) ||
 					!hasSameStructure(existing.data, body.data)
 				)
 					throw new WorkloadKubernetesError("conflict");
+				own(existing, value.agentId, value.workloadRevision, value.fence);
+				if (
+					existing.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+					existing.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence)
+				)
+					await client.replace({
+						...existing,
+						metadata: {
+							...existing.metadata,
+							labels: {
+								...existing.metadata?.labels,
+								[revisionLabel]: String(value.workloadRevision),
+							},
+							annotations: {
+								...existing.metadata?.annotations,
+								"agent-infra.agora.io/fence": String(value.fence),
+							},
+						},
+					});
 			}
 		},
 		async apply(
@@ -1038,7 +1161,37 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const value = desired(input);
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
-			if (!current && value.replicas === 0) return null;
+			if (!current && value.replicas === 0) {
+				const pvc = await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					value.persistentVolume.name,
+				);
+				if (pvc) {
+					own(pvc, value.agentId, value.workloadRevision, value.fence);
+					if (
+						pvc.metadata?.labels?.[revisionLabel] !==
+							String(value.workloadRevision) ||
+						pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+							String(value.fence)
+					)
+						await client.replace({
+							...pvc,
+							metadata: {
+								...pvc.metadata,
+								labels: {
+									...pvc.metadata?.labels,
+									[revisionLabel]: String(value.workloadRevision),
+								},
+								annotations: {
+									...pvc.metadata?.annotations,
+									"agent-infra.agora.io/fence": String(value.fence),
+									[fingerprintAnnotation]: "",
+								},
+							},
+						});
+				}
+				return null;
+			}
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
 			const driftedOwnedPod =
 				current &&
@@ -1057,13 +1210,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				(changing || driftedOwnedPod || value.replicas === 0) &&
 				(current.spec?.replicas !== 0 || pods.length > 0)
 			) {
-				if (current.spec?.replicas !== 0)
+				if (
+					current.spec?.replicas !== 0 ||
+					current.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+					current.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence)
+				)
 					await client.replace({
 						...current,
 						metadata: {
 							...current.metadata,
+							labels: {
+								...current.metadata?.labels,
+								[revisionLabel]: String(value.workloadRevision),
+							},
 							annotations: {
 								...current.metadata?.annotations,
+								"agent-infra.agora.io/fence": String(value.fence),
 								[fingerprintAnnotation]: "",
 							},
 						},
@@ -1071,13 +1235,36 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					} as V1StatefulSet);
 				return "pending";
 			}
-			if (value.replicas === 0)
-				return current?.metadata?.uid
+			if (value.replicas === 0) {
+				const fenced =
+					current &&
+					(current.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+						current.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+							String(value.fence))
+						? await client.replace({
+								...current,
+								metadata: {
+									...current.metadata,
+									labels: {
+										...current.metadata?.labels,
+										[revisionLabel]: String(value.workloadRevision),
+									},
+									annotations: {
+										...current.metadata?.annotations,
+										"agent-infra.agora.io/fence": String(value.fence),
+										[fingerprintAnnotation]: "",
+									},
+								},
+							} as V1StatefulSet)
+						: current;
+				return fenced?.metadata?.uid
 					? {
-							uid: current.metadata.uid,
-							generation: current.metadata.generation ?? 1,
+							uid: fenced.metadata.uid,
+							generation: fenced.metadata.generation ?? 1,
 						}
 					: null;
+			}
 			const podLabels = {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
@@ -1115,7 +1302,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				value.persistentVolume.name,
 			);
 			if (pvc) {
-				own(pvc, value.agentId, value.workloadRevision);
+				own(pvc, value.agentId, value.workloadRevision, value.fence);
 				if (
 					pvc.metadata?.deletionTimestamp ||
 					!matchesPersistentVolumeClaimSpec(pvc.spec)
@@ -1264,30 +1451,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			workloadRevision: number,
 			deleteNewVolume: boolean,
 		) {
-			const value = { agentId, workloadRevision };
-			if (!(await closeAgent(agentId, workloadRevision))) return false;
-			const name = workloadResourceNameV1(value.agentId);
-			if (
-				!(await remove("StatefulSet", name, value)) ||
-				(await client.list("Pod", selector(value.agentId))).length > 0
-			)
-				return false;
-			for (const kind of [
-				"Service",
-				"ServiceAccount",
-				"NetworkPolicy",
-			] as const)
-				if (!(await remove(kind, name, value))) return false;
-			// Secret reclamation requires the Platform binding and rollback-retention
-			// decision. This adapter only owns Kubernetes state, so it must retain
-			// Agent-labelled immutable material rather than bulk-delete it.
-			if (!(await remove("Service", `${name}-probe`, value))) return false;
-			if (
-				deleteNewVolume &&
-				!(await remove("PersistentVolumeClaim", `${name}-data`, value))
-			)
-				return false;
-			return true;
+			return cleanupAgentAtFence(
+				{ agentId, workloadRevision, fence: workloadRevision },
+				deleteNewVolume,
+			);
 		},
 		async removeImmutableSecret(
 			input: unknown,
@@ -1329,6 +1496,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (!secret) return true;
 			if (!isOwnedSecret(secret, value, ref) || secret.immutable !== true)
 				throw new WorkloadKubernetesError("policy");
+			own(secret, value.agentId, value.workloadRevision, value.fence);
 			await client.delete(secret);
 			return (await client.read<V1Secret>("Secret", ref.name)) === null;
 		},
@@ -1417,6 +1585,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					"StatefulSet",
 					workloadResourceNameV1(request.agentId),
 				);
+				if (current)
+					own(current, request.agentId, target.workloadRevision, request.fence);
 				const value = desired(
 					JSON.parse(
 						current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
@@ -1480,7 +1650,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			} catch {
 				if (
 					routeValidated &&
-					!(await closeAgent(request.agentId, target.workloadRevision))
+					!(await closeAgentAtFence({
+						agentId: request.agentId,
+						workloadRevision: target.workloadRevision,
+						fence: request.fence,
+					}))
 				)
 					throw new WorkloadKubernetesError("unavailable");
 				return validateWorkloadRouteSwitchResultV1(request, {
@@ -1521,10 +1695,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						current.metadata.generation !== request.workloadGeneration)
 				)
 					throw new WorkloadKubernetesError("conflict");
-				routeClosed = await closeAgent(
-					request.agentId,
-					request.workloadRevision,
-				);
+				if (current)
+					own(
+						current,
+						request.agentId,
+						request.workloadRevision,
+						request.fence,
+					);
+				routeClosed = await closeAgentAtFence(request);
 				if (!routeClosed)
 					return validateWorkloadCleanupResultV1(request, {
 						...request,
@@ -1533,9 +1711,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						routeClosed,
 						removed,
 					});
-				const completed = await adapter.cleanupAgent(
-					request.agentId,
-					request.workloadRevision,
+				const completed = await cleanupAgentAtFence(
+					request,
 					request.persistentVolumeIntent === "delete-new",
 				);
 				return validateWorkloadCleanupResultV1(
