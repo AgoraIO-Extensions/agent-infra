@@ -1430,6 +1430,67 @@ describe("Codex Runtime Driver", () => {
 		expect(JSON.stringify(result)).not.toContain("gpt-5.3-codex");
 	});
 
+	it("replays an unsupported selection after a crash immediately following its first durable write", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommandV2({
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "model-option-unsupported",
+				reasoningLevel: "high",
+			},
+		});
+		const originalUpdate = DurableJsonFile.prototype.update;
+		const crash = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementationOnce(function (
+				this: DurableJsonFile<unknown>,
+				change,
+			) {
+				return originalUpdate.call(this, change).then(() => {
+					throw new Error("simulated process loss after persist");
+				});
+			});
+		await expect(driver.execute(command)).rejects.toThrow();
+		crash.mockRestore();
+		await driver.close();
+		const persisted = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(Object.values(persisted.operations)).toEqual([
+			expect.objectContaining({
+				state: "resolved",
+				record: expect.objectContaining({
+					result: expect.objectContaining({
+						outcome: "rejected",
+						code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+					}),
+				}),
+			}),
+		]);
+		expect(bridge.requests.map(({ method }) => method)).toEqual([
+			"initialize",
+			"config/read",
+		]);
+		const recoveredBridge = new TestCodexBridge();
+		const recovered = await openDriver(path, recoveredBridge);
+		drivers.push(recovered);
+		const before = recoveredBridge.requests.length;
+		const replay = await recovered.execute(command);
+		expect(replay.result).toMatchObject({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		});
+		expect(await recovered.lookupOperation(command)).toEqual({
+			state: "found",
+			record: replay,
+		});
+		expect(recoveredBridge.requests.slice(before)).toEqual([]);
+	});
+
 	it("resets a legacy V1 Turn to configured defaults after a V2 override", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -2792,6 +2853,58 @@ describe("Codex Runtime Driver", () => {
 		expect(replacementUpstreamCalls).toBe(1);
 	});
 
+	it.each([
+		"missing-config",
+		"changed-config",
+		"missing-model",
+		"unconfigured-model",
+	] as const)(
+		"does not replay cached running acceptance with %s",
+		async (mutation) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const firstBridge = new TestCodexBridge();
+			const first = await openDriver(
+				path,
+				firstBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(first);
+			const command = submitCommand();
+			await first.execute(command);
+			await first.close();
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const operation = Object.values(state.operations)[0];
+			if (!operation) throw new Error("missing operation");
+			if (mutation === "missing-config") delete operation.configVersion;
+			if (mutation === "missing-model") delete operation.internalModel;
+			if (mutation === "unconfigured-model")
+				operation.internalModel = "unconfigured-model";
+			await writeFile(path, `${JSON.stringify(state)}\n`);
+			const beforeContents = await readFile(path, "utf8");
+			const bridge = new TestCodexBridge(firstBridge.nativeThreadId);
+			const recovered = await openDriver(
+				path,
+				bridge,
+				undefined,
+				mutation === "changed-config" ? "configuration-b" : "configuration-a",
+			);
+			drivers.push(recovered);
+			const before = bridge.requests.length;
+			expect(await recovered.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			await expect(recovered.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(bridge.requests.slice(before)).toEqual([]);
+			expect(await readFile(path, "utf8")).toBe(beforeContents);
+		},
+	);
+
 	it("does not recover or rewrite a legacy running Turn without configuration provenance", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -2872,6 +2985,14 @@ describe("Codex Runtime Driver", () => {
 		);
 		drivers.push(recoveredDriver);
 		const beforeRead = recoveredBridge.requests.length;
+		expect((await recoveredDriver.execute(command)).result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(await recoveredDriver.lookupOperation(command)).toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "completed" } },
+		});
 		expect(
 			await recoveredDriver.getStatus(
 				accepted.nativeSessionRef,

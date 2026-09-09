@@ -1553,7 +1553,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!text) unavailable();
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
-			if (prepared.operation.admissionPending) unavailable();
+			if (
+				prepared.operation.admissionPending ||
+				!this.canReplaySubmitOperation(prepared.operation)
+			)
+				unavailable();
 			return prepared.operation.record;
 		}
 		if (!prepared.created) {
@@ -1563,14 +1567,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			command.schemaVersion === 2
 				? this.nativeSelection(command.selection)
 				: this.defaultSelection;
-		if (command.schemaVersion === 2 && !nativeSelection) {
-			return this.resolve(command, prepared.operation.nativeSessionRef, {
-				outcome: "rejected",
-				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
-				message: "Runtime model selection is unsupported",
-				retryable: false,
-			});
-		}
+		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
 			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
 		let session: CodexSession;
@@ -1800,6 +1797,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!operationMatchesCommand(operation, command))
 			return { state: "unknown" };
 		if (operation.admissionPending) return { state: "unknown" };
+		if (
+			command.kind === "submit-turn" &&
+			!this.canReplaySubmitOperation(operation)
+		)
+			return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
 		await this.cancelModelTurn?.(
@@ -2881,6 +2883,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return execution.status;
 	}
 
+	private canReplaySubmitOperation(operation: CodexOperation) {
+		return (
+			operation.record?.result.outcome !== "accepted" ||
+			operation.record.result.status !== "running" ||
+			(operation.configVersion === this.configVersion &&
+				operation.internalModel !== undefined &&
+				[...this.modelOptions.values()].some(
+					(option) => option.internalModel === operation.internalModel,
+				))
+		);
+	}
+
 	private async prepare(command: CodexSubmitTurnCommand) {
 		return this.update((state) => {
 			const key = operationKey(command);
@@ -2948,6 +2962,29 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					: this.defaultSelection
 				)?.model,
 			};
+			// Persist deterministic local refusal atomically with the operation;
+			// a crash must not leave a never-submitted request acceptance-uncertain.
+			if (
+				command.schemaVersion === 2 &&
+				operation.internalModel === undefined
+			) {
+				operation.state = "resolved";
+				operation.record = driverRecord(command, {
+					schemaVersion: command.schemaVersion,
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					kind: command.kind,
+					operationId: command.operationId,
+					nativeSessionRef,
+					result: {
+						outcome: "rejected",
+						code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+						message: "Runtime model selection is unsupported",
+						retryable: false,
+					},
+				});
+			}
 			state.operations[key] = operation;
 			return { operation, created: true };
 		});
