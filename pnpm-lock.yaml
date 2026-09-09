@@ -316,6 +316,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
+      eventsource-parser:
+        specifier: 3.1.0
+        version: 3.1.0
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)

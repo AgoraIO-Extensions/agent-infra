@@ -339,8 +339,8 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 	const driver = await openCodexRuntimeDriverForTest(
 		{
 			path,
-			model: "gpt-5.3-codex",
-			reasoningEffort: "high",
+			defaultModelOptionId: "model-option-primary",
+			defaultReasoningLevel: "high",
 			modelOptions: [
 				{
 					modelOptionId: "model-option-primary",

@@ -84,6 +84,7 @@ if (capturePath) {
       cfUserTextEncoding: process.env.__CF_USER_TEXT_ENCODING,
       hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
       hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
+      modelCredentialMatches: process.env.AGENT_INFRA_CODEX_MODEL_CREDENTIAL === "synthetic-loopback-token",
     },
   }) + "\\n");
 }
@@ -197,6 +198,7 @@ async function readCaptures(path: string, minimum = 1) {
 								cfUserTextEncoding?: string;
 								hasMcpConfiguration: boolean;
 								hasConnectionCredential: boolean;
+								modelCredentialMatches: boolean;
 							};
 						},
 				);
@@ -568,6 +570,54 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it("pins the loopback Responses provider and exposes only its short-lived token", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				model: "synthetic/gpt-5.3-codex",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		const captures = await readCaptures(capturePath, 3);
+		const server = captures[2];
+		if (!server) throw new Error("expected app-server launch");
+		expect(
+			captures
+				.slice(0, 2)
+				.every(
+					(capture) =>
+						!capture.environmentKeys.includes(
+							"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+						),
+				),
+		).toBe(true);
+		expect(server.environmentKeys).toEqual(
+			[
+				...isolatedEnvironmentKeys,
+				"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+				"TMPDIR",
+			].sort(),
+		);
+		expect(server.environment.modelCredentialMatches).toBe(true);
+		expect(server.args).toEqual(
+			expect.arrayContaining([
+				'model_provider="agent_infra"',
+				'model_providers.agent_infra.name="Agent Infra Active Model"',
+				'model_providers.agent_infra.base_url="http://127.0.0.1:8080"',
+				'model_providers.agent_infra.env_key="AGENT_INFRA_CODEX_MODEL_CREDENTIAL"',
+				'model_providers.agent_infra.wire_api="responses"',
+				"model_providers.agent_infra.requires_openai_auth=false",
+				"model_providers.agent_infra.supports_websockets=false",
+				"model_providers.agent_infra.request_max_retries=0",
+				"model_providers.agent_infra.stream_max_retries=0",
+			]),
+		);
+		await bridge.close();
+	});
+
 	it("rejects unpinned provenance and unsafe launch configuration before spawning", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		await expect(
@@ -583,6 +633,18 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expect(
 			CodexAppServerBridge.open(options({ model: "model\nunsafe" })),
 		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+		for (const modelAccess of [
+			{ endpoint: "https://model.invalid/v1?private=value", credential: "x" },
+			{ endpoint: "file:///private", credential: "x" },
+			{ endpoint: "https://model.invalid/v1", credential: "contains space" },
+			{ endpoint: "https://model.invalid/v1", credential: "line\nbreak" },
+		]) {
+			await expect(
+				CodexAppServerBridge.open(options({ modelAccess })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		}
 		await expect(readFile(capturePath, "utf8")).rejects.toThrow();
 	});
 
@@ -743,7 +805,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expect(bridge.close()).rejects.toMatchObject({
 			code: "CODEX_APP_SERVER_TIMEOUT",
 		});
-		expect(() => process.kill(pid, 0)).toThrow();
+		await expectChildExited(pid);
 	});
 
 	it("keeps its private runtime directory until an unreaped child closes", async () => {

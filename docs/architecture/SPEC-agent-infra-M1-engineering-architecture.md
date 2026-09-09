@@ -441,6 +441,47 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 - Platform 不代理模型流量，也不负责供应商路由、成本、预算、配额或故障切换。Agent Pod 只获得本 Agent 当前 active credential；endpoint、认证、模型、额度和 capability 错误映射为稳定、脱敏且可操作的产品错误。
 - 自定义 Agent 的模型配置属于镜像内部；通过 ACP 探测到模型选择能力时，平台入口读取 Runtime 当前提供的选项和默认项并转发使用者选择，不配置或读取其 Base URL 与凭证。提交 Turn 前必须确认选项仍有效，不能在选项失效时静默改用其他模型。
 
+### 10.8 Codex 原生模型传输边界
+
+Codex Driver 在 Agent Pod 内管理一个仅绑定 loopback 的模型传输入口，将原生模型请求转发到
+该 Agent 当前配置中所选模型选项的已批准 endpoint。每个选项的上游 credential 仅保留在父进程；
+原生子进程只持有随机、
+短期且绑定该 Driver 生命周期的 loopback token。该入口只接受固定的 Responses 路径，不接受
+调用方选择上游、任意路径、跳转或代理配置；关闭 Driver 后撤销 token 并关闭入口。
+
+部署配置以版本化、不可变的选项集合传入 RuntimeHost；每个 `modelOptionId` 独立绑定 endpoint、
+真实 model、允许的 reasoning 与注入 credential，不因 model 名称相同而合并。Execution 已冻结
+的 optionId/reasoning 决定该次原生 Turn；重试沿用原选择，未知选项、配置版本或路由标识拒绝。
+Worker 负责目录解析和配置/SecretRef 投影，RuntimeHost 不读取目录、数据库或 Kubernetes。
+
+固定 Codex 版本的 `turn/start` 不能切换 provider，因此 Driver 使用每选项唯一的内部模型名
+`namespace/model`，namespace 从选项身份确定性生成且仅含非空 ASCII 字母、数字、`_` 或 `-`；
+整个别名恰好一个 `/`，model 保留不含 `/` 的真实模型名。固定版本按 model 后缀最长前缀匹配
+能力元数据；多斜线、非法 namespace 或不匹配已验证 profile 的配置拒绝。父进程仅按完整
+内部模型名查询当前批准集合，将请求的 model 改回真实 model，并使用该项固定 endpoint 与
+credential；不根据模型正文、调用方 URL 或同名 model 猜测路由。该方式必须保留原模型在 pinned
+Codex 中的能力元数据，不自行生成或放宽 capability profile；无已验证 profile 的选项不准入。
+同一会话连续切换两个不同 endpoint/credential、且真实 model 同名的选项必须有原生测试；
+任何上游失败都不得改用其他选项。
+
+供应商 HTTP 失败与 HTTP-200 流内失败必须在进入原生进程前归一为固定脱敏错误；不能把原始
+错误正文、headers、credential 或内部路径交给原生进程落盘。成功 SSE 按事件校验格式和大小，
+保留正常模型与工具调用语义；非法、超限或不完整终态必须失败，不能当作成功。取消、下游
+断开或 Driver 关闭必须中止上游请求并释放资源。此边界不增加模型选择、重试或故障切换政策。
+
+原生 Turn 取消不能只等待 Codex 关闭 HTTP 连接。父进程以已验证的 pinned 请求
+`x-codex-turn-metadata` 中 `thread_id` 与 `turn_id` 关联上游请求，并与 Driver 的原生
+Thread/Turn 生命周期绑定；缺失、非法或冲突的关联拒绝，不能根据模型正文或上游地址猜测。
+该关联只在 Driver 内使用，不替代 Grant/fence 授权，也不进入 RuntimeHost wire、日志或外部响应。
+停止 Turn 或取消代次时，在返回取消确认前中止目标 Turn 的全部上游请求并完成资源清理，
+拒绝该目标的迟到请求；其他 Thread/Turn 的请求和后续合法 Turn 保持可用。普通请求超时、
+全 Agent 中止或生成合成 SSE 内容均不能替代精确取消；原有代次 barrier 保持不变。
+
+RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威边界和 #403 的原生
+持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
+流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。
+取舍见 [ADR: Codex 模型错误在原生持久化前脱敏](../adr/0007-sanitize-codex-model-errors-before-native-storage.md)。
+
 ## 11. Agent Runtime 边界
 
 ### 11.1 Platform Conversation Contract

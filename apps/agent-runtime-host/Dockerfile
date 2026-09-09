@@ -1,8 +1,12 @@
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS builder
+ARG TARGETARCH
 RUN npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
 WORKDIR /app
 
+COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
+COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
+RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex
 COPY . .
 RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 
@@ -20,10 +24,14 @@ RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
     && mv /prod/agent-runtime-host-normalized /prod/agent-runtime-host
 
 FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 RUN npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
+ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
+COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 VOLUME ["/var/lib/agent-runtime"]

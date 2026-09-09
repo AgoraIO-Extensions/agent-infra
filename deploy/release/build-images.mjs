@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { runCommand } from "./run-command.mjs";
+import {
+	assertCleanRuntimeProbeSource,
+	probeRuntimeImage,
+} from "./runtime-probe.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
@@ -109,6 +113,7 @@ function assertCheckout(git, commitSha) {
 	if (head !== commitSha || status) {
 		fail("Git checkout changed during image build");
 	}
+	return assertCleanRuntimeProbeSource(status, commitSha);
 }
 
 function trackedFiles(git, commitSha) {
@@ -252,6 +257,9 @@ async function buildImage({
 				platform,
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
+				...(image.key === "runtimeHost"
+					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
+					: []),
 				"--provenance=false",
 				"--sbom=false",
 				"--no-cache",
@@ -346,7 +354,23 @@ async function buildImage({
 			timeoutMs: timeoutMs.probe,
 		},
 	);
-	return { archivePath, digest: digests[1], repository, reference };
+	const source = assertCheckout(git, commitSha);
+	const runtimeProbe =
+		image.key === "runtimeHost"
+			? await probeRuntimeImage({
+					image: reference,
+					source,
+					imageDigest: digests[1],
+					contextPath,
+				})
+			: undefined;
+	return {
+		archivePath,
+		digest: digests[1],
+		repository,
+		reference,
+		runtimeProbe,
+	};
 }
 
 function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
@@ -400,6 +424,10 @@ async function main() {
 		fail("usage: build-images.mjs <image-manifest.json>");
 	}
 	const manifestPath = resolve(manifestArgument);
+	const runtimeProbePath = `${manifestPath}.runtime-probe.json`;
+	if (!(await unavailable(runtimeProbePath))) {
+		fail("runtime probe evidence already exists");
+	}
 	if (!(await unavailable(manifestPath))) {
 		fail("image manifest already exists");
 	}
@@ -475,6 +503,11 @@ async function main() {
 			});
 		}
 		assertCheckout(git, commitSha);
+		await writeFile(
+			runtimeProbePath,
+			`${JSON.stringify(buildResults.runtimeHost.runtimeProbe, null, 2)}\n`,
+			{ flag: "wx" },
+		);
 		await writeFile(
 			manifestPath,
 			`${JSON.stringify(

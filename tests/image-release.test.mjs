@@ -74,6 +74,10 @@ if (args[0] === "buildx" && args[1] === "build") {
   process.exit(0);
 }
 if (args[0] === "image" && args[1] === "inspect") {
+  if (args.includes("{{json .}}")) {
+    console.log(JSON.stringify({ Id: "sha256:" + "a".repeat(64), Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } }));
+    process.exit(0);
+  }
   console.log(args.at(-1).includes("/web:") ? "nginx" : "node");
   process.exit(0);
 }
@@ -85,6 +89,12 @@ if (args[0] === "manifest" && args[1] === "inspect") {
   process.exit(0);
 }
 if (args[0] === "run") {
+  if (args.includes("/probe/runtime-image-probe.mjs")) {
+    if (process.env.FAKE_RUNTIME_PROBE_FAIL) process.exit(42);
+    if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
+    else console.log(JSON.stringify({ schemaVersion: 1, status: "passed", codexVersion: "0.153.0", configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
+    process.exit(0);
+  }
   if (args.includes("--entrypoint")) console.log(process.env.FAKE_RUNTIME_UID ?? "1000");
   process.exit(0);
 }
@@ -180,7 +190,14 @@ test("image build validates reproducibility and read-only non-root execution", a
 				args.flatMap((argument, index) =>
 					argument === "--build-arg" ? [args[index + 1]] : [],
 				),
-				["SOURCE_DATE_EPOCH=1700000000"],
+				[
+					"SOURCE_DATE_EPOCH=1700000000",
+					...(args.some((arg) =>
+						arg.endsWith("apps/agent-runtime-host/Dockerfile"),
+					)
+						? [`SOURCE_COMMIT=${commitSha}`]
+						: []),
+				],
 			);
 			assert.ok(args.includes("--provenance=false"));
 			assert.ok(args.includes("--sbom=false"));
@@ -211,7 +228,31 @@ test("image build validates reproducibility and read-only non-root execution", a
 			"publication must start only after every reproducibility build passes",
 		);
 		const probes = calls.filter(
-			(args) => args[0] === "run" && !args.includes("--entrypoint"),
+			(args) =>
+				args[0] === "run" &&
+				!args.includes("--entrypoint") &&
+				!args.includes("/probe/runtime-image-probe.mjs"),
+		);
+		const nativeProbes = calls.filter(
+			(args) =>
+				args[0] === "run" && args.includes("/probe/runtime-image-probe.mjs"),
+		);
+		assert.equal(nativeProbes.length, 2);
+		for (const args of nativeProbes) {
+			assert.ok(args.includes("--network=none"));
+			assert.ok(args.includes("--read-only"));
+			assert.ok(args.includes(`sha256:${"a".repeat(64)}`));
+		}
+		const runtimeEvidence = JSON.parse(
+			await readFile(`${manifestPath}.runtime-probe.json`, "utf8"),
+		);
+		assert.equal(runtimeEvidence.commitSha, commitSha);
+		assert.equal(runtimeEvidence.sourceDirty, false);
+		assert.equal(runtimeEvidence.imageId, `sha256:${"a".repeat(64)}`);
+		assert.equal("imageConfigDigest" in runtimeEvidence, false);
+		assert.equal(
+			runtimeEvidence.imageDigest,
+			manifest.images.runtimeHost.digest,
 		);
 		const userProbes = calls.filter(
 			(args) => args[0] === "run" && args.includes("--entrypoint"),
@@ -440,6 +481,30 @@ test("image build rejects an effective root runtime user", async () => {
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /effective UID must be non-root/);
 		await assert.rejects(access(manifestPath));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("native runtime probe failure blocks publication of every image", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-infra-native-probe-failure-"),
+	);
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {
+			FAKE_RUNTIME_PROBE_FAIL: "1",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Native Codex HTTP\/SSE image probe failed/);
+		await assert.rejects(access(manifestPath));
+		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		assert.ok(!calls.some((args) => args[0] === "push"));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

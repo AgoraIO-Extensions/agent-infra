@@ -31,7 +31,9 @@ const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
 const maximumFrameBytes = 65_536;
 const maximumQueuedFrames = 256;
-const modelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const realModelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const namespacedModelPattern =
+	/^[A-Za-z0-9_-]+\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const reasoningEffortPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -59,11 +61,19 @@ export const CODEX_APP_SERVER_V2_PROVENANCE = Object.freeze({
 
 export type CodexAppServerFrame = Readonly<Record<string, unknown>>;
 
+export interface CodexModelAccess {
+	readonly endpoint: string;
+	readonly credential: string;
+}
+
+const modelCredentialEnvironmentKey = "AGENT_INFRA_CODEX_MODEL_CREDENTIAL";
+
 export interface CodexAppServerBridgeOptions {
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
+	readonly modelAccess?: CodexModelAccess;
 	readonly provenance: CodexAppServerProvenanceV2;
 	readonly startupTimeoutMs?: number;
 	readonly shutdownTimeoutMs?: number;
@@ -96,6 +106,7 @@ interface ValidatedOptions {
 	dataDirectory: string;
 	model: string;
 	reasoningEffort: string;
+	modelAccess?: CodexModelAccess;
 	startupTimeoutMs: number;
 	shutdownTimeoutMs: number;
 }
@@ -269,6 +280,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		"dataDirectory",
 		"model",
 		"reasoningEffort",
+		"modelAccess",
 		"provenance",
 		"startupTimeoutMs",
 		"shutdownTimeoutMs",
@@ -285,20 +297,77 @@ function validateOptions(input: unknown): ValidatedOptions {
 			(character) => character.charCodeAt(0) < 32,
 		) ||
 		typeof input.model !== "string" ||
-		!modelPattern.test(input.model) ||
+		(!realModelPattern.test(input.model) &&
+			!namespacedModelPattern.test(input.model)) ||
 		typeof input.reasoningEffort !== "string" ||
 		!reasoningEffortPattern.test(input.reasoningEffort)
 	) {
 		configurationInvalid();
 	}
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
+	const modelAccess = validateModelAccess(input.modelAccess);
+	if (modelAccess && !namespacedModelPattern.test(input.model)) {
+		configurationInvalid();
+	}
 	return {
 		dataDirectory: input.dataDirectory,
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
+		...(modelAccess ? { modelAccess } : {}),
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
+}
+
+export function validateModelAccess(
+	input: unknown,
+): CodexModelAccess | undefined {
+	if (input === undefined) return undefined;
+	if (
+		!isPlainRecord(input) ||
+		!exactKeys(input, ["endpoint", "credential"]) ||
+		typeof input.endpoint !== "string" ||
+		input.endpoint.length > 2048 ||
+		/[\s\\]/.test(input.endpoint) ||
+		typeof input.credential !== "string" ||
+		!/^[\x21-\x7e]{1,8192}$/.test(input.credential)
+	) {
+		configurationInvalid();
+	}
+	try {
+		const endpoint = new URL(input.endpoint);
+		if (
+			!["http:", "https:"].includes(endpoint.protocol) ||
+			endpoint.username ||
+			endpoint.password ||
+			endpoint.search ||
+			endpoint.hash
+		) {
+			configurationInvalid();
+		}
+	} catch {
+		configurationInvalid();
+	}
+	return { endpoint: input.endpoint, credential: input.credential };
+}
+
+function modelAccessArguments(access: CodexModelAccess | undefined) {
+	if (!access) return [];
+	const settings = {
+		model_provider: "agent_infra",
+		"model_providers.agent_infra.name": "Agent Infra Active Model",
+		"model_providers.agent_infra.base_url": access.endpoint,
+		"model_providers.agent_infra.env_key": modelCredentialEnvironmentKey,
+		"model_providers.agent_infra.wire_api": "responses",
+		"model_providers.agent_infra.requires_openai_auth": false,
+		"model_providers.agent_infra.supports_websockets": false,
+		"model_providers.agent_infra.request_max_retries": 0,
+		"model_providers.agent_infra.stream_max_retries": 0,
+	};
+	return Object.entries(settings).flatMap(([key, value]) => [
+		"--config",
+		`${key}=${JSON.stringify(value)}`,
+	]);
 }
 
 function kill(
@@ -655,11 +724,20 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
+					...modelAccessArguments(validated.modelAccess),
 				],
 				{
 					stdio: ["pipe", "pipe", "pipe"],
 					cwd: nativeLaunchPolicy.directory,
-					env: nativeLaunchPolicy.environment,
+					env: {
+						...nativeLaunchPolicy.environment,
+						...(validated.modelAccess
+							? {
+									[modelCredentialEnvironmentKey]:
+										validated.modelAccess.credential,
+								}
+							: {}),
+					},
 				},
 			);
 		} catch {

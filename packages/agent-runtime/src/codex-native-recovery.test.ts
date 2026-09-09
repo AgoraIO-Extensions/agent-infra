@@ -290,8 +290,8 @@ async function crash() {
 function driverOptions(path: string) {
 	return {
 		path,
-		model: "gpt-5.3-codex",
-		reasoningEffort: "low",
+		defaultModelOptionId: "synthetic",
+		defaultReasoningLevel: "low",
 		modelOptions: [
 			{
 				modelOptionId: "synthetic",
