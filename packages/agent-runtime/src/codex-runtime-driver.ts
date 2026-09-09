@@ -128,6 +128,8 @@ interface CodexOperation {
 	schemaVersion: 1 | 2;
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
+	// Recovery must not expose or re-register the accepted record until this clears.
+	admissionPending?: true;
 	executionId?: string;
 	turnId?: string;
 	record?: RuntimeDriverOperationRecord;
@@ -532,6 +534,7 @@ function isCodexOperation(
 			"schemaVersion",
 			"state",
 			"nativeSessionRef",
+			"admissionPending",
 			"executionId",
 			"turnId",
 			"record",
@@ -580,7 +583,7 @@ function isCodexOperation(
 		return false;
 	}
 	if (value.state === "prepared") {
-		return value.record === undefined;
+		return value.admissionPending === undefined && value.record === undefined;
 	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = (
@@ -601,9 +604,15 @@ function isCodexOperation(
 		return false;
 	}
 	if (record.data.result.outcome !== "accepted") {
-		return record.data.result.outcome !== "unknown";
+		return (
+			value.admissionPending === undefined &&
+			record.data.result.outcome !== "unknown"
+		);
 	}
-	if (isInterruption) return true;
+	if (isInterruption) return value.admissionPending === undefined;
+	if (value.admissionPending !== undefined && value.admissionPending !== true) {
+		return false;
+	}
 	const execution = ownRecordValue(session.executions, record.data.operationId);
 	return (
 		execution !== undefined && execution.status === record.data.result.status
@@ -1124,6 +1133,7 @@ class CodexRpc {
 		parse: (value: unknown) => T,
 		nativeSelectionRejection = false,
 		allowHistoryMaterializationRetry = false,
+		deadlineAt = Date.now() + rpcRequestTimeoutMs,
 	) {
 		if (this.failed) unavailable();
 		const id = this.nextRequestId++;
@@ -1140,10 +1150,13 @@ class CodexRpc {
 		const timeoutError = unavailableError();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const deadline = new Promise<never>((_, reject) => {
-			timer = setTimeout(() => {
-				this.fail(timeoutError);
-				reject(timeoutError);
-			}, rpcRequestTimeoutMs);
+			timer = setTimeout(
+				() => {
+					this.fail(timeoutError);
+					reject(timeoutError);
+				},
+				Math.max(0, deadlineAt - Date.now()),
+			);
 		});
 		try {
 			await Promise.race([this.bridge.send({ id, method, params }), deadline]);
@@ -1293,6 +1306,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
 	private readonly observedNativeTurnStarts = new Set<string>();
 	private readonly nativeTurnStartWaiters = new Map<string, Set<() => void>>();
+	private readonly modelAdmissionDeadlines = new Map<string, number>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
@@ -1306,7 +1320,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			ConfiguredCodexRuntimeModelOption
 		>,
 		private readonly defaultSelection: { model: string; effort: string },
-		private readonly registerModelTurn?: (turn: CodexNativeTurn) => void,
+		private readonly recognizeModelTurn?: (
+			turn: CodexNativeTurn,
+			deadline: number,
+		) => void,
+		private readonly registerModelTurn?: (
+			turn: CodexNativeTurn,
+			deadline?: number,
+		) => boolean,
 		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
@@ -1405,6 +1426,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			bridge,
 			modelOptions,
 			defaultSelection,
+			modelTransport?.recognizeTurn,
 			modelTransport?.registerTurn,
 			modelTransport?.cancelTurn,
 		);
@@ -1492,7 +1514,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? this.nativeSelection(command.selection)
 				: this.defaultSelection;
 		const prepared = await this.prepare(command);
-		if (prepared.operation.record) return prepared.operation.record;
+		if (prepared.operation.record) {
+			if (prepared.operation.admissionPending) unavailable();
+			return prepared.operation.record;
+		}
 		if (command.schemaVersion === 2 && !nativeSelection) {
 			return this.resolve(command, prepared.operation.nativeSessionRef, {
 				outcome: "rejected",
@@ -1532,6 +1557,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 		}
 		if (!session.threadId) stateInvalid();
+		const admissionKey = operationKey(command);
+		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
+		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
+		let candidateModelTurn: CodexNativeTurn | undefined;
 		try {
 			const turn = await this.rpc.request(
 				"turn/start",
@@ -1556,24 +1585,72 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					};
 				},
 				command.schemaVersion === 2,
+				false,
+				admissionDeadline,
 			);
 			const nativeTurn = {
 				threadId: session.threadId,
 				turnId: turn.id,
 			};
+			candidateModelTurn = nativeTurn;
 			const record = await this.resolve(
 				command,
 				session.nativeSessionRef,
 				{ outcome: "accepted", status: turn.status },
 				turn.id,
+				turn.status === "running",
 			);
-			this.registerModelTurn?.(nativeTurn);
-			if (turn.status !== "running") {
+			if (
+				record.result.outcome !== "accepted" ||
+				record.result.status !== "running"
+			) {
 				await this.cancelModelTurn?.(nativeTurn);
+				return record;
 			}
+			const recognized = await this.waitForNativeTurnStarted(
+				nativeTurn.threadId,
+				nativeTurn.turnId,
+				admissionDeadline,
+			);
+			if (!recognized) {
+				const current = this.operationRecord(command);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status !== "running"
+				) {
+					await this.cancelModelTurn?.(nativeTurn);
+					await this.confirmModelAdmission(command, session.nativeSessionRef);
+					return current.record;
+				}
+				await this.cancelModelTurn?.(nativeTurn);
+				unavailable();
+			}
+			if (
+				Date.now() >= admissionDeadline ||
+				this.registerModelTurn?.(nativeTurn, admissionDeadline) === false
+			) {
+				await this.cancelModelTurn?.(nativeTurn);
+				unavailable();
+			}
+			await this.confirmModelAdmission(command, session.nativeSessionRef);
 			return record;
 		} catch (error) {
-			if (error instanceof CodexModelSelectionRejectedError) {
+			const pendingModelTurn = this.pendingModelTurn(
+				command,
+				session.nativeSessionRef,
+			);
+			const cancelledKeys = new Set<string>();
+			for (const turn of [candidateModelTurn, pendingModelTurn]) {
+				if (!turn) continue;
+				const key = this.nativeTurnKey(turn.threadId, turn.turnId);
+				if (cancelledKeys.has(key)) continue;
+				cancelledKeys.add(key);
+				await this.cancelModelTurn?.(turn);
+			}
+			if (
+				error instanceof CodexModelSelectionRejectedError &&
+				!pendingModelTurn
+			) {
 				return this.resolve(command, session.nativeSessionRef, {
 					outcome: "rejected",
 					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
@@ -1581,8 +1658,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
-			await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+			if (!this.hasPendingModelAdmission(command)) {
+				await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+			}
 			throw error;
+		} finally {
+			if (
+				this.modelAdmissionDeadlines.get(admissionKey) === admissionDeadline
+			) {
+				this.modelAdmissionDeadlines.delete(admissionKey);
+			}
 		}
 	}
 
@@ -1640,6 +1725,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!operation) return { state: "missing" };
 		if (!operationMatchesCommand(operation, command))
 			return { state: "unknown" };
+		if (operation.admissionPending) return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
 		const status = await this.getStatus(
@@ -1664,6 +1750,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let session = this.session(nativeSessionRef);
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status !== "running") {
 			await this.cancelModelTurn?.({
 				threadId: session.threadId,
@@ -1675,6 +1762,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session = this.session(nativeSessionRef);
 		execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status !== "running") {
 			await this.cancelModelTurn?.({
 				threadId: session.threadId,
@@ -1713,6 +1801,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const session = this.session(nativeSessionRef);
 		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
 		const journal = ownRecordValue(
 			session.journals ?? {},
 			execution.nativeTurnId,
@@ -1798,6 +1887,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return state;
 	}
 
+	private assertModelAdmissionConfirmed(
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		const operation = ownRecordValue(
+			this.readState().operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: execution.executionId,
+			}),
+		);
+		if (operation?.admissionPending) unavailable();
+	}
+
 	private update<R>(change: (state: CodexDriverState) => R) {
 		return this.file.update((state) => {
 			assertDriverState(state);
@@ -1810,7 +1916,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async recordNotification(frame: CodexAppServerFrame) {
 		const started = turnStartedNotification(frame);
 		if (started) {
-			const streamKey = await this.update((state) => {
+			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
 					started.threadId,
@@ -1823,15 +1929,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					resolved.session,
 					resolved.journal,
 				);
-				return resolved.execution && appended
-					? this.eventStreamKey(
-							resolved.nativeSessionRef,
-							resolved.execution.executionId,
-						)
-					: undefined;
+				return {
+					pendingOperationKey: resolved.pendingOperationKey,
+					streamKey:
+						resolved.execution && appended
+							? this.eventStreamKey(
+									resolved.nativeSessionRef,
+									resolved.execution.executionId,
+								)
+							: undefined,
+				};
 			});
-			this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
-			if (streamKey) this.notifyEventStream(streamKey);
+			const admissionDeadline = recorded?.pendingOperationKey
+				? this.modelAdmissionDeadlines.get(recorded.pendingOperationKey)
+				: undefined;
+			if (admissionDeadline !== undefined) {
+				this.recognizeModelTurn?.(
+					{
+						threadId: started.threadId,
+						turnId: started.nativeTurnId,
+					},
+					admissionDeadline,
+				);
+			}
+			if (recorded) {
+				this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
+			}
+			if (recorded?.streamKey) this.notifyEventStream(recorded.streamKey);
 			return;
 		}
 
@@ -1921,6 +2045,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = Object.values(session.executions).find(
 			(candidate) => candidate.nativeTurnId === nativeTurnId,
 		);
+		const executionOperationKey = execution
+			? operationKey({
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					kind: "submit-turn",
+					operationId: execution.executionId,
+				})
+			: undefined;
+		const executionOperation = executionOperationKey
+			? ownRecordValue(state.operations, executionOperationKey)
+			: undefined;
 		const preparedOperations = Object.entries(state.operations).filter(
 			([, operation]) =>
 				operation.nativeSessionRef === nativeSessionRef &&
@@ -1929,16 +2065,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				operation.turnId === undefined,
 		);
 		if (preparedOperations.length > 1) stateInvalid();
-		const pendingOperationKey = preparedOperations[0]?.[0];
+		const pendingOperationKey = executionOperation?.admissionPending
+			? executionOperationKey
+			: preparedOperations[0]?.[0];
 		if (!execution && !pendingOperationKey) return undefined;
 		return {
 			nativeSessionRef,
 			session,
 			execution,
+			pendingOperationKey,
 			journal: this.ensureJournal(
 				session,
 				nativeTurnId,
-				execution ? undefined : pendingOperationKey,
+				execution ? undefined : preparedOperations[0]?.[0],
 			),
 		};
 	}
@@ -2383,6 +2522,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async waitForNativeTurnStarted(
 		threadId: string,
 		nativeTurnId: string,
+		deadline = Date.now() + rpcRequestTimeoutMs,
 	) {
 		const key = this.nativeTurnKey(threadId, nativeTurnId);
 		if (this.observedNativeTurnStarts.has(key)) return true;
@@ -2398,7 +2538,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					return;
 				}
 				waiters.add(wake);
-				timer = setTimeout(wake, rpcRequestTimeoutMs);
+				timer = setTimeout(wake, Math.max(0, deadline - Date.now()));
 			});
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
@@ -2640,6 +2780,48 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 	}
 
+	private pendingModelTurn(
+		command: CodexSubmitTurnCommand,
+		nativeSessionRef: string,
+	) {
+		const session = this.session(nativeSessionRef);
+		if (!session.threadId) return undefined;
+		const pending = Object.values(session.journals ?? {}).filter(
+			(journal) => journal.pendingOperationKey === operationKey(command),
+		);
+		if (pending.length > 1) stateInvalid();
+		const journal = pending[0];
+		return journal
+			? { threadId: session.threadId, turnId: journal.nativeTurnId }
+			: undefined;
+	}
+
+	private operationRecord(command: CodexSubmitTurnCommand) {
+		return ownRecordValue(this.readState().operations, operationKey(command));
+	}
+
+	private hasPendingModelAdmission(command: CodexSubmitTurnCommand) {
+		return this.operationRecord(command)?.admissionPending === true;
+	}
+
+	private async confirmModelAdmission(
+		command: CodexSubmitTurnCommand,
+		nativeSessionRef: string,
+	) {
+		await this.update((state) => {
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			if (
+				operation?.state !== "resolved" ||
+				operation.nativeSessionRef !== nativeSessionRef ||
+				operation.record?.result.outcome !== "accepted" ||
+				operation.admissionPending !== true
+			) {
+				stateInvalid();
+			}
+			delete operation.admissionPending;
+		});
+	}
+
 	private async markAcceptanceUncertain(
 		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
@@ -2765,6 +2947,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		result: RuntimeDriverOperationRecord["result"],
 		nativeTurnId?: string,
+		admissionPending = false,
 	) {
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
@@ -2781,6 +2964,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const session = ownRecordValue(state.sessions, nativeSessionRef);
 			if (!operation || !session) protocolInvalid();
 			if (result.outcome !== "accepted") {
+				if (admissionPending) protocolInvalid();
 				operation.state = "resolved";
 				operation.record = record;
 				return;
@@ -2826,6 +3010,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			record = { ...record, result: { outcome: "accepted", status } };
 			operation.state = "resolved";
 			operation.record = record;
+			if (admissionPending && status === "running") {
+				operation.admissionPending = true;
+			}
 			Object.defineProperty(session.executions, command.executionId, {
 				value: {
 					executionId: command.executionId,

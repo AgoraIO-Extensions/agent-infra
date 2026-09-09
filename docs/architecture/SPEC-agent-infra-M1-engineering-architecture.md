@@ -477,6 +477,13 @@ Thread/Turn 生命周期绑定；缺失、非法或冲突的关联拒绝，不�
 拒绝该目标的迟到请求；其他 Thread/Turn 的请求和后续合法 Turn 保持可用。普通请求超时、
 全 Agent 中止或生成合成 SSE 内容均不能替代精确取消；原有代次 barrier 保持不变。
 
+启动通知仅在完成日志验证与持久识别后，才能把原生 Thread/Turn 关联到同 Thread 唯一的
+pending 启动；识别只允许模型请求等待，不能转发。只有匹配 RPC 响应返回同一 running Turn，
+且 operation/journal 持久化成功后才准入。沿用既有启动 RPC 预算，从 RPC 发起建立一次覆盖至
+持久化完成的绝对准入期限，不因通知或响应重置。错 ID、歧义、终态、RPC 或持久化失败、取消、
+关闭或期限到期均拒绝等待请求，并阻断该 Turn 的迟到准入；过期操作按现有 unavailable 或
+acceptance-uncertain 路径收敛，不能在期限后恢复普通准入。其他 Thread 不受影响。
+
 RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威边界和 #403 的原生
 持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。

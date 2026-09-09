@@ -26,6 +26,7 @@ import {
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import {
 	ingressVerifiedRuntimeHost,
@@ -37,6 +38,12 @@ type CancelTurnTestHook = (
 	turn: CodexNativeTurn,
 	cancel: () => Promise<void>,
 ) => Promise<void>;
+
+type RegisterTurnTestHook = (
+	turn: CodexNativeTurn,
+	deadline: number | undefined,
+	register: () => boolean,
+) => boolean;
 
 class ObservableCleanupPromise extends Promise<void> {
 	static override get [Symbol.species]() {
@@ -66,6 +73,7 @@ class ObservableCleanupPromise extends Promise<void> {
 
 const modelTransportTestHooks = vi.hoisted(() => ({
 	cancelTurn: undefined as CancelTurnTestHook | undefined,
+	registerTurn: undefined as RegisterTurnTestHook | undefined,
 }));
 
 vi.mock("./codex-model-transport.js", async (importOriginal) => {
@@ -79,6 +87,10 @@ vi.mock("./codex-model-transport.js", async (importOriginal) => {
 			const transport = await actual.openCodexModelTransport(...args);
 			return {
 				...transport,
+				registerTurn: (turn: CodexNativeTurn, deadline?: number) =>
+					modelTransportTestHooks.registerTurn?.(turn, deadline, () =>
+						transport.registerTurn(turn, deadline),
+					) ?? transport.registerTurn(turn, deadline),
 				cancelTurn: (turn: CodexNativeTurn) =>
 					modelTransportTestHooks.cancelTurn?.(turn, () =>
 						transport.cancelTurn(turn),
@@ -112,6 +124,7 @@ interface StoredCodexExecution {
 
 interface StoredCodexOperation {
 	state?: unknown;
+	admissionPending?: unknown;
 	record?: {
 		result?: { outcome?: unknown; status?: unknown };
 	};
@@ -550,6 +563,13 @@ function modelRequest(
 			stream: true,
 		}),
 	});
+}
+
+function completedEvent() {
+	return `data: ${JSON.stringify({
+		type: "response.completed",
+		response: { id: "response-synthetic", status: "completed" },
+	})}\n\n`;
 }
 
 class TestCodexBridge {
@@ -1000,7 +1020,9 @@ class TestCodexBridge {
 
 afterEach(async () => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 	modelTransportTestHooks.cancelTurn = undefined;
+	modelTransportTestHooks.registerTurn = undefined;
 	await Promise.all(drivers.splice(0).map((driver) => driver.close()));
 	await Promise.all(
 		servers.splice(0).map(
@@ -1647,6 +1669,330 @@ describe("Codex Runtime Driver", () => {
 			await response.body?.cancel().catch(() => {});
 		},
 	);
+
+	it("waits for a recognized native Turn then admits its delayed start response", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		let modelSettled = false;
+		const pendingModel = modelRequest(loopback, bridge).then((response) => {
+			modelSettled = true;
+			return response;
+		});
+
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 2_100));
+			expect(modelSettled).toBe(false);
+			expect(upstreamCalls).toBe(0);
+			bridge.respondToHeldTurnStart();
+			const response = await pendingModel;
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(completedEvent());
+			expect(upstreamCalls).toBe(1);
+		} finally {
+			if (bridge.pendingTurnStartCount() > 0) bridge.respondToHeldTurnStart();
+			await submission;
+		}
+	});
+
+	it("keeps a start response without a recognized notification unavailable", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const command = submitCommand();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+		const submission = driver.execute(command);
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+		await vi.waitFor(async () => {
+			const stored = JSON.parse(await readFile(path, "utf8")) as {
+				operations: Record<string, StoredCodexOperation>;
+			};
+			expect(Object.values(stored.operations)).toContainEqual(
+				expect.objectContaining({ admissionPending: true }),
+			);
+		});
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({
+				state: "resolved",
+				admissionPending: true,
+			}),
+		);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+	});
+
+	it("keeps an expired durable model admission unavailable after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const now = vi.spyOn(Date, "now");
+		let observedDeadline: number | undefined;
+		modelTransportTestHooks.registerTurn = (_turn, deadline, register) => {
+			if (deadline === undefined) throw new Error("missing admission deadline");
+			observedDeadline = deadline;
+			now.mockReturnValue(deadline);
+			return register();
+		};
+		const command = submitCommand();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(command);
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(observedDeadline).toEqual(expect.any(Number));
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			sessions: Record<string, StoredCodexSession>;
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({
+				state: "resolved",
+				admissionPending: true,
+			}),
+		);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+		const nativeSessionRef = Object.keys(stored.sessions)[0];
+		if (!nativeSessionRef) throw new Error("missing native Session");
+		await expect(
+			driver.getStatus(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+
+		await driver.close();
+		modelTransportTestHooks.registerTurn = undefined;
+		now.mockRestore();
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			new TestCodexBridge(),
+			endpoint,
+		);
+		drivers.push(recovered);
+		await expect(recovered.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(await recovered.lookupOperation(command)).toEqual({
+			state: "unknown",
+		});
+		await expect(
+			recovered.getStatus(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(upstreamCalls).toBe(0);
+	});
+
+	it("expires model admission while durable update acknowledgement is held", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		let releasePersistence: (() => void) | undefined;
+		const persistenceReleased = new Promise<void>((resolve) => {
+			releasePersistence = resolve;
+		});
+		let admissionPersisted: (() => void) | undefined;
+		const admissionPersistedPromise = new Promise<void>((resolve) => {
+			admissionPersisted = resolve;
+		});
+		let held = false;
+		const originalUpdate = DurableJsonFile.prototype.update;
+		vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(function (
+			this: DurableJsonFile<unknown>,
+			change,
+		) {
+			return originalUpdate.call(this, change).then(async (result) => {
+				const state = this.read() as {
+					operations?: Record<string, { admissionPending?: unknown }>;
+				};
+				if (
+					!held &&
+					Object.values(state.operations ?? {}).some(
+						(operation) => operation.admissionPending === true,
+					)
+				) {
+					held = true;
+					admissionPersisted?.();
+					await persistenceReleased;
+				}
+				return result;
+			});
+		});
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		vi.useFakeTimers();
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+		await admissionPersistedPromise;
+
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(await pendingModel).not.toBe(200);
+			expect(upstreamCalls).toBe(0);
+			let submissionSettled = false;
+			void submission.then(
+				() => {
+					submissionSettled = true;
+				},
+				() => {
+					submissionSettled = true;
+				},
+			);
+			await Promise.resolve();
+			expect(submissionSettled).toBe(false);
+		} finally {
+			releasePersistence?.();
+		}
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(upstreamCalls).toBe(0);
+	});
+
+	it("does not admit a Turn completed before its start response is resolved", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		await bridge.emitTurnCompleted("completed");
+		bridge.respondToHeldTurnStart();
+
+		await expect(submission).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "completed" },
+		});
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+	});
 
 	it.each([
 		["terminal status", "codex-native-turn-private", "completed"],

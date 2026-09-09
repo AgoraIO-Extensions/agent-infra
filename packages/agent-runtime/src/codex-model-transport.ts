@@ -52,6 +52,16 @@ interface ActiveTurnRequest {
 	readonly completion: Promise<void>;
 }
 
+interface AdmissionWaiter {
+	readonly recognize: () => void;
+	readonly settle: (admitted: boolean) => void;
+}
+
+interface RecognizedTurn {
+	readonly deadline: number;
+	readonly timer: ReturnType<typeof setTimeout>;
+}
+
 function reject(response: ServerResponse, status = 502) {
 	if (response.destroyed || response.writableEnded) return;
 	response.writeHead(status, { "content-type": "application/json" });
@@ -681,14 +691,41 @@ export async function openCodexModelTransport(
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
 	const admittedTurns = new Set<string>();
+	const recognizedTurns = new Map<string, RecognizedTurn>();
 	const blockedTurns = new Set<string>();
-	const admissionWaiters = new Map<string, Set<(admitted: boolean) => void>>();
+	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
 	let closing = false;
 	const settleAdmissionWaiters = (key: string, admitted: boolean) => {
 		const waiters = admissionWaiters.get(key);
 		if (!waiters) return;
 		admissionWaiters.delete(key);
-		for (const settle of waiters) settle(admitted);
+		for (const waiter of waiters) waiter.settle(admitted);
+	};
+	const blockTurn = (key: string) => {
+		const recognized = recognizedTurns.get(key);
+		if (recognized) clearTimeout(recognized.timer);
+		recognizedTurns.delete(key);
+		admittedTurns.delete(key);
+		blockedTurns.add(key);
+		settleAdmissionWaiters(key, false);
+	};
+	const recognizeAdmissionWaiters = (key: string, deadline: number) => {
+		const existing = recognizedTurns.get(key);
+		const effectiveDeadline = Math.min(
+			existing?.deadline ?? deadline,
+			deadline,
+		);
+		if (existing) clearTimeout(existing.timer);
+		if (effectiveDeadline <= Date.now()) {
+			blockTurn(key);
+			return;
+		}
+		const timer = setTimeout(
+			() => blockTurn(key),
+			effectiveDeadline - Date.now(),
+		);
+		recognizedTurns.set(key, { deadline: effectiveDeadline, timer });
+		for (const waiter of admissionWaiters.get(key) ?? []) waiter.recognize();
 	};
 	const waitForAdmission = (key: string, signal: AbortSignal) => {
 		if (admittedTurns.has(key)) return Promise.resolve(true);
@@ -702,19 +739,27 @@ export async function openCodexModelTransport(
 			const settle = (admitted: boolean) => {
 				if (timer !== undefined) clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
-				waiters.delete(settle);
+				waiters.delete(waiter);
 				if (waiters.size === 0 && admissionWaiters.get(key) === waiters) {
 					admissionWaiters.delete(key);
 				}
 				resolve(admitted);
 			};
+			const recognize = () => {
+				if (timer !== undefined) clearTimeout(timer);
+				timer = undefined;
+			};
 			const abort = () => settle(false);
-			waiters.add(settle);
+			const waiter = { recognize, settle };
+			waiters.add(waiter);
 			signal.addEventListener("abort", abort, { once: true });
-			timer = setTimeout(() => settle(false), turnAdmissionTimeoutMs);
+			if (!recognizedTurns.has(key)) {
+				timer = setTimeout(() => settle(false), turnAdmissionTimeoutMs);
+			}
 			if (admittedTurns.has(key)) settle(true);
 			else if (closing || blockedTurns.has(key) || signal.aborted)
 				settle(false);
+			else if (recognizedTurns.has(key)) recognize();
 		});
 	};
 	const server = createServer(async (request, response) => {
@@ -854,17 +899,35 @@ export async function openCodexModelTransport(
 			endpoint: `http://127.0.0.1:${address.port}`,
 			credential: token,
 		},
-		registerTurn: (turn: CodexNativeTurn) => {
+		recognizeTurn: (turn: CodexNativeTurn, deadline: number) => {
 			const key = nativeTurnKey(turn);
-			if (closing || blockedTurns.has(key)) return;
+			if (closing || blockedTurns.has(key) || admittedTurns.has(key)) return;
+			recognizeAdmissionWaiters(key, deadline);
+		},
+		registerTurn: (turn: CodexNativeTurn, deadline?: number) => {
+			const key = nativeTurnKey(turn);
+			const recognized = recognizedTurns.get(key);
+			if (deadline !== undefined && recognized === undefined) {
+				blockTurn(key);
+				return false;
+			}
+			const effectiveDeadline = Math.min(
+				recognized?.deadline ?? Number.POSITIVE_INFINITY,
+				deadline ?? Number.POSITIVE_INFINITY,
+			);
+			if (closing || blockedTurns.has(key) || effectiveDeadline <= Date.now()) {
+				blockTurn(key);
+				return false;
+			}
+			if (recognized) clearTimeout(recognized.timer);
+			recognizedTurns.delete(key);
 			admittedTurns.add(key);
 			settleAdmissionWaiters(key, true);
+			return true;
 		},
 		cancelTurn: async (turn: CodexNativeTurn) => {
 			const key = nativeTurnKey(turn);
-			admittedTurns.delete(key);
-			blockedTurns.add(key);
-			settleAdmissionWaiters(key, false);
+			blockTurn(key);
 			const requests = [...(activeTurns.get(key) ?? [])];
 			for (const request of requests) request.terminate();
 			await Promise.all(requests.map(({ completion }) => completion));
@@ -872,6 +935,10 @@ export async function openCodexModelTransport(
 		close: () => {
 			closePromise ??= (async () => {
 				closing = true;
+				for (const recognized of recognizedTurns.values()) {
+					clearTimeout(recognized.timer);
+				}
+				recognizedTurns.clear();
 				for (const key of admissionWaiters.keys()) {
 					settleAdmissionWaiters(key, false);
 				}

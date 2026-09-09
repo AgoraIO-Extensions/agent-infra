@@ -592,6 +592,37 @@ describe("Codex model transport", () => {
 		expect(calls).toBe(0);
 	});
 
+	it("blocks an expired recognized Turn without affecting another Thread", async () => {
+		let calls = 0;
+		const target = await listen(
+			createServer((_incoming, response) => {
+				calls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, false);
+		const expiringTurn = { threadId: "thread-expiring", turnId: "turn-one" };
+		const unrelatedTurn = { threadId: "thread-unrelated", turnId: "turn-one" };
+		value.recognizeTurn(expiringTurn, Date.now() + 50);
+		const expiringRequest = request(value.modelAccess, {}, expiringTurn);
+		value.registerTurn(unrelatedTurn);
+
+		const unrelatedResponse = await request(
+			value.modelAccess,
+			{},
+			unrelatedTurn,
+		);
+		expect(unrelatedResponse.status).toBe(200);
+		expect(await unrelatedResponse.text()).toBe(completedEvent());
+		const expiredResponse = await expiringRequest;
+		expect(expiredResponse.status).toBe(409);
+		expect(value.registerTurn(expiringTurn)).toBe(false);
+		const lateResponse = await request(value.modelAccess, {}, expiringTurn);
+		expect(lateResponse.status).toBe(409);
+		expect(calls).toBe(1);
+	});
+
 	it.each([
 		[401, "application/json", 401],
 		[403, "application/json", 403],

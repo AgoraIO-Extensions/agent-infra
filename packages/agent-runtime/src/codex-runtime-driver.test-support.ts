@@ -151,10 +151,18 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 					});
 					return;
 				}
+				const turnId = this.currentTurnId();
 				this.respond(frame.id, {
 					turn: {
-						id: this.currentTurnId(),
+						id: turnId,
 						status: "inProgress",
+					},
+				});
+				this.push({
+					method: "turn/started",
+					params: {
+						threadId: "thread-opaque",
+						turn: { id: turnId, status: "inProgress", items: [] },
 					},
 				});
 				return;
