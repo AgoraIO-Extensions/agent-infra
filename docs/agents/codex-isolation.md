@@ -52,6 +52,9 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   Driver root 分开，避免诊断 Thread 影响后续隔离控制；两个点不更换 Thread、二进制或 Provider。
   Bridge 为该进程创建独立临时 HOME/TMPDIR，不继承父进程凭证，也不修改 sandbox、cwd、`CODEX_HOME`
   或任何原生回包。
+- 原始标记正向对照使用独立 Thread 的 `thread/read(includeTurns=true)` 读取主动写入的合成标记；
+  不使用会省略 item 正文的 `notLoaded` 结果证明标记可观察。对照不能替代以下两个观测点的
+  `thread/turns/list` 实际结果，任何 unsupported/error 仍原样归类为未验证。
 - 该兼容性探针只输出 point、method、非敏感 options、success/error category、`thread.status.type`、
   目标 Turn 是否匹配及外来 marker 是否缺失；不输出 ID、线程正文、路径、模型输入、完整 frame 或凭证。
   `thread/read(includeTurns=true)` 在 active Turn 中若成功，只将目标 Turn 匹配、`inProgress` 等状态分类和

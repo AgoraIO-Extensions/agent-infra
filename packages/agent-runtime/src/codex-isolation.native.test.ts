@@ -710,9 +710,22 @@ it("requires an observable raw marker control before accepting active history", 
 		activeThreadPoints.map((point) => canonical(point)),
 	);
 	const observableControl = rawForeignMarkerControl(
-		canonical("after-turn-start-accepted", {
-			data: [{ id: knownTurnId, content: foreignMarker }],
-		}),
+		nativeReadSample(
+			"after-turn-start-accepted",
+			"thread/read",
+			{ includeTurns: true },
+			{
+				category: "success",
+				result: {
+					thread: {
+						status: { type: "active" },
+						turns: [{ id: knownTurnId, items: [{ content: foreignMarker }] }],
+					},
+				},
+			},
+			knownTurnId,
+			foreignMarker,
+		),
 	);
 	expect(gateRawActiveThreadEvidence(targetEvidence, observableControl)).toBe(
 		"pass",
@@ -1660,15 +1673,17 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			)
 				return rawForeignMarkerControl(undefined, turnStarted.category);
 
-			const turns = await client.request("thread/turns/list", {
+			// This control must hydrate the deliberately seeded marker. The separate
+			// two-point paginated observations still require their own real results.
+			const turns = await client.request("thread/read", {
 				threadId: thread.id,
-				itemsView: "notLoaded",
+				includeTurns: true,
 			});
 			return rawForeignMarkerControl(
 				nativeReadSample(
 					"after-turn-start-accepted",
-					"thread/turns/list",
-					{ itemsView: "notLoaded" },
+					"thread/read",
+					{ includeTurns: true },
 					turns,
 					turn.id,
 					foreignMarker,
