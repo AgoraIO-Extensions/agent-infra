@@ -65,6 +65,132 @@ export function assertCleanRuntimeProbeSource(status, commitSha) {
 	return { commitSha, sourceDirty: false };
 }
 
+const probeStages = new Set([
+	"model-substitute",
+	"provenance-rejection",
+	"entrypoint-configuration-rejections",
+	"default-turn",
+	"execution-selection",
+	"grant-rejections",
+	"process-restart",
+	"model-stop",
+	"model-stop-request",
+	"model-cancellation",
+	"model-cancellation-request",
+	"model-cancellation-status",
+	"model-cancellation-restart",
+	"recursive-native-storage-redaction",
+	...[
+		"default",
+		"selected",
+		"resumed",
+		"stop",
+		"stop-independent",
+		"stop-follow-up",
+		"cancel",
+		"http-401",
+		"http-403",
+		"http-503",
+		"redirect",
+		"wrong-content-type",
+		"response-failed",
+		"response-incomplete",
+		"error-event",
+		"malformed",
+		"oversized",
+		"unterminated",
+		"post-terminal",
+		"unknown-event",
+		"wrong-shape",
+		"extra-error",
+		"nested-error",
+		"credential-echo",
+	].flatMap((name) =>
+		["submit", "events", "status", "failure", "stream-failure"].map(
+			(suffix) => `${name}-${suffix}`,
+		),
+	),
+]);
+const probeCodes = new Set([
+	"RUNTIME_CONFIGURATION_INVALID",
+	"RUNTIME_CODEX_CONFIGURATION_INVALID",
+	"RUNTIME_CODEX_PROTOCOL_INVALID",
+	"RUNTIME_CODEX_PROVENANCE_MISMATCH",
+	"RUNTIME_CODEX_STATE_INVALID",
+	"RUNTIME_CODEX_UNAVAILABLE",
+	"RUNTIME_DRIVER_INVALID",
+	"RUNTIME_STARTUP_FAILED",
+	"RUNTIME_GENERATION_CANCELLED",
+	"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+	"RUNTIME_REQUEST_INVALID",
+	"RUNTIME_GRANT_INVALID",
+	"RUNTIME_OPERATION_CONFLICT",
+	"RUNTIME_SESSION_BINDING_MISMATCH",
+	"RUNTIME_EXECUTION_BINDING_MISMATCH",
+	"RUNTIME_FENCE_STALE",
+	"RUNTIME_SESSION_NOT_FOUND",
+	"RUNTIME_SESSION_UNAVAILABLE",
+	"RUNTIME_SESSION_REQUIRED",
+	"RUNTIME_TURN_NOT_ACTIVE",
+]);
+
+export function safeRuntimeProbeFailure(stderr) {
+	if (typeof stderr !== "string" || Buffer.byteLength(stderr) > 4096) return;
+	let value;
+	try {
+		value = JSON.parse(stderr);
+	} catch {
+		return;
+	}
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		value.status !== "failed" ||
+		Object.keys(value).some(
+			(key) =>
+				![
+					"status",
+					"stage",
+					"startupCode",
+					"httpStatus",
+					"responseCode",
+					"isolationFileKind",
+					"modelRequests",
+				].includes(key),
+		)
+	)
+		return;
+	const safe = { status: "failed" };
+	if (probeStages.has(value.stage)) safe.stage = value.stage;
+	for (const key of ["startupCode", "responseCode"])
+		if (probeCodes.has(value[key])) safe[key] = value[key];
+	if (
+		Number.isInteger(value.httpStatus) &&
+		value.httpStatus >= 100 &&
+		value.httpStatus <= 599
+	)
+		safe.httpStatus = value.httpStatus;
+	if (
+		Number.isInteger(value.modelRequests) &&
+		value.modelRequests >= 0 &&
+		value.modelRequests <= 1000
+	)
+		safe.modelRequests = value.modelRequests;
+	if (
+		[
+			"native-history:rollout",
+			"native-history:other-jsonl",
+			"native-database",
+			"other",
+		].includes(value.isolationFileKind)
+	)
+		safe.isolationFileKind = value.isolationFileKind;
+	return JSON.stringify(safe);
+}
+
+class RuntimeProbeFailure extends Error {}
+
 export async function probeRuntimeImage({
 	image,
 	source,
@@ -82,8 +208,8 @@ export async function probeRuntimeImage({
 	}
 	const { commitSha } = source;
 	const docker = process.env.DOCKER_BIN ?? "docker";
-	const command = (args, name, timeoutMs = 30_000) =>
-		runCommand(docker, args, { cwd: root, name, timeoutMs });
+	const command = (args, name, timeoutMs = 30_000, onFailure) =>
+		runCommand(docker, args, { cwd: root, name, timeoutMs, onFailure });
 	const inspect = () => {
 		try {
 			const inspection = JSON.parse(
@@ -103,12 +229,11 @@ export async function probeRuntimeImage({
 		inspection.Config?.Labels?.["org.opencontainers.image.revision"] !==
 		commitSha
 	) {
-		throw new Error("Codex runtime image source commit does not match checkout");
+		throw new Error(
+			"Codex runtime image source commit does not match checkout",
+		);
 	}
-	if (
-		imageDigest &&
-		imageDigest !== inspection.Descriptor?.digest
-	) {
+	if (imageDigest && imageDigest !== inspection.Descriptor?.digest) {
 		throw new Error("Codex runtime image digest does not match verified build");
 	}
 	const labels = process.env.AO_SESSION_ID
@@ -137,11 +262,19 @@ export async function probeRuntimeImage({
 			],
 			"Native Codex HTTP/SSE image probe",
 			180_000,
+			(stderr) => {
+				const detail = safeRuntimeProbeFailure(stderr);
+				if (detail)
+					throw new RuntimeProbeFailure(
+						`Native Codex HTTP/SSE image probe failed: ${detail}`,
+					);
+			},
 		);
 	let result;
 	try {
 		result = validateRuntimeProbe(JSON.parse(run()));
-	} catch {
+	} catch (error) {
+		if (error instanceof RuntimeProbeFailure) throw error;
 		throw new Error("Native Codex HTTP/SSE image probe failed");
 	}
 	try {
@@ -180,7 +313,10 @@ export async function probeRuntimeImage({
 	};
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		let [image, output, ...extra] = process.argv.slice(2);
 		if (!image || !output) {
