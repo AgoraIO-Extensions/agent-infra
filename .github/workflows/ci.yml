@@ -88,7 +88,12 @@ jobs:
       - name: Build deployment images
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: pnpm docker:build
+        run: |
+          if test -f .github/scripts/vulnerability-scan.mjs; then
+            node .github/scripts/vulnerability-scan.mjs build
+          else
+            pnpm docker:build
+          fi
 
       - name: Probe native Codex runtime image
         id: runtime_probe

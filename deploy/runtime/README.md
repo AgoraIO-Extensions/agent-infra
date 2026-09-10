@@ -77,7 +77,8 @@ probe 只接受 clean checkout；存在未提交修改时直接失败，不写�
 现有 `build-images.mjs` 在任何发布前执行同一 probe，并在 image manifest 旁保存
 `.runtime-probe.json`，绑定该 clean commit、已核验镜像 Digest 与 Codex/config 版本。
 扫描结果仍由 #405 的统一入口提供，使用同一 commit 与镜像内容标识关联。
-该入口落地后 CI 使用 `--scan-build .vulnerability-scan/build.json`，要求其 `source.commit`
+该入口落地后 CI 的镜像构建步骤直接使用扫描器的 `build` 命令，并以本次生成的
+`--scan-build .vulnerability-scan/build.json` 执行 probe，要求其 `source.commit`
 匹配当前 commit，并直接运行 `agent-runtime-host` 记录的 `imageId`。对应
 `imageId` 必须相同；缺失或不匹配的构建记录不能回退到 Compose Tag。
 

@@ -48,6 +48,8 @@ type OpenCodexBridge = (
 
 export interface CodexRuntimeDriverOptions {
 	readonly path: string;
+	// Deployment-owned native executable search path; never supplied by wire commands.
+	readonly launchPath?: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
@@ -133,8 +135,10 @@ interface CodexOperation {
 	configVersion?: string;
 	internalModel?: string;
 	reasoningLevel?: string;
-	// Recovery must not expose or re-register the accepted record until this clears.
+	// Durable admission confirmation has not returned successfully.
 	admissionPending?: true;
+	// Confirmation persisted, but timely transport admission is not durably recorded.
+	admissionRecoveryPending?: true;
 	executionId?: string;
 	turnId?: string;
 	record?: RuntimeDriverOperationRecord;
@@ -543,6 +547,7 @@ function isCodexOperation(
 			"internalModel",
 			"reasoningLevel",
 			"admissionPending",
+			"admissionRecoveryPending",
 			"executionId",
 			"turnId",
 			"record",
@@ -610,7 +615,11 @@ function isCodexOperation(
 		return false;
 	}
 	if (value.state === "prepared") {
-		return value.admissionPending === undefined && value.record === undefined;
+		return (
+			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined &&
+			value.record === undefined
+		);
 	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = (
@@ -633,11 +642,21 @@ function isCodexOperation(
 	if (record.data.result.outcome !== "accepted") {
 		return (
 			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined &&
 			record.data.result.outcome !== "unknown"
 		);
 	}
-	if (isInterruption) return value.admissionPending === undefined;
-	if (value.admissionPending !== undefined && value.admissionPending !== true) {
+	if (isInterruption)
+		return (
+			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined
+		);
+	if (
+		(value.admissionPending !== undefined && value.admissionPending !== true) ||
+		(value.admissionRecoveryPending !== undefined &&
+			value.admissionRecoveryPending !== true) ||
+		(value.admissionPending === true && value.admissionRecoveryPending === true)
+	) {
 		return false;
 	}
 	const execution = ownRecordValue(session.executions, record.data.operationId);
@@ -1444,6 +1463,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			nativeBridge = await openBridge({
 				dataDirectory: `${options.path}.native`,
+				...(options.launchPath === undefined
+					? {}
+					: { launchPath: options.launchPath }),
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
@@ -1571,6 +1593,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (prepared.operation.record) {
 			if (
 				prepared.operation.admissionPending ||
+				prepared.operation.admissionRecoveryPending ||
 				!this.canReplaySubmitOperation(prepared.operation)
 			)
 				unavailable();
@@ -1629,6 +1652,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 		};
 		let candidateModelTurn: CodexNativeTurn | undefined;
+		let modelTurnAdmitted = false;
 		try {
 			const turn = await this.rpc.request(
 				"turn/start",
@@ -1696,6 +1720,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				await this.cancelModelTurn?.(nativeTurn);
 				unavailable();
 			}
+			await this.confirmModelAdmission(command, session.nativeSessionRef, true);
 			if (
 				Date.now() >= admissionDeadline ||
 				(this.registerModelTurn !== undefined &&
@@ -1714,6 +1739,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				}
 				unavailable();
 			}
+			modelTurnAdmitted = true;
 			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
 			await this.confirmModelAdmission(command, session.nativeSessionRef);
 			return record;
@@ -1742,8 +1768,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
-			if (!this.hasPendingModelAdmission(command)) {
-				await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+			if (modelTurnAdmitted || !this.hasPendingModelAdmission(command)) {
+				const operation = this.operationRecord(command);
+				if (
+					operation?.state === "resolved" &&
+					operation.record?.result.outcome === "accepted"
+				) {
+					await this.update((state) => {
+						const current = ownRecordValue(state.operations, admissionKey);
+						if (
+							current?.state !== "resolved" ||
+							current.record?.result.outcome !== "accepted"
+						)
+							stateInvalid();
+						current.admissionRecoveryPending = true;
+					});
+				} else {
+					await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+				}
 			}
 			throw error;
 		} finally {
@@ -1812,7 +1854,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!operation) return { state: "missing" };
 		if (!operationMatchesCommand(operation, command))
 			return { state: "unknown" };
-		if (operation.admissionPending) return { state: "unknown" };
+		if (operation.admissionPending || operation.admissionRecoveryPending)
+			return { state: "unknown" };
 		if (
 			command.kind === "submit-turn" &&
 			!this.canReplaySubmitOperation(operation)
@@ -2086,7 +2129,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				operationId: execution.executionId,
 			}),
 		);
-		if (operation?.admissionPending) unavailable();
+		if (operation?.admissionPending || operation?.admissionRecoveryPending)
+			unavailable();
 	}
 
 	private executionOperation(
@@ -3092,7 +3136,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private hasPendingModelAdmission(command: CodexSubmitTurnCommand) {
-		return this.operationRecord(command)?.admissionPending === true;
+		const operation = this.operationRecord(command);
+		return (
+			operation?.admissionPending === true ||
+			operation?.admissionRecoveryPending === true
+		);
 	}
 
 	private hasInterruption(nativeSessionRef: string, executionId: string) {
@@ -3107,6 +3155,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async confirmModelAdmission(
 		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
+		recoveryPending = false,
 	) {
 		await this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
@@ -3114,11 +3163,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				operation?.state !== "resolved" ||
 				operation.nativeSessionRef !== nativeSessionRef ||
 				operation.record?.result.outcome !== "accepted" ||
-				operation.admissionPending !== true
+				(operation.admissionPending !== true &&
+					operation.admissionRecoveryPending !== true)
 			) {
 				stateInvalid();
 			}
 			delete operation.admissionPending;
+			delete operation.admissionRecoveryPending;
+			if (recoveryPending) operation.admissionRecoveryPending = true;
 		});
 	}
 

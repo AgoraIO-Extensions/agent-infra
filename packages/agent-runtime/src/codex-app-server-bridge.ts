@@ -24,6 +24,7 @@ import {
 	resolve,
 	sep,
 } from "node:path";
+import { env } from "node:process";
 import { TextDecoder } from "node:util";
 
 const defaultTimeoutMs = 5_000;
@@ -69,6 +70,7 @@ export interface CodexModelAccess {
 const modelCredentialEnvironmentKey = "AGENT_INFRA_CODEX_MODEL_CREDENTIAL";
 
 export interface CodexAppServerBridgeOptions {
+	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
 	readonly model: string;
@@ -103,6 +105,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	readonly launchPath?: string;
 	dataDirectory: string;
 	model: string;
 	reasoningEffort: string;
@@ -277,6 +280,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"launchPath",
 		"dataDirectory",
 		"model",
 		"reasoningEffort",
@@ -304,12 +308,26 @@ function validateOptions(input: unknown): ValidatedOptions {
 	) {
 		configurationInvalid();
 	}
+	if (
+		input.launchPath !== undefined &&
+		(typeof input.launchPath !== "string" ||
+			!input.launchPath ||
+			[...input.launchPath].some(
+				(character) =>
+					character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+			) ||
+			input.launchPath
+				.split(delimiter)
+				.some((entry) => !entry || !isAbsolute(entry)))
+	)
+		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
 	const modelAccess = validateModelAccess(input.modelAccess);
 	if (modelAccess && !namespacedModelPattern.test(input.model)) {
 		configurationInvalid();
 	}
 	return {
+		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
@@ -411,8 +429,7 @@ async function reapChild(
 	await waitForResult(closed, timeoutMs);
 }
 
-async function resolveCodexExecutable() {
-	const path = process.env.PATH;
+async function resolveCodexExecutable(path: string | undefined) {
 	if (!path) throw unavailable();
 	for (const directory of path.split(delimiter)) {
 		if (!directory) continue;
@@ -427,8 +444,9 @@ async function resolveCodexExecutable() {
 	throw unavailable();
 }
 
-async function createIsolatedLaunchPolicy(): Promise<IsolatedLaunchPolicy> {
-	const path = process.env.PATH;
+async function createIsolatedLaunchPolicy(
+	path: string | undefined,
+): Promise<IsolatedLaunchPolicy> {
 	if (!path) throw unavailable();
 	try {
 		const directory = await mkdtemp(
@@ -699,8 +717,9 @@ export class CodexAppServerBridge {
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
-		const executable = await resolveCodexExecutable();
-		const launchPolicy = await createIsolatedLaunchPolicy();
+		const launchPath = validated.launchPath ?? env.PATH;
+		const executable = await resolveCodexExecutable(launchPath);
+		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
 		let nativeLaunchPolicy: IsolatedLaunchPolicy;
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);

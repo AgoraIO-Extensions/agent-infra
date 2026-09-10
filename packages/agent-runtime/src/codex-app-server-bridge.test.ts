@@ -7,6 +7,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	realpath,
 	rm,
 	symlink,
 	writeFile,
@@ -76,6 +77,7 @@ if (capturePath) {
   appendFileSync(capturePath, JSON.stringify({
     args,
     executable: process.argv[1],
+    launchPath: process.env.PATH,
     pid: process.pid,
     cwd: process.cwd(),
     environmentKeys: Object.keys(process.env).sort(),
@@ -190,6 +192,7 @@ async function readCaptures(path: string, minimum = 1) {
 						JSON.parse(line) as {
 							args: string[];
 							executable: string;
+							launchPath: string;
 							pid: number;
 							cwd: string;
 							environmentKeys: string[];
@@ -266,6 +269,75 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	it("isolates concurrent explicit launch paths from the parent PATH", async () => {
+		const first = await installFakeCodex("echo");
+		const second = await installFakeCodex("echo");
+		process.env.PATH = "/synthetic-parent-path-without-codex";
+		const captures = [first, second];
+		const paths = captures.map(
+			({ capturePath }) =>
+				`${dirname(capturePath)}:${dirname(process.execPath)}`,
+		);
+		const bridges = await Promise.all(
+			paths.map((launchPath) =>
+				CodexAppServerBridge.open(options({ launchPath })),
+			),
+		);
+		try {
+			expect(process.env.PATH).toBe("/synthetic-parent-path-without-codex");
+			for (const [index, capture] of captures.entries()) {
+				const launches = await readCaptures(capture.capturePath, 3);
+				expect(launches).toHaveLength(3);
+				for (const launch of launches) {
+					expect(launch.launchPath).toBe(paths[index]);
+					expect(launch.executable).toBe(
+						await realpath(join(dirname(capture.capturePath), "codex")),
+					);
+				}
+			}
+		} finally {
+			await Promise.all(bridges.map((bridge) => bridge.close()));
+		}
+	});
+	it.each([
+		["empty", ""],
+		["relative", "bin"],
+		["mixed relative", "/usr/bin:bin"],
+		["leading empty component", ":/usr/bin"],
+		["trailing empty component", "/usr/bin:"],
+		["interior empty component", "/usr/bin::/bin"],
+		["NUL", "/usr/bin\0"],
+		["newline", "/usr/bin\n"],
+		["DEL", "/usr/bin\x7f"],
+		["null", null],
+		["array", ["/usr/bin"]],
+	])(
+		"rejects an explicit launch PATH with %s before spawning",
+		async (_name, launchPath) => {
+			const { capturePath } = await installFakeCodex("echo");
+			const parentPath = process.env.PATH;
+			await expect(
+				CodexAppServerBridge.open(options({ launchPath })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			expect(process.env.PATH).toBe(parentPath);
+			await expect(readFile(capturePath, "utf8")).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		},
+	);
+
+	it("does not fall back to parent PATH when an explicit launch path is unavailable", async () => {
+		await installFakeCodex("echo");
+		const parentPath = process.env.PATH;
+		await expect(
+			CodexAppServerBridge.open(
+				options({ launchPath: "/synthetic-missing-codex" }),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_UNAVAILABLE" });
+		expect(process.env.PATH).toBe(parentPath);
+	});
 	it("reuses native storage while replacing and cleaning only the temporary HOME", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		const configuration = options();

@@ -106,11 +106,10 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		: undefined;
 	if (configuration) {
 		await verifyCodexPilotInstallation();
-		// The fixed image executable was verified above; personal PATH cannot select it.
-		process.env.PATH = "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin";
 	}
 	const driver = configuration
 		? await CodexRuntimeDriver.open({
+				launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 				path: join(dataDirectory, "codex-driver.json"),
 				configVersion: configuration.configVersion,
 				defaultModelOptionId: configuration.defaultModelOptionId,

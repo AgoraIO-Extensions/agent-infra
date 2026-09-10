@@ -90,63 +90,75 @@ describe("RuntimeHost environment assembly", () => {
 		await runtime.close();
 	});
 
-	it("passes the parsed configuration revision into the Codex Driver", async () => {
-		const values = await environment();
-		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
-		const originalPath = process.env.PATH;
-		let openedWith: CodexRuntimeDriverOptions | undefined;
-		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
-			protocolVersion: 2,
-			codexVersion: "synthetic-codex",
-			upstreamTag: "synthetic-tag",
-			upstreamCommit: "synthetic-commit",
-			schemaSha256: "synthetic-schema-sha256",
-		});
-		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
-			async (options: CodexRuntimeDriverOptions) => {
-				openedWith = options;
-				return FakeRuntimeDriver.open(
-					join(dataDirectory, "codex-assembly-test.json"),
-				);
-			},
-		);
-		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
-		try {
-			runtime = await assembleRuntimeHost({
-				...values,
-				AGENT_INFRA_RUNTIME_DRIVER: "codex",
-				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
-				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
-				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
-					schemaVersion: 2,
+	it.each([false, true])(
+		"passes configuration without mutating PATH, failure=%s",
+		async (failure) => {
+			const values = await environment();
+			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+			const originalPath = process.env.PATH;
+			let openedWith: CodexRuntimeDriverOptions | undefined;
+			runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+				protocolVersion: 2,
+				codexVersion: "synthetic-codex",
+				upstreamTag: "synthetic-tag",
+				upstreamCommit: "synthetic-commit",
+				schemaSha256: "synthetic-schema-sha256",
+			});
+			runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+				async (options: CodexRuntimeDriverOptions) => {
+					openedWith = options;
+					expect(process.env.PATH).toBe(originalPath);
+					if (failure) throw new Error("synthetic driver open failure");
+					return FakeRuntimeDriver.open(
+						join(dataDirectory, "codex-assembly-test.json"),
+					);
+				},
+			);
+			let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+			try {
+				const assembling = assembleRuntimeHost({
+					...values,
+					AGENT_INFRA_RUNTIME_DRIVER: "codex",
+					AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+					AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+					AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+						schemaVersion: 2,
+						configVersion: "active-revision-17",
+						defaultModelOptionId: "model-option-primary",
+						defaultReasoningLevel: "high",
+						modelOptions: [
+							{
+								modelOptionId: "model-option-primary",
+								endpoint: "https://models.example.test/v1",
+								model: "gpt-5.3-codex",
+								reasoningLevels: ["high"],
+								credentialEnvironmentVariable:
+									"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+							},
+						],
+					}),
+				});
+				if (failure)
+					await expect(assembling).rejects.toThrow(
+						"synthetic driver open failure",
+					);
+				else runtime = await assembling;
+				expect(process.env.PATH).toBe(originalPath);
+				expect(openedWith).toMatchObject({
+					path: join(dataDirectory, "codex-driver.json"),
 					configVersion: "active-revision-17",
-					defaultModelOptionId: "model-option-primary",
-					defaultReasoningLevel: "high",
-					modelOptions: [
-						{
-							modelOptionId: "model-option-primary",
-							endpoint: "https://models.example.test/v1",
-							model: "gpt-5.3-codex",
-							reasoningLevels: ["high"],
-							credentialEnvironmentVariable:
-								"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
-						},
-					],
-				}),
-			});
-			expect(openedWith).toMatchObject({
-				path: join(dataDirectory, "codex-driver.json"),
-				configVersion: "active-revision-17",
-			});
-		} finally {
-			await runtime?.close();
-			if (originalPath === undefined) {
-				delete process.env.PATH;
-			} else {
-				process.env.PATH = originalPath;
+					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
+				});
+			} finally {
+				await runtime?.close();
+				if (originalPath === undefined) {
+					delete process.env.PATH;
+				} else {
+					process.env.PATH = originalPath;
+				}
 			}
-		}
-	});
+		},
+	);
 
 	it.each([
 		{ AGENT_INFRA_RUNTIME_DRIVER: "plugin" },

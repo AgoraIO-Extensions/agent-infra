@@ -570,6 +570,39 @@ describe("Codex model transport", () => {
 		);
 	});
 
+	it.each([
+		["assistant", 200],
+		["system", 502],
+		["user", 502],
+	] as const)(
+		"enforces the pinned output message role for real SSE role %s",
+		async (role, expectedStatus) => {
+			const outputItem = event({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					role,
+					content: [{ type: "output_text", text: "synthetic answer" }],
+				},
+			});
+			const target = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(outputItem + completedEvent());
+				}),
+			);
+			const value = await transport(target);
+			const response = await request(value.modelAccess);
+
+			expect(response.status).toBe(expectedStatus);
+			expect(await response.text()).toBe(
+				role === "assistant"
+					? outputItem + completedEvent()
+					: '{"error":{"message":"Model request failed"}}',
+			);
+		},
+	);
+
 	it("rejects a named event that does not match the JSON type", async () => {
 		const target = await listen(
 			createServer((_incoming, response) => {

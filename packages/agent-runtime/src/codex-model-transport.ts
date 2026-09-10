@@ -314,7 +314,7 @@ function projectResponseItem(value: unknown) {
 	if (!optionalString(value, "id", item)) return;
 	switch (value.type) {
 		case "message": {
-			if (typeof value.role !== "string") return;
+			if (value.role !== "assistant") return;
 			const content = projectTextItems(value.content, [
 				"input_text",
 				"output_text",

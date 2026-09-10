@@ -1091,6 +1091,36 @@ afterEach(async () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it("passes a deployment launch PATH only when configured without changing the process PATH", async () => {
+		const directory = await runtimeDirectory();
+		const processPath = process.env.PATH;
+		const launchPath = "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin";
+		for (const configuredPath of [launchPath, undefined]) {
+			let received: CodexAppServerBridgeOptions | undefined;
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(
+						join(directory, configuredPath ? "explicit.json" : "default.json"),
+					),
+					...(configuredPath === undefined
+						? {}
+						: { launchPath: configuredPath }),
+				},
+				async (options) => {
+					received = options;
+					expect(process.env.PATH).toBe(processPath);
+					return bridge;
+				},
+			);
+			drivers.push(driver);
+			expect(process.env.PATH).toBe(processPath);
+			if (configuredPath === undefined)
+				expect(received).not.toHaveProperty("launchPath");
+			else expect(received).toHaveProperty("launchPath", launchPath);
+		}
+	});
+
 	it("replaces upstream access with loopback access and revokes it on Driver close", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -2366,7 +2396,7 @@ describe("Codex Runtime Driver", () => {
 		expect(Object.values(stored.operations)).toContainEqual(
 			expect.objectContaining({
 				state: "resolved",
-				admissionPending: true,
+				admissionRecoveryPending: true,
 			}),
 		);
 		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
@@ -2498,6 +2528,212 @@ describe("Codex Runtime Driver", () => {
 		expect(output).toBe(completedEvent());
 		expect(upstreamCalls).toBe(1);
 	}, 10000);
+
+	it.each([
+		"success",
+		"deadline",
+		"failure",
+		"recovery-failure",
+		"recovery-ack-failure",
+		"recovery-disk-failure",
+	] as const)(
+		"parks model requests until final durable admission acknowledgement: %s",
+		async (outcome) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommand();
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const held = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let intercept = true;
+			const originalUpdate = DurableJsonFile.prototype.update;
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(
+				function (this: DurableJsonFile<unknown>, change) {
+					const before = this.read() as {
+						operations?: Record<
+							string,
+							{ admissionPending?: true; admissionRecoveryPending?: true }
+						>;
+					};
+					const wasPending = Object.values(before.operations ?? {}).some(
+						(operation) => operation.admissionPending,
+					);
+					return originalUpdate
+						.call(this, async (draft) => {
+							const result = await change(draft);
+							const after = draft as typeof before;
+							if (
+								(outcome === "recovery-failure" ||
+									outcome === "recovery-disk-failure") &&
+								Object.values(before.operations ?? {}).some(
+									(operation) => operation.admissionRecoveryPending,
+								) &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionRecoveryPending,
+								)
+							) {
+								await vi.waitFor(() => expect(upstreamCalls).toBe(1));
+								if (outcome === "recovery-disk-failure") {
+									// The replacement file is visible, but fsync failed before in-memory state advanced.
+									await writeFile(path, JSON.stringify(draft));
+									expect(
+										Object.values(
+											(this.read() as typeof before).operations ?? {},
+										).some((operation) => operation.admissionRecoveryPending),
+									).toBe(true);
+								}
+
+								throw new Error("recovery confirmation persistence failed");
+							}
+							return result;
+						})
+						.then(async (result) => {
+							const after = this.read() as typeof before;
+							if (
+								outcome === "recovery-ack-failure" &&
+								Object.values(before.operations ?? {}).some(
+									(operation) => operation.admissionRecoveryPending,
+								) &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionRecoveryPending,
+								)
+							) {
+								await vi.waitFor(() => expect(upstreamCalls).toBe(1));
+								throw new Error("recovery confirmation acknowledgement failed");
+							}
+
+							if (
+								intercept &&
+								wasPending &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionPending,
+								)
+							) {
+								intercept = false;
+								held.resolve();
+								await release.promise;
+							}
+							return result;
+						});
+				},
+			);
+			const bridge = new TestCodexBridge();
+			bridge.holdTurnStart();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submission = driver.execute(command);
+			void submission.catch(() => {});
+			await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+			await bridge.emitNotification();
+			if (!loopback) throw new Error("missing loopback access");
+			const pendingModel = modelRequest(loopback, bridge).then(
+				(response) => response.status,
+				() => "closed",
+			);
+			bridge.respondToHeldTurnStart();
+			await held.promise;
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				expect(upstreamCalls).toBe(0);
+				const stored = JSON.parse(await readFile(path, "utf8")) as {
+					sessions: Record<string, unknown>;
+					operations: Record<string, StoredCodexOperation>;
+				};
+				expect(Object.values(stored.operations)).toContainEqual(
+					expect.objectContaining({ admissionRecoveryPending: true }),
+				);
+				const ref = Object.keys(stored.sessions)[0];
+				if (!ref) throw new Error("missing Session");
+				expect(await driver.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				await expect(
+					driver.getStatus(ref, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				const recoveredBridge = new TestCodexBridge();
+				const recovered = await openDriverWithModelEndpoint(
+					path,
+					recoveredBridge,
+					endpoint,
+				);
+				drivers.push(recovered);
+				const before = recoveredBridge.requests.length;
+				await expect(recovered.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+				await expect(
+					recovered.getStatus(ref, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				expect(recoveredBridge.requests.length).toBe(before);
+				if (outcome === "deadline")
+					vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+				if (outcome === "failure")
+					release.reject(new Error("confirmation acknowledgement failed"));
+			} finally {
+				release.resolve();
+			}
+			if (outcome === "success") {
+				await expect(submission).resolves.toMatchObject({
+					result: { outcome: "accepted", status: "running" },
+				});
+				expect(await pendingModel).toBe(200);
+				expect(upstreamCalls).toBe(1);
+			} else {
+				await expect(submission).rejects.toThrow();
+				if (
+					outcome === "recovery-failure" ||
+					outcome === "recovery-ack-failure" ||
+					outcome === "recovery-disk-failure"
+				) {
+					expect(await pendingModel).toBe(200);
+					expect(upstreamCalls).toBe(1);
+				} else {
+					expect(await pendingModel).not.toBe(200);
+					expect(upstreamCalls).toBe(0);
+				}
+				expect(await driver.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				const stored = JSON.parse(await readFile(path, "utf8")) as {
+					operations: Record<string, StoredCodexOperation>;
+				};
+				expect(Object.values(stored.operations)).toContainEqual(
+					expect.objectContaining({ admissionRecoveryPending: true }),
+				);
+				await driver.close();
+				const restartedBridge = new TestCodexBridge();
+				const restarted = await openDriverWithModelEndpoint(
+					path,
+					restartedBridge,
+					endpoint,
+				);
+				drivers.push(restarted);
+				const requestsBefore = restartedBridge.requests.length;
+				await expect(restarted.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+				expect(await restarted.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				expect(restartedBridge.requests.length).toBe(requestsBefore);
+			}
+		},
+	);
 
 	it("expires model admission while durable update acknowledgement is held", async () => {
 		const directory = await runtimeDirectory();
