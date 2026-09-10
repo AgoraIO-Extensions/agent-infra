@@ -24,6 +24,7 @@ import {
 	resolve,
 	sep,
 } from "node:path";
+import { env } from "node:process";
 import { TextDecoder } from "node:util";
 
 const defaultTimeoutMs = 5_000;
@@ -31,7 +32,9 @@ const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
 const maximumFrameBytes = 65_536;
 const maximumQueuedFrames = 256;
-const modelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const realModelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const namespacedModelPattern =
+	/^[A-Za-z0-9_-]+\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const reasoningEffortPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -59,11 +62,20 @@ export const CODEX_APP_SERVER_V2_PROVENANCE = Object.freeze({
 
 export type CodexAppServerFrame = Readonly<Record<string, unknown>>;
 
+export interface CodexModelAccess {
+	readonly endpoint: string;
+	readonly credential: string;
+}
+
+const modelCredentialEnvironmentKey = "AGENT_INFRA_CODEX_MODEL_CREDENTIAL";
+
 export interface CodexAppServerBridgeOptions {
+	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
+	readonly modelAccess?: CodexModelAccess;
 	readonly provenance: CodexAppServerProvenanceV2;
 	readonly startupTimeoutMs?: number;
 	readonly shutdownTimeoutMs?: number;
@@ -93,9 +105,11 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	readonly launchPath?: string;
 	dataDirectory: string;
 	model: string;
 	reasoningEffort: string;
+	modelAccess?: CodexModelAccess;
 	startupTimeoutMs: number;
 	shutdownTimeoutMs: number;
 }
@@ -266,9 +280,11 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"launchPath",
 		"dataDirectory",
 		"model",
 		"reasoningEffort",
+		"modelAccess",
 		"provenance",
 		"startupTimeoutMs",
 		"shutdownTimeoutMs",
@@ -285,20 +301,96 @@ function validateOptions(input: unknown): ValidatedOptions {
 			(character) => character.charCodeAt(0) < 32,
 		) ||
 		typeof input.model !== "string" ||
-		!modelPattern.test(input.model) ||
+		(!realModelPattern.test(input.model) &&
+			!namespacedModelPattern.test(input.model)) ||
 		typeof input.reasoningEffort !== "string" ||
 		!reasoningEffortPattern.test(input.reasoningEffort)
 	) {
 		configurationInvalid();
 	}
+	if (
+		input.launchPath !== undefined &&
+		(typeof input.launchPath !== "string" ||
+			!input.launchPath ||
+			[...input.launchPath].some(
+				(character) =>
+					character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+			) ||
+			input.launchPath
+				.split(delimiter)
+				.some((entry) => !entry || !isAbsolute(entry)))
+	)
+		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
+	const modelAccess = validateModelAccess(input.modelAccess);
+	if (modelAccess && !namespacedModelPattern.test(input.model)) {
+		configurationInvalid();
+	}
 	return {
+		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
+		...(modelAccess ? { modelAccess } : {}),
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
+}
+
+export function validateModelAccess(
+	input: unknown,
+): CodexModelAccess | undefined {
+	if (input === undefined) return undefined;
+	if (
+		!isPlainRecord(input) ||
+		!exactKeys(input, ["endpoint", "credential"]) ||
+		typeof input.endpoint !== "string" ||
+		input.endpoint.length > 2048 ||
+		/[\s\\?#]/.test(input.endpoint) ||
+		typeof input.credential !== "string" ||
+		!/^[\x21-\x7e]{16,8192}$/.test(input.credential)
+	) {
+		configurationInvalid();
+	}
+	try {
+		const endpoint = new URL(input.endpoint);
+		// Match the literal authority, not URL-normalized numeric host aliases.
+		const literalLoopback =
+			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(
+				input.endpoint,
+			);
+		if (
+			(endpoint.protocol !== "https:" && !literalLoopback) ||
+			endpoint.username ||
+			endpoint.password ||
+			endpoint.search ||
+			endpoint.hash
+		) {
+			configurationInvalid();
+		}
+	} catch {
+		configurationInvalid();
+	}
+	return { endpoint: input.endpoint, credential: input.credential };
+}
+
+function modelAccessArguments(access: CodexModelAccess | undefined) {
+	if (!access) return [];
+	const settings = {
+		model_provider: "agent_infra",
+		"model_providers.agent_infra.name": "Agent Infra Active Model",
+		"model_providers.agent_infra.base_url": access.endpoint,
+		"model_providers.agent_infra.env_key": modelCredentialEnvironmentKey,
+		"model_providers.agent_infra.wire_api": "responses",
+		"model_providers.agent_infra.requires_openai_auth": false,
+		"model_providers.agent_infra.supports_websockets": false,
+		"model_providers.agent_infra.request_max_retries": 0,
+		"model_providers.agent_infra.stream_max_retries": 0,
+	};
+	return Object.entries(settings).flatMap(([key, value]) => [
+		"--config",
+		`${key}=${JSON.stringify(value)}`,
+	]);
 }
 
 function kill(
@@ -337,8 +429,7 @@ async function reapChild(
 	await waitForResult(closed, timeoutMs);
 }
 
-async function resolveCodexExecutable() {
-	const path = process.env.PATH;
+async function resolveCodexExecutable(path: string | undefined) {
 	if (!path) throw unavailable();
 	for (const directory of path.split(delimiter)) {
 		if (!directory) continue;
@@ -353,8 +444,9 @@ async function resolveCodexExecutable() {
 	throw unavailable();
 }
 
-async function createIsolatedLaunchPolicy(): Promise<IsolatedLaunchPolicy> {
-	const path = process.env.PATH;
+async function createIsolatedLaunchPolicy(
+	path: string | undefined,
+): Promise<IsolatedLaunchPolicy> {
 	if (!path) throw unavailable();
 	try {
 		const directory = await mkdtemp(
@@ -625,8 +717,9 @@ export class CodexAppServerBridge {
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
-		const executable = await resolveCodexExecutable();
-		const launchPolicy = await createIsolatedLaunchPolicy();
+		const launchPath = validated.launchPath ?? env.PATH;
+		const executable = await resolveCodexExecutable(launchPath);
+		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
 		let nativeLaunchPolicy: IsolatedLaunchPolicy;
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
@@ -655,11 +748,20 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
+					...modelAccessArguments(validated.modelAccess),
 				],
 				{
 					stdio: ["pipe", "pipe", "pipe"],
 					cwd: nativeLaunchPolicy.directory,
-					env: nativeLaunchPolicy.environment,
+					env: {
+						...nativeLaunchPolicy.environment,
+						...(validated.modelAccess
+							? {
+									[modelCredentialEnvironmentKey]:
+										validated.modelAccess.credential,
+								}
+							: {}),
+					},
 				},
 			);
 		} catch {

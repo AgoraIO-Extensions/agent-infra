@@ -104,6 +104,18 @@ services:
       retries: 5
       start_period: 10s
 
+  agent-runtime-host:
+    profiles: ["runtime"]
+    build:
+      context: .
+      dockerfile: apps/agent-runtime-host/Dockerfile
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
 volumes:
   local-topology-object-storage:
   local-topology-postgres:

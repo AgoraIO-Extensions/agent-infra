@@ -49,6 +49,9 @@ Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
 `IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
 `IMAGE_REGISTRY_INSECURE=true`，生产 Registry 必须使用 HTTPS。
 
+RuntimeHost 镜像额外通过[Codex Pilot 原生 HTTP/SSE probe](runtime/README.md#镜像验证)，
+对应证据与 image manifest 使用相同 commit 和镜像 Digest。
+
 release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
 检查：
 

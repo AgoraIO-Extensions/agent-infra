@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type {
@@ -18,7 +18,15 @@ import {
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
+	type CodexModelAccess,
+	validateModelAccess,
 } from "./codex-app-server-bridge.js";
+import {
+	type CodexModelRoute,
+	type CodexModelTurnAdmission,
+	type CodexNativeTurn,
+	openCodexModelTransport,
+} from "./codex-model-transport.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -40,14 +48,26 @@ type OpenCodexBridge = (
 
 export interface CodexRuntimeDriverOptions {
 	readonly path: string;
-	readonly model: string;
-	readonly reasoningEffort: string;
+	// Deployment-owned native executable search path; never supplied by wire commands.
+	readonly launchPath?: string;
+	readonly configVersion: string;
+	readonly defaultModelOptionId: string;
+	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
 }
 
 export interface CodexRuntimeModelOption {
 	readonly modelOptionId: string;
 	readonly model: string;
+	readonly reasoningLevels: readonly string[];
+	readonly endpoint?: string;
+	readonly credential?: string;
+}
+
+interface ConfiguredCodexRuntimeModelOption {
+	readonly modelOptionId: string;
+	readonly model: string;
+	readonly internalModel: string;
 	readonly reasoningLevels: readonly string[];
 }
 
@@ -112,6 +132,13 @@ interface CodexOperation {
 	schemaVersion: 1 | 2;
 	state: "prepared" | "resolved";
 	nativeSessionRef: string;
+	configVersion?: string;
+	internalModel?: string;
+	reasoningLevel?: string;
+	// Durable admission confirmation has not returned successfully.
+	admissionPending?: true;
+	// Confirmation persisted, but timely transport admission is not durably recorded.
+	admissionRecoveryPending?: true;
 	executionId?: string;
 	turnId?: string;
 	record?: RuntimeDriverOperationRecord;
@@ -143,6 +170,8 @@ const capabilities: RuntimeCapabilitiesV1 = {
 
 const itemsListPageSize = 100;
 const maximumItemsListPages = 8;
+const modelsListPageSize = 100;
+const maximumModelsListPages = 8;
 const turnsListPageSize = 100;
 const maximumTurnsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
@@ -514,6 +543,11 @@ function isCodexOperation(
 			"schemaVersion",
 			"state",
 			"nativeSessionRef",
+			"configVersion",
+			"internalModel",
+			"reasoningLevel",
+			"admissionPending",
+			"admissionRecoveryPending",
 			"executionId",
 			"turnId",
 			"record",
@@ -552,6 +586,25 @@ function isCodexOperation(
 	}
 	if (value.schemaVersion === 2 && kind !== "submit-turn") return false;
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
+	if (
+		(kind === "submit-turn" &&
+			value.configVersion !== undefined &&
+			(typeof value.configVersion !== "string" ||
+				!codexModelPattern.test(value.configVersion))) ||
+		(value.internalModel !== undefined &&
+			(isInterruption ||
+				typeof value.internalModel !== "string" ||
+				!/^(?:[a-f0-9]{64}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
+					value.internalModel,
+				))) ||
+		(value.reasoningLevel !== undefined &&
+			(isInterruption ||
+				typeof value.reasoningLevel !== "string" ||
+				!codexReasoningPattern.test(value.reasoningLevel))) ||
+		(isInterruption && value.configVersion !== undefined)
+	) {
+		return false;
+	}
 	if (isInterruption) {
 		if (!nonEmptyString(value.executionId) || !nonEmptyString(value.turnId)) {
 			return false;
@@ -562,7 +615,11 @@ function isCodexOperation(
 		return false;
 	}
 	if (value.state === "prepared") {
-		return value.record === undefined;
+		return (
+			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined &&
+			value.record === undefined
+		);
 	}
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = (
@@ -583,9 +640,25 @@ function isCodexOperation(
 		return false;
 	}
 	if (record.data.result.outcome !== "accepted") {
-		return record.data.result.outcome !== "unknown";
+		return (
+			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined &&
+			record.data.result.outcome !== "unknown"
+		);
 	}
-	if (isInterruption) return true;
+	if (isInterruption)
+		return (
+			value.admissionPending === undefined &&
+			value.admissionRecoveryPending === undefined
+		);
+	if (
+		(value.admissionPending !== undefined && value.admissionPending !== true) ||
+		(value.admissionRecoveryPending !== undefined &&
+			value.admissionRecoveryPending !== true) ||
+		(value.admissionPending === true && value.admissionRecoveryPending === true)
+	) {
+		return false;
+	}
 	const execution = ownRecordValue(session.executions, record.data.operationId);
 	return (
 		execution !== undefined && execution.status === record.data.result.status
@@ -782,7 +855,11 @@ function statusForTurn(
 
 function assertContainedConfiguration(
 	value: unknown,
-	expected: Pick<CodexRuntimeDriverOptions, "model" | "reasoningEffort">,
+	expected: {
+		model: string;
+		reasoningEffort: string;
+		modelAccess?: CodexModelAccess;
+	},
 ) {
 	if (
 		!isPlainRecord(value) ||
@@ -804,16 +881,90 @@ function assertContainedConfiguration(
 	for (const key of isolatedConfigurationKeys) {
 		if (!isEmptyRecord(value.config[key])) configurationInvalid();
 	}
+	if (expected.modelAccess) {
+		const configuredProvider = {
+			name: "Agent Infra Active Model",
+			base_url: expected.modelAccess.endpoint,
+			env_key: "AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+			wire_api: "responses",
+			requires_openai_auth: false,
+			supports_websockets: false,
+			request_max_retries: 0,
+			stream_max_retries: 0,
+		};
+		const expectedProvider = {
+			...configuredProvider,
+			env_key_instructions: null,
+			experimental_bearer_token: null,
+			auth: null,
+			aws: null,
+			query_params: null,
+			http_headers: null,
+			env_http_headers: null,
+			stream_idle_timeout_ms: null,
+			websocket_connect_timeout_ms: null,
+			supports_standalone_web_search: false,
+		};
+		const providers = value.config.model_providers;
+		const provider = isPlainRecord(providers)
+			? providers.agent_infra
+			: undefined;
+		if (
+			value.config.model_provider !== "agent_infra" ||
+			!isPlainRecord(provider) ||
+			!hasOnlyKeys(provider, Object.keys(expectedProvider)) ||
+			Object.entries(expectedProvider).some(
+				([key, expectedValue]) => provider[key] !== expectedValue,
+			)
+		) {
+			configurationInvalid();
+		}
+		for (const key of [
+			"model_provider",
+			...Object.keys(configuredProvider).map(
+				(key) => `model_providers.agent_infra.${key}`,
+			),
+		]) {
+			const origin = ownRecordValue(value.origins, key);
+			if (origin === undefined) configurationInvalid();
+			assertSessionFlagOrigin(origin);
+		}
+	}
 }
 
 function configuredModelOptions(options: CodexRuntimeDriverOptions) {
-	const configured = new Map<string, CodexRuntimeModelOption>();
+	if (
+		typeof options.configVersion !== "string" ||
+		!codexModelPattern.test(options.configVersion)
+	) {
+		configurationInvalid();
+	}
+	const configured = new Map<string, ConfiguredCodexRuntimeModelOption>();
+	const routes: CodexModelRoute[] = [];
 	const values: unknown = options.modelOptions;
 	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
+	const routed = values.every(
+		(value) =>
+			isPlainRecord(value) &&
+			value.endpoint !== undefined &&
+			value.credential !== undefined,
+	);
+	if (
+		!routed &&
+		values.some(
+			(value) =>
+				isPlainRecord(value) &&
+				(value.endpoint !== undefined || value.credential !== undefined),
+		)
+	) {
+		configurationInvalid();
+	}
 	for (const value of values) {
+		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
+		if (routed) expectedKeys.push("endpoint", "credential");
 		if (
 			!isPlainRecord(value) ||
-			!hasOnlyKeys(value, ["modelOptionId", "model", "reasoningLevels"]) ||
+			!hasOnlyKeys(value, expectedKeys) ||
 			!nonEmptyString(value.modelOptionId) ||
 			typeof value.model !== "string" ||
 			!codexModelPattern.test(value.model) ||
@@ -828,22 +979,138 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 		) {
 			configurationInvalid();
 		}
+		const internalModel = routed
+			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
+			: value.model;
+		if (routed) {
+			const access = validateModelAccess({
+				endpoint: value.endpoint,
+				credential: value.credential,
+			});
+			if (!access) configurationInvalid();
+			routes.push({
+				internalModel,
+				model: value.model,
+				...access,
+			});
+		}
 		configured.set(value.modelOptionId, {
 			modelOptionId: value.modelOptionId,
 			model: value.model,
+			internalModel,
 			reasoningLevels: [...value.reasoningLevels],
 		});
 	}
-	if (
-		![...configured.values()].some(
-			(option) =>
-				option.model === options.model &&
-				option.reasoningLevels.includes(options.reasoningEffort),
-		)
-	) {
+	const defaultOption = configured.get(options.defaultModelOptionId);
+	if (!defaultOption?.reasoningLevels.includes(options.defaultReasoningLevel)) {
 		configurationInvalid();
 	}
-	return configured;
+	return {
+		configured,
+		defaultSelection: {
+			model: defaultOption.internalModel,
+			effort: options.defaultReasoningLevel,
+		},
+		routes,
+	};
+}
+
+interface PinnedModelProfile {
+	model: string;
+	reasoningLevels: ReadonlySet<string>;
+}
+
+function parsePinnedModelProfiles(value: unknown) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["data", "nextCursor"]) ||
+		!Array.isArray(value.data) ||
+		(value.nextCursor !== undefined &&
+			value.nextCursor !== null &&
+			!nonEmptyString(value.nextCursor))
+	) {
+		protocolInvalid();
+	}
+	const profiles: PinnedModelProfile[] = [];
+	for (const model of value.data) {
+		if (
+			!isPlainRecord(model) ||
+			typeof model.model !== "string" ||
+			!codexModelPattern.test(model.model) ||
+			!Array.isArray(model.supportedReasoningEfforts)
+		) {
+			protocolInvalid();
+		}
+		const reasoningLevels = new Set<string>();
+		for (const effort of model.supportedReasoningEfforts) {
+			if (
+				!isPlainRecord(effort) ||
+				typeof effort.reasoningEffort !== "string" ||
+				!codexReasoningPattern.test(effort.reasoningEffort) ||
+				reasoningLevels.has(effort.reasoningEffort)
+			) {
+				protocolInvalid();
+			}
+			reasoningLevels.add(effort.reasoningEffort);
+		}
+		profiles.push({ model: model.model, reasoningLevels });
+	}
+	return {
+		profiles,
+		nextCursor: value.nextCursor as string | null | undefined,
+	};
+}
+
+async function assertPinnedModelProfiles(
+	rpc: CodexRpc,
+	modelOptions: ReadonlyMap<string, ConfiguredCodexRuntimeModelOption>,
+) {
+	const profiles: PinnedModelProfile[] = [];
+	const cursors = new Set<string>();
+	const modelNames = new Set<string>();
+	let cursor: string | undefined;
+	for (let page = 0; page < maximumModelsListPages; page += 1) {
+		const result = await rpc.request(
+			"model/list",
+			{
+				includeHidden: true,
+				limit: modelsListPageSize,
+				...(cursor ? { cursor } : {}),
+			},
+			parsePinnedModelProfiles,
+		);
+		for (const profile of result.profiles) {
+			if (modelNames.has(profile.model)) protocolInvalid();
+			modelNames.add(profile.model);
+			profiles.push(profile);
+		}
+		if (!result.nextCursor) {
+			for (const option of modelOptions.values()) {
+				const profile = profiles.reduce<PinnedModelProfile | undefined>(
+					(best, candidate) =>
+						(option.model === candidate.model ||
+							option.model.startsWith(`${candidate.model}-`)) &&
+						(!best || candidate.model.length > best.model.length)
+							? candidate
+							: best,
+					undefined,
+				);
+				if (
+					!profile ||
+					option.reasoningLevels.some(
+						(level) => !profile.reasoningLevels.has(level),
+					)
+				) {
+					configurationInvalid();
+				}
+			}
+			return;
+		}
+		if (cursors.has(result.nextCursor)) protocolInvalid();
+		cursors.add(result.nextCursor);
+		cursor = result.nextCursor;
+	}
+	protocolInvalid();
 }
 
 function turnStartedNotification(frame: CodexAppServerFrame) {
@@ -924,6 +1191,7 @@ class CodexRpc {
 		parse: (value: unknown) => T,
 		nativeSelectionRejection = false,
 		allowHistoryMaterializationRetry = false,
+		deadlineAt = Date.now() + rpcRequestTimeoutMs,
 	) {
 		if (this.failed) unavailable();
 		const id = this.nextRequestId++;
@@ -940,10 +1208,13 @@ class CodexRpc {
 		const timeoutError = unavailableError();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const deadline = new Promise<never>((_, reject) => {
-			timer = setTimeout(() => {
-				this.fail(timeoutError);
-				reject(timeoutError);
-			}, rpcRequestTimeoutMs);
+			timer = setTimeout(
+				() => {
+					this.fail(timeoutError);
+					reject(timeoutError);
+				},
+				Math.max(0, deadlineAt - Date.now()),
+			);
 		});
 		try {
 			await Promise.race([this.bridge.send({ id, method, params }), deadline]);
@@ -1093,6 +1364,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
 	private readonly observedNativeTurnStarts = new Set<string>();
 	private readonly nativeTurnStartWaiters = new Map<string, Set<() => void>>();
+	private readonly modelAdmissionDeadlines = new Map<string, number>();
+	private readonly modelTurnAdmissions = new Map<
+		string,
+		CodexModelTurnAdmission
+	>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
@@ -1101,8 +1377,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	protected constructor(
 		private readonly file: DurableJsonFile<CodexDriverState>,
 		bridge: CodexAppServerTransport,
-		private readonly modelOptions: ReadonlyMap<string, CodexRuntimeModelOption>,
+		private readonly modelOptions: ReadonlyMap<
+			string,
+			ConfiguredCodexRuntimeModelOption
+		>,
 		private readonly defaultSelection: { model: string; effort: string },
+		private readonly configVersion: string,
+		private readonly beginModelTurnAdmission?: (
+			deadline: number,
+			internalModel: string,
+			threadId: string,
+			reasoningLevel: string,
+		) => CodexModelTurnAdmission,
+		private readonly recognizeModelTurn?: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) => boolean,
+		private readonly registerModelTurn?: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) => boolean,
+		private readonly abandonModelTurnAdmission?: (
+			admission: CodexModelTurnAdmission,
+		) => void,
+		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
+		private readonly revokeModelTurn?: (turn: CodexNativeTurn) => void,
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
 	}
@@ -1147,23 +1446,70 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
-		const modelOptions = configuredModelOptions(options);
+		const {
+			configured: modelOptions,
+			defaultSelection,
+			routes,
+		} = configuredModelOptions(options);
 		const file = await CodexRuntimeDriver.openState(options.path);
-		let bridge: CodexAppServerTransport;
+		const modelTransport =
+			routes.length > 0 ? await openCodexModelTransport(routes) : undefined;
+		const containedConfiguration = {
+			model: defaultSelection.model,
+			reasoningEffort: defaultSelection.effort,
+			...(modelTransport ? { modelAccess: modelTransport.modelAccess } : {}),
+		};
+		let nativeBridge: CodexAppServerTransport;
 		try {
-			bridge = await openBridge({
+			nativeBridge = await openBridge({
 				dataDirectory: `${options.path}.native`,
-				model: options.model,
-				reasoningEffort: options.reasoningEffort,
+				...(options.launchPath === undefined
+					? {}
+					: { launchPath: options.launchPath }),
+				model: defaultSelection.model,
+				reasoningEffort: defaultSelection.effort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+				...(containedConfiguration.modelAccess
+					? { modelAccess: containedConfiguration.modelAccess }
+					: {}),
 			});
 		} catch {
+			await modelTransport?.close();
 			unavailable();
 		}
-		const driver = new CodexRuntimeDriver(file, bridge, modelOptions, {
-			model: options.model,
-			effort: options.reasoningEffort,
-		});
+		let closePromise: Promise<void> | undefined;
+		const bridge: CodexAppServerTransport = modelTransport
+			? {
+					send: (frame) => nativeBridge.send(frame),
+					frames: () => nativeBridge.frames(),
+					close: () => {
+						closePromise ??= (async () => {
+							const results = await Promise.allSettled([
+								nativeBridge.close?.(),
+								modelTransport.close(),
+							]);
+							const rejected = results.find(
+								(result) => result.status === "rejected",
+							);
+							if (rejected?.status === "rejected") throw rejected.reason;
+						})();
+						return closePromise;
+					},
+				}
+			: nativeBridge;
+		const driver = new CodexRuntimeDriver(
+			file,
+			bridge,
+			modelOptions,
+			defaultSelection,
+			options.configVersion,
+			modelTransport?.beginTurnAdmission,
+			modelTransport?.recognizeTurn,
+			modelTransport?.registerTurn,
+			modelTransport?.abandonTurnAdmission,
+			modelTransport?.cancelTurn,
+			modelTransport?.revokeTurn,
+		);
 		try {
 			await driver.rpc.request(
 				"initialize",
@@ -1179,9 +1525,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				"config/read",
 				{ includeLayers: false },
 				(value) => {
-					assertContainedConfiguration(value, options);
+					assertContainedConfiguration(value, containedConfiguration);
 				},
 			);
+			if (modelTransport) {
+				await assertPinnedModelProfiles(driver.rpc, modelOptions);
+			}
 			return driver;
 		} catch (error) {
 			await driver.close();
@@ -1240,23 +1589,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
-		const nativeSelection =
-			command.schemaVersion === 2
-				? this.nativeSelection(command.selection)
-				: this.defaultSelection;
 		const prepared = await this.prepare(command);
-		if (prepared.operation.record) return prepared.operation.record;
-		if (command.schemaVersion === 2 && !nativeSelection) {
-			return this.resolve(command, prepared.operation.nativeSessionRef, {
-				outcome: "rejected",
-				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
-				message: "Runtime model selection is unsupported",
-				retryable: false,
-			});
+		if (prepared.operation.record) {
+			if (
+				prepared.operation.admissionPending ||
+				prepared.operation.admissionRecoveryPending ||
+				!this.canReplaySubmitOperation(prepared.operation)
+			)
+				unavailable();
+			return prepared.operation.record;
 		}
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
+		const nativeSelection = this.operationSelection(prepared.operation);
+		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
 			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
 		let session: CodexSession;
@@ -1284,6 +1631,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				outcome: "busy",
 			});
 		}
+		if (!session.threadId) stateInvalid();
+		const admissionKey = operationKey(command);
+		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
+		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
+		if (!prepared.operation.internalModel) stateInvalid();
+		const modelAdmission = this.beginModelTurnAdmission?.(
+			admissionDeadline,
+			prepared.operation.internalModel,
+			session.threadId,
+			nativeSelection.effort,
+		);
+		if (modelAdmission)
+			this.modelTurnAdmissions.set(admissionKey, modelAdmission);
+		const abandonModelAdmission = () => {
+			if (!modelAdmission) return;
+			this.abandonModelTurnAdmission?.(modelAdmission);
+			if (this.modelTurnAdmissions.get(admissionKey) === modelAdmission) {
+				this.modelTurnAdmissions.delete(admissionKey);
+			}
+		};
+		let candidateModelTurn: CodexNativeTurn | undefined;
+		let modelTurnAdmitted = false;
 		try {
 			const turn = await this.rpc.request(
 				"turn/start",
@@ -1308,15 +1677,90 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					};
 				},
 				command.schemaVersion === 2,
+				false,
+				admissionDeadline,
 			);
-			return await this.resolve(
+			const nativeTurn = {
+				threadId: session.threadId,
+				turnId: turn.id,
+			};
+			candidateModelTurn = nativeTurn;
+			const record = await this.resolve(
 				command,
 				session.nativeSessionRef,
 				{ outcome: "accepted", status: turn.status },
 				turn.id,
+				turn.status === "running",
 			);
+			if (
+				record.result.outcome !== "accepted" ||
+				record.result.status !== "running"
+			) {
+				abandonModelAdmission();
+				await this.cancelModelTurn?.(nativeTurn);
+				return record;
+			}
+			const recognized = await this.waitForNativeTurnStarted(
+				nativeTurn.threadId,
+				nativeTurn.turnId,
+				admissionDeadline,
+			);
+			if (!recognized) {
+				const current = this.operationRecord(command);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status !== "running"
+				) {
+					abandonModelAdmission();
+					await this.cancelModelTurn?.(nativeTurn);
+					await this.confirmModelAdmission(command, session.nativeSessionRef);
+					return current.record;
+				}
+				abandonModelAdmission();
+				await this.cancelModelTurn?.(nativeTurn);
+				unavailable();
+			}
+			await this.confirmModelAdmission(command, session.nativeSessionRef, true);
+			if (
+				Date.now() >= admissionDeadline ||
+				(this.registerModelTurn !== undefined &&
+					(!modelAdmission ||
+						this.registerModelTurn(modelAdmission, nativeTurn) === false))
+			) {
+				abandonModelAdmission();
+				await this.cancelModelTurn?.(nativeTurn);
+				const current = this.operationRecord(command);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status !== "running"
+				) {
+					await this.confirmModelAdmission(command, session.nativeSessionRef);
+					return current.record;
+				}
+				unavailable();
+			}
+			modelTurnAdmitted = true;
+			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
+			await this.confirmModelAdmission(command, session.nativeSessionRef);
+			return record;
 		} catch (error) {
-			if (error instanceof CodexModelSelectionRejectedError) {
+			abandonModelAdmission();
+			const pendingModelTurn = this.pendingModelTurn(
+				command,
+				session.nativeSessionRef,
+			);
+			const cancelledKeys = new Set<string>();
+			for (const turn of [candidateModelTurn, pendingModelTurn]) {
+				if (!turn) continue;
+				const key = this.nativeTurnKey(turn.threadId, turn.turnId);
+				if (cancelledKeys.has(key)) continue;
+				cancelledKeys.add(key);
+				await this.cancelModelTurn?.(turn);
+			}
+			if (
+				error instanceof CodexModelSelectionRejectedError &&
+				!pendingModelTurn
+			) {
 				return this.resolve(command, session.nativeSessionRef, {
 					outcome: "rejected",
 					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
@@ -1324,8 +1768,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
-			await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+			if (modelTurnAdmitted || !this.hasPendingModelAdmission(command)) {
+				const operation = this.operationRecord(command);
+				if (
+					operation?.state === "resolved" &&
+					operation.record?.result.outcome === "accepted"
+				) {
+					await this.update((state) => {
+						const current = ownRecordValue(state.operations, admissionKey);
+						if (
+							current?.state !== "resolved" ||
+							current.record?.result.outcome !== "accepted"
+						)
+							stateInvalid();
+						current.admissionRecoveryPending = true;
+					});
+				} else {
+					await this.markAcceptanceUncertain(command, session.nativeSessionRef);
+				}
+			}
 			throw error;
+		} finally {
+			abandonModelAdmission();
+			if (
+				this.modelAdmissionDeadlines.get(admissionKey) === admissionDeadline
+			) {
+				this.modelAdmissionDeadlines.delete(admissionKey);
+			}
 		}
 	}
 
@@ -1334,7 +1803,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!option?.reasoningLevels.includes(selection.reasoningLevel)) {
 			return undefined;
 		}
-		return { model: option.model, effort: selection.reasoningLevel };
+		return { model: option.internalModel, effort: selection.reasoningLevel };
 	}
 
 	private async executeInterruption(command: CodexInterruptionCommand) {
@@ -1343,32 +1812,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		let status = await this.getStatus(
+		const nativeTurn = this.interruptionNativeTurn(
 			prepared.operation.nativeSessionRef,
-			command.executionId,
+			command,
 		);
-		if (status === "running") {
-			const session = this.session(prepared.operation.nativeSessionRef);
-			const execution = ownRecordValue(session.executions, command.executionId);
-			if (
-				!session.threadId ||
-				!execution ||
-				execution.turnId !== command.turnId
-			) {
-				unavailable();
-			}
-			await this.rpc.request(
-				"turn/interrupt",
-				{ threadId: session.threadId, turnId: execution.nativeTurnId },
-				(value) => {
-					if (!isEmptyRecord(value)) protocolInvalid();
-				},
-			);
-			status = await this.getStatus(
+		// The durable interruption intent fences new requests before asking the
+		// native runtime to cancel. Aborting its stream first can manufacture a
+		// failed Turn before turn/interrupt reaches the native runtime.
+		this.revokeModelTurn?.(nativeTurn);
+		try {
+			const status = await this.getStatus(
 				prepared.operation.nativeSessionRef,
 				command.executionId,
 			);
+			if (status === "running") {
+				await this.rpc.request("turn/interrupt", nativeTurn, (value) => {
+					if (!isEmptyRecord(value)) protocolInvalid();
+				});
+			}
+		} finally {
+			await this.cancelModelTurn?.(nativeTurn);
 		}
+		const status = await this.getStatus(
+			prepared.operation.nativeSessionRef,
+			command.executionId,
+		);
 		return this.resolveInterruption(
 			command,
 			prepared.operation.nativeSessionRef,
@@ -1386,13 +1854,26 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!operation) return { state: "missing" };
 		if (!operationMatchesCommand(operation, command))
 			return { state: "unknown" };
+		if (operation.admissionPending || operation.admissionRecoveryPending)
+			return { state: "unknown" };
+		if (
+			command.kind === "submit-turn" &&
+			!this.canReplaySubmitOperation(operation)
+		)
+			return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
+		this.revokeModelTurn?.(
+			this.interruptionNativeTurn(operation.nativeSessionRef, command),
+		);
 		const status = await this.getStatus(
 			operation.nativeSessionRef,
 			command.executionId,
 		);
 		if (status === "running") return { state: "unknown" };
+		await this.cancelModelTurn?.(
+			this.interruptionNativeTurn(operation.nativeSessionRef, command),
+		);
 		return {
 			state: "found",
 			record: await this.resolveInterruption(
@@ -1404,22 +1885,128 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
-		let session = this.session(nativeSessionRef);
+		return this.restoreExecutionStatus(nativeSessionRef, executionId);
+	}
+
+	private async restoreExecutionStatus(
+		nativeSessionRef: string,
+		executionId: string,
+		recoverEventHistory = false,
+	) {
+		const initialState = this.readState();
+		let session = ownRecordValue(initialState.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
-		if (execution.status !== "running") return execution.status;
-		await this.resumeSession(nativeSessionRef);
-		session = this.session(nativeSessionRef);
-		execution = ownRecordValue(session.executions, executionId);
-		if (!execution || !session.threadId) unavailable();
-		if (execution.status !== "running") return execution.status;
-		const status = await this.readNativeTurnStatus(session, execution);
-		return this.updateExecutionStatus(
-			nativeSessionRef,
-			executionId,
-			execution.nativeTurnId,
-			status,
-		);
+		this.assertModelAdmissionConfirmed(session, execution);
+		if (execution.status !== "running") {
+			if (
+				!this.executionConfigurationMatches(initialState, session, execution)
+			) {
+				return execution.status;
+			}
+			await this.cancelModelTurn?.({
+				threadId: session.threadId,
+				turnId: execution.nativeTurnId,
+			});
+			return execution.status;
+		}
+		this.assertExecutionConfiguration(initialState, session, execution);
+		const nativeTurn = {
+			threadId: session.threadId,
+			turnId: execution.nativeTurnId,
+		};
+		const restoreRequired =
+			!this.hasInterruption(nativeSessionRef, executionId) &&
+			this.beginModelTurnAdmission !== undefined &&
+			this.recognizeModelTurn !== undefined &&
+			this.registerModelTurn !== undefined;
+		let restoreAdmission: CodexModelTurnAdmission | undefined;
+		if (restoreRequired) {
+			const selection = this.operationSelection(
+				this.executionOperation(initialState, session, execution),
+			);
+			if (!selection) unavailable();
+			restoreAdmission = this.beginModelTurnAdmission?.(
+				Date.now() + rpcRequestTimeoutMs,
+				selection.model,
+				nativeTurn.threadId,
+				selection.effort,
+			);
+			if (
+				restoreAdmission &&
+				this.recognizeModelTurn?.(restoreAdmission, nativeTurn) === false
+			) {
+				this.abandonModelTurnAdmission?.(restoreAdmission);
+				restoreAdmission = undefined;
+			}
+		}
+		try {
+			await this.resumeSession(nativeSessionRef);
+			session = this.session(nativeSessionRef);
+			execution = ownRecordValue(session.executions, executionId);
+			if (!execution || !session.threadId) unavailable();
+			this.assertModelAdmissionConfirmed(session, execution);
+			if (execution.status !== "running") {
+				await this.cancelModelTurn?.({
+					threadId: session.threadId,
+					turnId: execution.nativeTurnId,
+				});
+				if (recoverEventHistory) {
+					const items = await this.readNativeAgentMessageItems(
+						session.threadId,
+						execution.nativeTurnId,
+					);
+					await this.persistRecoveredAgentMessageItems(
+						nativeSessionRef,
+						executionId,
+						execution.nativeTurnId,
+						items,
+					);
+				}
+				return execution.status;
+			}
+			if (
+				session.threadId !== nativeTurn.threadId ||
+				execution.nativeTurnId !== nativeTurn.turnId
+			) {
+				stateInvalid();
+			}
+			const status = await this.readNativeTurnStatus(session, execution);
+			if (recoverEventHistory) {
+				const items = await this.readNativeAgentMessageItems(
+					session.threadId,
+					execution.nativeTurnId,
+				);
+				await this.persistRecoveredAgentMessageItems(
+					nativeSessionRef,
+					executionId,
+					execution.nativeTurnId,
+					items,
+				);
+			}
+			const persistedStatus = await this.updateExecutionStatus(
+				nativeSessionRef,
+				executionId,
+				execution.nativeTurnId,
+				status,
+			);
+			if (persistedStatus !== "running") {
+				await this.cancelModelTurn?.(nativeTurn);
+			} else if (
+				restoreRequired &&
+				(!restoreAdmission ||
+					this.hasInterruption(nativeSessionRef, executionId) ||
+					this.registerModelTurn?.(restoreAdmission, nativeTurn) !== true)
+			) {
+				unavailable();
+			}
+			return persistedStatus;
+		} finally {
+			if (restoreAdmission) {
+				this.abandonModelTurnAdmission?.(restoreAdmission);
+			}
+		}
 	}
 
 	async getCapabilities() {
@@ -1431,10 +2018,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 	): Promise<RuntimeEventV1[]> {
+		const existingSession = this.session(nativeSessionRef);
+		const existingExecution = ownRecordValue(
+			existingSession.executions,
+			executionId,
+		);
+		if (!existingExecution) unavailable();
+		this.assertModelAdmissionConfirmed(existingSession, existingExecution);
 		await this.recoverEventHistory(nativeSessionRef, executionId);
 		const session = this.session(nativeSessionRef);
 		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
 		const journal = ownRecordValue(
 			session.journals ?? {},
 			execution.nativeTurnId,
@@ -1520,6 +2115,65 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return state;
 	}
 
+	private assertModelAdmissionConfirmed(
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		const operation = ownRecordValue(
+			this.readState().operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: execution.executionId,
+			}),
+		);
+		if (operation?.admissionPending || operation?.admissionRecoveryPending)
+			unavailable();
+	}
+
+	private executionOperation(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: execution.executionId,
+			}),
+		);
+		if (!operation) stateInvalid();
+		return operation;
+	}
+
+	private executionConfigurationMatches(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		const operation = this.executionOperation(state, session, execution);
+		return (
+			operation.configVersion === this.configVersion &&
+			this.operationSelection(operation) !== undefined
+		);
+	}
+
+	private assertExecutionConfiguration(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		if (!this.executionConfigurationMatches(state, session, execution)) {
+			unavailable();
+		}
+	}
+
 	private update<R>(change: (state: CodexDriverState) => R) {
 		return this.file.update((state) => {
 			assertDriverState(state);
@@ -1532,7 +2186,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async recordNotification(frame: CodexAppServerFrame) {
 		const started = turnStartedNotification(frame);
 		if (started) {
-			const streamKey = await this.update((state) => {
+			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
 					started.threadId,
@@ -1545,20 +2199,39 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					resolved.session,
 					resolved.journal,
 				);
-				return resolved.execution && appended
-					? this.eventStreamKey(
-							resolved.nativeSessionRef,
-							resolved.execution.executionId,
-						)
-					: undefined;
+				return {
+					pendingOperationKey: resolved.pendingOperationKey,
+					streamKey:
+						resolved.execution && appended
+							? this.eventStreamKey(
+									resolved.nativeSessionRef,
+									resolved.execution.executionId,
+								)
+							: undefined,
+				};
 			});
-			this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
-			if (streamKey) this.notifyEventStream(streamKey);
+			const admissionDeadline = recorded?.pendingOperationKey
+				? this.modelAdmissionDeadlines.get(recorded.pendingOperationKey)
+				: undefined;
+			const modelAdmission = recorded?.pendingOperationKey
+				? this.modelTurnAdmissions.get(recorded.pendingOperationKey)
+				: undefined;
+			if (admissionDeadline !== undefined && modelAdmission !== undefined) {
+				this.recognizeModelTurn?.(modelAdmission, {
+					threadId: started.threadId,
+					turnId: started.nativeTurnId,
+				});
+			}
+			if (recorded) {
+				this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
+			}
+			if (recorded?.streamKey) this.notifyEventStream(recorded.streamKey);
 			return;
 		}
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
+			let recognized = false;
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -1566,6 +2239,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					completed.nativeTurnId,
 				);
 				if (!resolved) return;
+				recognized = true;
 				const appended = this.appendCompletedEvent(
 					resolved.session,
 					resolved.journal,
@@ -1590,6 +2264,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				completed.threadId,
 				completed.nativeTurnId,
 			);
+			if (recognized) {
+				await this.cancelModelTurn?.({
+					threadId: completed.threadId,
+					turnId: completed.nativeTurnId,
+				});
+			}
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
@@ -1635,22 +2315,39 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = Object.values(session.executions).find(
 			(candidate) => candidate.nativeTurnId === nativeTurnId,
 		);
+		const executionOperationKey = execution
+			? operationKey({
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					kind: "submit-turn",
+					operationId: execution.executionId,
+				})
+			: undefined;
+		const executionOperation = executionOperationKey
+			? ownRecordValue(state.operations, executionOperationKey)
+			: undefined;
 		const preparedOperations = Object.entries(state.operations).filter(
 			([, operation]) =>
 				operation.nativeSessionRef === nativeSessionRef &&
-				operation.state === "prepared",
+				operation.state === "prepared" &&
+				operation.executionId === undefined &&
+				operation.turnId === undefined,
 		);
 		if (preparedOperations.length > 1) stateInvalid();
-		const pendingOperationKey = preparedOperations[0]?.[0];
+		const pendingOperationKey = executionOperation?.admissionPending
+			? executionOperationKey
+			: preparedOperations[0]?.[0];
 		if (!execution && !pendingOperationKey) return undefined;
 		return {
 			nativeSessionRef,
 			session,
 			execution,
+			pendingOperationKey,
 			journal: this.ensureJournal(
 				session,
 				nativeTurnId,
-				execution ? undefined : pendingOperationKey,
+				execution ? undefined : preparedOperations[0]?.[0],
 			),
 		};
 	}
@@ -1714,6 +2411,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeItemId: string,
 		delta: string,
 	) {
+		this.assertJournalOpen(journal);
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
 		const event: CodexJournalTextEvent = {
 			cursor,
@@ -1723,11 +2421,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			type: "text",
 			payload: { delta },
 		};
-		const completedIndex = journal.events.findIndex(
-			(candidate) => candidate.type === "completed",
-		);
-		if (completedIndex === -1) journal.events.push(event);
-		else journal.events.splice(completedIndex, 0, event);
+		journal.events.push(event);
 	}
 
 	private appendCompletedEvent(
@@ -1871,17 +2565,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 	) {
-		let session = this.session(nativeSessionRef);
+		const initialState = this.readState();
+		let session = ownRecordValue(initialState.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
+		this.assertModelAdmissionConfirmed(session, execution);
+		if (execution.status === "running") {
+			await this.restoreExecutionStatus(nativeSessionRef, executionId, true);
+			return;
+		}
+		if (!this.executionConfigurationMatches(initialState, session, execution)) {
+			return;
+		}
 		await this.resumeSession(nativeSessionRef);
 		session = this.session(nativeSessionRef);
 		execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
-		const status =
-			execution.status === "running"
-				? await this.readNativeTurnStatus(session, execution)
-				: execution.status;
+		this.assertModelAdmissionConfirmed(session, execution);
 		const items = await this.readNativeAgentMessageItems(
 			session.threadId,
 			execution.nativeTurnId,
@@ -1891,12 +2592,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 			execution.nativeTurnId,
 			items,
-		);
-		await this.updateExecutionStatus(
-			nativeSessionRef,
-			executionId,
-			execution.nativeTurnId,
-			status,
 		);
 	}
 
@@ -2095,6 +2790,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async waitForNativeTurnStarted(
 		threadId: string,
 		nativeTurnId: string,
+		deadline = Date.now() + rpcRequestTimeoutMs,
 	) {
 		const key = this.nativeTurnKey(threadId, nativeTurnId);
 		if (this.observedNativeTurnStarts.has(key)) return true;
@@ -2110,7 +2806,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					return;
 				}
 				waiters.add(wake);
-				timer = setTimeout(wake, rpcRequestTimeoutMs);
+				timer = setTimeout(wake, Math.max(0, deadline - Date.now()));
 			});
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
@@ -2242,6 +2938,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return execution.status;
 	}
 
+	private operationSelection(operation: CodexOperation) {
+		const model = operation.internalModel;
+		const effort = operation.reasoningLevel;
+		if (
+			model === undefined ||
+			effort === undefined ||
+			![...this.modelOptions.values()].some(
+				(option) =>
+					option.internalModel === model &&
+					option.reasoningLevels.includes(effort),
+			)
+		)
+			return undefined;
+		return { model, effort };
+	}
+
+	private canReplaySubmitOperation(operation: CodexOperation) {
+		return (
+			operation.record?.result.outcome !== "accepted" ||
+			operation.record.result.status !== "running" ||
+			(operation.configVersion === this.configVersion &&
+				this.operationSelection(operation) !== undefined)
+		);
+	}
+
 	private async prepare(command: CodexSubmitTurnCommand) {
 		return this.update((state) => {
 			const key = operationKey(command);
@@ -2280,6 +3001,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				) {
 					unavailable();
 				}
+				if (session.activeExecutionId !== undefined) {
+					const activeExecution = ownRecordValue(
+						session.executions,
+						session.activeExecutionId,
+					);
+					if (!activeExecution) stateInvalid();
+					this.assertExecutionConfiguration(state, session, activeExecution);
+				}
 			} else if (command.nativeSessionRef) {
 				unavailable();
 			} else {
@@ -2291,11 +3020,41 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					executions: {},
 				};
 			}
+			const selection =
+				command.schemaVersion === 2
+					? this.nativeSelection(command.selection)
+					: this.defaultSelection;
 			const operation: CodexOperation = {
 				schemaVersion: command.schemaVersion,
 				state: "prepared",
 				nativeSessionRef,
+				configVersion: this.configVersion,
+				internalModel: selection?.model,
+				reasoningLevel: selection?.effort,
 			};
+			// Persist deterministic local refusal atomically with the operation;
+			// a crash must not leave a never-submitted request acceptance-uncertain.
+			if (
+				command.schemaVersion === 2 &&
+				operation.internalModel === undefined
+			) {
+				operation.state = "resolved";
+				operation.record = driverRecord(command, {
+					schemaVersion: command.schemaVersion,
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					kind: command.kind,
+					operationId: command.operationId,
+					nativeSessionRef,
+					result: {
+						outcome: "rejected",
+						code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+						message: "Runtime model selection is unsupported",
+						retryable: false,
+					},
+				});
+			}
 			state.operations[key] = operation;
 			return { operation, created: true };
 		});
@@ -2321,6 +3080,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			const execution = ownRecordValue(session.executions, command.executionId);
 			if (!execution || execution.turnId !== command.turnId) unavailable();
+			this.assertExecutionConfiguration(state, session, execution);
 			const operation: CodexOperation = {
 				schemaVersion: 1,
 				state: "prepared",
@@ -2330,6 +3090,87 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			};
 			state.operations[key] = operation;
 			return { operation, created: true };
+		});
+	}
+
+	private interruptionNativeTurn(
+		nativeSessionRef: string,
+		command: CodexInterruptionCommand,
+	) {
+		const state = this.readState();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		if (!session) unavailable();
+		const execution = ownRecordValue(session.executions, command.executionId);
+		if (
+			!session.threadId ||
+			!execution ||
+			execution.turnId !== command.turnId
+		) {
+			unavailable();
+		}
+		this.assertExecutionConfiguration(state, session, execution);
+		return {
+			threadId: session.threadId,
+			turnId: execution.nativeTurnId,
+		};
+	}
+
+	private pendingModelTurn(
+		command: CodexSubmitTurnCommand,
+		nativeSessionRef: string,
+	) {
+		const session = this.session(nativeSessionRef);
+		if (!session.threadId) return undefined;
+		const pending = Object.values(session.journals ?? {}).filter(
+			(journal) => journal.pendingOperationKey === operationKey(command),
+		);
+		if (pending.length > 1) stateInvalid();
+		const journal = pending[0];
+		return journal
+			? { threadId: session.threadId, turnId: journal.nativeTurnId }
+			: undefined;
+	}
+
+	private operationRecord(command: CodexSubmitTurnCommand) {
+		return ownRecordValue(this.readState().operations, operationKey(command));
+	}
+
+	private hasPendingModelAdmission(command: CodexSubmitTurnCommand) {
+		const operation = this.operationRecord(command);
+		return (
+			operation?.admissionPending === true ||
+			operation?.admissionRecoveryPending === true
+		);
+	}
+
+	private hasInterruption(nativeSessionRef: string, executionId: string) {
+		return Object.values(this.readState().operations).some(
+			(operation) =>
+				operation.nativeSessionRef === nativeSessionRef &&
+				operation.executionId === executionId &&
+				operation.turnId !== undefined,
+		);
+	}
+
+	private async confirmModelAdmission(
+		command: CodexSubmitTurnCommand,
+		nativeSessionRef: string,
+		recoveryPending = false,
+	) {
+		await this.update((state) => {
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			if (
+				operation?.state !== "resolved" ||
+				operation.nativeSessionRef !== nativeSessionRef ||
+				operation.record?.result.outcome !== "accepted" ||
+				(operation.admissionPending !== true &&
+					operation.admissionRecoveryPending !== true)
+			) {
+				stateInvalid();
+			}
+			delete operation.admissionPending;
+			delete operation.admissionRecoveryPending;
+			if (recoveryPending) operation.admissionRecoveryPending = true;
 		});
 	}
 
@@ -2458,6 +3299,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		result: RuntimeDriverOperationRecord["result"],
 		nativeTurnId?: string,
+		admissionPending = false,
 	) {
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
@@ -2474,6 +3316,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const session = ownRecordValue(state.sessions, nativeSessionRef);
 			if (!operation || !session) protocolInvalid();
 			if (result.outcome !== "accepted") {
+				if (admissionPending) protocolInvalid();
 				operation.state = "resolved";
 				operation.record = record;
 				return;
@@ -2519,6 +3362,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			record = { ...record, result: { outcome: "accepted", status } };
 			operation.state = "resolved";
 			operation.record = record;
+			if (admissionPending && status === "running") {
+				operation.admissionPending = true;
+			}
 			Object.defineProperty(session.executions, command.executionId, {
 				value: {
 					executionId: command.executionId,

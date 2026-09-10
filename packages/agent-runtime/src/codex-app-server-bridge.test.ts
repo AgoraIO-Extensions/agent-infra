@@ -7,6 +7,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	realpath,
 	rm,
 	symlink,
 	writeFile,
@@ -36,6 +37,7 @@ vi.mock("node:crypto", () => ({
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
+	validateModelAccess,
 } from "./codex-app-server-bridge.js";
 
 const directories: string[] = [];
@@ -75,6 +77,7 @@ if (capturePath) {
   appendFileSync(capturePath, JSON.stringify({
     args,
     executable: process.argv[1],
+    launchPath: process.env.PATH,
     pid: process.pid,
     cwd: process.cwd(),
     environmentKeys: Object.keys(process.env).sort(),
@@ -84,6 +87,7 @@ if (capturePath) {
       cfUserTextEncoding: process.env.__CF_USER_TEXT_ENCODING,
       hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
       hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
+      modelCredentialMatches: process.env.AGENT_INFRA_CODEX_MODEL_CREDENTIAL === "synthetic-loopback-token",
     },
   }) + "\\n");
 }
@@ -188,6 +192,7 @@ async function readCaptures(path: string, minimum = 1) {
 						JSON.parse(line) as {
 							args: string[];
 							executable: string;
+							launchPath: string;
 							pid: number;
 							cwd: string;
 							environmentKeys: string[];
@@ -197,6 +202,7 @@ async function readCaptures(path: string, minimum = 1) {
 								cfUserTextEncoding?: string;
 								hasMcpConfiguration: boolean;
 								hasConnectionCredential: boolean;
+								modelCredentialMatches: boolean;
 							};
 						},
 				);
@@ -263,6 +269,75 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	it("isolates concurrent explicit launch paths from the parent PATH", async () => {
+		const first = await installFakeCodex("echo");
+		const second = await installFakeCodex("echo");
+		process.env.PATH = "/synthetic-parent-path-without-codex";
+		const captures = [first, second];
+		const paths = captures.map(
+			({ capturePath }) =>
+				`${dirname(capturePath)}:${dirname(process.execPath)}`,
+		);
+		const bridges = await Promise.all(
+			paths.map((launchPath) =>
+				CodexAppServerBridge.open(options({ launchPath })),
+			),
+		);
+		try {
+			expect(process.env.PATH).toBe("/synthetic-parent-path-without-codex");
+			for (const [index, capture] of captures.entries()) {
+				const launches = await readCaptures(capture.capturePath, 3);
+				expect(launches).toHaveLength(3);
+				for (const launch of launches) {
+					expect(launch.launchPath).toBe(paths[index]);
+					expect(launch.executable).toBe(
+						await realpath(join(dirname(capture.capturePath), "codex")),
+					);
+				}
+			}
+		} finally {
+			await Promise.all(bridges.map((bridge) => bridge.close()));
+		}
+	});
+	it.each([
+		["empty", ""],
+		["relative", "bin"],
+		["mixed relative", "/usr/bin:bin"],
+		["leading empty component", ":/usr/bin"],
+		["trailing empty component", "/usr/bin:"],
+		["interior empty component", "/usr/bin::/bin"],
+		["NUL", "/usr/bin\0"],
+		["newline", "/usr/bin\n"],
+		["DEL", "/usr/bin\x7f"],
+		["null", null],
+		["array", ["/usr/bin"]],
+	])(
+		"rejects an explicit launch PATH with %s before spawning",
+		async (_name, launchPath) => {
+			const { capturePath } = await installFakeCodex("echo");
+			const parentPath = process.env.PATH;
+			await expect(
+				CodexAppServerBridge.open(options({ launchPath })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			expect(process.env.PATH).toBe(parentPath);
+			await expect(readFile(capturePath, "utf8")).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		},
+	);
+
+	it("does not fall back to parent PATH when an explicit launch path is unavailable", async () => {
+		await installFakeCodex("echo");
+		const parentPath = process.env.PATH;
+		await expect(
+			CodexAppServerBridge.open(
+				options({ launchPath: "/synthetic-missing-codex" }),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_UNAVAILABLE" });
+		expect(process.env.PATH).toBe(parentPath);
+	});
 	it("reuses native storage while replacing and cleaning only the temporary HOME", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		const configuration = options();
@@ -568,6 +643,54 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it("pins the loopback Responses provider and exposes only its short-lived token", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				model: "synthetic/gpt-5.3-codex",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		const captures = await readCaptures(capturePath, 3);
+		const server = captures[2];
+		if (!server) throw new Error("expected app-server launch");
+		expect(
+			captures
+				.slice(0, 2)
+				.every(
+					(capture) =>
+						!capture.environmentKeys.includes(
+							"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+						),
+				),
+		).toBe(true);
+		expect(server.environmentKeys).toEqual(
+			[
+				...isolatedEnvironmentKeys,
+				"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+				"TMPDIR",
+			].sort(),
+		);
+		expect(server.environment.modelCredentialMatches).toBe(true);
+		expect(server.args).toEqual(
+			expect.arrayContaining([
+				'model_provider="agent_infra"',
+				'model_providers.agent_infra.name="Agent Infra Active Model"',
+				'model_providers.agent_infra.base_url="http://127.0.0.1:8080"',
+				'model_providers.agent_infra.env_key="AGENT_INFRA_CODEX_MODEL_CREDENTIAL"',
+				'model_providers.agent_infra.wire_api="responses"',
+				"model_providers.agent_infra.requires_openai_auth=false",
+				"model_providers.agent_infra.supports_websockets=false",
+				"model_providers.agent_infra.request_max_retries=0",
+				"model_providers.agent_infra.stream_max_retries=0",
+			]),
+		);
+		await bridge.close();
+	});
+
 	it("rejects unpinned provenance and unsafe launch configuration before spawning", async () => {
 		const { capturePath } = await installFakeCodex("echo");
 		await expect(
@@ -583,6 +706,18 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expect(
 			CodexAppServerBridge.open(options({ model: "model\nunsafe" })),
 		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+		for (const modelAccess of [
+			{ endpoint: "https://model.invalid/v1?private=value", credential: "x" },
+			{ endpoint: "file:///private", credential: "x" },
+			{ endpoint: "https://model.invalid/v1", credential: "contains space" },
+			{ endpoint: "https://model.invalid/v1", credential: "line\nbreak" },
+		]) {
+			await expect(
+				CodexAppServerBridge.open(options({ modelAccess })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		}
 		await expect(readFile(capturePath, "utf8")).rejects.toThrow();
 	});
 
@@ -743,7 +878,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expect(bridge.close()).rejects.toMatchObject({
 			code: "CODEX_APP_SERVER_TIMEOUT",
 		});
-		expect(() => process.kill(pid, 0)).toThrow();
+		await expectChildExited(pid);
 	});
 
 	it("keeps its private runtime directory until an unreaped child closes", async () => {
@@ -792,5 +927,74 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		releaseCleanup();
 		await closing;
 		clean.mockRestore();
+	});
+});
+
+describe("model access admission", () => {
+	it.each([
+		"https://model.invalid/v1?",
+		"https://model.invalid/v1#",
+		"https://model.invalid/v1?query=value",
+		"https://model.invalid/v1#fragment",
+		"http://127.0.0.1:1234/v1?",
+		"http://[::1]:1234/v1#",
+	])("rejects endpoint query or fragment delimiters %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
+		"e",
+		"x".repeat(15),
+		"x".repeat(8193),
+		"contains a space",
+		"synthetic\ncredential",
+	])("rejects inadmissible credential length or characters", (credential) => {
+		expect(() =>
+			validateModelAccess({ endpoint: "https://model.invalid/v1", credential }),
+		).toThrow();
+	});
+	it.each(["x".repeat(16), "x".repeat(8192)])(
+		"accepts credential boundary lengths",
+		(credential) => {
+			expect(
+				validateModelAccess({
+					endpoint: "https://model.invalid/v1",
+					credential,
+				}),
+			).toEqual({ endpoint: "https://model.invalid/v1", credential });
+		},
+	);
+	it.each([
+		"http://model.invalid/v1",
+		"http://localhost/v1",
+		"http://127.1/v1",
+		"http://2130706433/v1",
+		"http://0x7f000001/v1",
+		"http://127.0.0.2/v1",
+		"http://[::ffff:127.0.0.1]/v1",
+		"http://127.0.0.1@model.invalid/v1",
+	])("rejects cleartext nonliteral loopback %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
+		"https://model.invalid/v1",
+		"http://127.0.0.1:1234/v1",
+		"http://[::1]:1234/v1",
+	])("accepts approved transport scheme %s", (endpoint) => {
+		expect(
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			})?.endpoint,
+		).toBe(endpoint);
 	});
 });
