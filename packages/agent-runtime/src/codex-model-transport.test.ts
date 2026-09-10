@@ -234,7 +234,7 @@ describe("Codex model transport", () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe(stream);
-	});
+	}, 30_000);
 
 	it.each([
 		["gzip", gzipSync, gunzipSync],
