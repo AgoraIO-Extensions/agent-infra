@@ -155,6 +155,29 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toBe("closed");
 		},
 	);
+	it("accepts an additional non-controller owner alongside the exact StatefulSet controller", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const key = `Pod/${desired.service.name}-0`;
+		const pod = structuredClone(f.resources.get(key)) as V1Pod;
+		pod.metadata?.ownerReferences?.push({
+			apiVersion: "v1",
+			kind: "ConfigMap",
+			name: "additional-owner",
+			uid: "additional-owner",
+			controller: false,
+		});
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		await adapter.promote(desired, identity);
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe(String(desired.workloadRevision));
+	});
 	it.each(["labels", "annotations", "revision", "fence"])(
 		"rechecks route closure metadata after a concurrent %s change",
 		async (field) => {
@@ -4298,46 +4321,58 @@ describe("GA Kubernetes Workload adapter", () => {
 		"kubernetes.io/service-account-token",
 		"kubernetes.io/tls",
 		undefined,
-	])("rejects non-Opaque Secret reuse and activation: %s", async (type) => {
-		const f = fixture();
-		const desired = workloadDesiredFixture();
-		const ref = {
-			schemaVersion: 1 as const,
-			agentId: desired.agentId,
-			ownerType: "agent-owner" as const,
-			ownerId: "owner-a",
-			secretId: "secret-a",
-			secretVersion: 1,
-			configRevision: 1,
-			algorithmVersion: "aes-256-gcm:v1" as const,
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-			wrappingKeyVersion: "key-a",
-			name: `${desired.service.name}-secret-1`,
-		};
-		desired.secretRefs = [ref];
-		const adapter = f.adapter();
-		const plaintext = new Uint8Array([1]);
-		const uid = await adapter.applyImmutableSecret(
-			desired,
-			ref.name,
-			"API_KEY",
-			plaintext,
-		);
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending") throw new Error();
-		const secret = await f.client.read<V1Secret>("Secret", ref.name);
-		if (!secret) throw new Error();
-		f.resources.set(`Secret/${ref.name}`, { ...secret, type } as V1Secret);
-		await expect(
-			adapter.applyImmutableSecret(desired, ref.name, "API_KEY", plaintext),
-		).rejects.toThrow();
-		expect(
-			await adapter.observe(desired, identity, "closed", "activation"),
-		).toBe("drifted");
-		await expect(
-			adapter.bindSecretFence(desired, identity, ref.name, 7, uid),
-		).rejects.toThrow();
-	});
+	])(
+		"rejects non-Opaque Secret reuse, activation and cleanup: %s",
+		async (type) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const ref = {
+				schemaVersion: 1 as const,
+				agentId: desired.agentId,
+				ownerType: "agent-owner" as const,
+				ownerId: "owner-a",
+				secretId: "secret-a",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1" as const,
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				wrappingKeyVersion: "key-a",
+				name: `${desired.service.name}-secret-1`,
+			};
+			desired.secretRefs = [ref];
+			const adapter = f.adapter();
+			const plaintext = new Uint8Array([1]);
+			const uid = await adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				plaintext,
+			);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const secret = await f.client.read<V1Secret>("Secret", ref.name);
+			if (!secret) throw new Error();
+			f.resources.set(`Secret/${ref.name}`, { ...secret, type } as V1Secret);
+			await expect(
+				adapter.applyImmutableSecret(desired, ref.name, "API_KEY", plaintext),
+			).rejects.toThrow();
+			expect(
+				await adapter.observe(desired, identity, "closed", "activation"),
+			).toBe("drifted");
+			await expect(
+				adapter.bindSecretFence(desired, identity, ref.name, 7, uid),
+			).rejects.toThrow();
+			await expect(
+				adapter.removeImmutableSecret(desired, ref),
+			).rejects.toMatchObject({
+				code: "policy",
+			});
+			expect(await f.client.read<V1Secret>("Secret", ref.name)).toEqual({
+				...secret,
+				type,
+			});
+		},
+	);
 	it("fences identical immutable Secret reuse without changing its body", async () => {
 		const f = fixture();
 		const desired = { ...workloadDesiredFixture(), fence: 9 };

@@ -2320,7 +2320,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					!isLiveOwnedImmutableSecret(secret, value, ref))
 			)
 				return false;
-			if (!isOwnedSecret(secret, value, ref) || secret.immutable !== true)
+			if (
+				!isOwnedSecret(secret, value, ref) ||
+				secret.immutable !== true ||
+				secret.type !== "Opaque"
+			)
 				throw new WorkloadKubernetesError("policy");
 			own(secret, value.agentId, value.workloadRevision, value.fence);
 			await client.delete(secret);
