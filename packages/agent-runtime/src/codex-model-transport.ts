@@ -80,10 +80,17 @@ function reject(response: ServerResponse, status = 502) {
 async function write(response: ServerResponse, value: string) {
 	if (response.destroyed || response.writableEnded) throw new Error();
 	if (response.write(value)) return;
-	await Promise.race([
-		once(response, "drain"),
-		once(response, "close").then(() => Promise.reject(new Error())),
-	]);
+	const pending = new AbortController();
+	try {
+		await Promise.race([
+			once(response, "drain", { signal: pending.signal }),
+			once(response, "close", { signal: pending.signal }).then(() =>
+				Promise.reject(new Error()),
+			),
+		]);
+	} finally {
+		pending.abort();
+	}
 }
 
 async function failStream(response: ServerResponse) {

@@ -64,7 +64,6 @@ export function readCodexPilotConfiguration(
 		runtimeConfigurationInvalid();
 	}
 	const seen = new Set<string>();
-	const seenCredentialEnvironmentVariables = new Set<string>();
 	const modelOptions = value.modelOptions.map((option) => {
 		if (
 			!record(option) ||
@@ -89,12 +88,7 @@ export function readCodexPilotConfiguration(
 			) ||
 			new Set(option.reasoningLevels).size !== option.reasoningLevels.length ||
 			typeof option.credentialEnvironmentVariable !== "string" ||
-			!credentialEnvironmentVariable.test(
-				option.credentialEnvironmentVariable,
-			) ||
-			seenCredentialEnvironmentVariables.has(
-				option.credentialEnvironmentVariable,
-			)
+			!credentialEnvironmentVariable.test(option.credentialEnvironmentVariable)
 		) {
 			runtimeConfigurationInvalid();
 		}
@@ -110,9 +104,6 @@ export function readCodexPilotConfiguration(
 		}
 		if (!access) runtimeConfigurationInvalid();
 		seen.add(option.modelOptionId);
-		seenCredentialEnvironmentVariables.add(
-			option.credentialEnvironmentVariable,
-		);
 		return {
 			modelOptionId: option.modelOptionId,
 			endpoint: access.endpoint,

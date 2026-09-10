@@ -165,6 +165,80 @@ describe("Codex Pilot deployment configuration", () => {
 		).toThrow("RUNTIME_CONFIGURATION_INVALID");
 	});
 
+	it("binds distinct options independently when they share a credential reference", () => {
+		const alternate = {
+			...configuration.modelOptions[0],
+			modelOptionId: "option-alternate",
+			endpoint: "https://alternate.invalid/v1",
+			model: "synthetic-alternate",
+			reasoningLevels: ["low"],
+		};
+		expect(
+			readCodexPilotConfiguration(
+				environment({
+					modelOptions: [...configuration.modelOptions, alternate],
+				}),
+			),
+		).toEqual({
+			configVersion: configuration.configVersion,
+			defaultModelOptionId: "option-default",
+			defaultReasoningLevel: "medium",
+			modelOptions: [
+				{
+					modelOptionId: "option-default",
+					endpoint: "http://127.0.0.1:8080/v1",
+					model: "synthetic-default",
+					reasoningLevels: ["medium", "high"],
+					credential: "synthetic-active-credential",
+				},
+				{
+					modelOptionId: "option-alternate",
+					endpoint: "https://alternate.invalid/v1",
+					model: "synthetic-alternate",
+					reasoningLevels: ["low"],
+					credential: "synthetic-active-credential",
+				},
+			],
+		});
+	});
+
+	it.each([undefined, "", "synthetic invalid credential"])(
+		"rejects missing or invalid shared credential values",
+		(credential) => {
+			expect(() =>
+				readCodexPilotConfiguration({
+					...environment({
+						modelOptions: [
+							...configuration.modelOptions,
+							{
+								...configuration.modelOptions[0],
+								modelOptionId: "option-alternate",
+							},
+						],
+					}),
+					AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT: credential,
+				}),
+			).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+		},
+	);
+
+	it("validates every endpoint even when options share a credential reference", () => {
+		expect(() =>
+			readCodexPilotConfiguration(
+				environment({
+					modelOptions: [
+						...configuration.modelOptions,
+						{
+							...configuration.modelOptions[0],
+							modelOptionId: "option-alternate",
+							endpoint: "http://unapproved.invalid/v1",
+						},
+					],
+				}),
+			),
+		).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+	});
+
 	it("keeps duplicate real models independently bound by option identity", () => {
 		const alternate = {
 			...configuration.modelOptions[0],

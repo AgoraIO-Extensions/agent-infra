@@ -4,7 +4,7 @@ import {
 	request as httpRequest,
 	IncomingMessage,
 	Server,
-	type ServerResponse,
+	ServerResponse,
 } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -142,6 +142,57 @@ afterEach(async () => {
 });
 
 describe("Codex model transport", () => {
+	it("does not retain listeners across repeated real response backpressure", async () => {
+		const delta = "a".repeat(256 * 1024);
+		const body =
+			Array.from({ length: 8 }, () =>
+				event({ type: "response.output_text.delta", delta }),
+			).join("") + completedEvent();
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(body);
+			}),
+		);
+		const value = await transport(target);
+		const listenerCounts: { close: number; error: number }[] = [];
+		let backpressureCount = 0;
+		const original = ServerResponse.prototype.write;
+		const writes = vi
+			.spyOn(ServerResponse.prototype, "write")
+			.mockImplementation(function (
+				this: ServerResponse,
+				...args: Parameters<ServerResponse["write"]>
+			) {
+				const isNativeResponse = Boolean(
+					this.req.headers["x-codex-turn-metadata"],
+				);
+				if (isNativeResponse)
+					listenerCounts.push({
+						close: this.listenerCount("close"),
+						error: this.listenerCount("error"),
+					});
+				const result = Reflect.apply(original, this, args) as boolean;
+				if (isNativeResponse && !result) backpressureCount += 1;
+				return result;
+			});
+		try {
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(200);
+			const output = await response.text();
+			expect(output).toContain(delta);
+			expect(output).toContain('"type":"response.completed"');
+			expect(backpressureCount).toBeGreaterThanOrEqual(4);
+			const initial = listenerCounts[0];
+			if (!initial) throw new Error("No native response observed");
+			for (const counts of listenerCounts) {
+				expect(counts.close).toBeLessThanOrEqual(initial.close);
+				expect(counts.error).toBeLessThanOrEqual(initial.error);
+			}
+		} finally {
+			writes.mockRestore();
+		}
+	});
 	it("removes its startup error listener after listening", async () => {
 		const target = await listen(
 			createServer((_request, response) => response.end()),
