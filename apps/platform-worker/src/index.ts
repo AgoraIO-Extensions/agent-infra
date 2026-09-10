@@ -209,8 +209,17 @@ export async function startPlatformWorkerFromDeploymentV1(
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	const workerPromise = startPlatformWorkerFromDeploymentV1();
+	const primary = startPlatformWorker();
+	const workerPromise = startPlatformWorkerFromDeploymentV1({
+		startPrimary: () => primary,
+	});
 	const stop = () => {
+		// Assembly may remain pending; stop the already-running loop independently.
+		try {
+			primary.stop();
+		} catch {
+			process.exitCode = 1;
+		}
 		void workerPromise
 			.then((worker) => worker.stop())
 			.catch(() => {
@@ -219,5 +228,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	};
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
-	await workerPromise;
+	void workerPromise.catch(() => {
+		process.exitCode = 1;
+	});
 }

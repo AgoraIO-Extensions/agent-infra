@@ -403,12 +403,14 @@ describe("platform worker lifecycle", () => {
 	});
 
 	it.each(
-		(["SIGINT", "SIGTERM"] as const).flatMap((signal) =>
-			[false, true].map((duringAssembly) => ({ signal, duringAssembly })),
-		),
+		(["SIGINT", "SIGTERM"] as const).flatMap((signal) => [
+			{ signal, duringAssembly: false, rejectsAssembly: false },
+			{ signal, duringAssembly: true, rejectsAssembly: false },
+			{ signal, duringAssembly: true, rejectsAssembly: true },
+		]),
 	)(
-		"handles a rejecting workload shutdown from $signal (during assembly: $duringAssembly)",
-		async ({ signal, duringAssembly }) => {
+		"handles $signal with pending assembly or shutdown failure (pending: $duringAssembly, rejects: $rejectsAssembly)",
+		async ({ signal, duringAssembly, rejectsAssembly }) => {
 			const originalArgv = process.argv[1];
 			const originalExitCode = process.exitCode;
 			const workload = {
@@ -422,6 +424,7 @@ describe("platform worker lifecycle", () => {
 			});
 			const startWorkload = vi.fn(async () => {
 				if (duringAssembly) await assembly;
+				if (rejectsAssembly) throw new Error("synthetic assembly failure");
 				return workload;
 			});
 			const unhandled: unknown[] = [];
@@ -446,6 +449,12 @@ describe("platform worker lifecycle", () => {
 				if (duringAssembly) {
 					await vi.waitFor(() => expect(startWorkload).toHaveBeenCalledOnce());
 					process.emit(signal);
+					await vi.waitFor(() =>
+						expect(
+							info.mock.calls.map(([message]) => JSON.parse(String(message))),
+						).toContainEqual({ service: "platform-worker", status: "stopped" }),
+					);
+					expect(workload.stop).not.toHaveBeenCalled();
 					finishAssembly();
 					await loading;
 				} else {
@@ -455,7 +464,7 @@ describe("platform worker lifecycle", () => {
 				await new Promise<void>((resolve) => setImmediate(resolve));
 
 				expect(startWorkload).toHaveBeenCalledOnce();
-				expect(workload.stop).toHaveBeenCalledOnce();
+				expect(workload.stop).toHaveBeenCalledTimes(rejectsAssembly ? 0 : 1);
 				expect(process.exitCode).toBe(1);
 				expect(unhandled).toEqual([]);
 				expect(

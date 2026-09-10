@@ -563,6 +563,50 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				pod?.subdomain !== expectedIdentity.subdomain
 			: pod?.hostname !== undefined || pod?.subdomain !== undefined;
 		return (
+			Object.entries(pod ?? {}).some(
+				([key, value]) =>
+					value !== undefined &&
+					![
+						"containers",
+						"volumes",
+						"serviceAccountName",
+						"serviceAccount",
+						"automountServiceAccountToken",
+						"securityContext",
+						"restartPolicy",
+						"terminationGracePeriodSeconds",
+						"enableServiceLinks",
+						"dnsPolicy",
+						"schedulerName",
+						"priorityClassName",
+						"priority",
+						"preemptionPolicy",
+						"nodeSelector",
+						"nodeName",
+						"hostname",
+						"subdomain",
+						"tolerations",
+						"hostNetwork",
+						"hostPID",
+						"hostIPC",
+						"shareProcessNamespace",
+						"hostAliases",
+						"imagePullSecrets",
+						"initContainers",
+						"ephemeralContainers",
+						"overhead",
+						"resourceClaims",
+						"schedulingGates",
+						"topologySpreadConstraints",
+					].includes(key),
+			) ||
+			(pod?.restartPolicy !== undefined && pod.restartPolicy !== "Always") ||
+			(pod?.terminationGracePeriodSeconds !== undefined &&
+				pod.terminationGracePeriodSeconds !== 30) ||
+			(pod?.enableServiceLinks !== undefined &&
+				pod.enableServiceLinks !== true) ||
+			(pod?.serviceAccount !== undefined &&
+				pod.serviceAccount !== pod.serviceAccountName) ||
 			(pod?.containers.length ?? 0) !== 1 ||
 			pod?.containers[0]?.name !== "agent" ||
 			pod?.hostNetwork === true ||
@@ -2283,7 +2327,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				const expectedIngress = ingress(value);
 				if (
 					!service ||
-					!containsDesired(service.metadata, expectedMetadata) ||
+					!hasSafeRoutingMetadata(value, service) ||
 					!matchesServiceSpec(
 						service?.spec,
 						serviceSpec(value, expectedSelector),
@@ -2291,7 +2335,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(value.route.exposure === "internal-only"
 						? routeIngress !== null
 						: !routeIngress ||
-							!containsDesired(routeIngress.metadata, expectedMetadata) ||
+							!hasSameStructure(
+								routeIngress.metadata?.labels,
+								expectedMetadata.labels,
+							) ||
 							!matchesIngress(routeIngress, expectedIngress))
 				)
 					throw new WorkloadKubernetesError("conflict");

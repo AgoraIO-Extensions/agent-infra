@@ -42,6 +42,53 @@ function fixture() {
 
 describe("GA Kubernetes Workload adapter", () => {
 	it.each([
+		{ activeDeadlineSeconds: 30 },
+		{ restartPolicy: "Never" },
+		{ terminationGracePeriodSeconds: 0 },
+		{ enableServiceLinks: false },
+		{ readinessGates: [{ conditionType: "external.example.test/ready" }] },
+		{ hostUsers: false },
+		{ serviceAccount: "foreign-account" },
+	])(
+		"rejects unmanaged Pod profile %j in template and live Pod",
+		async (mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			if (!workload?.spec?.template.spec) throw new Error();
+			workload.spec.template.spec = {
+				...workload.spec.template.spec,
+				...mutation,
+			};
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!pod?.spec) throw new Error();
+			pod.spec = { ...pod.spec, ...mutation };
+			f.resources.set(`Pod/${desired.service.name}-0`, pod);
+			expect(await adapter.observe(desired, repaired)).toBe("drifted");
+			await expect(adapter.promote(desired, repaired)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(await adapter.apply(desired)).toBe("pending");
+		},
+	);
+	it.each([
 		[
 			"volume claim templates",
 			{
@@ -2936,6 +2983,11 @@ describe("GA Kubernetes Workload adapter", () => {
 		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
 		if (!workload?.spec || !spec || !pod?.spec) throw new Error();
 		const defaults = {
+			restartPolicy: "Always",
+			terminationGracePeriodSeconds: 30,
+			enableServiceLinks: true,
+			dnsPolicy: "ClusterFirst",
+			serviceAccount: desired.serviceAccount.name,
 			schedulerName: "default-scheduler",
 			priority: 0,
 			preemptionPolicy: "PreemptLowerPriority",
@@ -3267,8 +3319,11 @@ describe("GA Kubernetes Workload adapter", () => {
 	it.each([
 		"service selector",
 		"service fence",
+		"service annotations",
+		"service labels",
 		"ingress",
 		"ingress owner",
+		"ingress labels",
 	] as const)(
 		"closes a route when post-promotion %s verification detects drift",
 		async (mutation) => {
@@ -3284,7 +3339,7 @@ describe("GA Kubernetes Workload adapter", () => {
 					const current = await f.client.read<T>(kind, name);
 					if (!mutateOnce || !current) return current;
 					if (
-						(mutation === "service selector" || mutation === "service fence") &&
+						mutation.startsWith("service") &&
 						kind === "Service" &&
 						name === desired.service.name &&
 						(current as V1Service).spec?.selector?.[
@@ -3308,9 +3363,19 @@ describe("GA Kubernetes Workload adapter", () => {
 								: {
 										metadata: {
 											...(current as V1Service).metadata,
+											labels: {
+												...(current as V1Service).metadata?.labels,
+												...(mutation === "service labels"
+													? { "external.example.test/route": "injected" }
+													: {}),
+											},
 											annotations: {
 												...(current as V1Service).metadata?.annotations,
-												"agent-infra.agora.io/fence": "10",
+												...(mutation === "service annotations"
+													? { "external.example.test/route": "injected" }
+													: mutation === "service fence"
+														? { "agent-infra.agora.io/fence": "10" }
+														: {}),
 											},
 										},
 									}),
@@ -3319,7 +3384,7 @@ describe("GA Kubernetes Workload adapter", () => {
 						return drifted as T;
 					}
 					if (
-						(mutation === "ingress" || mutation === "ingress owner") &&
+						mutation.startsWith("ingress") &&
 						kind === "Ingress" &&
 						name === desired.route.name
 					) {
@@ -3333,7 +3398,9 @@ describe("GA Kubernetes Workload adapter", () => {
 											...(current as V1Ingress).metadata,
 											labels: {
 												...(current as V1Ingress).metadata?.labels,
-												"agent-infra.agora.io/agent": "foreign",
+												...(mutation === "ingress labels"
+													? { "external.example.test/route": "injected" }
+													: { "agent-infra.agora.io/agent": "foreign" }),
 											},
 										},
 									}),
