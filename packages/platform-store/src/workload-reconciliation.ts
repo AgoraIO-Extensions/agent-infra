@@ -414,8 +414,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.sourceLifecycleRevision !== management.workloadRevision ||
 						next.revision < (state?.revision ?? 1) ||
 						next.fence !== management.fence ||
-						(next.cleanupInterrupted === true &&
-							(next.phase !== "cleaning" || next.rollback))
+						(next.cleanupInterrupted === true && next.phase !== "cleaning")
 					)
 						throw new Error();
 					const observation = await workloadManagementObservationV1(

@@ -9,6 +9,7 @@ import {
 	createAgentManagementV1,
 	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
+	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
@@ -532,6 +533,103 @@ describe("PostgreSQL Workload steps", () => {
 				phase: "closing",
 			}),
 		});
+	});
+
+	it("persists interrupted rollback cleanup before adopting newer configuration", async () => {
+		const [base] = await sql<
+			{ configuration: Record<string, unknown> }[]
+		>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+		if (!base) throw new Error();
+		for (const revision of [2, 3]) {
+			const configuration = { ...base.configuration, revision };
+			await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', ${revision}, 'synthetic-configuration', ${sql.json(configuration)}, now())`;
+		}
+		await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
+		const rollbackCandidate = {
+			configuration: base.configuration,
+			deployment: { admitted: true },
+		};
+		const identity = { uid: "uid-rollback", generation: 2 };
+		await sql`insert into platform.workload_reconciliations(agent_id, revision, state, next_attempt_at) values ('agent-a', 2, ${sql.json(
+			{
+				schemaVersion: 1,
+				agentId: "agent-a",
+				sourceConfigurationRevision: 2,
+				sourceLifecycleRevision: 1,
+				revision: 2,
+				fence: 1,
+				phase: "cleaning",
+				candidate: rollbackCandidate,
+				verified: rollbackCandidate,
+				verifiedRevision: 1,
+				identity,
+				rollback: true,
+				failureCode: "reconciliation_failed",
+				attempts: 0,
+			} as unknown as postgres.JSONValue,
+		)}, clock_timestamp())`;
+		const readState = async () => {
+			const [row] = await sql<
+				{ state: WorkloadReconciliationStateV1 }[]
+			>`select state from platform.workload_reconciliations where agent_id = 'agent-a'`;
+			if (!row) throw new Error();
+			return row.state;
+		};
+		const cleanup = vi
+			.fn()
+			.mockResolvedValueOnce(false)
+			.mockResolvedValue(true);
+		const closeRoute = vi.fn(async () => undefined);
+		const preflight = vi.fn(runtime().preflight);
+		const apply = vi.fn(runtime().apply);
+		const adapter = { ...runtime(), cleanup, closeRoute, preflight, apply };
+		expect(
+			await createWorkloadReconciliationV1({
+				store: first,
+				runtime: adapter,
+			}).tick("worker-interrupt"),
+		).toBe("advanced");
+		const interrupted = await readState();
+		expect(interrupted).toMatchObject({
+			phase: "cleaning",
+			rollback: true,
+			cleanupInterrupted: true,
+			sourceConfigurationRevision: 3,
+			revision: 2,
+			fence: 1,
+			candidate: rollbackCandidate,
+			identity,
+		});
+		expect(closeRoute).toHaveBeenCalledWith(interrupted);
+		expect(cleanup).not.toHaveBeenCalled();
+		// A separate Store instance consumes the durable state after interruption.
+		const resumed = createWorkloadReconciliationV1({
+			store: second,
+			runtime: adapter,
+		});
+		expect(await resumed.tick("worker-resume")).toBe("advanced");
+		expect(await readState()).toEqual(interrupted);
+		expect(cleanup).toHaveBeenCalledWith(interrupted, false, expect.anything());
+		expect(preflight).not.toHaveBeenCalled();
+		expect(apply).not.toHaveBeenCalled();
+		expect(await resumed.tick("worker-finish")).toBe("advanced");
+		const next = await readState();
+		expect(next).toMatchObject({
+			phase: "preflight",
+			rollback: false,
+			revision: 3,
+			identity: null,
+			candidate: { configuration: { revision: 3 }, deployment: null },
+		});
+		expect(next).not.toHaveProperty("cleanupInterrupted");
+		expect(cleanup).toHaveBeenCalledTimes(2);
+		await expect(
+			first.runNext("worker-invalid-phase", async (input) => {
+				if (!input.state) throw new Error();
+				return { ...input.state, phase: "ready", cleanupInterrupted: true };
+			}),
+		).rejects.toThrow("Workload reconciliation persistence failed");
+		expect(await readState()).toEqual(next);
 	});
 
 	it.each([false, true])(

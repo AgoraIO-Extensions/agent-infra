@@ -115,6 +115,86 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.closeRoute(desired)).toBe(true);
 		},
 	);
+	it.each([
+		"apiVersion",
+		"kind",
+		"name",
+		"uid",
+		"controller",
+		"extra-reference",
+	])(
+		"rejects a Pod without the exact controlling StatefulSet reference: %s",
+		async (field) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const key = `Pod/${desired.service.name}-0`;
+			const pod = structuredClone(f.resources.get(key)) as V1Pod;
+			const owner = pod.metadata?.ownerReferences?.[0];
+			if (!owner) throw new Error();
+			if (field === "extra-reference") {
+				owner.uid = "foreign-owner";
+				pod.metadata?.ownerReferences?.push({
+					...owner,
+					uid: identity.uid,
+					controller: false,
+				});
+			} else
+				Object.assign(owner, {
+					[field]: field === "controller" ? false : "foreign",
+				});
+			f.resources.set(key, pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toThrow();
+			expect(f.resources.get(key)).toEqual(pod);
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+		},
+	);
+	it.each(["labels", "annotations", "revision", "fence"])(
+		"rechecks route closure metadata after a concurrent %s change",
+		async (field) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = {
+				...workloadDesiredFixture(),
+				workloadRevision: 2,
+				fence: 2,
+			};
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.promote(desired, identity);
+			const replace = f.client.replace.bind(f.client);
+			vi.spyOn(f.client, "replace").mockImplementation(async (resource) => {
+				const updated = await replace(resource);
+				if (
+					resource.kind === "Service" &&
+					resource.metadata?.name === desired.service.name
+				) {
+					const raced = structuredClone(updated);
+					if (!raced.metadata?.labels || !raced.metadata.annotations)
+						throw new Error();
+					if (field === "labels" || field === "annotations")
+						(field === "labels"
+							? raced.metadata.labels
+							: raced.metadata.annotations)["external.example.test/route"] =
+							"injected";
+					if (field === "revision")
+						raced.metadata.labels["agent-infra.agora.io/revision"] = "1";
+					if (field === "fence")
+						raced.metadata.annotations["agent-infra.agora.io/fence"] = "1";
+					f.resources.set(`Service/${desired.service.name}`, raced);
+				}
+				return updated;
+			});
+			expect(await adapter.closeRoute(desired)).toBe(false);
+			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+		},
+	);
 	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

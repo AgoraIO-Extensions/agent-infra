@@ -232,6 +232,8 @@ export function fakeKubernetesApi() {
 								kind: "StatefulSet",
 								name: workload.metadata?.name ?? "",
 								uid: updated.metadata.uid ?? "",
+								controller: true,
+								blockOwnerDeletion: true,
 							},
 						],
 					},

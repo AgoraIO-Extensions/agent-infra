@@ -499,6 +499,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		);
 	}
 
+	function hasControllingWorkloadOwner(
+		pod: V1Pod,
+		workload: V1StatefulSet,
+	): boolean {
+		return Boolean(
+			workload.metadata?.uid &&
+				workload.metadata.name &&
+				pod.metadata?.ownerReferences?.some(
+					(owner) =>
+						owner.apiVersion === "apps/v1" &&
+						owner.kind === "StatefulSet" &&
+						owner.name === workload.metadata?.name &&
+						owner.uid === workload.metadata?.uid &&
+						owner.controller === true,
+				),
+		);
+	}
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,
 		actual: V1Pod["metadata"],
@@ -1265,6 +1282,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (closed) {
 				own(closed, value.agentId, value.workloadRevision, value.fence);
 				if (
+					!hasOnlyControllerRoutingMetadata(closed) ||
+					closed.metadata?.labels?.[revisionLabel] !==
+						String(value.workloadRevision) ||
+					closed.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+						String(value.fence) ||
 					!matchesServiceSpec(closed.spec, {
 						...safeServiceSpec,
 						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
@@ -1521,9 +1543,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			selector(value.agentId),
 		);
 		const ownedByExpectedWorkload = (pod: V1Pod) =>
-			pod.metadata?.ownerReferences?.some(
-				(owner) => owner.uid === identity.uid,
-			);
+			hasControllingWorkloadOwner(pod, current);
 		// Services select labels, not ownerReferences. A foreign Pod matching the
 		// current revision must not be hidden by the lifecycle ownership filter.
 		if (
@@ -1541,10 +1561,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			!pod ||
 			pod.metadata?.deletionTimestamp ||
-			!pod.metadata?.ownerReferences?.some(
-				(owner) => owner.uid === identity.uid,
-			) ||
-			pod.metadata.labels?.[revisionLabel] !== String(value.workloadRevision)
+			!hasControllingWorkloadOwner(pod, current) ||
+			pod.metadata?.labels?.[revisionLabel] !== String(value.workloadRevision)
 		)
 			return "pending";
 		const expectedPodIdentity = {
@@ -1959,19 +1977,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
 			const ownedPods = current?.metadata?.uid
-				? pods.filter((pod) =>
-						pod.metadata?.ownerReferences?.some(
-							(owner) => owner.uid === current.metadata?.uid,
-						),
-					)
+				? pods.filter((pod) => hasControllingWorkloadOwner(pod, current))
 				: [];
 			const driftedOwnedPod =
 				current &&
 				pods.some(
 					(pod) =>
-						pod.metadata?.ownerReferences?.some(
-							(owner) => owner.uid === current.metadata?.uid,
-						) &&
+						hasControllingWorkloadOwner(pod, current) &&
 						(!hasSafePodMetadata(value, pod.metadata, {
 							pod,
 							workload: current,
