@@ -39,6 +39,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createWorkloadRuntimeV1,
@@ -943,10 +944,15 @@ describe("assembled Workload Runtime contracts", () => {
 
 	it.each(
 		(["current", "active-origin"] as const).flatMap((materialization) =>
-			["bound", "legacy missing UID"].map((binding) => ({
-				materialization,
-				binding,
-			})),
+			(
+				[
+					"bound",
+					"legacy missing UID",
+					"missing Secret",
+					"recreated UID",
+					"missing Secret after CAS retry",
+				] as const
+			).map((binding) => ({ materialization, binding })),
 		),
 	)(
 		"safely reuses an $materialization Secret with $binding identity",
@@ -1032,11 +1038,57 @@ describe("assembled Workload Runtime contracts", () => {
 				delete statefulSet.metadata.annotations[uidKey];
 				f.resources.set(resourceKey, statefulSet);
 			}
+			const recreated = binding === "recreated UID";
+			const missing = binding.startsWith("missing Secret");
+			let expectedUid = recreated ? "replacement-secret-uid" : secretUid;
+			if (recreated) {
+				const secret = await f.client.read<V1Secret>("Secret", ref.name);
+				if (!secret) throw new Error();
+				f.resources.set(`Secret/${ref.name}`, {
+					...secret,
+					metadata: { ...secret.metadata, uid: expectedUid },
+				} as V1Secret);
+			}
+			if (missing) f.resources.delete(`Secret/${ref.name}`);
+			let failedCas = false;
+			if (binding === "missing Secret after CAS retry") {
+				const replace = f.client.replace.bind(f.client);
+				vi.spyOn(f.client, "replace").mockImplementation(async (object) => {
+					const bindsReplacementUid = Object.entries(
+						object.metadata?.annotations ?? {},
+					).some(
+						([key, value]) =>
+							key.startsWith("agent-infra.agora.io/secret-uid-") &&
+							value !== secretUid,
+					);
+					if (
+						!failedCas &&
+						object.kind === "StatefulSet" &&
+						bindsReplacementUid
+					) {
+						failedCas = true;
+						throw new WorkloadKubernetesError("conflict");
+					}
+					return replace(object);
+				});
+			}
 			const before = structuredClone(record);
 
 			await f.tick(8);
 			expect(f.state?.phase).toBe("ready");
-			expect(decrypt).toHaveBeenCalledTimes(binding === "bound" ? 0 : 1);
+			if (missing) {
+				const live = await f.client.read<V1Secret>("Secret", ref.name);
+				if (!live?.metadata?.uid) throw new Error();
+				expectedUid = live.metadata.uid;
+			}
+			expect(decrypt).toHaveBeenCalledTimes(
+				binding === "bound"
+					? 0
+					: binding === "missing Secret after CAS retry"
+						? 2
+						: 1,
+			);
+			expect(failedCas).toBe(binding === "missing Secret after CAS retry");
 			if (binding === "bound") expect(audit).not.toHaveBeenCalled();
 			else expect(audit).toHaveBeenCalledWith("secret-a", "key-a", "succeeded");
 			expect(
@@ -1046,7 +1098,7 @@ describe("assembled Workload Runtime contracts", () => {
 						deployment.service.name,
 					)
 				)?.metadata?.annotations?.[uidKey],
-			).toBe(secretUid);
+			).toBe(expectedUid);
 			expect(record).toEqual(before);
 			expect(cleanup.claims).toBe(0);
 			expect(cleanup.commits).toBe(0);

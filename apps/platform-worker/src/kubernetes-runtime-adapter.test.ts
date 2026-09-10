@@ -4630,6 +4630,264 @@ describe("GA Kubernetes Workload adapter", () => {
 			),
 		).toContain("8");
 	});
+	it("rebinds a recreated active Secret only with its original activation fence", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		const plaintext = new Uint8Array([1, 2, 3]);
+		const originalUid = await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			plaintext,
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.bindSecretFence(desired, identity, ref.name, 7, originalUid);
+		const activationFence = {
+			schemaVersion: 1 as const,
+			agentId: ref.agentId,
+			secretId: ref.secretId,
+			secretVersion: ref.secretVersion,
+			configRevision: ref.configRevision,
+			kubernetesSecretName: ref.name,
+			workloadUid: identity.uid,
+			workloadGeneration: identity.generation,
+			fence: 7,
+		};
+		const secret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!secret) throw new Error();
+		const replacementUid = "replacement-secret-uid";
+		f.resources.set(`Secret/${ref.name}`, {
+			...secret,
+			metadata: { ...secret.metadata, uid: replacementUid },
+		} as V1Secret);
+
+		expect(
+			await adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				plaintext,
+				activationFence,
+			),
+		).toBe(replacementUid);
+		const rebound = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		expect(
+			Object.entries(rebound?.metadata?.annotations ?? {}).find(([key]) =>
+				key.startsWith("agent-infra.agora.io/secret-uid-"),
+			)?.[1],
+		).toBe(replacementUid);
+	});
+	it.each([
+		"zero generation",
+		"wrong reference",
+		"wrong activation fence",
+		"higher management fence",
+	] as const)("rejects active Secret recovery with a %s", async (mutation) => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		const plaintext = new Uint8Array([1, 2, 3]);
+		const originalUid = await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			plaintext,
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.bindSecretFence(desired, identity, ref.name, 7, originalUid);
+		const secret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!secret) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, {
+			...secret,
+			metadata: { ...secret.metadata, uid: "replacement-secret-uid" },
+		} as V1Secret);
+		const activationFence = {
+			schemaVersion: 1 as const,
+			agentId: ref.agentId,
+			secretId: mutation === "wrong reference" ? "secret-other" : ref.secretId,
+			secretVersion: ref.secretVersion,
+			configRevision: ref.configRevision,
+			kubernetesSecretName: ref.name,
+			workloadUid: identity.uid,
+			workloadGeneration:
+				mutation === "zero generation" ? 0 : identity.generation,
+			fence: mutation === "wrong activation fence" ? 8 : 7,
+		};
+		if (mutation === "higher management fence") {
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			if (!workload?.metadata?.annotations) throw new Error();
+			workload.metadata.annotations["agent-infra.agora.io/fence"] = "2";
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+		}
+
+		await expect(
+			adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				plaintext,
+				activationFence,
+			),
+		).rejects.toMatchObject({ code: "conflict" });
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		expect(Object.values(workload?.metadata?.annotations ?? {})).toContain(
+			originalUid,
+		);
+	});
+	it.each(["Secret UID", "StatefulSet resourceVersion"] as const)(
+		"rejects a concurrent %s change while rebinding an active Secret",
+		async (race) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const ref = {
+				schemaVersion: 1 as const,
+				agentId: desired.agentId,
+				ownerType: "agent-owner" as const,
+				ownerId: "owner-a",
+				secretId: "secret-a",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1" as const,
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				wrappingKeyVersion: "key-a",
+				name: `${desired.service.name}-secret-1`,
+			};
+			desired.secretRefs = [ref];
+			let armed = false;
+			let secretReads = 0;
+			const client: WorkerKubernetesClientV1 = {
+				...f.client,
+				async read<T extends KubernetesObject>(
+					kind: WorkloadResourceKind,
+					name: string,
+				) {
+					if (armed && race === "Secret UID" && kind === "Secret") {
+						secretReads++;
+						if (secretReads === 2) {
+							const secret = await f.client.read<V1Secret>("Secret", ref.name);
+							if (!secret) throw new Error();
+							f.resources.set(`Secret/${ref.name}`, {
+								...secret,
+								metadata: { ...secret.metadata, uid: "raced-secret-uid" },
+							} as V1Secret);
+						}
+					}
+					return f.client.read<T>(kind, name);
+				},
+				async replace<T extends KubernetesObject>(object: T): Promise<T> {
+					if (
+						armed &&
+						race === "StatefulSet resourceVersion" &&
+						object.kind === "StatefulSet"
+					) {
+						armed = false;
+						const workload = await f.client.read<V1StatefulSet>(
+							"StatefulSet",
+							desired.service.name,
+						);
+						if (!workload) throw new Error();
+						f.resources.set(`StatefulSet/${desired.service.name}`, {
+							...workload,
+							metadata: {
+								...workload.metadata,
+								resourceVersion: "concurrent-resource-version",
+							},
+						} as V1StatefulSet);
+					}
+					return f.client.replace(object);
+				},
+			};
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client,
+				policy: workloadTestPolicy,
+				probe: async () => true,
+			});
+			const plaintext = new Uint8Array([1, 2, 3]);
+			const originalUid = await adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				plaintext,
+			);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.bindSecretFence(
+				desired,
+				identity,
+				ref.name,
+				7,
+				originalUid,
+			);
+			const secret = await f.client.read<V1Secret>("Secret", ref.name);
+			if (!secret) throw new Error();
+			f.resources.set(`Secret/${ref.name}`, {
+				...secret,
+				metadata: { ...secret.metadata, uid: "replacement-secret-uid" },
+			} as V1Secret);
+			armed = true;
+
+			await expect(
+				adapter.applyImmutableSecret(desired, ref.name, "API_KEY", plaintext, {
+					schemaVersion: 1,
+					agentId: ref.agentId,
+					secretId: ref.secretId,
+					secretVersion: ref.secretVersion,
+					configRevision: ref.configRevision,
+					kubernetesSecretName: ref.name,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+					fence: 7,
+				}),
+			).rejects.toMatchObject({ code: "conflict" });
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			expect(Object.values(workload?.metadata?.annotations ?? {})).toContain(
+				originalUid,
+			);
+		},
+	);
 	it("rejects a Secret replacement that races the StatefulSet UID binding", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

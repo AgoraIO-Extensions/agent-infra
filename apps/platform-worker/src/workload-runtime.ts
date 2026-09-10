@@ -626,6 +626,7 @@ export function createWorkloadRuntimeV1(
 						reference.name,
 						secretDataKey(record.name),
 						decryption.plaintext,
+						activationFence ?? undefined,
 					);
 					if (activationFence)
 						activeBindingsToRepair.push({

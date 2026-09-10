@@ -1886,12 +1886,53 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			name: string,
 			key: string,
 			plaintext: Uint8Array,
+			activationFence?: SecretActivationFenceV1,
 		) {
 			const value = desired(input);
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
 				throw new WorkloadKubernetesError("policy");
 			const ref = value.secretRefs.find((entry) => entry.name === name);
 			if (!ref) throw new WorkloadKubernetesError("policy");
+			let activeBinding:
+				| {
+						readonly workload: V1StatefulSet;
+						readonly uidKey: string;
+				  }
+				| undefined;
+			if (activationFence) {
+				if (
+					activationFence.schemaVersion !== 1 ||
+					typeof activationFence.workloadUid !== "string" ||
+					!activationFence.workloadUid ||
+					!Number.isSafeInteger(activationFence.workloadGeneration) ||
+					activationFence.workloadGeneration < 1 ||
+					!Number.isSafeInteger(activationFence.fence) ||
+					activationFence.fence < 1 ||
+					activationFence.agentId !== ref.agentId ||
+					activationFence.secretId !== ref.secretId ||
+					activationFence.secretVersion !== ref.secretVersion ||
+					activationFence.configRevision !== ref.configRevision ||
+					activationFence.kubernetesSecretName !== ref.name
+				)
+					throw new WorkloadKubernetesError("conflict");
+				const workload = await statefulSet(value);
+				const fenceKey = secretFenceAnnotation(ref.name);
+				const uidKey = secretUidAnnotation(ref.name);
+				const storedUid = workload?.metadata?.annotations?.[uidKey];
+				if (
+					!workload ||
+					workload.metadata?.uid !== activationFence.workloadUid ||
+					!workload.metadata.resourceVersion ||
+					!Number.isSafeInteger(workload.metadata.generation) ||
+					(workload.metadata.generation ?? 0) <
+						activationFence.workloadGeneration ||
+					workload.metadata.annotations?.[fenceKey] !==
+						String(activationFence.fence) ||
+					storedUid === ""
+				)
+					throw new WorkloadKubernetesError("conflict");
+				activeBinding = { workload, uidKey };
+			}
 			const body: V1Secret = {
 				apiVersion: "v1",
 				kind: "Secret",
@@ -1908,6 +1949,33 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				type: "Opaque",
 				data: { [key]: Buffer.from(plaintext).toString("base64") },
 			};
+			const bindActiveSecretUid = async (secretUid: string) => {
+				if (!activeBinding) return;
+				const live = await client.read<V1Secret>("Secret", ref.name);
+				if (
+					live?.metadata?.uid !== secretUid ||
+					!isLiveOwnedImmutableSecret(live, value, ref) ||
+					!hasSameStructure(live.data, body.data)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				own(live, value.agentId, value.workloadRevision, value.fence);
+				if (
+					activeBinding.workload.metadata?.annotations?.[
+						activeBinding.uidKey
+					] === secretUid
+				)
+					return;
+				await client.replace({
+					...activeBinding.workload,
+					metadata: {
+						...activeBinding.workload.metadata,
+						annotations: {
+							...activeBinding.workload.metadata?.annotations,
+							[activeBinding.uidKey]: secretUid,
+						},
+					},
+				});
+			};
 			const existing = await client.read<V1Secret>("Secret", ref.name);
 			if (!existing) {
 				const created = await client.create(body);
@@ -1920,6 +1988,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					!hasSameStructure(live.data, body.data)
 				)
 					throw new WorkloadKubernetesError("conflict");
+				await bindActiveSecretUid(live.metadata.uid);
 				return live.metadata.uid;
 			}
 			if (
@@ -1949,6 +2018,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						})
 					: existing;
 			if (!live.metadata?.uid) throw new WorkloadKubernetesError("conflict");
+			await bindActiveSecretUid(live.metadata.uid);
 			return live.metadata.uid;
 		},
 		async apply(
