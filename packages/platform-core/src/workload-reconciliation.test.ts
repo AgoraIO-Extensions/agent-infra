@@ -198,6 +198,26 @@ describe("durable Workload reconciliation", () => {
 		await f.tick();
 		expect(f.state).toMatchObject({ phase: "closing", attempts: 0 });
 	});
+	it("rejects preflight configuration that differs from the authoritative record", async () => {
+		const f = fixture();
+		await f.tick();
+		const authoritative = f.state?.candidate.configuration;
+		if (!authoritative) throw new Error();
+		vi.mocked(f.runtime.preflight).mockResolvedValueOnce({
+			configuration: { ...authoritative, agentId: "agent-other" },
+			deployment: { admitted: true },
+		});
+
+		await f.tick();
+
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+			candidate: { configuration: authoritative, deployment: null },
+		});
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+	});
 	it("exhausts initial transient preflight budget before cleanup", async () => {
 		const f = fixture();
 		vi.mocked(f.runtime.preflight).mockRejectedValue(
@@ -449,6 +469,64 @@ describe("durable Workload reconciliation", () => {
 		});
 		expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledTimes(2);
 		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+	});
+	it("preserves failed rollback cleanup when a newer configuration supersedes it", async () => {
+		const f = fixture();
+		await f.tick(7);
+		f.upgrade("image-b");
+		vi.mocked(f.runtime.observe).mockResolvedValue("unhealthy");
+		await f.tick(8);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			rollback: true,
+			candidate: { configuration: { source: { imageDigest: "image-a" } } },
+		});
+		const rollbackCandidate = structuredClone(f.state?.candidate);
+		const rollbackIdentity = structuredClone(f.state?.identity);
+		const rollbackRevision = f.state?.revision;
+		vi.mocked(f.runtime.cleanup).mockResolvedValueOnce(false);
+
+		f.upgrade("image-c");
+		await f.tick();
+
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			rollback: true,
+			cleanupInterrupted: true,
+			candidate: rollbackCandidate,
+			identity: rollbackIdentity,
+			revision: rollbackRevision,
+		});
+		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+		f.restart();
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			rollback: true,
+			cleanupInterrupted: true,
+			candidate: rollbackCandidate,
+		});
+		expect(f.runtime.cleanup).toHaveBeenCalledWith(
+			expect.objectContaining({
+				candidate: rollbackCandidate,
+				identity: rollbackIdentity,
+				rollback: true,
+			}),
+			false,
+			expect.anything(),
+		);
+		f.restart();
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "preflight",
+			rollback: false,
+			candidate: {
+				configuration: { source: { imageDigest: "image-c" } },
+				deployment: null,
+			},
+		});
+		expect(f.state).not.toHaveProperty("cleanupInterrupted");
+		expect(f.runtime.cleanup).toHaveBeenCalledTimes(2);
 	});
 	it.each(["stop", "disable", "restart", "configuration"] as const)(
 		"preserves candidate cleanup across %s and process restart",

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
 import {
 	type AgentManagementDecisionV1,
@@ -181,8 +182,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 						].includes(state.phase);
 					if (
 						state &&
-						!state.rollback &&
-						(state.phase === "cleaning" || supersedesUnverifiedCandidate)
+						(state.phase === "cleaning" ||
+							(!state.rollback && supersedesUnverifiedCandidate))
 					) {
 						const interruptedState: WorkloadReconciliationStateV1 = {
 							...state,
@@ -236,8 +237,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 						case "preflight": {
 							const candidate = await runtime.preflight(input, state);
 							if (
-								candidate.configuration.source.imageDigest !==
-								state.candidate.configuration.source.imageDigest
+								!isDeepStrictEqual(
+									candidate.configuration,
+									state.candidate.configuration,
+								)
 							)
 								throw new WorkloadPreflightRejectedErrorV1();
 							const previous = state.verified?.configuration.source;

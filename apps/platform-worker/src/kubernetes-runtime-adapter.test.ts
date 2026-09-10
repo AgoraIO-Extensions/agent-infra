@@ -41,6 +41,58 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: { ...workloadTestPolicy, storageSize: "0.125Gi" },
+			probe: f.probe,
+		});
+		const identity = await adapter.apply(desired);
+		const pvc = await f.client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			desired.persistentVolume.name,
+		);
+		if (!pvc?.spec?.resources?.requests) throw new Error();
+		pvc.spec.resources.requests.storage = "128Mi";
+		f.resources.set(
+			`PersistentVolumeClaim/${desired.persistentVolume.name}`,
+			pvc,
+		);
+		const writes = f.writes.length;
+		expect(await adapter.apply(desired)).toEqual(identity);
+		expect(f.writes).toHaveLength(writes);
+		pvc.spec.resources.requests.storage = "129Mi";
+		f.resources.set(
+			`PersistentVolumeClaim/${desired.persistentVolume.name}`,
+			pvc,
+		);
+		await expect(adapter.apply(desired)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(f.writes).toHaveLength(writes);
+	});
+	it("rejects and repairs injected Ingress labels on an open route", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.promote(desired, identity);
+		const route = await f.client.read<V1Ingress>("Ingress", desired.route.name);
+		if (!route?.metadata?.labels) throw new Error();
+		route.metadata.labels["external.example.test/route"] = "injected";
+		f.resources.set(`Ingress/${desired.route.name}`, route);
+		expect(await adapter.observe(desired, identity, "open")).toBe("drifted");
+		await adapter.closeAgent(
+			desired.agentId,
+			desired.workloadRevision,
+			desired.fence,
+		);
+		await adapter.promote(desired, identity);
+		expect(await adapter.observe(desired, identity, "open")).toBe("healthy");
+	});
 	it.each([
 		{ activeDeadlineSeconds: 30 },
 		{ restartPolicy: "Never" },
@@ -121,6 +173,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			},
 		],
 		["parallel management", { podManagementPolicy: "Parallel" }],
+		["service name", { serviceName: "foreign-service" }],
 		["nonzero ordinal", { ordinals: { start: 1 } }],
 		[
 			"partitioned rollout",
@@ -132,7 +185,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			},
 		],
 	] as const)(
-		"rejects and repairs StatefulSet %s despite an unchanged fingerprint",
+		"rejects or repairs StatefulSet %s despite an unchanged fingerprint",
 		async (_label, mutation) => {
 			const f = fixture();
 			const adapter = f.adapter();
@@ -157,6 +210,23 @@ describe("GA Kubernetes Workload adapter", () => {
 			await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
 				code: "conflict",
 			});
+			if (
+				[
+					"volume claim templates",
+					"selector expressions",
+					"parallel management",
+					"service name",
+				].includes(_label)
+			) {
+				const before = structuredClone(f.resources);
+				const writes = f.writes.length;
+				await expect(adapter.apply(desired)).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+				expect(f.resources).toEqual(before);
+				return;
+			}
 			const repaired = await adapter.apply(desired);
 			if (!repaired || repaired === "pending") throw new Error();
 			expect(await adapter.observe(desired, repaired)).toBe("healthy");
@@ -1138,6 +1208,22 @@ describe("GA Kubernetes Workload adapter", () => {
 				).rejects.toMatchObject({
 					code: blocker === "foreign" ? "policy" : "conflict",
 				});
+				expect(f.writes).toHaveLength(writes);
+				expect(f.resources).toEqual(before);
+				expect(
+					await adapter.cleanup({
+						schemaVersion: 1,
+						requestId: "stale-cleanup",
+						traceId: desired.traceId,
+						agentId: desired.agentId,
+						configRevision: desired.configRevision,
+						workloadRevision: 2,
+						workloadUid: identity.uid,
+						workloadGeneration: identity.generation,
+						fence: 2,
+						persistentVolumeIntent: "retain-existing",
+					}),
+				).toMatchObject({ status: "failed", routeClosed: false });
 				expect(f.writes).toHaveLength(writes);
 				expect(f.resources).toEqual(before);
 			}

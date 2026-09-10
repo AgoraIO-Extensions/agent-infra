@@ -47,6 +47,39 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it.each([false, true])(
+		"does not start polling after termination during deployment assembly (already aborted: %s)",
+		async (alreadyAborted) => {
+			const controller = new AbortController();
+			const entered = Promise.withResolvers<void>();
+			const assembled = Promise.withResolvers<ReturnType<typeof fixture>>();
+			vi.stubGlobal("workloadDeploymentTestFactory", () => {
+				entered.resolve();
+				return assembled.promise;
+			});
+			if (alreadyAborted) controller.abort();
+			const starting = startPlatformWorkloadWorkerFromDeploymentV1(
+				"data:text/javascript,export const createPlatformWorkloadWorkerOptionsV1 = () => globalThis.workloadDeploymentTestFactory();",
+				controller.signal,
+			);
+			let worker: Awaited<typeof starting> | undefined;
+			try {
+				await entered.promise;
+				controller.abort();
+				assembled.resolve(fixture());
+				worker = await starting;
+				expect(store.runNext).not.toHaveBeenCalled();
+				expect(store.close).toHaveBeenCalledOnce();
+				worker.start();
+				await vi.advanceTimersByTimeAsync(100);
+				expect(store.runNext).not.toHaveBeenCalled();
+			} finally {
+				assembled.resolve(fixture());
+				await (worker ?? (await starting)).stop();
+				vi.unstubAllGlobals();
+			}
+		},
+	);
 	it("serializes polling, starts once, drains an in-flight step and closes once", async () => {
 		const step = Promise.withResolvers<"idle">();
 		store.runNext.mockReturnValueOnce(step.promise);

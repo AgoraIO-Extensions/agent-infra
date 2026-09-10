@@ -209,11 +209,18 @@ export async function startPlatformWorkerFromDeploymentV1(
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+	const termination = new AbortController();
 	const primary = startPlatformWorker();
 	const workerPromise = startPlatformWorkerFromDeploymentV1({
 		startPrimary: () => primary,
+		startWorkload: () =>
+			startPlatformWorkloadWorkerFromDeploymentV1(
+				undefined,
+				termination.signal,
+			),
 	});
 	const stop = () => {
+		termination.abort();
 		// Assembly may remain pending; stop the already-running loop independently.
 		try {
 			primary.stop();

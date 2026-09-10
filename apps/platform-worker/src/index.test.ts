@@ -422,11 +422,15 @@ describe("platform worker lifecycle", () => {
 			const assembly = new Promise<void>((resolve) => {
 				finishAssembly = resolve;
 			});
-			const startWorkload = vi.fn(async () => {
-				if (duringAssembly) await assembly;
-				if (rejectsAssembly) throw new Error("synthetic assembly failure");
-				return workload;
-			});
+			let startupSignal: AbortSignal | undefined;
+			const startWorkload = vi.fn(
+				async (_module?: string, signal?: AbortSignal) => {
+					startupSignal = signal;
+					if (duringAssembly) await assembly;
+					if (rejectsAssembly) throw new Error("synthetic assembly failure");
+					return workload;
+				},
+			);
 			const unhandled: unknown[] = [];
 			const onUnhandled = (error: unknown) => unhandled.push(error);
 			const once = vi.spyOn(process, "once");
@@ -449,6 +453,7 @@ describe("platform worker lifecycle", () => {
 				if (duringAssembly) {
 					await vi.waitFor(() => expect(startWorkload).toHaveBeenCalledOnce());
 					process.emit(signal);
+					expect(startupSignal?.aborted).toBe(true);
 					await vi.waitFor(() =>
 						expect(
 							info.mock.calls.map(([message]) => JSON.parse(String(message))),

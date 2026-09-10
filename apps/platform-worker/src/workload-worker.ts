@@ -112,6 +112,7 @@ export function createPlatformWorkloadWorkerV1(
 
 export async function startPlatformWorkloadWorkerFromDeploymentV1(
 	moduleSpecifier = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE,
+	signal?: AbortSignal,
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
@@ -127,6 +128,7 @@ export async function startPlatformWorkloadWorkerFromDeploymentV1(
 		throw new Error("Platform Worker deployment dependencies are unavailable");
 	}
 	const worker = createPlatformWorkloadWorkerV1(options);
-	worker.start();
+	if (signal?.aborted) await worker.stop();
+	else worker.start();
 	return worker;
 }

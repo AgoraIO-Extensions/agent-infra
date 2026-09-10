@@ -281,10 +281,12 @@ function matchesServiceSpec(
 function matchesIngress(current: V1Ingress, expected: V1Ingress) {
 	const hash = resourceFingerprint(expected);
 	return (
+		hasSameStructure(current.metadata?.labels, expected.metadata?.labels) &&
 		hasSameStructure(current.metadata?.annotations, {
 			...expected.metadata?.annotations,
 			[fingerprintAnnotation]: hash,
-		}) && hasSameStructure(current.spec, expected.spec)
+		}) &&
+		hasSameStructure(current.spec, expected.spec)
 	);
 }
 
@@ -707,6 +709,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}) === true
 		);
 	}
+	function hasDriftedImmutableStatefulSetSpec(
+		value: AgentWorkloadDesiredV1,
+		spec: V1StatefulSet["spec"],
+	) {
+		return (
+			!spec ||
+			spec.serviceName !== workloadResourceNameV1(value.agentId) ||
+			(spec.podManagementPolicy ?? "OrderedReady") !== "OrderedReady" ||
+			!hasSameStructure(spec.volumeClaimTemplates ?? [], []) ||
+			!hasSameStructure(
+				{ matchExpressions: [], ...spec.selector },
+				{
+					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },
+					matchExpressions: [],
+				},
+			)
+		);
+	}
 	function hasDriftedStatefulSetSpec(
 		value: AgentWorkloadDesiredV1,
 		spec: V1StatefulSet["spec"],
@@ -813,8 +833,27 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	function matchesPersistentVolumeClaimSpec(
 		actual: V1PersistentVolumeClaim["spec"] | undefined,
 	): boolean {
+		const storage = actual?.resources?.requests?.storage;
+		const observed =
+			typeof storage === "string" ? quantityRatio(storage) : undefined;
+		const expected = quantityRatio(policy.storageSize);
 		return (
-			containsDesired(actual, persistentVolumeClaimSpec()) &&
+			observed !== undefined &&
+			expected !== undefined &&
+			observed[0] * expected[1] === expected[0] * observed[1] &&
+			containsDesired(
+				{
+					...actual,
+					resources: {
+						...actual?.resources,
+						requests: {
+							...actual?.resources?.requests,
+							storage: policy.storageSize,
+						},
+					},
+				},
+				persistentVolumeClaimSpec(),
+			) &&
 			(actual?.volumeMode === undefined ||
 				actual.volumeMode === "Filesystem") &&
 			actual?.selector === undefined &&
@@ -980,6 +1019,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (current.metadata?.deletionTimestamp)
 				throw new WorkloadKubernetesError("conflict");
 		}
+		if (
+			current &&
+			kind === "StatefulSet" &&
+			hasDriftedImmutableStatefulSetSpec(value, (current as V1StatefulSet).spec)
+		)
+			throw new WorkloadKubernetesError("conflict");
 		const hash = resourceFingerprint(object);
 		object.metadata = {
 			...object.metadata,
@@ -1820,6 +1865,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				if (resource.metadata?.deletionTimestamp)
 					throw new WorkloadKubernetesError("conflict");
 			}
+			if (current && hasDriftedImmutableStatefulSetSpec(value, current.spec))
+				throw new WorkloadKubernetesError("conflict");
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
 			if (!current && value.replicas === 0) {
@@ -2395,13 +2442,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						current.metadata.generation !== request.workloadGeneration)
 				)
 					throw new WorkloadKubernetesError("conflict");
-				if (current)
-					own(
-						current,
-						request.agentId,
-						request.workloadRevision,
-						request.fence,
-					);
+				const name = workloadResourceNameV1(request.agentId);
+				const resources = await Promise.all([
+					client.read("PersistentVolumeClaim", `${name}-data`),
+					client.read("Service", name),
+					client.read("Service", `${name}-probe`),
+					client.read("ServiceAccount", name),
+					client.read("NetworkPolicy", name),
+					client.read("Ingress", name),
+				]);
+				for (const resource of [current, ...resources]) {
+					if (resource)
+						own(
+							resource,
+							request.agentId,
+							request.workloadRevision,
+							request.fence,
+						);
+				}
 				routeClosed = await closeAgentAtFence(request);
 				if (!routeClosed)
 					return validateWorkloadCleanupResultV1(request, {
