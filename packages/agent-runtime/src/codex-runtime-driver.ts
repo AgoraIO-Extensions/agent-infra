@@ -1374,6 +1374,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission: CodexModelTurnAdmission,
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
+		private readonly revokeModelTurn?: (turn: CodexNativeTurn) => void,
 	) {
 		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
 	}
@@ -1477,6 +1478,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport?.registerTurn,
 			modelTransport?.abandonTurnAdmission,
 			modelTransport?.cancelTurn,
+			modelTransport?.revokeTurn,
 		);
 		try {
 			await driver.rpc.request(
@@ -1765,26 +1767,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			prepared.operation.nativeSessionRef,
 			command,
 		);
-		await this.cancelModelTurn?.(nativeTurn);
-		let status = await this.getStatus(
-			prepared.operation.nativeSessionRef,
-			command.executionId,
-		);
-		if (status === "running") {
-			try {
-				await this.rpc.request("turn/interrupt", nativeTurn, (value) => {
-					if (!isEmptyRecord(value)) protocolInvalid();
-				});
-			} finally {
-				await this.cancelModelTurn?.(nativeTurn);
-			}
-			status = await this.getStatus(
+		// The durable interruption intent fences new requests before asking the
+		// native runtime to cancel. Aborting its stream first can manufacture a
+		// failed Turn before turn/interrupt reaches the native runtime.
+		this.revokeModelTurn?.(nativeTurn);
+		try {
+			const status = await this.getStatus(
 				prepared.operation.nativeSessionRef,
 				command.executionId,
 			);
-		} else {
+			if (status === "running") {
+				await this.rpc.request("turn/interrupt", nativeTurn, (value) => {
+					if (!isEmptyRecord(value)) protocolInvalid();
+				});
+			}
+		} finally {
 			await this.cancelModelTurn?.(nativeTurn);
 		}
+		const status = await this.getStatus(
+			prepared.operation.nativeSessionRef,
+			command.executionId,
+		);
 		return this.resolveInterruption(
 			command,
 			prepared.operation.nativeSessionRef,
@@ -1810,7 +1813,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return { state: "unknown" };
 		if (operation.record) return { state: "found", record: operation.record };
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
-		await this.cancelModelTurn?.(
+		this.revokeModelTurn?.(
 			this.interruptionNativeTurn(operation.nativeSessionRef, command),
 		);
 		const status = await this.getStatus(

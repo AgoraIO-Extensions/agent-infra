@@ -1178,6 +1178,10 @@ export async function openCodexModelTransport(
 				chunks.push(bytes);
 			}
 			if (controller.signal.aborted) throw new Error();
+			if (revokedTurns.has(turnKey)) {
+				reject(response, 409);
+				return;
+			}
 			const routed = routedRequest(
 				Buffer.concat(chunks),
 				contentEncoding,
@@ -1326,6 +1330,9 @@ export async function openCodexModelTransport(
 		},
 		abandonTurnAdmission: (admission: CodexModelTurnAdmission) => {
 			closeAdmission(admission);
+		},
+		revokeTurn: (turn: CodexNativeTurn) => {
+			revokeTurn(nativeTurnKey(turn));
 		},
 		cancelTurn: async (turn: CodexNativeTurn) => {
 			const key = nativeTurnKey(turn);

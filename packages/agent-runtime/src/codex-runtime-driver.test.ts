@@ -604,6 +604,8 @@ function completedEvent() {
 class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
 	readonly responses: CodexAppServerFrame[] = [];
+	beforeInterrupt?: () => Promise<void>;
+	interruptError?: { code: number; message: string };
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
@@ -766,6 +768,11 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "turn/interrupt") {
+			await this.beforeInterrupt?.();
+			if (this.interruptError) {
+				this.push({ id, error: this.interruptError });
+				return;
+			}
 			if (this.interruptTerminalStatus) {
 				this.turnStatus = this.interruptTerminalStatus;
 			}
@@ -1882,6 +1889,229 @@ describe("Codex Runtime Driver", () => {
 					: generationCancelCommand(submitted.nativeSessionRef);
 			await expect(driver.execute(command)).resolves.toMatchObject({
 				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"requests native interruption before aborting the stream during %s",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.completeOnInterrupt("interrupted");
+			bridge.beforeInterrupt = async () => {
+				expect(upstreamIsClosed).toBe(false);
+				if (!loopback) throw new Error("missing loopback access");
+				const late = await modelRequest(loopback, bridge);
+				expect(late.status).toBe(409);
+				await late.body?.cancel();
+			};
+			modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+				await cancel();
+				if (
+					!bridge.requests.some(({ method }) => method === "turn/interrupt")
+				) {
+					bridge.setTurnStatus("failed");
+				}
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			await expect(driver.execute(command)).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"keeps concurrent pending %s lookup observational until native interruption",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.completeOnInterrupt("interrupted");
+			let cancelledBeforeInterrupt = false;
+			modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+				if (
+					!bridge.requests.some(({ method }) => method === "turn/interrupt")
+				) {
+					cancelledBeforeInterrupt = true;
+				}
+				await cancel();
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			bridge.holdTurnsList();
+			const execution = driver.execute(command);
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+			const lookup = driver.lookupOperation(command);
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(2));
+			bridge.respondToHeldTurnsListWithStatus("inProgress", 1);
+			const lookupResult = await lookup;
+			const closedDuringLookup = upstreamIsClosed;
+			const interruptsDuringLookup = bridge.requests.filter(
+				({ method }) => method === "turn/interrupt",
+			).length;
+			const late = await modelRequest(loopback, bridge);
+			await late.body?.cancel();
+			bridge.respondToHeldTurnsListWithStatus("inProgress");
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+			bridge.respondToHeldTurnsListWithStatus("interrupted");
+			await expect(execution).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+			expect(lookupResult).toEqual({ state: "unknown" });
+			expect(interruptsDuringLookup).toBe(0);
+			expect(late.status).toBe(409);
+			expect(closedDuringLookup).toBe(false);
+			expect(cancelledBeforeInterrupt).toBe(false);
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"drains the stream even when native interruption RPC rejects during %s",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.interruptError = {
+				code: -32000,
+				message: "synthetic interrupt rejection",
+			};
+			bridge.beforeInterrupt = async () => {
+				expect(upstreamIsClosed).toBe(false);
+				if (!loopback) throw new Error("missing loopback access");
+				const late = await modelRequest(loopback, bridge);
+				expect(late.status).toBe(409);
+				await late.body?.cancel();
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			await expect(driver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
 			});
 			await expect(upstreamClosedPromise).resolves.toBeUndefined();
 			expect(

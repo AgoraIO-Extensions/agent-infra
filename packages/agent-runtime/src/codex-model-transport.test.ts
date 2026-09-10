@@ -2,6 +2,7 @@ import { once } from "node:events";
 import {
 	createServer,
 	request as httpRequest,
+	IncomingMessage,
 	Server,
 	type ServerResponse,
 } from "node:http";
@@ -1728,4 +1729,99 @@ describe("Codex model transport", () => {
 		await expect(upstreamClosedPromise).resolves.toBeUndefined();
 		await expect(request(value.modelAccess)).rejects.toThrow();
 	});
+});
+
+it("revokes late admission before draining only the target Thread", async () => {
+	const responses: import("node:http").ServerResponse[] = [];
+	const closed: boolean[] = [];
+	const target = await listen(
+		createServer((_req, res) => {
+			const i = responses.length;
+			responses.push(res);
+			closed.push(false);
+			res.once("close", () => {
+				closed[i] = true;
+			});
+			if (i === 0) {
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.write(event({ type: "response.created", response: {} }));
+			}
+		}),
+	);
+	const value = await transport(target);
+	const other = {
+		threadId: "independent-thread",
+		turnId: defaultNativeTurn.turnId,
+	};
+	admitTurn(value, other);
+	const first = await request(value.modelAccess);
+	const second = request(value.modelAccess, {}, other);
+	await vi.waitFor(() => expect(responses).toHaveLength(2));
+	value.revokeTurn(defaultNativeTurn);
+	expect(closed).toEqual([false, false]);
+	const late = await request(value.modelAccess);
+	expect(late.status).toBe(409);
+	expect(responses).toHaveLength(2);
+	expect(closed).toEqual([false, false]);
+	await value.cancelTurn(defaultNativeTurn);
+	await vi.waitFor(() => expect(closed[0]).toBe(true));
+	expect(closed[1]).toBe(false);
+	responses[1]?.writeHead(200, { "content-type": "text/event-stream" });
+	responses[1]?.end(completedEvent());
+	expect(await (await second).text()).toContain("response.completed");
+	await first.body?.cancel().catch(() => {});
+});
+
+it("fences an admitted request whose body completes after revocation", async () => {
+	let calls = 0;
+	const target = await listen(
+		createServer((_req, res) => {
+			calls++;
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.end(completedEvent());
+		}),
+	);
+	const value = await transport(target);
+	let reading!: () => void;
+	const bodyReading = new Promise<void>((resolve) => {
+		reading = resolve;
+	});
+	const iterate = IncomingMessage.prototype[Symbol.asyncIterator];
+	const spy = vi
+		.spyOn(IncomingMessage.prototype, Symbol.asyncIterator)
+		.mockImplementation(function (this: IncomingMessage) {
+			if (this.url === "/responses") reading();
+			return iterate.call(this);
+		});
+	const body = JSON.stringify({ model: selectedInternalModel });
+	const client = httpRequest(`${value.modelAccess.endpoint}/responses`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${value.modelAccess.credential}`,
+			"content-length": Buffer.byteLength(body),
+			"x-client-request-id": defaultNativeTurn.threadId,
+			"x-codex-turn-metadata": JSON.stringify({
+				thread_id: defaultNativeTurn.threadId,
+				turn_id: defaultNativeTurn.turnId,
+			}),
+		},
+	});
+	const received = new Promise<number | undefined>((resolve, reject) => {
+		client.once("response", (response) => {
+			response.resume();
+			response.once("end", () => resolve(response.statusCode));
+		});
+		client.once("error", reject);
+	});
+	try {
+		client.write(body.slice(0, 1));
+		await bodyReading;
+		value.revokeTurn(defaultNativeTurn);
+		client.end(body.slice(1));
+		expect(await received).toBe(409);
+		expect(calls).toBe(0);
+	} finally {
+		spy.mockRestore();
+		client.destroy();
+	}
 });
