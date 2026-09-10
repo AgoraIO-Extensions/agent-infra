@@ -1225,6 +1225,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const current = await statefulSet(value);
 		if (
 			!current ||
+			current.metadata?.deletionTimestamp ||
 			current.metadata?.uid !== identity.uid ||
 			current.metadata.generation !== identity.generation ||
 			current.metadata?.annotations?.[agentAnnotation] !== value.agentId ||

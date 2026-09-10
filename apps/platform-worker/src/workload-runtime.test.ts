@@ -445,6 +445,49 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it.each(["current", "active-origin"] as const)(
+		"rejects mismatched persisted active Secret names for %s bindings",
+		async (materialization) => {
+			const record = activeSecretRecord();
+			const cleanup = secretCleanupStore(record);
+			const decrypt = vi.fn(async () => ({
+				outcome: "decrypted" as const,
+				plaintext: new Uint8Array([1, 2, 3]),
+			}));
+			const f = fixture(
+				{ decryptor: { decrypt } },
+				{
+					configuration: secretConfiguration({
+						revision: materialization === "current" ? 1 : 2,
+					}),
+					secrets: {
+						bindings: [{ materialization, record }],
+						store: cleanup.store,
+						auditDecryption: vi.fn(async () => undefined),
+					},
+				},
+			);
+			await f.tick(2);
+			const deployment = validateAgentWorkloadDesiredV1(
+				f.state?.candidate.deployment,
+			);
+			const ref = deployment.secretRefs[0];
+			if (!ref) throw new Error();
+			expect(record.kubernetesSecretRef.name).not.toBe(ref.name);
+			expect(record.activationFence.kubernetesSecretName).toBe(
+				record.kubernetesSecretRef.name,
+			);
+			await f.tick(3);
+			expect(decrypt).not.toHaveBeenCalled();
+			expect(await f.client.read("Secret", ref.name)).toBeNull();
+			expect(
+				await f.client.read("StatefulSet", deployment.service.name),
+			).toBeNull();
+			expect(await f.client.read("Ingress", deployment.route.name)).toBeNull();
+			expect(f.state?.phase).not.toBe("ready");
+		},
+	);
+
 	it("keeps retryable registry admission failures in preflight without Kubernetes mutations", async () => {
 		const f = fixture({
 			registry: {
@@ -771,7 +814,7 @@ describe("assembled Workload Runtime contracts", () => {
 				},
 				{ configuration, secrets },
 			);
-			await f.tick(4);
+			await f.tick(lifecycle === "active" ? 2 : 4);
 			const state = f.state;
 			if (!state?.candidate.deployment) throw new Error();
 			const deployment = validateAgentWorkloadDesiredV1(
@@ -779,6 +822,20 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 			const ref = deployment.secretRefs[0];
 			if (!ref) throw new Error();
+			if (lifecycle === "active") {
+				const adapter = createKubernetesRuntimeAdapterV1({
+					client: f.client,
+					policy: workloadTestPolicy,
+					probe: async () => true,
+				});
+				await adapter.applyImmutableSecret(
+					deployment,
+					ref.name,
+					"BOT_TOKEN",
+					new Uint8Array([1, 2, 3]),
+				);
+				await adapter.apply(deployment);
+			}
 			const before = structuredClone([...f.resources.entries()]);
 			expect(before.some(([key]) => key.startsWith("StatefulSet/"))).toBe(true);
 			expect(
@@ -806,9 +863,16 @@ describe("assembled Workload Runtime contracts", () => {
 		},
 	);
 
-	it.each(["bound", "legacy missing UID"])(
-		"safely reuses an active Secret with %s identity",
-		async (binding) => {
+	it.each(
+		(["current", "active-origin"] as const).flatMap((materialization) =>
+			["bound", "legacy missing UID"].map((binding) => ({
+				materialization,
+				binding,
+			})),
+		),
+	)(
+		"safely reuses an $materialization Secret with $binding identity",
+		async ({ materialization, binding }) => {
 			let record = activeSecretRecord();
 			if (record.lifecycleState !== "active") throw new Error();
 			const cleanup = secretCleanupStore(record);
@@ -820,10 +884,12 @@ describe("assembled Workload Runtime contracts", () => {
 			const f = fixture(
 				{ decryptor: { decrypt } },
 				{
-					configuration: secretConfiguration(),
+					configuration: secretConfiguration({
+						revision: materialization === "current" ? 1 : 2,
+					}),
 					secrets: {
 						get bindings() {
-							return [{ materialization: "current" as const, record }];
+							return [{ materialization, record }];
 						},
 						store: cleanup.store,
 						auditDecryption: audit,

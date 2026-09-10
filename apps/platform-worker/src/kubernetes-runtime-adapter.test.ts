@@ -41,6 +41,28 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("rejects a terminating StatefulSet before observation and promotion", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const current = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		if (!current?.metadata) throw new Error();
+		current.metadata.deletionTimestamp = new Date("2026-09-10T00:00:00Z");
+		f.resources.set(`StatefulSet/${desired.service.name}`, current);
+		const writes = f.writes.length;
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(f.writes).toHaveLength(writes);
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+	});
 	it.each(["route", "probe"] as const)(
 		"rejects a recreated Ingress targeting the %s Service while closed",
 		async (target) => {

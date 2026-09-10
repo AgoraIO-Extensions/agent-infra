@@ -573,6 +573,8 @@ export function createWorkloadRuntimeV1(
 			for (const { record } of bindingsFor(state, input)) {
 				const reference = recordReference(record);
 				const activationFence = activeSecretFence(record, reference);
+				if (record.lifecycleState === "active" && !activationFence)
+					throw new Error("Active Workload Secret fence is unavailable");
 				if (
 					activationFence &&
 					(await adapter.observeActiveImmutableSecret(

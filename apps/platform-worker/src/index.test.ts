@@ -402,9 +402,13 @@ describe("platform worker lifecycle", () => {
 		expect(primary.stop).toHaveBeenCalledOnce();
 	});
 
-	it.each(["SIGINT", "SIGTERM"] as const)(
-		"handles a rejecting workload shutdown from %s",
-		async (signal) => {
+	it.each(
+		(["SIGINT", "SIGTERM"] as const).flatMap((signal) =>
+			[false, true].map((duringAssembly) => ({ signal, duringAssembly })),
+		),
+	)(
+		"handles a rejecting workload shutdown from $signal (during assembly: $duringAssembly)",
+		async ({ signal, duringAssembly }) => {
 			const originalArgv = process.argv[1];
 			const originalExitCode = process.exitCode;
 			const workload = {
@@ -412,7 +416,14 @@ describe("platform worker lifecycle", () => {
 					throw new Error("synthetic shutdown failure");
 				}),
 			};
-			const startWorkload = vi.fn(async () => workload);
+			let finishAssembly!: () => void;
+			const assembly = new Promise<void>((resolve) => {
+				finishAssembly = resolve;
+			});
+			const startWorkload = vi.fn(async () => {
+				if (duringAssembly) await assembly;
+				return workload;
+			});
 			const unhandled: unknown[] = [];
 			const onUnhandled = (error: unknown) => unhandled.push(error);
 			const once = vi.spyOn(process, "once");
@@ -431,8 +442,16 @@ describe("platform worker lifecycle", () => {
 				process.exitCode = undefined;
 				process.on("unhandledRejection", onUnhandled);
 
-				await import("./index.js");
-				process.emit(signal);
+				const loading = import("./index.js");
+				if (duringAssembly) {
+					await vi.waitFor(() => expect(startWorkload).toHaveBeenCalledOnce());
+					process.emit(signal);
+					finishAssembly();
+					await loading;
+				} else {
+					await loading;
+					process.emit(signal);
+				}
 				await new Promise<void>((resolve) => setImmediate(resolve));
 
 				expect(startWorkload).toHaveBeenCalledOnce();
@@ -447,6 +466,10 @@ describe("platform worker lifecycle", () => {
 				]);
 				expect(error).not.toHaveBeenCalled();
 			} finally {
+				finishAssembly();
+				for (const [name, listener] of once.mock.calls)
+					if (name === signal) listener();
+				await new Promise<void>((resolve) => setImmediate(resolve));
 				process.off("unhandledRejection", onUnhandled);
 				for (const [signal, listener] of once.mock.calls)
 					if (signal === "SIGINT" || signal === "SIGTERM")
