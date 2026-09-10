@@ -404,18 +404,40 @@ describe("platform worker lifecycle", () => {
 
 	it.each(
 		(["SIGINT", "SIGTERM"] as const).flatMap((signal) => [
-			{ signal, duringAssembly: false, rejectsAssembly: false },
-			{ signal, duringAssembly: true, rejectsAssembly: false },
-			{ signal, duringAssembly: true, rejectsAssembly: true },
+			{
+				signal,
+				duringAssembly: false,
+				rejectsAssembly: false,
+				rejectsShutdown: false,
+			},
+			{
+				signal,
+				duringAssembly: false,
+				rejectsAssembly: false,
+				rejectsShutdown: true,
+			},
+			{
+				signal,
+				duringAssembly: true,
+				rejectsAssembly: false,
+				rejectsShutdown: true,
+			},
+			{
+				signal,
+				duringAssembly: true,
+				rejectsAssembly: true,
+				rejectsShutdown: false,
+			},
 		]),
 	)(
-		"handles $signal with pending assembly or shutdown failure (pending: $duringAssembly, rejects: $rejectsAssembly)",
-		async ({ signal, duringAssembly, rejectsAssembly }) => {
+		"handles $signal assembly and shutdown (pending: $duringAssembly, assembly rejects: $rejectsAssembly, shutdown rejects: $rejectsShutdown)",
+		async ({ signal, duringAssembly, rejectsAssembly, rejectsShutdown }) => {
 			const originalArgv = process.argv[1];
 			const originalExitCode = process.exitCode;
+			vi.useFakeTimers();
 			const workload = {
 				stop: vi.fn(async () => {
-					throw new Error("synthetic shutdown failure");
+					if (rejectsShutdown) throw new Error("synthetic shutdown failure");
 				}),
 			};
 			let finishAssembly!: () => void;
@@ -433,7 +455,10 @@ describe("platform worker lifecycle", () => {
 			);
 			const unhandled: unknown[] = [];
 			const onUnhandled = (error: unknown) => unhandled.push(error);
-			const once = vi.spyOn(process, "once");
+			const on = vi.spyOn(process, "on");
+			const exit = vi
+				.spyOn(process, "exit")
+				.mockImplementation((() => undefined) as never);
 			const info = vi
 				.spyOn(console, "info")
 				.mockImplementation(() => undefined);
@@ -466,11 +491,13 @@ describe("platform worker lifecycle", () => {
 					await loading;
 					process.emit(signal);
 				}
-				await new Promise<void>((resolve) => setImmediate(resolve));
+				await vi.advanceTimersByTimeAsync(0);
 
 				expect(startWorkload).toHaveBeenCalledOnce();
 				expect(workload.stop).toHaveBeenCalledTimes(rejectsAssembly ? 0 : 1);
-				expect(process.exitCode).toBe(1);
+				expect(process.exitCode).toBe(
+					rejectsAssembly || rejectsShutdown ? 1 : undefined,
+				);
 				expect(unhandled).toEqual([]);
 				expect(
 					info.mock.calls.map(([message]) => JSON.parse(String(message))),
@@ -479,22 +506,33 @@ describe("platform worker lifecycle", () => {
 					{ service: "platform-worker", status: "stopped" },
 				]);
 				expect(error).not.toHaveBeenCalled();
+				const failed = rejectsAssembly || rejectsShutdown;
+				expect(vi.getTimerCount()).toBe(failed ? 1 : 0);
+				process.emit(signal);
+				process.emit(signal === "SIGINT" ? "SIGTERM" : "SIGINT");
+				expect(vi.getTimerCount()).toBe(failed ? 1 : 0);
+				expect(exit).not.toHaveBeenCalled();
+				await vi.runOnlyPendingTimersAsync();
+				if (failed) {
+					expect(exit).toHaveBeenCalledOnce();
+					expect(exit).toHaveBeenCalledWith(1);
+				} else expect(exit).not.toHaveBeenCalled();
 			} finally {
 				finishAssembly();
-				for (const [name, listener] of once.mock.calls)
-					if (name === signal) listener();
-				await new Promise<void>((resolve) => setImmediate(resolve));
+				await vi.advanceTimersByTimeAsync(0);
 				process.off("unhandledRejection", onUnhandled);
-				for (const [signal, listener] of once.mock.calls)
+				for (const [signal, listener] of on.mock.calls)
 					if (signal === "SIGINT" || signal === "SIGTERM")
 						process.off(signal, listener);
 				if (originalArgv === undefined) process.argv.splice(1, 1);
 				else process.argv[1] = originalArgv;
 				process.exitCode = originalExitCode;
 				vi.doUnmock("./workload-worker.js");
-				once.mockRestore();
+				on.mockRestore();
+				exit.mockRestore();
 				info.mockRestore();
 				error.mockRestore();
+				vi.useRealTimers();
 			}
 		},
 	);

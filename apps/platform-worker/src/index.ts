@@ -209,6 +209,7 @@ export async function startPlatformWorkerFromDeploymentV1(
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+	const shutdownDeadlineMs = 10_000;
 	const termination = new AbortController();
 	const primary = startPlatformWorker();
 	const workerPromise = startPlatformWorkerFromDeploymentV1({
@@ -219,22 +220,31 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 				termination.signal,
 			),
 	});
+	let stopping = false;
 	const stop = () => {
+		if (stopping) return;
+		stopping = true;
+		const deadline = setTimeout(() => process.exit(1), shutdownDeadlineMs);
+		deadline.unref();
 		termination.abort();
-		// Assembly may remain pending; stop the already-running loop independently.
+		let primaryStop: Promise<void>;
 		try {
-			primary.stop();
+			primaryStop = Promise.resolve(primary.stop());
 		} catch {
-			process.exitCode = 1;
+			primaryStop = Promise.reject();
 		}
-		void workerPromise
-			.then((worker) => worker.stop())
-			.catch(() => {
+		void Promise.all([
+			primaryStop,
+			workerPromise.then((worker) => worker.stop()),
+		]).then(
+			() => clearTimeout(deadline),
+			() => {
 				process.exitCode = 1;
-			});
+			},
+		);
 	};
-	process.once("SIGINT", stop);
-	process.once("SIGTERM", stop);
+	process.on("SIGINT", stop);
+	process.on("SIGTERM", stop);
 	void workerPromise.catch(() => {
 		process.exitCode = 1;
 	});

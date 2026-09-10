@@ -69,17 +69,27 @@ describe("Workload Worker lifecycle", () => {
 			const controller = new AbortController();
 			const entered = Promise.withResolvers<void>();
 			const assembled = Promise.withResolvers<ReturnType<typeof fixture>>();
-			vi.stubGlobal("workloadDeploymentTestFactory", () => {
+			const factory = vi.fn((signal: AbortSignal) => {
+				expect(signal).toBe(controller.signal);
 				entered.resolve();
 				return assembled.promise;
 			});
+			vi.stubGlobal("workloadDeploymentTestFactory", factory);
 			if (alreadyAborted) controller.abort();
 			const starting = startPlatformWorkloadWorkerFromDeploymentV1(
-				"data:text/javascript,export const createPlatformWorkloadWorkerOptionsV1 = () => globalThis.workloadDeploymentTestFactory();",
+				"data:text/javascript,export const createPlatformWorkloadWorkerOptionsV1 = signal => globalThis.workloadDeploymentTestFactory(signal);",
 				controller.signal,
 			);
 			let worker: Awaited<typeof starting> | undefined;
 			try {
+				if (alreadyAborted) {
+					await expect(starting).rejects.toThrow(
+						"Platform Worker deployment dependencies are unavailable",
+					);
+					expect(factory).not.toHaveBeenCalled();
+					expect(store.opened).not.toHaveBeenCalled();
+					return;
+				}
 				await entered.promise;
 				controller.abort();
 				assembled.resolve(fixture());
@@ -91,7 +101,8 @@ describe("Workload Worker lifecycle", () => {
 				expect(store.runNext).not.toHaveBeenCalled();
 			} finally {
 				assembled.resolve(fixture());
-				await (worker ?? (await starting)).stop();
+				if (worker) await worker.stop();
+				else if (!alreadyAborted) await (await starting).stop();
 				vi.unstubAllGlobals();
 			}
 		},

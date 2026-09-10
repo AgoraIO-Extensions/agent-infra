@@ -970,6 +970,119 @@ describe("OCI ImageRegistryAdapter V1", () => {
 		}
 	});
 
+	it("does not start policy or transport for cancelled admission", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetch = vi.fn();
+		const authorize = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch,
+			policy: { authorize },
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({ status: "rejected" });
+		expect(authorize).not.toHaveBeenCalled();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each(["resolve", "reject"] as const)(
+		"cancels pending policy and consumes late %s",
+		async (late) => {
+			const controller = new AbortController();
+			const gate = Promise.withResolvers<typeof admittedPolicy>();
+			const started = Promise.withResolvers<void>();
+			let signal: AbortSignal | undefined;
+			const fetch = vi.fn(async () =>
+				ociManifestResponse(registryManifestBody, manifestDigest),
+			);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				fetch,
+				policy: {
+					authorize(_input, options?: { readonly signal?: AbortSignal }) {
+						signal = options?.signal;
+						started.resolve();
+						return gate.promise;
+					},
+				},
+			});
+			const pending = adapter.admit(request, { signal: controller.signal });
+			await started.promise;
+			controller.abort();
+			let settled = false;
+			void pending.then(() => {
+				settled = true;
+			});
+			try {
+				await vi.waitFor(() => expect(settled).toBe(true), { timeout: 150 });
+				expect(signal).toBe(controller.signal);
+				expect(signal?.aborted).toBe(true);
+				await expect(pending).resolves.toMatchObject({
+					status: "rejected",
+					error: { code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" },
+				});
+			} finally {
+				if (late === "resolve") gate.resolve(admittedPolicy);
+				else gate.reject(new Error("late policy rejection"));
+				await pending;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(fetch).toHaveBeenCalledTimes(1);
+		},
+	);
+	it("consumes cancellation when policy aborts and throws synchronously", async () => {
+		const controller = new AbortController();
+		const fetch = vi.fn(async () =>
+			ociManifestResponse(registryManifestBody, manifestDigest),
+		);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch,
+			policy: {
+				authorize() {
+					controller.abort();
+					throw new Error("synchronous policy failure");
+				},
+			},
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("removes policy cancellation listener after normal completion", async () => {
+		const controller = new AbortController();
+		const add = vi.spyOn(controller.signal, "addEventListener");
+		const remove = vi.spyOn(controller.signal, "removeEventListener");
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch: vi
+				.fn()
+				.mockResolvedValueOnce(
+					ociManifestResponse(registryManifestBody, manifestDigest),
+				)
+				.mockResolvedValueOnce(ociConfigResponse(registryConfigBody)),
+			policy: { authorize: async () => admittedPolicy },
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({ status: "admitted" });
+		const listener = add.mock.calls.find(([name]) => name === "abort")?.[1];
+		expect(listener).toBeDefined();
+		expect(remove).toHaveBeenCalledWith("abort", listener);
+	});
+
 	it("clears the transport deadline when the admission caller cancels", async () => {
 		vi.useFakeTimers();
 		const controller = new AbortController();

@@ -72,8 +72,14 @@ image manifest 只标识当前已部署 release。
 ### Workload 调谐
 
 生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如 `file:///app/deployment/platform-worker.mjs`；该示例不代表基础镜像包含此文件。仓库基础镜像不提供环境专属装配包，发布前必须在最终镜像内确认模块可加载并导出下述工厂。未配置路径时，生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
-`createPlatformWorkloadWorkerOptionsV1()`。部署包装配 namespace-scoped Kubernetes
-client、ImageRegistryAdapter、Worker-only Secret decryptor、资源和网络 Profile，
+`createPlatformWorkloadWorkerOptionsV1(signal: AbortSignal)`。部署包必须在装配前检查
+signal，并把它传给数据库、网络和其他异步装配操作；取消后须停止继续创建资源并清理已经
+创建的资源。收到 SIGINT 或 SIGTERM 后，Worker 会取消装配并停止已有循环；装配或停止未在
+10 秒内全部完成时进程以状态 1 强制退出。该截止可能截断 60 秒 admission 排空，后续实例
+依靠 Platform DB 中的持久化调谐状态恢复。
+
+部署包装配 namespace-scoped Kubernetes client、ImageRegistryAdapter、Worker-only
+Secret decryptor、资源和网络 Profile，
 以及 RuntimeHost Client 的核心与 capability 探测。探测必须绑定传入的 Agent、
 Workload revision 和固定 Service origin；`platform-adapter` 的核心探测必须满足
 [Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。

@@ -118,19 +118,25 @@ export async function startPlatformWorkloadWorkerFromDeploymentV1(
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
+	const assemblySignal = signal ?? new AbortController().signal;
 	let options: PlatformWorkloadWorkerOptionsV1;
 	try {
+		if (assemblySignal.aborted) throw new Error();
 		const deployment = (await import(moduleSpecifier)) as {
-			createPlatformWorkloadWorkerOptionsV1():
+			createPlatformWorkloadWorkerOptionsV1(
+				signal: AbortSignal,
+			):
 				| Promise<PlatformWorkloadWorkerOptionsV1>
 				| PlatformWorkloadWorkerOptionsV1;
 		};
-		options = await deployment.createPlatformWorkloadWorkerOptionsV1();
+		if (assemblySignal.aborted) throw new Error();
+		options =
+			await deployment.createPlatformWorkloadWorkerOptionsV1(assemblySignal);
 	} catch {
 		throw new Error("Platform Worker deployment dependencies are unavailable");
 	}
 	const worker = createPlatformWorkloadWorkerV1(options);
-	if (signal?.aborted) await worker.stop();
+	if (assemblySignal.aborted) await worker.stop();
 	else worker.start();
 	return worker;
 }

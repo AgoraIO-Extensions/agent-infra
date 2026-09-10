@@ -66,6 +66,7 @@ export interface OciImageAdmissionPolicyV1 {
 		input: ImageRegistryAdmissionRequestV1 & {
 			readonly immutableDigest: string;
 		},
+		options?: { readonly signal?: AbortSignal },
 	): Promise<
 		| {
 				readonly status: "admitted";
@@ -195,7 +196,15 @@ export function createOciImageRegistryAdapterV1(options: {
 				return rejected(request, distributionFailureCode(manifest.status));
 			}
 
-			const policy = await authorizePolicy(options.policy, request, manifest);
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+			const policy = await authorizePolicy(
+				options.policy,
+				request,
+				manifest,
+				admissionOptions?.signal,
+			);
 			if (policy.status !== "admitted") {
 				return rejected(request, policy.code);
 			}
@@ -628,6 +637,7 @@ async function authorizePolicy(
 	policy: OciImageAdmissionPolicyV1,
 	request: ImageRegistryAdmissionRequestV1,
 	manifest: Extract<OciManifestResolutionV1, { readonly status: "resolved" }>,
+	signal?: AbortSignal,
 ): Promise<
 	| {
 			readonly status: "admitted";
@@ -640,11 +650,23 @@ async function authorizePolicy(
 				| "IMAGE_ADMISSION_POLICY_UNAVAILABLE";
 	  }
 > {
+	let onAbort: (() => void) | undefined;
 	try {
-		const decision = await policy.authorize({
-			...request,
-			immutableDigest: manifest.immutableDigest,
+		signal?.throwIfAborted();
+		const cancelled = new Promise<never>((_resolve, reject) => {
+			onAbort = () => reject(new Error("Image admission policy cancelled"));
+			signal?.addEventListener("abort", onAbort, { once: true });
 		});
+		const decision = await Promise.race([
+			Promise.resolve().then(() => {
+				signal?.throwIfAborted();
+				return policy.authorize(
+					{ ...request, immutableDigest: manifest.immutableDigest },
+					{ signal },
+				);
+			}),
+			cancelled,
+		]);
 		if (decision.status === "rejected") {
 			return { status: "rejected", code: "IMAGE_NOT_ADMITTED" };
 		}
@@ -669,6 +691,8 @@ async function authorizePolicy(
 			: { status: "rejected", code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" };
 	} catch {
 		return { status: "rejected", code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" };
+	} finally {
+		if (onAbort) signal?.removeEventListener("abort", onAbort);
 	}
 }
 
