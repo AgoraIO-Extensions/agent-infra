@@ -89,6 +89,7 @@ function admitTurn(
 		Date.now() + 1_000,
 		internalModel,
 		turn.threadId,
+		"high",
 	);
 	expect(transport.recognizeTurn(admission, turn)).toBe(true);
 	expect(transport.registerTurn(admission, turn)).toBe(true);
@@ -218,6 +219,57 @@ describe("Codex model transport", () => {
 		}
 	});
 
+	it("binds upstream reasoning to the admitted effort despite a stale native effort", async () => {
+		let observed: unknown;
+		const target = await listen(
+			createServer(async (incoming, response) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+				observed = JSON.parse(Buffer.concat(chunks).toString()).reasoning;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, false);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 1_000,
+			selectedInternalModel,
+			defaultNativeTurn.threadId,
+			"high",
+		);
+		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(true);
+		expect(value.registerTurn(admission, defaultNativeTurn)).toBe(true);
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({
+				model: selectedInternalModel,
+				reasoning: { effort: "ultra", summary: "auto" },
+			}),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		expect(observed).toEqual({ effort: "high", summary: "auto" });
+	});
+
+	it.each([null, [], true])(
+		"rejects malformed reasoning %s without forwarding",
+		async (reasoning) => {
+			let calls = 0;
+			const target = await listen(
+				createServer((_incoming, response) => {
+					calls += 1;
+					response.end();
+				}),
+			);
+			const value = await transport(target);
+			const response = await request(value.modelAccess, {
+				body: JSON.stringify({ model: selectedInternalModel, reasoning }),
+			});
+			expect(response.status).toBe(400);
+			await response.text();
+			expect(calls).toBe(0);
+		},
+	);
+
 	it("forwards the selected model and reasoning over the fixed upstream path", async () => {
 		let observed: unknown;
 		const target = await listen(
@@ -323,7 +375,11 @@ describe("Codex model transport", () => {
 
 			expect(response.status).toBe(200);
 			expect(await response.text()).toBe(completedEvent());
-			expect(observed).toEqual({ model: "synthetic-selected", stream: true });
+			expect(observed).toEqual({
+				model: "synthetic-selected",
+				stream: true,
+				reasoning: { effort: "high" },
+			});
 		},
 	);
 
@@ -1239,12 +1295,30 @@ describe("Codex model transport", () => {
 		},
 	);
 
-	it.each([undefined, "gzip", "zstd"] as const)(
-		"binds an admitted Turn to its selected route with %s encoding",
-		async (encoding) => {
+	it.each([
+		[undefined, "model"],
+		["gzip", "model"],
+		["zstd", "model"],
+		[undefined, "effort"],
+		["gzip", "effort"],
+		["zstd", "effort"],
+	] as const)(
+		"keeps the admitted selection with %s encoding despite conflicting %s",
+		async (encoding, conflict) => {
 			const observed: string[] = [];
+			const efforts: string[] = [];
 			const target = await listen(
-				createServer((incoming, response) => {
+				createServer(async (incoming, response) => {
+					const chunks: Buffer[] = [];
+					for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+					const bytes = Buffer.concat(chunks);
+					const decoded =
+						incoming.headers["content-encoding"] === "gzip"
+							? gunzipSync(bytes)
+							: incoming.headers["content-encoding"] === "zstd"
+								? zstdDecompressSync(bytes)
+								: bytes;
+					efforts.push(JSON.parse(decoded.toString()).reasoning.effort);
 					observed.push(incoming.headers.authorization ?? "");
 					response.writeHead(200, { "content-type": "text/event-stream" });
 					response.end(completedEvent());
@@ -1269,8 +1343,9 @@ describe("Codex model transport", () => {
 			admitTurn(value, defaultNativeTurn);
 			const conflicting = value.beginTurnAdmission(
 				Date.now() + 1_000,
-				alternate,
+				conflict === "model" ? alternate : selectedInternalModel,
 				defaultNativeTurn.threadId,
+				conflict === "effort" ? "low" : "high",
 			);
 			expect(value.recognizeTurn(conflicting, defaultNativeTurn)).toBe(true);
 			expect(value.registerTurn(conflicting, defaultNativeTurn)).toBe(false);
@@ -1295,6 +1370,7 @@ describe("Codex model transport", () => {
 			expect(accepted.status).toBe(200);
 			await accepted.text();
 			expect(observed).toEqual([`Bearer ${credential}`]);
+			expect(efforts).toEqual(["high"]);
 		},
 	);
 
@@ -1307,6 +1383,7 @@ describe("Codex model transport", () => {
 			Date.now() + 1_000,
 			"unknown/model",
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(false);
 		expect(value.registerTurn(admission, defaultNativeTurn)).toBe(false);
@@ -1326,6 +1403,7 @@ describe("Codex model transport", () => {
 			Date.now() + 1_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		const pending = request(value.modelAccess);
 		await delay(25);
@@ -1362,6 +1440,7 @@ describe("Codex model transport", () => {
 				Date.now() + (failure === "expire" ? 100 : 5_000),
 				selectedInternalModel,
 				defaultNativeTurn.threadId,
+				"high",
 			);
 			let settled = false;
 			const pending = request(value.modelAccess).then(
@@ -1393,6 +1472,7 @@ describe("Codex model transport", () => {
 					Date.now() + 5_000,
 					selectedInternalModel,
 					defaultNativeTurn.threadId,
+					"high",
 				);
 				value.abandonTurnAdmission(second);
 				expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(true);
@@ -1427,6 +1507,7 @@ describe("Codex model transport", () => {
 			Date.now() + 5_000,
 			selectedInternalModel,
 			"another-thread",
+			"high",
 		);
 		const rejected = await request(value.modelAccess);
 		expect(rejected.status).toBe(409);
@@ -1469,6 +1550,7 @@ describe("Codex model transport", () => {
 			Date.now() + 50,
 			selectedInternalModel,
 			expiringTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(admission, expiringTurn)).toBe(true);
 		const expiringRequest = request(value.modelAccess, {}, expiringTurn);
@@ -1504,11 +1586,13 @@ describe("Codex model transport", () => {
 			Date.now() + 5_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		const secondAdmission = value.beginTurnAdmission(
 			Date.now() + 5_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(firstAdmission, defaultNativeTurn)).toBe(true);
 		expect(value.recognizeTurn(secondAdmission, defaultNativeTurn)).toBe(true);
@@ -1522,6 +1606,7 @@ describe("Codex model transport", () => {
 			Date.now() + 5_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(freshAdmission, defaultNativeTurn)).toBe(false);
 		expect(value.registerTurn(freshAdmission, defaultNativeTurn)).toBe(false);
@@ -1539,6 +1624,7 @@ describe("Codex model transport", () => {
 			Date.now() + 5_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 
 		value.abandonTurnAdmission(admission);
@@ -1559,6 +1645,7 @@ describe("Codex model transport", () => {
 			Date.now() + 1_000,
 			selectedInternalModel,
 			defaultNativeTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(provisional, defaultNativeTurn)).toBe(true);
 		value.abandonTurnAdmission(provisional);
@@ -1714,6 +1801,7 @@ describe("Codex model transport", () => {
 			Date.now() + 1_000,
 			selectedInternalModel,
 			firstTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(cancelledAdmission, firstTurn)).toBe(true);
 		expect(value.registerTurn(cancelledAdmission, firstTurn)).toBe(true);
@@ -1756,6 +1844,7 @@ describe("Codex model transport", () => {
 			Date.now() + 1_000,
 			selectedInternalModel,
 			firstTurn.threadId,
+			"high",
 		);
 		expect(value.recognizeTurn(reused, firstTurn)).toBe(false);
 		expect(value.registerTurn(reused, firstTurn)).toBe(false);

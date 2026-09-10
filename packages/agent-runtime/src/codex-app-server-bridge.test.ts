@@ -860,6 +860,21 @@ describe.sequential("Codex app-server v2 bridge", () => {
 
 describe("model access admission", () => {
 	it.each([
+		"https://model.invalid/v1?",
+		"https://model.invalid/v1#",
+		"https://model.invalid/v1?query=value",
+		"https://model.invalid/v1#fragment",
+		"http://127.0.0.1:1234/v1?",
+		"http://[::1]:1234/v1#",
+	])("rejects endpoint query or fragment delimiters %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
 		"e",
 		"x".repeat(15),
 		"x".repeat(8193),

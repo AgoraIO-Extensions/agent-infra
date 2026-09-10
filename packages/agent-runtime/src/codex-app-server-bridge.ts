@@ -328,7 +328,7 @@ export function validateModelAccess(
 		!exactKeys(input, ["endpoint", "credential"]) ||
 		typeof input.endpoint !== "string" ||
 		input.endpoint.length > 2048 ||
-		/[\s\\]/.test(input.endpoint) ||
+		/[\s\\?#]/.test(input.endpoint) ||
 		typeof input.credential !== "string" ||
 		!/^[\x21-\x7e]{16,8192}$/.test(input.credential)
 	) {

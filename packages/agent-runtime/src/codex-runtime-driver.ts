@@ -132,6 +132,7 @@ interface CodexOperation {
 	nativeSessionRef: string;
 	configVersion?: string;
 	internalModel?: string;
+	reasoningLevel?: string;
 	// Recovery must not expose or re-register the accepted record until this clears.
 	admissionPending?: true;
 	executionId?: string;
@@ -540,6 +541,7 @@ function isCodexOperation(
 			"nativeSessionRef",
 			"configVersion",
 			"internalModel",
+			"reasoningLevel",
 			"admissionPending",
 			"executionId",
 			"turnId",
@@ -590,6 +592,10 @@ function isCodexOperation(
 				!/^(?:[a-f0-9]{64}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
 					value.internalModel,
 				))) ||
+		(value.reasoningLevel !== undefined &&
+			(isInterruption ||
+				typeof value.reasoningLevel !== "string" ||
+				!codexReasoningPattern.test(value.reasoningLevel))) ||
 		(isInterruption && value.configVersion !== undefined)
 	) {
 		return false;
@@ -1362,6 +1368,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			deadline: number,
 			internalModel: string,
 			threadId: string,
+			reasoningLevel: string,
 		) => CodexModelTurnAdmission,
 		private readonly recognizeModelTurn?: (
 			admission: CodexModelTurnAdmission,
@@ -1572,10 +1579,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		const nativeSelection =
-			command.schemaVersion === 2
-				? this.nativeSelection(command.selection)
-				: this.defaultSelection;
+		const nativeSelection = this.operationSelection(prepared.operation);
 		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
 			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
@@ -1613,6 +1617,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admissionDeadline,
 			prepared.operation.internalModel,
 			session.threadId,
+			nativeSelection.effort,
 		);
 		if (modelAdmission)
 			this.modelTurnAdmissions.set(admissionKey, modelAdmission);
@@ -1875,22 +1880,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.registerModelTurn !== undefined;
 		let restoreAdmission: CodexModelTurnAdmission | undefined;
 		if (restoreRequired) {
-			const internalModel = this.executionOperation(
-				initialState,
-				session,
-				execution,
-			).internalModel;
-			if (
-				!internalModel ||
-				![...this.modelOptions.values()].some(
-					(option) => option.internalModel === internalModel,
-				)
-			)
-				unavailable();
+			const selection = this.operationSelection(
+				this.executionOperation(initialState, session, execution),
+			);
+			if (!selection) unavailable();
 			restoreAdmission = this.beginModelTurnAdmission?.(
 				Date.now() + rpcRequestTimeoutMs,
-				internalModel,
+				selection.model,
 				nativeTurn.threadId,
+				selection.effort,
 			);
 			if (
 				restoreAdmission &&
@@ -2115,9 +2113,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session: CodexSession,
 		execution: CodexExecution,
 	) {
+		const operation = this.executionOperation(state, session, execution);
 		return (
-			this.executionOperation(state, session, execution).configVersion ===
-			this.configVersion
+			operation.configVersion === this.configVersion &&
+			this.operationSelection(operation) !== undefined
 		);
 	}
 
@@ -2895,15 +2894,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return execution.status;
 	}
 
+	private operationSelection(operation: CodexOperation) {
+		const model = operation.internalModel;
+		const effort = operation.reasoningLevel;
+		if (
+			model === undefined ||
+			effort === undefined ||
+			![...this.modelOptions.values()].some(
+				(option) =>
+					option.internalModel === model &&
+					option.reasoningLevels.includes(effort),
+			)
+		)
+			return undefined;
+		return { model, effort };
+	}
+
 	private canReplaySubmitOperation(operation: CodexOperation) {
 		return (
 			operation.record?.result.outcome !== "accepted" ||
 			operation.record.result.status !== "running" ||
 			(operation.configVersion === this.configVersion &&
-				operation.internalModel !== undefined &&
-				[...this.modelOptions.values()].some(
-					(option) => option.internalModel === operation.internalModel,
-				))
+				this.operationSelection(operation) !== undefined)
 		);
 	}
 
@@ -2964,15 +2976,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					executions: {},
 				};
 			}
+			const selection =
+				command.schemaVersion === 2
+					? this.nativeSelection(command.selection)
+					: this.defaultSelection;
 			const operation: CodexOperation = {
 				schemaVersion: command.schemaVersion,
 				state: "prepared",
 				nativeSessionRef,
 				configVersion: this.configVersion,
-				internalModel: (command.schemaVersion === 2
-					? this.nativeSelection(command.selection)
-					: this.defaultSelection
-				)?.model,
+				internalModel: selection?.model,
+				reasoningLevel: selection?.effort,
 			};
 			// Persist deterministic local refusal atomically with the operation;
 			// a crash must not leave a never-submitted request acceptance-uncertain.

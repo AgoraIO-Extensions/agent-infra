@@ -57,16 +57,20 @@ interface ActiveTurnRequest {
 	readonly completion: Promise<void>;
 }
 
-interface AdmissionWaiter {
-	readonly admission: CodexModelTurnAdmission;
-	readonly settle: (model: string | undefined) => void;
+interface ModelTurnSelection {
+	readonly internalModel: string;
+	readonly reasoningLevel: string;
 }
 
-interface ModelTurnAdmissionState {
+interface AdmissionWaiter {
+	readonly admission: CodexModelTurnAdmission;
+	readonly settle: (model: ModelTurnSelection | undefined) => void;
+}
+
+interface ModelTurnAdmissionState extends ModelTurnSelection {
 	state: "open" | "consumed" | "closed";
 	readonly deadline: number;
 	readonly threadId: string;
-	readonly internalModel: string;
 	turnKey?: string;
 	timer?: ReturnType<typeof setTimeout>;
 }
@@ -988,7 +992,7 @@ function routedRequest(
 		string,
 		CodexModelAccess & { model: string; target: URL }
 	>,
-	admittedModel: string,
+	admittedModel: ModelTurnSelection,
 ) {
 	const decoded = decodeRequestBody(bytes, encoding);
 	if (decoded.byteLength > maximumRequestBytes) throw new Error();
@@ -996,10 +1000,20 @@ function routedRequest(
 	if (!isPlainRecord(value) || typeof value.model !== "string") {
 		throw new Error();
 	}
-	if (value.model !== admittedModel) return;
-	const route = routes.get(admittedModel);
+	if (value.model !== admittedModel.internalModel) return;
+	const route = routes.get(admittedModel.internalModel);
 	if (!route) return;
-	const body = Buffer.from(JSON.stringify({ ...value, model: route.model }));
+	if (value.reasoning !== undefined && !isPlainRecord(value.reasoning)) return;
+	const body = Buffer.from(
+		JSON.stringify({
+			...value,
+			model: route.model,
+			reasoning: {
+				...(value.reasoning as Record<string, unknown> | undefined),
+				effort: admittedModel.reasoningLevel,
+			},
+		}),
+	);
 	return { route, body: encodeRequestBody(body, encoding) };
 }
 
@@ -1015,7 +1029,7 @@ export async function openCodexModelTransport(
 	const expectedAuthorization = Buffer.from(`Bearer ${token}`);
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
-	const admittedTurns = new Map<string, string>();
+	const admittedTurns = new Map<string, ModelTurnSelection>();
 	// Explicit cancellation is final for this token's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
 	const revokedTurns = new Set<string>();
@@ -1027,7 +1041,10 @@ export async function openCodexModelTransport(
 	const pendingThreads = new Map<string, Set<CodexModelTurnAdmission>>();
 	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
 	let closing = false;
-	const settleAdmissionWaiters = (key: string, model: string | undefined) => {
+	const settleAdmissionWaiters = (
+		key: string,
+		model: ModelTurnSelection | undefined,
+	) => {
 		const waiters = admissionWaiters.get(key);
 		if (!waiters) return;
 		admissionWaiters.delete(key);
@@ -1125,10 +1142,10 @@ export async function openCodexModelTransport(
 			(state.turnKey !== undefined && state.turnKey !== key)
 		)
 			return Promise.resolve(undefined);
-		return new Promise<string | undefined>((resolve) => {
+		return new Promise<ModelTurnSelection | undefined>((resolve) => {
 			const waiters = admissionWaiters.get(key) ?? new Set();
 			admissionWaiters.set(key, waiters);
-			const settle = (model: string | undefined) => {
+			const settle = (model: ModelTurnSelection | undefined) => {
 				clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
 				waiters.delete(waiter);
@@ -1299,10 +1316,13 @@ export async function openCodexModelTransport(
 			deadline: number,
 			internalModel: string,
 			threadId: string,
+			reasoningLevel: string,
 		) => {
 			const admission = Object.freeze({}) as CodexModelTurnAdmission;
 			const state: ModelTurnAdmissionState = {
 				state:
+					typeof reasoningLevel === "string" &&
+					/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(reasoningLevel) &&
 					typeof threadId === "string" &&
 					nativeTurnIdentifierPattern.test(threadId) &&
 					Number.isFinite(deadline) &&
@@ -1314,6 +1334,7 @@ export async function openCodexModelTransport(
 				deadline,
 				threadId,
 				internalModel,
+				reasoningLevel,
 			};
 			if (state.state === "open") {
 				const pending = pendingThreads.get(threadId) ?? new Set();
@@ -1357,7 +1378,8 @@ export async function openCodexModelTransport(
 				revokedTurns.has(key) ||
 				state.deadline <= Date.now() ||
 				(admittedTurns.has(key) &&
-					admittedTurns.get(key) !== state.internalModel)
+					(admittedTurns.get(key)?.internalModel !== state.internalModel ||
+						admittedTurns.get(key)?.reasoningLevel !== state.reasoningLevel))
 			) {
 				closeAdmission(admission);
 				return false;
@@ -1370,8 +1392,12 @@ export async function openCodexModelTransport(
 				recognized.delete(admission);
 				if (recognized.size === 0) recognizedTurns.delete(key);
 			}
-			admittedTurns.set(key, state.internalModel);
-			settleAdmissionWaiters(key, state.internalModel);
+			const selection = {
+				internalModel: state.internalModel,
+				reasoningLevel: state.reasoningLevel,
+			};
+			admittedTurns.set(key, selection);
+			settleAdmissionWaiters(key, selection);
 			return true;
 		},
 		abandonTurnAdmission: (admission: CodexModelTurnAdmission) => {

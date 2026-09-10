@@ -137,10 +137,12 @@ interface StoredEventJournal {
 
 interface StoredCodexExecution {
 	status?: unknown;
+	nativeTurnId?: string;
 }
 
 interface StoredCodexOperation {
 	internalModel?: string;
+	reasoningLevel?: string;
 	state?: unknown;
 	nativeSessionRef?: string;
 	configVersion?: unknown;
@@ -5024,15 +5026,115 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
-	it("persists the alternate model before Turn start and restores only that route after restart", async () => {
+	it("keeps different frozen efforts separate across Turns using the same option", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
-		const upstreamModels: string[] = [];
+		const observed: string[] = [];
 		const endpoint = await listen(
 			createServer(async (request, response) => {
 				const chunks: Buffer[] = [];
 				for await (const chunk of request) chunks.push(Buffer.from(chunk));
-				upstreamModels.push(JSON.parse(Buffer.concat(chunks).toString()).model);
+				observed.push(
+					JSON.parse(Buffer.concat(chunks).toString()).reasoning.effort,
+				);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let access: CodexModelAccess | undefined;
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(path),
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						model: "gpt-5.3",
+						reasoningLevels: ["high", "ultra"],
+						endpoint,
+						credential: upstreamModelAccess.credential,
+					},
+				],
+			},
+			async (options) => {
+				if (!options.modelAccess) throw new Error("missing model access");
+				access = options.modelAccess;
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(
+						access,
+						options.model,
+						options.reasoningEffort,
+					),
+				);
+				return bridge;
+			},
+		);
+		drivers.push(driver);
+		let nativeSessionRef: string | undefined;
+		for (const effort of ["high", "ultra"]) {
+			const command = submitCommandV2({
+				operationId: `execution-${effort}`,
+				executionId: `execution-${effort}`,
+				turnId: `turn-${effort}`,
+				...(nativeSessionRef ? { nativeSessionRef } : {}),
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: effort,
+				},
+			});
+			const accepted = await driver.execute(command);
+			nativeSessionRef = accepted.nativeSessionRef;
+			if (!access) throw new Error("missing model access");
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const turn =
+				state.sessions[accepted.nativeSessionRef]?.executions?.[
+					command.executionId
+				]?.nativeTurnId;
+			if (!turn) throw new Error("missing persisted Turn");
+			const response = await modelRequest(
+				access,
+				bridge,
+				turn,
+				internalModel("model-option-primary", "gpt-5.3"),
+			);
+			expect(response.status).toBe(200);
+			await response.text();
+			if (effort === "high") {
+				bridge.setTurnStatus("completed");
+				await driver.getStatus(nativeSessionRef, command.executionId);
+			}
+		}
+		expect(observed).toEqual(["high", "ultra"]);
+		expect(
+			bridge.requests
+				.filter(({ method }) => method === "turn/start")
+				.map(({ params }) => (params as { effort: string }).effort),
+		).toEqual(["high", "ultra"]);
+		const stored = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(
+			Object.values(stored.operations).map(
+				(operation) => operation.reasoningLevel,
+			),
+		).toEqual(["high", "ultra"]);
+	});
+
+	it("persists the alternate model before Turn start and restores only that route after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const upstreamModels: string[] = [];
+		const upstreamEfforts: string[] = [];
+		const endpoint = await listen(
+			createServer(async (request, response) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of request) chunks.push(Buffer.from(chunk));
+				const body = JSON.parse(Buffer.concat(chunks).toString());
+				upstreamModels.push(body.model);
+				upstreamEfforts.push(body.reasoning.effort);
 				response.writeHead(200, { "content-type": "text/event-stream" });
 				response.end(completedEvent());
 			}),
@@ -5068,6 +5170,7 @@ describe("Codex Runtime Driver", () => {
 					expect.objectContaining({
 						state: "prepared",
 						internalModel: alternate,
+						reasoningLevel: "low",
 					}),
 				);
 				persistedBeforeNative.push(frame.method);
@@ -5080,7 +5183,11 @@ describe("Codex Runtime Driver", () => {
 			await readFile(path, "utf8"),
 		) as StoredCodexDriverState;
 		expect(Object.values(stored.operations)).toContainEqual(
-			expect.objectContaining({ state: "prepared", internalModel: alternate }),
+			expect.objectContaining({
+				state: "prepared",
+				internalModel: alternate,
+				reasoningLevel: "low",
+			}),
 		);
 		await bridge.emitNotification();
 		bridge.respondToHeldTurnStart();
@@ -5124,12 +5231,20 @@ describe("Codex Runtime Driver", () => {
 			expect(allowed.status).toBe(200);
 			await allowed.text();
 			expect(upstreamModels.slice(before)).toEqual(["gpt-5.2-codex"]);
+			expect(upstreamEfforts.slice(before)).toEqual(["low"]);
 		}
 	});
 
-	it.each(["running", "completed"] as const)(
-		"keeps legacy %s records without a model binding fail closed or terminal-readable",
-		async (status) => {
+	it.each([
+		["running", "internalModel", undefined],
+		["completed", "internalModel", undefined],
+		["running", "reasoningLevel", undefined],
+		["completed", "reasoningLevel", undefined],
+		["running", "reasoningLevel", "ultra"],
+		["completed", "reasoningLevel", "ultra"],
+	] as const)(
+		"keeps %s records with invalid %s=%s fail closed or terminal-readable",
+		async (status, field, invalid) => {
 			const directory = await runtimeDirectory();
 			const path = join(directory, "driver.json");
 			let upstreamCalls = 0;
@@ -5157,8 +5272,10 @@ describe("Codex Runtime Driver", () => {
 			const stored = JSON.parse(
 				await readFile(path, "utf8"),
 			) as StoredCodexDriverState;
-			for (const operation of Object.values(stored.operations))
-				delete operation.internalModel;
+			for (const operation of Object.values(stored.operations)) {
+				if (invalid === undefined) delete operation[field];
+				else operation[field] = invalid;
+			}
 			await writeFile(path, JSON.stringify(stored));
 			const recoveredBridge = new TestCodexBridge(
 				bridge.nativeThreadId,
