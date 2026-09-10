@@ -1189,6 +1189,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (resource)
 				own(resource, value.agentId, value.workloadRevision, value.fence);
 		}
+		let resourcesClosed = true;
 		if (probe) {
 			own(probe, value.agentId, value.workloadRevision, value.fence);
 			const expectedProbeSpec = {
@@ -1208,7 +1209,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					!hasOnlyControllerRoutingMetadata(probe)) &&
 				!(await remove("Service", probeName, value))
 			)
-				return false;
+				resourcesClosed = false;
 		}
 		// Remove the selected route's backend before any candidate Pod can start.
 		if (service) {
@@ -1226,8 +1227,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				!matchesServiceSpec(service.spec, safeServiceSpec) ||
 				!hasOnlyControllerRoutingMetadata(service)
 			) {
-				if (!(await remove("Service", name, value))) return false;
-				return remove("Ingress", name, value);
+				const serviceRemoved = await remove("Service", name, value);
+				const ingressRemoved = await remove("Ingress", name, value);
+				return resourcesClosed && serviceRemoved && ingressRemoved;
 			}
 			if (
 				!hasSameStructure(service.spec?.selector, {
@@ -1268,10 +1270,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
 					})
 				)
-					return false;
+					resourcesClosed = false;
 			}
 		}
-		return remove("Ingress", name, value);
+		const ingressRemoved = await remove("Ingress", name, value);
+		return resourcesClosed && ingressRemoved;
 	}
 	async function closeAgent(
 		agentId: string,

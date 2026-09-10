@@ -74,6 +74,47 @@ describe("GA Kubernetes Workload adapter", () => {
 			}
 		},
 	);
+	it.each(["probe", "main"])(
+		"continues closing routes while unsafe %s Service deletion is pending",
+		async (target) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.promote(desired, identity);
+			const name =
+				target === "probe"
+					? `${desired.service.name}-probe`
+					: desired.service.name;
+			const service = await f.client.read<V1Service>("Service", name);
+			if (!service?.metadata?.annotations) throw new Error();
+			service.metadata.annotations["external.example.test/route"] = "injected";
+			service.metadata.finalizers = ["external.example.test/retained"];
+			f.resources.set(`Service/${name}`, service);
+			const remove = f.client.delete.bind(f.client);
+			vi.spyOn(f.client, "delete").mockImplementation(async (resource) => {
+				if (resource.kind === "Service" && resource.metadata?.name === name) {
+					f.resources.set(`Service/${name}`, {
+						...resource,
+						metadata: { ...resource.metadata, deletionTimestamp: new Date() },
+					});
+					return;
+				}
+				await remove(resource);
+			});
+			expect(await adapter.closeRoute(desired)).toBe(false);
+			expect(await f.client.read("Service", name)).not.toBeNull();
+			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+			if (target === "probe")
+				expect(
+					(await f.client.read<V1Service>("Service", desired.service.name))
+						?.spec?.selector?.["agent-infra.agora.io/revision"],
+				).toBe("closed");
+			f.resources.delete(`Service/${name}`);
+			expect(await adapter.closeRoute(desired)).toBe(true);
+		},
+	);
 	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
