@@ -172,7 +172,7 @@ export function startPlatformWorker(options: StartOptions = {}) {
 
 export async function startPlatformWorkerFromDeploymentV1(
 	options: {
-		readonly startPrimary?: () => { stop(): void };
+		readonly startPrimary?: () => { stop(): void | Promise<void> };
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
 	} = {},
 ) {
@@ -199,7 +199,7 @@ export async function startPlatformWorkerFromDeploymentV1(
 		};
 	} catch (error) {
 		try {
-			primary.stop();
+			await primary.stop();
 		} catch {
 			// Preserve the workload assembly error; primary cleanup is best effort here.
 		}

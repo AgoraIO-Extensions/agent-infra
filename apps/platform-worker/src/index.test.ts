@@ -352,6 +352,38 @@ describe("platform worker lifecycle", () => {
 		).rejects.toThrow("deployment unavailable");
 		expect(primary.stop).toHaveBeenCalledOnce();
 	});
+	it.each([false, true])(
+		"awaits asynchronous primary cleanup on assembly failure (rejects: %s)",
+		async (rejects) => {
+			const deploymentFailure = new Error("deployment unavailable");
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const cleanup = gate.then(() => {
+				if (rejects) throw new Error("primary shutdown failed");
+			});
+			void cleanup.catch(() => undefined);
+			const primary = { stop: vi.fn(() => cleanup) };
+			let settled = false;
+			const failure = startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw deploymentFailure;
+				},
+			}).catch((error) => {
+				settled = true;
+				return error;
+			});
+			await vi.waitFor(() => expect(primary.stop).toHaveBeenCalledOnce());
+			try {
+				expect(settled).toBe(false);
+			} finally {
+				release();
+			}
+			expect(await failure).toBe(deploymentFailure);
+		},
+	);
 	it("preserves the workload assembly failure when primary cleanup also fails", async () => {
 		const deploymentFailure = new Error("deployment unavailable");
 		const primary = {

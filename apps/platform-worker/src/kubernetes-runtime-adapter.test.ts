@@ -41,6 +41,84 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it.each(["route", "probe"] as const)(
+		"rejects a recreated Ingress targeting the %s Service while closed",
+		async (target) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.promote(desired, identity);
+			const ingress = await f.client.read<V1Ingress>(
+				"Ingress",
+				desired.route.name,
+			);
+			if (!ingress?.spec) throw new Error();
+			await adapter.closeAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				desired.fence,
+			);
+			if (target === "probe") {
+				for (const rule of ingress.spec.rules ?? []) {
+					for (const path of rule.http?.paths ?? []) {
+						if (path.backend.service)
+							path.backend.service.name = `${desired.service.name}-probe`;
+					}
+				}
+			}
+			f.resources.set(`Ingress/${desired.route.name}`, ingress);
+			expect(await adapter.observe(desired, identity, "closed")).toBe(
+				"drifted",
+			);
+			await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			await adapter.closeAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				desired.fence,
+			);
+			expect(await adapter.observe(desired, identity, "closed")).toBe(
+				"healthy",
+			);
+		},
+	);
+	it.each(["Service", "ProbeService", "NetworkPolicy"] as const)(
+		"rejects and repairs unmanaged %s labels and annotations",
+		async (resourceKind) => {
+			for (const field of ["labels", "annotations"] as const) {
+				const f = fixture();
+				const adapter = f.adapter();
+				const desired = workloadDesiredFixture();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				const kind = resourceKind === "ProbeService" ? "Service" : resourceKind;
+				const name =
+					resourceKind === "ProbeService"
+						? `${desired.service.name}-probe`
+						: desired.service.name;
+				const resource = await f.client.read(kind, name);
+				if (!resource?.metadata) throw new Error();
+				resource.metadata[field] = {
+					...resource.metadata[field],
+					"external.example.test/routing": "unexpected",
+				};
+				f.resources.set(`${kind}/${name}`, resource);
+				expect(await adapter.observe(desired, identity)).toBe("drifted");
+				const repaired = await adapter.apply(desired);
+				if (!repaired || repaired === "pending") throw new Error();
+				expect(
+					(await f.client.read(kind, name))?.metadata?.[field],
+				).not.toHaveProperty("external.example.test/routing");
+				expect(await adapter.observe(desired, repaired)).toBe("healthy");
+				const writes = f.writes.length;
+				await adapter.apply(desired);
+				expect(f.writes).toHaveLength(writes);
+			}
+		},
+	);
 	it("rejects deployment annotations in the controller-owned namespace", () => {
 		const f = fixture();
 		expect(() =>
@@ -1379,6 +1457,11 @@ describe("GA Kubernetes Workload adapter", () => {
 		expect(await f.client.read("Ingress", external.route.name)).not.toBeNull();
 
 		const internal = workloadDesiredFixture(1, "agent-a", "internal-only");
+		await adapter.closeAgent(
+			internal.agentId,
+			internal.workloadRevision,
+			internal.fence,
+		);
 		const internalIdentity = await adapter.apply(internal);
 		if (!internalIdentity || internalIdentity === "pending") throw new Error();
 		await adapter.promote(internal, internalIdentity);
@@ -3313,6 +3396,15 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBe("closed");
 		expect(await f.client.read("Ingress", desired.route.name)).not.toBeNull();
 
+		await expect(adapter.switchRoute(request)).rejects.toThrow(
+			"route closure unavailable",
+		);
+		failRouteClosure = false;
+		await adapter.closeAgent(
+			desired.agentId,
+			desired.workloadRevision,
+			desired.fence,
+		);
 		const retry = await adapter.switchRoute(request);
 		expect(retry).toMatchObject({ status: "completed" });
 		expect(

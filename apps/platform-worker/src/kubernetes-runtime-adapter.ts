@@ -442,6 +442,21 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.fence)
 		);
 	}
+	function hasSafeRoutingMetadata(
+		value: AgentWorkloadDesiredV1,
+		object: KubernetesObject,
+	) {
+		const expected = metadata(value);
+		return (
+			hasSameStructure(object.metadata?.labels, expected.labels) &&
+			containsDesired(object.metadata?.annotations, expected.annotations) &&
+			Object.keys(object.metadata?.annotations ?? {}).every(
+				(key) =>
+					key === fingerprintAnnotation ||
+					Object.hasOwn(expected.annotations, key),
+			)
+		);
+	}
 	function hasSafeServiceAccount(
 		value: AgentWorkloadDesiredV1,
 		account: V1ServiceAccount,
@@ -876,6 +891,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		if (
 			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
 			containsDesired(current, object) &&
+			(!["Service", "NetworkPolicy"].includes(kind) ||
+				hasSafeRoutingMetadata(value, current)) &&
 			(kind !== "ServiceAccount" ||
 				hasSafeServiceAccount(value, current as V1ServiceAccount)) &&
 			(kind !== "Service" ||
@@ -1257,10 +1274,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (!hasCurrentMetadata(resource, value)) return "drifted";
 		}
 		if (
-			routeMode === "open" &&
-			(value.route.exposure === "internal-only"
-				? routeIngress !== null
-				: !routeIngress || !matchesIngress(routeIngress, ingress(value)))
+			[network, probe, service].some(
+				(resource) => !hasSafeRoutingMetadata(value, resource),
+			)
+		)
+			return "drifted";
+		if (
+			(routeMode === "closed" && routeIngress !== null) ||
+			(routeMode === "open" &&
+				(value.route.exposure === "internal-only"
+					? routeIngress !== null
+					: !routeIngress || !matchesIngress(routeIngress, ingress(value))))
 		)
 			return "drifted";
 		if (routeIngress) {
