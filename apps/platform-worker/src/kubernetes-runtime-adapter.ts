@@ -369,7 +369,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	) =>
 		!secret.metadata?.deletionTimestamp &&
 		isOwnedSecret(secret, value, ref) &&
-		secret.immutable === true;
+		secret.immutable === true &&
+		secret.type === "Opaque";
 	function desired(input: unknown) {
 		const value = validateAgentWorkloadDesiredV1(input);
 		const name = workloadResourceNameV1(value.agentId);
@@ -841,6 +842,20 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	function matchesPersistentVolumeClaimSpec(
 		actual: V1PersistentVolumeClaim["spec"] | undefined,
 	): boolean {
+		const allowedFields = [
+			"accessModes",
+			"resources",
+			"storageClassName",
+			"volumeMode",
+			"volumeName",
+		];
+		if (
+			!actual ||
+			Object.entries(actual).some(
+				([key, value]) => value !== undefined && !allowedFields.includes(key),
+			)
+		)
+			return false;
 		const storage = actual?.resources?.requests?.storage;
 		const observed =
 			typeof storage === "string" ? quantityRatio(storage) : undefined;

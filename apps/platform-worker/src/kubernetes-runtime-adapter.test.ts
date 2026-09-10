@@ -2956,6 +2956,30 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBe(false);
 		expect(await f.client.read("Service", desired.service.name)).not.toBeNull();
 	});
+	it.each(["volumeAttributesClassName", "unsupportedFutureField"])(
+		"rejects unsupported PVC spec field %s",
+		async (field) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const key = `PersistentVolumeClaim/${desired.persistentVolume.name}`;
+			const pvc = structuredClone(
+				f.resources.get(key),
+			) as V1PersistentVolumeClaim;
+			if (!pvc.spec) throw new Error();
+			Object.assign(pvc.spec, { [field]: "unapproved" });
+			f.resources.set(key, pvc);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toThrow();
+			const writes = f.writes.length;
+			await expect(adapter.apply(desired)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
 	it.each(["missing", "terminating", "foreign", "stale", "spec"])(
 		"rejects promotion with an invalid PVC: %s",
 		async (mutation) => {
@@ -4023,6 +4047,50 @@ describe("GA Kubernetes Workload adapter", () => {
 			await adapter.removeImmutableSecret(desired, ref, activationFence),
 		).toBe(true);
 		expect(await f.client.read<V1Secret>("Secret", ref.name)).toBeNull();
+	});
+	it.each([
+		"kubernetes.io/service-account-token",
+		"kubernetes.io/tls",
+		undefined,
+	])("rejects non-Opaque Secret reuse and activation: %s", async (type) => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const ref = {
+			schemaVersion: 1 as const,
+			agentId: desired.agentId,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			secretId: "secret-a",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: `${desired.service.name}-secret-1`,
+		};
+		desired.secretRefs = [ref];
+		const adapter = f.adapter();
+		const plaintext = new Uint8Array([1]);
+		const uid = await adapter.applyImmutableSecret(
+			desired,
+			ref.name,
+			"API_KEY",
+			plaintext,
+		);
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const secret = await f.client.read<V1Secret>("Secret", ref.name);
+		if (!secret) throw new Error();
+		f.resources.set(`Secret/${ref.name}`, { ...secret, type } as V1Secret);
+		await expect(
+			adapter.applyImmutableSecret(desired, ref.name, "API_KEY", plaintext),
+		).rejects.toThrow();
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
+		await expect(
+			adapter.bindSecretFence(desired, identity, ref.name, 7, uid),
+		).rejects.toThrow();
 	});
 	it("fences identical immutable Secret reuse without changing its body", async () => {
 		const f = fixture();
