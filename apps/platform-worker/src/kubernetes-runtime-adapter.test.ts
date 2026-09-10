@@ -255,6 +255,71 @@ describe("GA Kubernetes Workload adapter", () => {
 			}
 		},
 	);
+	it.each([
+		new Error("network unavailable"),
+		new DOMException("probe timed out", "TimeoutError"),
+	])("reports a probe failure as unhealthy: %s", async (error) => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		f.probe.mockRejectedValue(error);
+		expect(await adapter.observe(desired, identity)).toBe("unhealthy");
+		await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+	});
+	it.each(["revision", "fence"])(
+		"rejects a referenced Secret advanced to a newer %s",
+		async (field) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const ref = {
+				schemaVersion: 1 as const,
+				agentId: desired.agentId,
+				ownerType: "agent-owner" as const,
+				ownerId: "owner-a",
+				secretId: "secret-a",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1" as const,
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				wrappingKeyVersion: "key-a",
+				name: `${desired.service.name}-secret-1`,
+			};
+			desired.secretRefs = [ref];
+			const adapter = f.adapter();
+			const uid = await adapter.applyImmutableSecret(
+				desired,
+				ref.name,
+				"API_KEY",
+				new Uint8Array([1]),
+			);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.bindSecretFence(desired, identity, ref.name, 7, uid);
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			const secret = await f.client.read<V1Secret>("Secret", ref.name);
+			if (!secret?.metadata?.labels || !secret.metadata.annotations)
+				throw new Error();
+			if (field === "revision")
+				secret.metadata.labels["agent-infra.agora.io/revision"] = String(
+					desired.workloadRevision + 1,
+				);
+			else
+				secret.metadata.annotations["agent-infra.agora.io/fence"] = String(
+					desired.fence + 1,
+				);
+			f.resources.set(`Secret/${ref.name}`, secret);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toThrow();
+		},
+	);
 	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

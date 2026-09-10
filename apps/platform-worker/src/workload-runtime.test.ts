@@ -513,6 +513,75 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.state?.candidate.deployment).toBeNull();
 		expect(f.resources.size).toBe(0);
 	});
+	it("bounds registry admission and ignores a successful result after the deadline", async () => {
+		vi.useFakeTimers();
+		const gate = Promise.withResolvers<void>();
+		const admitted = workloadRegistryFixture({
+			schemaVersion: 1,
+			interactionMode: "platform-adapter",
+			protocol: "acp",
+			service: { port: 8080 },
+			health: { path: "/healthz" },
+		});
+		const admit = vi.fn(async (request) => {
+			await gate.promise;
+			return admitted.admit(request);
+		});
+		const f = fixture({ registry: { admit } });
+		try {
+			await f.tick(1);
+			const preflight = f.tick(1);
+			await Promise.resolve();
+			expect(admit).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(59_999);
+			expect(f.state).toMatchObject({ phase: "preflight", attempts: 0 });
+			expect(f.resources.size).toBe(0);
+
+			await vi.advanceTimersByTimeAsync(1);
+			await preflight;
+			expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
+			expect(f.state?.candidate.deployment).toBeNull();
+			expect(f.resources.size).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+
+			gate.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
+			expect(f.state?.candidate.deployment).toBeNull();
+			expect(f.resources.size).toBe(0);
+		} finally {
+			gate.resolve();
+			vi.useRealTimers();
+		}
+	});
+	it.each(["resolves", "rejects"] as const)(
+		"clears the admission deadline when the registry %s first",
+		async (outcome) => {
+			vi.useFakeTimers();
+			const admitted = workloadRegistryFixture({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+			});
+			const f = fixture({
+				registry: {
+					async admit(request) {
+						if (outcome === "rejects")
+							throw new Error("Registry request failed");
+						return admitted.admit(request);
+					},
+				},
+			});
+			try {
+				await f.tick(2);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
 	it("rejects preflight when an explicit environment key shadows a Secret", async () => {
 		const record = pendingSecretRecord();
 		const cleanup = secretCleanupStore(record);
@@ -1714,6 +1783,28 @@ describe("assembled Workload Runtime contracts", () => {
 		await expect(runtime.capabilities(promoting)).rejects.toThrow(
 			"Runtime capabilities are unavailable",
 		);
+	});
+	it.each([
+		new Error("network unavailable"),
+		new DOMException("probe timed out", "TimeoutError"),
+	])("closes a ready route when its health probe throws: %s", async (error) => {
+		const fetcher = vi.fn(async () => new Response("ok"));
+		const f = fixture({ fetch: fetcher });
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw new Error();
+		const serviceName = validateAgentWorkloadDesiredV1(
+			ready.candidate.deployment,
+		).service.name;
+		fetcher.mockRejectedValueOnce(error);
+
+		await f.tick(1);
+
+		expect(f.state?.phase).toBe("observing");
+		expect(
+			(await f.client.read<V1Service>("Service", serviceName))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
 	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({

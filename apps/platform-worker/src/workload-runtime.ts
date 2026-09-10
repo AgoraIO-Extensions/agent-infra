@@ -446,7 +446,22 @@ export function createWorkloadRuntimeV1(
 						: ("custom-agent" as const),
 				admissionPolicyRef: options.admissionPolicyRef,
 			};
-			const result = await options.registry.admit(request);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const deadline = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() => reject(new Error("Workload admission is unavailable")),
+					60_000,
+				);
+			});
+			let result: Awaited<ReturnType<typeof options.registry.admit>>;
+			try {
+				result = await Promise.race([
+					options.registry.admit(request),
+					deadline,
+				]);
+			} finally {
+				clearTimeout(timer);
+			}
 			let admission: ReturnType<typeof validateImageRegistryAdmissionResultV1>;
 			try {
 				admission = validateImageRegistryAdmissionResultV1(request, result);

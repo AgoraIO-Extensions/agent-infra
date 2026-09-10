@@ -156,6 +156,32 @@ describe("Workload Worker lifecycle", () => {
 		expect(store.runNext).toHaveBeenCalledTimes(2);
 		await worker.stop();
 	});
+	it("drains a queued tick and stop after the in-flight deadline expires", async () => {
+		store.runNext.mockReturnValueOnce(
+			new Promise<"idle">((_resolve, reject) => {
+				setTimeout(
+					() => reject(new Error("Workload admission is unavailable")),
+					60_000,
+				);
+			}),
+		);
+		const worker = createPlatformWorkloadWorkerV1(fixture());
+		worker.start();
+		const manual = worker.tick();
+		const stopped = worker.stop();
+		await Promise.resolve();
+		expect(store.runNext).toHaveBeenCalledOnce();
+
+		await vi.advanceTimersByTimeAsync(59_999);
+		expect(store.runNext).toHaveBeenCalledOnce();
+		expect(store.close).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		await expect(manual).resolves.toBe("idle");
+		await expect(stopped).resolves.toBeUndefined();
+		expect(store.runNext).toHaveBeenCalledTimes(2);
+		expect(store.close).toHaveBeenCalledOnce();
+	});
 	it("drains an in-flight manual tick before closing the Store", async () => {
 		const step = Promise.withResolvers<"idle">();
 		store.runNext.mockReturnValueOnce(step.promise);

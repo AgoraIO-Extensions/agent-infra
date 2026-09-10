@@ -1474,6 +1474,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret || !isLiveOwnedImmutableSecret(secret, value, ref))
 				return "drifted";
+			try {
+				own(secret, value.agentId, value.workloadRevision, value.fence);
+			} catch {
+				return "drifted";
+			}
 			const boundFence =
 				current.metadata.annotations?.[secretFenceAnnotation(ref.name)];
 			const boundUid =
@@ -1597,12 +1602,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			!pod.status.podIP
 		)
 			return "pending";
-		return (await options.probe({
-			desired: value,
-			serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
-		}))
-			? "healthy"
-			: "unhealthy";
+		try {
+			return (await options.probe({
+				desired: value,
+				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+			}))
+				? "healthy"
+				: "unhealthy";
+		} catch {
+			return "unhealthy";
+		}
 	}
 	const adapter = {
 		capabilities: () =>
