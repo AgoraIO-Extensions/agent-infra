@@ -1661,6 +1661,28 @@ describe("assembled Workload Runtime contracts", () => {
 			assertSafe(replacement);
 		},
 	);
+	it("closes the retained verified revision after rejecting a newer revision", async () => {
+		const f = fixture();
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw new Error();
+		const name = validateAgentWorkloadDesiredV1(ready.candidate.deployment)
+			.service.name;
+		const rejected = {
+			...ready,
+			phase: "rejected" as const,
+			revision: ready.revision + 1,
+			verifiedRevision: ready.revision,
+		};
+		await createWorkloadRuntimeV1(f.options).closeRoute(rejected);
+		const service = await f.client.read<V1Service>("Service", name);
+		expect(service?.metadata?.labels?.["agent-infra.agora.io/revision"]).toBe(
+			String(ready.revision),
+		);
+		expect(service?.spec?.selector?.["agent-infra.agora.io/revision"]).toBe(
+			"closed",
+		);
+	});
 	it("retains capabilities only for the exact healthy promotion attempt", async () => {
 		const fetch = vi.fn(async () => new Response("ok"));
 		const f = fixture({ fetch });

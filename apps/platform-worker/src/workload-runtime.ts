@@ -547,8 +547,11 @@ export function createWorkloadRuntimeV1(
 			}
 		},
 		async closeRoute(state) {
+			const revision =
+				state.phase === "rejected" ? state.verifiedRevision : state.revision;
 			if (
-				!(await adapter.closeAgent(state.agentId, state.revision, state.fence))
+				revision === null ||
+				!(await adapter.closeAgent(state.agentId, revision, state.fence))
 			)
 				throw new Error("Workload route is closing");
 		},

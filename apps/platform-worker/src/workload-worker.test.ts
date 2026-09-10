@@ -6,11 +6,15 @@ import {
 } from "./kubernetes.fixture.js";
 
 const store = vi.hoisted(() => ({
+	opened: vi.fn(),
 	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
-	openPostgresWorkloadReconciliationStoreV1: () => store,
+	openPostgresWorkloadReconciliationStoreV1: () => {
+		store.opened();
+		return store;
+	},
 }));
 
 import {
@@ -41,12 +45,24 @@ function fixture() {
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	store.opened.mockReset();
 	store.runNext.mockReset().mockResolvedValue("idle");
 	store.close.mockReset().mockResolvedValue();
 });
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it.each(["", "worker\0a"])(
+		"rejects invalid Worker identity before opening the Store: %j",
+		(workerId) => {
+			const options = { ...fixture(), workerId };
+			expect(() => createPlatformWorkloadWorkerV1(options)).toThrow(
+				"Invalid Worker identity",
+			);
+			expect(store.opened).not.toHaveBeenCalled();
+			expect(options.log).not.toHaveBeenCalled();
+		},
+	);
 	it.each([false, true])(
 		"does not start polling after termination during deployment assembly (already aborted: %s)",
 		async (alreadyAborted) => {

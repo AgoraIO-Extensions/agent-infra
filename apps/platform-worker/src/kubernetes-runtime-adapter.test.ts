@@ -915,6 +915,103 @@ describe("GA Kubernetes Workload adapter", () => {
 			}
 		},
 	);
+	it.each(["never-created", "after-cleanup"])(
+		"reports public stopped absence: %s",
+		async (scenario) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			if (scenario === "after-cleanup") {
+				await adapter.apply(desired);
+				for (let attempt = 0; attempt < 3; attempt++) {
+					if (
+						await adapter.cleanupAgent(
+							desired.agentId,
+							desired.workloadRevision,
+							desired.fence,
+							false,
+						)
+					)
+						break;
+				}
+				expect(
+					await f.client.read("StatefulSet", desired.service.name),
+				).toBeNull();
+			}
+			const stopped = {
+				...desired,
+				desiredState: "stopped" as const,
+				replicas: 0 as const,
+			};
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const result = await adapter.reconcile(stopped);
+				expect(result).toMatchObject({
+					status: "absent",
+					replicas: 0,
+					routeClosed: true,
+					requestId: desired.requestId,
+					fence: desired.fence,
+				});
+				expect(result).not.toHaveProperty("workloadUid");
+				expect(result).not.toHaveProperty("workloadGeneration");
+			}
+		},
+	);
+	it.each(["pod", "foreign", "new-fence", "route-delete", "identity"])(
+		"does not report absent with a blocker: %s",
+		async (blocker) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			if (blocker !== "identity")
+				f.resources.delete(`StatefulSet/${desired.service.name}`);
+			if (blocker !== "pod")
+				f.resources.delete(`Pod/${desired.service.name}-0`);
+			const service = f.resources.get(`Service/${desired.service.name}`);
+			if (!service?.metadata?.annotations) throw new Error();
+			if (blocker === "foreign")
+				service.metadata.annotations["agent-infra.agora.io/agent-id"] =
+					"foreign";
+			if (blocker === "new-fence")
+				service.metadata.annotations["agent-infra.agora.io/fence"] = String(
+					desired.fence + 1,
+				);
+			if (blocker === "route-delete") {
+				service.metadata.annotations["external-controller"] = "route";
+				vi.spyOn(f.client, "delete").mockResolvedValue(undefined);
+			}
+			const result = await adapter.reconcile({
+				...desired,
+				desiredState: "stopped",
+				replicas: 0,
+				...(blocker === "identity"
+					? {
+							expectedWorkload: {
+								state: "present",
+								workloadUid: "different-uid",
+								workloadGeneration: identity.generation,
+							},
+						}
+					: {}),
+			});
+			expect(result).toMatchObject({ status: "failed" });
+		},
+	);
+	it("does not report running absence when the workload disappears during apply", async () => {
+		const f = fixture();
+		const original = f.client.create.bind(f.client);
+		vi.spyOn(f.client, "create").mockImplementation(async (object) => {
+			const result = await original(object);
+			if (object.kind === "StatefulSet" && result.metadata)
+				delete result.metadata.uid;
+			return result;
+		});
+		expect(await f.adapter().reconcile(workloadDesiredFixture())).toMatchObject(
+			{ status: "failed" },
+		);
+	});
 	it("fences an already-stopped workload before reporting newer convergence", async () => {
 		const f = fixture();
 		const adapter = f.adapter();
@@ -2859,6 +2956,68 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toBe(false);
 		expect(await f.client.read("Service", desired.service.name)).not.toBeNull();
 	});
+	it.each(["missing", "terminating", "foreign", "stale", "spec"])(
+		"rejects promotion with an invalid PVC: %s",
+		async (mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const key = `PersistentVolumeClaim/${desired.persistentVolume.name}`;
+			const pvc = structuredClone(
+				f.resources.get(key),
+			) as V1PersistentVolumeClaim;
+			if (
+				!pvc?.metadata ||
+				!pvc.metadata.labels ||
+				!pvc.metadata.annotations ||
+				!pvc.spec
+			)
+				throw new Error();
+			if (mutation === "missing") f.resources.delete(key);
+			else {
+				if (mutation === "terminating")
+					pvc.metadata.deletionTimestamp = new Date();
+				if (mutation === "foreign")
+					pvc.metadata.annotations["agent-infra.agora.io/agent-id"] = "foreign";
+				if (mutation === "stale")
+					pvc.metadata.annotations["agent-infra.agora.io/config-revision"] =
+						"0";
+				if (mutation === "spec") pvc.spec.accessModes = ["ReadWriteMany"];
+				f.resources.set(key, pvc);
+			}
+			await expect(adapter.promote(desired, identity)).rejects.toThrow();
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+		},
+	);
+	it.each(["1e0", "01", " 1", "1.0"])(
+		"rejects noncanonical ownership metadata before route mutation: %s",
+		async (encoded) => {
+			for (const field of ["revision", "fence"]) {
+				const f = fixture();
+				const desired = workloadDesiredFixture();
+				const adapter = f.adapter();
+				await adapter.apply(desired);
+				const key = `Service/${desired.service.name}`;
+				const service = structuredClone(f.resources.get(key)) as V1Service;
+				if (!service.metadata?.labels || !service.metadata.annotations)
+					throw new Error();
+				if (field === "revision")
+					service.metadata.labels["agent-infra.agora.io/revision"] = encoded;
+				else
+					service.metadata.annotations["agent-infra.agora.io/fence"] = encoded;
+				f.resources.set(key, service);
+				await expect(adapter.closeRoute(desired)).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(f.resources.get(key)).toEqual(service);
+			}
+		},
+	);
 	it("does not publish a healthy candidate without caller validation", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

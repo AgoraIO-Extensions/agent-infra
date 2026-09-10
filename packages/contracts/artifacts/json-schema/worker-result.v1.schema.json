@@ -8037,6 +8037,67 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "replicas": {
+                      "const": 0,
+                      "type": "number"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "absent",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "fence",
+                    "status",
+                    "replicas",
+                    "routeClosed"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
                     "applied": {
                       "oneOf": [
                         {
@@ -10823,6 +10884,67 @@
             },
             "outcome": {
               "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fence": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "replicas": {
+                      "const": 0,
+                      "type": "number"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "routeClosed": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "const": "absent",
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "requestId",
+                    "traceId",
+                    "agentId",
+                    "configRevision",
+                    "workloadRevision",
+                    "fence",
+                    "status",
+                    "replicas",
+                    "routeClosed"
+                  ],
+                  "type": "object"
+                },
                 {
                   "additionalProperties": false,
                   "properties": {

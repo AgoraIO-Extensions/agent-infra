@@ -157,6 +157,42 @@ const applied = {
 } as const;
 
 describe("KubernetesRuntimeAdapter V1 contract", () => {
+	it("accepts only correlated stopped requests as absent without a fabricated identity", () => {
+		const stopped = { ...desired, desiredState: "stopped", replicas: 0 };
+		const absent = {
+			schemaVersion: 1,
+			requestId: desired.requestId,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
+			status: "absent",
+			replicas: 0,
+			routeClosed: true,
+		};
+		expect(validateKubernetesReconcileResultV1(stopped, absent)).toEqual(
+			absent,
+		);
+		expect(() =>
+			validateKubernetesReconcileResultV1(desired, absent),
+		).toThrow();
+		for (const override of [
+			{ agentId: "another-agent" },
+			{ fence: desired.fence + 1 },
+			{ replicas: 1 },
+			{ routeClosed: false },
+			{ workloadUid: "fabricated" },
+			{ workloadGeneration: 1 },
+		]) {
+			expect(() =>
+				validateKubernetesReconcileResultV1(stopped, {
+					...absent,
+					...override,
+				}),
+			).toThrow();
+		}
+	});
 	it("accepts protocol-neutral GA capabilities and rejects legacy/provider objects", () => {
 		const capabilities = {
 			schemaVersion: 1,

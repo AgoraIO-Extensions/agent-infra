@@ -19,6 +19,8 @@ export function createPlatformWorkloadWorkerV1(
 	options: PlatformWorkloadWorkerOptionsV1,
 ) {
 	const workerId = options.workerId ?? randomUUID();
+	if (!workerId || workerId.includes("\0"))
+		throw new TypeError("Invalid Worker identity");
 	const pollIntervalMs = options.pollIntervalMs ?? 1000;
 	if (
 		!Number.isSafeInteger(pollIntervalMs) ||

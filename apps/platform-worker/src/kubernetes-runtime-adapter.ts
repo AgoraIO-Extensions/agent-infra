@@ -417,6 +417,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			object.metadata.labels?.[ownerLabel] !== workloadResourceNameV1(agentId)
 		)
 			throw new WorkloadKubernetesError("policy");
+		const revisionValue = object.metadata.labels[revisionLabel];
+		const fenceValue =
+			object.metadata.annotations["agent-infra.agora.io/fence"];
+		if (
+			!/^[1-9][0-9]*$/.test(revisionValue ?? "") ||
+			!/^[1-9][0-9]*$/.test(fenceValue ?? "")
+		)
+			throw new WorkloadKubernetesError("conflict");
 		const currentRevision = Number(object.metadata.labels[revisionLabel]);
 		const currentFence = Number(
 			object.metadata.annotations["agent-infra.agora.io/fence"],
@@ -1409,7 +1417,19 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const probe = await client.read<V1Service>("Service", `${name}-probe`);
 		const service = await client.read<V1Service>("Service", name);
 		const routeIngress = await client.read<V1Ingress>("Ingress", name);
-		if (!serviceAccount || !network || !probe || !service) return "drifted";
+		const pvc = await client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			value.persistentVolume.name,
+		);
+		if (!serviceAccount || !network || !probe || !service || !pvc)
+			return "drifted";
+		if (
+			pvc.metadata?.deletionTimestamp ||
+			!matchesPersistentVolumeClaimSpec(pvc.spec)
+		)
+			return "drifted";
+		own(pvc, value.agentId, value.workloadRevision, value.fence);
+		if (!hasCurrentMetadata(pvc, value)) return "drifted";
 		for (const ref of value.secretRefs) {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret || !isLiveOwnedImmutableSecret(secret, value, ref))
@@ -2274,6 +2294,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				if (value.replicas === 0 && !(await closeRoute(value)))
 					throw new WorkloadKubernetesError("unavailable");
 				const identity = await adapter.apply(value);
+				if (
+					identity === null &&
+					value.desiredState === "stopped" &&
+					value.replicas === 0
+				) {
+					if (
+						(await statefulSet(value)) ||
+						(await client.list("Pod", selector(value.agentId))).length ||
+						!(await closeRoute(value))
+					)
+						throw new WorkloadKubernetesError("unavailable");
+					return validateKubernetesReconcileResultV1(value, {
+						...correlation,
+						status: "absent",
+						replicas: 0,
+						routeClosed: true,
+					});
+				}
 				if (!identity || identity === "pending")
 					throw new WorkloadKubernetesError("unavailable");
 				const applied = {

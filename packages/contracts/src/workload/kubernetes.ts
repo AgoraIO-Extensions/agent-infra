@@ -405,6 +405,12 @@ export const KubernetesReconcileResultV1Schema = z.discriminatedUnion(
 	[
 		z.strictObject({
 			...reconcileCorrelationV1Shape,
+			status: z.literal("absent"),
+			replicas: z.literal(0),
+			routeClosed: z.literal(true),
+		}),
+		z.strictObject({
+			...reconcileCorrelationV1Shape,
 			status: z.literal("applied"),
 			workloadUid: WorkloadOpaqueIdV1Schema,
 			workloadGeneration: WorkloadRevisionV1Schema,
@@ -708,6 +714,9 @@ export function validateKubernetesReconcileResultV1(
 			throw new Error("Kubernetes reconciliation correlation mismatch");
 		}
 		validateAgentWorkloadAppliedV1(desired, result.applied);
+	} else if (result.status === "absent") {
+		if (desired.desiredState !== "stopped" || desired.replicas !== 0)
+			throw new Error("Absent Workload requires a stopped desired state");
 	} else if (result.error.traceId !== desired.traceId) {
 		throw new Error("Kubernetes reconciliation correlation mismatch");
 	}

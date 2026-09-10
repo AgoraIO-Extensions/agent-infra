@@ -385,6 +385,12 @@ Platform DB 保存：
 
 HTTP 请求只提交期望状态，不等待 Kubernetes 操作完成。
 
+Kubernetes 调谐结果在已停止、期望副本为 0、实际 StatefulSet 不存在且路由已关闭时返回
+`status: absent`，保留请求、Agent、配置修订、Workload 修订和 fence 的完整关联，固定
+`replicas: 0`、`routeClosed: true`，不生成虚构的 Workload UID 或 generation。
+运行中期望不能接受该结果；资源期望身份、归属、fence 或路由关闭校验失败仍返回失败，
+不能以资源缺失掩盖拒绝或不完整操作。保留的持久卷不因该结果被删除。
+
 Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部实现，不向用户提供统一任务队列、优先级或排队管理能力。
 
 ### 10.3 并发与 Leader
