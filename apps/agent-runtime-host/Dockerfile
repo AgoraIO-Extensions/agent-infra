@@ -1,5 +1,6 @@
-FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS builder
-RUN npm install --global npm@11.19.1 \
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' \
+	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
 WORKDIR /app
 
@@ -19,8 +20,9 @@ RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
     && rm -r /prod/agent-runtime-host \
     && mv /prod/agent-runtime-host-normalized /prod/agent-runtime-host
 
-FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runner
-RUN npm install --global npm@11.19.1
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runner
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' \
+	&& npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 WORKDIR /app
