@@ -2,6 +2,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagnostics.mjs";
+export { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagnostics.mjs";
+
 import { runCommand } from "./run-command.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -63,137 +66,6 @@ export function assertCleanRuntimeProbeSource(status, commitSha) {
 		throw new Error("Codex runtime image probe source is invalid");
 	}
 	return { commitSha, sourceDirty: false };
-}
-
-const probeStages = new Set([
-	"model-substitute",
-	"provenance-rejection",
-	"entrypoint-configuration-rejections",
-	"default-turn",
-	"execution-selection",
-	"grant-rejections",
-	"process-restart",
-	"model-stop",
-	"model-stop-request",
-	"model-cancellation",
-	"model-cancellation-request",
-	"model-cancellation-close-before-confirmation",
-	"model-cancellation-result",
-	"model-cancellation-status",
-	"model-cancellation-restart",
-	"recursive-native-storage-redaction",
-	...[
-		"default",
-		"selected",
-		"resumed",
-		"stop",
-		"stop-independent",
-		"stop-follow-up",
-		"cancel",
-		"http-401",
-		"http-403",
-		"http-503",
-		"redirect",
-		"wrong-content-type",
-		"response-failed",
-		"response-incomplete",
-		"error-event",
-		"malformed",
-		"oversized",
-		"unterminated",
-		"post-terminal",
-		"unknown-event",
-		"wrong-shape",
-		"extra-error",
-		"nested-error",
-		"credential-echo",
-	].flatMap((name) =>
-		["submit", "events", "status", "failure", "stream-failure"].map(
-			(suffix) => `${name}-${suffix}`,
-		),
-	),
-]);
-const probeCodes = new Set([
-	"RUNTIME_CONFIGURATION_INVALID",
-	"RUNTIME_CODEX_CONFIGURATION_INVALID",
-	"RUNTIME_CODEX_PROTOCOL_INVALID",
-	"RUNTIME_CODEX_PROVENANCE_MISMATCH",
-	"RUNTIME_CODEX_STATE_INVALID",
-	"RUNTIME_CODEX_UNAVAILABLE",
-	"RUNTIME_DRIVER_INVALID",
-	"RUNTIME_STARTUP_FAILED",
-	"RUNTIME_GENERATION_CANCELLED",
-	"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
-	"RUNTIME_REQUEST_INVALID",
-	"RUNTIME_GRANT_INVALID",
-	"RUNTIME_OPERATION_CONFLICT",
-	"RUNTIME_SESSION_BINDING_MISMATCH",
-	"RUNTIME_EXECUTION_BINDING_MISMATCH",
-	"RUNTIME_FENCE_STALE",
-	"RUNTIME_SESSION_NOT_FOUND",
-	"RUNTIME_SESSION_UNAVAILABLE",
-	"RUNTIME_SESSION_REQUIRED",
-	"RUNTIME_TURN_NOT_ACTIVE",
-]);
-
-export function safeRuntimeProbeFailure(stderr) {
-	if (typeof stderr !== "string" || Buffer.byteLength(stderr) > 4096) return;
-	let value;
-	try {
-		value = JSON.parse(stderr);
-	} catch {
-		return;
-	}
-	if (
-		!value ||
-		typeof value !== "object" ||
-		Array.isArray(value) ||
-		value.status !== "failed" ||
-		Object.keys(value).some(
-			(key) =>
-				![
-					"status",
-					"stage",
-					"startupCode",
-					"httpStatus",
-					"responseCode",
-					"resultStatus",
-					"isolationFileKind",
-					"modelRequests",
-				].includes(key),
-		)
-	)
-		return;
-	const safe = { status: "failed" };
-	if (probeStages.has(value.stage)) safe.stage = value.stage;
-	if (
-		["running", "completed", "failed", "cancelled"].includes(value.resultStatus)
-	)
-		safe.resultStatus = value.resultStatus;
-	for (const key of ["startupCode", "responseCode"])
-		if (probeCodes.has(value[key])) safe[key] = value[key];
-	if (
-		Number.isInteger(value.httpStatus) &&
-		value.httpStatus >= 100 &&
-		value.httpStatus <= 599
-	)
-		safe.httpStatus = value.httpStatus;
-	if (
-		Number.isInteger(value.modelRequests) &&
-		value.modelRequests >= 0 &&
-		value.modelRequests <= 1000
-	)
-		safe.modelRequests = value.modelRequests;
-	if (
-		[
-			"native-history:rollout",
-			"native-history:other-jsonl",
-			"native-database",
-			"other",
-		].includes(value.isolationFileKind)
-	)
-		safe.isolationFileKind = value.isolationFileKind;
-	return JSON.stringify(safe);
 }
 
 class RuntimeProbeFailure extends Error {}
@@ -261,6 +133,8 @@ export async function probeRuntimeImage({
 				"/var/lib/agent-runtime:size=128m,uid=1000,gid=1000,mode=0700",
 				"--mount",
 				`type=bind,src=${join(contextPath, "tests/runtime-image-probe.mjs")},dst=/probe/runtime-image-probe.mjs,readonly`,
+				"--mount",
+				`type=bind,src=${join(contextPath, "tests/support/runtime-probe-diagnostics.mjs")},dst=/probe/support/runtime-probe-diagnostics.mjs,readonly`,
 				...mounts,
 				inspection.Id,
 				"node",

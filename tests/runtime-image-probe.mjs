@@ -7,6 +7,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
+import {
+	ProbeStepFailure,
+	probeStep as runProbeStep,
+} from "./support/runtime-probe-diagnostics.mjs";
+
+const probeStep = (name, operation, details = () => ({})) =>
+	runProbeStep(name, operation, () => ({
+		...details(),
+		modelRequests: requests.length,
+	}));
+
 const credentials = {
 	default: `synthetic-${randomBytes(24).toString("hex")}`,
 	selected: `synthetic-${randomBytes(24).toString("hex")}`,
@@ -455,13 +466,27 @@ async function launch(environment, rejection) {
 	throw new Error("entrypoint unavailable");
 }
 
-async function assertUpstreamClosedBeforeConfirmation(observed, confirmation) {
-	const first = await Promise.race([
-		observed.closedPromise.then(() => "upstream-closed"),
-		confirmation.then(() => "http-confirmed"),
-	]);
-	assert.equal(first, "upstream-closed");
-	return confirmation;
+async function assertUpstreamClosedBeforeConfirmation(
+	observed,
+	confirmation,
+	name,
+) {
+	let response;
+	return probeStep(
+		`${name}-close-before-confirmation`,
+		async () => {
+			const first = await Promise.race([
+				observed.closedPromise.then(() => "upstream-closed"),
+				confirmation.then((value) => {
+					response = value;
+					return "http-confirmed";
+				}),
+			]);
+			assert.equal(first, "upstream-closed");
+			return confirmation;
+		},
+		() => ({ httpStatus: response?.status }),
+	);
 }
 
 async function waitForOpenModelRequest(path) {
@@ -537,13 +562,24 @@ async function submitTurn(name, selection, session = undefined) {
 		...(selection ? { selection } : {}),
 	};
 	const path = `v${submit.schemaVersion}/turns`;
-	const accepted = await request(path, submit);
-	stage = `${name}-submit`;
-	assert.equal(accepted.status, 200);
-	const result = JSON.parse(accepted.text);
-	assert.equal(result.result.outcome, "accepted");
-	const lookup = { ...base, hostSessionRef: result.hostSessionRef };
-	return { lookup, submit, path, accepted: result };
+	let accepted;
+	return probeStep(
+		`${name}-submit`,
+		async () => {
+			accepted = await request(path, submit);
+			const result = JSON.parse(accepted.text);
+			assert.equal(accepted.status, 200);
+			assert.equal(result.result.outcome, "accepted");
+			const lookup = { ...base, hostSessionRef: result.hostSessionRef };
+			return { lookup, submit, path, accepted: result };
+		},
+		() => ({
+			httpStatus: accepted?.status,
+			resultStatus: accepted
+				? JSON.parse(accepted.text).result?.status
+				: undefined,
+		}),
+	);
 }
 
 async function turn(
@@ -554,32 +590,48 @@ async function turn(
 ) {
 	const submitted = await submitTurn(name, selection, session);
 	const { lookup } = submitted;
-	const events = await request("v1/events/stream", lookup);
-	stage = `${name}-events`;
-	assert.equal(events.status, 200);
-	assert.ok(events.contentType.includes("text/event-stream"));
-	const frames = events.text
-		.split("\n")
-		.filter((line) => line.startsWith("data: "))
-		.map((line) => JSON.parse(line.slice(6)));
-	assert.ok(
-		frames.some(
-			(event) =>
-				event.type === "completed" && event.payload.status === expectedStatus,
-		),
+	let events;
+	await probeStep(
+		`${name}-events`,
+		async () => {
+			events = await request("v1/events/stream", lookup);
+			assert.equal(events.status, 200);
+			assert.ok(events.contentType.includes("text/event-stream"));
+			const frames = events.text
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) => JSON.parse(line.slice(6)));
+			assert.ok(
+				frames.some(
+					(event) =>
+						event.type === "completed" &&
+						event.payload.status === expectedStatus,
+				),
+			);
+			if (expectedStatus === "completed")
+				assert.ok(
+					frames.some(
+						(event) =>
+							event.type === "text" &&
+							event.payload.delta.includes("synthetic runtime answer"),
+					),
+				);
+		},
+		() => ({ httpStatus: events?.status }),
 	);
-	if (expectedStatus === "completed")
-		assert.ok(
-			frames.some(
-				(event) =>
-					event.type === "text" &&
-					event.payload.delta.includes("synthetic runtime answer"),
-			),
-		);
-	const status = await request("v1/status", lookup);
-	stage = `${name}-status`;
-	assert.equal(status.status, 200);
-	assert.equal(JSON.parse(status.text).status, expectedStatus);
+	let status;
+	await probeStep(
+		`${name}-status`,
+		async () => {
+			status = await request("v1/status", lookup);
+			assert.equal(status.status, 200);
+			assert.equal(JSON.parse(status.text).status, expectedStatus);
+		},
+		() => ({
+			httpStatus: status?.status,
+			resultStatus: status ? JSON.parse(status.text).status : undefined,
+		}),
+	);
 	return submitted;
 }
 
@@ -812,11 +864,13 @@ try {
 			(value) => ({ value }),
 			(error) => ({ error }),
 		);
-		const independentRequest = await waitForOpenModelRequest(
-			"/hold-selected/v1/responses",
+		const independentRequest = await probeStep("model-stop-request", () =>
+			waitForOpenModelRequest("/hold-selected/v1/responses"),
 		);
-		assert.equal(stopRequest.closed, false);
-		assert.equal(independentRequest.closed, false);
+		await probeStep("model-stop-request", () => {
+			assert.equal(stopRequest.closed, false);
+			assert.equal(independentRequest.closed, false);
+		});
 		const stopConfirmation = request("v1/stops", {
 			...stopped.lookup,
 			requestId: "request-stop-generation",
@@ -826,14 +880,26 @@ try {
 		const stopResult = await assertUpstreamClosedBeforeConfirmation(
 			stopRequest,
 			stopConfirmation,
+			"model-stop",
 		);
-		assert.equal(stopResult.status, 200);
-		assert.deepEqual(JSON.parse(stopResult.text).result, {
-			outcome: "accepted",
-			status: "cancelled",
+		await probeStep(
+			"model-stop-result",
+			() => {
+				assert.equal(stopResult.status, 200);
+				assert.deepEqual(JSON.parse(stopResult.text).result, {
+					outcome: "accepted",
+					status: "cancelled",
+				});
+			},
+			() => ({
+				httpStatus: stopResult.status,
+				resultStatus: JSON.parse(stopResult.text).result?.status,
+			}),
+		);
+		await probeStep("model-stop-independent", () => {
+			assert.equal(independentRequest.closed, false);
+			assert.ok(releaseHeldSelectedResponse);
 		});
-		assert.equal(independentRequest.closed, false);
-		assert.ok(releaseHeldSelectedResponse);
 		releaseHeldSelectedResponse();
 		releaseHeldSelectedResponse = undefined;
 		const independentResult = await independentTurn;
@@ -866,7 +932,9 @@ try {
 			"/cancel/v1/responses",
 		);
 		stage = "model-cancellation-request";
-		assert.equal(cancellationRequest.closed, false);
+		await probeStep("model-cancellation-request", () =>
+			assert.equal(cancellationRequest.closed, false),
+		);
 		httpStatus = undefined;
 		responseCode = undefined;
 		stage = "model-cancellation-close-before-confirmation";
@@ -878,20 +946,29 @@ try {
 		const cancelResult = await assertUpstreamClosedBeforeConfirmation(
 			cancellationRequest,
 			cancelConfirmation,
+			"model-cancellation",
 		);
-		stage = "model-cancellation-result";
-		assert.equal(cancelResult.status, 200);
-		const cancellationResult = JSON.parse(cancelResult.text).result;
-		if (
-			["running", "completed", "failed", "cancelled"].includes(
-				cancellationResult?.status,
-			)
-		)
-			resultStatus = cancellationResult.status;
-		assert.deepEqual(cancellationResult, {
-			outcome: "accepted",
-			status: "cancelled",
-		});
+		await probeStep(
+			"model-cancellation-result",
+			() => {
+				assert.equal(cancelResult.status, 200);
+				const cancellationResult = JSON.parse(cancelResult.text).result;
+				if (
+					["running", "completed", "failed", "cancelled"].includes(
+						cancellationResult?.status,
+					)
+				)
+					resultStatus = cancellationResult.status;
+				assert.deepEqual(cancellationResult, {
+					outcome: "accepted",
+					status: "cancelled",
+				});
+			},
+			() => ({
+				httpStatus: cancelResult.status,
+				resultStatus: JSON.parse(cancelResult.text).result?.status,
+			}),
+		);
 		stage = "model-cancellation-status";
 		const cancelledStatus = await request("v1/status", cancellation.lookup);
 		await runtime.stop();
@@ -935,18 +1012,22 @@ try {
 			}),
 		);
 	}
-} catch {
+} catch (error) {
 	console.error(
-		JSON.stringify({
-			status: "failed",
-			stage,
-			startupCode,
-			httpStatus,
-			responseCode,
-			resultStatus,
-			isolationFileKind,
-			modelRequests: requests.length,
-		}),
+		JSON.stringify(
+			error instanceof ProbeStepFailure
+				? error.diagnostic
+				: {
+						status: "failed",
+						stage,
+						startupCode,
+						httpStatus,
+						responseCode,
+						resultStatus,
+						isolationFileKind,
+						modelRequests: requests.length,
+					},
+		),
 	);
 	process.exitCode = 1;
 } finally {

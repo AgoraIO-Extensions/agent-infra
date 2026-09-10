@@ -241,6 +241,13 @@ test("image build validates reproducibility and read-only non-root execution", a
 		);
 		assert.equal(nativeProbes.length, 2);
 		for (const args of nativeProbes) {
+			assert.ok(
+				args.some((arg) =>
+					arg.endsWith(
+						"dst=/probe/support/runtime-probe-diagnostics.mjs,readonly",
+					),
+				),
+			);
 			assert.ok(args.includes("--network=none"));
 			assert.ok(args.includes("--read-only"));
 			assert.ok(args.includes(`sha256:${"a".repeat(64)}`));

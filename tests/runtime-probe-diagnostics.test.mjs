@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runCommand } from "../deploy/release/run-command.mjs";
 import { safeRuntimeProbeFailure } from "../deploy/release/runtime-probe.mjs";
+import {
+	ProbeStepFailure,
+	probeStep,
+} from "./support/runtime-probe-diagnostics.mjs";
 
 test("probe diagnostic only retains bounded permitted fields", () => {
 	assert.deepEqual(
@@ -111,4 +115,65 @@ test("cancellation diagnostic distinguishes order from terminal result without c
 				{ status: "failed", stage },
 			);
 	}
+});
+
+test("foreground failure keeps its own stage and response while background steps finish", async () => {
+	let release;
+	const pending = new Promise((resolve) => {
+		release = resolve;
+	});
+	const response = { status: 409, resultStatus: "failed" };
+	const failed = probeStep(
+		"model-stop-result",
+		async () => {
+			await pending;
+			throw new Error("synthetic-credential-do-not-log");
+		},
+		() => ({
+			httpStatus: response.status,
+			resultStatus: response.resultStatus,
+			modelRequests: 22,
+		}),
+	).catch((error) => error);
+	await probeStep("stop-independent-submit", async () => "background success");
+	release();
+	const error = await failed;
+	response.status = 200;
+	response.resultStatus = "completed";
+	await probeStep("selected-submit", async () => "later background success");
+	assert.ok(error instanceof ProbeStepFailure);
+	assert.deepEqual(error.diagnostic, {
+		status: "failed",
+		stage: "model-stop-result",
+		resultStatus: "failed",
+		httpStatus: 409,
+		modelRequests: 22,
+	});
+	assert.ok(Object.isFrozen(error.diagnostic));
+	assert.ok(!String(error).includes("synthetic-credential"));
+	assert.ok(!JSON.stringify(error).includes("synthetic-credential"));
+});
+test("nested and delayed background failures preserve the originating diagnostic", async () => {
+	const error = await probeStep("model-stop-result", () =>
+		probeStep(
+			"stop-independent-submit",
+			async () => {
+				throw new Error("synthetic-original-body");
+			},
+			() => ({ httpStatus: 200, resultStatus: "running" }),
+		),
+	).catch((error) => error);
+	assert.equal(error.diagnostic.stage, "stop-independent-submit");
+	assert.equal(error.diagnostic.resultStatus, "running");
+	assert.equal(await probeStep("default-submit", async () => 42), 42);
+	const noResponse = await probeStep(
+		"model-cancellation-close-before-confirmation",
+		async () => {
+			throw new Error("synthetic-body");
+		},
+	).catch((error) => error);
+	assert.deepEqual(noResponse.diagnostic, {
+		status: "failed",
+		stage: "model-cancellation-close-before-confirmation",
+	});
 });
