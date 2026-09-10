@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -91,11 +91,11 @@ vi.mock("./codex-model-transport.js", async (importOriginal) => {
 			const deadlines = new WeakMap<CodexModelTurnAdmission, number>();
 			return {
 				...transport,
-				beginTurnAdmission: (deadline: number, internalModel: string) => {
-					const admission = transport.beginTurnAdmission(
-						deadline,
-						internalModel,
-					);
+				beginTurnAdmission: (
+					...args: Parameters<typeof transport.beginTurnAdmission>
+				) => {
+					const [deadline] = args;
+					const admission = transport.beginTurnAdmission(...args);
 					deadlines.set(admission, deadline);
 					return admission;
 				},
@@ -2412,6 +2412,90 @@ describe("Codex Runtime Driver", () => {
 		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		expect(upstreamCalls).toBe(0);
 	});
+
+	it("keeps a legitimate model request waiting while turn-start persistence takes over two seconds", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const received = Promise.withResolvers<void>();
+		const originalEmit = Server.prototype.emit;
+		vi.spyOn(Server.prototype, "emit").mockImplementation(function (
+			this: Server,
+			event: string | symbol,
+			...args: unknown[]
+		) {
+			if (
+				event === "request" &&
+				(args[0] as IncomingMessage).headers["x-codex-turn-metadata"]
+			)
+				received.resolve();
+			return Reflect.apply(originalEmit, this, [event, ...args]);
+		});
+		const persisted = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let held = false;
+		const originalUpdate = DurableJsonFile.prototype.update;
+		vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(function (
+			this: DurableJsonFile<unknown>,
+			change,
+		) {
+			return originalUpdate.call(this, change).then(async (result) => {
+				if (
+					!held &&
+					typeof result === "object" &&
+					result !== null &&
+					"pendingOperationKey" in result &&
+					result.pendingOperationKey
+				) {
+					held = true;
+					persisted.resolve();
+					await release.promise;
+				}
+				return result;
+			});
+		});
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge);
+		await received.promise;
+		await bridge.emitNotification();
+		await persisted.promise;
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 2300));
+			expect(upstreamCalls).toBe(0);
+		} finally {
+			release.resolve();
+		}
+		bridge.respondToHeldTurnStart();
+		await expect(submission).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "running" },
+		});
+		const response = await pendingModel;
+		const output = await response.text();
+		expect(response.status).toBe(200);
+		expect(output).toBe(completedEvent());
+		expect(upstreamCalls).toBe(1);
+	}, 10000);
 
 	it("expires model admission while durable update acknowledgement is held", async () => {
 		const directory = await runtimeDirectory();

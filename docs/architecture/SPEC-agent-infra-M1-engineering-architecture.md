@@ -484,6 +484,11 @@ Thread/Turn 生命周期绑定；缺失、非法或冲突的关联拒绝，不�
 拒绝该目标的迟到请求；其他 Thread/Turn 的请求和后续合法 Turn 保持可用。普通请求超时、
 全 Agent 中止或生成合成 SSE 内容均不能替代精确取消；原有代次 barrier 保持不变。
 
+Driver 在启动 RPC 前登记可信 Thread、唯一 pending 操作及其原始绝对准入期限。
+尚未持久识别 Turn 的模型请求，仅可在该 Thread 已登记的唯一 pending 操作期限内等待；
+等待绑定最初的 pending 操作，不因后续操作、通知或响应延长，也不赋予 Turn 关联或转发权限。
+没有匹配 pending 操作、存在歧义，或该操作取消、失败、关闭、到期时，等待请求拒绝；
+识别或确认其他 Turn 时，不匹配的等待请求同样拒绝。
 启动通知仅在完成日志验证与持久识别后，才能把原生 Thread/Turn 关联到同 Thread 唯一的
 pending 启动；识别只允许模型请求等待，不能转发。只有匹配 RPC 响应返回同一 running Turn，
 且 operation/journal 持久化成功后才准入。沿用既有启动 RPC 预算，从 RPC 发起建立一次覆盖至

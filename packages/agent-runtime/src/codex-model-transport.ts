@@ -21,7 +21,6 @@ const maximumEventBytes = 1024 * 1024;
 const maximumStreamBytes = 16 * 1024 * 1024;
 const maximumStreamEvents = 8_192;
 const requestTimeoutMs = 120_000;
-const turnAdmissionTimeoutMs = 2_000;
 const sanitizedFailureBody = JSON.stringify({
 	error: { message: "Model request failed" },
 });
@@ -59,13 +58,14 @@ interface ActiveTurnRequest {
 }
 
 interface AdmissionWaiter {
-	readonly recognize: () => void;
+	readonly admission: CodexModelTurnAdmission;
 	readonly settle: (model: string | undefined) => void;
 }
 
 interface ModelTurnAdmissionState {
 	state: "open" | "consumed" | "closed";
 	readonly deadline: number;
+	readonly threadId: string;
 	readonly internalModel: string;
 	turnKey?: string;
 	timer?: ReturnType<typeof setTimeout>;
@@ -1024,6 +1024,7 @@ export async function openCodexModelTransport(
 		CodexModelTurnAdmission,
 		ModelTurnAdmissionState
 	>();
+	const pendingThreads = new Map<string, Set<CodexModelTurnAdmission>>();
 	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
 	let closing = false;
 	const settleAdmissionWaiters = (key: string, model: string | undefined) => {
@@ -1032,10 +1033,31 @@ export async function openCodexModelTransport(
 		admissionWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(model);
 	};
+	const removePending = (
+		admission: CodexModelTurnAdmission,
+		state: ModelTurnAdmissionState,
+	) => {
+		const pending = pendingThreads.get(state.threadId);
+		pending?.delete(admission);
+		if (pending?.size === 0) pendingThreads.delete(state.threadId);
+	};
+	const settleBoundWaiters = (
+		admission: CodexModelTurnAdmission,
+		acceptedKey?: string,
+	) => {
+		for (const [key, waiters] of admissionWaiters) {
+			if (key === acceptedKey) continue;
+			for (const waiter of [...waiters]) {
+				if (waiter.admission === admission) waiter.settle(undefined);
+			}
+		}
+	};
 	const closeAdmission = (admission: CodexModelTurnAdmission) => {
 		const state = admissions.get(admission);
 		if (state?.state !== "open") return;
 		state.state = "closed";
+		removePending(admission, state);
+		settleBoundWaiters(admission);
 		if (state.timer !== undefined) clearTimeout(state.timer);
 		if (state.turnKey !== undefined) {
 			const recognized = recognizedTurns.get(state.turnKey);
@@ -1068,6 +1090,7 @@ export async function openCodexModelTransport(
 		if (
 			revokedTurns.has(key) ||
 			state?.state !== "open" ||
+			state.threadId !== key.split("\u0000")[0] ||
 			state.deadline <= Date.now()
 		) {
 			closeAdmission(admission);
@@ -1081,7 +1104,7 @@ export async function openCodexModelTransport(
 		const recognized = recognizedTurns.get(key) ?? new Set();
 		recognizedTurns.set(key, recognized);
 		recognized.add(admission);
-		for (const waiter of admissionWaiters.get(key) ?? []) waiter.recognize();
+		settleBoundWaiters(admission, key);
 		return true;
 	};
 	const waitForAdmission = (key: string, signal: AbortSignal) => {
@@ -1090,33 +1113,34 @@ export async function openCodexModelTransport(
 		if (closing || signal.aborted) {
 			return Promise.resolve(undefined);
 		}
+		const threadId = key.slice(0, key.indexOf("\u0000"));
+		const pending = [...(pendingThreads.get(threadId) ?? [])];
+		if (pending.length !== 1) return Promise.resolve(undefined);
+		const admission = pending[0];
+		if (!admission) return Promise.resolve(undefined);
+		const state = admissions.get(admission);
+		if (
+			state?.state !== "open" ||
+			state.deadline <= Date.now() ||
+			(state.turnKey !== undefined && state.turnKey !== key)
+		)
+			return Promise.resolve(undefined);
 		return new Promise<string | undefined>((resolve) => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
 			const waiters = admissionWaiters.get(key) ?? new Set();
 			admissionWaiters.set(key, waiters);
 			const settle = (model: string | undefined) => {
-				if (timer !== undefined) clearTimeout(timer);
+				clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
 				waiters.delete(waiter);
-				if (waiters.size === 0 && admissionWaiters.get(key) === waiters) {
+				if (waiters.size === 0 && admissionWaiters.get(key) === waiters)
 					admissionWaiters.delete(key);
-				}
 				resolve(model);
 			};
-			const recognize = () => {
-				if (timer !== undefined) clearTimeout(timer);
-				timer = undefined;
-			};
 			const abort = () => settle(undefined);
-			const waiter = { recognize, settle };
+			const waiter = { admission, settle };
+			const timer = setTimeout(abort, state.deadline - Date.now());
 			waiters.add(waiter);
 			signal.addEventListener("abort", abort, { once: true });
-			if (!recognizedTurns.has(key)) {
-				timer = setTimeout(() => settle(undefined), turnAdmissionTimeoutMs);
-			}
-			if (admittedTurns.has(key)) settle(admittedTurns.get(key));
-			else if (closing || signal.aborted) settle(undefined);
-			else if (recognizedTurns.has(key)) recognize();
 		});
 	};
 	const server = createServer(async (request, response) => {
@@ -1271,10 +1295,16 @@ export async function openCodexModelTransport(
 			endpoint: `http://127.0.0.1:${address.port}`,
 			credential: token,
 		},
-		beginTurnAdmission: (deadline: number, internalModel: string) => {
+		beginTurnAdmission: (
+			deadline: number,
+			internalModel: string,
+			threadId: string,
+		) => {
 			const admission = Object.freeze({}) as CodexModelTurnAdmission;
 			const state: ModelTurnAdmissionState = {
 				state:
+					typeof threadId === "string" &&
+					nativeTurnIdentifierPattern.test(threadId) &&
 					Number.isFinite(deadline) &&
 					deadline > Date.now() &&
 					!closing &&
@@ -1282,9 +1312,16 @@ export async function openCodexModelTransport(
 						? "open"
 						: "closed",
 				deadline,
+				threadId,
 				internalModel,
 			};
 			if (state.state === "open") {
+				const pending = pendingThreads.get(threadId) ?? new Set();
+				pendingThreads.set(threadId, pending);
+				pending.add(admission);
+				if (pending.size > 1) {
+					for (const existing of pending) settleBoundWaiters(existing);
+				}
 				state.timer = setTimeout(
 					() => closeAdmission(admission),
 					deadline - Date.now(),
@@ -1327,6 +1364,8 @@ export async function openCodexModelTransport(
 			}
 			if (state.timer !== undefined) clearTimeout(state.timer);
 			state.state = "consumed";
+			removePending(admission, state);
+			settleBoundWaiters(admission, key);
 			if (recognized) {
 				recognized.delete(admission);
 				if (recognized.size === 0) recognizedTurns.delete(key);
@@ -1351,7 +1390,7 @@ export async function openCodexModelTransport(
 		close: () => {
 			closePromise ??= (async () => {
 				closing = true;
-				for (const recognized of recognizedTurns.values()) {
+				for (const recognized of pendingThreads.values()) {
 					for (const admission of [...recognized]) {
 						closeAdmission(admission);
 					}

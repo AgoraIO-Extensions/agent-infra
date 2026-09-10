@@ -1361,6 +1361,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly beginModelTurnAdmission?: (
 			deadline: number,
 			internalModel: string,
+			threadId: string,
 		) => CodexModelTurnAdmission,
 		private readonly recognizeModelTurn?: (
 			admission: CodexModelTurnAdmission,
@@ -1611,6 +1612,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const modelAdmission = this.beginModelTurnAdmission?.(
 			admissionDeadline,
 			prepared.operation.internalModel,
+			session.threadId,
 		);
 		if (modelAdmission)
 			this.modelTurnAdmissions.set(admissionKey, modelAdmission);
@@ -1888,6 +1890,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			restoreAdmission = this.beginModelTurnAdmission?.(
 				Date.now() + rpcRequestTimeoutMs,
 				internalModel,
+				nativeTurn.threadId,
 			);
 			if (
 				restoreAdmission &&

@@ -88,6 +88,7 @@ function admitTurn(
 	const admission = transport.beginTurnAdmission(
 		Date.now() + 1_000,
 		internalModel,
+		turn.threadId,
 	);
 	expect(transport.recognizeTurn(admission, turn)).toBe(true);
 	expect(transport.registerTurn(admission, turn)).toBe(true);
@@ -1269,6 +1270,7 @@ describe("Codex model transport", () => {
 			const conflicting = value.beginTurnAdmission(
 				Date.now() + 1_000,
 				alternate,
+				defaultNativeTurn.threadId,
 			);
 			expect(value.recognizeTurn(conflicting, defaultNativeTurn)).toBe(true);
 			expect(value.registerTurn(conflicting, defaultNativeTurn)).toBe(false);
@@ -1304,6 +1306,7 @@ describe("Codex model transport", () => {
 		const admission = value.beginTurnAdmission(
 			Date.now() + 1_000,
 			"unknown/model",
+			defaultNativeTurn.threadId,
 		);
 		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(false);
 		expect(value.registerTurn(admission, defaultNativeTurn)).toBe(false);
@@ -1322,6 +1325,7 @@ describe("Codex model transport", () => {
 		const admission = value.beginTurnAdmission(
 			Date.now() + 1_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 		const pending = request(value.modelAccess);
 		await delay(25);
@@ -1333,6 +1337,102 @@ describe("Codex model transport", () => {
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe(completedEvent());
 		expect(calls).toBe(1);
+	});
+
+	it.each([
+		"abandon",
+		"expire",
+		"cancel",
+		"close",
+		"other-turn",
+		"ambiguous",
+	] as const)(
+		"rejects a parked request on %s without borrowing a later admission",
+		async (failure) => {
+			let calls = 0;
+			const target = await listen(
+				createServer((_incoming, response) => {
+					calls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const value = await transport(target, false);
+			const admission = value.beginTurnAdmission(
+				Date.now() + (failure === "expire" ? 100 : 5_000),
+				selectedInternalModel,
+				defaultNativeTurn.threadId,
+			);
+			let settled = false;
+			const pending = request(value.modelAccess).then(
+				(response) => {
+					settled = true;
+					return response;
+				},
+				(error: unknown) => {
+					if (failure !== "cancel" && failure !== "close") throw error;
+					settled = true;
+					return undefined;
+				},
+			);
+			await delay(25);
+			expect(settled).toBe(false);
+			expect(calls).toBe(0);
+			if (failure === "abandon") value.abandonTurnAdmission(admission);
+			if (failure === "cancel") await value.cancelTurn(defaultNativeTurn);
+			if (failure === "close") await value.close();
+			if (failure === "other-turn")
+				expect(
+					value.recognizeTurn(admission, {
+						...defaultNativeTurn,
+						turnId: "different-turn",
+					}),
+				).toBe(true);
+			if (failure === "ambiguous") {
+				const second = value.beginTurnAdmission(
+					Date.now() + 5_000,
+					selectedInternalModel,
+					defaultNativeTurn.threadId,
+				);
+				value.abandonTurnAdmission(second);
+				expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(true);
+				expect(value.registerTurn(admission, defaultNativeTurn)).toBe(true);
+			}
+			const rejected = await pending;
+			if (rejected) {
+				expect(rejected.status).toBe(409);
+				await rejected.text();
+			}
+			value.abandonTurnAdmission(admission);
+			if (failure !== "cancel" && failure !== "close") {
+				admitTurn(value, defaultNativeTurn);
+				const accepted = await request(value.modelAccess);
+				expect(accepted.status).toBe(200);
+				await accepted.text();
+				expect(calls).toBe(1);
+			} else expect(calls).toBe(0);
+		},
+	);
+
+	it("rejects an unknown Thread despite another Thread's pending admission", async () => {
+		let calls = 0;
+		const target = await listen(
+			createServer((_incoming, response) => {
+				calls += 1;
+				response.end();
+			}),
+		);
+		const value = await transport(target, false);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 5_000,
+			selectedInternalModel,
+			"another-thread",
+		);
+		const rejected = await request(value.modelAccess);
+		expect(rejected.status).toBe(409);
+		await rejected.text();
+		expect(value.recognizeTurn(admission, defaultNativeTurn)).toBe(false);
+		expect(calls).toBe(0);
 	});
 
 	it("rejects a well-formed but unknown native Turn", async () => {
@@ -1368,6 +1468,7 @@ describe("Codex model transport", () => {
 		const admission = value.beginTurnAdmission(
 			Date.now() + 50,
 			selectedInternalModel,
+			expiringTurn.threadId,
 		);
 		expect(value.recognizeTurn(admission, expiringTurn)).toBe(true);
 		const expiringRequest = request(value.modelAccess, {}, expiringTurn);
@@ -1402,10 +1503,12 @@ describe("Codex model transport", () => {
 		const firstAdmission = value.beginTurnAdmission(
 			Date.now() + 5_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 		const secondAdmission = value.beginTurnAdmission(
 			Date.now() + 5_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 		expect(value.recognizeTurn(firstAdmission, defaultNativeTurn)).toBe(true);
 		expect(value.recognizeTurn(secondAdmission, defaultNativeTurn)).toBe(true);
@@ -1418,6 +1521,7 @@ describe("Codex model transport", () => {
 		const freshAdmission = value.beginTurnAdmission(
 			Date.now() + 5_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 		expect(value.recognizeTurn(freshAdmission, defaultNativeTurn)).toBe(false);
 		expect(value.registerTurn(freshAdmission, defaultNativeTurn)).toBe(false);
@@ -1434,6 +1538,7 @@ describe("Codex model transport", () => {
 		const admission = value.beginTurnAdmission(
 			Date.now() + 5_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 
 		value.abandonTurnAdmission(admission);
@@ -1453,6 +1558,7 @@ describe("Codex model transport", () => {
 		const provisional = value.beginTurnAdmission(
 			Date.now() + 1_000,
 			selectedInternalModel,
+			defaultNativeTurn.threadId,
 		);
 		expect(value.recognizeTurn(provisional, defaultNativeTurn)).toBe(true);
 		value.abandonTurnAdmission(provisional);
@@ -1607,6 +1713,7 @@ describe("Codex model transport", () => {
 		const cancelledAdmission = value.beginTurnAdmission(
 			Date.now() + 1_000,
 			selectedInternalModel,
+			firstTurn.threadId,
 		);
 		expect(value.recognizeTurn(cancelledAdmission, firstTurn)).toBe(true);
 		expect(value.registerTurn(cancelledAdmission, firstTurn)).toBe(true);
@@ -1648,6 +1755,7 @@ describe("Codex model transport", () => {
 		const reused = value.beginTurnAdmission(
 			Date.now() + 1_000,
 			selectedInternalModel,
+			firstTurn.threadId,
 		);
 		expect(value.recognizeTurn(reused, firstTurn)).toBe(false);
 		expect(value.registerTurn(reused, firstTurn)).toBe(false);
