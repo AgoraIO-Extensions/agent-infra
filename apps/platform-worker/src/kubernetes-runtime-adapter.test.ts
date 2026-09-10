@@ -41,6 +41,116 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it.each([
+		[
+			"volume claim templates",
+			{
+				volumeClaimTemplates: [
+					{
+						metadata: { name: "injected" },
+						spec: {
+							accessModes: ["ReadWriteOnce"],
+							resources: { requests: { storage: "1Gi" } },
+						},
+					},
+				],
+			},
+		],
+		[
+			"PVC deletion policy",
+			{
+				persistentVolumeClaimRetentionPolicy: {
+					whenDeleted: "Delete",
+					whenScaled: "Delete",
+				},
+			},
+		],
+		[
+			"selector expressions",
+			{
+				selector: {
+					matchExpressions: [{ key: "unmanaged", operator: "Exists" }],
+				},
+			},
+		],
+		["parallel management", { podManagementPolicy: "Parallel" }],
+		["nonzero ordinal", { ordinals: { start: 1 } }],
+		[
+			"partitioned rollout",
+			{
+				updateStrategy: {
+					type: "RollingUpdate",
+					rollingUpdate: { partition: 1 },
+				},
+			},
+		],
+	] as const)(
+		"rejects and repairs StatefulSet %s despite an unchanged fingerprint",
+		async (_label, mutation) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const current = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			if (!current?.spec) throw new Error();
+			current.spec = {
+				...current.spec,
+				...structuredClone(mutation),
+				selector: {
+					...current.spec.selector,
+					...("selector" in mutation ? mutation.selector : {}),
+				},
+			} as V1StatefulSet["spec"];
+			f.resources.set(`StatefulSet/${desired.service.name}`, current);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+			const writes = f.writes.length;
+			await adapter.apply(desired);
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
+	it("accepts defaulted StatefulSet spec without reconciliation writes", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const current = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		if (!current?.spec) throw new Error();
+		current.spec = {
+			...current.spec,
+			podManagementPolicy: "OrderedReady",
+			revisionHistoryLimit: 10,
+			minReadySeconds: 0,
+			ordinals: { start: 0 },
+			volumeClaimTemplates: [],
+			persistentVolumeClaimRetentionPolicy: {
+				whenDeleted: "Retain",
+				whenScaled: "Retain",
+			},
+			updateStrategy: {
+				type: "RollingUpdate",
+				rollingUpdate: { partition: 0, maxUnavailable: 1 },
+			},
+		};
+		f.resources.set(`StatefulSet/${desired.service.name}`, current);
+		const writes = f.writes.length;
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		await adapter.apply(desired);
+		expect(f.writes).toHaveLength(writes);
+	});
 	it("rejects a terminating StatefulSet before observation and promotion", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

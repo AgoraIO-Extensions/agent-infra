@@ -663,6 +663,63 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}) === true
 		);
 	}
+	function hasDriftedStatefulSetSpec(
+		value: AgentWorkloadDesiredV1,
+		spec: V1StatefulSet["spec"],
+	) {
+		if (!spec) return true;
+		const { template, ...controller } = spec;
+		return (
+			hasDriftedStatefulSetTemplate(value, template) ||
+			!hasSameStructure(
+				{
+					...controller,
+					podManagementPolicy: controller.podManagementPolicy ?? "OrderedReady",
+					revisionHistoryLimit: controller.revisionHistoryLimit ?? 10,
+					minReadySeconds: controller.minReadySeconds ?? 0,
+					ordinals: { start: 0, ...controller.ordinals },
+					volumeClaimTemplates: controller.volumeClaimTemplates ?? [],
+					persistentVolumeClaimRetentionPolicy: {
+						whenDeleted: "Retain",
+						whenScaled: "Retain",
+						...controller.persistentVolumeClaimRetentionPolicy,
+					},
+					selector: { matchExpressions: [], ...controller.selector },
+					updateStrategy: {
+						...controller.updateStrategy,
+						rollingUpdate: {
+							partition: 0,
+							maxUnavailable: 1,
+							...controller.updateStrategy?.rollingUpdate,
+						},
+					},
+				},
+				{
+					serviceName: workloadResourceNameV1(value.agentId),
+					replicas: value.replicas,
+					selector: {
+						matchLabels: {
+							[ownerLabel]: workloadResourceNameV1(value.agentId),
+						},
+						matchExpressions: [],
+					},
+					podManagementPolicy: "OrderedReady",
+					revisionHistoryLimit: 10,
+					minReadySeconds: 0,
+					ordinals: { start: 0 },
+					volumeClaimTemplates: [],
+					persistentVolumeClaimRetentionPolicy: {
+						whenDeleted: "Retain",
+						whenScaled: "Retain",
+					},
+					updateStrategy: {
+						type: "RollingUpdate",
+						rollingUpdate: { partition: 0, maxUnavailable: 1 },
+					},
+				},
+			)
+		);
+	}
 	function hasDriftedStatefulSetTemplate(
 		value: AgentWorkloadDesiredV1,
 		template: NonNullable<V1StatefulSet["spec"]>["template"] | undefined,
@@ -906,10 +963,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(object as V1NetworkPolicy).spec,
 				)) &&
 			(kind !== "StatefulSet" ||
-				!hasDriftedStatefulSetTemplate(
-					value,
-					(current as V1StatefulSet).spec?.template,
-				)) &&
+				!hasDriftedStatefulSetSpec(value, (current as V1StatefulSet).spec)) &&
 			(kind !== "Ingress" ||
 				matchesIngress(current as V1Ingress, object as V1Ingress))
 		)
@@ -1237,8 +1291,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.workloadRevision)
 		)
 			return "drifted";
-		if (hasDriftedStatefulSetTemplate(value, current.spec?.template))
-			return "drifted";
+		if (hasDriftedStatefulSetSpec(value, current.spec)) return "drifted";
 		const name = workloadResourceNameV1(value.agentId);
 		const serviceAccount = await client.read<V1ServiceAccount>(
 			"ServiceAccount",
