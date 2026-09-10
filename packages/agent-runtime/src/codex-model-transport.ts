@@ -146,24 +146,125 @@ function nativeTurnKey(turn: CodexNativeTurn) {
 	return `${turn.threadId}\u0000${turn.turnId}`;
 }
 
-function containsCredential(value: string, credentials: readonly string[]) {
-	return credentials.some((credential) => value.includes(credential));
+function createCredentialMatcher(credentials: readonly string[]) {
+	const firstEdges = [-1];
+	const failures = [0];
+	const terminal = [false];
+	const edgeCharacters: string[] = [];
+	const edgeTargets: number[] = [];
+	const nextEdges: number[] = [];
+	const indexedTransitions = new Map<number, ReadonlyMap<string, number>>();
+	const transition = (state: number, character: string) => {
+		const indexed = indexedTransitions.get(state);
+		if (indexed) return indexed.get(character);
+		for (
+			let edge = firstEdges[state] ?? -1;
+			edge >= 0;
+			edge = nextEdges[edge] ?? -1
+		) {
+			if (edgeCharacters[edge] === character) return edgeTargets[edge];
+		}
+	};
+	for (const credential of credentials) {
+		let state = 0;
+		for (const character of credential) {
+			let target = transition(state, character);
+			if (target === undefined) {
+				target = firstEdges.length;
+				firstEdges.push(-1);
+				failures.push(0);
+				terminal.push(false);
+				const edge = edgeCharacters.length;
+				edgeCharacters.push(character);
+				edgeTargets.push(target);
+				nextEdges.push(firstEdges[state] ?? -1);
+				firstEdges[state] = edge;
+			}
+			state = target;
+		}
+		terminal[state] = true;
+	}
+	for (let state = 0; state < firstEdges.length; state += 1) {
+		const entries: [string, number][] = [];
+		for (
+			let edge = firstEdges[state] ?? -1;
+			edge >= 0;
+			edge = nextEdges[edge] ?? -1
+		) {
+			const character = edgeCharacters[edge];
+			const target = edgeTargets[edge];
+			if (character !== undefined && target !== undefined)
+				entries.push([character, target]);
+		}
+		if (entries.length > 4) indexedTransitions.set(state, new Map(entries));
+	}
+	const queue: number[] = [];
+	for (
+		let edge = firstEdges[0] ?? -1;
+		edge >= 0;
+		edge = nextEdges[edge] ?? -1
+	) {
+		const target = edgeTargets[edge];
+		if (target !== undefined) queue.push(target);
+	}
+	for (let cursor = 0; cursor < queue.length; cursor += 1) {
+		const state = queue[cursor];
+		if (state === undefined) continue;
+		for (
+			let edge = firstEdges[state] ?? -1;
+			edge >= 0;
+			edge = nextEdges[edge] ?? -1
+		) {
+			const character = edgeCharacters[edge];
+			const target = edgeTargets[edge];
+			if (character === undefined || target === undefined) continue;
+			let fallback = failures[state] ?? 0;
+			let candidate = transition(fallback, character);
+			while (fallback > 0 && candidate === undefined) {
+				fallback = failures[fallback] ?? 0;
+				candidate = transition(fallback, character);
+			}
+			failures[target] = candidate ?? 0;
+			terminal[target] =
+				terminal[target] === true || terminal[failures[target] ?? 0] === true;
+			queue.push(target);
+		}
+	}
+	const advance = (initialState: number, value: string) => {
+		let state = initialState;
+		for (const character of value) {
+			let target = transition(state, character);
+			while (state > 0 && target === undefined) {
+				state = failures[state] ?? 0;
+				target = transition(state, character);
+			}
+			state = target ?? 0;
+			if (terminal[state]) return { matched: true, state };
+		}
+		return { matched: false, state };
+	};
+	return {
+		advance,
+		contains: (value: string) => advance(0, value).matched,
+	};
 }
 
 function containsUnsafeModelData(
 	value: unknown,
-	credentials: readonly string[],
+	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 ): boolean {
-	if (typeof value === "string") return containsCredential(value, credentials);
+	if (typeof value === "string") return credentialMatcher.contains(value);
 	if (Array.isArray(value)) {
-		return value.some((item) => containsUnsafeModelData(item, credentials));
+		return value.some((item) =>
+			containsUnsafeModelData(item, credentialMatcher),
+		);
 	}
 	if (!isPlainRecord(value)) return false;
 	return Object.entries(value).some(
 		([key, nested]) =>
 			(key === "error" && nested !== null) ||
-			containsCredential(key, credentials) ||
-			containsUnsafeModelData(nested, credentials),
+			credentialMatcher.contains(key) ||
+			containsUnsafeModelData(nested, credentialMatcher),
 	);
 }
 
@@ -487,7 +588,7 @@ const ignoredPinnedCodexEvents = new Set([
 
 function semanticPayload(
 	event: Record<string, unknown>,
-	credentials: readonly string[],
+	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 ) {
 	let visited = 0;
 	let bytes = 0;
@@ -503,7 +604,7 @@ function semanticPayload(
 			const value = entry.value;
 			if (typeof value === "string") {
 				bytes += Buffer.byteLength(value);
-				if (bytes > maximumEventBytes || containsCredential(value, credentials))
+				if (bytes > maximumEventBytes || credentialMatcher.contains(value))
 					return false;
 				strings.push(value);
 			} else if (Array.isArray(value)) {
@@ -513,7 +614,7 @@ function semanticPayload(
 				const entries = Object.entries(value);
 				for (let index = entries.length - 1; index >= 0; index -= 1) {
 					const pair = entries[index];
-					if (!pair || containsCredential(pair[0], credentials)) return false;
+					if (!pair || credentialMatcher.contains(pair[0])) return false;
 					pending.push({ value: pair[1], depth: entry.depth + 1 });
 				}
 			}
@@ -617,7 +718,7 @@ function semanticPayload(
 
 function encodeValidatedEvent(
 	event: EventSourceMessage,
-	credentials: readonly string[],
+	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 ) {
 	if (
 		event.id !== undefined ||
@@ -635,15 +736,15 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		containsUnsafeModelData(value, credentials)
+		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
 	}
-	const rawPayload = semanticPayload(value, credentials);
+	const rawPayload = semanticPayload(value, credentialMatcher);
 	if (
 		!rawPayload ||
 		[...rawPayload.values()].some((strings) =>
-			containsCredential(strings.join(""), credentials),
+			credentialMatcher.contains(strings.join("")),
 		)
 	)
 		return { state: "invalid" as const };
@@ -667,7 +768,7 @@ function encodeValidatedEvent(
 	}
 	const projected = projectHandledEvent(value);
 	if (!projected) return { state: "invalid" as const };
-	const payload = semanticPayload(projected, credentials);
+	const payload = semanticPayload(projected, credentialMatcher);
 	if (!payload) return { state: "invalid" as const };
 	return {
 		state: "event" as const,
@@ -677,19 +778,11 @@ function encodeValidatedEvent(
 	};
 }
 
-// KMP state retains only a possible credential prefix per semantic channel.
-function credentialStreamGuard(credentials: readonly string[]) {
-	const patterns = credentials.map((text) => {
-		const failure = new Uint32Array(text.length);
-		for (let i = 1, matched = 0; i < text.length; i += 1) {
-			while (matched > 0 && text[i] !== text[matched])
-				matched = failure[matched - 1] ?? 0;
-			if (text[i] === text[matched]) matched += 1;
-			failure[i] = matched;
-		}
-		return { text, failure };
-	});
-	const channels = new Map<string, Uint32Array>();
+// Matcher state retains only a possible credential prefix per semantic channel.
+function credentialStreamGuard(
+	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
+) {
+	const channels = new Map<string, number>();
 	return {
 		accept(
 			value: Record<string, unknown>,
@@ -711,24 +804,13 @@ function credentialStreamGuard(credentials: readonly string[]) {
 						keys.push(JSON.stringify([channel, field, identifier]));
 				}
 				for (const key of keys) {
-					let states = channels.get(key);
-					if (!states) {
-						states = new Uint32Array(patterns.length);
-						channels.set(key, states);
-					}
-					for (let index = 0; index < patterns.length; index += 1) {
-						const pattern = patterns[index];
-						if (!pattern) continue;
-						let matched = states[index] ?? 0;
-						for (const character of text) {
-							while (matched > 0 && character !== pattern.text[matched])
-								matched = pattern.failure[matched - 1] ?? 0;
-							if (character === pattern.text[matched]) matched += 1;
-							if (matched === pattern.text.length) return false;
-						}
-						states[index] = matched;
-					}
-					if (!states.some((value) => value > 0)) channels.delete(key);
+					const result = credentialMatcher.advance(
+						channels.get(key) ?? 0,
+						text,
+					);
+					if (result.matched) return false;
+					if (result.state > 0) channels.set(key, result.state);
+					else channels.delete(key);
 				}
 			}
 			return true;
@@ -745,7 +827,7 @@ async function forwardValidatedStream(
 	body: ReadableStream<Uint8Array>,
 	response: ServerResponse,
 	controller: AbortController,
-	credentials: readonly string[],
+	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let failed = false;
@@ -756,7 +838,7 @@ async function forwardValidatedStream(
 	let queued: string[] = [];
 	let pending: string[] = [];
 	let pendingBytes = 0;
-	const guard = credentialStreamGuard(credentials);
+	const guard = credentialStreamGuard(credentialMatcher);
 	const parser = createParser({
 		maxBufferSize: maximumEventBytes,
 		onComment: () => {},
@@ -773,7 +855,7 @@ async function forwardValidatedStream(
 				failed = true;
 				return;
 			}
-			const result = encodeValidatedEvent(event, credentials);
+			const result = encodeValidatedEvent(event, credentialMatcher);
 			if (result.state === "invalid" || result.state === "failed") {
 				failed = true;
 				return;
@@ -921,6 +1003,7 @@ export async function openCodexModelTransport(
 	const credentials = [
 		...new Set([...routes.values()].map(({ credential }) => credential)),
 	];
+	const credentialMatcher = createCredentialMatcher(credentials);
 	const token = randomBytes(32).toString("base64url");
 	const expectedAuthorization = Buffer.from(`Bearer ${token}`);
 	const active = new Set<ActiveTurnRequest>();
@@ -1138,7 +1221,7 @@ export async function openCodexModelTransport(
 				upstream.body,
 				response,
 				controller,
-				credentials,
+				credentialMatcher,
 			);
 		} catch {
 			await failStream(response);

@@ -177,3 +177,42 @@ test("nested and delayed background failures preserve the originating diagnostic
 		stage: "model-cancellation-close-before-confirmation",
 	});
 });
+
+test("independent failpoints preserve the exact failed assertion and only boolean authentication", async () => {
+	for (const stage of [
+		"model-stop-target-open",
+		"model-stop-independent-open",
+		"model-stop-independent-closed",
+		"model-stop-independent-release",
+		"model-cancellation-request-closed",
+	]) {
+		for (const authenticated of [true, false]) {
+			const error = await probeStep(
+				stage,
+				() => {
+					assert.fail("synthetic-original");
+				},
+				() => ({ authenticated }),
+			).catch((error) => error);
+			assert.deepEqual(error.diagnostic, {
+				status: "failed",
+				stage,
+				authenticated,
+			});
+		}
+		for (const authenticated of [
+			"synthetic-credential",
+			1,
+			{ token: "synthetic-credential" },
+		]) {
+			assert.deepEqual(
+				JSON.parse(
+					safeRuntimeProbeFailure(
+						JSON.stringify({ status: "failed", stage, authenticated }),
+					),
+				),
+				{ status: "failed", stage },
+			);
+		}
+	}
+});

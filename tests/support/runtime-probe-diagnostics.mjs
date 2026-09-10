@@ -11,6 +11,11 @@ const probeStages = new Set([
 	"model-stop-close-before-confirmation",
 	"model-stop-result",
 	"model-stop-independent",
+	"model-stop-target-open",
+	"model-stop-independent-open",
+	"model-stop-independent-closed",
+	"model-stop-independent-release",
+	"model-cancellation-request-closed",
 	"model-cancellation",
 	"model-cancellation-request",
 	"model-cancellation-close-before-confirmation",
@@ -96,12 +101,15 @@ export function safeRuntimeProbeFailure(stderr) {
 					"resultStatus",
 					"isolationFileKind",
 					"modelRequests",
+					"authenticated",
 				].includes(key),
 		)
 	)
 		return;
 	const safe = { status: "failed" };
 	if (probeStages.has(value.stage)) safe.stage = value.stage;
+	if (typeof value.authenticated === "boolean")
+		safe.authenticated = value.authenticated;
 	if (
 		["running", "completed", "failed", "cancelled"].includes(value.resultStatus)
 	)

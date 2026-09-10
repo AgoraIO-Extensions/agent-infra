@@ -59,6 +59,26 @@ async function transport(endpoint: string, registerDefaultTurn = true) {
 	return value;
 }
 
+async function transportWithCredentials(
+	endpoint: string,
+	credentials: readonly string[],
+) {
+	const value = await openCodexModelTransport(
+		credentials.map((credential, index) => ({
+			internalModel:
+				index === 0
+					? selectedInternalModel
+					: `option_${index}/synthetic-selected`,
+			model: "synthetic-selected",
+			endpoint,
+			credential,
+		})),
+	);
+	admitTurn(value, defaultNativeTurn);
+	close.push(value.close);
+	return value;
+}
+
 function admitTurn(
 	transport: Awaited<ReturnType<typeof openCodexModelTransport>>,
 	turn: CodexNativeTurn,
@@ -190,6 +210,30 @@ describe("Codex model transport", () => {
 			authorization: `Bearer ${credential}`,
 			body: { ...body, model: "synthetic-selected" },
 		});
+	});
+
+	it("forwards a near-limit benign stream with the maximum route count", async () => {
+		const largeEvent = event({
+			type: "response.output_text.delta",
+			delta: "x".repeat(1024 * 1024 - 256),
+		});
+		const stream = largeEvent.repeat(15) + completedEvent();
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(stream);
+			}),
+		);
+		const credentials = Array.from(
+			{ length: 128 },
+			(_, index) =>
+				`synthetic-route-${String(index).padStart(3, "0")}-credential`,
+		);
+		const value = await transportWithCredentials(target, credentials);
+		const response = await request(value.modelAccess);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(stream);
 	});
 
 	it.each([
@@ -574,6 +618,42 @@ describe("Codex model transport", () => {
 		expect(await response.text()).toBe(
 			'{"error":{"message":"Model request failed"}}',
 		);
+	});
+
+	it("rejects a split non-first credential through a shared suffix fallback", async () => {
+		const sharedCredential = "synthetic-overlap-credential";
+		const target = await listen(
+			createServer(async (_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					event({
+						type: "response.output_text.delta",
+						delta: "prefix-synthetic-overlap-",
+					}),
+				);
+				await delay(5);
+				response.end(
+					event({ type: "response.output_text.delta", delta: "credential" }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const credentials = Array.from(
+			{ length: 126 },
+			(_, index) =>
+				`synthetic-route-${String(index).padStart(3, "0")}-credential`,
+		);
+		credentials.push(
+			sharedCredential,
+			`prefix-${sharedCredential}-continuation`,
+		);
+		const value = await transportWithCredentials(target, credentials);
+		const response = await request(value.modelAccess);
+		const text = await response.text();
+
+		expect(response.status).toBe(502);
+		expect(text).toBe('{"error":{"message":"Model request failed"}}');
+		expect(text).not.toContain(sharedCredential);
 	});
 	it("releases disambiguated prefixes incrementally without changing event order", async () => {
 		let finish: (() => void) | undefined;

@@ -867,10 +867,20 @@ try {
 		const independentRequest = await probeStep("model-stop-request", () =>
 			waitForOpenModelRequest("/hold-selected/v1/responses"),
 		);
-		await probeStep("model-stop-request", () => {
-			assert.equal(stopRequest.closed, false);
-			assert.equal(independentRequest.closed, false);
-		});
+		await probeStep(
+			"model-stop-target-open",
+			() => {
+				assert.equal(stopRequest.closed, false);
+			},
+			() => ({ authenticated: stopRequest.authenticated }),
+		);
+		await probeStep(
+			"model-stop-independent-open",
+			() => {
+				assert.equal(independentRequest.closed, false);
+			},
+			() => ({ authenticated: independentRequest.authenticated }),
+		);
 		const stopConfirmation = request("v1/stops", {
 			...stopped.lookup,
 			requestId: "request-stop-generation",
@@ -896,10 +906,20 @@ try {
 				resultStatus: JSON.parse(stopResult.text).result?.status,
 			}),
 		);
-		await probeStep("model-stop-independent", () => {
-			assert.equal(independentRequest.closed, false);
-			assert.ok(releaseHeldSelectedResponse);
-		});
+		await probeStep(
+			"model-stop-independent-closed",
+			() => {
+				assert.equal(independentRequest.closed, false);
+			},
+			() => ({ authenticated: independentRequest.authenticated }),
+		);
+		await probeStep(
+			"model-stop-independent-release",
+			() => {
+				assert.ok(releaseHeldSelectedResponse);
+			},
+			() => ({ authenticated: independentRequest.authenticated }),
+		);
 		releaseHeldSelectedResponse();
 		releaseHeldSelectedResponse = undefined;
 		const independentResult = await independentTurn;
@@ -932,8 +952,10 @@ try {
 			"/cancel/v1/responses",
 		);
 		stage = "model-cancellation-request";
-		await probeStep("model-cancellation-request", () =>
-			assert.equal(cancellationRequest.closed, false),
+		await probeStep(
+			"model-cancellation-request-closed",
+			() => assert.equal(cancellationRequest.closed, false),
+			() => ({ authenticated: cancellationRequest.authenticated }),
 		);
 		httpStatus = undefined;
 		responseCode = undefined;
