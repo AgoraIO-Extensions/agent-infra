@@ -1206,97 +1206,112 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			if (resource)
 				own(resource, value.agentId, value.workloadRevision, value.fence);
 		}
-		let resourcesClosed = true;
-		if (probe) {
-			own(probe, value.agentId, value.workloadRevision, value.fence);
-			const expectedProbeSpec = {
-				type: "ClusterIP",
-				selector: {
-					[ownerLabel]: name,
-					[revisionLabel]: probe.metadata?.labels?.[revisionLabel] ?? "closed",
-				},
-				ports: probe.spec?.ports?.map((port) => ({
-					name: port.name,
-					port: port.port,
-					targetPort: port.targetPort,
-				})),
-			};
-			if (
-				(!matchesServiceSpec(probe.spec, expectedProbeSpec) ||
-					!hasOnlyControllerRoutingMetadata(probe)) &&
-				!(await remove("Service", probeName, value))
-			)
-				resourcesClosed = false;
-		}
-		// Remove the selected route's backend before any candidate Pod can start.
-		if (service) {
-			own(service, value.agentId, value.workloadRevision, value.fence);
-			const safeServiceSpec = {
-				type: "ClusterIP",
-				selector: service.spec?.selector,
-				ports: service.spec?.ports?.map((port) => ({
-					name: port.name,
-					port: port.port,
-					targetPort: port.targetPort,
-				})),
-			};
-			if (
-				!matchesServiceSpec(service.spec, safeServiceSpec) ||
-				!hasOnlyControllerRoutingMetadata(service)
-			) {
-				const serviceRemoved = await remove("Service", name, value);
-				const ingressRemoved = await remove("Ingress", name, value);
-				return resourcesClosed && serviceRemoved && ingressRemoved;
-			}
-			if (
-				!hasSameStructure(service.spec?.selector, {
-					[ownerLabel]: name,
-					[revisionLabel]: "closed",
-				}) ||
-				service.metadata?.labels?.[revisionLabel] !==
-					String(value.workloadRevision) ||
-				service.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-					String(value.fence)
-			) {
-				await client.replace({
-					...service,
-					metadata: {
-						...service.metadata,
-						labels: {
-							...service.metadata?.labels,
-							[revisionLabel]: String(value.workloadRevision),
+		const outcomes = await Promise.allSettled([
+			(async () => {
+				let resourcesClosed = true;
+				if (probe) {
+					own(probe, value.agentId, value.workloadRevision, value.fence);
+					const expectedProbeSpec = {
+						type: "ClusterIP",
+						selector: {
+							[ownerLabel]: name,
+							[revisionLabel]:
+								probe.metadata?.labels?.[revisionLabel] ?? "closed",
 						},
-						annotations: {
-							...service.metadata?.annotations,
-							"agent-infra.agora.io/fence": String(value.fence),
-							[fingerprintAnnotation]: "",
-						},
-					},
-					spec: {
-						...service.spec,
-						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
-					},
-				});
-			}
-			const closed = await client.read<V1Service>("Service", name);
-			if (closed) {
-				own(closed, value.agentId, value.workloadRevision, value.fence);
-				if (
-					!hasOnlyControllerRoutingMetadata(closed) ||
-					closed.metadata?.labels?.[revisionLabel] !==
-						String(value.workloadRevision) ||
-					closed.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(value.fence) ||
-					!matchesServiceSpec(closed.spec, {
-						...safeServiceSpec,
-						selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
-					})
-				)
-					resourcesClosed = false;
-			}
-		}
-		const ingressRemoved = await remove("Ingress", name, value);
-		return resourcesClosed && ingressRemoved;
+						ports: probe.spec?.ports?.map((port) => ({
+							name: port.name,
+							port: port.port,
+							targetPort: port.targetPort,
+						})),
+					};
+					if (
+						(!matchesServiceSpec(probe.spec, expectedProbeSpec) ||
+							!hasOnlyControllerRoutingMetadata(probe)) &&
+						!(await remove("Service", probeName, value))
+					)
+						resourcesClosed = false;
+				}
+				return resourcesClosed;
+			})(),
+			(async () => {
+				let resourcesClosed = true;
+				// Remove the selected route's backend before any candidate Pod can start.
+				if (service) {
+					own(service, value.agentId, value.workloadRevision, value.fence);
+					const safeServiceSpec = {
+						type: "ClusterIP",
+						selector: service.spec?.selector,
+						ports: service.spec?.ports?.map((port) => ({
+							name: port.name,
+							port: port.port,
+							targetPort: port.targetPort,
+						})),
+					};
+					if (
+						!matchesServiceSpec(service.spec, safeServiceSpec) ||
+						!hasOnlyControllerRoutingMetadata(service)
+					) {
+						return remove("Service", name, value);
+					}
+					if (
+						!hasSameStructure(service.spec?.selector, {
+							[ownerLabel]: name,
+							[revisionLabel]: "closed",
+						}) ||
+						service.metadata?.labels?.[revisionLabel] !==
+							String(value.workloadRevision) ||
+						service.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+							String(value.fence)
+					) {
+						await client.replace({
+							...service,
+							metadata: {
+								...service.metadata,
+								labels: {
+									...service.metadata?.labels,
+									[revisionLabel]: String(value.workloadRevision),
+								},
+								annotations: {
+									...service.metadata?.annotations,
+									"agent-infra.agora.io/fence": String(value.fence),
+									[fingerprintAnnotation]: "",
+								},
+							},
+							spec: {
+								...service.spec,
+								selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
+							},
+						});
+					}
+					const closed = await client.read<V1Service>("Service", name);
+					if (closed) {
+						own(closed, value.agentId, value.workloadRevision, value.fence);
+						if (
+							!hasOnlyControllerRoutingMetadata(closed) ||
+							closed.metadata?.labels?.[revisionLabel] !==
+								String(value.workloadRevision) ||
+							closed.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+								String(value.fence) ||
+							!matchesServiceSpec(closed.spec, {
+								...safeServiceSpec,
+								selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
+							})
+						)
+							resourcesClosed = false;
+					}
+				}
+				return resourcesClosed;
+			})(),
+			remove("Ingress", name, value),
+		]);
+		const failure = outcomes.find(
+			(outcome): outcome is PromiseRejectedResult =>
+				outcome.status === "rejected",
+		);
+		if (failure) throw failure.reason;
+		return outcomes.every(
+			(outcome) => outcome.status === "fulfilled" && outcome.value,
+		);
 	}
 	async function closeAgent(
 		agentId: string,

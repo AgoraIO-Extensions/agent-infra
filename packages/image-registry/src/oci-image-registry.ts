@@ -51,11 +51,13 @@ type OciConfigResolutionV1 =
 type OciDistributionClientV1 = {
 	readonly resolveManifest: (input: {
 		readonly imageReference: string;
+		readonly signal?: AbortSignal;
 	}) => Promise<OciManifestResolutionV1>;
 	readonly readConfig: (input: {
 		readonly imageReference: string;
 		readonly configDigest: string;
 		readonly configSize: number;
+		readonly signal?: AbortSignal;
 	}) => Promise<OciConfigResolutionV1>;
 };
 
@@ -77,6 +79,7 @@ export interface OciImageAdmissionPolicyV1 {
 export interface ImageRegistryAdapterV1 {
 	admit(
 		request: ImageRegistryAdmissionRequestV1,
+		options?: { readonly signal?: AbortSignal },
 	): Promise<ImageRegistryAdmissionResultV1>;
 }
 
@@ -95,6 +98,7 @@ function createOciDistributionClientV1(options: {
 				binding,
 				`${encodeRepository(location.repository)}/manifests/${encodeURIComponent(location.reference)}`,
 				manifestMediaType,
+				input.signal,
 			);
 			if (response.status !== "ok") return response;
 			try {
@@ -130,6 +134,7 @@ function createOciDistributionClientV1(options: {
 				binding,
 				`${encodeRepository(location.repository)}/blobs/${encodeURIComponent(input.configDigest)}`,
 				configMediaType,
+				input.signal,
 			);
 			if (response.status !== "ok") return response;
 			try {
@@ -168,6 +173,7 @@ export function createOciImageRegistryAdapterV1(options: {
 	return {
 		async admit(
 			requestInput: unknown,
+			admissionOptions?: { readonly signal?: AbortSignal },
 		): Promise<ImageRegistryAdmissionResultV1> {
 			const parsedRequest = parseImageRegistryAdmissionRequestV1(requestInput);
 			if (parsedRequest.status === "invalid-image-reference") {
@@ -177,7 +183,14 @@ export function createOciImageRegistryAdapterV1(options: {
 				throw new TypeError("Image registry request is invalid");
 			}
 			const request = parsedRequest.request;
-			const manifest = await resolveManifest(distribution, request);
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+			const manifest = await resolveManifest(
+				distribution,
+				request,
+				admissionOptions?.signal,
+			);
 			if (manifest.status !== "resolved") {
 				return rejected(request, distributionFailureCode(manifest.status));
 			}
@@ -187,7 +200,15 @@ export function createOciImageRegistryAdapterV1(options: {
 				return rejected(request, policy.code);
 			}
 
-			const config = await resolveConfig(distribution, request, manifest);
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+			const config = await resolveConfig(
+				distribution,
+				request,
+				manifest,
+				admissionOptions?.signal,
+			);
 			if (config.status !== "resolved") {
 				return rejected(request, config.code);
 			}
@@ -312,6 +333,7 @@ async function requestOci(
 	},
 	path: string,
 	accept: string,
+	parentSignal?: AbortSignal,
 ): Promise<
 	| {
 			readonly status: "ok";
@@ -321,10 +343,13 @@ async function requestOci(
 	| { readonly status: OciDistributionFailureV1 }
 > {
 	const controller = new AbortController();
+	const signal = parentSignal
+		? AbortSignal.any([parentSignal, controller.signal])
+		: controller.signal;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await Promise.race([
-			readOciResponse(binding, path, accept, controller.signal),
+			readOciResponse(binding, path, accept, signal),
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(() => {
 					controller.abort();
@@ -585,11 +610,13 @@ function decodeUtf8(input: Uint8Array): string {
 async function resolveManifest(
 	distribution: OciDistributionClientV1,
 	request: ImageRegistryAdmissionRequestV1,
+	signal?: AbortSignal,
 ): Promise<OciManifestResolutionV1> {
 	try {
 		return normalizeManifestResolution(
 			await distribution.resolveManifest({
 				imageReference: request.imageReference,
+				signal,
 			}),
 		);
 	} catch {
@@ -649,6 +676,7 @@ async function resolveConfig(
 	distribution: OciDistributionClientV1,
 	request: ImageRegistryAdmissionRequestV1,
 	manifest: Extract<OciManifestResolutionV1, { readonly status: "resolved" }>,
+	signal?: AbortSignal,
 ): Promise<
 	| {
 			readonly status: "resolved";
@@ -671,6 +699,7 @@ async function resolveConfig(
 				imageReference: request.imageReference,
 				configDigest: manifest.configDigest,
 				configSize: manifest.configSize,
+				signal,
 			}),
 		);
 	} catch {

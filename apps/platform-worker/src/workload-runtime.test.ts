@@ -516,6 +516,7 @@ describe("assembled Workload Runtime contracts", () => {
 	it("bounds registry admission and ignores a successful result after the deadline", async () => {
 		vi.useFakeTimers();
 		const gate = Promise.withResolvers<void>();
+		let admissionSignal: AbortSignal | undefined;
 		const admitted = workloadRegistryFixture({
 			schemaVersion: 1,
 			interactionMode: "platform-adapter",
@@ -523,10 +524,16 @@ describe("assembled Workload Runtime contracts", () => {
 			service: { port: 8080 },
 			health: { path: "/healthz" },
 		});
-		const admit = vi.fn(async (request) => {
-			await gate.promise;
-			return admitted.admit(request);
-		});
+		const admit = vi.fn(
+			async (
+				request: Parameters<typeof admitted.admit>[0],
+				options?: { readonly signal?: AbortSignal },
+			) => {
+				admissionSignal = options?.signal;
+				await gate.promise;
+				return admitted.admit(request);
+			},
+		);
 		const f = fixture({ registry: { admit } });
 		try {
 			await f.tick(1);
@@ -536,9 +543,11 @@ describe("assembled Workload Runtime contracts", () => {
 			await vi.advanceTimersByTimeAsync(59_999);
 			expect(f.state).toMatchObject({ phase: "preflight", attempts: 0 });
 			expect(f.resources.size).toBe(0);
+			expect(admissionSignal?.aborted).toBe(false);
 
 			await vi.advanceTimersByTimeAsync(1);
 			await preflight;
+			expect(admissionSignal?.aborted).toBe(true);
 			expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
 			expect(f.state?.candidate.deployment).toBeNull();
 			expect(f.resources.size).toBe(0);

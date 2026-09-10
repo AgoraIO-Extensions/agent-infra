@@ -41,6 +41,132 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("starts other route closures while a Service operation is pending and waits for its outcome", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		await adapter.promote(desired, identity);
+		const probeName = `${desired.service.name}-probe`;
+		const probe = await f.client.read<V1Service>("Service", probeName);
+		if (!probe?.metadata) throw new Error();
+		probe.metadata.annotations = {
+			...probe.metadata.annotations,
+			"external.example.test/route": "injected",
+		};
+		f.resources.set(`Service/${probeName}`, probe);
+		const gate = Promise.withResolvers<void>();
+		const failure = new Error("synthetic delayed deletion failure");
+		const remove = f.client.delete.bind(f.client);
+		vi.spyOn(f.client, "delete").mockImplementation(async (resource) => {
+			if (resource.kind === "Service" && resource.metadata?.name === probeName)
+				await gate.promise;
+			await remove(resource);
+		});
+		let settled = false;
+		const closing = adapter.closeRoute(desired);
+		void closing.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		const rejected = expect(closing).rejects.toBe(failure);
+		try {
+			await vi.waitFor(() => {
+				expect(f.resources.has(`Ingress/${desired.route.name}`)).toBe(false);
+				expect(
+					(f.resources.get(`Service/${desired.service.name}`) as V1Service).spec
+						?.selector?.["agent-infra.agora.io/revision"],
+				).toBe("closed");
+			});
+			expect(settled).toBe(false);
+		} finally {
+			gate.reject(failure);
+		}
+		await rejected;
+	});
+	it.each([
+		"probe-delete",
+		"main-delete",
+		"main-replace",
+		"main-readback",
+		"ingress-delete",
+	] as const)(
+		"attempts every route closure and preserves a failure in %s",
+		async (failurePoint) => {
+			const f = fixture();
+			const adapter = f.adapter();
+			const desired = workloadDesiredFixture();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			await adapter.promote(desired, identity);
+			const probeName = `${desired.service.name}-probe`;
+			for (const name of [
+				probeName,
+				...(failurePoint === "main-delete" ? [desired.service.name] : []),
+			]) {
+				const service = await f.client.read<V1Service>("Service", name);
+				if (!service?.metadata) throw new Error();
+				service.metadata.annotations = {
+					...service.metadata.annotations,
+					"external.example.test/route": "injected",
+				};
+				f.resources.set(`Service/${name}`, service);
+			}
+			const failure = new Error("synthetic Kubernetes failure");
+			const remove = f.client.delete.bind(f.client);
+			vi.spyOn(f.client, "delete").mockImplementation(async (resource) => {
+				if (
+					(failurePoint === "probe-delete" &&
+						resource.metadata?.name === probeName) ||
+					(failurePoint === "main-delete" &&
+						resource.kind === "Service" &&
+						resource.metadata?.name === desired.service.name) ||
+					(failurePoint === "ingress-delete" && resource.kind === "Ingress")
+				)
+					throw failure;
+				await remove(resource);
+			});
+			const replace = f.client.replace.bind(f.client);
+			vi.spyOn(f.client, "replace").mockImplementation(async (resource) => {
+				if (
+					failurePoint === "main-replace" &&
+					resource.kind === "Service" &&
+					resource.metadata?.name === desired.service.name
+				)
+					throw failure;
+				return replace(resource);
+			});
+			const read = f.client.read.bind(f.client);
+			let mainReads = 0;
+			vi.spyOn(f.client, "read").mockImplementation(async (kind, name) => {
+				if (
+					failurePoint === "main-readback" &&
+					kind === "Service" &&
+					name === desired.service.name &&
+					++mainReads === 2
+				)
+					throw failure;
+				return read(kind, name);
+			});
+			await expect(adapter.closeRoute(desired)).rejects.toBe(failure);
+			expect(f.resources.has(`Ingress/${desired.route.name}`)).toBe(
+				failurePoint === "ingress-delete",
+			);
+			expect(f.resources.has(`Service/${probeName}`)).toBe(
+				failurePoint === "probe-delete",
+			);
+			if (!["main-delete", "main-replace"].includes(failurePoint))
+				expect(
+					(f.resources.get(`Service/${desired.service.name}`) as V1Service).spec
+						?.selector?.["agent-infra.agora.io/revision"],
+				).toBe("closed");
+		},
+	);
 	it.each(["Service", "ProbeService"] as const)(
 		"removes %s with unmanaged routing metadata before reporting closure",
 		async (resourceKind) => {

@@ -446,17 +446,18 @@ export function createWorkloadRuntimeV1(
 						: ("custom-agent" as const),
 				admissionPolicyRef: options.admissionPolicyRef,
 			};
+			const controller = new AbortController();
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const deadline = new Promise<never>((_resolve, reject) => {
-				timer = setTimeout(
-					() => reject(new Error("Workload admission is unavailable")),
-					60_000,
-				);
+				timer = setTimeout(() => {
+					controller.abort();
+					reject(new Error("Workload admission is unavailable"));
+				}, 60_000);
 			});
 			let result: Awaited<ReturnType<typeof options.registry.admit>>;
 			try {
 				result = await Promise.race([
-					options.registry.admit(request),
+					options.registry.admit(request, { signal: controller.signal }),
 					deadline,
 				]);
 			} finally {
