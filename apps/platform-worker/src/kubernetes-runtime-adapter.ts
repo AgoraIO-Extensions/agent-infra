@@ -1134,6 +1134,21 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			own(current, value.agentId, value.workloadRevision, value.fence);
 		return closeAgentAtFence(value);
 	}
+	function hasOnlyControllerRoutingMetadata(resource: KubernetesObject) {
+		return (
+			Object.keys(resource.metadata?.labels ?? {}).every(
+				(key) => key === ownerLabel || key === revisionLabel,
+			) &&
+			Object.keys(resource.metadata?.annotations ?? {}).every((key) =>
+				[
+					agentAnnotation,
+					secretConfigRevisionAnnotation,
+					"agent-infra.agora.io/fence",
+					fingerprintAnnotation,
+				].includes(key),
+			)
+		);
+	}
 	async function closeAgentAtFence(value: {
 		agentId: string;
 		workloadRevision: number;
@@ -1166,7 +1181,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				})),
 			};
 			if (
-				!matchesServiceSpec(probe.spec, expectedProbeSpec) &&
+				(!matchesServiceSpec(probe.spec, expectedProbeSpec) ||
+					!hasOnlyControllerRoutingMetadata(probe)) &&
 				!(await remove("Service", probeName, value))
 			)
 				return false;
@@ -1183,7 +1199,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					targetPort: port.targetPort,
 				})),
 			};
-			if (!matchesServiceSpec(service.spec, safeServiceSpec)) {
+			if (
+				!matchesServiceSpec(service.spec, safeServiceSpec) ||
+				!hasOnlyControllerRoutingMetadata(service)
+			) {
 				if (!(await remove("Service", name, value))) return false;
 				return remove("Ingress", name, value);
 			}

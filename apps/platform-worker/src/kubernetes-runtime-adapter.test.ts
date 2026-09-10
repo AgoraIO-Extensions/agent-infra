@@ -41,6 +41,39 @@ function fixture() {
 }
 
 describe("GA Kubernetes Workload adapter", () => {
+	it.each(["Service", "ProbeService"] as const)(
+		"removes %s with unmanaged routing metadata before reporting closure",
+		async (resourceKind) => {
+			for (const field of ["labels", "annotations"] as const) {
+				const f = fixture();
+				const adapter = f.adapter();
+				const desired = workloadDesiredFixture();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				await adapter.promote(desired, identity);
+				const name =
+					resourceKind === "Service"
+						? desired.service.name
+						: `${desired.service.name}-probe`;
+				const service = await f.client.read<V1Service>("Service", name);
+				if (!service?.metadata) throw new Error();
+				service.metadata[field] = {
+					...service.metadata[field],
+					"external.example.test/route": "injected",
+				};
+				f.resources.set(`Service/${name}`, service);
+				expect(
+					await adapter.closeAgent(
+						desired.agentId,
+						desired.workloadRevision,
+						desired.fence,
+					),
+				).toBe(true);
+				expect(await f.client.read("Service", name)).toBeNull();
+				expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+			}
+		},
+	);
 	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -3536,13 +3569,17 @@ describe("GA Kubernetes Workload adapter", () => {
 
 			const result = await adapter.switchRoute(request);
 			expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
-			expect(
-				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
-					?.selector,
-			).toEqual({
-				"agent-infra.agora.io/agent": desired.service.name,
-				"agent-infra.agora.io/revision": "closed",
-			});
+			const closedService = await f.client.read<V1Service>(
+				"Service",
+				desired.service.name,
+			);
+			if (mutation === "service labels" || mutation === "service annotations")
+				expect(closedService).toBeNull();
+			else
+				expect(closedService?.spec?.selector).toEqual({
+					"agent-infra.agora.io/agent": desired.service.name,
+					"agent-infra.agora.io/revision": "closed",
+				});
 			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 		},
 	);
