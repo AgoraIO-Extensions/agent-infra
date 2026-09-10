@@ -157,3 +157,16 @@ test("Compose runs every deployment image with a read-only root filesystem", asy
 		"http://127.0.0.1:8080/",
 	]);
 });
+
+test("Compose keeps the configured RuntimeHost out of the default application", async () => {
+	const compose = parse(await readFile("docker-compose.yml", "utf8"));
+	const rootManifest = JSON.parse(await readFile("package.json", "utf8"));
+
+	assert.deepEqual(compose.services["agent-runtime-host"].profiles, [
+		"runtime",
+	]);
+	assert.match(
+		rootManifest.scripts["docker:build"],
+		/docker compose --profile runtime build$/,
+	);
+});

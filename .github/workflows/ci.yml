@@ -86,7 +86,34 @@ jobs:
           retention-days: 14
 
       - name: Build deployment images
-        run: pnpm docker:build
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if test -f .github/scripts/vulnerability-scan.mjs; then
+            node .github/scripts/vulnerability-scan.mjs build
+          else
+            pnpm docker:build
+          fi
+
+      - name: Probe native Codex runtime image
+        id: runtime_probe
+        run: |
+          if test -f .github/scripts/vulnerability-scan.mjs; then
+            node deploy/release/runtime-probe.mjs --scan-build \
+              .vulnerability-scan/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
+          else
+            node deploy/release/runtime-probe.mjs \
+              agent-infra-agent-runtime-host:latest "$RUNNER_TEMP/codex-runtime-probe.json"
+          fi
+
+      - name: Preserve Codex runtime image evidence
+        if: ${{ !cancelled() && steps.runtime_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-runtime-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/codex-runtime-probe.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Lint Markdown
         run: >-
