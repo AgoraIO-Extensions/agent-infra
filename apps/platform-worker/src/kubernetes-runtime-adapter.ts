@@ -1623,7 +1623,18 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			fence: number,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const name = workloadResourceNameV1(agentId);
-			const current = await client.read<V1StatefulSet>("StatefulSet", name);
+			const [current, ...existingResources] = await Promise.all([
+				client.read<V1StatefulSet>("StatefulSet", name),
+				client.read("PersistentVolumeClaim", `${name}-data`),
+				client.read("Service", name),
+				client.read("Service", `${name}-probe`),
+				client.read("ServiceAccount", name),
+				client.read("NetworkPolicy", name),
+				client.read("Ingress", name),
+			]);
+			for (const resource of [current, ...existingResources]) {
+				if (resource) own(resource, agentId, workloadRevision, fence);
+			}
 			if (!current) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",

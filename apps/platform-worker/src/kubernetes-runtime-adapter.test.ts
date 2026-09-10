@@ -195,6 +195,66 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
 		},
 	);
+	it.each([
+		"PersistentVolumeClaim",
+		"Service",
+		"ProbeService",
+		"ServiceAccount",
+		"NetworkPolicy",
+		"Ingress",
+	] as const)(
+		"preflights sibling %s before scale-down or absent-PVC fencing",
+		async (kind) => {
+			for (const absent of [false, true]) {
+				for (const mismatch of ["fence", "revision", "owner"]) {
+					const f = fixture();
+					const adapter = f.adapter();
+					const desired = workloadDesiredFixture();
+					const identity = await adapter.apply(desired);
+					if (!identity || identity === "pending") throw new Error();
+					await adapter.promote(desired, identity);
+					const resourceKind = kind === "ProbeService" ? "Service" : kind;
+					const name =
+						kind === "PersistentVolumeClaim"
+							? desired.persistentVolume.name
+							: kind === "ProbeService"
+								? `${desired.service.name}-probe`
+								: desired.service.name;
+					const resource = await f.client.read(resourceKind, name);
+					if (!resource?.metadata?.annotations || !resource.metadata.labels)
+						throw new Error();
+					if (mismatch === "fence")
+						resource.metadata.annotations["agent-infra.agora.io/fence"] =
+							String(desired.fence + 2);
+					if (mismatch === "revision")
+						resource.metadata.labels["agent-infra.agora.io/revision"] = String(
+							desired.workloadRevision + 2,
+						);
+					if (mismatch === "owner")
+						resource.metadata.annotations["agent-infra.agora.io/agent-id"] =
+							"foreign";
+					f.resources.set(`${resourceKind}/${name}`, resource);
+					if (absent) {
+						f.resources.delete(`StatefulSet/${desired.service.name}`);
+						f.resources.delete(`Pod/${desired.service.name}-0`);
+					}
+					const before = structuredClone([...f.resources]);
+					const writes = f.writes.length;
+					await expect(
+						adapter.scaleDownAgent(
+							desired.agentId,
+							desired.workloadRevision + 1,
+							desired.fence + 1,
+						),
+					).rejects.toMatchObject({
+						code: mismatch === "owner" ? "policy" : "conflict",
+					});
+					expect(f.writes).toHaveLength(writes);
+					expect([...f.resources]).toEqual(before);
+				}
+			}
+		},
+	);
 	it("reuses canonical equivalent PVC storage quantities without writes", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
