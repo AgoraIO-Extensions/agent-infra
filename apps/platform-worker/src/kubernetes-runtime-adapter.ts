@@ -301,6 +301,14 @@ function routeSelector(
 	};
 }
 
+function hasClosedSelectorCollision(pods: readonly V1Pod[], name: string) {
+	return pods.some(
+		(pod) =>
+			pod.metadata?.labels?.[ownerLabel] === name &&
+			pod.metadata?.labels?.[revisionLabel] === "closed",
+	);
+}
+
 export function workloadResourceNameV1(agentId: string): string {
 	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
 }
@@ -1253,6 +1261,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					) {
 						return remove("Service", name, value);
 					}
+					const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+					if (hasClosedSelectorCollision(pods, name))
+						return remove("Service", name, value);
 					if (
 						!hasSameStructure(service.spec?.selector, {
 							[ownerLabel]: name,
@@ -1562,6 +1573,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			"Pod",
 			selector(value.agentId),
 		);
+		if (
+			routeMode === "closed" &&
+			hasClosedSelectorCollision(labelledPods, name)
+		)
+			return "drifted";
 		const ownedByExpectedWorkload = (pod: V1Pod) =>
 			hasControllingWorkloadOwner(pod, current);
 		// Services select labels, not ownerReferences. A foreign Pod matching the
@@ -2081,6 +2097,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return null;
 			}
 			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+			if (hasClosedSelectorCollision(pods, name)) {
+				await remove("Service", name, value);
+				return "pending";
+			}
 			const ownedPods = current?.metadata?.uid
 				? pods.filter((pod) => hasControllingWorkloadOwner(pod, current))
 				: [];

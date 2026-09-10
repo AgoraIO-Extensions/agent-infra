@@ -94,6 +94,7 @@ describe("GA Kubernetes Workload adapter", () => {
 		"main-delete",
 		"main-replace",
 		"main-readback",
+		"main-list",
 		"ingress-delete",
 	] as const)(
 		"attempts every route closure and preserves a failure in %s",
@@ -153,6 +154,11 @@ describe("GA Kubernetes Workload adapter", () => {
 					throw failure;
 				return read(kind, name);
 			});
+			const list = f.client.list.bind(f.client);
+			vi.spyOn(f.client, "list").mockImplementation(async (kind, selector) => {
+				if (failurePoint === "main-list" && kind === "Pod") throw failure;
+				return list(kind, selector);
+			});
 			await expect(adapter.closeRoute(desired)).rejects.toBe(failure);
 			expect(f.resources.has(`Ingress/${desired.route.name}`)).toBe(
 				failurePoint === "ingress-delete",
@@ -160,7 +166,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(f.resources.has(`Service/${probeName}`)).toBe(
 				failurePoint === "probe-delete",
 			);
-			if (!["main-delete", "main-replace"].includes(failurePoint))
+			if (!["main-delete", "main-replace", "main-list"].includes(failurePoint))
 				expect(
 					(f.resources.get(`Service/${desired.service.name}`) as V1Service).spec
 						?.selector?.["agent-infra.agora.io/revision"],
@@ -3255,6 +3261,89 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, identity)).not.toBe("healthy");
 		},
 	);
+	it("fails closed while a foreign Pod collides with the closed Service selector", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const owned = await f.client.read<V1Pod>(
+			"Pod",
+			`${desired.service.name}-0`,
+		);
+		if (!owned) throw new Error();
+		const foreign: V1Pod = {
+			...owned,
+			metadata: {
+				...owned.metadata,
+				name: `${desired.service.name}-foreign-closed`,
+				uid: "foreign-closed-pod",
+				labels: {
+					...owned.metadata?.labels,
+					"agent-infra.agora.io/revision": "closed",
+				},
+				ownerReferences: [
+					{
+						apiVersion: "apps/v1",
+						kind: "StatefulSet",
+						name: "foreign",
+						uid: "foreign-statefulset",
+					},
+				],
+			},
+		};
+		const foreignKey = `Pod/${foreign.metadata?.name}`;
+		expect(await f.client.read("Service", desired.service.name)).not.toBeNull();
+		f.resources.set(foreignKey, foreign);
+		expect(await adapter.observe(desired, identity, "closed")).toBe("drifted");
+		expect(await adapter.apply(desired)).toBe("pending");
+		expect(await f.client.read("Service", desired.service.name)).toBeNull();
+		expect(await f.client.read("Pod", foreign.metadata?.name ?? "")).toEqual(
+			foreign,
+		);
+
+		f.resources.delete(foreignKey);
+		expect(await adapter.reconcile(desired)).toMatchObject({
+			status: "applied",
+		});
+		expect(await f.client.read("Service", desired.service.name)).not.toBeNull();
+		await adapter.promote(desired, identity);
+		f.resources.set(foreignKey, foreign);
+		expect(
+			await adapter.closeAgent(
+				desired.agentId,
+				desired.workloadRevision,
+				desired.fence,
+			),
+		).toBe(true);
+		expect(await f.client.read("Service", desired.service.name)).toBeNull();
+		expect(
+			await f.client.read("Service", `${desired.service.name}-probe`),
+		).not.toBeNull();
+		expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+		expect(await f.client.read("Pod", foreign.metadata?.name ?? "")).toEqual(
+			foreign,
+		);
+
+		expect(await adapter.apply(desired)).toBe("pending");
+		expect(await f.client.read("Service", desired.service.name)).toBeNull();
+		expect(await f.client.read("Pod", foreign.metadata?.name ?? "")).toEqual(
+			foreign,
+		);
+
+		f.resources.delete(foreignKey);
+		expect(await adapter.reconcile(desired)).toMatchObject({
+			status: "applied",
+		});
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector,
+		).toEqual({
+			"agent-infra.agora.io/agent": desired.service.name,
+			"agent-infra.agora.io/revision": "closed",
+		});
+		expect(await adapter.observe(desired, identity, "closed")).toBe("healthy");
+	});
 	it("does not scale down a safe current owned Pod", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
