@@ -1486,8 +1486,9 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		async function open() {
 			driver = await CodexRuntimeDriver.open({
 				path: join(directory, "driver.json"),
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
+				configVersion: "synthetic-config-1",
+				defaultModelOptionId: "synthetic",
+				defaultReasoningLevel: "high",
 				modelOptions: [
 					{
 						modelOptionId: "synthetic",
@@ -1511,8 +1512,9 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		async function prepareRawNativeStorage() {
 			const rawDriver = await CodexRuntimeDriver.open({
 				path: rawDriverPath,
-				model: "gpt-5.3-codex",
-				reasoningEffort: "high",
+				configVersion: "synthetic-config-1",
+				defaultModelOptionId: "synthetic",
+				defaultReasoningLevel: "high",
 				modelOptions: [
 					{
 						modelOptionId: "synthetic",
