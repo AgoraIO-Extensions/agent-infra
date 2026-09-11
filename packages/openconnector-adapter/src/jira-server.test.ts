@@ -132,6 +132,37 @@ test("Jira Server execution encodes issue paths and maps JSON responses", async 
 	}
 });
 
+test("Jira Server search preserves issue arrays and pagination", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json({
+			issues: [
+				{ fields: { summary: "First issue" }, id: "10001", key: "ASS-1" },
+				{ fields: { summary: "Second issue" }, id: "10002", key: "ASS-2" },
+			],
+			maxResults: 2,
+			startAt: 0,
+			total: 3,
+		});
+
+	try {
+		const result = await createAdapter().execute({
+			action: "jira.search_issues",
+			credential: { accessToken: credential },
+			input: { jql: "assignee = currentUser()", limit: 2 },
+		});
+		assert.deepEqual(result, {
+			issues: [
+				{ fields: { summary: "First issue" }, id: "10001", key: "ASS-1" },
+				{ fields: { summary: "Second issue" }, id: "10002", key: "ASS-2" },
+			],
+			pagination: { nextCursor: "2" },
+		});
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("Jira Server OAuth token provider caches and refreshes the application token", async () => {
 	let now = 1_000_000;
 	let tokenRequests = 0;

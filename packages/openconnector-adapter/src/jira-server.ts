@@ -781,7 +781,7 @@ function stringArray(value: JsonObject, key: string) {
 }
 
 function arrayOfObjects(value: unknown, key: string): JsonObject[] {
-	const entry = objectValue(value, key);
+	const entry = isJsonObject(value) ? value[key] : undefined;
 	return Array.isArray(entry) ? entry.filter(isJsonObject) : [];
 }
 
