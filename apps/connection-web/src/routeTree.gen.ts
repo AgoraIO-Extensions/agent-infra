@@ -14,6 +14,7 @@ import { Route as ConnectionConnectionsRouteImport } from './routes/connection.c
 import { Route as ConnectionLoginRouteImport } from './routes/connection.login'
 import { Route as ConnectionTokensRouteImport } from './routes/connection.tokens'
 import { Route as ConnectionAdminAdministratorsRouteImport } from './routes/connection.admin.administrators'
+import { Route as ConnectionAdminAgentsRouteImport } from './routes/connection.admin.agents'
 import { Route as ConnectionAdminSharedConnectionsRouteImport } from './routes/connection.admin.shared-connections'
 
 const IndexRoute = IndexRouteImport.update({
@@ -42,6 +43,11 @@ const ConnectionAdminAdministratorsRoute =
     path: '/connection/admin/administrators',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ConnectionAdminAgentsRoute = ConnectionAdminAgentsRouteImport.update({
+  id: '/connection/admin/agents',
+  path: '/connection/admin/agents',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectionAdminSharedConnectionsRoute =
   ConnectionAdminSharedConnectionsRouteImport.update({
     id: '/connection/admin/shared-connections',
@@ -55,6 +61,7 @@ export interface FileRoutesByFullPath {
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
+  '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRoutesByTo {
@@ -63,6 +70,7 @@ export interface FileRoutesByTo {
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
+  '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRoutesById {
@@ -72,6 +80,7 @@ export interface FileRoutesById {
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
+  '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRouteTypes {
@@ -82,6 +91,7 @@ export interface FileRouteTypes {
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/administrators'
+    | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -90,6 +100,7 @@ export interface FileRouteTypes {
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/administrators'
+    | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
   id:
     | '__root__'
@@ -98,6 +109,7 @@ export interface FileRouteTypes {
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/administrators'
+    | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
   fileRoutesById: FileRoutesById
 }
@@ -107,6 +119,7 @@ export interface RootRouteChildren {
   ConnectionLoginRoute: typeof ConnectionLoginRoute
   ConnectionTokensRoute: typeof ConnectionTokensRoute
   ConnectionAdminAdministratorsRoute: typeof ConnectionAdminAdministratorsRoute
+  ConnectionAdminAgentsRoute: typeof ConnectionAdminAgentsRoute
   ConnectionAdminSharedConnectionsRoute: typeof ConnectionAdminSharedConnectionsRoute
 }
 
@@ -147,6 +160,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectionAdminAdministratorsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/connection/admin/agents': {
+      id: '/connection/admin/agents'
+      path: '/connection/admin/agents'
+      fullPath: '/connection/admin/agents'
+      preLoaderRoute: typeof ConnectionAdminAgentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connection/admin/shared-connections': {
       id: '/connection/admin/shared-connections'
       path: '/connection/admin/shared-connections'
@@ -163,6 +183,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectionLoginRoute: ConnectionLoginRoute,
   ConnectionTokensRoute: ConnectionTokensRoute,
   ConnectionAdminAdministratorsRoute: ConnectionAdminAdministratorsRoute,
+  ConnectionAdminAgentsRoute: ConnectionAdminAgentsRoute,
   ConnectionAdminSharedConnectionsRoute: ConnectionAdminSharedConnectionsRoute,
 }
 export const routeTree = rootRouteImport

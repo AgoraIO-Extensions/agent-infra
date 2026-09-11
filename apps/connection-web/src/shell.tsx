@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate } from "@tanstack/react-router";
-import { Cable, KeyRound, LogOut, ShieldCheck, UsersRound } from "lucide-react";
+import {
+	Bot,
+	Cable,
+	KeyRound,
+	LogOut,
+	ShieldCheck,
+	UsersRound,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { connectionApi } from "./api";
@@ -51,6 +58,9 @@ export function ConsoleShell(props: { children: ReactNode }) {
 					{session.data.isAdministrator ? (
 						<>
 							<div className="nav-separator" />
+							<NavLink to="/connection/admin/agents" icon={<Bot size={18} />}>
+								Agent 接入
+							</NavLink>
 							<NavLink
 								to="/connection/admin/shared-connections"
 								icon={<UsersRound size={18} />}
@@ -95,6 +105,7 @@ function NavLink(props: {
 	to:
 		| "/connection/connections"
 		| "/connection/tokens"
+		| "/connection/admin/agents"
 		| "/connection/admin/shared-connections"
 		| "/connection/admin/administrators";
 }) {

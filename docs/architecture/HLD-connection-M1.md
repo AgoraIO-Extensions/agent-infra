@@ -289,6 +289,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | Browser -> Connection | 公司用户 | LDAP login 后的 hash-only HttpOnly browser session | 当前 Principal、RBAC、组织关系 | 接受 body 中的 userId；保存或记录 LDAP 密码 |
 | Direct MCP Client -> MCP | Direct ConsumerInstance | remote MCP OAuth user session，或 Connection PAT；客户端支持时增加 sender constraint | ConnectionGrant current revision | 传 Principal/Consumer/connectionId 或 Provider token |
+| 具名 PAT Consumer -> binding | 已注册 Consumer backend + 当前 browser Principal | 固定 callback、服务领取凭据、短期单次 opaque state | 用户确认的目标 Consumer 与 TOKEN instance | 任意 callback、URL 携带 PAT、Consumer 代替用户确认 |
 | Local MCP Client -> optional edge | 已登录 Direct ConsumerInstance | Connection OAuth token/session 或 Connection PAT | 与远程 Direct MCP 相同的 Grant | 本机 installation 身份、账号 alias 或 Credential store |
 | Delegated Consumer -> HTTP | 注册 workload | mTLS + signed assertion | ConnectionGrant + actor constraint | assertion 创建或扩大 Grant |
 | Connection -> Identity | connection workload | workload identity | 请求期 current identity | 把缓存当永久资格 |
@@ -536,6 +537,8 @@ invocationId, callId, attemptId, effectId, dispatchId
 10. Consumer 内部 policy 只能收紧，不能扩大 Connection 授权。
 11. 审计、日志和错误不包含原始 Credential 或普通用户业务正文。
 12. 恢复不能让已撤销授权、停用 Action 或未知外部效果重新可执行。
+13. PAT binding session 只能为已注册的具名 Consumer 创建，绑定一个待生成 TOKEN instance，且只能由
+    当前 browser Principal 确认并由发起 Consumer 后端领取一次；PAT 不进入 URL、日志或审计正文。
 
 ## 12. 核心领域模型
 
@@ -934,6 +937,15 @@ callback、token exchange 或 profile response 未知时，不重放已消费 au
 - 服务端先用 exact Provider profile/validation endpoint 验证 key 和 stable account identity，再提交 current pointer。
 - replacement 创建新 CredentialVersion，旧版本进入 `RETIRED`；验证失败不影响当前版本。
 - API Key/PAT 不能通过 MCP tool args、Delegated assertion 或 Consumer callback 提交。
+
+本节描述 Provider Credential，不等同于 Connection PAT。Connection PAT 的具名 Consumer binding
+profile 使用独立短期 transaction：Consumer 后端认证后创建 opaque state，用户通过 Connection
+browser session 确认，Connection 原子创建 PAT hash 与 TOKEN ConsumerInstance，明文只保留到固定
+Consumer callback 的单次领取完成。callback 失败时 transaction 保持可安全重试的待领取状态，但同一
+PAT 不能成功领取两次；不得通过定时轮询或任意 redirect 传递 PAT。
+Consumer 创建 binding 时还要提交由其服务身份认证的当前登录名提示；Connection 只持久化规范化
+hash，并在用户确认时与当前 browser Principal 的 profile 投影比较。该提示只阻止其他 Connection
+账号误确认被转发的链接，不创建 Principal，也不能替代 LDAP subject 或 browser session。
 
 ### 16.3 Envelope Encryption
 
@@ -2590,8 +2602,9 @@ flowchart LR
 | D-08 | 写 Action 使用 Call + Effect + Dispatch，`SUBMISSION_STARTED` 后未知即 UNCERTAIN | Connection/SRE | 需要 |
 | D-09 | PostgreSQL lease/outbox 支撑 M1，不引入额外消息/工作流系统 | Connection/SRE | 需要 |
 | D-10 | Connection PITR 使用域外 Recovery Control 和独立 mutation gate | Security/SRE/DBA | 需要 |
+| D-11 | Agent Consumer 通过 DB 注册的 callback 与服务凭据按用户实例绑定 PAT；一个 PAT 可使用多个已授权 Provider | Product/Connection/Security | [ADR-connection-agent-pat-binding](../adr/ADR-connection-agent-pat-binding.md) |
 
-`D-01` 至 `D-10` 在本文状态仍为 `Proposed for Design Review`。即使相关 PRD/Spec 已同步，也不表示具体字段、协议和恢复实现已经批准。
+`D-01` 至 `D-11` 在本文状态仍为 `Proposed for Design Review`。即使相关 PRD/Spec 已同步，也不表示具体字段、协议和恢复实现已经批准。
 
 ### 36.2 P0 与 P1 门禁
 

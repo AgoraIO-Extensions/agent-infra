@@ -130,6 +130,7 @@ test("Connection Web preserves every same-origin API route family", async () => 
 	const nginx = await readFile("apps/connection-web/nginx.conf", "utf8");
 	const vite = await readFile("apps/connection-web/vite.config.ts", "utf8");
 	const directSessionApi = nginx.indexOf("location ^~ /connection/v1/");
+	const patBindingApi = nginx.indexOf("location ^~ /connection/pat-bindings/");
 	const spaFallback = nginx.indexOf("location /connection/");
 
 	assert.ok(directSessionApi >= 0, "nginx must proxy the Direct Session API");
@@ -137,5 +138,11 @@ test("Connection Web preserves every same-origin API route family", async () => 
 		directSessionApi < spaFallback,
 		"the Direct Session API must be matched before the Connection SPA",
 	);
+	assert.ok(patBindingApi >= 0, "nginx must proxy the PAT binding API");
+	assert.ok(
+		patBindingApi < spaFallback,
+		"the PAT binding API must be matched before the Connection SPA",
+	);
 	assert.match(vite, /"\/connection\/v1"/);
+	assert.match(vite, /"\/connection\/pat-bindings"/);
 });

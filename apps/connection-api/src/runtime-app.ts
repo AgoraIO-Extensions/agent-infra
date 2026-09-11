@@ -9,6 +9,7 @@ import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
 	PostgresBrowserCommandIdempotency,
 	PostgresConnectionOAuthRepository,
+	PostgresConnectionPatBindingRepository,
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
 import {
@@ -37,6 +38,9 @@ export async function createConnectionRuntimeApp(
 ) {
 	const config = fullConnectionRuntimeConfig(environment);
 	const oauthRepository = new PostgresConnectionOAuthRepository(
+		config.databaseUrl,
+	);
+	const patBindingRepository = new PostgresConnectionPatBindingRepository(
 		config.databaseUrl,
 	);
 	const repository = new PostgresConnectionRepository(
@@ -80,6 +84,7 @@ export async function createConnectionRuntimeApp(
 		identityEnvironment: config.publicBaseUrl,
 		identityKey: config.identityKey,
 		patConsumers: [rehoboamAiConsumer],
+		patBinding: { repository: patBindingRepository },
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});

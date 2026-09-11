@@ -438,6 +438,145 @@ describe("Connection API", () => {
 		});
 	});
 
+	it("binds a RehoboamAI PAT without placing the token in browser URLs", async () => {
+		const sessionToken = `conn_session_${"S".repeat(43)}`;
+		const pat = `conn_pat_${"P".repeat(43)}`;
+		const state = `conn_pat_binding_${"T".repeat(43)}`;
+		const seen: Record<string, unknown>[] = [];
+		const service = {
+			claimPersonalAccessTokenBinding: async (
+				input: Record<string, unknown>,
+			) => {
+				seen.push({ operation: "claim", ...input });
+				return {
+					consumerId: "consumer-rehoboam-ai",
+					expiresAt: new Date("2026-12-01T00:00:00.000Z"),
+					name: "Alice / Agent A",
+					token: pat,
+					tokenId: "pat-bound",
+				};
+			},
+			confirmPersonalAccessTokenBinding: async (
+				input: Record<string, unknown>,
+			) => {
+				seen.push({ operation: "confirm", ...input });
+				return {
+					callbackUrl:
+						"https://rehoboam.example/api/connection/callback?binding_id=pat-binding-1",
+				};
+			},
+			createPersonalAccessTokenBinding: async (
+				input: Record<string, unknown>,
+			) => {
+				seen.push({ operation: "create", ...input });
+				return {
+					authorizationUrl: `https://connection.example/connection/pat-bindings/${state}`,
+					bindingId: "pat-binding-1",
+					expiresAt: new Date("2026-09-11T07:00:00.000Z"),
+				};
+			},
+			getBrowserAccount: async (value: string | undefined) => {
+				if (value !== sessionToken)
+					throw new OAuthProtocolError("invalid_token", "denied", 401);
+				return {
+					displayName: "Alice",
+					email: "alice@example.invalid",
+					principalId: "principal-alice",
+				};
+			},
+			getPersonalAccessTokenBinding: async (value: string) => {
+				seen.push({ operation: "read", state: value });
+				return {
+					bindingId: "pat-binding-1",
+					consumerId: "consumer-rehoboam-ai",
+					consumerName: "RehoboamAI",
+					expiresAt: new Date("2026-09-11T07:00:00.000Z"),
+					name: "Alice / Agent A",
+				};
+			},
+		} as unknown as ConnectionOAuthService;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service,
+		});
+
+		const created = await app.request("/api/v1/connection/pat-bindings", {
+			body: JSON.stringify({
+				consumerId: "consumer-rehoboam-ai",
+				name: "Alice / Agent A",
+				principalHint: "alice@example.invalid",
+			}),
+			headers: {
+				authorization: "Bearer binding-secret",
+				"content-type": "application/json",
+				"idempotency-key": "create-binding-1",
+			},
+			method: "POST",
+		});
+		expect(created.status).toBe(201);
+		expect(JSON.stringify(await created.json())).not.toContain(pat);
+
+		const anonymous = await app.request(`/connection/pat-bindings/${state}`);
+		expect(anonymous.status).toBe(302);
+		expect(anonymous.headers.get("location")).toContain(
+			"/connection/login?returnTo=%2Fconnection%2Fpat-bindings%2F",
+		);
+
+		const page = await app.request(`/connection/pat-bindings/${state}`, {
+			headers: { cookie: `connection_session=${sessionToken}` },
+		});
+		expect(page.status).toBe(200);
+		expect(await page.text()).toContain("Alice / Agent A");
+
+		const confirmed = await app.request("/connection/pat-bindings/confirm", {
+			body: new URLSearchParams({ state }),
+			headers: {
+				"content-type": "application/x-www-form-urlencoded",
+				cookie: `connection_session=${sessionToken}`,
+				origin: "https://connection.example",
+			},
+			method: "POST",
+		});
+		expect(confirmed.status).toBe(303);
+		expect(confirmed.headers.get("location")).toBe(
+			"https://rehoboam.example/api/connection/callback?binding_id=pat-binding-1",
+		);
+		expect(confirmed.headers.get("location")).not.toContain(pat);
+
+		const claimed = await app.request(
+			"/api/v1/connection/pat-bindings/pat-binding-1/claim",
+			{
+				body: JSON.stringify({ consumerId: "consumer-rehoboam-ai" }),
+				headers: {
+					authorization: "Bearer binding-secret",
+					"content-type": "application/json",
+					"idempotency-key": "claim-binding-1",
+				},
+				method: "POST",
+			},
+		);
+		expect(claimed.status).toBe(200);
+		expect(await claimed.json()).toMatchObject({
+			issued: { consumerId: "consumer-rehoboam-ai", token: pat },
+		});
+		expect(seen).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					consumerId: "consumer-rehoboam-ai",
+					operation: "create",
+					principalHint: "alice@example.invalid",
+					secret: "binding-secret",
+				}),
+				expect.objectContaining({
+					consumerId: "consumer-rehoboam-ai",
+					operation: "claim",
+					secret: "binding-secret",
+				}),
+			]),
+		);
+	});
+
 	it("logs in once and issues a portable PAT from the authenticated console", async () => {
 		const token = `conn_pat_${"A".repeat(43)}`;
 		const sessionToken = `conn_session_${"B".repeat(43)}`;
@@ -1087,12 +1226,32 @@ describe("Connection API", () => {
 			],
 		]);
 		const oauth = {
+			disablePatBindingConsumer: async (consumerId: string) => {
+				mutations.push({
+					action: "disable-consumer",
+					targetPrincipalId: consumerId,
+				});
+			},
 			getBrowserAccount: async (sessionToken: string | undefined) => {
 				const account = sessionToken ? accounts.get(sessionToken) : undefined;
 				if (!account)
 					throw new OAuthProtocolError("invalid_token", "denied", 401);
 				return account;
 			},
+			listPatBindingConsumers: async () => [
+				{
+					callbackUrl: "https://agent.example/callback",
+					consumerId: "consumer-agent",
+					consumerName: "Agent",
+					status: "ACTIVE",
+				},
+			],
+			registerPatBindingConsumer: async () => ({
+				callbackUrl: "https://agent.example/callback",
+				consumerId: "consumer-agent",
+				consumerName: "Agent",
+				secret: "conn_consumer_secret-once",
+			}),
 		} as unknown as ConnectionOAuthService;
 		const management = {
 			authorizeConnectionAdministration: async (principalId: string) =>
@@ -1169,6 +1328,38 @@ describe("Connection API", () => {
 				{ isAdministrator: false, principalId: "principal-user" },
 			],
 		});
+		const consumers = await app.request(
+			"/api/v1/connection/admin/pat-consumers",
+			{ headers: { cookie: "connection_session=admin-session" } },
+		);
+		expect(consumers.status).toBe(200);
+		expect(JSON.stringify(await consumers.json())).not.toContain(
+			"conn_consumer_secret-once",
+		);
+		const registered = await app.request(
+			"/api/v1/connection/admin/pat-consumers",
+			{
+				body: JSON.stringify({
+					callbackUrl: "https://agent.example/callback",
+					consumerId: "consumer-agent",
+					consumerName: "Agent",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=admin-session",
+					"idempotency-key": "register-consumer-agent",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(registered.status).toBe(201);
+		expect(await registered.json()).toMatchObject({
+			issued: {
+				consumerId: "consumer-agent",
+				secret: "conn_consumer_secret-once",
+			},
+		});
 		const adminHeaders = {
 			cookie: "connection_session=admin-session",
 			"idempotency-key": "test-administrator-mutation",
@@ -1183,11 +1374,16 @@ describe("Connection API", () => {
 				headers: adminHeaders,
 				method: "DELETE",
 			}),
+			app.request("/api/v1/connection/admin/pat-consumers/consumer-agent", {
+				headers: adminHeaders,
+				method: "DELETE",
+			}),
 		]);
-		expect(apiMutations.map(({ status }) => status)).toEqual([204, 204]);
+		expect(apiMutations.map(({ status }) => status)).toEqual([204, 204, 204]);
 		expect(mutations).toEqual([
 			{ action: "grant", targetPrincipalId: "principal-user" },
 			{ action: "revoke", targetPrincipalId: "principal-admin" },
+			{ action: "disable-consumer", targetPrincipalId: "consumer-agent" },
 		]);
 	});
 

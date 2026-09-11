@@ -49,6 +49,27 @@ import {
 
 client.setConfig({ baseUrl: "/", credentials: "same-origin" });
 
+export type PatConsumerProfile = {
+	callbackUrl: string;
+	consumerId: string;
+	consumerName: string;
+	status: "ACTIVE" | "DISABLED";
+};
+
+async function patConsumerRequest<T>(path: string, init?: RequestInit) {
+	const response = await fetch(path, {
+		...init,
+		credentials: "same-origin",
+		headers: {
+			...(init?.body ? { "content-type": "application/json" } : {}),
+			...(init?.method && init.method !== "GET" ? commandHeaders() : {}),
+			...init?.headers,
+		},
+	});
+	if (!response.ok) throw new Error("Agent 接入操作失败");
+	return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
 export class ConnectionApiError extends Error {
 	constructor(readonly detail: ApiError["error"]) {
 		super(errorMessage(detail.messageKey));
@@ -137,6 +158,26 @@ function toApiError(error: unknown): ApiError {
 }
 
 export const connectionApi = {
+	listPatConsumers: () =>
+		patConsumerRequest<{ consumers: PatConsumerProfile[] }>(
+			"/api/v1/connection/admin/pat-consumers",
+		),
+	registerPatConsumer: (input: {
+		callbackUrl: string;
+		consumerId: string;
+		consumerName: string;
+	}) =>
+		patConsumerRequest<{
+			issued: PatConsumerProfile & { secret: string };
+		}>("/api/v1/connection/admin/pat-consumers", {
+			body: JSON.stringify(input),
+			method: "POST",
+		}),
+	disablePatConsumer: (consumerId: string) =>
+		patConsumerRequest<void>(
+			`/api/v1/connection/admin/pat-consumers/${encodeURIComponent(consumerId)}`,
+			{ method: "DELETE" },
+		),
 	getSession: () => unwrap<Session>(getSession()),
 	login: (body: LoginRequest) =>
 		unwrap<Session>(

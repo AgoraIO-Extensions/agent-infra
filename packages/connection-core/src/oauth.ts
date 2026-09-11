@@ -76,6 +76,72 @@ export type PersonalAccessTokenRecord = {
 	tokenId: string;
 };
 
+export type PersonalAccessTokenBinding = {
+	bindingId: string;
+	callbackUrl: string;
+	consumerId: string;
+	consumerName: string;
+	expiresAt: Date;
+	name: string;
+};
+
+export interface ConnectionPatBindingRepository {
+	authenticatePatBindingConsumer(input: {
+		consumerId: string;
+		secretHash: string;
+	}): Promise<{
+		callbackUrl: string;
+		consumerId: string;
+		consumerName: string;
+	}>;
+	claimPersonalAccessTokenBinding(input: {
+		bindingId: string;
+		consumerId: string;
+	}): Promise<{
+		consumerId: string;
+		expiresAt: Date;
+		name: string;
+		protectedToken: string;
+		tokenId: string;
+	}>;
+	confirmPersonalAccessTokenBinding(input: {
+		browserSessionHash: string;
+		protectedToken: string;
+		stateHash: string;
+		tokenHash: string;
+		tokenId: string;
+		ttlMs: number;
+	}): Promise<PersonalAccessTokenBinding>;
+	createPersonalAccessTokenBinding(input: {
+		bindingId: string;
+		consumerId: string;
+		consumerName: string;
+		expiresAt: Date;
+		instanceId: string;
+		name: string;
+		principalHintHash: string;
+		stateHash: string;
+	}): Promise<void>;
+	findPersonalAccessTokenBinding(
+		stateHash: string,
+	): Promise<PersonalAccessTokenBinding>;
+	listPatBindingConsumers(): Promise<
+		Array<{
+			callbackUrl: string;
+			consumerId: string;
+			consumerName: string;
+			status: "ACTIVE" | "DISABLED";
+		}>
+	>;
+	registerPatBindingConsumer(input: {
+		callbackUrl: string;
+		consumerId: string;
+		consumerName: string;
+		secretHash: string;
+	}): Promise<void>;
+	disablePatBindingConsumer(consumerId: string): Promise<void>;
+}
+
 export interface ConnectionOAuthRepository {
 	approveAuthorization(input: {
 		codeHash: string;
@@ -187,6 +253,9 @@ type OAuthServiceOptions = {
 	identityEnvironment: string;
 	identityKey: Uint8Array;
 	patConsumers?: Array<{ id: string; name: string }>;
+	patBinding?: {
+		repository: ConnectionPatBindingRepository;
+	};
 	principalFreshnessMs?: number;
 	refreshTokenTtlMs?: number;
 	repository: ConnectionOAuthRepository;
@@ -198,6 +267,7 @@ const defaultAccessTokenTtlMs = 5 * 60_000;
 const defaultAuthorizationCodeTtlMs = 2 * 60_000;
 const defaultBrowserSessionTtlMs = 12 * 60 * 60_000;
 const defaultPersonalAccessTokenTtlMs = 90 * 24 * 60 * 60_000;
+const defaultPersonalAccessTokenBindingTtlMs = 10 * 60_000;
 const defaultRefreshTokenTtlMs = 30 * 24 * 60 * 60_000;
 const defaultPrincipalFreshnessMs = 60_000;
 const identitySubjectHashVersion = "v1";
@@ -580,6 +650,209 @@ export class ConnectionOAuthService {
 
 	listPersonalAccessTokenConsumers() {
 		return [portablePatConsumer, ...(this.options.patConsumers ?? [])];
+	}
+
+	private async requirePatBindingProfile(consumerId: string, secret: string) {
+		if (!this.options.patBinding || !secret) {
+			throw new OAuthProtocolError(
+				"invalid_client",
+				"Invalid PAT binding client",
+				401,
+			);
+		}
+		return this.options.patBinding.repository.authenticatePatBindingConsumer({
+			consumerId,
+			secretHash: tokenHash(secret),
+		});
+	}
+
+	async createPersonalAccessTokenBinding(input: {
+		consumerId: string;
+		name: string;
+		principalHint: string;
+		secret: string;
+	}) {
+		const profile = await this.requirePatBindingProfile(
+			input.consumerId,
+			input.secret,
+		);
+		const name = input.name.trim();
+		if (name.length < 1 || name.length > 100) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Token name must contain between 1 and 100 characters",
+			);
+		}
+		const principalHint = input.principalHint.trim().toLowerCase();
+		if (principalHint.length < 3 || principalHint.length > 320) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Invalid Principal binding",
+			);
+		}
+		const bindingId = `pat-binding-${randomUUID()}`;
+		const state = `conn_pat_binding_${opaqueToken()}`;
+		const expiresAt = new Date(
+			Date.now() + defaultPersonalAccessTokenBindingTtlMs,
+		);
+		await this.options.patBinding?.repository.createPersonalAccessTokenBinding({
+			bindingId,
+			consumerId: profile.consumerId,
+			consumerName: profile.consumerName,
+			expiresAt,
+			instanceId: `instance-${randomUUID()}`,
+			name,
+			principalHintHash: tokenHash(principalHint),
+			stateHash: tokenHash(state),
+		});
+		return {
+			authorizationUrl: new URL(
+				`/connection/pat-bindings/${encodeURIComponent(state)}`,
+				this.options.identityEnvironment,
+			).toString(),
+			bindingId,
+			expiresAt,
+		};
+	}
+
+	async getPersonalAccessTokenBinding(state: string) {
+		if (!state.startsWith("conn_pat_binding_") || !this.options.patBinding) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"PAT binding request is unavailable",
+				404,
+			);
+		}
+		return this.options.patBinding.repository.findPersonalAccessTokenBinding(
+			tokenHash(state),
+		);
+	}
+
+	async confirmPersonalAccessTokenBinding(input: {
+		sessionToken: string | undefined;
+		state: string;
+	}) {
+		if (!this.options.patBinding) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"PAT binding request is unavailable",
+				404,
+			);
+		}
+		const token = `conn_pat_${opaqueToken()}`;
+		const tokenId = `pat-${randomUUID()}`;
+		const binding =
+			await this.options.patBinding.repository.confirmPersonalAccessTokenBinding(
+				{
+					browserSessionHash: this.browserSessionHash(input.sessionToken),
+					protectedToken: this.protector.protect({
+						issuer: "connection-pat-binding",
+						subject: token,
+					}),
+					stateHash: tokenHash(input.state),
+					tokenHash: tokenHash(token),
+					tokenId,
+					ttlMs: defaultPersonalAccessTokenTtlMs,
+				},
+			);
+		const callback = new URL(binding.callbackUrl);
+		callback.searchParams.set("binding_id", binding.bindingId);
+		return { callbackUrl: callback.toString() };
+	}
+
+	async claimPersonalAccessTokenBinding(input: {
+		bindingId: string;
+		consumerId: string;
+		secret: string;
+	}) {
+		await this.requirePatBindingProfile(input.consumerId, input.secret);
+		if (!this.options.patBinding) {
+			throw new OAuthProtocolError(
+				"invalid_client",
+				"Invalid PAT binding client",
+				401,
+			);
+		}
+		const claimed =
+			await this.options.patBinding.repository.claimPersonalAccessTokenBinding({
+				bindingId: input.bindingId,
+				consumerId: input.consumerId,
+			});
+		const protectedValue = this.protector.unprotect(claimed.protectedToken);
+		if (protectedValue.issuer !== "connection-pat-binding") {
+			throw new OAuthProtocolError("invalid_token", "Invalid PAT binding", 401);
+		}
+		return {
+			consumerId: claimed.consumerId,
+			expiresAt: claimed.expiresAt,
+			name: claimed.name,
+			token: protectedValue.subject,
+			tokenId: claimed.tokenId,
+		};
+	}
+
+	async listPatBindingConsumers() {
+		return this.options.patBinding?.repository.listPatBindingConsumers() ?? [];
+	}
+
+	async registerPatBindingConsumer(input: {
+		callbackUrl: string;
+		consumerId: string;
+		consumerName: string;
+	}) {
+		if (!this.options.patBinding) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"PAT binding is unavailable",
+			);
+		}
+		const consumerId = input.consumerId.trim();
+		const consumerName = input.consumerName.trim();
+		let callback: URL;
+		try {
+			callback = new URL(input.callbackUrl);
+		} catch {
+			throw new OAuthProtocolError("invalid_request", "Invalid callback URL");
+		}
+		if (
+			!/^[a-z0-9][a-z0-9-]{2,79}$/.test(consumerId) ||
+			consumerName.length < 1 ||
+			consumerName.length > 100 ||
+			callback.protocol !== "https:" ||
+			callback.username ||
+			callback.password ||
+			callback.hash
+		) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Invalid PAT Consumer profile",
+			);
+		}
+		const secret = `conn_consumer_${opaqueToken()}`;
+		await this.options.patBinding.repository.registerPatBindingConsumer({
+			callbackUrl: callback.toString(),
+			consumerId,
+			consumerName,
+			secretHash: tokenHash(secret),
+		});
+		return {
+			callbackUrl: callback.toString(),
+			consumerId,
+			consumerName,
+			secret,
+		};
+	}
+
+	async disablePatBindingConsumer(consumerId: string) {
+		if (!this.options.patBinding) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"PAT binding is unavailable",
+			);
+		}
+		await this.options.patBinding.repository.disablePatBindingConsumer(
+			consumerId,
+		);
 	}
 
 	async issuePersonalAccessToken(input: {
