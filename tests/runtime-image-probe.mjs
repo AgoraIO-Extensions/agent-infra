@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -30,6 +30,11 @@ const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
 const requests = [];
 const processes = new Set();
+const toolCallId = "synthetic-runtime-tool";
+const toolDeniedPath = "/var/lib/agent-runtime/tool-probe-denied";
+const toolExistingPath = "/var/lib/agent-runtime/tool-probe-existing";
+let toolProbePending = false;
+let toolProbeOutput;
 let holdNextSelectedResponse = true;
 let releaseHeldSelectedResponse;
 let stage = "model-substitute";
@@ -95,6 +100,60 @@ function syntheticEvents(sequence) {
 function syntheticResponse(response, sequence) {
 	response.writeHead(200, { "content-type": "text/event-stream" });
 	for (const event of syntheticEvents(sequence)) response.write(sse(event));
+	response.end();
+}
+
+function syntheticToolResponse(response, sequence) {
+	const item = {
+		type: "function_call",
+		id: `synthetic-tool-${sequence}`,
+		call_id: toolCallId,
+		name: "exec_command",
+		arguments: JSON.stringify({
+			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath}`,
+			max_output_tokens: 100,
+			yield_time_ms: 1000,
+		}),
+	};
+	const events = [
+		{
+			type: "response.created",
+			response: {
+				id: `synthetic-response-${sequence}`,
+				status: "in_progress",
+				output: [],
+			},
+		},
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { ...item, arguments: "" },
+		},
+		{
+			type: "response.function_call_arguments.delta",
+			item_id: item.id,
+			output_index: 0,
+			delta: item.arguments,
+		},
+		{
+			type: "response.function_call_arguments.done",
+			item_id: item.id,
+			output_index: 0,
+			arguments: item.arguments,
+		},
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id: `synthetic-response-${sequence}`,
+				status: "completed",
+				output: [item],
+				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+			},
+		},
+	];
+	response.writeHead(200, { "content-type": "text/event-stream" });
+	for (const event of events) response.write(sse(event));
 	response.end();
 }
 
@@ -168,6 +227,16 @@ const model = createServer(async (request, response) => {
 		switch (request.url) {
 			case "/approved-default/v1/responses":
 			case "/approved-selected/v1/responses":
+				if (toolProbePending) {
+					assert.ok(body.tools.some((tool) => tool.name === "exec_command"));
+					toolProbePending = false;
+					syntheticToolResponse(response, requests.length);
+					return;
+				}
+				toolProbeOutput ??= body.input.find(
+					(item) =>
+						item.type === "function_call_output" && item.call_id === toolCallId,
+				)?.output;
 				syntheticResponse(response, requests.length);
 				return;
 			case "/hold-selected/v1/responses":
@@ -1010,6 +1079,36 @@ try {
 				restartedCancelledStatus.status === 409 &&
 				JSON.parse(restartedCancelledStatus.text).code ===
 					"RUNTIME_GENERATION_CANCELLED",
+		);
+		await runtime.stop();
+
+		stage = "native-sandboxed-tool-execution";
+		await writeFile(toolDeniedPath, "owner-write-control");
+		await unlink(toolDeniedPath);
+		await writeFile(toolExistingPath, "owner-truncate-control");
+		execFileSync("truncate", ["-s", "0", toolExistingPath], {
+			timeout: 5_000,
+			stdio: "ignore",
+		});
+		assert.equal(await readFile(toolExistingPath, "utf8"), "");
+		await writeFile(toolExistingPath, "owner-truncate-control");
+		runtime = await launch(
+			deployment(origin, "/var/lib/agent-runtime/tool-probe"),
+		);
+		toolProbePending = true;
+		await turn("tool-probe");
+		check(
+			"native-sandboxed-tool-execution",
+			typeof toolProbeOutput === "string" &&
+				toolProbeOutput.includes("Process exited with code 0") &&
+				toolProbeOutput.includes("runtime-tool-ok") &&
+				toolProbeOutput.includes("runtime-truncate-denied") &&
+				toolProbeOutput.includes("Permission denied"),
+		);
+		await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
+		assert.equal(
+			await readFile(toolExistingPath, "utf8"),
+			"owner-truncate-control",
 		);
 		await runtime.stop();
 

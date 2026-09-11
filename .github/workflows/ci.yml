@@ -51,22 +51,21 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Install pinned Codex for native recovery tests
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/codex-native"
-          curl --fail --location --retry 3 \
-            https://github.com/openai/codex/releases/download/rust-v0.153.0/codex-x86_64-unknown-linux-musl.tar.gz \
-            --output "$RUNNER_TEMP/codex-native/codex.tar.gz"
-          echo "35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e  $RUNNER_TEMP/codex-native/codex.tar.gz" | sha256sum --check --status
-          tar -xzf "$RUNNER_TEMP/codex-native/codex.tar.gz" -C "$RUNNER_TEMP/codex-native"
-          mv "$RUNNER_TEMP/codex-native/codex-x86_64-unknown-linux-musl" "$RUNNER_TEMP/codex-native/codex"
-          echo "$RUNNER_TEMP/codex-native" >> "$GITHUB_PATH"
+      - name: Build pinned Codex native test environment
+        run: >-
+          docker build --target builder -f apps/agent-runtime-host/Dockerfile
+          --tag agent-infra-codex-native-test .
 
       - name: Verify native Codex recovery
-        env:
-          AGENT_INFRA_CODEX_NATIVE_TEST: "1"
-        run: pnpm --filter @agent-infra/agent-runtime exec vitest run src/codex-native-recovery.test.ts
+        run: |
+          docker run --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/codex-native-recovery.test.ts --cache=false
 
       - name: Build applications
         run: pnpm build
