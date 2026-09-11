@@ -96,6 +96,7 @@ interface NativeReadSample {
 	threadStatusType?: string;
 	knownTurnMatches?: boolean | "unavailable";
 	foreignMarkerAbsent?: boolean | "unavailable";
+	foreignTurnAbsent?: boolean | "unavailable";
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -222,7 +223,9 @@ const activeThreadPoints = [
 
 function evaluateActiveThreadEvidence(samples: readonly NativeReadSample[]) {
 	const activeThreadLeak = samples.some(
-		(sample) => sample.foreignMarkerAbsent === false,
+		(sample) =>
+			sample.foreignMarkerAbsent === false ||
+			sample.foreignTurnAbsent === false,
 	);
 	const pointEvidence = activeThreadPoints.map((point) =>
 		samples.some(
@@ -231,7 +234,8 @@ function evaluateActiveThreadEvidence(samples: readonly NativeReadSample[]) {
 				sample.method === "thread/turns/list" &&
 				sample.category === "success" &&
 				sample.knownTurnMatches === true &&
-				sample.foreignMarkerAbsent === true,
+				sample.foreignMarkerAbsent === true &&
+				sample.foreignTurnAbsent === true,
 		),
 	);
 	return {
@@ -550,6 +554,7 @@ function nativeReadSample(
 	reply: RawNativeReply,
 	knownTurnId: string,
 	foreignMarker: string,
+	foreignTurnId?: string,
 ): NativeReadSample {
 	const markerObserved = containsMarker(
 		reply.category === "success" ? reply.result : reply.error,
@@ -560,6 +565,7 @@ function nativeReadSample(
 		method,
 		options,
 		category: reply.category,
+		foreignTurnAbsent: "unavailable",
 		...(markerObserved
 			? { foreignMarkerAbsent: false }
 			: reply.category === "success"
@@ -604,6 +610,12 @@ function nativeReadSample(
 		};
 	return {
 		...sample,
+		foreignTurnAbsent:
+			typeof foreignTurnId === "string" &&
+			foreignTurnId.length > 0 &&
+			foreignTurnId !== knownTurnId
+				? !data.some((turn) => isPlainRecord(turn) && turn.id === foreignTurnId)
+				: "unavailable",
 		knownTurnMatches: data.some(
 			(turn) => isPlainRecord(turn) && turn.id === knownTurnId,
 		),
@@ -621,6 +633,7 @@ it("requires canonical active-history samples at both lifecycle points", () => {
 			reply,
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		);
 	const validCanonical = activeThreadPoints.map((point) =>
 		canonical(point, {
@@ -658,6 +671,37 @@ it("requires canonical active-history samples at both lifecycle points", () => {
 			}),
 		]).status,
 	).toBe("unverified");
+});
+
+it("rejects foreign turn IDs even when canonical history omits item contents", () => {
+	const targetTurnId = "synthetic-target-turn";
+	const foreignTurnId = "synthetic-foreign-turn";
+	const samples = (ids: string[], controlId: string | undefined) =>
+		activeThreadPoints.map((point) =>
+			nativeReadSample(
+				point,
+				"thread/turns/list",
+				{ itemsView: "notLoaded" },
+				{ category: "success", result: { data: ids.map((id) => ({ id })) } },
+				targetTurnId,
+				"SYNTH_FOREIGN_MARKER",
+				controlId,
+			),
+		);
+	const clean = samples([targetTurnId], foreignTurnId);
+	expect(evaluateActiveThreadEvidence(clean).status).toBe("pass");
+	const leaked = samples([targetTurnId, foreignTurnId], foreignTurnId);
+	expect(leaked.every((sample) => sample.foreignMarkerAbsent === true)).toBe(
+		true,
+	);
+	expect(evaluateActiveThreadEvidence(leaked).status).toBe("fail");
+	for (const controlId of [undefined, "", targetTurnId]) {
+		expect(
+			evaluateActiveThreadEvidence(samples([targetTurnId], controlId)).status,
+		).toBe("unverified");
+	}
+	expect(JSON.stringify([...clean, ...leaked])).not.toContain(targetTurnId);
+	expect(JSON.stringify([...clean, ...leaked])).not.toContain(foreignTurnId);
 });
 
 it("fails malformed successful native results that contain a foreign marker", () => {
@@ -705,6 +749,7 @@ it("requires an observable raw marker control before accepting active history", 
 			{ category: "success", result },
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		);
 	const targetEvidence = evaluateActiveThreadEvidence(
 		activeThreadPoints.map((point) => canonical(point)),
@@ -725,6 +770,7 @@ it("requires an observable raw marker control before accepting active history", 
 			},
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		),
 	);
 	expect(gateRawActiveThreadEvidence(targetEvidence, observableControl)).toBe(
@@ -769,6 +815,7 @@ it("fails raw active history evidence when JSON-RPC errors contain a foreign mar
 			{ category: "success", result: { data: [{ id: knownTurnId }] } },
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		),
 	);
 	const control = rawForeignMarkerControl(
@@ -782,6 +829,7 @@ it("fails raw active history evidence when JSON-RPC errors contain a foreign mar
 			},
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		),
 	);
 	for (const error of [
@@ -795,6 +843,7 @@ it("fails raw active history evidence when JSON-RPC errors contain a foreign mar
 			receive({ id: 42, error }),
 			knownTurnId,
 			foreignMarker,
+			"synthetic-foreign-turn",
 		);
 		const evidence = evaluateActiveThreadEvidence([...healthy, sample]);
 		expect(sample.foreignMarkerAbsent).toBe(false);
@@ -1477,6 +1526,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		let activeDriver: CodexRuntimeDriver | undefined;
 		const rawNativeThreadIds = new Set<string>();
 		let rawActiveThreadControl = rawForeignMarkerControl(undefined);
+		let rawForeignTurnId: string | undefined;
 		let stage = "startup";
 		const record = (key: string, status: Status, reason: string) => {
 			scenarios[key] = { status, reason };
@@ -1653,6 +1703,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					turns,
 					turnId,
 					foreignMarker,
+					rawForeignTurnId,
 				),
 			];
 		}
@@ -1694,6 +1745,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				typeof turn.id !== "string"
 			)
 				return rawForeignMarkerControl(undefined, turnStarted.category);
+
+			rawForeignTurnId = turn.id;
 
 			// This control must hydrate the deliberately seeded marker. The separate
 			// two-point paginated observations still require their own real results.

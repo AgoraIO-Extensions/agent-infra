@@ -505,8 +505,8 @@ child.on("close", (code) => process.exit(code ?? 1));
 					if (!content.endsWith("\n"))
 						throw new NativeObservationError("incomplete");
 					return content
+						.slice(0, -1)
 						.split("\n")
-						.filter(Boolean)
 						.map((line) => JSON.parse(line) as NativeObservation);
 				} catch (error) {
 					if (attempt === 4) {

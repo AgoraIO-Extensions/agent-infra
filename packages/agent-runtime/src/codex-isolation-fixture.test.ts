@@ -268,6 +268,17 @@ it("reports terminal native observation failures without treating them as empty"
 		await expect(launcher.observations()).rejects.toMatchObject({
 			category: "invalid-json",
 		});
+		for (const content of [
+			"\n",
+			'\n{"method":"launch"}\n',
+			'{"method":"launch"}\n\n',
+			'{"method":"launch"}\n\n{"method":"launch"}\n',
+		]) {
+			await writeFile(observationFile, content);
+			await expect(launcher.observations()).rejects.toMatchObject({
+				category: "invalid-json",
+			});
+		}
 		await rm(observationFile);
 		await mkdir(observationFile);
 		await expect(launcher.observations()).rejects.toMatchObject({
