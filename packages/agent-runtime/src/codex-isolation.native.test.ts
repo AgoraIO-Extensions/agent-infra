@@ -196,6 +196,9 @@ function nativeRestartSessionEvidence(
 			entry.method === "thread/start" &&
 			!rawThreadIds.has(nativeThreadId(entry) ?? ""),
 	);
+	const startsBeforeRestart = observations
+		.slice(0, Math.max(0, restartLaunchIndex))
+		.filter((entry) => formalStarts.includes(entry));
 	const formalIds = formalStarts.map(nativeThreadId);
 	const resumed = formalIds.every(
 		(id) =>
@@ -209,6 +212,7 @@ function nativeRestartSessionEvidence(
 		status:
 			restartLaunchIndex >= 0 &&
 			formalStarts.length === 2 &&
+			startsBeforeRestart.length === 2 &&
 			new Set(formalIds).size === 2 &&
 			resumed
 				? ("pass" as const)
@@ -910,6 +914,21 @@ it("matches only the two formal sessions after an interleaved raw probe restart"
 	);
 
 	for (const observations of [
+		[
+			{ method: "launch" },
+			threadStart("formal-a"),
+			{ method: "launch" },
+			threadStart("formal-b"),
+			resumed("formal-a"),
+			resumed("formal-b"),
+		],
+		[
+			{ method: "launch" },
+			threadStart("formal-a"),
+			threadStart("formal-b"),
+			resumed("formal-a"),
+			resumed("formal-b"),
+		],
 		complete.filter((entry) =>
 			entry.method === "thread/resume"
 				? entry.params?.threadId !== "formal-b"
