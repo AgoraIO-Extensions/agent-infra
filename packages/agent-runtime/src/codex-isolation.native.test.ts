@@ -302,8 +302,8 @@ function crossFileModifyEvidence(input: {
 		return { status: "unverified", reason: "owner-write-control-failed" };
 	if (!completeOutput)
 		return { status: "unverified", reason: "foreign-write-output-incomplete" };
-	const outcomes = historyOutputLines(input.outputs).filter((line) =>
-		line.startsWith(`${input.outcomeMarker}=`),
+	const outcomes = historyOutputLines(input.outputs).filter(
+		(line) => line.length > 0,
 	);
 	if (
 		outcomes.length === 1 &&
@@ -364,7 +364,10 @@ function crossFileReadEvidence(input: {
 	if (!input.positiveControl)
 		return { status: "unverified", reason: "matching-positive-control-failed" };
 	const outcome = fileReadOutcome(input.outputs, input.outcomeMarker);
-	return outcome === "EACCES" || outcome === "EPERM"
+	const lines = historyOutputLines(input.outputs).filter(
+		(line) => line.length > 0,
+	);
+	return lines.length === 1 && (outcome === "EACCES" || outcome === "EPERM")
 		? { status: "pass", reason: "foreign-read-permission-denied" }
 		: { status: "unverified", reason: "foreign-read-denial-unclassified" };
 }
@@ -1233,6 +1236,8 @@ it.skipIf(process.platform === "win32")(
 			`${marker}=EACCES\n${marker}=READ`,
 			`${marker}=EACCES\n${marker}=EACCES`,
 			`${marker}=EACCES\ntruncated`,
+			`${marker}=EACCES\nunexpected error`,
+			`unexpected data\n${marker}=EPERM`,
 			`${marker}=EACCES\nProcess running with session ID test`,
 		]) {
 			expect(classify(output)).toBe("unverified");
@@ -1306,6 +1311,8 @@ it("accepts only a complete nonce-bound filesystem permission denial", () => {
 		["SYNTH_WRITE_RESULT_OTHER=EACCES"],
 		[`${outcomeMarker}=EACCES`, `${outcomeMarker}=APPLIED`],
 		[`${outcomeMarker}=EACCES`, `${outcomeMarker}=EACCES`],
+		[`${outcomeMarker}=EACCES`, "unexpected error"],
+		["unexpected data", `${outcomeMarker}=EPERM`],
 		[`prefix ${outcomeMarker}=EACCES`],
 		[`${outcomeMarker}=EACCES`, "Process running with session ID test"],
 	])
