@@ -34,11 +34,14 @@ describe("Connection Web 中文界面", () => {
 		const { rerender } = render(
 			<TokensView
 				busy={false}
+				consumers={[{ id: "consumer-rehoboam-ai", name: "RehoboamAI" }]}
 				issued={null}
 				onIssue={onIssue}
 				onRevoke={onRevoke}
 				tokens={[
 					{
+						consumerId: "consumer-rehoboam-ai",
+						consumerName: "RehoboamAI",
 						createdAt: "2026-08-25T00:00:00.000Z",
 						expiresAt: "2026-11-23T00:00:00.000Z",
 						lastUsedAt: null,
@@ -64,7 +67,10 @@ describe("Connection Web 中文界面", () => {
 		rerender(
 			<TokensView
 				busy={false}
+				consumers={[{ id: "consumer-rehoboam-ai", name: "RehoboamAI" }]}
 				issued={{
+					consumerId: "consumer-rehoboam-ai",
+					consumerName: "RehoboamAI",
 					expiresAt: "2026-11-23T00:00:00.000Z",
 					name: "Codex 本机",
 					token: "conn_pat_one_time_secret",

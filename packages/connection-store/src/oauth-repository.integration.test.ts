@@ -40,6 +40,7 @@ describe("PostgreSQL Connection OAuth", () => {
 				},
 				identityEnvironment: "test",
 				identityKey: Buffer.alloc(32, 19),
+				patConsumers: [{ id: "consumer-rehoboam-ai", name: "RehoboamAI" }],
 				repository,
 				resource: "https://connection.example/mcp",
 			});
@@ -54,6 +55,7 @@ describe("PostgreSQL Connection OAuth", () => {
 					username: "pat-other-stable-uid",
 				});
 				const first = await service.issuePersonalAccessToken({
+					consumerId: "consumer-rehoboam-ai",
 					name: `Codex ${randomUUID()}`,
 					sessionToken: browserLogin.sessionToken,
 				});
@@ -107,7 +109,7 @@ describe("PostgreSQL Connection OAuth", () => {
 					`Bearer ${oauthTokens.access_token}`,
 				);
 				expect(firstIdentity).toMatchObject({
-					consumerId: "consumer-portable-pat",
+					consumerId: "consumer-rehoboam-ai",
 				});
 				expect(firstIdentity.principalId).toBe(secondIdentity.principalId);
 				expect(oauthIdentity).toMatchObject({ consumerId: "consumer-codex" });

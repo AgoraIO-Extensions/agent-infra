@@ -1,0 +1,2 @@
+export const confluenceServerExecutorDigest =
+	"sha256:ed7cb9f7aca45612fa75aef9105c3000be647a5685022c8a789ec43f0ae20ebb";

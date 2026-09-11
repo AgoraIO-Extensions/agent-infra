@@ -3,11 +3,13 @@ import {
 	ConnectionOAuthService,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
+	rehoboamAiConsumer,
 } from "@agent-infra/connection-core";
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
 	PostgresBrowserCommandIdempotency,
 	PostgresConnectionOAuthRepository,
+	PostgresConnectionPatBindingRepository,
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
 import {
@@ -17,6 +19,10 @@ import {
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
+import {
+	ConfluenceServerAdapter,
+	confluenceServerConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/confluence-server";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
@@ -34,6 +40,9 @@ export async function createConnectionRuntimeApp(
 	const oauthRepository = new PostgresConnectionOAuthRepository(
 		config.databaseUrl,
 	);
+	const patBindingRepository = new PostgresConnectionPatBindingRepository(
+		config.databaseUrl,
+	);
 	const repository = new PostgresConnectionRepository(
 		config.databaseUrl,
 		config.credentialKey,
@@ -46,17 +55,20 @@ export async function createConnectionRuntimeApp(
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
+		confluenceServerConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog);
 	}
 	for (const consumer of [
 		config.directConsumer,
 		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
+		rehoboamAiConsumer,
 	]) {
 		for (const catalog of [
 			githubConnectionCatalog,
 			bitbucketServerConnectionCatalog,
 			jiraServerConnectionCatalog,
+			confluenceServerConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
@@ -71,6 +83,8 @@ export async function createConnectionRuntimeApp(
 		directory,
 		identityEnvironment: config.publicBaseUrl,
 		identityKey: config.identityKey,
+		patConsumers: [rehoboamAiConsumer],
+		patBinding: { repository: patBindingRepository },
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
@@ -82,9 +96,14 @@ export async function createConnectionRuntimeApp(
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
-	const jira = new JiraServerAdapter(
+	const atlassianTokenProvider = new JiraServerOAuthTokenProvider(
 		jiraFetch,
-		new JiraServerOAuthTokenProvider(jiraFetch, config.jiraToken),
+		config.jiraToken,
+	);
+	const jira = new JiraServerAdapter(jiraFetch, atlassianTokenProvider);
+	const confluence = new ConfluenceServerAdapter(
+		jiraFetch,
+		atlassianTokenProvider,
 	);
 	const service = new ConnectionApplicationService(
 		repository,
@@ -92,12 +111,14 @@ export async function createConnectionRuntimeApp(
 			[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 			[githubConnectionCatalog.providerReleaseId]: github,
 			[jiraServerConnectionCatalog.providerReleaseId]: jira,
+			[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		}),
 		new OpenConnectorGitHubOAuthAdapter(config.github),
-		{ bitbucket, jira },
+		{ bitbucket, confluence, jira },
 	);
 	return createConnectionApp({
 		accessTokens: oauth,
+		connectionWebUrl: config.publicBaseUrl,
 		directMcpEnabled: true,
 		githubProviderEnabled: false,
 		oauthServer: {
@@ -114,5 +135,11 @@ export async function createConnectionRuntimeApp(
 			service: oauth,
 		},
 		service,
+		supportedProviders: [
+			githubConnectionCatalog.provider,
+			bitbucketServerConnectionCatalog.provider,
+			jiraServerConnectionCatalog.provider,
+			confluenceServerConnectionCatalog.provider,
+		],
 	});
 }

@@ -299,8 +299,9 @@ Connection 对 Consumer 提供两个调用协议入口，并为管理操作提�
 - Direct MCP Client 使用 MCP，并通过 Connection OAuth access token 或 Connection PAT 认证。OAuth
   token 必须绑定服务端解析的 Principal、已注册 Consumer、ConsumerInstance 和 Connection audience；
   G-01 验证目标客户端支持 sender-constrained token 时还必须绑定实例公钥 thumbprint。Connection PAT
-  绑定 Principal、内建 Portable PAT Consumer 和 TOKEN instance；同一 PAT 跨客户端使用时共享撤销、
-  Grant 和审计边界。两种模式都不能从请求中的 Principal/Consumer/Instance 字段决定身份。
+  绑定 Principal、获准 PAT Consumer 和 TOKEN instance；未注册 profile 时固定使用内建 Portable PAT
+  Consumer。同一 PAT 跨客户端使用时共享撤销、Grant 和审计边界。两种模式都不能从请求中的
+  Principal/Consumer/Instance 字段决定身份。
 - Delegated Consumer 使用版本化 HTTP/OpenAPI、注册 workload 身份和短期委托断言。
 - Connection Web 和管理员工具使用用户态 HTTP/OpenAPI，不作为 Direct Action 调用协议。
 
@@ -325,6 +326,11 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
   PAT 名称，不再次接收 LDAP 凭证。
   PAT 明文只展示一次，数据库只保存 hash、Principal、token instance、有效期和撤销状态，不建立
   第二套账号。
+- 获准的具名 MCP Consumer 可以创建短期 PAT binding session。Connection 只接受该 Consumer 已注册
+  的固定 callback 和服务领取凭据；浏览器确认后，PAT 通过后端到后端的单次领取交付，opaque state、
+  callback URL、日志、审计和浏览器响应都不能包含 PAT。binding session 过期或消费后拒绝重放。
+- Consumer 注册由 Connection 管理员在独立 Connection Web 完成，callback、服务凭据 hash、状态和
+  轮换生命周期以 Connection DB 为准；不得为 RehoboamAI 或其他 Agent 增加专属环境变量。
 - LDAP egress 使用部署批准的固定 transport profile。当前 Agora 目录因不提供可用 TLS，批准仅在
   公司私网使用 `ldap://` direct bind；不允许请求选择 endpoint、自动 downgrade 或 fallback，目录
   服务提供可用 TLS 后必须迁移。
@@ -351,10 +357,11 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 Direct MCP Client 通过 MCP 只提交 Action 和参数。OAuth 模式从 access token 解析并校验 Principal、
 Consumer、ConsumerInstance、audience 和 recovery generation；新实例注册、sender constraint、refresh
-rotation 和实例撤销按目标客户端 G-01 profile 执行。PAT 模式按 token hash 解析 Principal、内建
-Portable PAT Consumer 和 TOKEN instance，并检查有效期、撤销、identity freshness 与 recovery
-generation。浏览器会话、请求中的 Consumer/Instance ID、公开 client ID 或客户端产品名不能作为上述
-证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
+rotation 和实例撤销按目标客户端 G-01 profile 执行。PAT 模式按 token hash 解析 Principal、获准
+PAT Consumer 和 TOKEN instance，并检查有效期、撤销、identity freshness 与 recovery
+generation。具名 PAT Consumer 和 TOKEN instance 还必须来自已注册 profile 或该 profile 的一次性
+binding session；浏览器会话、请求中的 Consumer/Instance ID、公开 client ID 或客户端产品名不能作为
+调用身份的证明。Direct Consumer 的 Actor 模式固定为 `NONE`，携带 Actor claim 时拒绝。
 
 Delegated Consumer 注册时固定选择 `NONE` 或 `REQUIRED` Actor 模式，再认证注册 workload 并通过 Connection token exchange 获取短期委托令牌。token exchange 必须独立取得受信 Principal evidence：交互式调用使用公司身份系统签发的当前用户断言；企微等非交互渠道按 14.2 校验来源事件签名、事件唯一 ID、防重放和发送者到公司 Principal 的映射后，由 Connection 配置的受信身份签发方签发短期断言。该 evidence 必须绑定来源事件、workload、Consumer、ConsumerInstance、Actor（如适用）、audience、期限和一次性 `jti`；Consumer 请求体中的映射结果不能替代它。身份签发方还必须校验 workload 与已注册 Consumer/Instance 的映射，不能根据 Consumer 自报字段签发。
 

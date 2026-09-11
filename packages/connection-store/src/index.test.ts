@@ -62,6 +62,7 @@ describe("Connection store migrations", () => {
 			"0023_consumer_declaration_provider_release_fk",
 			"0024_provider_release_integrity",
 			"0025_consumer_declaration_rolling_compatibility",
+			"0026_pat_binding_sessions",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

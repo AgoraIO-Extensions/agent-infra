@@ -28,7 +28,7 @@ describe("Connection Browser OpenAPI", () => {
 					additionalProperties: false,
 					properties: {
 						password: { maxLength: 1024, minLength: 1, type: "string" },
-						providerId: { const: "jira", type: "string" },
+						providerId: { enum: ["confluence", "jira"], type: "string" },
 						username: { maxLength: 256, minLength: 1, type: "string" },
 					},
 					required: ["providerId", "username", "password"],

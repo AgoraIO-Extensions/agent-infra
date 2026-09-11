@@ -557,6 +557,7 @@
 				"additionalProperties": false,
 				"required": ["name"],
 				"properties": {
+					"consumerId": { "type": "string", "minLength": 1, "maxLength": 512 },
 					"name": { "type": "string", "minLength": 1, "maxLength": 100 }
 				}
 			},
@@ -565,6 +566,8 @@
 				"additionalProperties": false,
 				"required": [
 					"tokenId",
+					"consumerId",
+					"consumerName",
 					"name",
 					"status",
 					"createdAt",
@@ -573,6 +576,8 @@
 				],
 				"properties": {
 					"tokenId": { "type": "string" },
+					"consumerId": { "type": "string" },
+					"consumerName": { "type": "string" },
 					"name": { "type": "string" },
 					"status": { "type": "string" },
 					"createdAt": { "type": "string", "format": "date-time" },
@@ -583,8 +588,12 @@
 			"TokenList": {
 				"type": "object",
 				"additionalProperties": false,
-				"required": ["tokens"],
+				"required": ["consumers", "tokens"],
 				"properties": {
+					"consumers": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/Consumer" }
+					},
 					"tokens": {
 						"type": "array",
 						"items": { "$ref": "#/components/schemas/TokenRecord" }
@@ -594,8 +603,16 @@
 			"IssuedToken": {
 				"type": "object",
 				"additionalProperties": false,
-				"required": ["name", "token", "expiresAt"],
+				"required": [
+					"consumerId",
+					"consumerName",
+					"name",
+					"token",
+					"expiresAt"
+				],
 				"properties": {
+					"consumerId": { "type": "string" },
+					"consumerName": { "type": "string" },
 					"name": { "type": "string" },
 					"token": { "type": "string" },
 					"tokenId": { "type": "string" },
@@ -791,7 +808,10 @@
 						"additionalProperties": false,
 						"required": ["providerId", "username", "password"],
 						"properties": {
-							"providerId": { "type": "string", "const": "jira" },
+							"providerId": {
+								"type": "string",
+								"enum": ["confluence", "jira"]
+							},
 							"username": {
 								"type": "string",
 								"minLength": 1,

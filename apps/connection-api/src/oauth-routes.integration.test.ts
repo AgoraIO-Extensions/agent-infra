@@ -119,7 +119,15 @@ describe("Connection OAuth HTTP flow", () => {
 					headers: { cookie },
 				});
 				expect(tokenList.status).toBe(200);
-				expect(await tokenList.json()).toEqual({ tokens: [] });
+				expect(await tokenList.json()).toEqual({
+					consumers: [
+						{
+							id: "consumer-portable-pat",
+							name: "Portable Connection PAT",
+						},
+					],
+					tokens: [],
+				});
 
 				const issued = await app.request("/api/v1/connection/tokens", {
 					body: JSON.stringify({

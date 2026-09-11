@@ -12,6 +12,7 @@ const REQUIRED_WORKFLOWS = [
   "codex-worker.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
+  "publish-ghcr.yml",
   "workflow-outcome.yml",
 ];
 const RUN_NAME_CONTRACTS = {
@@ -76,6 +77,10 @@ const RUN_NAME_CONTRACTS = {
       "github.event_name",
     ],
   },
+  "publish-ghcr.yml": {
+    operation: "publish-ghcr",
+    references: ["github.ref_name"],
+  },
   "workflow-outcome.yml": {
     operation: "workflow-outcome",
     references: [
@@ -122,6 +127,10 @@ const SOURCE_OUTCOME_CONTRACTS = {
   "pr-gates.yml": {
     needs: ["dispatch-issue-update", "gates"],
     operation: "pr-gates",
+  },
+  "publish-ghcr.yml": {
+    needs: ["publish"],
+    operation: "publish-ghcr",
   },
 };
 const SOURCE_OUTCOME_ENV_KEYS = [

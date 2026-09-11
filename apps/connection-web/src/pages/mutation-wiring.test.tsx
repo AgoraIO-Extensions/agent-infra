@@ -51,6 +51,16 @@ const api = vi.hoisted(() => ({
 			actions: [],
 			connections: [
 				{
+					actionVersionIds: ["confluence.get_page_by_id@v1"],
+					displayName: "Confluence",
+					externalAccount: "guoxianzhe",
+					id: "connection-confluence",
+					ownerType: "PERSONAL" as const,
+					providerId: "confluence",
+					requiresReconnect: false,
+					status: "ACTIVE",
+				},
+				{
 					actionVersionIds: [],
 					displayName: "GitHub",
 					externalAccount: "guoxianzhe",
@@ -152,8 +162,14 @@ const api = vi.hoisted(() => ({
 		],
 	})),
 	listTokens: vi.fn(async () => ({
+		consumers: [
+			{ id: "consumer-portable-pat", name: "Portable Connection PAT" },
+			{ id: "consumer-rehoboam-ai", name: "RehoboamAI" },
+		],
 		tokens: [
 			{
+				consumerId: "consumer-rehoboam-ai",
+				consumerName: "RehoboamAI",
 				createdAt: "2026-08-26T00:00:00.000Z",
 				expiresAt: "2026-11-26T00:00:00.000Z",
 				lastUsedAt: null,
@@ -186,6 +202,7 @@ import { TokensPage } from "./tokens-page";
 
 afterEach(() => {
 	cleanup();
+	window.history.replaceState({}, "", "/");
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
 });
@@ -204,6 +221,32 @@ function calls(mock: unknown) {
 }
 
 describe("Connection 管理 mutation wiring", () => {
+	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect",
+		);
+		renderPage(<ConnectionsPage />);
+
+		expect(
+			await screen.findByRole("heading", { name: "连接公司 Confluence" }),
+		).toBeTruthy();
+	});
+
+	it("根据 MCP 授权链接直接打开目标 Provider 的客户端授权界面", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=authorize",
+		);
+		renderPage(<ConnectionsPage />);
+
+		expect(
+			await screen.findByRole("heading", { name: "授权客户端" }),
+		).toBeTruthy();
+	});
+
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const popup = {
@@ -248,7 +291,9 @@ describe("Connection 管理 mutation wiring", () => {
 		await waitFor(() => expect(api.revokeGrant).toHaveBeenCalledOnce());
 		expect(calls(api.revokeGrant)[0]?.[0]).toBe("grant-codex");
 
-		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.click(
+			screen.getAllByRole("button", { name: "授权客户端" })[1] as HTMLElement,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "确认授权" });
 		fireEvent.click(screen.getByRole("button", { name: "确认授权" }));
@@ -280,6 +325,25 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
 			password: "jira-password",
 			providerId: "jira",
+			username: "guoxianzhe@agora.io",
+		});
+	});
+
+	it("连接页调用 Confluence Server credential API", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "连接 Confluence" }));
+		fireEvent.change(screen.getByLabelText("Confluence 密码"), {
+			target: { value: "confluence-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			password: "confluence-password",
+			providerId: "confluence",
 			username: "guoxianzhe@agora.io",
 		});
 	});
@@ -324,12 +388,18 @@ describe("Connection 管理 mutation wiring", () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		renderPage(<TokensPage />);
 		await screen.findByText("现有 Token");
+		fireEvent.change(screen.getByLabelText("客户端"), {
+			target: { value: "consumer-rehoboam-ai" },
+		});
 		fireEvent.change(screen.getByLabelText("令牌名称"), {
 			target: { value: "Codex 本机" },
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "签发令牌" }));
 		await waitFor(() => expect(api.issueToken).toHaveBeenCalledOnce());
-		expect(calls(api.issueToken)[0]?.[0]).toBe("Codex 本机");
+		expect(calls(api.issueToken)[0]?.[0]).toEqual({
+			consumerId: "consumer-rehoboam-ai",
+			name: "Codex 本机",
+		});
 		fireEvent.click(screen.getByRole("button", { name: "撤销 现有 Token" }));
 		await waitFor(() => expect(api.revokeToken).toHaveBeenCalledOnce());
 		expect(calls(api.revokeToken)[0]?.[0]).toBe("token-existing");

@@ -412,6 +412,8 @@ export class PostgresConnectionOAuthRepository
 			const session = await this.requireBrowserSession(sql, browserSessionHash);
 			const rows = await sql<
 				{
+					consumer_id: string;
+					consumer_name: string;
 					created_at: Date;
 					expires_at: Date;
 					last_used_at: Date | null;
@@ -421,21 +423,26 @@ export class PostgresConnectionOAuthRepository
 				}[]
 			>`
 				SELECT
-					id AS token_id,
-					name,
-					created_at,
-					expires_at,
-					last_used_at,
+					token.id AS token_id,
+					token.consumer_id,
+					consumer.display_name AS consumer_name,
+					token.name,
+					token.created_at,
+					token.expires_at,
+					token.last_used_at,
 					CASE
-						WHEN revoked_at IS NOT NULL THEN 'REVOKED'
-						WHEN expires_at <= now() THEN 'EXPIRED'
+						WHEN token.revoked_at IS NOT NULL THEN 'REVOKED'
+						WHEN token.expires_at <= now() THEN 'EXPIRED'
 						ELSE 'ACTIVE'
 					END AS status
-				FROM connection_personal_access_tokens
-				WHERE principal_id = ${session.principal_id}
-				ORDER BY created_at DESC, id DESC
+				FROM connection_personal_access_tokens token
+				JOIN connection_consumers consumer ON consumer.id = token.consumer_id
+				WHERE token.principal_id = ${session.principal_id}
+				ORDER BY token.created_at DESC, token.id DESC
 			`;
 			return rows.map((row) => ({
+				consumerId: row.consumer_id,
+				consumerName: row.consumer_name,
 				createdAt: row.created_at,
 				expiresAt: row.expires_at,
 				lastUsedAt: row.last_used_at,

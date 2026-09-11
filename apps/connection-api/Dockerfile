@@ -21,6 +21,7 @@ COPY apps/connection-api/src/index.ts apps/connection-api/src/index.ts
 COPY apps/connection-api/src/app.ts apps/connection-api/src/app.ts
 COPY apps/connection-api/src/oauth-routes.ts apps/connection-api/src/oauth-routes.ts
 COPY apps/connection-api/src/production-app.ts apps/connection-api/src/production-app.ts
+COPY apps/connection-api/src/runtime-app.ts apps/connection-api/src/runtime-app.ts
 COPY apps/connection-api/src/runtime-config.ts apps/connection-api/src/runtime-config.ts
 COPY apps/connection-api/tsconfig.json apps/connection-api/tsconfig.json
 COPY apps/connection-api/tsdown.config.ts apps/connection-api/tsdown.config.ts

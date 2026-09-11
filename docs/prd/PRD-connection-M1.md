@@ -126,14 +126,15 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 同一 Consumer 可以有多个 ConsumerInstance，例如同一客户端产品的不同设备或服务的不同 workload。
 - ConsumerInstance 可以单独退出登录或撤销，不改变 Consumer 的稳定身份。
 - Codex、Claude App、Cursor 等支持 OAuth 的客户端产品分别注册为 Direct Consumer，不能共享
-  OAuth Consumer 身份、用户会话或授权。PAT 模式统一使用 Connection 内建的 Portable PAT
-  Consumer，不信任调用方自报客户端产品身份。
+  OAuth Consumer 身份、用户会话或授权。通用 PAT 模式使用 Connection 内建的 Portable PAT
+  Consumer；只有经过管理员审核、固定回调和领取凭据的具名 MCP Consumer 才能签发绑定自身
+  Consumer 的 PAT。两种模式都不信任调用方自报客户端产品身份。
 - Direct MCP Consumer 可以通过 OAuth Authorization Code + PKCE 登录并使用 MCP access token
   调用，也可以使用用户登录 Connection 控制台后签发的 Connection PAT 调用。
   每次客户端安装登记为独立 ConsumerInstance，token 绑定 Principal、Consumer、ConsumerInstance
   和 Connection audience。不同实例不共享 session 或 refresh token，可分别撤销；同一 Principal
   的活跃实例共享该 Principal 已授予同一 Direct Consumer 的 Connection 与 Action 授权，不需要
-  重复执行 Provider OAuth 或逐设备重新确认。每枚 PAT 是 Portable PAT Consumer 下的独立 token
+  重复执行 Provider OAuth 或逐设备重新确认。每枚 PAT 是其获准 Consumer 下的独立 token
   instance；同一枚 PAT 可以部署到多个消费端，这些消费端共享授权、撤销和审计边界。需要独立边界
   时必须分别签发 PAT。调用方提交的 Principal/Consumer/Instance ID 不能决定身份。
   Delegated Service Consumer 通过 HTTP/OpenAPI，以注册 workload 身份代表当前 Principal 调用。
@@ -159,8 +160,15 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
   Principal、identity issuer、有效期、最近访问、撤销状态和 recovery generation；退出登录后失效。
 - PAT 明文只展示一次，可部署到 Codex、Claude、Agent Platform 或其他支持 Bearer token 的
   Consumer。Connection 只把 PAT 解析为当前 Principal 和 token instance，不接受消费端自报身份。
+- 获准的具名 MCP Consumer 可以发起一次性 PAT 绑定。用户仍须在 Connection 的已认证 HTTPS
+  页面确认；PAT 只能由已注册 Consumer 后端通过固定回调和短期单次领取协议取得，不能进入跳转
+  URL、浏览器历史或聊天消息。该协议不允许 Consumer 替用户完成 Connection 登录或确认。
 - PAT 可以撤销并有明确有效期。多端复用同一 PAT 时无法区分具体消费端，且任一泄露会影响所有
   复用端；需要单端审计和撤销时必须为每个部署分别签发 PAT。
+- RehoboamAI profile 为每个服务端确认的 `Rehoboam 用户 + Agent` 组合分别签发 PAT。一个 PAT
+  可以使用该 Principal 已分别连接并授权给 RehoboamAI 的多个 Provider；新增 Provider 需要建立
+  Provider Connection 和 Consumer 授权，但不需要重新签发 PAT。Rehoboam 用户或 Agent 的自报字段
+  不能进入 Connection Action 参数或替换 PAT 解析出的 Principal/Consumer/Instance。
 - PAT 只授权访问 Connection，不能读取或导出 GitHub、Jira 等 Provider Credential。
 
 ## 7. Connection 类型与多账号
@@ -306,7 +314,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | Delegated Consumer | Agent Platform 通过通用 Delegated 契约调用同一 Action，不成为授权权威 |
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
-| 私有 Provider | 员工可用公司 Bitbucket Server PAT 和 Jira Server 凭证建立个人 Connection；同一 Consumer 的 GitHub、Bitbucket 与 Jira 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
+| 私有 Provider | 员工可用公司 Bitbucket Server PAT、Jira Server 凭证和 Confluence Server 凭证建立个人 Connection；同一 Consumer 的 GitHub、Bitbucket、Jira 与 Confluence 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
 | 多 Credential | 同一 Connection 可完成 refresh/rotation 并保留版本历史，新调用只使用 current 版本 |
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |
 | 授权与撤销 | 用户可以授权或撤销 Consumer/Actor；其他 Consumer 的独立授权不受影响 |

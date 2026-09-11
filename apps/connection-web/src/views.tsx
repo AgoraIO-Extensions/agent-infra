@@ -1,5 +1,6 @@
 import type {
 	Connection,
+	Consumer,
 	IssuedToken,
 	TokenRecord,
 } from "@agent-infra/connection-contracts";
@@ -93,6 +94,7 @@ export function EmptyState(props: { children: ReactNode; title: string }) {
 
 export function TokensView(props: {
 	busy: boolean;
+	consumers: Consumer[];
 	issued: IssuedToken | null;
 	onCopy?: () => void;
 	onIssue: (event: FormEvent<HTMLFormElement>) => void;
@@ -103,6 +105,16 @@ export function TokensView(props: {
 		<div className="content-stack">
 			<section className="toolbar-section">
 				<form className="inline-form" onSubmit={props.onIssue}>
+					<div>
+						<label htmlFor="token-consumer">客户端</label>
+						<select id="token-consumer" name="consumerId" required>
+							{props.consumers.map((consumer) => (
+								<option key={consumer.id} value={consumer.id}>
+									{consumer.name}
+								</option>
+							))}
+						</select>
+					</div>
 					<div className="field-grow">
 						<label htmlFor="token-name">令牌名称</label>
 						<input
@@ -157,6 +169,7 @@ export function TokensView(props: {
 							<thead>
 								<tr>
 									<th>名称</th>
+									<th>客户端</th>
 									<th>状态</th>
 									<th>创建时间</th>
 									<th>到期时间</th>
@@ -167,6 +180,7 @@ export function TokensView(props: {
 								{props.tokens.map((token) => (
 									<tr key={token.tokenId}>
 										<td className="primary-cell">{token.name}</td>
+										<td>{token.consumerName}</td>
 										<td>
 											<Status value={token.status} />
 										</td>
@@ -295,7 +309,12 @@ function statusLabel(value: string) {
 
 export function providerLabel(value: string) {
 	return (
-		{ bitbucket: "Bitbucket", github: "GitHub", jira: "Jira" }[value] ?? value
+		{
+			bitbucket: "Bitbucket",
+			confluence: "Confluence",
+			github: "GitHub",
+			jira: "Jira",
+		}[value] ?? value
 	);
 }
 

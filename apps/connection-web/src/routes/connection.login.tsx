@@ -1,43 +1,15 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import type { FormEvent } from "react";
+import { createFileRoute } from "@tanstack/react-router";
 
-import { ConnectionApiError, connectionApi } from "../api";
-import { LoginView } from "../views";
+import { LoginPage } from "../pages/login-page";
 
 export const Route = createFileRoute("/connection/login")({
-	component: LoginPage,
+	component: LoginRoute,
+	validateSearch: (search: Record<string, unknown>) => ({
+		returnTo: typeof search.returnTo === "string" ? search.returnTo : undefined,
+	}),
 });
 
-function LoginPage() {
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
-	const mutation = useMutation({
-		mutationFn: connectionApi.login,
-		onSuccess: async (session) => {
-			queryClient.setQueryData(["session"], session);
-			await navigate({ to: "/connection/connections" });
-		},
-	});
-	const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-		event.preventDefault();
-		const data = new FormData(event.currentTarget);
-		mutation.mutate({
-			password: String(data.get("password") ?? ""),
-			username: String(data.get("username") ?? ""),
-		});
-	};
-	return (
-		<LoginView
-			busy={mutation.isPending}
-			error={
-				mutation.error instanceof ConnectionApiError
-					? mutation.error.message
-					: mutation.isError
-						? "登录失败，请稍后重试"
-						: null
-			}
-			onSubmit={onSubmit}
-		/>
-	);
+function LoginRoute() {
+	const { returnTo } = Route.useSearch();
+	return <LoginPage returnTo={returnTo} />;
 }

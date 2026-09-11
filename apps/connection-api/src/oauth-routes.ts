@@ -78,7 +78,7 @@ function isCodexLoopbackRedirect(value: unknown) {
 		Number.isInteger(port) &&
 		port >= 1_024 &&
 		port <= 65_535 &&
-		/^\/callback\/[A-Za-z0-9_-]{8,128}$/.test(url.pathname) &&
+		/^\/callback(?:\/[A-Za-z0-9_-]{8,128})?$/.test(url.pathname) &&
 		!url.username &&
 		!url.password &&
 		!url.search &&
@@ -168,6 +168,50 @@ ${
 </main>
 </body>
 </html>`;
+}
+
+function patBindingPage(input: {
+	consumerName: string;
+	expiresAt: Date;
+	name: string;
+	state: string;
+}) {
+	return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>授权 ${html(input.consumerName)}</title>
+<style>
+:root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; color: #171717; background: #f5f5f4; }
+* { box-sizing: border-box; }
+body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; }
+main { width: min(100%, 420px); }
+h1 { margin: 0 0 12px; font-size: 24px; font-weight: 650; letter-spacing: 0; }
+p { margin: 0 0 16px; color: #57534e; font-size: 14px; line-height: 1.5; }
+strong { color: #171717; }
+button { width: 100%; height: 42px; border: 0; border-radius: 6px; background: #166534; color: white; font: inherit; font-weight: 650; cursor: pointer; }
+button:hover { background: #14532d; }
+</style>
+</head>
+<body>
+<main>
+<h1>授权 ${html(input.consumerName)}</h1>
+<p>将为当前 Connection 账号签发独立访问令牌：<strong>${html(input.name)}</strong>。</p>
+<p>该令牌可以使用你已授权给 ${html(input.consumerName)} 的多个连接器；外部账号凭据不会交给客户端。</p>
+<p>本链接将在 ${html(input.expiresAt.toISOString())} 失效。</p>
+<form method="post" action="/connection/pat-bindings/confirm">
+<input type="hidden" name="state" value="${html(input.state)}">
+<button type="submit">确认并返回 RehoboamAI</button>
+</form>
+</main>
+</body>
+</html>`;
+}
+
+function bearerSecret(context: Context) {
+	const authorization = context.req.header("authorization") ?? "";
+	return authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
 }
 
 function browserAccountProjection(account: {
@@ -583,6 +627,128 @@ export function createConnectionOAuthApp(
 		return context.body(null, 204);
 	});
 
+	app.post("/api/v1/connection/pat-bindings", async (context) => {
+		const body = (await context.req.json().catch(() => undefined)) as
+			| Record<string, unknown>
+			| undefined;
+		if (
+			!body ||
+			Object.keys(body).some(
+				(key) =>
+					key !== "consumerId" && key !== "name" && key !== "principalHint",
+			) ||
+			typeof body.consumerId !== "string" ||
+			typeof body.name !== "string" ||
+			typeof body.principalHint !== "string"
+		) {
+			throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
+		}
+		const created = await browserCommand(
+			options,
+			context,
+			{
+				operation: "connection.pat-binding.create",
+				request: body,
+				subject: `pat-binding-client:${body.consumerId}`,
+			},
+			() =>
+				options.service.createPersonalAccessTokenBinding({
+					consumerId: body.consumerId as string,
+					name: body.name as string,
+					principalHint: body.principalHint as string,
+					secret: bearerSecret(context),
+				}),
+		);
+		context.header("cache-control", "no-store");
+		return context.json(created, 201);
+	});
+
+	app.get("/connection/pat-bindings/:state", async (context) => {
+		const state = context.req.param("state");
+		let binding: Awaited<
+			ReturnType<ConnectionOAuthService["getPersonalAccessTokenBinding"]>
+		>;
+		try {
+			binding = await options.service.getPersonalAccessTokenBinding(state);
+		} catch (error) {
+			if (!(error instanceof OAuthProtocolError)) throw error;
+			secureHtmlHeaders(context);
+			return context.html(
+				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><body><p>该授权链接已失效，请返回 RehoboamAI 重新发起。</p></body></html>',
+				404,
+			);
+		}
+		const session = await currentBrowserAccount(context);
+		if (!session) {
+			const login = new URL("/connection/login", options.issuer);
+			login.searchParams.set("returnTo", context.req.path);
+			return context.redirect(login.toString(), 302);
+		}
+		secureHtmlHeaders(context);
+		return context.html(
+			patBindingPage({
+				consumerName: binding.consumerName,
+				expiresAt: binding.expiresAt,
+				name: binding.name,
+				state,
+			}),
+		);
+	});
+
+	app.post("/connection/pat-bindings/confirm", async (context) => {
+		requireSameOrigin(context.req.raw.headers, options.issuer);
+		const form = await context.req.formData();
+		const state = formValue(form, "state");
+		const session = await currentBrowserAccount(context);
+		if (!session) {
+			const login = new URL("/connection/login", options.issuer);
+			login.searchParams.set(
+				"returnTo",
+				`/connection/pat-bindings/${encodeURIComponent(state)}`,
+			);
+			return context.redirect(login.toString(), 302);
+		}
+		const confirmed = await options.service.confirmPersonalAccessTokenBinding({
+			sessionToken: session.sessionToken,
+			state,
+		});
+		return context.redirect(confirmed.callbackUrl, 303);
+	});
+
+	app.post(
+		"/api/v1/connection/pat-bindings/:bindingId/claim",
+		async (context) => {
+			const body = (await context.req.json().catch(() => undefined)) as
+				| Record<string, unknown>
+				| undefined;
+			if (
+				!body ||
+				Object.keys(body).some((key) => key !== "consumerId") ||
+				typeof body.consumerId !== "string"
+			) {
+				throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
+			}
+			const bindingId = context.req.param("bindingId");
+			const claimed = await browserCommand(
+				options,
+				context,
+				{
+					operation: "connection.pat-binding.claim",
+					request: { bindingId, consumerId: body.consumerId },
+					subject: `pat-binding-client:${body.consumerId}`,
+				},
+				() =>
+					options.service.claimPersonalAccessTokenBinding({
+						bindingId,
+						consumerId: body.consumerId as string,
+						secret: bearerSecret(context),
+					}),
+			);
+			context.header("cache-control", "no-store");
+			return context.json({ issued: claimed });
+		},
+	);
+
 	app.get("/api/v1/connection/tokens", async (context) => {
 		const session = await currentBrowserAccount(context);
 		if (!session) {
@@ -594,6 +760,7 @@ export function createConnectionOAuthApp(
 		}
 		context.header("cache-control", "no-store");
 		return context.json({
+			consumers: options.service.listPersonalAccessTokenConsumers(),
 			tokens: await options.service.listPersonalAccessTokens(
 				session.sessionToken,
 			),
@@ -626,6 +793,7 @@ export function createConnectionOAuthApp(
 				},
 				() =>
 					options.service.issuePersonalAccessToken({
+						consumerId: body.consumerId,
 						name: body.name,
 						sessionToken: session.sessionToken,
 					}),
@@ -776,17 +944,20 @@ export function createConnectionOAuthApp(
 						request: body,
 						subject: session.account.principalId,
 					},
-					() =>
-						management.service.connectProviderCredential(
-							session.account.principalId,
-							body.providerId,
-							body.providerId === "jira"
-								? JSON.stringify({
+					() => {
+						const credential =
+							body.providerId === "bitbucket"
+								? body.accessToken
+								: JSON.stringify({
 										password: body.password,
 										username: body.username,
-									})
-								: body.accessToken,
-						),
+									});
+						return management.service.connectProviderCredential(
+							session.account.principalId,
+							body.providerId,
+							credential,
+						);
+					},
 				),
 			);
 			if (connected instanceof Response) return connected;
@@ -913,6 +1084,77 @@ export function createConnectionOAuthApp(
 				);
 				if (disconnected instanceof Response) return disconnected;
 				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/pat-consumers", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			context.header("cache-control", "no-store");
+			return context.json({
+				consumers: await options.service.listPatBindingConsumers(),
+			});
+		});
+
+		app.post("/api/v1/connection/admin/pat-consumers", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const body = (await context.req.json().catch(() => undefined)) as
+				| Record<string, unknown>
+				| undefined;
+			if (
+				!body ||
+				Object.keys(body).some(
+					(key) =>
+						key !== "consumerId" &&
+						key !== "consumerName" &&
+						key !== "callbackUrl",
+				) ||
+				typeof body.consumerId !== "string" ||
+				typeof body.consumerName !== "string" ||
+				typeof body.callbackUrl !== "string"
+			) {
+				throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
+			}
+			const issued = await browserCommand(
+				options,
+				context,
+				{
+					operation: "connection.pat-consumer.register",
+					replayable: false,
+					request: body,
+					subject: session.account.principalId,
+				},
+				() =>
+					options.service.registerPatBindingConsumer({
+						callbackUrl: body.callbackUrl as string,
+						consumerId: body.consumerId as string,
+						consumerName: body.consumerName as string,
+					}),
+			);
+			context.header("cache-control", "no-store");
+			return context.json({ issued }, 201);
+		});
+
+		app.delete(
+			"/api/v1/connection/admin/pat-consumers/:consumerId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const consumerId = context.req.param("consumerId");
+				await browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.pat-consumer.disable",
+						request: { consumerId },
+						subject: session.account.principalId,
+					},
+					() => options.service.disablePatBindingConsumer(consumerId),
+				);
 				return context.body(null, 204);
 			},
 		);

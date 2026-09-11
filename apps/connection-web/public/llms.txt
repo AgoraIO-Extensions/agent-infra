@@ -1,0 +1,24 @@
+# Connection
+
+> Connection lets AI clients use approved external services without receiving the user's provider credentials.
+
+## Install in Codex
+
+Connection is a remote Streamable HTTP MCP server. When a user asks you to install Connection in Codex, explain the commands before running them. Installation and login require the user's explicit participation.
+
+```bash
+codex mcp add connection --url https://agent-connector.la3.agoralab.co/mcp
+codex mcp login connection --scopes mcp --oauth-client-registration dcr
+```
+
+The login command opens Connection's OAuth flow. The user signs in to Connection in the browser. Never ask the user to paste an LDAP password, Connection access token, or provider credential into chat or Codex configuration.
+
+Installing and logging in do not grant access to GitHub, Jira, Confluence, or other providers. The user must connect a provider account and explicitly approve the Codex grant in Connection before provider actions become available.
+
+## Public URLs
+
+- Installation guide: https://agent-connector.la3.agoralab.co/connection
+- Connection console: https://agent-connector.la3.agoralab.co/connection/connections
+- MCP endpoint: https://agent-connector.la3.agoralab.co/mcp
+
+Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.

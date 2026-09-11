@@ -1,0 +1,87 @@
+name: Publish container images
+run-name: >-
+  ${{ format('{0} | publish-ghcr | push', github.ref_name) }}
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: connection-api
+            dockerfile: apps/connection-api/Dockerfile
+          - name: connection-web
+            dockerfile: apps/connection-web/Dockerfile
+          - name: platform-api
+            dockerfile: apps/platform-api/Dockerfile
+          - name: platform-worker
+            dockerfile: apps/platform-worker/Dockerfile
+          - name: web
+            dockerfile: apps/web/Dockerfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/agoraio-extensions/agent-infra/${{ matrix.name }}:${{ github.ref_name }}
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [publish]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ""
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ github.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: publish-ghcr
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: "Tag ${{ github.ref_name }}"
+          SUMMARY_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

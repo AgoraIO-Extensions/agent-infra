@@ -11,6 +11,7 @@
 		"check-types": "tsc --noEmit",
 		"test": "vitest run src --no-file-parallelism",
 		"test:bitbucket:e2e": "tsx scripts/bitbucket-connection-e2e.ts",
+		"test:confluence:e2e": "tsx scripts/confluence-connection-e2e.ts",
 		"test:jira:e2e": "tsx scripts/jira-connection-e2e.ts"
 	},
 	"dependencies": {

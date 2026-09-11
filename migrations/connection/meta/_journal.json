@@ -183,6 +183,13 @@
       "when": 1787731204000,
       "tag": "0025_consumer_declaration_rolling_compatibility",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789099200000,
+      "tag": "0026_pat_binding_sessions",
+      "breakpoints": true
     }
   ]
 }

@@ -92,6 +92,7 @@ test("the production Connection builder excludes development fixture source", as
 	assert.doesNotMatch(dockerfile, /^COPY . .$/m);
 	assert.doesNotMatch(dockerfile, /fixture|stub/i);
 	assert.doesNotMatch(dockerfile, /src\/conformance(?:-app)?\.ts/);
+	assert.match(dockerfile, /src\/runtime-app\.ts/);
 	assert.doesNotMatch(dockerfile, /Dockerfile.development/);
 	assert.ok(
 		dockerfile.includes("COPY migrations/connection migrations/connection"),
@@ -128,7 +129,14 @@ test("local Compose exposes only the real PostgreSQL dependency", async () => {
 test("Connection Web preserves every same-origin API route family", async () => {
 	const nginx = await readFile("apps/connection-web/nginx.conf", "utf8");
 	const vite = await readFile("apps/connection-web/vite.config.ts", "utf8");
+	const installPage = await readFile(
+		"apps/connection-web/public/connection/index.html",
+		"utf8",
+	);
+	const llms = await readFile("apps/connection-web/public/llms.txt", "utf8");
+	const appHtml = await readFile("apps/connection-web/index.html", "utf8");
 	const directSessionApi = nginx.indexOf("location ^~ /connection/v1/");
+	const patBindingApi = nginx.indexOf("location ^~ /connection/pat-bindings/");
 	const spaFallback = nginx.indexOf("location /connection/");
 
 	assert.ok(directSessionApi >= 0, "nginx must proxy the Direct Session API");
@@ -136,5 +144,25 @@ test("Connection Web preserves every same-origin API route family", async () => 
 		directSessionApi < spaFallback,
 		"the Direct Session API must be matched before the Connection SPA",
 	);
+	assert.ok(patBindingApi >= 0, "nginx must proxy the PAT binding API");
+	assert.ok(
+		patBindingApi < spaFallback,
+		"the PAT binding API must be matched before the Connection SPA",
+	);
 	assert.match(vite, /"\/connection\/v1"/);
+	assert.match(vite, /"\/connection\/pat-bindings"/);
+	assert.match(nginx, /absolute_redirect off;/);
+	assert.match(nginx, /location = \/connection/);
+	assert.match(
+		installPage,
+		/codex mcp add connection --url https:\/\/agent-connector\.la3\.agoralab\.co\/mcp/,
+	);
+	assert.match(
+		installPage,
+		/codex mcp login connection --scopes mcp --oauth-client-registration dcr/,
+	);
+	assert.match(installPage, /href="\/llms\.txt"/);
+	assert.match(appHtml, /href="\/llms\.txt"/);
+	assert.match(llms, /Installing and logging in do not grant access/);
+	assert.doesNotMatch(llms, /bearer[_ -]?token|password\s*=/i);
 });

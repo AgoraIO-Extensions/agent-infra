@@ -28,8 +28,14 @@ export function TokensPage() {
 	const onIssue = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		const form = event.currentTarget;
-		const name = String(new FormData(form).get("name") ?? "");
-		issue.mutate(name, { onSuccess: () => form.reset() });
+		const data = new FormData(form);
+		issue.mutate(
+			{
+				consumerId: String(data.get("consumerId") ?? ""),
+				name: String(data.get("name") ?? ""),
+			},
+			{ onSuccess: () => form.reset() },
+		);
 	};
 
 	return (
@@ -43,6 +49,7 @@ export function TokensPage() {
 			) : tokens.isError ? null : (
 				<TokensView
 					busy={issue.isPending}
+					consumers={tokens.data?.consumers ?? []}
 					issued={issued}
 					onCopy={
 						issued

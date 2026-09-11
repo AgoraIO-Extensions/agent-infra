@@ -7,7 +7,7 @@ describe("Connection Web 表单校验", () => {
 		expect(() =>
 			connectionApi.login({ password: "password", username: "   " }),
 		).toThrow("请填写有效的公司账号和密码");
-		expect(() => connectionApi.issueToken("   ")).toThrow(
+		expect(() => connectionApi.issueToken({ name: "   " })).toThrow(
 			"令牌名称需为 1 到 100 个字符",
 		);
 		expect(() => connectionApi.createSharedScope("   ")).toThrow(
