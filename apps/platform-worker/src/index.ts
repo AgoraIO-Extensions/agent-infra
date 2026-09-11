@@ -1,4 +1,10 @@
 import { pathToFileURL } from "node:url";
+import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
+
+export * from "./kubernetes-client.js";
+export * from "./kubernetes-runtime-adapter.js";
+export * from "./workload-runtime.js";
+export * from "./workload-worker.js";
 
 import {
 	type ConversationDispatchAuthorizationPortV1,
@@ -164,9 +170,82 @@ export function startPlatformWorker(options: StartOptions = {}) {
 	};
 }
 
+export async function startPlatformWorkerFromDeploymentV1(
+	options: {
+		readonly startPrimary?: () => { stop(): void | Promise<void> };
+		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
+	} = {},
+) {
+	const primary = (options.startPrimary ?? startPlatformWorker)();
+	try {
+		const workload = await (
+			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
+		)();
+		let stopping: Promise<void> | undefined;
+		return {
+			stop() {
+				stopping ??= Promise.allSettled([
+					Promise.resolve().then(() => primary.stop()),
+					Promise.resolve().then(() => workload.stop()),
+				]).then((results) => {
+					const failure = results.find(
+						(result): result is PromiseRejectedResult =>
+							result.status === "rejected",
+					);
+					if (failure) throw failure.reason;
+				});
+				return stopping;
+			},
+		};
+	} catch (error) {
+		try {
+			await primary.stop();
+		} catch {
+			// Preserve the workload assembly error; primary cleanup is best effort here.
+		}
+		throw error;
+	}
+}
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-	const worker = startPlatformWorker();
-	process.once("SIGINT", worker.stop);
-	process.once("SIGTERM", worker.stop);
+	const shutdownDeadlineMs = 10_000;
+	const termination = new AbortController();
+	const primary = startPlatformWorker();
+	const workerPromise = startPlatformWorkerFromDeploymentV1({
+		startPrimary: () => primary,
+		startWorkload: () =>
+			startPlatformWorkloadWorkerFromDeploymentV1(
+				undefined,
+				termination.signal,
+			),
+	});
+	let stopping = false;
+	const stop = () => {
+		if (stopping) return;
+		stopping = true;
+		const deadline = setTimeout(() => process.exit(1), shutdownDeadlineMs);
+		deadline.unref();
+		termination.abort();
+		let primaryStop: Promise<void>;
+		try {
+			primaryStop = Promise.resolve(primary.stop());
+		} catch {
+			primaryStop = Promise.reject();
+		}
+		void Promise.all([
+			primaryStop,
+			workerPromise.then((worker) => worker.stop()),
+		]).then(
+			() => clearTimeout(deadline),
+			() => {
+				process.exitCode = 1;
+			},
+		);
+	};
+	process.on("SIGINT", stop);
+	process.on("SIGTERM", stop);
+	void workerPromise.catch(() => {
+		process.exitCode = 1;
+	});
 }

@@ -23,7 +23,7 @@
 		"dev:platform-api": "turbo run dev -F @agent-infra/platform-api",
 		"dev:platform-worker": "turbo run dev -F @agent-infra/platform-worker",
 		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
-		"docker:build": "docker compose build",
+		"docker:build": "SOURCE_COMMIT=${SOURCE_COMMIT:-$(git rev-parse HEAD)} docker compose --profile runtime build",
 		"docker:up": "docker compose up -d --build",
 		"docker:down": "docker compose down",
 		"docker:logs": "docker compose logs -f"

@@ -40,6 +40,8 @@ async function fixture() {
 			"utf8",
 		),
 	);
+	values.platformWorker.deploymentModule =
+		"file:///app/deployment/platform-worker.mjs";
 	const images = {};
 	for (const [index, key] of imageKeys.entries()) {
 		const digest = `sha256:${String(index + 1).repeat(64)}`;

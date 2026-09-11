@@ -45,6 +45,8 @@ describe("platform-core package surface", () => {
 			"PlatformIdempotencyError",
 			"SecretActivationError",
 			"SecretKeyRotationError",
+			"WorkloadPreflightRejectedErrorV1",
+			"cleanupUnactivatedSecretCandidateV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",
@@ -54,6 +56,7 @@ describe("platform-core package surface", () => {
 			"createConversationExecutionUseCaseV1",
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
+			"createWorkloadReconciliationV1",
 			"immutableSecretNameV1",
 			"parseConversationPersistedEventPayloadV1",
 			"platformIdempotencyV1",
@@ -63,6 +66,7 @@ describe("platform-core package surface", () => {
 			"snapshotAgentManagementWritePlanV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
+			"workloadManagementObservationV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href

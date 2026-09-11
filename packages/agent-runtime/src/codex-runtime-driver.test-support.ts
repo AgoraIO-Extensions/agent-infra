@@ -151,10 +151,18 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 					});
 					return;
 				}
+				const turnId = this.currentTurnId();
 				this.respond(frame.id, {
 					turn: {
-						id: this.currentTurnId(),
+						id: turnId,
 						status: "inProgress",
+					},
+				});
+				this.push({
+					method: "turn/started",
+					params: {
+						threadId: "thread-opaque",
+						turn: { id: turnId, status: "inProgress", items: [] },
 					},
 				});
 				return;
@@ -339,8 +347,9 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 	const driver = await openCodexRuntimeDriverForTest(
 		{
 			path,
-			model: "gpt-5.3-codex",
-			reasoningEffort: "high",
+			configVersion: "synthetic-config-1",
+			defaultModelOptionId: "model-option-primary",
+			defaultReasoningLevel: "high",
 			modelOptions: [
 				{
 					modelOptionId: "model-option-primary",

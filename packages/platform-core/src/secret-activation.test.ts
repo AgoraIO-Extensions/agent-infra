@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeSecretActivationKubernetesV1 } from "./fake-secret-activation.js";
 import { FakeSecretActivationDecryptorV1 } from "./fake-secret-decryptor.js";
 import { secretActivationKubernetesConformanceV1 } from "./secret-activation.conformance.js";
 import {
+	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
 	type SecretActivationAuditIntentV1,
 	type SecretActivationCandidateV1,
@@ -166,6 +167,16 @@ function command() {
 		configRevision: candidate.configRevision,
 		workerId: "worker_01",
 		traceId: "trace_01",
+	};
+}
+
+function cleanupCommand() {
+	return {
+		...command(),
+		ownerType: candidate.ownerType,
+		ownerId: candidate.ownerId,
+		name: candidate.name,
+		wrappingKeyVersion: candidate.wrappingKeyVersion,
 	};
 }
 
@@ -543,5 +554,167 @@ describe("Secret candidate activation", () => {
 			schemaVersion: 1,
 			outcome: "stale",
 		});
+	});
+});
+
+describe("unactivated Secret candidate cleanup", () => {
+	it.each(["pending", "applying", "observed"] as const)(
+		"reclaims one exact current %s candidate and leaves retryable failure state",
+		async (lifecycleState) => {
+			const store = new FakeActivationStore({
+				candidate: { ...candidate, lifecycleState },
+			});
+			const removed: SecretActivationCandidateV1[] = [];
+			await expect(
+				cleanupUnactivatedSecretCandidateV1(
+					{
+						store,
+						kubernetes: {
+							async removeCandidate(candidate) {
+								removed.push(candidate);
+								return true;
+							},
+						},
+					},
+					cleanupCommand(),
+				),
+			).resolves.toBe(true);
+			expect(removed).toHaveLength(1);
+			expect(removed[0]).toEqual({ ...candidate, lifecycleState });
+			expect(store.currentCandidate).toMatchObject({
+				lifecycleState: "failed",
+				failureRetryable: true,
+			});
+			expect(store.currentError).toMatchObject({
+				code: "SECRET_ACTIVATION_FAILED",
+				retryable: true,
+			});
+		},
+	);
+
+	it("reclaims the exact historical candidate after configuration advances", async () => {
+		const historical = { ...candidate, lifecycleState: "observed" as const };
+		const store = new FakeActivationStore({ candidate: historical });
+		store.currentConfigurationRevision += 1;
+		const removeCandidate = vi.fn(async () => true);
+
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				{ store, kubernetes: { removeCandidate } },
+				cleanupCommand(),
+			),
+		).resolves.toBe(true);
+		expect(removeCandidate).toHaveBeenCalledOnce();
+		expect(removeCandidate).toHaveBeenCalledWith(historical);
+		expect(store.currentConfigurationRevision).toBe(
+			candidate.configRevision + 1,
+		);
+		expect(store.currentCandidate).toMatchObject({
+			agentId: candidate.agentId,
+			secretId: candidate.secretId,
+			secretVersion: candidate.secretVersion,
+			configRevision: candidate.configRevision,
+			ownerType: candidate.ownerType,
+			ownerId: candidate.ownerId,
+			name: candidate.name,
+			wrappingKeyVersion: candidate.wrappingKeyVersion,
+			lifecycleState: "failed",
+			failureRetryable: true,
+		});
+	});
+
+	it("retries after candidate deletion or failure-transition errors", async () => {
+		const deletionStore = new FakeActivationStore({
+			candidate: { ...candidate, lifecycleState: "applying" },
+		});
+		const removeCandidate = vi
+			.fn<(candidate: SecretActivationCandidateV1) => Promise<boolean>>()
+			.mockResolvedValueOnce(false)
+			.mockResolvedValue(true);
+		const deletionDependencies = {
+			store: deletionStore,
+			kubernetes: { removeCandidate },
+		};
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				deletionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(false);
+		expect(deletionStore.transitions).toEqual([]);
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				deletionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(true);
+		expect(removeCandidate).toHaveBeenCalledTimes(2);
+
+		const transitionStore = new FakeActivationStore({
+			candidate: { ...candidate, lifecycleState: "observed" },
+		});
+		const commitTransition = vi.spyOn(transitionStore, "commitTransition");
+		commitTransition.mockResolvedValueOnce(false);
+		const transitionDependencies = {
+			store: transitionStore,
+			kubernetes: { removeCandidate: async () => true },
+		};
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				transitionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(false);
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				transitionDependencies,
+				cleanupCommand(),
+			),
+		).resolves.toBe(true);
+		expect(transitionStore.currentCandidate.lifecycleState).toBe("failed");
+	});
+
+	it.each([
+		"older configuration",
+		"foreign owner",
+		"wrong Secret name",
+		"active origin",
+	] as const)("fails closed for a %s candidate", async (condition) => {
+		const store = new FakeActivationStore();
+		if (condition === "older configuration")
+			store.currentConfigurationRevision -= 1;
+		if (condition === "foreign owner")
+			store.currentCandidate = {
+				...store.currentCandidate,
+				ownerId: "owner_02",
+			};
+		if (condition === "wrong Secret name")
+			store.currentCandidate = {
+				...store.currentCandidate,
+				name: "OTHER_SECRET",
+			};
+		if (condition === "active origin")
+			store.currentCandidate = {
+				...store.currentCandidate,
+				lifecycleState: "active",
+				failureRetryable: null,
+			};
+		let removeCalls = 0;
+		await expect(
+			cleanupUnactivatedSecretCandidateV1(
+				{
+					store,
+					kubernetes: {
+						async removeCandidate() {
+							removeCalls += 1;
+							return true;
+						},
+					},
+				},
+				cleanupCommand(),
+			),
+		).resolves.toBe(false);
+		expect(removeCalls).toBe(0);
+		expect(store.transitions).toEqual([]);
 	});
 });
