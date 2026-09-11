@@ -144,6 +144,7 @@ test("Connection Web preserves every same-origin API route family", async () => 
 		"the Direct Session API must be matched before the Connection SPA",
 	);
 	assert.match(vite, /"\/connection\/v1"/);
+	assert.match(nginx, /absolute_redirect off;/);
 	assert.match(nginx, /location = \/connection/);
 	assert.match(
 		installPage,
