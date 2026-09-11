@@ -24,7 +24,7 @@ import {
 	resolve,
 	sep,
 } from "node:path";
-import { env } from "node:process";
+import { env, platform } from "node:process";
 import { TextDecoder } from "node:util";
 
 const defaultTimeoutMs = 5_000;
@@ -38,7 +38,6 @@ const namespacedModelPattern =
 const reasoningEffortPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
-const codexExecutableName = "codex";
 const schemaArtifactName = "codex_app_server_protocol.v2.schemas.json";
 const isolatedRuntimeDirectoryPrefix = "agent-runtime-codex-home-";
 
@@ -85,6 +84,7 @@ type CodexAppServerBridgeErrorCode =
 	| "CODEX_APP_SERVER_CONFIGURATION_INVALID"
 	| "CODEX_APP_SERVER_PROVENANCE_MISMATCH"
 	| "CODEX_APP_SERVER_UNAVAILABLE"
+	| "CODEX_APP_SERVER_SANDBOX_UNAVAILABLE"
 	| "CODEX_APP_SERVER_TIMEOUT"
 	| "CODEX_APP_SERVER_EXITED"
 	| "CODEX_APP_SERVER_FRAME_INVALID"
@@ -429,11 +429,11 @@ async function reapChild(
 	await waitForResult(closed, timeoutMs);
 }
 
-async function resolveCodexExecutable(path: string | undefined) {
+async function resolveExecutable(path: string | undefined, name: string) {
 	if (!path) throw unavailable();
 	for (const directory of path.split(delimiter)) {
 		if (!directory) continue;
-		const candidate = join(directory, codexExecutableName);
+		const candidate = join(directory, name);
 		try {
 			await access(candidate, constants.X_OK);
 			return await realpath(candidate);
@@ -558,7 +558,7 @@ type CommandOutcome =
 	| { kind: "close"; code: number | null }
 	| { kind: "error" };
 
-async function runCodexCommand(
+async function runProbeCommand(
 	executable: string,
 	args: readonly string[],
 	timeoutMs: number,
@@ -617,7 +617,7 @@ async function probeVersion(
 	timeoutMs: number,
 	launchPolicy: IsolatedLaunchPolicy,
 ) {
-	const output = await runCodexCommand(
+	const output = await runProbeCommand(
 		executable,
 		["--version"],
 		timeoutMs,
@@ -646,7 +646,7 @@ async function verifySchema(
 	}
 	let failure: CodexAppServerBridgeError | undefined;
 	try {
-		await runCodexCommand(
+		await runProbeCommand(
 			executable,
 			["app-server", "generate-json-schema", "--out", directory],
 			timeoutMs,
@@ -670,6 +670,39 @@ async function verifySchema(
 		failure ??= unavailable();
 	}
 	if (failure) throw failure;
+}
+
+async function verifyLinuxSandbox(
+	launchPolicy: IsolatedLaunchPolicy,
+	timeoutMs: number,
+) {
+	if (platform !== "linux") return;
+	try {
+		const helper = await resolveExecutable(
+			launchPolicy.environment.PATH,
+			"setpriv",
+		);
+		// ABI V5's newest filesystem right must install without BestEffort masking.
+		// setpriv fails if the kernel or container policy cannot enforce the rule.
+		await runProbeCommand(
+			helper,
+			[
+				"--no-new-privs",
+				"--landlock-access",
+				"fs:ioctl-dev",
+				"--",
+				"/bin/true",
+			],
+			timeoutMs,
+			false,
+			launchPolicy,
+		);
+	} catch {
+		throw new CodexAppServerBridgeError(
+			"CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
+			"Codex requires setpriv and enforceable Landlock ABI V5 filesystem rights",
+		);
+	}
 }
 
 function provenanceMismatchError() {
@@ -718,12 +751,13 @@ export class CodexAppServerBridge {
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
 		const launchPath = validated.launchPath ?? env.PATH;
-		const executable = await resolveCodexExecutable(launchPath);
+		const executable = await resolveExecutable(launchPath, "codex");
 		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
 		let nativeLaunchPolicy: IsolatedLaunchPolicy;
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
+			await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
 			nativeLaunchPolicy = await persistentLaunchPolicy(
 				validated.dataDirectory,
 				launchPolicy,
@@ -748,6 +782,11 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
+					// Landlock enforces the native policy without namespace privileges.
+					// Admission above requires the full pinned filesystem capability set.
+					...(platform === "linux"
+						? ["--config", "features.use_legacy_landlock=true"]
+						: []),
 					...modelAccessArguments(validated.modelAccess),
 				],
 				{

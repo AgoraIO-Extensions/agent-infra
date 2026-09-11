@@ -8,6 +8,7 @@ WORKDIR /app
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
 RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex
+RUN apk add --no-cache 'setpriv=2.42.3-r1'
 COPY . .
 RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 
@@ -27,7 +28,7 @@ RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runner
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' \
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' 'setpriv=2.42.3-r1' \
 	&& npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime

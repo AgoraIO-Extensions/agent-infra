@@ -20,6 +20,7 @@ const requiredChecks = [
 	"http-failures-redacted",
 	"stream-failures-redacted",
 	"cancellation-aborts-upstream",
+	"native-sandboxed-tool-execution",
 	"recursive-native-storage-redacted",
 	"personal-configuration-isolated",
 ];
@@ -127,6 +128,8 @@ export async function probeRuntimeImage({
 				"--pull=never",
 				"--network=none",
 				"--read-only",
+				"--cap-drop=ALL",
+				"--security-opt=no-new-privileges",
 				"--tmpfs",
 				"/tmp:size=128m,mode=1777",
 				"--tmpfs",

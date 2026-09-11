@@ -24,6 +24,7 @@ const evidence = {
 		"http-failures-redacted",
 		"stream-failures-redacted",
 		"cancellation-aborts-upstream",
+		"native-sandboxed-tool-execution",
 		"recursive-native-storage-redacted",
 		"personal-configuration-isolated",
 	],
