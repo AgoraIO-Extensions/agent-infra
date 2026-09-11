@@ -151,6 +151,7 @@ test("Connection Web preserves every same-origin API route family", async () => 
 	);
 	assert.match(vite, /"\/connection\/v1"/);
 	assert.match(vite, /"\/connection\/pat-bindings"/);
+	assert.match(nginx, /absolute_redirect off;/);
 	assert.match(nginx, /location = \/connection/);
 	assert.match(
 		installPage,
