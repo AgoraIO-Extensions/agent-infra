@@ -13,14 +13,17 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
-test("Platform Worker typecheck builds its dist-backed Secret Store dependency", async () => {
+test("Platform Worker typecheck builds dist-backed workspace dependencies through Turbo", async () => {
 	const manifest = JSON.parse(
 		await readFile("apps/platform-worker/package.json", "utf8"),
 	);
+	const turbo = JSON.parse(await readFile("turbo.json", "utf8"));
 
-	assert.match(
-		manifest.scripts["check-types"],
-		/pnpm --filter @agent-infra\/secret-store build && tsc --noEmit/,
+	assert.equal(manifest.scripts["check-types"], "tsc --noEmit");
+	assert.deepEqual(
+		turbo.tasks["check-types"].dependsOn,
+		["^build", "^check-types"],
+		"typechecks must build workspace dependencies before reading their dist exports",
 	);
 });
 

@@ -405,6 +405,12 @@ export const KubernetesReconcileResultV1Schema = z.discriminatedUnion(
 	[
 		z.strictObject({
 			...reconcileCorrelationV1Shape,
+			status: z.literal("absent"),
+			replicas: z.literal(0),
+			routeClosed: z.literal(true),
+		}),
+		z.strictObject({
+			...reconcileCorrelationV1Shape,
 			status: z.literal("applied"),
 			workloadUid: WorkloadOpaqueIdV1Schema,
 			workloadGeneration: WorkloadRevisionV1Schema,
@@ -514,7 +520,9 @@ const cleanupResourcesV1Shape = {
 	serviceAccount: z.literal(true),
 	networkPolicy: z.literal(true),
 	configuration: z.literal(true),
-	secrets: z.literal(true),
+	// Generic Kubernetes cleanup intentionally retains immutable Secret material
+	// until the Store-authorized candidate reclamation step has run.
+	secrets: z.boolean(),
 } as const;
 
 const pendingCleanupResourcesV1Schema = z.strictObject({
@@ -626,7 +634,7 @@ export function validateAgentWorkloadDesiredV1(
 		desired.secretRefs.some(
 			(secretRef) =>
 				secretRef.agentId !== desired.agentId ||
-				secretRef.configRevision !== desired.configRevision,
+				secretRef.configRevision > desired.configRevision,
 		)
 	) {
 		throw new Error("Desired Workload correlation mismatch");
@@ -706,6 +714,9 @@ export function validateKubernetesReconcileResultV1(
 			throw new Error("Kubernetes reconciliation correlation mismatch");
 		}
 		validateAgentWorkloadAppliedV1(desired, result.applied);
+	} else if (result.status === "absent") {
+		if (desired.desiredState !== "stopped" || desired.replicas !== 0)
+			throw new Error("Absent Workload requires a stopped desired state");
 	} else if (result.error.traceId !== desired.traceId) {
 		throw new Error("Kubernetes reconciliation correlation mismatch");
 	}

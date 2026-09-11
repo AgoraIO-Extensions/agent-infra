@@ -8,18 +8,21 @@
 	],
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
-		"@agent-infra/secret-store": "workspace:*"
+		"@agent-infra/secret-store": "workspace:*",
+		"@kubernetes/client-node": "2.0.0"
 	},
 	"scripts": {
 		"build": "tsdown",
-		"check-types": "pnpm --filter @agent-infra/platform-core build && pnpm --filter @agent-infra/platform-store build && pnpm --filter @agent-infra/secret-store build && tsc --noEmit",
+		"check-types": "tsc --noEmit",
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.mjs",
 		"test": "vitest run src"
 	},
 	"devDependencies": {
+		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "^0.22.14",

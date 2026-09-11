@@ -157,6 +157,42 @@ const applied = {
 } as const;
 
 describe("KubernetesRuntimeAdapter V1 contract", () => {
+	it("accepts only correlated stopped requests as absent without a fabricated identity", () => {
+		const stopped = { ...desired, desiredState: "stopped", replicas: 0 };
+		const absent = {
+			schemaVersion: 1,
+			requestId: desired.requestId,
+			traceId: desired.traceId,
+			agentId: desired.agentId,
+			configRevision: desired.configRevision,
+			workloadRevision: desired.workloadRevision,
+			fence: desired.fence,
+			status: "absent",
+			replicas: 0,
+			routeClosed: true,
+		};
+		expect(validateKubernetesReconcileResultV1(stopped, absent)).toEqual(
+			absent,
+		);
+		expect(() =>
+			validateKubernetesReconcileResultV1(desired, absent),
+		).toThrow();
+		for (const override of [
+			{ agentId: "another-agent" },
+			{ fence: desired.fence + 1 },
+			{ replicas: 1 },
+			{ routeClosed: false },
+			{ workloadUid: "fabricated" },
+			{ workloadGeneration: 1 },
+		]) {
+			expect(() =>
+				validateKubernetesReconcileResultV1(stopped, {
+					...absent,
+					...override,
+				}),
+			).toThrow();
+		}
+	});
 	it("accepts protocol-neutral GA capabilities and rejects legacy/provider objects", () => {
 		const capabilities = {
 			schemaVersion: 1,
@@ -257,7 +293,7 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		],
 		["Secret Agent", { secretRefs: [{ ...secretRef, agentId: "agent_02" }] }],
 		[
-			"Secret config revision",
+			"Secret from a future config revision",
 			{ secretRefs: [{ ...secretRef, configRevision: 8 }] },
 		],
 		["Runtime service port", { service: { ...desired.service, port: 9090 } }],
@@ -269,6 +305,14 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(() =>
 			validateAgentWorkloadDesiredV1({ ...desired, ...mismatch }),
 		).toThrow("Desired Workload correlation mismatch");
+	});
+
+	it("accepts an immutable Secret retained from an earlier configuration", () => {
+		const retained = {
+			...desired,
+			configRevision: desired.configRevision + 1,
+		};
+		expect(validateAgentWorkloadDesiredV1(retained)).toEqual(retained);
 	});
 
 	it("binds each self-managed identity choice to exactly one route policy", () => {
@@ -630,6 +674,15 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		expect(WorkloadCleanupRequestV1Schema.parse(request)).toEqual(request);
 		expect(WorkloadCleanupResultV1Schema.parse(result)).toEqual(result);
 		expect(validateWorkloadCleanupResultV1(request, result)).toEqual(result);
+		expect(
+			validateWorkloadCleanupResultV1(request, {
+				...result,
+				removed: { ...result.removed, secrets: false },
+			}),
+		).toMatchObject({
+			status: "completed",
+			removed: { secrets: false },
+		});
 		expect(() =>
 			validateWorkloadCleanupResultV1(request, {
 				...result,
