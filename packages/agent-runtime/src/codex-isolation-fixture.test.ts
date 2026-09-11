@@ -4,6 +4,7 @@ import {
 	chmod,
 	mkdir,
 	mkdtemp,
+	readFile,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -388,6 +389,53 @@ process.stdin.on("end", () => process.stdout.write("", () => process.exit(0)));
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it
+	.skipIf(process.platform === "win32")
+	.each([
+		'{"id":7,"result":{"synthetic":"SYNTH_PRIVATE_TAIL"}}',
+		'{"id":7,"result":"SYNTH_PRIVATE_TAIL',
+	])(
+	"rejects an unterminated synthetic child frame without recording its contents: %s",
+	async (tail) => {
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-tail-"));
+		try {
+			const executable = join(directory, "fake-codex");
+			await writeFile(
+				executable,
+				`#!${process.execPath}
+process.stdout.write(${JSON.stringify(tail)}, () => process.exit(0));
+`,
+			);
+			await chmod(executable, 0o700);
+			const launcher = await nativeIsolationLauncher(
+				directory,
+				executable,
+				"http://127.0.0.1:1/v1",
+			);
+			const child = spawn(join(launcher.bin, "codex"), ["app-server"], {
+				stdio: ["pipe", "ignore", "ignore"],
+			});
+			const code = await new Promise<number | null>((resolve, reject) => {
+				child.once("error", reject);
+				child.once("close", resolve);
+				child.stdin.end();
+			});
+			expect(code).toBe(1);
+			await expect(launcher.observations()).rejects.toMatchObject({
+				category: "incomplete",
+			});
+			const saved = await readFile(
+				join(directory, "observations.jsonl"),
+				"utf8",
+			);
+			expect(saved).toContain('"method":"observer/incomplete-output"');
+			expect(saved).not.toContain("SYNTH_PRIVATE_TAIL");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);
 
 it("rejects overlapping synthetic launch directories", () => {
 	expect(

@@ -166,6 +166,20 @@ function rawForeignMarkerControl(
 	};
 }
 
+async function waitForRawForeignMarkerControl(
+	read: () => Promise<NativeReadSample>,
+): Promise<RawForeignMarkerControl> {
+	let control = rawForeignMarkerControl(undefined);
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		control = rawForeignMarkerControl(await read());
+		if (control.status === "pass" || control.category === "unsupported")
+			return control;
+		if (attempt < 4)
+			await new Promise<void>((resolve) => setTimeout(resolve, 100));
+	}
+	return control;
+}
+
 function gateRawActiveThreadEvidence(
 	evidence: ReturnType<typeof evaluateActiveThreadEvidence>,
 	control: Pick<RawForeignMarkerControl, "status">,
@@ -740,6 +754,30 @@ it("fails malformed successful native results that contain a foreign marker", ()
 	expect(
 		evaluateActiveThreadEvidence([...otherwiseHealthy, malformed]).status,
 	).toBe("fail");
+});
+
+it("waits for raw marker materialization and bounds unavailable control evidence", async () => {
+	const sample = (markerObserved: boolean): NativeReadSample => ({
+		point: "after-model-observed",
+		method: "thread/read",
+		options: { includeTurns: true },
+		category: "success",
+		knownTurnMatches: true,
+		foreignMarkerAbsent: !markerObserved,
+	});
+	let reads = 0;
+	expect(
+		await waitForRawForeignMarkerControl(async () => sample(++reads === 3)),
+	).toMatchObject({ status: "pass", markerObserved: true });
+	expect(reads).toBe(3);
+	reads = 0;
+	expect(
+		await waitForRawForeignMarkerControl(async () => {
+			reads += 1;
+			return sample(false);
+		}),
+	).toMatchObject({ status: "unverified", markerObserved: false });
+	expect(reads).toBe(5);
 });
 
 it("requires an observable raw marker control before accepting active history", () => {
@@ -1737,6 +1775,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			client: RawNativeClient,
 			foreignMarker: string,
 			probeId: string,
+			modelObserved: Promise<void>,
 		): Promise<RawForeignMarkerControl> {
 			const threadStarted = await client.request("thread/start", {});
 			const thread = isPlainRecord(threadStarted.result)
@@ -1772,29 +1811,37 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			)
 				return rawForeignMarkerControl(undefined, turnStarted.category);
 
-			rawForeignTurnId = turn.id;
+			const controlTurnId = turn.id;
+			rawForeignTurnId = controlTurnId;
 
-			// This control must hydrate the deliberately seeded marker. The separate
-			// two-point paginated observations still require their own real results.
-			const turns = await client.request("thread/read", {
-				threadId: thread.id,
-				includeTurns: true,
-			});
-			return rawForeignMarkerControl(
-				nativeReadSample(
-					"after-turn-start-accepted",
+			if (!(await waitForModelSignal(modelObserved)))
+				return rawForeignMarkerControl(
+					undefined,
+					"model-observation-unavailable",
+				);
+			// Model observation and bounded readback retries avoid treating acceptance
+			// as proof that native history has already materialized the marker.
+			return waitForRawForeignMarkerControl(async () => {
+				const turns = await client.request("thread/read", {
+					threadId: thread.id,
+					includeTurns: true,
+				});
+				return nativeReadSample(
+					"after-model-observed",
 					"thread/read",
 					{ includeTurns: true },
 					turns,
-					turn.id,
+					controlTurnId,
 					foreignMarker,
-				),
-				turns.category,
-			);
+				);
+			});
 		}
 		async function sampleActiveThreadHistory() {
 			if (!model || !launcher) throw new Error("No native isolation fixture");
 			const controlProbe = model.probe();
+			const controlHold = model.holdObservation(controlProbe);
+			controlHold.allowObservation();
+			controlHold.releaseResponse();
 			const probe = model.probe();
 			const foreignMarker = users.at(1)?.context;
 			if (!foreignMarker) throw new Error("Missing foreign isolation marker");
@@ -1809,6 +1856,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					client,
 					foreignMarker,
 					controlProbe.id,
+					controlHold.observed,
 				);
 				const threadStarted = await client.request("thread/start", {});
 				const nativeThread = isPlainRecord(threadStarted.result)

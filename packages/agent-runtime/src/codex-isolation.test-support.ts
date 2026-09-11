@@ -500,7 +500,13 @@ process.stdin.pipe(child.stdin); child.stdout.pipe(process.stdout); child.stderr
 child.stdin.on("error", () => {});
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(signal));
 child.on("error", () => process.exit(1));
-child.on("close", (code) => process.exit(code ?? 1));
+child.on("close", (code) => {
+  if (serving && output.length > 0) {
+    observe({ method: "observer/incomplete-output" });
+    process.exit(1);
+  }
+  process.exit(code ?? 1);
+});
 `,
 	);
 	await chmod(join(bin, "codex"), 0o700);
@@ -527,6 +533,8 @@ child.on("close", (code) => process.exit(code ?? 1));
 								value.method.length === 0
 							)
 								throw new NativeObservationError("invalid-json");
+							if (value.method === "observer/incomplete-output")
+								throw new NativeObservationError("incomplete");
 							return value as NativeObservation;
 						});
 				} catch (error) {
