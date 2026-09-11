@@ -17,6 +17,12 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Exercise Linux admission on every test host; the helper itself is synthetic.
+vi.mock("node:process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:process")>()),
+	platform: "linux",
+}));
+
 vi.mock("node:crypto", () => ({
 	createHash: () => {
 		let value = "";
@@ -133,8 +139,27 @@ if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes
 `,
 	);
 	await chmod(executable, 0o755);
+	const sandboxCapturePath = join(directory, "sandbox-admission.json");
+	const helper = join(directory, "setpriv");
+	await writeFile(
+		helper,
+		`#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+writeFileSync(${JSON.stringify(sandboxCapturePath)}, JSON.stringify({
+  args: process.argv.slice(2),
+  pid: process.pid,
+  cwd: process.cwd(),
+  environmentKeys: Object.keys(process.env).sort(),
+}));
+if (${JSON.stringify(mode)} === "sandbox-hangs") {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1_000);
+} else process.exit(${JSON.stringify(mode)} === "sandbox-unsupported" ? 127 : 0);
+`,
+	);
+	await chmod(helper, 0o755);
 	process.env.PATH = `${directory}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
-	return { capturePath };
+	return { capturePath, sandboxCapturePath };
 }
 
 function options(overrides: Record<string, unknown> = {}) {
@@ -269,6 +294,76 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	it("admits Linux sandbox capabilities before sharing model credentials", async () => {
+		const { sandboxCapturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				model: "option_a/synthetic-model",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:12345",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		await bridge.close();
+		const capture = JSON.parse(await readFile(sandboxCapturePath, "utf8"));
+		expect(capture.args).toEqual([
+			"--no-new-privs",
+			"--landlock-access",
+			"fs:ioctl-dev",
+			"--",
+			"/bin/true",
+		]);
+		expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+		await expectPathRemoved(capture.cwd);
+	});
+
+	it.each(["sandbox-unsupported", "sandbox-hangs", "sandbox-missing"])(
+		"rejects %s before starting app-server or creating persistent storage",
+		async (mode) => {
+			const { capturePath, sandboxCapturePath } = await installFakeCodex(mode);
+			if (mode === "sandbox-missing")
+				await rm(join(dirname(capturePath), "setpriv"));
+			const configuration = options({
+				launchPath: `${dirname(capturePath)}:${dirname(process.execPath)}`,
+				startupTimeoutMs: 2_000,
+				model: "option_a/synthetic-model",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:12345",
+					credential: "synthetic-loopback-token",
+				},
+			});
+			await expect(
+				CodexAppServerBridge.open(configuration).then(async (bridge) => {
+					await bridge.close();
+					return bridge;
+				}),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
+				retryable: false,
+			});
+			const captures = await readCaptures(capturePath, 2);
+			expect(captures).toHaveLength(2);
+			expect(captures.map((capture) => capture.args[0])).toEqual([
+				"--version",
+				"app-server",
+			]);
+			expect(captures[1]?.args[1]).toBe("generate-json-schema");
+			for (const capture of captures)
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+			await expect(access(configuration.dataDirectory)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			if (mode !== "sandbox-missing") {
+				const capture = JSON.parse(await readFile(sandboxCapturePath, "utf8"));
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+				await expectPathRemoved(capture.cwd);
+				expect(() => process.kill(capture.pid, 0)).toThrow();
+			}
+		},
+		15_000,
+	);
+
 	it("isolates concurrent explicit launch paths from the parent PATH", async () => {
 		const first = await installFakeCodex("echo");
 		const second = await installFakeCodex("echo");
@@ -588,6 +683,8 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				"mcp_servers={}",
 				"--config",
 				"features.plugins=false",
+				"--config",
+				"features.use_legacy_landlock=true",
 			]);
 		} finally {
 			await bridge.close();
@@ -637,6 +734,8 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			"mcp_servers={}",
 			"--config",
 			"features.plugins=false",
+			"--config",
+			"features.use_legacy_landlock=true",
 		]);
 		expect(captured.args).not.toContain("--session-source");
 		expect(bridge.provenance()).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
