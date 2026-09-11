@@ -156,6 +156,8 @@ export async function isolationModel() {
 		{ wait: Promise<void>; arrive: (id: string) => void; cancel: () => void }
 	>();
 	const server = createServer(async (request, response) => {
+		let observationHold: ReturnType<typeof observationHolds.get>;
+		let heldProbeId: string | undefined;
 		try {
 			if (request.method !== "POST" || request.url !== "/v1/responses") {
 				response.writeHead(404).end();
@@ -173,7 +175,8 @@ export async function isolationModel() {
 			const probe = id ? probes.get(id) : undefined;
 			if (!probe) throw new Error("Unknown synthetic probe");
 			if (probe.inputs.length >= 4) throw new Error("Synthetic request limit");
-			const observationHold = observationHolds.get(probe.id);
+			observationHold = observationHolds.get(probe.id);
+			heldProbeId = probe.id;
 			if (observationHold) {
 				observationHold.received();
 				await observationHold.waitForObservation;
@@ -257,10 +260,16 @@ export async function isolationModel() {
 				);
 			}
 			response.end();
-			observationHold?.responseSent();
-			observationHolds.delete(probe.id);
 		} catch {
 			response.writeHead(500).end("Synthetic model request invalid");
+		} finally {
+			observationHold?.responseSent();
+			if (
+				heldProbeId !== undefined &&
+				observationHold !== undefined &&
+				observationHolds.get(heldProbeId) === observationHold
+			)
+				observationHolds.delete(heldProbeId);
 		}
 	});
 	await new Promise<void>((accept, reject) => {
@@ -507,7 +516,19 @@ child.on("close", (code) => process.exit(code ?? 1));
 					return content
 						.slice(0, -1)
 						.split("\n")
-						.map((line) => JSON.parse(line) as NativeObservation);
+						.map((line) => {
+							const value: unknown = JSON.parse(line);
+							if (
+								typeof value !== "object" ||
+								value === null ||
+								Array.isArray(value) ||
+								!("method" in value) ||
+								typeof value.method !== "string" ||
+								value.method.length === 0
+							)
+								throw new NativeObservationError("invalid-json");
+							return value as NativeObservation;
+						});
 				} catch (error) {
 					if (attempt === 4) {
 						if (

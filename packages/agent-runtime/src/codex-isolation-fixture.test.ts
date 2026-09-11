@@ -207,6 +207,36 @@ it("holds synthetic request observation and response at separate probe points", 
 	expect((await response).status).toBe(200);
 });
 
+it("settles and releases an acquired hold when a synthetic request fails", async () => {
+	const server = await model();
+	const probe = server.probe("cat synthetic-private.txt");
+	const hold = server.holdObservation(probe);
+	const failed = submit(server, probe);
+	await hold.received;
+	expect(probe.inputs).toEqual([]);
+	hold.allowObservation();
+	await hold.observed;
+	hold.releaseResponse();
+	expect((await failed).status).toBe(500);
+	await hold.responseSent;
+	expect(probe.outputs).toEqual([]);
+	expect(probe.answer).toBe("");
+
+	const retryHold = server.holdObservation(probe);
+	const retried = submit(
+		server,
+		probe,
+		[],
+		[{ type: "function", name: "exec_command" }],
+	);
+	await retryHold.received;
+	retryHold.allowObservation();
+	await retryHold.observed;
+	retryHold.releaseResponse();
+	await retryHold.responseSent;
+	expect((await retried).status).toBe(200);
+});
+
 it("retries pre-launch and incomplete native observation reads", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-observation-"));
 	try {
@@ -273,6 +303,14 @@ it("reports terminal native observation failures without treating them as empty"
 			'\n{"method":"launch"}\n',
 			'{"method":"launch"}\n\n',
 			'{"method":"launch"}\n\n{"method":"launch"}\n',
+			"null\n",
+			"[]\n",
+			"true\n",
+			"42\n",
+			'"launch"\n',
+			"{}\n",
+			'{"method":null}\n',
+			'{"method":""}\n',
 		]) {
 			await writeFile(observationFile, content);
 			await expect(launcher.observations()).rejects.toMatchObject({
