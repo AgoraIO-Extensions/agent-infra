@@ -53,8 +53,12 @@ test("Jira Server catalog covers OpenConnector overlap and CLI additions", () =>
 	);
 	assert.equal(jiraServerConnectionCatalog.deploymentProfile.version, "7.11.0");
 	assert.equal(jiraServerConnectionCatalog.deploymentProfile.build, "711000");
+	assert.match(
+		jiraServerConnectionCatalog.providerReleaseId,
+		/-connection-v5$/,
+	);
 	for (const action of jiraServerConnectionCatalog.actions) {
-		assert.match(action.id, /^jira\.[a-z_]+@v4$/);
+		assert.match(action.id, /^jira\.[a-z_]+@v5$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["jira.server.access"]);
 	}

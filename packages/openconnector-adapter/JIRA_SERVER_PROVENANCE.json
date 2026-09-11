@@ -13,7 +13,7 @@
 		"build": "711000",
 		"apiOrigin": "https://jira.agoralab.co",
 		"authentication": "per-user Basic username/password plus server-issued short-lived accessToken request header",
-		"executorDigest": "sha256:b5c36d6a0dc2b471ba26548b15c37d81fc544652002423aa27201c412f5466fc"
+		"executorDigest": "sha256:7b1277c3413fc0b5c2587ac4e0df1ec825e1dc5ad849e16c7b5e627e7a1b9e9c"
 	},
 	"atlassianCliReference": {
 		"version": "0.1.18",
@@ -85,6 +85,6 @@
 		"Move the CLI header command's application token exchange to a server-side, on-demand Token Provider while keeping per-user Basic identity.",
 		"Preserve OpenConnector Jira action names and schemas where the Server API supports them.",
 		"Add reviewed Server-only issue, workflow, field, user, comment and bulk-create actions; file upload/download are excluded from JSON MCP input until a bounded file contract is approved.",
-		"Preserve object arrays returned by Jira list actions instead of treating array-valued response fields as objects."
+		"Preserve object arrays returned by Jira list actions instead of treating array-valued response fields as objects, published as immutable Connection v5 ActionVersions."
 	]
 }

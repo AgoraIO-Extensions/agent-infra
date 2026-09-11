@@ -10,7 +10,7 @@ const sourceCommit = "5cd85feb1a19cb43a711fe305ea1b40f388792aa";
 const providerId = "jira";
 const apiOrigin = "https://jira.agoralab.co";
 const apiBasePath = "/rest/api/2";
-const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v4`;
+const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v5`;
 const credentialScope = "jira.server.access";
 const maxResponseBytes = 10 * 1024 * 1024;
 const requestTimeoutMs = 12_000;
@@ -324,7 +324,7 @@ export const jiraServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v4`,
+		id: `${providerId}.${action.name}@v5`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
