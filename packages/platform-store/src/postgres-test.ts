@@ -33,6 +33,8 @@ export async function startPostgresTestDatabase(
 			"run",
 			"--detach",
 			"--rm",
+			"--label",
+			`ao.session=${process.env.AO_SESSION_ID ?? "local"}`,
 			"--name",
 			containerName,
 			"--env",

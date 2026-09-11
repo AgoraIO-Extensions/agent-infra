@@ -91,7 +91,24 @@ jobs:
 
       - name: Build deployment images
         id: images
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node .github/scripts/vulnerability-scan.mjs build
+
+      - name: Probe native Codex runtime image
+        id: runtime_probe
+        run: >-
+          node deploy/release/runtime-probe.mjs --scan-build
+          .vulnerability-scan/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
+
+      - name: Preserve Codex runtime image evidence
+        if: ${{ !cancelled() && steps.runtime_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-runtime-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/codex-runtime-probe.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Lint Markdown
         run: >-
@@ -159,9 +176,34 @@ jobs:
           VULNERABILITY_REPORT_DIR: ${{ runner.temp }}/vulnerability-readback
         run: node .github/scripts/vulnerability-scan.mjs verify
 
+  workload-kind:
+    name: Workload kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install tools and dependencies
+        run: |
+          npm install --global pnpm@11.20.0
+          go install sigs.k8s.io/kind@v0.30.0
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          pnpm install --frozen-lockfile
+      - name: Build Workload dependencies
+        run: pnpm exec turbo run build --filter=@agent-infra/platform-worker
+      - name: Verify Kubernetes lifecycle and isolation
+        run: bash deploy/kind/workload.sh
+
   outcome:
     name: Publish terminal outcome
-    needs: [ci]
+    needs: [ci, workload-kind]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

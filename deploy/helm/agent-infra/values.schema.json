@@ -115,6 +115,7 @@
       "additionalProperties": false,
       "required": ["replicas"],
       "properties": {
+        "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
         "replicas": {
           "type": "integer",
           "minimum": 1,

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import {
 	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
+	type RuntimeDriver,
 	RuntimeHost,
 	RuntimeHostError,
 } from "@agent-infra/agent-runtime";
@@ -77,13 +78,16 @@ function executionGrant(
 	};
 }
 
-async function setup() {
+async function setup(
+	wrapDriver?: (driver: FakeRuntimeDriver) => RuntimeDriver,
+) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-http-"));
 	directories.push(directory);
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const hostPath = join(directory, "host.json");
 	const host = await RuntimeHost.open({
-		store: await FileRuntimeStore.open(join(directory, "host.json")),
-		driver,
+		store: await FileRuntimeStore.open(hostPath),
+		driver: wrapDriver?.(driver) ?? driver,
 		grantValidation: {
 			expectedIssuer: "agent-platform",
 			now: () => "2026-08-28T10:00:00Z",
@@ -98,7 +102,30 @@ async function setup() {
 			),
 		}),
 		driver,
+		hostPath,
 	};
+}
+
+async function storedHostOperation(
+	path: string,
+	hostSessionRef: string,
+	operationId: string,
+) {
+	const state = JSON.parse(await readFile(path, "utf8")) as {
+		sessions: Record<
+			string,
+			{
+				operations: Record<
+					string,
+					{
+						state?: unknown;
+						result?: { outcome?: unknown; status?: unknown };
+					}
+				>;
+			}
+		>;
+	};
+	return state.sessions[hostSessionRef]?.operations[operationId];
 }
 
 function submitBody() {
@@ -230,6 +257,114 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		});
 		expect(JSON.stringify(driverFailureBody)).not.toContain("secret-value");
 		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
+	it("keeps the HTTP stop response and Host record pending until Driver cancellation completes", async () => {
+		let releaseDriver: (() => void) | undefined;
+		let stopStarted: (() => void) | undefined;
+		const driverGate = new Promise<void>((resolve) => {
+			releaseDriver = resolve;
+		});
+		const stopStartedPromise = new Promise<void>((resolve) => {
+			stopStarted = resolve;
+		});
+		const { app, hostPath } = await setup((driver) => ({
+			execute: async (command) => {
+				if (command.kind === "stop") {
+					stopStarted?.();
+					await driverGate;
+				}
+				return driver.execute(command);
+			},
+			lookupOperation: (command) => driver.lookupOperation(command),
+			getStatus: (nativeSessionRef, executionId) =>
+				driver.getStatus(nativeSessionRef, executionId),
+			getCapabilities: () => driver.getCapabilities(),
+			replayEvents: (nativeSessionRef, executionId, afterCursor) =>
+				driver.replayEvents(nativeSessionRef, executionId, afterCursor),
+			subscribeEvents: (nativeSessionRef, executionId, afterCursor, signal) =>
+				driver.subscribeEvents(
+					nativeSessionRef,
+					executionId,
+					afterCursor,
+					signal,
+				),
+		}));
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		expect(submittedResponse.status).toBe(200);
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const stop = {
+			schemaVersion: 1 as const,
+			requestId: "request-http-stop",
+			agentId: body.agentId,
+			actorId: body.actorId,
+			channelId: body.channelId,
+			conversationId: body.conversationId,
+			executionId: body.executionId,
+			turnId: body.turnId,
+			sessionGeneration: body.sessionGeneration,
+			traceId: body.traceId,
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+			hostSessionRef: submitted.hostSessionRef,
+			stopRequestId: "stop-http",
+			grant: executionGrant(body, ["turn.stop"], "grant-http-stop"),
+		};
+		const stopResponsePromise = Promise.resolve(
+			app.request("/internal/runtime/v1/stops", {
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify(stop),
+			}),
+		);
+		void stopResponsePromise.catch(() => {});
+		let responded = false;
+		void stopResponsePromise.then(
+			() => {
+				responded = true;
+			},
+			() => {
+				responded = true;
+			},
+		);
+
+		await stopStartedPromise;
+		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+		try {
+			expect(responded).toBe(false);
+			const pendingStop = await storedHostOperation(
+				hostPath,
+				submitted.hostSessionRef,
+				stop.stopRequestId,
+			);
+			expect(pendingStop).toMatchObject({ state: "prepared" });
+			expect(pendingStop?.result).toBeUndefined();
+		} finally {
+			releaseDriver?.();
+		}
+
+		const stoppedResponse = await stopResponsePromise;
+		expect(stoppedResponse.status).toBe(200);
+		expect(await stoppedResponse.json()).toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(
+			await storedHostOperation(
+				hostPath,
+				submitted.hostSessionRef,
+				stop.stopRequestId,
+			),
+		).toMatchObject({
+			state: "resolved",
+			result: { outcome: "accepted", status: "cancelled" },
+		});
 	});
 
 	it("submits a Turn and replays normalized events as SSE", async () => {

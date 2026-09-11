@@ -114,7 +114,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "codex-worker",
   },
   "ci.yml": {
-    needs: ["ci"],
+    needs: ["ci", "workload-kind"],
     operation: "ci",
   },
   "pr-agent-review.yml": {

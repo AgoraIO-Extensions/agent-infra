@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -57,6 +58,7 @@ import {
 	createPlatformSecretActivationWorkerV1,
 	createPlatformSecretRotationWorkerV1,
 	startPlatformWorker,
+	startPlatformWorkerFromDeploymentV1,
 } from "./index";
 
 const sourceKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -269,4 +271,269 @@ describe("platform worker lifecycle", () => {
 			{ service: "platform-worker", status: "stopped" },
 		]);
 	});
+
+	it("starts and stops the existing and workload loops together", async () => {
+		const primary = { stop: vi.fn() };
+		const workload = { stop: vi.fn(async () => undefined) };
+		const startPrimary = vi.fn(() => primary);
+		const startWorkload = vi.fn(async () => workload);
+
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary,
+			startWorkload,
+		});
+		expect(startPrimary).toHaveBeenCalledOnce();
+		expect(startWorkload).toHaveBeenCalledOnce();
+		const stopping = worker.stop();
+		expect(worker.stop()).toBe(stopping);
+		await stopping;
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+	});
+	it("still stops the workload loop when the existing loop throws synchronously", async () => {
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		const workload = { stop: vi.fn(async () => undefined) };
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+		});
+
+		await expect(worker.stop()).rejects.toThrow("primary shutdown failed");
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+	});
+
+	it("waits for workload shutdown to drain before surfacing a primary failure", async () => {
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		let finishWorkloadStop: (() => void) | undefined;
+		const workload = {
+			stop: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishWorkloadStop = resolve;
+					}),
+			),
+		};
+		const worker = await startPlatformWorkerFromDeploymentV1({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+		});
+
+		let settled = false;
+		const stopping = worker.stop().finally(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+		expect(settled).toBe(false);
+		finishWorkloadStop?.();
+		await expect(stopping).rejects.toThrow("primary shutdown failed");
+	});
+
+	it("stops the existing loop when workload assembly fails", async () => {
+		const primary = { stop: vi.fn() };
+		await expect(
+			startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw new Error("deployment unavailable");
+				},
+			}),
+		).rejects.toThrow("deployment unavailable");
+		expect(primary.stop).toHaveBeenCalledOnce();
+	});
+	it.each([false, true])(
+		"awaits asynchronous primary cleanup on assembly failure (rejects: %s)",
+		async (rejects) => {
+			const deploymentFailure = new Error("deployment unavailable");
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const cleanup = gate.then(() => {
+				if (rejects) throw new Error("primary shutdown failed");
+			});
+			void cleanup.catch(() => undefined);
+			const primary = { stop: vi.fn(() => cleanup) };
+			let settled = false;
+			const failure = startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw deploymentFailure;
+				},
+			}).catch((error) => {
+				settled = true;
+				return error;
+			});
+			await vi.waitFor(() => expect(primary.stop).toHaveBeenCalledOnce());
+			try {
+				expect(settled).toBe(false);
+			} finally {
+				release();
+			}
+			expect(await failure).toBe(deploymentFailure);
+		},
+	);
+	it("preserves the workload assembly failure when primary cleanup also fails", async () => {
+		const deploymentFailure = new Error("deployment unavailable");
+		const primary = {
+			stop: vi.fn(() => {
+				throw new Error("primary shutdown failed");
+			}),
+		};
+		await expect(
+			startPlatformWorkerFromDeploymentV1({
+				startPrimary: () => primary,
+				startWorkload: async () => {
+					throw deploymentFailure;
+				},
+			}),
+		).rejects.toBe(deploymentFailure);
+		expect(primary.stop).toHaveBeenCalledOnce();
+	});
+
+	it.each(
+		(["SIGINT", "SIGTERM"] as const).flatMap((signal) => [
+			{
+				signal,
+				duringAssembly: false,
+				rejectsAssembly: false,
+				rejectsShutdown: false,
+			},
+			{
+				signal,
+				duringAssembly: false,
+				rejectsAssembly: false,
+				rejectsShutdown: true,
+			},
+			{
+				signal,
+				duringAssembly: true,
+				rejectsAssembly: false,
+				rejectsShutdown: true,
+			},
+			{
+				signal,
+				duringAssembly: true,
+				rejectsAssembly: true,
+				rejectsShutdown: false,
+			},
+		]),
+	)(
+		"handles $signal assembly and shutdown (pending: $duringAssembly, assembly rejects: $rejectsAssembly, shutdown rejects: $rejectsShutdown)",
+		async ({ signal, duringAssembly, rejectsAssembly, rejectsShutdown }) => {
+			const originalArgv = process.argv[1];
+			const originalExitCode = process.exitCode;
+			vi.useFakeTimers();
+			const workload = {
+				stop: vi.fn(async () => {
+					if (rejectsShutdown) throw new Error("synthetic shutdown failure");
+				}),
+			};
+			let finishAssembly!: () => void;
+			const assembly = new Promise<void>((resolve) => {
+				finishAssembly = resolve;
+			});
+			let startupSignal: AbortSignal | undefined;
+			const startWorkload = vi.fn(
+				async (_module?: string, signal?: AbortSignal) => {
+					startupSignal = signal;
+					if (duringAssembly) await assembly;
+					if (rejectsAssembly) throw new Error("synthetic assembly failure");
+					return workload;
+				},
+			);
+			const unhandled: unknown[] = [];
+			const onUnhandled = (error: unknown) => unhandled.push(error);
+			const on = vi.spyOn(process, "on");
+			const exit = vi
+				.spyOn(process, "exit")
+				.mockImplementation((() => undefined) as never);
+			const info = vi
+				.spyOn(console, "info")
+				.mockImplementation(() => undefined);
+			const error = vi
+				.spyOn(console, "error")
+				.mockImplementation(() => undefined);
+			try {
+				vi.resetModules();
+				vi.doMock("./workload-worker.js", () => ({
+					startPlatformWorkloadWorkerFromDeploymentV1: startWorkload,
+				}));
+				process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
+				process.exitCode = undefined;
+				process.on("unhandledRejection", onUnhandled);
+
+				const loading = import("./index.js");
+				if (duringAssembly) {
+					await vi.waitFor(() => expect(startWorkload).toHaveBeenCalledOnce());
+					process.emit(signal);
+					expect(startupSignal?.aborted).toBe(true);
+					await vi.waitFor(() =>
+						expect(
+							info.mock.calls.map(([message]) => JSON.parse(String(message))),
+						).toContainEqual({ service: "platform-worker", status: "stopped" }),
+					);
+					expect(workload.stop).not.toHaveBeenCalled();
+					finishAssembly();
+					await loading;
+				} else {
+					await loading;
+					process.emit(signal);
+				}
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(startWorkload).toHaveBeenCalledOnce();
+				expect(workload.stop).toHaveBeenCalledTimes(rejectsAssembly ? 0 : 1);
+				expect(process.exitCode).toBe(
+					rejectsAssembly || rejectsShutdown ? 1 : undefined,
+				);
+				expect(unhandled).toEqual([]);
+				expect(
+					info.mock.calls.map(([message]) => JSON.parse(String(message))),
+				).toEqual([
+					{ service: "platform-worker", status: "ready" },
+					{ service: "platform-worker", status: "stopped" },
+				]);
+				expect(error).not.toHaveBeenCalled();
+				const failed = rejectsAssembly || rejectsShutdown;
+				expect(vi.getTimerCount()).toBe(failed ? 1 : 0);
+				process.emit(signal);
+				process.emit(signal === "SIGINT" ? "SIGTERM" : "SIGINT");
+				expect(vi.getTimerCount()).toBe(failed ? 1 : 0);
+				expect(exit).not.toHaveBeenCalled();
+				await vi.runOnlyPendingTimersAsync();
+				if (failed) {
+					expect(exit).toHaveBeenCalledOnce();
+					expect(exit).toHaveBeenCalledWith(1);
+				} else expect(exit).not.toHaveBeenCalled();
+			} finally {
+				finishAssembly();
+				await vi.advanceTimersByTimeAsync(0);
+				process.off("unhandledRejection", onUnhandled);
+				for (const [signal, listener] of on.mock.calls)
+					if (signal === "SIGINT" || signal === "SIGTERM")
+						process.off(signal, listener);
+				if (originalArgv === undefined) process.argv.splice(1, 1);
+				else process.argv[1] = originalArgv;
+				process.exitCode = originalExitCode;
+				vi.doUnmock("./workload-worker.js");
+				on.mockRestore();
+				exit.mockRestore();
+				info.mockRestore();
+				error.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
 });

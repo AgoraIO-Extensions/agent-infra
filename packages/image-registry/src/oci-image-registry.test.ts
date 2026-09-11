@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -963,8 +964,235 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
 			expect(policy).not.toHaveBeenCalled();
 			expect(JSON.stringify(result)).not.toContain("registry-secret");
+			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+
+	it("does not start policy or transport for cancelled admission", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetch = vi.fn();
+		const authorize = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch,
+			policy: { authorize },
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({ status: "rejected" });
+		expect(authorize).not.toHaveBeenCalled();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each(["resolve", "reject"] as const)(
+		"cancels pending policy and consumes late %s",
+		async (late) => {
+			const controller = new AbortController();
+			const gate = Promise.withResolvers<typeof admittedPolicy>();
+			const started = Promise.withResolvers<void>();
+			let signal: AbortSignal | undefined;
+			const fetch = vi.fn(async () =>
+				ociManifestResponse(registryManifestBody, manifestDigest),
+			);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				fetch,
+				policy: {
+					authorize(_input, options?: { readonly signal?: AbortSignal }) {
+						signal = options?.signal;
+						started.resolve();
+						return gate.promise;
+					},
+				},
+			});
+			const pending = adapter.admit(request, { signal: controller.signal });
+			await started.promise;
+			controller.abort();
+			let settled = false;
+			void pending.then(() => {
+				settled = true;
+			});
+			try {
+				await vi.waitFor(() => expect(settled).toBe(true), { timeout: 150 });
+				expect(signal).toBe(controller.signal);
+				expect(signal?.aborted).toBe(true);
+				await expect(pending).resolves.toMatchObject({
+					status: "rejected",
+					error: { code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" },
+				});
+			} finally {
+				if (late === "resolve") gate.resolve(admittedPolicy);
+				else gate.reject(new Error("late policy rejection"));
+				await pending;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(fetch).toHaveBeenCalledTimes(1);
+		},
+	);
+	it("consumes cancellation when policy aborts and throws synchronously", async () => {
+		const controller = new AbortController();
+		const fetch = vi.fn(async () =>
+			ociManifestResponse(registryManifestBody, manifestDigest),
+		);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch,
+			policy: {
+				authorize() {
+					controller.abort();
+					throw new Error("synchronous policy failure");
+				},
+			},
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_ADMISSION_POLICY_UNAVAILABLE" },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("removes policy cancellation listener after normal completion", async () => {
+		const controller = new AbortController();
+		const add = vi.spyOn(controller.signal, "addEventListener");
+		const remove = vi.spyOn(controller.signal, "removeEventListener");
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch: vi
+				.fn()
+				.mockResolvedValueOnce(
+					ociManifestResponse(registryManifestBody, manifestDigest),
+				)
+				.mockResolvedValueOnce(ociConfigResponse(registryConfigBody)),
+			policy: { authorize: async () => admittedPolicy },
+		});
+		await expect(
+			adapter.admit(request, { signal: controller.signal }),
+		).resolves.toMatchObject({ status: "admitted" });
+		const listener = add.mock.calls.find(([name]) => name === "abort")?.[1];
+		expect(listener).toBeDefined();
+		expect(remove).toHaveBeenCalledWith("abort", listener);
+	});
+
+	it("clears the transport deadline when the admission caller cancels", async () => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
+		const fetch = vi.fn(
+			(
+				_input: Parameters<typeof globalThis.fetch>[0],
+				init?: Parameters<typeof globalThis.fetch>[1],
+			) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener(
+						"abort",
+						() => reject(new Error("registry request cancelled")),
+						{ once: true },
+					);
+				}),
+		);
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch,
+			policy: { authorize: policy },
+		});
+		const pending = adapter.admit(request, { signal: controller.signal });
+		try {
+			await Promise.resolve();
+			expect(vi.getTimerCount()).toBe(1);
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(0);
+
+			await expect(pending).resolves.toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			});
+			expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+			expect(policy).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(30_000);
+			await pending.catch(() => undefined);
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts a stalled OCI response body when the admission caller cancels", async () => {
+		const requests: string[] = [];
+		const bodyStarted = Promise.withResolvers<void>();
+		const responseClosed = Promise.withResolvers<void>();
+		const server = createServer((incoming, outgoing) => {
+			requests.push(incoming.url ?? "");
+			outgoing.once("close", () => responseClosed.resolve());
+			outgoing.writeHead(200, {
+				"content-length": Buffer.byteLength(registryManifestBody),
+				"content-type": ociManifestMediaType,
+				"docker-content-digest": manifestDigest,
+			});
+			outgoing.write(registryManifestBody.slice(0, 1));
+			bodyStarted.resolve();
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error();
+		const localOrigin = `http://127.0.0.1:${address.port}`;
+		const policy = vi.fn(async () => admittedPolicy);
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch(input, init) {
+				const url = new URL(requestUrl(input));
+				return globalThis.fetch(`${localOrigin}${url.pathname}`, init);
+			},
+			policy: { authorize: policy },
+		});
+		const controller = new AbortController();
+		const pending = adapter.admit(request, { signal: controller.signal });
+		let closeTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await bodyStarted.promise;
+			controller.abort();
+			const closed = await Promise.race([
+				responseClosed.promise.then(() => true),
+				new Promise<false>((resolve) => {
+					closeTimer = setTimeout(() => resolve(false), 500);
+				}),
+			]);
+			expect(closed).toBe(true);
+			await expect(pending).resolves.toMatchObject({
+				status: "rejected",
+				error: {
+					code: "IMAGE_REGISTRY_UNAVAILABLE",
+					retryable: true,
+				},
+			});
+			expect(requests).toHaveLength(1);
+			expect(requests[0]).toContain("/manifests/");
+			expect(policy).not.toHaveBeenCalled();
+		} finally {
+			controller.abort();
+			clearTimeout(closeTimer);
+			server.closeAllConnections();
+			await pending.catch(() => undefined);
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
 		}
 	});
 

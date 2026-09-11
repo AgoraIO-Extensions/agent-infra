@@ -49,6 +49,9 @@ Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
 `IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
 `IMAGE_REGISTRY_INSECURE=true`，生产 Registry 必须使用 HTTPS。
 
+RuntimeHost 镜像额外通过[Codex Pilot 原生 HTTP/SSE probe](runtime/README.md#镜像验证)，
+对应证据与 image manifest 使用相同 commit 和镜像 Digest。
+
 release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
 检查：
 
@@ -65,6 +68,47 @@ image manifest 的 Commit，rollback 的 `HEAD` 必须等于 target image manife
 image manifest 只标识当前已部署 release。
 
 ## kind 拓扑验证
+
+### Workload 调谐
+
+生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如 `file:///app/deployment/platform-worker.mjs`；该示例不代表基础镜像包含此文件。仓库基础镜像不提供环境专属装配包，发布前必须在最终镜像内确认模块可加载并导出下述工厂。未配置路径时，生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
+`createPlatformWorkloadWorkerOptionsV1(signal: AbortSignal)`。部署包必须在装配前检查
+signal，并把它传给数据库、网络和其他异步装配操作；取消后须停止继续创建资源并清理已经
+创建的资源。收到 SIGINT 或 SIGTERM 后，Worker 会取消装配并停止已有循环；装配或停止未在
+10 秒内全部完成时进程以状态 1 强制退出。该截止可能截断 60 秒 admission 排空，后续实例
+依靠 Platform DB 中的持久化调谐状态恢复。
+
+部署包装配 namespace-scoped Kubernetes client、ImageRegistryAdapter、Worker-only
+Secret decryptor、资源和网络 Profile，
+以及 RuntimeHost Client 的核心与 capability 探测。探测必须绑定传入的 Agent、
+Workload revision 和固定 Service origin；`platform-adapter` 的核心探测必须满足
+[Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。
+Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
+
+迁移 `0012` 保存每个 Agent 的调谐进度、候选与已验证修订。Worker 在 Agent 行锁内
+执行一个可重入步骤；多个 Worker 使用 `SKIP LOCKED` 处理不同 Agent。停止和停用
+先关闭路由再缩容，升级先停止旧 Pod，再复用 PVC 启动候选。预检拒绝保留旧版本，
+运行期候选失败则把已验证配置作为新的 Workload revision 调谐。新建失败清理完成后
+才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
+
+Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站
+属于[后续生产化加固](../docs/architecture/PLAN-M1-delivery-convergence.md)，当前
+Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
+
+独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：
+
+```bash
+pnpm build
+bash deploy/kind/workload.sh
+```
+
+脚本创建临时 registry 与独立 kind cluster，构建两个不同 Digest 的合成测试镜像，
+验证真实 Kubernetes RBAC、NetworkPolicy、版本化 Secret、PVC、停止/重启、路由切换、
+失败候选回滚和资源清理，退出时删除该次测试资源。普通 `pnpm test` 不启动 kind；
+CI 的 Workload kind job 单独运行本测试。网络插件安装依据
+[Calico kind 安装说明](https://docs.tigera.io/calico/3.30/getting-started/kubernetes/kind)。
+
+### 部署拓扑
 
 安装 `kind v0.30.0`、Helm 3、kubectl 和 Docker 后运行：
 

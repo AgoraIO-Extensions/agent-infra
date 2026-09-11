@@ -66,6 +66,7 @@ describe("platform-store package surface", () => {
 			"openPostgresPlatformIdempotencyStore",
 			"openPostgresSecretActivationStoreV1",
 			"openPostgresSecretKeyRotationStoreV1",
+			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
 		]);
 

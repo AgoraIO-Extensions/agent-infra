@@ -250,6 +250,7 @@ function audit(
 function plan(input: {
 	readonly expectedLifecycleStates: SecretActivationTransitionPlanV1["expectedLifecycleStates"];
 	readonly expectedActivationFence?: SecretActivationFenceV1;
+	readonly historicalCandidateCleanup?: true;
 	readonly next: SecretActivationTransitionPlanV1["next"];
 	readonly auditEvents?: readonly SecretActivationAuditIntentV1[];
 }): SecretActivationTransitionPlanV1 {
@@ -259,12 +260,121 @@ function plan(input: {
 		...(input.expectedActivationFence
 			? { expectedActivationFence: input.expectedActivationFence }
 			: {}),
+		...(input.historicalCandidateCleanup
+			? { historicalCandidateCleanup: true as const }
+			: {}),
 		next: input.next,
 		auditEvents: input.auditEvents ?? [],
 	};
 }
 
 describe("PostgreSQL Secret activation Store", () => {
+	it("commits exact non-active historical candidate cleanup after configuration advances", async () => {
+		const historical = validatePlatformSecretRecordV1({
+			...parallelPending,
+			agentId: "agent_cleanup_history",
+			secretId: "credential_cleanup_history",
+			configRevision: 7,
+			crypto: {
+				...parallelPending.crypto,
+				dekFingerprint: "e".repeat(64),
+				aadBinding: {
+					...parallelPending.crypto.aadBinding,
+					agentId: "agent_cleanup_history",
+					secretId: "credential_cleanup_history",
+					configRevision: 7,
+				},
+			},
+		});
+		await client`
+			insert into platform.agents (id, current_configuration_revision)
+			values (${historical.agentId}, 8)
+		`;
+		await client`
+			insert into platform.agent_configuration_revisions
+				(agent_id, revision, source_reference, created_at)
+			values
+				(${historical.agentId}, 7, 'configuration_07', now()),
+				(${historical.agentId}, 8, 'configuration_08', now())
+		`;
+		await client`
+			insert into platform.secret_records
+				(agent_id, secret_id, secret_version, configuration_revision,
+				 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
+				 wrapping_key_version, record, created_at, updated_at)
+			values
+				(${historical.agentId}, ${historical.secretId}, ${historical.secretVersion},
+				 ${historical.configRevision}, ${historical.ownerType}, ${historical.ownerId},
+				 ${historical.name}, ${historical.lifecycleState},
+				 ${historical.crypto.dekFingerprint}, ${historical.crypto.wrappingKeyVersion},
+				 ${client.json(historical)}, ${new Date(historical.createdAt)},
+				 ${new Date(historical.updatedAt)})
+		`;
+		const claimed = await store.claimCandidate(
+			{
+				schemaVersion: 1,
+				agentId: historical.agentId,
+				secretId: historical.secretId,
+				secretVersion: historical.secretVersion,
+				configRevision: historical.configRevision,
+				workerId: "worker_cleanup_history",
+				leaseDurationMs: 60_000,
+			},
+			(state) =>
+				state.currentConfigurationRevision >= state.candidate.configRevision
+					? { outcome: "claim" }
+					: { outcome: "stale" },
+		);
+		expect(claimed.outcome).toBe("claimed");
+		if (claimed.outcome !== "claimed") throw new Error("Expected claim");
+		expect(claimed.claim.candidate).toMatchObject({
+			agentId: historical.agentId,
+			secretId: historical.secretId,
+			secretVersion: historical.secretVersion,
+			configRevision: historical.configRevision,
+			ownerType: historical.ownerType,
+			ownerId: historical.ownerId,
+			name: historical.name,
+			wrappingKeyVersion: historical.crypto.wrappingKeyVersion,
+			lifecycleState: "pending",
+		});
+		await expect(
+			store.commitTransition({
+				claim: claimed.claim,
+				plan: plan({
+					expectedLifecycleStates: ["pending"],
+					historicalCandidateCleanup: true,
+					next: {
+						lifecycleState: "failed",
+						error: {
+							schemaVersion: 1,
+							code: "SECRET_ACTIVATION_FAILED",
+							message: "Secret activation failed",
+							retryable: true,
+							traceId: "trace_cleanup_history",
+						},
+					},
+				}),
+			}),
+		).resolves.toBe(true);
+		const [persisted] = await client`
+			select lifecycle_state, record from platform.secret_records
+			where agent_id = ${historical.agentId}
+				and secret_id = ${historical.secretId}
+				and secret_version = ${historical.secretVersion}
+				and configuration_revision = ${historical.configRevision}
+		`;
+		expect(persisted?.lifecycle_state).toBe("failed");
+		expect(validatePlatformSecretRecordV1(persisted?.record)).toMatchObject({
+			agentId: historical.agentId,
+			secretId: historical.secretId,
+			secretVersion: historical.secretVersion,
+			configRevision: historical.configRevision,
+			lifecycleState: "failed",
+			error: { code: "SECRET_ACTIVATION_FAILED", retryable: true },
+		});
+	});
+
 	it("serializes an Agent, fences stale writes and atomically activates with audit", async () => {
 		const first = await claim("worker_01");
 		expect(first.outcome).toBe("claimed");

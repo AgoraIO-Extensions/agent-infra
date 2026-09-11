@@ -685,3 +685,50 @@ test("kind down deletes only an owned topology cluster", async () => {
 		await rm(fixture, { force: true, recursive: true });
 	}
 });
+
+test("topology harness does not pretend to package a production Worker module", () => {
+	const result = render("--set", "platformWorker.deploymentModule=null");
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.some(
+			(entry) => entry.name === "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+		),
+		false,
+	);
+});
+
+test("production Worker requires an explicit packaged deployment module path", () => {
+	const missing = render("--set", "workloadTopology.enabled=false");
+	assert.notEqual(missing.status, 0);
+	assert.match(missing.stderr, /platformWorker.deploymentModule/);
+	const bare = render(
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=deployment-platform-worker",
+	);
+	assert.notEqual(bare.status, 0);
+	const result = render(
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/deployment/platform-worker.mjs",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+		).value,
+		"file:///app/deployment/platform-worker.mjs",
+	);
+});

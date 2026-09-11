@@ -13,14 +13,17 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
-test("Platform Worker typecheck builds its dist-backed Secret Store dependency", async () => {
+test("Platform Worker typecheck builds dist-backed workspace dependencies through Turbo", async () => {
 	const manifest = JSON.parse(
 		await readFile("apps/platform-worker/package.json", "utf8"),
 	);
+	const turbo = JSON.parse(await readFile("turbo.json", "utf8"));
 
-	assert.match(
-		manifest.scripts["check-types"],
-		/pnpm --filter @agent-infra\/secret-store build && tsc --noEmit/,
+	assert.equal(manifest.scripts["check-types"], "tsc --noEmit");
+	assert.deepEqual(
+		turbo.tasks["check-types"].dependsOn,
+		["^build", "^check-types"],
+		"typechecks must build workspace dependencies before reading their dist exports",
 	);
 });
 
@@ -153,4 +156,17 @@ test("Compose runs every deployment image with a read-only root filesystem", asy
 		"--spider",
 		"http://127.0.0.1:8080/",
 	]);
+});
+
+test("Compose keeps the configured RuntimeHost out of the default application", async () => {
+	const compose = parse(await readFile("docker-compose.yml", "utf8"));
+	const rootManifest = JSON.parse(await readFile("package.json", "utf8"));
+
+	assert.deepEqual(compose.services["agent-runtime-host"].profiles, [
+		"runtime",
+	]);
+	assert.match(
+		rootManifest.scripts["docker:build"],
+		/docker compose --profile runtime build$/,
+	);
 });

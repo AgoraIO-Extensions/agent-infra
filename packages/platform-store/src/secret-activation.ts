@@ -184,8 +184,13 @@ function claimMatchesRow(
 	row: SecretActivationRow,
 	record: PlatformSecretRecordV1,
 	decisionAt: Date,
+	allowHistoricalConfiguration = false,
 ): boolean {
 	try {
+		const currentConfigurationRevision = integer(
+			row.current_configuration_revision,
+			1,
+		);
 		return (
 			claim.schemaVersion === 1 &&
 			claim.workerId === row.secret_activation_owner &&
@@ -194,8 +199,9 @@ function claimMatchesRow(
 				claim.leaseExpiresAt.getTime() &&
 			claim.leaseExpiresAt > decisionAt &&
 			recordMatchesCandidate(record, claim.candidate) &&
-			integer(row.current_configuration_revision, 1) ===
-				claim.candidate.configRevision
+			(allowHistoricalConfiguration
+				? currentConfigurationRevision >= claim.candidate.configRevision
+				: currentConfigurationRevision === claim.candidate.configRevision)
 		);
 	} catch {
 		return false;
@@ -273,6 +279,22 @@ function validatePlan(
 			) ||
 			!Array.isArray(plan.auditEvents) ||
 			plan.auditEvents.length > 2
+		) {
+			throw new Error();
+		}
+		if (
+			plan.historicalCandidateCleanup !== undefined &&
+			(plan.historicalCandidateCleanup !== true ||
+				plan.next.lifecycleState !== "failed" ||
+				plan.next.error.code !== "SECRET_ACTIVATION_FAILED" ||
+				plan.next.error.retryable !== true ||
+				plan.expectedActivationFence !== undefined ||
+				plan.expectedLifecycleStates.some(
+					(state) => !["pending", "applying", "observed"].includes(state),
+				) ||
+				plan.auditEvents.length !== 0 ||
+				plan.next.kubernetesSecretRef !== undefined ||
+				plan.next.activationFence !== undefined)
 		) {
 			throw new Error();
 		}
@@ -414,9 +436,18 @@ export interface PostgresSecretActivationStoreOptionsV1 {
 export class PostgresSecretActivationStoreV1
 	implements SecretActivationStorePortV1
 {
-	readonly #client: ReturnType<typeof postgres>;
+	readonly #client: ReturnType<typeof postgres> | undefined;
+	readonly #transaction: postgres.TransactionSql | undefined;
 
-	constructor(options: PostgresSecretActivationStoreOptionsV1) {
+	constructor(
+		options:
+			| PostgresSecretActivationStoreOptionsV1
+			| { readonly transaction: postgres.TransactionSql },
+	) {
+		if ("transaction" in options) {
+			this.#transaction = options.transaction;
+			return;
+		}
 		const databaseUrl = platformDatabaseUrlFromEnvironment({
 			PLATFORM_DATABASE_URL: text(options.databaseUrl),
 		});
@@ -424,7 +455,15 @@ export class PostgresSecretActivationStoreV1
 	}
 
 	async close(): Promise<void> {
-		await this.#client.end();
+		await this.#client?.end();
+	}
+
+	async #run<T>(
+		operation: (sql: postgres.TransactionSql) => Promise<T>,
+	): Promise<T> {
+		if (this.#transaction) return operation(this.#transaction);
+		if (!this.#client) throw new SecretActivationStoreError();
+		return this.#client.begin(operation) as Promise<T>;
 	}
 
 	async claimCandidate(
@@ -433,7 +472,7 @@ export class PostgresSecretActivationStoreV1
 	): ReturnType<SecretActivationStorePortV1["claimCandidate"]> {
 		try {
 			const request = claimInput(input);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, request);
 				if (!row) return { outcome: "stale" as const };
 				const record = parseRecord(row);
@@ -494,7 +533,7 @@ export class PostgresSecretActivationStoreV1
 	): Promise<boolean> {
 		try {
 			validateAudit(input.auditEvent, input.claim);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, input.claim.candidate);
 				if (!row) return false;
 				const record = parseRecord(row);
@@ -515,13 +554,19 @@ export class PostgresSecretActivationStoreV1
 	): Promise<boolean> {
 		try {
 			validatePlan(input.plan, input.claim);
-			return await this.#client.begin(async (sql) => {
+			return await this.#run(async (sql) => {
 				const row = await this.#lockedRow(sql, input.claim.candidate);
 				if (!row) return false;
 				const record = parseRecord(row);
 				const decisionAt = await this.#decisionAt(sql);
 				if (
-					!claimMatchesRow(input.claim, row, record, decisionAt) ||
+					!claimMatchesRow(
+						input.claim,
+						row,
+						record,
+						decisionAt,
+						input.plan.historicalCandidateCleanup === true,
+					) ||
 					!input.plan.expectedLifecycleStates.includes(record.lifecycleState) ||
 					!currentRecordMatchesExpectedFence(record, input.plan)
 				) {

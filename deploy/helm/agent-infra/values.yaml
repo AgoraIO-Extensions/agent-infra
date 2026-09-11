@@ -52,6 +52,7 @@ platformApi:
   deploymentModule: deployment-platform-api
 
 platformWorker:
+  deploymentModule: ""
   replicas: 1
 
 migration:

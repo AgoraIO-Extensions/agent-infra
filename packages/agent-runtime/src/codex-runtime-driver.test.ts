@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,12 +18,18 @@ import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
+	type CodexModelAccess,
 } from "./codex-app-server-bridge.js";
+import type {
+	CodexModelTurnAdmission,
+	CodexNativeTurn,
+} from "./codex-model-transport.js";
 import {
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import {
 	ingressVerifiedRuntimeHost,
@@ -29,8 +37,89 @@ import {
 } from "./grant-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
 
+type CancelTurnTestHook = (
+	turn: CodexNativeTurn,
+	cancel: () => Promise<void>,
+) => Promise<void>;
+
+type RegisterTurnTestHook = (
+	turn: CodexNativeTurn,
+	deadline: number | undefined,
+	register: () => boolean,
+) => boolean;
+
+class ObservableCleanupPromise extends Promise<void> {
+	static override get [Symbol.species]() {
+		return Promise;
+	}
+
+	constructor(
+		executor: (
+			resolve: (value?: void | PromiseLike<void>) => void,
+			reject: (reason?: unknown) => void,
+		) => void,
+		private readonly onConsumed: () => void,
+	) {
+		super(executor);
+	}
+
+	// biome-ignore lint/suspicious/noThenProperty: Await consumption is the behavior under test.
+	override then<TResult1 = void, TResult2 = never>(
+		// biome-ignore lint/suspicious/noConfusingVoidType: This overrides the native Promise signature.
+		onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+		onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+	): Promise<TResult1 | TResult2> {
+		this.onConsumed();
+		return super.then(onfulfilled, onrejected);
+	}
+}
+
+const modelTransportTestHooks = vi.hoisted(() => ({
+	cancelTurn: undefined as CancelTurnTestHook | undefined,
+	registerTurn: undefined as RegisterTurnTestHook | undefined,
+}));
+
+vi.mock("./codex-model-transport.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./codex-model-transport.js")>();
+	return {
+		...actual,
+		openCodexModelTransport: async (
+			...args: Parameters<typeof actual.openCodexModelTransport>
+		) => {
+			const transport = await actual.openCodexModelTransport(...args);
+			const deadlines = new WeakMap<CodexModelTurnAdmission, number>();
+			return {
+				...transport,
+				beginTurnAdmission: (
+					...args: Parameters<typeof transport.beginTurnAdmission>
+				) => {
+					const [deadline] = args;
+					const admission = transport.beginTurnAdmission(...args);
+					deadlines.set(admission, deadline);
+					return admission;
+				},
+				registerTurn: (
+					admission: CodexModelTurnAdmission,
+					turn: CodexNativeTurn,
+				) =>
+					modelTransportTestHooks.registerTurn?.(
+						turn,
+						deadlines.get(admission),
+						() => transport.registerTurn(admission, turn),
+					) ?? transport.registerTurn(admission, turn),
+				cancelTurn: (turn: CodexNativeTurn) =>
+					modelTransportTestHooks.cancelTurn?.(turn, () =>
+						transport.cancelTurn(turn),
+					) ?? transport.cancelTurn(turn),
+			};
+		},
+	};
+});
+
 const directories: string[] = [];
 const drivers: CodexRuntimeDriver[] = [];
+const servers: Server[] = [];
 
 type CodexTurnStatus = "inProgress" | "completed" | "failed" | "interrupted";
 
@@ -48,9 +137,23 @@ interface StoredEventJournal {
 
 interface StoredCodexExecution {
 	status?: unknown;
+	nativeTurnId?: string;
+}
+
+interface StoredCodexOperation {
+	internalModel?: string;
+	reasoningLevel?: string;
+	state?: unknown;
+	nativeSessionRef?: string;
+	configVersion?: unknown;
+	admissionPending?: unknown;
+	record?: {
+		result?: { outcome?: unknown; status?: unknown };
+	};
 }
 
 interface StoredCodexSession {
+	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
 	journals?: Record<string, StoredEventJournal>;
 	executions?: Record<string, StoredCodexExecution>;
@@ -58,6 +161,7 @@ interface StoredCodexSession {
 
 interface StoredCodexDriverState {
 	sessions: Record<string, StoredCodexSession>;
+	operations: Record<string, StoredCodexOperation>;
 }
 
 async function persistedExecutionStatus(
@@ -219,6 +323,16 @@ function stopCommand(
 	};
 }
 
+function generationCancelCommand(
+	nativeSessionRef: string,
+): Extract<RuntimeDriverCommandV1, { kind: "generation-cancel" }> {
+	return {
+		...stopCommand(nativeSessionRef),
+		kind: "generation-cancel",
+		operationId: "generation-cancel-codex",
+	};
+}
+
 function stopRequest(
 	request: RuntimeSubmitTurnRequestV1,
 	hostSessionRef: string,
@@ -274,11 +388,12 @@ function generationCancelRequest(
 	};
 }
 
-function driverOptions(path: string) {
+function driverOptions(path: string, configVersion = "synthetic-config-1") {
 	return {
 		path,
-		model: "gpt-5.3-codex",
-		reasoningEffort: "high",
+		configVersion,
+		defaultModelOptionId: "model-option-primary",
+		defaultReasoningLevel: "high",
 		modelOptions: [
 			{
 				modelOptionId: "model-option-primary",
@@ -294,15 +409,23 @@ function driverOptions(path: string) {
 	};
 }
 
+function internalModel(modelOptionId: string, model: string) {
+	return `${createHash("sha256").update(modelOptionId).digest("hex")}/${model}`;
+}
+
 function openDriver(
 	path: string,
 	bridge: TestCodexBridge,
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+	configVersion?: string,
 ) {
-	return openCodexRuntimeDriverForTest(driverOptions(path), async (options) => {
-		onOpen?.(options);
-		return bridge;
-	});
+	return openCodexRuntimeDriverForTest(
+		driverOptions(path, configVersion),
+		async (options) => {
+			onOpen?.(options);
+			return bridge;
+		},
+	);
 }
 
 function configReadResult(
@@ -333,9 +456,158 @@ function configReadResult(
 	};
 }
 
+const upstreamModelAccess = {
+	endpoint: "http://127.0.0.1:8080/approved/v1",
+	credential: "synthetic-active-credential",
+};
+
+function sessionFlagOrigin() {
+	return { name: { type: "sessionFlags" }, version: "1" };
+}
+
+function modelAccessConfigReadResult(
+	modelAccess: CodexModelAccess,
+	model = internalModel("model-option-primary", "gpt-5.3-codex"),
+	reasoningEffort = "high",
+) {
+	const configuredProvider = {
+		name: "Agent Infra Active Model",
+		base_url: modelAccess.endpoint,
+		env_key: "AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+		wire_api: "responses",
+		requires_openai_auth: false,
+		supports_websockets: false,
+		request_max_retries: 0,
+		stream_max_retries: 0,
+	};
+	const provider = {
+		...configuredProvider,
+		env_key_instructions: null,
+		experimental_bearer_token: null,
+		auth: null,
+		aws: null,
+		query_params: null,
+		http_headers: null,
+		env_http_headers: null,
+		stream_idle_timeout_ms: null,
+		websocket_connect_timeout_ms: null,
+		supports_standalone_web_search: false,
+	};
+	return configReadResult({
+		config: {
+			model,
+			model_reasoning_effort: reasoningEffort,
+			model_provider: "agent_infra",
+			model_providers: { agent_infra: provider },
+		},
+		origins: {
+			model_provider: sessionFlagOrigin(),
+			...Object.fromEntries(
+				Object.keys(configuredProvider).map((key) => [
+					`model_providers.agent_infra.${key}`,
+					sessionFlagOrigin(),
+				]),
+			),
+		},
+	});
+}
+
+function openDriverWithModelAccess(
+	path: string,
+	bridge: TestCodexBridge,
+	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+) {
+	return openCodexRuntimeDriverForTest(
+		{
+			...driverOptions(path),
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+		},
+		async (options) => {
+			if (!options.modelAccess) throw new Error("missing loopback access");
+			bridge.setConfigReadResult(
+				modelAccessConfigReadResult(options.modelAccess),
+			);
+			onOpen?.(options);
+			return bridge;
+		},
+	);
+}
+
+function openDriverWithModelEndpoint(
+	path: string,
+	bridge: TestCodexBridge,
+	endpoint: string,
+	onOpen?: (options: CodexAppServerBridgeOptions) => void,
+	configVersion?: string,
+	credential = upstreamModelAccess.credential,
+) {
+	return openCodexRuntimeDriverForTest(
+		{
+			...driverOptions(path, configVersion),
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				endpoint,
+				credential,
+			})),
+		},
+		async (options) => {
+			if (!options.modelAccess) throw new Error("missing loopback access");
+			bridge.setConfigReadResult(
+				modelAccessConfigReadResult(options.modelAccess),
+			);
+			onOpen?.(options);
+			return bridge;
+		},
+	);
+}
+
+async function listen(server: Server) {
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	servers.push(server);
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("missing address");
+	return `http://127.0.0.1:${address.port}/v1`;
+}
+
+function modelRequest(
+	modelAccess: CodexModelAccess,
+	bridge: TestCodexBridge,
+	nativeTurnId = bridge.nativeTurnId,
+	model = internalModel("model-option-primary", "gpt-5.3-codex"),
+) {
+	return fetch(`${modelAccess.endpoint}/responses`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${modelAccess.credential}`,
+			"x-client-request-id": bridge.nativeThreadId,
+			"x-codex-turn-metadata": JSON.stringify({
+				thread_id: bridge.nativeThreadId,
+				turn_id: nativeTurnId,
+			}),
+		},
+		body: JSON.stringify({
+			model,
+			stream: true,
+		}),
+	});
+}
+
+function completedEvent() {
+	return `data: ${JSON.stringify({
+		type: "response.completed",
+		response: { id: "response-synthetic", status: "completed" },
+	})}\n\n`;
+}
+
 class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
 	readonly responses: CodexAppServerFrame[] = [];
+	beforeInterrupt?: () => Promise<void>;
+	interruptError?: { code: number; message: string };
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly heldTurnsListRequestIds: number[] = [];
@@ -351,6 +623,7 @@ class TestCodexBridge {
 	private turnsListError?: { code: number; message: string };
 	private nextTurnsListError?: { code: number; message: string };
 	private itemsListPages?: TestItemsListPage[];
+	modelListPages?: Record<string, unknown>[];
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
@@ -392,6 +665,37 @@ class TestCodexBridge {
 		}
 		if (method === "config/read") {
 			this.respond(id, this.configReadResult);
+			return;
+		}
+		if (method === "model/list") {
+			if (this.modelListPages) {
+				this.respond(id, this.modelListPages.shift());
+				return;
+			}
+			this.respond(id, {
+				data: [
+					{
+						model: "gpt-5.3",
+						supportedReasoningEfforts: [
+							{ reasoningEffort: "high", description: "Synthetic high" },
+							{ reasoningEffort: "ultra", description: "Synthetic ultra" },
+						],
+					},
+					{
+						model: "gpt-5.3-codex",
+						supportedReasoningEfforts: [
+							{ reasoningEffort: "high", description: "Synthetic high" },
+						],
+					},
+					{
+						model: "gpt-5.2-codex",
+						supportedReasoningEfforts: [
+							{ reasoningEffort: "low", description: "Synthetic low" },
+						],
+					},
+				],
+				nextCursor: null,
+			});
 			return;
 		}
 		if (method === "thread/start") {
@@ -466,6 +770,11 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "turn/interrupt") {
+			await this.beforeInterrupt?.();
+			if (this.interruptError) {
+				this.push({ id, error: this.interruptError });
+				return;
+			}
 			if (this.interruptTerminalStatus) {
 				this.turnStatus = this.interruptTerminalStatus;
 			}
@@ -761,7 +1070,19 @@ class TestCodexBridge {
 
 afterEach(async () => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
+	modelTransportTestHooks.cancelTurn = undefined;
+	modelTransportTestHooks.registerTurn = undefined;
 	await Promise.all(drivers.splice(0).map((driver) => driver.close()));
+	await Promise.all(
+		servers.splice(0).map(
+			(server) =>
+				new Promise<void>((resolve) => {
+					server.close(() => resolve());
+					server.closeAllConnections();
+				}),
+		),
+	);
 	await Promise.all(
 		directories
 			.splice(0)
@@ -770,6 +1091,330 @@ afterEach(async () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it("passes a deployment launch PATH only when configured without changing the process PATH", async () => {
+		const directory = await runtimeDirectory();
+		const processPath = process.env.PATH;
+		const launchPath = "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin";
+		for (const configuredPath of [launchPath, undefined]) {
+			let received: CodexAppServerBridgeOptions | undefined;
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(
+						join(directory, configuredPath ? "explicit.json" : "default.json"),
+					),
+					...(configuredPath === undefined
+						? {}
+						: { launchPath: configuredPath }),
+				},
+				async (options) => {
+					received = options;
+					expect(process.env.PATH).toBe(processPath);
+					return bridge;
+				},
+			);
+			drivers.push(driver);
+			expect(process.env.PATH).toBe(processPath);
+			if (configuredPath === undefined)
+				expect(received).not.toHaveProperty("launchPath");
+			else expect(received).toHaveProperty("launchPath", launchPath);
+		}
+	});
+
+	it("replaces upstream access with loopback access and revokes it on Driver close", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelAccess(path, bridge, (options) => {
+			loopback = options.modelAccess;
+		});
+		if (!loopback) throw new Error("missing loopback access");
+		expect(loopback.endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+		expect(loopback.credential).not.toBe(upstreamModelAccess.credential);
+		expect(await readFile(path, "utf8")).not.toContain(
+			upstreamModelAccess.credential,
+		);
+		expect(await readFile(path, "utf8")).not.toContain(loopback.credential);
+		const beforeClose = await fetch(`${loopback.endpoint}/arbitrary`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${loopback.credential}` },
+			body: "{}",
+		});
+		expect(beforeClose.status).toBe(404);
+		await driver.close();
+		await expect(
+			fetch(`${loopback.endpoint}/responses`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${loopback.credential}` },
+				body: "{}",
+			}),
+		).rejects.toThrow();
+	});
+
+	it("fails closed when Codex reports a different model provider configuration", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		await expect(
+			openDriverWithModelAccess(
+				join(directory, "driver.json"),
+				bridge,
+				(options) => {
+					if (!options.modelAccess) throw new Error("missing loopback access");
+					loopback = options.modelAccess;
+					const result = modelAccessConfigReadResult(options.modelAccess);
+					const providers = (
+						result.config as typeof result.config & {
+							model_providers: Record<string, Record<string, unknown>>;
+						}
+					).model_providers;
+					const provider = providers.agent_infra as
+						| Record<string, unknown>
+						| undefined;
+					if (!provider) throw new Error("missing model provider fixture");
+					provider.base_url = "http://127.0.0.1:1";
+					bridge.setConfigReadResult(result);
+				},
+			),
+		).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+		});
+		if (!loopback) throw new Error("missing captured loopback access");
+		await expect(
+			fetch(`${loopback.endpoint}/responses`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${loopback.credential}` },
+				body: "{}",
+			}),
+		).rejects.toThrow();
+	});
+
+	it.each([
+		["missing model metadata", "unverified-model", "high"],
+		["unrelated prefix extension", "gpt-5.3x", "high"],
+		["numeric prefix extension", "gpt-5.30", "high"],
+		["unsupported reasoning profile", "gpt-5.3-codex", "ultra"],
+	] as const)(
+		"rejects routed configuration with %s",
+		async (_name, model, reasoningLevel) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			await expect(
+				openCodexRuntimeDriverForTest(
+					{
+						path: join(directory, "driver.json"),
+						configVersion: "synthetic-config-1",
+						defaultModelOptionId: "model-option-primary",
+						defaultReasoningLevel: reasoningLevel,
+						modelOptions: [
+							{
+								modelOptionId: "model-option-primary",
+								model,
+								reasoningLevels: [reasoningLevel],
+								...upstreamModelAccess,
+							},
+						],
+					},
+					async (options) => {
+						if (!options.modelAccess)
+							throw new Error("missing loopback access");
+						bridge.setConfigReadResult(
+							modelAccessConfigReadResult(
+								options.modelAccess,
+								internalModel("model-option-primary", model),
+								reasoningLevel,
+							),
+						);
+						return bridge;
+					},
+				),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it.each(["gpt-5.3-codex", "gpt-5.3-codex-2026-01-01"])(
+		"admits exact or hyphen-separated model profile %s",
+		async (model) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					path: join(directory, "driver.json"),
+					configVersion: "synthetic-config-1",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							model,
+							reasoningLevels: ["high"],
+							...upstreamModelAccess,
+						},
+					],
+				},
+				async (options) => {
+					if (!options.modelAccess) throw new Error("missing loopback access");
+					bridge.setConfigReadResult(
+						modelAccessConfigReadResult(
+							options.modelAccess,
+							internalModel("model-option-primary", model),
+							"high",
+						),
+					);
+					return bridge;
+				},
+			);
+			drivers.push(driver);
+			await driver.execute(submitCommandV2());
+			expect(
+				bridge.requests.find(({ method }) => method === "turn/start")?.params,
+			).toMatchObject({ model: internalModel("model-option-primary", model) });
+		},
+	);
+
+	it.each(["same-page", "cross-page", "unique-pages"] as const)(
+		"validates model profile identity across %s",
+		async (scenario) => {
+			const model = "gpt-5.3-codex";
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const profile = {
+				model,
+				supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+			};
+			const other = {
+				...profile,
+				model: scenario === "unique-pages" ? "gpt-5.2-codex" : model,
+				supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+			};
+			bridge.modelListPages =
+				scenario === "same-page"
+					? [{ data: [profile, other], nextCursor: null }]
+					: [
+							{ data: [profile], nextCursor: "page-two" },
+							{ data: [other], nextCursor: null },
+						];
+			const opening = openCodexRuntimeDriverForTest(
+				{
+					path: join(directory, "driver.json"),
+					configVersion: "synthetic-config-1",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							model,
+							reasoningLevels: ["high"],
+							...upstreamModelAccess,
+						},
+					],
+				},
+				async (options) => {
+					if (!options.modelAccess) throw new Error("missing loopback access");
+					bridge.setConfigReadResult(
+						modelAccessConfigReadResult(
+							options.modelAccess,
+							internalModel("model-option-primary", model),
+							"high",
+						),
+					);
+					return bridge;
+				},
+			);
+			if (scenario !== "unique-pages") {
+				await expect(opening).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+				});
+				expect(
+					bridge.requests.some(({ method }) => method === "turn/start"),
+				).toBe(false);
+				return;
+			}
+			const driver = await opening;
+			expect(
+				bridge.requests
+					.filter(({ method }) => method === "model/list")
+					.map(({ params }) => params),
+			).toEqual([
+				{ includeHidden: true, limit: 100 },
+				{ includeHidden: true, limit: 100, cursor: "page-two" },
+			]);
+			drivers.push(driver);
+			await driver.execute(submitCommandV2());
+			expect(
+				bridge.requests.find(({ method }) => method === "turn/start")?.params,
+			).toMatchObject({ model: internalModel("model-option-primary", model) });
+		},
+	);
+
+	it("keeps duplicate real models distinct when one conversation changes option", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const options: CodexRuntimeDriverOptions = {
+			path: join(directory, "driver.json"),
+			configVersion: "synthetic-config-1",
+			defaultModelOptionId: "model-option-primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "model-option-primary",
+					model: "gpt-5.3-codex",
+					reasoningLevels: ["high"],
+					endpoint: "http://127.0.0.1:8080/one/v1",
+					credential: "synthetic-credential-one",
+				},
+				{
+					modelOptionId: "model-option-alternate",
+					model: "gpt-5.3-codex",
+					reasoningLevels: ["high"],
+					endpoint: "http://127.0.0.1:8080/two/v1",
+					credential: "synthetic-credential-two",
+				},
+			],
+		};
+		const driver = await openCodexRuntimeDriverForTest(
+			options,
+			async (bridgeOptions) => {
+				if (!bridgeOptions.modelAccess)
+					throw new Error("missing loopback access");
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(bridgeOptions.modelAccess),
+				);
+				return bridge;
+			},
+		);
+		drivers.push(driver);
+		const first = await driver.execute(submitCommandV2());
+		bridge.setTurnStatus("completed");
+		await driver.getStatus(first.nativeSessionRef, "execution-codex");
+
+		await driver.execute(
+			submitCommandV2({
+				operationId: "execution-codex-alternate",
+				executionId: "execution-codex-alternate",
+				turnId: "turn-codex-alternate",
+				nativeSessionRef: first.nativeSessionRef,
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-alternate",
+					reasoningLevel: "high",
+				},
+			}),
+		);
+
+		expect(
+			bridge.requests
+				.filter(({ method }) => method === "turn/start")
+				.map(({ params }) => (params as { model?: unknown }).model),
+		).toEqual([
+			internalModel("model-option-primary", "gpt-5.3-codex"),
+			internalModel("model-option-alternate", "gpt-5.3-codex"),
+		]);
+	});
+
 	it.each([undefined, null, 123])(
 		"redacts an invalid deployment path %s before launch",
 		async (path) => {
@@ -953,6 +1598,67 @@ describe("Codex Runtime Driver", () => {
 		expect(JSON.stringify(result)).not.toContain("gpt-5.3-codex");
 	});
 
+	it("replays an unsupported selection after a crash immediately following its first durable write", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommandV2({
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "model-option-unsupported",
+				reasoningLevel: "high",
+			},
+		});
+		const originalUpdate = DurableJsonFile.prototype.update;
+		const crash = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementationOnce(function (
+				this: DurableJsonFile<unknown>,
+				change,
+			) {
+				return originalUpdate.call(this, change).then(() => {
+					throw new Error("simulated process loss after persist");
+				});
+			});
+		await expect(driver.execute(command)).rejects.toThrow();
+		crash.mockRestore();
+		await driver.close();
+		const persisted = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(Object.values(persisted.operations)).toEqual([
+			expect.objectContaining({
+				state: "resolved",
+				record: expect.objectContaining({
+					result: expect.objectContaining({
+						outcome: "rejected",
+						code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+					}),
+				}),
+			}),
+		]);
+		expect(bridge.requests.map(({ method }) => method)).toEqual([
+			"initialize",
+			"config/read",
+		]);
+		const recoveredBridge = new TestCodexBridge();
+		const recovered = await openDriver(path, recoveredBridge);
+		drivers.push(recovered);
+		const before = recoveredBridge.requests.length;
+		const replay = await recovered.execute(command);
+		expect(replay.result).toMatchObject({
+			outcome: "rejected",
+			code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		});
+		expect(await recovered.lookupOperation(command)).toEqual({
+			state: "found",
+			record: replay,
+		});
+		expect(recoveredBridge.requests.slice(before)).toEqual([]);
+	});
+
 	it("resets a legacy V1 Turn to configured defaults after a V2 override", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -1066,6 +1772,1253 @@ describe("Codex Runtime Driver", () => {
 			expect(state).not.toContain(message);
 		},
 	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"keeps %s pending until exact model Turn cleanup completes",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			const driverPath = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			bridge.completeOnInterrupt("interrupted");
+			let releaseCleanup: (() => void) | undefined;
+			let cleanupStarted: (() => void) | undefined;
+			const cleanupGate = new Promise<void>((resolve) => {
+				releaseCleanup = resolve;
+			});
+			const cleanupStartedPromise = new Promise<void>((resolve) => {
+				cleanupStarted = resolve;
+			});
+			const cleanupCalls: { consumed: boolean; turn: CodexNativeTurn }[] = [];
+			modelTransportTestHooks.cancelTurn = (turn, cancel) => {
+				const call = { consumed: false, turn };
+				cleanupCalls.push(call);
+				if (cleanupCalls.length > 1) return cancel();
+				const completion = cancel().then(() => {
+					cleanupStarted?.();
+					return cleanupGate;
+				});
+				return new ObservableCleanupPromise(
+					(resolve, reject) => {
+						void completion.then(resolve, reject);
+					},
+					() => {
+						call.consumed = true;
+					},
+				);
+			};
+			const driver = await openDriverWithModelAccess(driverPath, bridge);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			const interruption = driver.execute(command);
+			void interruption.catch(() => {});
+			let settled = false;
+			void interruption.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+
+			await cleanupStartedPromise;
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			try {
+				expect(settled).toBe(false);
+				expect(cleanupCalls).toEqual([
+					{
+						consumed: true,
+						turn: {
+							threadId: bridge.nativeThreadId,
+							turnId: bridge.nativeTurnId,
+						},
+					},
+				]);
+				const pendingState = JSON.parse(
+					await readFile(driverPath, "utf8"),
+				) as StoredCodexDriverState;
+				const operationKey = JSON.stringify([
+					command.agentId,
+					command.conversationId,
+					command.sessionGeneration,
+					command.kind,
+					command.operationId,
+				]);
+				expect(pendingState.operations[operationKey]).toMatchObject({
+					state: "prepared",
+				});
+				expect(pendingState.operations[operationKey]?.record).toBeUndefined();
+			} finally {
+				releaseCleanup?.();
+			}
+
+			await expect(interruption).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			const resolvedState = JSON.parse(
+				await readFile(driverPath, "utf8"),
+			) as StoredCodexDriverState;
+			const operationKey = JSON.stringify([
+				command.agentId,
+				command.conversationId,
+				command.sessionGeneration,
+				command.kind,
+				command.operationId,
+			]);
+			expect(resolvedState.operations[operationKey]).toMatchObject({
+				state: "resolved",
+				record: {
+					result: { outcome: "accepted", status: "cancelled" },
+				},
+			});
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"closes the exact silent upstream during bounded %s handling",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => upstreamClosed?.());
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.completeOnInterrupt("interrupted");
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			await expect(driver.execute(command)).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"requests native interruption before aborting the stream during %s",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.completeOnInterrupt("interrupted");
+			bridge.beforeInterrupt = async () => {
+				expect(upstreamIsClosed).toBe(false);
+				if (!loopback) throw new Error("missing loopback access");
+				const late = await modelRequest(loopback, bridge);
+				expect(late.status).toBe(409);
+				await late.body?.cancel();
+			};
+			modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+				await cancel();
+				if (
+					!bridge.requests.some(({ method }) => method === "turn/interrupt")
+				) {
+					bridge.setTurnStatus("failed");
+				}
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			await expect(driver.execute(command)).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"keeps concurrent pending %s lookup observational until native interruption",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.completeOnInterrupt("interrupted");
+			let cancelledBeforeInterrupt = false;
+			modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+				if (
+					!bridge.requests.some(({ method }) => method === "turn/interrupt")
+				) {
+					cancelledBeforeInterrupt = true;
+				}
+				await cancel();
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			bridge.holdTurnsList();
+			const execution = driver.execute(command);
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+			const lookup = driver.lookupOperation(command);
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(2));
+			bridge.respondToHeldTurnsListWithStatus("inProgress", 1);
+			const lookupResult = await lookup;
+			const closedDuringLookup = upstreamIsClosed;
+			const interruptsDuringLookup = bridge.requests.filter(
+				({ method }) => method === "turn/interrupt",
+			).length;
+			const late = await modelRequest(loopback, bridge);
+			await late.body?.cancel();
+			bridge.respondToHeldTurnsListWithStatus("inProgress");
+			await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+			bridge.respondToHeldTurnsListWithStatus("interrupted");
+			await expect(execution).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+			expect(lookupResult).toEqual({ state: "unknown" });
+			expect(interruptsDuringLookup).toBe(0);
+			expect(late.status).toBe(409);
+			expect(closedDuringLookup).toBe(false);
+			expect(cancelledBeforeInterrupt).toBe(false);
+		},
+	);
+
+	it.each(["stop", "generation-cancel"] as const)(
+		"drains the stream even when native interruption RPC rejects during %s",
+		async (kind) => {
+			const directory = await runtimeDirectory();
+			let upstreamClosed: (() => void) | undefined;
+			let upstreamIsClosed = false;
+			let upstreamContacted: (() => void) | undefined;
+			const upstreamClosedPromise = new Promise<void>((resolve) => {
+				upstreamClosed = resolve;
+			});
+			const upstreamContactedPromise = new Promise<void>((resolve) => {
+				upstreamContacted = resolve;
+			});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamContacted?.();
+					response.once("close", () => {
+						upstreamIsClosed = true;
+						upstreamClosed?.();
+					});
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write('data: {"type":"response.created","response":{}}\n\n');
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submitted = await driver.execute(submitCommand());
+			if (!loopback) throw new Error("missing loopback access");
+			const response = await modelRequest(loopback, bridge);
+			await upstreamContactedPromise;
+			bridge.interruptError = {
+				code: -32000,
+				message: "synthetic interrupt rejection",
+			};
+			bridge.beforeInterrupt = async () => {
+				expect(upstreamIsClosed).toBe(false);
+				if (!loopback) throw new Error("missing loopback access");
+				const late = await modelRequest(loopback, bridge);
+				expect(late.status).toBe(409);
+				await late.body?.cancel();
+			};
+
+			const command =
+				kind === "stop"
+					? stopCommand(submitted.nativeSessionRef)
+					: generationCancelCommand(submitted.nativeSessionRef);
+			await expect(driver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+			});
+			await expect(upstreamClosedPromise).resolves.toBeUndefined();
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+			).toHaveLength(1);
+			await response.body?.cancel().catch(() => {});
+		},
+	);
+
+	it("waits for a recognized native Turn then admits its delayed start response", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		let modelSettled = false;
+		const pendingModel = modelRequest(loopback, bridge).then((response) => {
+			modelSettled = true;
+			return response;
+		});
+
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 2_100));
+			expect(modelSettled).toBe(false);
+			expect(upstreamCalls).toBe(0);
+			bridge.respondToHeldTurnStart();
+			const response = await pendingModel;
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(completedEvent());
+			expect(upstreamCalls).toBe(1);
+		} finally {
+			if (bridge.pendingTurnStartCount() > 0) bridge.respondToHeldTurnStart();
+			await submission;
+		}
+	});
+
+	it("keeps a start response without a recognized notification unavailable", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const command = submitCommand();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+		const submission = driver.execute(command);
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+		await vi.waitFor(async () => {
+			const stored = JSON.parse(await readFile(path, "utf8")) as {
+				operations: Record<string, StoredCodexOperation>;
+			};
+			expect(Object.values(stored.operations)).toContainEqual(
+				expect.objectContaining({ admissionPending: true }),
+			);
+		});
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({
+				state: "resolved",
+				admissionPending: true,
+			}),
+		);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+	});
+
+	it("confirms a terminal result persisted after start recognition but before model registration", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		const driver = await openDriverWithModelEndpoint(path, bridge, endpoint);
+		drivers.push(driver);
+		const recognition = driver as unknown as {
+			waitForNativeTurnStarted(
+				threadId: string,
+				turnId: string,
+				deadline: number,
+			): Promise<boolean>;
+		};
+		let terminalCancelled = false;
+		modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+			await cancel();
+			terminalCancelled = true;
+		};
+		const waitForStarted = recognition.waitForNativeTurnStarted.bind(driver);
+		vi.spyOn(recognition, "waitForNativeTurnStarted").mockImplementationOnce(
+			async (...args) => {
+				const recognized = await waitForStarted(...args);
+				expect(recognized).toBe(true);
+				await bridge.emitTurnCompleted("completed");
+				await vi.waitFor(() => expect(terminalCancelled).toBe(true));
+				return recognized;
+			},
+		);
+		let registered: boolean | undefined;
+		modelTransportTestHooks.registerTurn = (_turn, _deadline, register) => {
+			registered = register();
+			return registered;
+		};
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		expect(registered).toBe(false);
+		expect(accepted.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(await driver.lookupOperation(command)).toMatchObject({
+			state: "found",
+		});
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		expect(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).toContainEqual(expect.objectContaining({ type: "completed" }));
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(
+			Object.values(stored.operations).every(
+				(operation) => operation.admissionPending === undefined,
+			),
+		).toBe(true);
+		expect(upstreamCalls).toBe(0);
+		await driver.close();
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			new TestCodexBridge(),
+			endpoint,
+		);
+		drivers.push(recovered);
+		expect((await recovered.execute(command)).result).toEqual(accepted.result);
+		expect(
+			await recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("completed");
+	});
+
+	it("keeps an expired durable model admission unavailable after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const now = vi.spyOn(Date, "now");
+		let observedDeadline: number | undefined;
+		modelTransportTestHooks.registerTurn = (_turn, deadline, register) => {
+			if (deadline === undefined) throw new Error("missing admission deadline");
+			observedDeadline = deadline;
+			now.mockReturnValue(deadline);
+			return register();
+		};
+		const command = submitCommand();
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(command);
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(observedDeadline).toEqual(expect.any(Number));
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+		const stored = JSON.parse(await readFile(path, "utf8")) as {
+			sessions: Record<string, StoredCodexSession>;
+			operations: Record<string, StoredCodexOperation>;
+		};
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({
+				state: "resolved",
+				admissionRecoveryPending: true,
+			}),
+		);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+		const nativeSessionRef = Object.keys(stored.sessions)[0];
+		if (!nativeSessionRef) throw new Error("missing native Session");
+		await expect(
+			driver.getStatus(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+
+		await driver.close();
+		modelTransportTestHooks.registerTurn = undefined;
+		now.mockRestore();
+		const recoveredBridge = new TestCodexBridge();
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			recoveredBridge,
+			endpoint,
+		);
+		drivers.push(recovered);
+		const beforeRecovery = recoveredBridge.requests.length;
+		await expect(
+			recovered.replayEvents(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recovered.subscribeEvents(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(
+			recoveredBridge.requests
+				.slice(beforeRecovery)
+				.filter(({ method }) =>
+					["thread/resume", "thread/turns/list", "thread/items/list"].includes(
+						method,
+					),
+				),
+		).toHaveLength(0);
+
+		await expect(recovered.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(await recovered.lookupOperation(command)).toEqual({
+			state: "unknown",
+		});
+		await expect(
+			recovered.getStatus(nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(upstreamCalls).toBe(0);
+	});
+
+	it("keeps a legitimate model request waiting while turn-start persistence takes over two seconds", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const received = Promise.withResolvers<void>();
+		const originalEmit = Server.prototype.emit;
+		vi.spyOn(Server.prototype, "emit").mockImplementation(function (
+			this: Server,
+			event: string | symbol,
+			...args: unknown[]
+		) {
+			if (
+				event === "request" &&
+				(args[0] as IncomingMessage).headers["x-codex-turn-metadata"]
+			)
+				received.resolve();
+			return Reflect.apply(originalEmit, this, [event, ...args]);
+		});
+		const persisted = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let held = false;
+		const originalUpdate = DurableJsonFile.prototype.update;
+		vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(function (
+			this: DurableJsonFile<unknown>,
+			change,
+		) {
+			return originalUpdate.call(this, change).then(async (result) => {
+				if (
+					!held &&
+					typeof result === "object" &&
+					result !== null &&
+					"pendingOperationKey" in result &&
+					result.pendingOperationKey
+				) {
+					held = true;
+					persisted.resolve();
+					await release.promise;
+				}
+				return result;
+			});
+		});
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge);
+		await received.promise;
+		await bridge.emitNotification();
+		await persisted.promise;
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 2300));
+			expect(upstreamCalls).toBe(0);
+		} finally {
+			release.resolve();
+		}
+		bridge.respondToHeldTurnStart();
+		await expect(submission).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "running" },
+		});
+		const response = await pendingModel;
+		const output = await response.text();
+		expect(response.status).toBe(200);
+		expect(output).toBe(completedEvent());
+		expect(upstreamCalls).toBe(1);
+	}, 10000);
+
+	it.each([
+		"success",
+		"deadline",
+		"failure",
+		"recovery-failure",
+		"recovery-ack-failure",
+		"recovery-disk-failure",
+	] as const)(
+		"parks model requests until final durable admission acknowledgement: %s",
+		async (outcome) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommand();
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const held = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let intercept = true;
+			const originalUpdate = DurableJsonFile.prototype.update;
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(
+				function (this: DurableJsonFile<unknown>, change) {
+					const before = this.read() as {
+						operations?: Record<
+							string,
+							{ admissionPending?: true; admissionRecoveryPending?: true }
+						>;
+					};
+					const wasPending = Object.values(before.operations ?? {}).some(
+						(operation) => operation.admissionPending,
+					);
+					return originalUpdate
+						.call(this, async (draft) => {
+							const result = await change(draft);
+							const after = draft as typeof before;
+							if (
+								(outcome === "recovery-failure" ||
+									outcome === "recovery-disk-failure") &&
+								Object.values(before.operations ?? {}).some(
+									(operation) => operation.admissionRecoveryPending,
+								) &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionRecoveryPending,
+								)
+							) {
+								await vi.waitFor(() => expect(upstreamCalls).toBe(1));
+								if (outcome === "recovery-disk-failure") {
+									// The replacement file is visible, but fsync failed before in-memory state advanced.
+									await writeFile(path, JSON.stringify(draft));
+									expect(
+										Object.values(
+											(this.read() as typeof before).operations ?? {},
+										).some((operation) => operation.admissionRecoveryPending),
+									).toBe(true);
+								}
+
+								throw new Error("recovery confirmation persistence failed");
+							}
+							return result;
+						})
+						.then(async (result) => {
+							const after = this.read() as typeof before;
+							if (
+								outcome === "recovery-ack-failure" &&
+								Object.values(before.operations ?? {}).some(
+									(operation) => operation.admissionRecoveryPending,
+								) &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionRecoveryPending,
+								)
+							) {
+								await vi.waitFor(() => expect(upstreamCalls).toBe(1));
+								throw new Error("recovery confirmation acknowledgement failed");
+							}
+
+							if (
+								intercept &&
+								wasPending &&
+								Object.values(after.operations ?? {}).every(
+									(operation) => !operation.admissionPending,
+								)
+							) {
+								intercept = false;
+								held.resolve();
+								await release.promise;
+							}
+							return result;
+						});
+				},
+			);
+			const bridge = new TestCodexBridge();
+			bridge.holdTurnStart();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submission = driver.execute(command);
+			void submission.catch(() => {});
+			await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+			await bridge.emitNotification();
+			if (!loopback) throw new Error("missing loopback access");
+			const pendingModel = modelRequest(loopback, bridge).then(
+				(response) => response.status,
+				() => "closed",
+			);
+			bridge.respondToHeldTurnStart();
+			await held.promise;
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				expect(upstreamCalls).toBe(0);
+				const stored = JSON.parse(await readFile(path, "utf8")) as {
+					sessions: Record<string, unknown>;
+					operations: Record<string, StoredCodexOperation>;
+				};
+				expect(Object.values(stored.operations)).toContainEqual(
+					expect.objectContaining({ admissionRecoveryPending: true }),
+				);
+				const ref = Object.keys(stored.sessions)[0];
+				if (!ref) throw new Error("missing Session");
+				expect(await driver.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				await expect(
+					driver.getStatus(ref, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				const recoveredBridge = new TestCodexBridge();
+				const recovered = await openDriverWithModelEndpoint(
+					path,
+					recoveredBridge,
+					endpoint,
+				);
+				drivers.push(recovered);
+				const before = recoveredBridge.requests.length;
+				await expect(recovered.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+				await expect(
+					recovered.getStatus(ref, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				expect(recoveredBridge.requests.length).toBe(before);
+				if (outcome === "deadline")
+					vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+				if (outcome === "failure")
+					release.reject(new Error("confirmation acknowledgement failed"));
+			} finally {
+				release.resolve();
+			}
+			if (outcome === "success") {
+				await expect(submission).resolves.toMatchObject({
+					result: { outcome: "accepted", status: "running" },
+				});
+				expect(await pendingModel).toBe(200);
+				expect(upstreamCalls).toBe(1);
+			} else {
+				await expect(submission).rejects.toThrow();
+				if (
+					outcome === "recovery-failure" ||
+					outcome === "recovery-ack-failure" ||
+					outcome === "recovery-disk-failure"
+				) {
+					expect(await pendingModel).toBe(200);
+					expect(upstreamCalls).toBe(1);
+				} else {
+					expect(await pendingModel).not.toBe(200);
+					expect(upstreamCalls).toBe(0);
+				}
+				expect(await driver.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				const stored = JSON.parse(await readFile(path, "utf8")) as {
+					operations: Record<string, StoredCodexOperation>;
+				};
+				expect(Object.values(stored.operations)).toContainEqual(
+					expect.objectContaining({ admissionRecoveryPending: true }),
+				);
+				await driver.close();
+				const restartedBridge = new TestCodexBridge();
+				const restarted = await openDriverWithModelEndpoint(
+					path,
+					restartedBridge,
+					endpoint,
+				);
+				drivers.push(restarted);
+				const requestsBefore = restartedBridge.requests.length;
+				await expect(restarted.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+				expect(await restarted.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				expect(restartedBridge.requests.length).toBe(requestsBefore);
+			}
+		},
+	);
+
+	it("expires model admission while durable update acknowledgement is held", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		let releasePersistence: (() => void) | undefined;
+		const persistenceReleased = new Promise<void>((resolve) => {
+			releasePersistence = resolve;
+		});
+		let admissionPersisted: (() => void) | undefined;
+		const admissionPersistedPromise = new Promise<void>((resolve) => {
+			admissionPersisted = resolve;
+		});
+		let held = false;
+		const originalUpdate = DurableJsonFile.prototype.update;
+		vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(function (
+			this: DurableJsonFile<unknown>,
+			change,
+		) {
+			return originalUpdate.call(this, change).then(async (result) => {
+				const state = this.read() as {
+					operations?: Record<string, { admissionPending?: unknown }>;
+				};
+				if (
+					!held &&
+					Object.values(state.operations ?? {}).some(
+						(operation) => operation.admissionPending === true,
+					)
+				) {
+					held = true;
+					admissionPersisted?.();
+					await persistenceReleased;
+				}
+				return result;
+			});
+		});
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		vi.useFakeTimers();
+		const submission = driver.execute(submitCommand());
+		void submission.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		bridge.respondToHeldTurnStart();
+		await admissionPersistedPromise;
+
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(await pendingModel).not.toBe(200);
+			expect(upstreamCalls).toBe(0);
+			let submissionSettled = false;
+			void submission.then(
+				() => {
+					submissionSettled = true;
+				},
+				() => {
+					submissionSettled = true;
+				},
+			);
+			await Promise.resolve();
+			expect(submissionSettled).toBe(false);
+		} finally {
+			releasePersistence?.();
+		}
+		await expect(submission).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(upstreamCalls).toBe(0);
+	});
+
+	it("does not admit a Turn completed before its start response is resolved", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.end();
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submission = driver.execute(submitCommand());
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		await bridge.emitNotification();
+		if (!loopback) throw new Error("missing loopback access");
+		const pendingModel = modelRequest(loopback, bridge).then(
+			(response) => response.status,
+			() => "closed" as const,
+		);
+		await bridge.emitTurnCompleted("completed");
+		bridge.respondToHeldTurnStart();
+
+		await expect(submission).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "completed" },
+		});
+		expect(await pendingModel).not.toBe(200);
+		expect(upstreamCalls).toBe(0);
+	});
+
+	it.each([
+		["terminal status", "codex-native-turn-private", "completed"],
+		["conflicting Turn ID", "codex-native-turn-conflicting", "inProgress"],
+	] as const)(
+		"does not admit a model request from a %s start notification",
+		async (_name, notifiedTurnId, status) => {
+			const directory = await runtimeDirectory();
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.end();
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			bridge.holdTurnStart();
+			let loopback: CodexModelAccess | undefined;
+			const driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const submission = driver.execute(submitCommand());
+			void submission.catch(() => {});
+			await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+			if (!loopback) throw new Error("missing loopback access");
+			const pendingModel = modelRequest(loopback, bridge, notifiedTurnId).then(
+				(response) => response.status,
+				() => "closed" as const,
+			);
+			await bridge.emitFrame({
+				method: "turn/started",
+				params: {
+					threadId: bridge.nativeThreadId,
+					turn: { id: notifiedTurnId, status, items: [] },
+				},
+			});
+			if (status === "inProgress") bridge.respondToHeldTurnStart();
+
+			await expect(submission).rejects.toBeDefined();
+			expect(await pendingModel).not.toBe(200);
+			expect(upstreamCalls).toBe(0);
+		},
+	);
+
+	it("closes a silent upstream when cancellation finds the native Turn terminal", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamClosed: (() => void) | undefined;
+		const upstreamClosedPromise = new Promise<void>((resolve) => {
+			upstreamClosed = resolve;
+		});
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				response.once("close", () => upstreamClosed?.());
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write('data: {"type":"response.created","response":{}}\n\n');
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submitted = await driver.execute(submitCommand());
+		if (!loopback) throw new Error("missing loopback access");
+		const response = await modelRequest(loopback, bridge);
+		bridge.setTurnStatus("interrupted");
+
+		await expect(
+			driver.execute(stopCommand(submitted.nativeSessionRef)),
+		).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		await expect(upstreamClosedPromise).resolves.toBeUndefined();
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(0);
+		await response.body?.cancel().catch(() => {});
+	});
+
+	it("closes a recovered terminal Turn before lookup confirms cancellation", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriverWithModelEndpoint(
+			path,
+			firstBridge,
+			endpoint,
+		);
+		drivers.push(firstDriver);
+		const submitted = await firstDriver.execute(submitCommand());
+		const command = stopCommand(submitted.nativeSessionRef);
+		firstBridge.dropNextInterruptResponse();
+		await expect(firstDriver.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		await firstDriver.close();
+
+		const recoveredBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		recoveredBridge.setTurnStatus("interrupted");
+		recoveredBridge.holdTurnsList();
+		let loopback: CodexModelAccess | undefined;
+		const recoveredDriver = await openDriverWithModelEndpoint(
+			path,
+			recoveredBridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(recoveredDriver);
+		if (!loopback) throw new Error("missing loopback access");
+		const responsePromise = modelRequest(loopback, recoveredBridge);
+		void responsePromise.catch(() => {});
+		const lookup = recoveredDriver.lookupOperation(command);
+		await vi.waitFor(() =>
+			expect(recoveredBridge.pendingTurnsListCount()).toBe(1),
+		);
+		const response = await responsePromise;
+		expect(response.status).toBe(409);
+		expect(upstreamCalls).toBe(0);
+		recoveredBridge.respondToHeldTurnsListWithStatus("interrupted");
+
+		await expect(lookup).resolves.toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "cancelled" } },
+		});
+		expect(upstreamCalls).toBe(0);
+		expect(
+			recoveredBridge.requests.filter(
+				({ method }) => method === "turn/interrupt",
+			),
+		).toHaveLength(0);
+		await response.body?.cancel().catch(() => {});
+	});
 
 	it("waits for a durable terminal Turn before confirming generation cancellation", async () => {
 		const directory = await runtimeDirectory();
@@ -1472,6 +3425,293 @@ describe("Codex Runtime Driver", () => {
 				)
 			).result,
 		).toEqual({ outcome: "accepted", status: "running" });
+	});
+
+	it("fails closed before recovering a running Turn under a different configuration revision", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		let firstUpstreamCalls = 0;
+		const firstEndpoint = await listen(
+			createServer((_request, response) => {
+				firstUpstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		let replacementUpstreamCalls = 0;
+		const replacementEndpoint = await listen(
+			createServer((_request, response) => {
+				replacementUpstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriverWithModelEndpoint(
+			path,
+			firstBridge,
+			firstEndpoint,
+			undefined,
+			"configuration-a",
+			"synthetic-credential-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriverWithModelEndpoint(
+			path,
+			recoveredBridge,
+			replacementEndpoint,
+			undefined,
+			"configuration-b",
+			"synthetic-credential-b",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRecovery = recoveredBridge.requests.length;
+
+		await expect(
+			recoveredDriver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.execute(stopCommand(accepted.nativeSessionRef)),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(
+			recoveredDriver.execute(
+				submitCommand({
+					operationId: "execution-codex-new-config",
+					executionId: "execution-codex-new-config",
+					turnId: "turn-codex-new-config",
+					nativeSessionRef: accepted.nativeSessionRef,
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		expect(replacementUpstreamCalls).toBe(0);
+		await recoveredDriver.close();
+
+		const independentBridge = new TestCodexBridge(
+			"codex-native-thread-new-configuration",
+			"codex-native-turn-new-configuration",
+		);
+		let loopback: CodexModelAccess | undefined;
+		const independentDriver = await openDriverWithModelEndpoint(
+			path,
+			independentBridge,
+			replacementEndpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+			"configuration-b",
+			"synthetic-credential-b",
+		);
+		drivers.push(independentDriver);
+		const independent = await independentDriver.execute(
+			submitCommand({
+				operationId: "execution-codex-independent",
+				executionId: "execution-codex-independent",
+				turnId: "turn-codex-independent",
+				conversationId: "conversation-codex-independent",
+			}),
+		);
+		expect(independent.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		if (!loopback) throw new Error("missing loopback access");
+		expect(await modelRequest(loopback, independentBridge)).toMatchObject({
+			status: 200,
+		});
+		expect(firstUpstreamCalls).toBe(0);
+		expect(replacementUpstreamCalls).toBe(1);
+	});
+
+	it.each([
+		"missing-config",
+		"changed-config",
+		"missing-model",
+		"unconfigured-model",
+	] as const)(
+		"does not replay cached running acceptance with %s",
+		async (mutation) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const firstBridge = new TestCodexBridge();
+			const first = await openDriver(
+				path,
+				firstBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(first);
+			const command = submitCommand();
+			await first.execute(command);
+			await first.close();
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const operation = Object.values(state.operations)[0];
+			if (!operation) throw new Error("missing operation");
+			if (mutation === "missing-config") delete operation.configVersion;
+			if (mutation === "missing-model") delete operation.internalModel;
+			if (mutation === "unconfigured-model")
+				operation.internalModel = "unconfigured-model";
+			await writeFile(path, `${JSON.stringify(state)}\n`);
+			const beforeContents = await readFile(path, "utf8");
+			const bridge = new TestCodexBridge(firstBridge.nativeThreadId);
+			const recovered = await openDriver(
+				path,
+				bridge,
+				undefined,
+				mutation === "changed-config" ? "configuration-b" : "configuration-a",
+			);
+			drivers.push(recovered);
+			const before = bridge.requests.length;
+			expect(await recovered.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			await expect(recovered.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(bridge.requests.slice(before)).toEqual([]);
+			expect(await readFile(path, "utf8")).toBe(beforeContents);
+		},
+	);
+
+	it("does not recover or rewrite a legacy running Turn without configuration provenance", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			path,
+			firstBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const submit = Object.values(state.operations).find(
+			(operation) => operation.record?.result?.outcome === "accepted",
+		);
+		if (!submit) throw new Error("missing submit operation");
+		delete submit.configVersion;
+		await writeFile(path, `${JSON.stringify(state)}\n`);
+		const legacyContents = await readFile(path, "utf8");
+
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriver(
+			path,
+			recoveredBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRecovery = recoveredBridge.requests.length;
+		await expect(
+			recoveredDriver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		expect(await readFile(path, "utf8")).toBe(legacyContents);
+	});
+
+	it("keeps terminal durable data readable and starts the next Turn under the current revision", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			path,
+			firstBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+		});
+		await firstDriver.close();
+
+		const recoveredBridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		recoveredBridge.setTurnStatus("completed");
+		recoveredBridge.continueAfterPersistedTurn();
+		const recoveredDriver = await openDriver(
+			path,
+			recoveredBridge,
+			undefined,
+			"configuration-b",
+		);
+		drivers.push(recoveredDriver);
+		const beforeRead = recoveredBridge.requests.length;
+		expect((await recoveredDriver.execute(command)).result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(await recoveredDriver.lookupOperation(command)).toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "completed" } },
+		});
+		expect(
+			await recoveredDriver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("completed");
+		expect(
+			await recoveredDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "completed",
+					payload: { status: "completed" },
+				}),
+			]),
+		);
+		expect(recoveredBridge.requests.slice(beforeRead)).toEqual([]);
+
+		const next = await recoveredDriver.execute(
+			submitCommand({
+				operationId: "execution-codex-next-config",
+				executionId: "execution-codex-next-config",
+				turnId: "turn-codex-next-config",
+				nativeSessionRef: accepted.nativeSessionRef,
+			}),
+		);
+		expect(next.result).toEqual({ outcome: "accepted", status: "running" });
+		const persisted = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(
+			Object.values(persisted.operations)
+				.filter((operation) => operation.record?.result?.outcome === "accepted")
+				.map((operation) => operation.configVersion),
+		).toEqual(["configuration-a", "configuration-b"]);
 	});
 
 	it("persists a turn-start notification that races the Turn binding and replays it once", async () => {
@@ -2114,6 +4354,17 @@ describe("Codex Runtime Driver", () => {
 			accepted.nativeSessionRef,
 			command.executionId,
 		);
+		expect(events.map((event) => event.cursor)).toEqual([
+			"codex-cursor-1",
+			"codex-cursor-2",
+			"codex-cursor-3",
+		]);
+		expect(events.map((event) => event.adapterEventKey)).toEqual([
+			"codex-event-1",
+			"codex-event-2",
+			"codex-event-3",
+		]);
+
 		expect(events).toEqual([
 			expect.objectContaining({
 				type: "status",
@@ -2289,7 +4540,7 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
-	it("replays recovered text before a persisted terminal event", async () => {
+	it("rejects new recovered text after a persisted terminal event without rewriting history", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
 		const firstBridge = new TestCodexBridge();
@@ -2329,19 +4580,14 @@ describe("Codex Runtime Driver", () => {
 		const resumedDriver = await openDriver(path, resumedBridge);
 		drivers.push(resumedDriver);
 
-		const events = await resumedDriver.replayEvents(
-			accepted.nativeSessionRef,
-			command.executionId,
-		);
-		expect(events.map((event) => event.type)).toEqual([
-			"status",
-			"text",
-			"completed",
-		]);
-		expect(events[1]).toMatchObject({
-			type: "text",
-			payload: { delta: "recovered-after-terminal" },
-		});
+		const before = await readFile(path, "utf8");
+		await expect(
+			resumedDriver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(await readFile(path, "utf8")).toBe(before);
 	});
 
 	it("fails closed for duplicate durable journal identities", async () => {
@@ -2746,73 +4992,193 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(0);
 	});
 
-	it("keeps an unconfirmed native Turn unknown without retrying it", async () => {
-		const directory = await runtimeDirectory();
-		const command = submitCommand();
-		const interruptedBridge = new TestCodexBridge(
-			"codex-native-thread-private",
-			"codex-native-turn-private",
-			true,
-		);
-		const interruptedDriver = await openDriver(
-			join(directory, "driver.json"),
-			interruptedBridge,
-		);
-		drivers.push(interruptedDriver);
+	it.each([
+		["a different configuration revision", false, "configuration-b"],
+		["missing legacy configuration provenance", true, "configuration-a"],
+	] as const)(
+		"keeps an unconfirmed native Turn unknown under %s without retrying it",
+		async (_name, removeConfigVersion, recoveredConfigVersion) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommand();
+			const interruptedBridge = new TestCodexBridge(
+				"codex-native-thread-private",
+				"codex-native-turn-private",
+				true,
+			);
+			const interruptedDriver = await openDriver(
+				path,
+				interruptedBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(interruptedDriver);
 
-		await expect(interruptedDriver.execute(command)).rejects.toMatchObject({
-			code: "RUNTIME_CODEX_UNAVAILABLE",
-		});
-		expect(
-			interruptedBridge.requests.filter(
-				({ method }) => method === "turn/start",
-			),
-		).toHaveLength(1);
+			await expect(interruptedDriver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(
+				interruptedBridge.requests.filter(
+					({ method }) => method === "turn/start",
+				),
+			).toHaveLength(1);
+			if (removeConfigVersion) {
+				const state = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				const prepared = Object.values(state.operations).find(
+					(operation) => operation.state === "prepared",
+				);
+				if (!prepared) throw new Error("missing prepared submit operation");
+				delete prepared.configVersion;
+				await writeFile(path, `${JSON.stringify(state)}\n`);
+			}
 
-		const recoveredBridge = new TestCodexBridge();
-		const recoveredDriver = await openDriver(
-			join(directory, "driver.json"),
-			recoveredBridge,
-		);
-		drivers.push(recoveredDriver);
+			const recoveredBridge = new TestCodexBridge();
+			const recoveredDriver = await openDriver(
+				path,
+				recoveredBridge,
+				undefined,
+				recoveredConfigVersion,
+			);
+			drivers.push(recoveredDriver);
+			const beforeRecovery = recoveredBridge.requests.length;
 
-		expect(await recoveredDriver.lookupOperation(command)).toEqual({
-			state: "unknown",
-		});
-		const unknown = await recoveredDriver.execute(command);
-		expect(unknown.result).toEqual({
-			outcome: "unknown",
-			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-			message: "Runtime command acceptance could not be confirmed",
-		});
-		await expect(
-			recoveredDriver.execute(
-				submitCommand({
-					operationId: "execution-codex-after-unknown",
-					executionId: "execution-codex-after-unknown",
-					turnId: "turn-codex-after-unknown",
-					nativeSessionRef: unknown.nativeSessionRef,
-				}),
+			expect(await recoveredDriver.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			const unknown = await recoveredDriver.execute(command);
+			expect(unknown.result).toEqual({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			});
+			await expect(
+				recoveredDriver.execute(
+					submitCommand({
+						operationId: "execution-codex-after-unknown",
+						executionId: "execution-codex-after-unknown",
+						turnId: "turn-codex-after-unknown",
+						nativeSessionRef: unknown.nativeSessionRef,
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				recoveredDriver.execute(
+					submitCommand({
+						operationId: "execution-codex-replacement-after-unknown",
+						executionId: "execution-codex-replacement-after-unknown",
+						turnId: "turn-codex-replacement-after-unknown",
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(
+				recoveredBridge.requests.filter(
+					({ method }) => method === "turn/start",
+				),
+			).toHaveLength(0);
+			expect(
+				recoveredBridge.requests.filter(
+					({ method }) => method === "thread/start",
+				),
+			).toHaveLength(0);
+			expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+		},
+	);
+
+	it.each([
+		[
+			"removed model option",
+			driverOptions("unused").modelOptions.filter(
+				(option) => option.modelOptionId !== "model-option-alternate",
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-		await expect(
-			recoveredDriver.execute(
-				submitCommand({
-					operationId: "execution-codex-replacement-after-unknown",
-					executionId: "execution-codex-replacement-after-unknown",
-					turnId: "turn-codex-replacement-after-unknown",
-				}),
+		],
+		[
+			"removed reasoning level",
+			driverOptions("unused").modelOptions.map((option) =>
+				option.modelOptionId === "model-option-alternate"
+					? { ...option, reasoningLevels: ["high"] }
+					: option,
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-		expect(
-			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
-		).toHaveLength(0);
-		expect(
-			recoveredBridge.requests.filter(
-				({ method }) => method === "thread/start",
-			),
-		).toHaveLength(0);
-	});
+		],
+	] as const)(
+		"keeps an uncertain V2 operation unknown after its %s",
+		async (_name, modelOptions) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const command = submitCommandV2({
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-alternate",
+					reasoningLevel: "low",
+				},
+			});
+			const failedBridge = new TestCodexBridge(
+				"codex-native-thread-private",
+				"codex-native-turn-private",
+				true,
+			);
+			const failedDriver = await openDriver(
+				path,
+				failedBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(failedDriver);
+			await expect(failedDriver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			const durableBeforeRecovery = await readFile(path, "utf8");
+			const durableState = JSON.parse(
+				durableBeforeRecovery,
+			) as StoredCodexDriverState;
+			const [preparedOperationKey, preparedOperation] =
+				Object.entries(durableState.operations)[0] ?? [];
+			if (!preparedOperationKey || !preparedOperation?.nativeSessionRef) {
+				throw new Error("missing prepared submit operation");
+			}
+			expect(
+				durableState.sessions[preparedOperation.nativeSessionRef]
+					?.acceptanceUncertainOperationKey,
+			).toBe(preparedOperationKey);
+
+			const recoveredBridge = new TestCodexBridge();
+			const recoveredDriver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(path, "configuration-b"),
+					modelOptions,
+				},
+				async () => recoveredBridge,
+			);
+			drivers.push(recoveredDriver);
+			const beforeRecovery = recoveredBridge.requests.length;
+
+			expect(await recoveredDriver.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			expect((await recoveredDriver.execute(command)).result).toMatchObject({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			});
+			await expect(
+				recoveredDriver.execute(
+					submitCommandV2({
+						operationId: "execution-codex-after-v2-unknown",
+						executionId: "execution-codex-after-v2-unknown",
+						turnId: "turn-codex-after-v2-unknown",
+						nativeSessionRef: preparedOperation.nativeSessionRef,
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: "model-option-primary",
+							reasoningLevel: "high",
+						},
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
+			expect(await readFile(path, "utf8")).toBe(durableBeforeRecovery);
+		},
+	);
 
 	it("keeps a command unknown when its native Session start response is lost", async () => {
 		const directory = await runtimeDirectory();
@@ -2895,6 +5261,509 @@ describe("Codex Runtime Driver", () => {
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(1);
 	});
+
+	it("keeps different frozen efforts separate across Turns using the same option", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const observed: string[] = [];
+		const endpoint = await listen(
+			createServer(async (request, response) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of request) chunks.push(Buffer.from(chunk));
+				observed.push(
+					JSON.parse(Buffer.concat(chunks).toString()).reasoning.effort,
+				);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let access: CodexModelAccess | undefined;
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(path),
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						model: "gpt-5.3",
+						reasoningLevels: ["high", "ultra"],
+						endpoint,
+						credential: upstreamModelAccess.credential,
+					},
+				],
+			},
+			async (options) => {
+				if (!options.modelAccess) throw new Error("missing model access");
+				access = options.modelAccess;
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(
+						access,
+						options.model,
+						options.reasoningEffort,
+					),
+				);
+				return bridge;
+			},
+		);
+		drivers.push(driver);
+		let nativeSessionRef: string | undefined;
+		for (const effort of ["high", "ultra"]) {
+			const command = submitCommandV2({
+				operationId: `execution-${effort}`,
+				executionId: `execution-${effort}`,
+				turnId: `turn-${effort}`,
+				...(nativeSessionRef ? { nativeSessionRef } : {}),
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: effort,
+				},
+			});
+			const accepted = await driver.execute(command);
+			nativeSessionRef = accepted.nativeSessionRef;
+			if (!access) throw new Error("missing model access");
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const turn =
+				state.sessions[accepted.nativeSessionRef]?.executions?.[
+					command.executionId
+				]?.nativeTurnId;
+			if (!turn) throw new Error("missing persisted Turn");
+			const response = await modelRequest(
+				access,
+				bridge,
+				turn,
+				internalModel("model-option-primary", "gpt-5.3"),
+			);
+			expect(response.status).toBe(200);
+			await response.text();
+			if (effort === "high") {
+				bridge.setTurnStatus("completed");
+				await driver.getStatus(nativeSessionRef, command.executionId);
+			}
+		}
+		expect(observed).toEqual(["high", "ultra"]);
+		expect(
+			bridge.requests
+				.filter(({ method }) => method === "turn/start")
+				.map(({ params }) => (params as { effort: string }).effort),
+		).toEqual(["high", "ultra"]);
+		const stored = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(
+			Object.values(stored.operations).map(
+				(operation) => operation.reasoningLevel,
+			),
+		).toEqual(["high", "ultra"]);
+	});
+
+	it("persists the alternate model before Turn start and restores only that route after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const upstreamModels: string[] = [];
+		const upstreamEfforts: string[] = [];
+		const endpoint = await listen(
+			createServer(async (request, response) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of request) chunks.push(Buffer.from(chunk));
+				const body = JSON.parse(Buffer.concat(chunks).toString());
+				upstreamModels.push(body.model);
+				upstreamEfforts.push(body.reasoning.effort);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		let bridge = new TestCodexBridge();
+		bridge.holdTurnStart();
+		let loopback: CodexModelAccess | undefined;
+		let driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const command = submitCommandV2({
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "model-option-alternate",
+				reasoningLevel: "low",
+			},
+		});
+		const alternate = internalModel("model-option-alternate", "gpt-5.2-codex");
+		const nativeSend = bridge.send.bind(bridge);
+		const persistedBeforeNative: string[] = [];
+		vi.spyOn(bridge, "send").mockImplementation(async (frame) => {
+			if (frame.method === "thread/start" || frame.method === "turn/start") {
+				const state = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				expect(Object.values(state.operations)).toContainEqual(
+					expect.objectContaining({
+						state: "prepared",
+						internalModel: alternate,
+						reasoningLevel: "low",
+					}),
+				);
+				persistedBeforeNative.push(frame.method);
+			}
+			await nativeSend(frame);
+		});
+		const submitted = driver.execute(command);
+		await vi.waitFor(() => expect(bridge.pendingTurnStartCount()).toBe(1));
+		const stored = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(Object.values(stored.operations)).toContainEqual(
+			expect.objectContaining({
+				state: "prepared",
+				internalModel: alternate,
+				reasoningLevel: "low",
+			}),
+		);
+		await bridge.emitNotification();
+		bridge.respondToHeldTurnStart();
+		const accepted = await submitted;
+		expect(persistedBeforeNative).toEqual(["thread/start", "turn/start"]);
+		for (const restart of [false, true]) {
+			if (restart) {
+				await driver.close();
+				bridge = new TestCodexBridge(
+					bridge.nativeThreadId,
+					bridge.nativeTurnId,
+				);
+				driver = await openDriverWithModelEndpoint(
+					path,
+					bridge,
+					endpoint,
+					(options) => {
+						loopback = options.modelAccess;
+					},
+				);
+				drivers.push(driver);
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("running");
+			}
+			if (!loopback) throw new Error("missing model access");
+			const before = upstreamModels.length;
+			const rejected = await modelRequest(loopback, bridge);
+			expect(rejected.status).toBe(400);
+			await rejected.text();
+			expect(upstreamModels).toHaveLength(before);
+			const allowed = await modelRequest(
+				loopback,
+				bridge,
+				bridge.nativeTurnId,
+				alternate,
+			);
+			expect(allowed.status).toBe(200);
+			await allowed.text();
+			expect(upstreamModels.slice(before)).toEqual(["gpt-5.2-codex"]);
+			expect(upstreamEfforts.slice(before)).toEqual(["low"]);
+		}
+	});
+
+	it.each([
+		["running", "internalModel", undefined],
+		["completed", "internalModel", undefined],
+		["running", "reasoningLevel", undefined],
+		["completed", "reasoningLevel", undefined],
+		["running", "reasoningLevel", "ultra"],
+		["completed", "reasoningLevel", "ultra"],
+	] as const)(
+		"keeps %s records with invalid %s=%s fail closed or terminal-readable",
+		async (status, field, invalid) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.end();
+				}),
+			);
+			const bridge = new TestCodexBridge();
+			const driver = await openDriverWithModelEndpoint(path, bridge, endpoint);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			if (status === "completed") {
+				bridge.setTurnStatus("completed");
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed");
+			}
+			await driver.close();
+			const stored = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			for (const operation of Object.values(stored.operations)) {
+				if (invalid === undefined) delete operation[field];
+				else operation[field] = invalid;
+			}
+			await writeFile(path, JSON.stringify(stored));
+			const recoveredBridge = new TestCodexBridge(
+				bridge.nativeThreadId,
+				bridge.nativeTurnId,
+			);
+			const recovered = await openDriverWithModelEndpoint(
+				path,
+				recoveredBridge,
+				endpoint,
+			);
+			drivers.push(recovered);
+			const nativeRequests = recoveredBridge.requests.length;
+			if (status === "running") {
+				await expect(
+					recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				await expect(
+					recovered.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			} else {
+				expect(
+					await recovered.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed");
+				expect((await recovered.execute(command)).result).toEqual({
+					outcome: "accepted",
+					status: "completed",
+				});
+			}
+			expect(recoveredBridge.requests.slice(nativeRequests)).toEqual([]);
+			expect(upstreamCalls).toBe(0);
+		},
+	);
+
+	it.each([false, true])(
+		"keeps running status polling authorized after restart=%s",
+		async (restart) => {
+			const directory = await runtimeDirectory();
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			let bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			let driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const accepted = await driver.execute(submitCommand());
+			if (restart) {
+				await driver.close();
+				bridge = new TestCodexBridge(
+					bridge.nativeThreadId,
+					bridge.nativeTurnId,
+				);
+				driver = await openDriverWithModelEndpoint(
+					join(directory, "driver.json"),
+					bridge,
+					endpoint,
+					(options) => {
+						loopback = options.modelAccess;
+					},
+				);
+				drivers.push(driver);
+			}
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-codex"),
+			).toBe("running");
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-codex"),
+			).toBe("running");
+			if (!loopback) throw new Error();
+			const response = await modelRequest(loopback, bridge);
+			expect(response.status).toBe(200);
+			await response.text();
+			expect(upstreamCalls).toBe(1);
+		},
+	);
+
+	it.each(["replay", "subscribe"] as const)(
+		"restores model admission when %s is the first operation after restart",
+		async (entry) => {
+			const directory = await runtimeDirectory();
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			let bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			let driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const accepted = await driver.execute(submitCommand());
+			await driver.close();
+			bridge = new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId);
+			driver = await openDriverWithModelEndpoint(
+				join(directory, "driver.json"),
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const abort = new AbortController();
+			if (entry === "replay") {
+				await driver.replayEvents(accepted.nativeSessionRef, "execution-codex");
+			} else {
+				await driver.subscribeEvents(
+					accepted.nativeSessionRef,
+					"execution-codex",
+					undefined,
+					abort.signal,
+				);
+				abort.abort();
+			}
+			if (!loopback) throw new Error();
+			const response = await modelRequest(loopback, bridge);
+			expect(response.status).toBe(200);
+			await response.text();
+			expect(upstreamCalls).toBe(1);
+		},
+	);
+
+	it.each([false, true])(
+		"does not readmit a resolved stop while native is running, restart=%s",
+		async (restart) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			let bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const capture = (options: CodexAppServerBridgeOptions) => {
+				loopback = options.modelAccess;
+			};
+			let driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				capture,
+			);
+			drivers.push(driver);
+			const accepted = await driver.execute(submitCommand());
+			await expect(
+				driver.execute(stopCommand(accepted.nativeSessionRef)),
+			).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
+			if (restart) {
+				await driver.close();
+				bridge = new TestCodexBridge(
+					bridge.nativeThreadId,
+					bridge.nativeTurnId,
+				);
+				driver = await openDriverWithModelEndpoint(
+					path,
+					bridge,
+					endpoint,
+					capture,
+				);
+				drivers.push(driver);
+			}
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-codex"),
+			).toBe("running");
+			if (!loopback) throw new Error();
+			expect((await modelRequest(loopback, bridge)).status).toBe(409);
+			expect(upstreamCalls).toBe(0);
+		},
+	);
+
+	it("cannot restore model access across a prepared stop and held status reads", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		bridge.completeOnInterrupt("interrupted");
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const accepted = await driver.execute(submitCommand());
+		bridge.holdTurnsList();
+		const first = driver
+			.getStatus(accepted.nativeSessionRef, "execution-codex")
+			.catch((error: unknown) => error);
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+		const stopping = driver.execute(stopCommand(accepted.nativeSessionRef));
+		void stopping.catch(() => {});
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(2));
+		const fresh = driver
+			.getStatus(accepted.nativeSessionRef, "execution-codex")
+			.catch((error: unknown) => error);
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(3));
+		bridge.respondToHeldTurnsListWithStatus("inProgress", 2);
+		await fresh;
+		bridge.respondToHeldTurnsListWithStatus("inProgress", 0);
+		await first;
+		if (!loopback) throw new Error();
+		expect((await modelRequest(loopback, bridge)).status).toBe(409);
+		expect(upstreamCalls).toBe(0);
+		bridge.respondToHeldTurnsListWithStatus("inProgress");
+		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+		bridge.respondToHeldTurnsListWithStatus("interrupted");
+		await expect(stopping).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(upstreamCalls).toBe(0);
+	}, 10_000);
 
 	it("fails closed for an out-of-order status that conflicts with a terminal read", async () => {
 		const directory = await runtimeDirectory();
