@@ -78,7 +78,7 @@ function isCodexLoopbackRedirect(value: unknown) {
 		Number.isInteger(port) &&
 		port >= 1_024 &&
 		port <= 65_535 &&
-		/^\/callback\/[A-Za-z0-9_-]{8,128}$/.test(url.pathname) &&
+		/^\/callback(?:\/[A-Za-z0-9_-]{8,128})?$/.test(url.pathname) &&
 		!url.username &&
 		!url.password &&
 		!url.search &&

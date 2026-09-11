@@ -1615,16 +1615,32 @@ describe("Connection API", () => {
 			scope: "mcp",
 			token_endpoint_auth_method: "none",
 		};
-		const registration = await app.request("/oauth/register", {
-			body: JSON.stringify(metadata),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		});
-		expect(registration.status).toBe(201);
-		expect(await registration.json()).toMatchObject({ scope: "mcp" });
+		for (const acceptedRedirectUri of [
+			redirectUri,
+			"http://127.0.0.1:58245/callback",
+		]) {
+			const registration = await app.request("/oauth/register", {
+				body: JSON.stringify({
+					...metadata,
+					redirect_uris: [acceptedRedirectUri],
+				}),
+				headers: { "content-type": "application/json" },
+				method: "POST",
+			});
+			expect(registration.status).toBe(201);
+			expect(await registration.json()).toMatchObject({ scope: "mcp" });
+		}
 		for (const rejected of [
 			{ ...metadata, client_name: "Unapproved client" },
 			{ ...metadata, redirect_uris: ["https://attacker.example/callback"] },
+			{
+				...metadata,
+				redirect_uris: ["http://127.0.0.1:58245/callback/short"],
+			},
+			{
+				...metadata,
+				redirect_uris: ["http://127.0.0.1:58245/callback/nonce/extra"],
+			},
 			{ ...metadata, scope: "admin" },
 			{ ...metadata, software_id: "unreviewed" },
 		]) {
