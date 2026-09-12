@@ -325,10 +325,9 @@ function driverOptions(path: string) {
 
 // The bridge never exposes native stderr, so a launch failure would otherwise
 // carry no reason at all on a host where the sandbox behaves differently.
-async function nativeStderr(path: string) {
-	const roots = [`${path}.native`, dirname(path)];
+async function nativeStderr(root: string) {
 	const found: string[] = [];
-	for (const root of roots) {
+	{
 		const stack = [root];
 		while (stack.length > 0 && found.length < 4) {
 			const current = stack.pop();
@@ -346,18 +345,11 @@ async function nativeStderr(path: string) {
 		}
 	}
 	const text = found.join("\n").trim();
-	return text.length > 0 ? `; native stderr: ${text.slice(-2_000)}` : "";
+	return text.length > 0 ? `native stderr: ${text.slice(-2_000)}` : "";
 }
 
 async function nativeDriver(path: string) {
-	const driver = await CodexRuntimeDriver.open(driverOptions(path)).catch(
-		async (error: unknown) => {
-			const reason = error instanceof Error ? error.message : String(error);
-			throw Object.assign(error instanceof Error ? error : new Error(reason), {
-				message: `${reason}${await nativeStderr(path)}`,
-			});
-		},
-	);
+	const driver = await CodexRuntimeDriver.open(driverOptions(path));
 	closers.push(() => driver.close());
 	return driver;
 }
@@ -539,8 +531,11 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	for (const close of closers.splice(0).reverse())
 		await close().catch(() => {});
-	for (const path of directories.splice(0))
+	for (const path of directories.splice(0)) {
+		const reason = await nativeStderr(path);
+		if (reason.length > 0) console.error(reason);
 		await rm(path, { recursive: true, force: true });
+	}
 });
 
 describe
