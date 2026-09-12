@@ -41,11 +41,19 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   待其最终 committed head 集成后，必须保留原生 sandbox/cwd/HOME、不得加入 status fallback 或替换
   native 回包，并在该组合版本重跑全部 #404 原生验收；配置解析或 fixture 通过不能代替重跑。
 - #403 的正式装配由 `CodexRuntimeDriver.open` 从 `path` 派生 `dataDirectory: path + ".native"`，
-  并传入已验证的 model、reasoning effort 和 pinned provenance。PVC 所属的 `dataDirectory/home`
-  是 `CODEX_HOME`，`dataDirectory/workspace` 是 cwd；父进程 HOME 和 `TMPDIR` 仍是独立临时目录。
-  关闭只清理临时 launch/probe/schema/scratch，不清理持久目录。Bridge 要求绝对规范路径、无 symlink、
-  Runtime UID 私有 `0700`，拒绝与父 HOME/CODEX_HOME/cwd 重叠及持久化配置或凭证文件。
-- active-history 兼容性探针先由正式 Driver 创建测试专用的持久 root，随后以单个 pinned app-server
+  并传入已验证的 model、reasoning effort 和 pinned provenance。Driver 按可信
+  `agentId`/`conversationId`/`sessionGeneration` 派生存储键，为每个 Conversation 代次单独启动原生进程，
+  PVC 所属的 `dataDirectory/conversations/<key>/home` 是 `CODEX_HOME`、同级 `workspace` 是 cwd；
+  父进程 HOME 和 `TMPDIR` 仍是独立临时目录。关闭只清理临时 launch/probe/schema/scratch，不清理持久目录。
+  Bridge 要求绝对规范路径、无 symlink、Runtime UID 私有 `0700`，拒绝与父 HOME/CODEX_HOME/cwd 重叠
+  及持久化配置或凭证文件，并拒绝非服务端派生的存储键。
+- 文件边界由固定 Codex 版本自身的权限 profile 施加（Linux 经 Landlock、Darwin 经 Seatbelt），以 session
+  flag 注入：Conversation 根 `deny`、本 Conversation `home` 只读、`workspace` 可写。测试不额外包裹沙箱，
+  也不放宽该 profile；约束以工程 Spec 的
+  [Codex 原生 Conversation 隔离边界](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为权威。
+- 原生进程按 Conversation 启动，因此 launch 观测按存储键归属到对应 actor；两个 actor 的
+  cwd 与 `CODEX_HOME` 必须互不重叠，重启恢复后仍回到同一持久目录。
+- active-history 兼容性探针使用测试专用的持久 root 与独立存储键，以单个 pinned app-server
   在同一 Thread 上调用 `thread/start`、`turn/start`，并在 loopback 模型记录合成用户请求前、以及记录后
   但响应仍受控暂停时，分别调用 `thread/read(includeTurns=false)`、
   `thread/read(includeTurns=true)` 与 `thread/turns/list(itemsView=notLoaded)`。该 root 与正式双用户
@@ -63,7 +71,8 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   也不能单独证明隔离。若 loopback 模型未在有界时间内观察到请求，第二点标为
   `model-observation-unavailable`，不重发 Turn 或把第一点结果挪用为第二点。
 - 两个用户的文件正文使用独立随机标记，标记不进入读取请求；真实 Codex `exec_command`
-  执行读取、搜索及修改。正向对照必须在工具输出与平台结果中看到本人标记；搜索使用同命令
+  执行读取、搜索及修改。证据只取原生 exec 信封 `Output:` 之后的命令输出，并要求进程以退出码 0
+  终止；未终止或非零退出不构成已分类结果。正向对照必须在工具输出与平台结果中看到本人标记；搜索使用同命令
   正向对照，修改还由测试独立回读磁盘。工具不可用或本人访问失败不能形成负向通过。
 - 读取和搜索正负对照执行相同 Node 文件读取探针；搜索仅返回包含固定合成前缀的行。只有本人
   标记正向对照成功，且完整结果包含唯一的本次随机标记与 `EACCES`/`EPERM`，负向才通过。
@@ -76,6 +85,9 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
 - 个人记忆保持实际配置。原生 feature 列表关闭且模型未暴露 memory 工具时，只证明该能力未
   启用。当前上下文路径另测：原 Session 历史中的本人标记、另一用户标记，以及原生 sessions
   文件通过真实文件工具进入模型输入或结果的可能性。不会为测试启用个人记忆。
+- 历史扫描同时读取本人与另一用户的 `CODEX_HOME/sessions`。本人标记必须为 `present`，另一用户
+  标记为 `absent` 或权限 `denied` 才通过；本人扫描被拒绝、任一侧普通错误或输出不完整均为
+  `unverified`，另一用户标记 `present` 始终为 `fail`。
 - 各组双用户请求并行提交，本地模型 barrier 等待双方请求到达后才回复，防止全局串行执行
   被当成并发验收。正常关闭并重开正式 Driver/Bridge 后复用原 Host 引用和持久映射，重复场景。
 - 已进入会话历史的外来标记继续算隔离失败，原因记录为 `foreign-marker-already-in-history`，
@@ -108,5 +120,7 @@ fence、事件归属、配置隔离与模拟恢复。`codex-isolation-fixture.te
 
 若原生历史 API 阻塞正向对照，先由维护者确认存储初始化与兼容性修复范围：在现有 pinned
 版本内修正存储查询路径，或独立批准版本变更并重做 provenance、恢复和隔离验收。实际文件/上下文
-失败后才讨论相应最小隔离修复。本入口不改变部署单元、Runtime Contract、进程模型或 Sandbox。
+失败后才讨论相应最小隔离修复。本入口不改变部署单元、Runtime Contract 或引入平台统一 Sandbox；
+按 Conversation 划分原生进程与持久目录是 #404 已授权的修复，取舍见
+[ADR 0008](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
 Issue #190/#322 的 Fake 交付不增加本票依赖。

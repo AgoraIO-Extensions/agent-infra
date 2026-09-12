@@ -17,6 +17,7 @@ import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
 	type CodexAppServerFrame,
+	codexConversationKey,
 } from "./codex-app-server-bridge.js";
 import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
@@ -40,7 +41,13 @@ import {
 import { FileRuntimeStore, RuntimeHost } from "./index.js";
 
 type Status = "pass" | "fail" | "unverified";
-type HistoryMembership = "present" | "absent" | "error" | "unavailable";
+// A denied foreign scan is isolation evidence, not an inconclusive error.
+type HistoryMembership =
+	| "present"
+	| "absent"
+	| "denied"
+	| "error"
+	| "unavailable";
 
 interface HistoryScanEvidence {
 	owner: HistoryMembership;
@@ -199,20 +206,37 @@ function nativeRestartSessionEvidence(
 	observations: readonly NativeObservation[],
 	rawThreadIds: ReadonlySet<string>,
 ) {
-	const restartLaunchIndex = observations.findLastIndex(
-		(entry) => entry.method === "launch",
-	);
-	const resumedAfterRestart = observations
-		.slice(restartLaunchIndex + 1)
-		.filter((entry) => entry.method === "thread/resume");
 	const formalStarts = observations.filter(
 		(entry) =>
 			entry.method === "thread/start" &&
 			!rawThreadIds.has(nativeThreadId(entry) ?? ""),
 	);
-	const startsBeforeRestart = observations
-		.slice(0, Math.max(0, restartLaunchIndex))
-		.filter((entry) => formalStarts.includes(entry));
+	const lastStartIndex = observations.lastIndexOf(
+		formalStarts.at(-1) as NativeObservation,
+	);
+	// Every Conversation restarts as its own process, so the boundary is the
+	// first launch after the last original Session was started.
+	const restartLaunchIndex = observations.findIndex(
+		(entry, index) => index > lastStartIndex && entry.method === "launch",
+	);
+	const resumedAfterRestart =
+		restartLaunchIndex < 0
+			? []
+			: observations
+					.slice(restartLaunchIndex)
+					.filter((entry) => entry.method === "thread/resume");
+	const launchesAfterRestart =
+		restartLaunchIndex < 0
+			? 0
+			: observations
+					.slice(restartLaunchIndex)
+					.filter((entry) => entry.method === "launch").length;
+	const startsBeforeRestart =
+		restartLaunchIndex < 0
+			? []
+			: observations
+					.slice(0, restartLaunchIndex)
+					.filter((entry) => formalStarts.includes(entry));
 	const formalIds = formalStarts.map(nativeThreadId);
 	const resumed = formalIds.every(
 		(id) =>
@@ -224,9 +248,11 @@ function nativeRestartSessionEvidence(
 	);
 	return {
 		status:
+			formalStarts.length > 0 &&
 			restartLaunchIndex >= 0 &&
 			formalStarts.length === 2 &&
 			startsBeforeRestart.length === 2 &&
+			launchesAfterRestart === 2 &&
 			new Set(formalIds).size === 2 &&
 			resumed
 				? ("pass" as const)
@@ -283,13 +309,45 @@ function effectiveThreadConfiguration(
 	};
 }
 
+/**
+ * The native exec tool wraps command output in a fixed envelope. Evidence uses
+ * only the command's own output, and a non-zero or unterminated process is
+ * never treated as a classified isolation outcome.
+ */
+function nativeToolOutput(text: string) {
+	const exited = /^Process exited with code (-?\d+)$/m.exec(text);
+	const output = /^Output:$/m.exec(text);
+	if (!exited || !output || output.index < exited.index)
+		return { body: text, exitCode: undefined };
+	return {
+		body: text.slice(output.index + output[0].length + 1),
+		exitCode: Number(exited[1]),
+	};
+}
+
 function decodedToolOutput(output: string): string | undefined {
 	try {
 		const parsed: unknown = JSON.parse(output);
-		return typeof parsed === "string" ? parsed : undefined;
+		return typeof parsed === "string"
+			? nativeToolOutput(parsed).body
+			: undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function toolExitCodes(outputs: readonly string[]) {
+	const codes: (number | undefined)[] = [];
+	for (const output of outputs) {
+		try {
+			const parsed: unknown = JSON.parse(output);
+			if (typeof parsed !== "string") return undefined;
+			codes.push(nativeToolOutput(parsed).exitCode);
+		} catch {
+			return undefined;
+		}
+	}
+	return codes;
 }
 
 function completeToolOutput(
@@ -297,9 +355,12 @@ function completeToolOutput(
 	completionMarker?: string,
 ) {
 	const decoded = outputs.map(decodedToolOutput);
+	const exitCodes = toolExitCodes(outputs);
 	return (
 		decoded.length > 0 &&
 		decoded.every((output): output is string => output !== undefined) &&
+		exitCodes !== undefined &&
+		exitCodes.every((code) => code === undefined || code === 0) &&
 		!decoded.some((output) =>
 			/truncated|Process running with session ID/i.test(output),
 		) &&
@@ -426,7 +487,9 @@ function historyMembership(
 	name: "OWNER" | "FOREIGN",
 ): HistoryMembership {
 	const matches = lines.filter((line) =>
-		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|error)$/.test(line),
+		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|denied|error)$/.test(
+			line,
+		),
 	);
 	const value = `SYNTH_HISTORY_${name}=`;
 	const matching = matches.filter((line) => line.startsWith(value));
@@ -442,7 +505,7 @@ function historyScanEvidence(outputs: readonly string[]): HistoryScanEvidence {
 	const owner = historyMembership(lines, "OWNER");
 	const foreign = historyMembership(lines, "FOREIGN");
 	const expectedLine =
-		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|error)$/;
+		/^SYNTH_HISTORY_(?:OWNER|FOREIGN)=(?:present|absent|denied|error)$/;
 	const completed = lines.filter(
 		(line) => line === "SYNTH_HISTORY_SCAN_COMPLETE",
 	).length;
@@ -462,6 +525,7 @@ function historyScanEvidence(outputs: readonly string[]): HistoryScanEvidence {
 			owner !== "unavailable" &&
 			foreign !== "unavailable" &&
 			owner !== "error" &&
+			owner !== "denied" &&
 			foreign !== "error",
 	};
 }
@@ -497,9 +561,10 @@ class RawNativeClient {
 		void this.consume();
 	}
 
-	static async open(dataDirectory: string) {
+	static async open(dataDirectory: string, conversationKey: string) {
 		const bridge = await CodexAppServerBridge.open({
 			dataDirectory,
+			conversationKey,
 			model: "gpt-5.3-codex",
 			reasoningEffort: "high",
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
@@ -937,14 +1002,19 @@ it("matches only the two formal sessions after an interleaved raw probe restart"
 		params: { threadId },
 		result: { thread: { id } },
 	});
+	// One native process per Conversation: two launches start the original
+	// Sessions and two more resume them after the restart.
 	const complete = [
 		{ method: "launch" },
 		threadStart("raw-control"),
+		{ method: "launch" },
 		threadStart("formal-a"),
 		threadStart("raw-target"),
+		{ method: "launch" },
 		threadStart("formal-b"),
 		{ method: "launch" },
 		resumed("formal-a"),
+		{ method: "launch" },
 		resumed("formal-b"),
 	] satisfies NativeObservation[];
 	expect(nativeRestartSessionEvidence(complete, rawThreadIds).status).toBe(
@@ -952,6 +1022,9 @@ it("matches only the two formal sessions after an interleaved raw probe restart"
 	);
 
 	for (const observations of [
+		// Only one process restarted.
+		complete.filter((_entry, index) => index !== 9),
+		// No launch separates the original Sessions from the resumes.
 		[
 			{ method: "launch" },
 			threadStart("formal-a"),
@@ -960,23 +1033,30 @@ it("matches only the two formal sessions after an interleaved raw probe restart"
 			resumed("formal-a"),
 			resumed("formal-b"),
 		],
+		// A Session was started after the restart boundary.
 		[
 			{ method: "launch" },
 			threadStart("formal-a"),
+			{ method: "launch" },
+			{ method: "launch" },
 			threadStart("formal-b"),
+			{ method: "launch" },
 			resumed("formal-a"),
 			resumed("formal-b"),
 		],
+		// One original Session was never resumed.
 		complete.filter((entry) =>
 			entry.method === "thread/resume"
 				? entry.params?.threadId !== "formal-b"
 				: true,
 		),
+		// A resume names a different native thread.
 		complete.map((entry) =>
 			entry.method === "thread/resume" && entry.params?.threadId === "formal-b"
 				? resumed("formal-b", "different-thread")
 				: entry,
 		),
+		// A third formal Session appeared.
 		[
 			...complete.slice(0, -2),
 			threadStart("formal-c"),
@@ -984,6 +1064,8 @@ it("matches only the two formal sessions after an interleaved raw probe restart"
 			resumed("formal-b"),
 			resumed("formal-c"),
 		],
+		// No formal Session was ever started.
+		[{ method: "launch" }, threadStart("raw-control"), { method: "launch" }],
 	])
 		expect(
 			nativeRestartSessionEvidence(observations, rawThreadIds).status,
@@ -1061,6 +1143,73 @@ it("records effective thread settings from the native result root", () => {
 	});
 });
 
+it("reads evidence from the native exec envelope without trusting its framing", () => {
+	const marker = "SYNTH_ENVELOPE_TEST";
+	const envelope = (body: string, exit = "Process exited with code 0") =>
+		JSON.stringify(
+			[
+				"Chunk ID: abc123",
+				"Wall time: 0.0000 seconds",
+				exit,
+				"Original token count: 12",
+				"Output:",
+				body,
+			].join("\n"),
+		);
+
+	// The envelope lines are framing, not command output.
+	expect(
+		crossFileReadEvidence({
+			outputs: [envelope(`${marker}=EPERM\n`)],
+			outcomeMarker: marker,
+			positiveControl: true,
+			foreignMarkerObserved: false,
+		}),
+	).toEqual({ status: "pass", reason: "foreign-read-permission-denied" });
+	expect(
+		crossFileModifyEvidence({
+			outputs: [envelope(`${marker}=EACCES\n`)],
+			outcomeMarker: marker,
+			ownerWriteSucceeded: true,
+			changed: false,
+		}),
+	).toEqual({ status: "pass", reason: "foreign-write-permission-denied" });
+	expect(
+		historyScenarioEvidence({
+			outputs: [
+				envelope(
+					"SYNTH_HISTORY_OWNER=present\nSYNTH_HISTORY_FOREIGN=denied\nSYNTH_HISTORY_SCAN_COMPLETE\n",
+				),
+			],
+			foreignMarkerObserved: false,
+		}),
+	).toMatchObject({ owner: "present", foreign: "denied", status: "pass" });
+
+	// A failed or unterminated native process is never a classified outcome.
+	for (const exit of [
+		"Process exited with code 1",
+		"Process running with session ID abc",
+	])
+		expect(
+			crossFileReadEvidence({
+				outputs: [envelope(`${marker}=EPERM\n`, exit)],
+				outcomeMarker: marker,
+				positiveControl: true,
+				foreignMarkerObserved: false,
+			}).status,
+		).toBe("unverified");
+
+	// Extra command output beside the outcome stays unclassified.
+	expect(
+		crossFileReadEvidence({
+			outputs: [envelope(`unexpected\n${marker}=EPERM\n`)],
+			outcomeMarker: marker,
+			positiveControl: true,
+			foreignMarkerObserved: false,
+		}).status,
+	).toBe("unverified");
+});
+
 it.skipIf(process.platform === "win32")(
 	"uses bounded exact membership evidence for the history positive control",
 	async () => {
@@ -1068,16 +1217,17 @@ it.skipIf(process.platform === "win32")(
 		const foreign = "SYNTH_CONTEXT_FOREIGN_DEF";
 		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-history-"));
 		try {
-			const sessions = join(directory, "sessions");
-			await mkdir(sessions);
-			await writeFile(join(sessions, "owner-history.json"), owner);
+			const ownerSessions = join(directory, "owner", "sessions");
+			const foreignSessions = join(directory, "foreign", "sessions");
+			await mkdir(ownerSessions, { recursive: true });
+			await mkdir(foreignSessions, { recursive: true });
+			await writeFile(join(ownerSessions, "owner-history.json"), owner);
 			const command = historyScanCommand({
 				ownerMarker: owner,
 				foreignMarker: foreign,
-				directory: sessions,
+				ownerDirectory: ownerSessions,
+				foreignDirectory: foreignSessions,
 			});
-			expect(command).toContain("grep -R -F -l --");
-			expect(command).not.toContain("sort -u");
 			expect(command).not.toContain(owner);
 			expect(command).not.toContain(foreign);
 			const evidence = historyScenarioEvidence({
@@ -1102,6 +1252,62 @@ it.skipIf(process.platform === "win32")(
 				}),
 			).toBe("pass");
 		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+	"accepts a denied foreign history scan beside a successful owner control",
+	async () => {
+		const owner = "SYNTH_CONTEXT_OWNER_GHI";
+		const foreign = "SYNTH_CONTEXT_FOREIGN_JKL";
+		const directory = await mkdtemp(join(tmpdir(), "agent-runtime-history-"));
+		const foreignSessions = join(directory, "foreign", "sessions");
+		try {
+			const ownerSessions = join(directory, "owner", "sessions");
+			await mkdir(ownerSessions, { recursive: true });
+			await mkdir(foreignSessions, { recursive: true });
+			await writeFile(join(ownerSessions, "owner-history.json"), owner);
+			await writeFile(join(foreignSessions, "foreign-history.json"), foreign);
+			await chmod(foreignSessions, 0o000);
+			const outputs = [
+				JSON.stringify(
+					execFileSync(
+						"sh",
+						[
+							"-c",
+							historyScanCommand({
+								ownerMarker: owner,
+								foreignMarker: foreign,
+								ownerDirectory: ownerSessions,
+								foreignDirectory: foreignSessions,
+							}),
+						],
+						{ encoding: "utf8" },
+					),
+				),
+			];
+			expect(
+				historyScenarioEvidence({ outputs, foreignMarkerObserved: false }),
+			).toMatchObject({
+				owner: "present",
+				foreign: "denied",
+				completeOutput: true,
+				status: "pass",
+			});
+			// A denied owner control can never stand in for isolation evidence.
+			expect(
+				historyScenarioEvidence({
+					outputs: [JSON.stringify("SYNTH_HISTORY_OWNER=denied\n")].concat(
+						JSON.stringify("SYNTH_HISTORY_FOREIGN=denied\n"),
+						JSON.stringify("SYNTH_HISTORY_SCAN_COMPLETE\n"),
+					),
+					foreignMarkerObserved: false,
+				}),
+			).toMatchObject({ completeOutput: false, status: "unverified" });
+		} finally {
+			await chmod(foreignSessions, 0o700).catch(() => {});
 			await rm(directory, { recursive: true, force: true });
 		}
 	},
@@ -1504,24 +1710,44 @@ function quote(value: string) {
 function historyScanCommand(input: {
 	ownerMarker: string;
 	foreignMarker: string;
-	directory: string;
+	ownerDirectory: string;
+	foreignDirectory: string;
 }) {
-	const octalEscapes = (value: string) =>
-		[...Buffer.from(value, "utf8")]
-			.map((byte) => `\\${byte.toString(8).padStart(3, "0")}`)
-			.join("");
-	const marker = (value: string) =>
-		`$(printf '%b' ${quote(octalEscapes(value))})`;
+	// Markers are rebuilt from byte values so no scanned marker text appears in
+	// the command, the model input, or the tool arguments.
+	const bytes = (value: string) =>
+		JSON.stringify([...Buffer.from(value, "utf8")]);
+	const script = `const fs = require("node:fs");
+const path = require("node:path");
+const [ownerDirectory, foreignDirectory, ownerBytes, foreignBytes] = process.argv.slice(1);
+const scan = (directory, encoded) => {
+ const marker = Buffer.from(JSON.parse(encoded)).toString("utf8");
+ const walk = (current) => {
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+   const full = path.join(current, entry.name);
+   if (entry.isDirectory()) { if (walk(full)) return true; continue; }
+   if (!entry.isFile()) continue;
+   if (fs.readFileSync(full, "utf8").includes(marker)) return true;
+  }
+  return false;
+ };
+ try { return walk(directory) ? "present" : "absent"; }
+ catch (error) { return error.code === "EACCES" || error.code === "EPERM" ? "denied" : "error"; }
+};
+console.log("SYNTH_HISTORY_OWNER=" + scan(ownerDirectory, ownerBytes));
+console.log("SYNTH_HISTORY_FOREIGN=" + scan(foreignDirectory, foreignBytes));
+console.log("SYNTH_HISTORY_SCAN_COMPLETE");`;
 	return [
-		`owner_marker=${marker(input.ownerMarker)}`,
-		`foreign_marker=${marker(input.foreignMarker)}`,
-		'history_scan_marker() { if grep -R -F -l -- "$1" ' +
-			quote(input.directory) +
-			' >/dev/null 2>&1; then printf \'%s=present\\n\' "$2"; else status=$?; case "$status" in 1) printf \'%s=absent\\n\' "$2";; *) printf \'%s=error\\n\' "$2";; esac; fi; }',
-		'history_scan_marker "$owner_marker" SYNTH_HISTORY_OWNER',
-		'history_scan_marker "$foreign_marker" SYNTH_HISTORY_FOREIGN',
-		"printf 'SYNTH_HISTORY_SCAN_COMPLETE\\n'",
-	].join("; ");
+		process.execPath,
+		"-e",
+		script,
+		input.ownerDirectory,
+		input.foreignDirectory,
+		bytes(input.ownerMarker),
+		bytes(input.foreignMarker),
+	]
+		.map(quote)
+		.join(" ");
 }
 
 // A skipped native suite is never isolation acceptance evidence.
@@ -1583,10 +1809,23 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		let launcher:
 			| Awaited<ReturnType<typeof nativeIsolationLauncher>>
 			| undefined;
-		let nativeHome = "";
-		let workspace = "";
+		// One native process per Conversation, so every actor has its own
+		// CODEX_HOME and workspace.
+		const actorStorage = new Map<
+			string,
+			{ home: string; codexHome: string; cwd: string }
+		>();
+		const conversationKeys = new Map(
+			users.map((user) => [
+				user.id,
+				codexConversationKey({
+					agentId: "agent-isolation",
+					conversationId: `conversation-${user.id}`,
+					sessionGeneration: 1,
+				}),
+			]),
+		);
 		let rawProbeLaunches = 0;
-		let bootstrapDriverLaunches = 0;
 		let activeDriver: CodexRuntimeDriver | undefined;
 		const rawNativeThreadIds = new Set<string>();
 		let rawActiveThreadControl = rawForeignMarkerControl(undefined);
@@ -1595,8 +1834,43 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 		const record = (key: string, status: Status, reason: string) => {
 			scenarios[key] = { status, reason };
 		};
+		const storageOf = (user: (typeof users)[number]) => {
+			const storage = actorStorage.get(user.id);
+			if (!storage) throw new Error("Missing native launch");
+			return storage;
+		};
 		const filePath = (user: (typeof users)[number], name: string) =>
-			join(workspace, "workspace", user.id, name);
+			join(storageOf(user).cwd, name);
+		const historyDirectory = (user: (typeof users)[number]) =>
+			join(storageOf(user).codexHome, "sessions");
+		const features = (nativeHome: string) => {
+			if (!launcher) throw new Error("Missing native launcher");
+			return launcher.features(nativeHome);
+		};
+		async function resolveActorStorage() {
+			if (!launcher) throw new Error("Missing native launcher");
+			const launches = (await launcher.observations()).filter(
+				(entry) => entry.method === "launch",
+			);
+			for (const user of users) {
+				const key = conversationKeys.get(user.id);
+				if (!key) throw new Error("Missing Conversation key");
+				// The launch is matched by the server-derived Conversation key, which
+				// also proves the path is bound to the trusted binding.
+				const launch = launches.findLast(
+					(entry) =>
+						typeof entry.cwd === "string" &&
+						entry.cwd.includes(`${sep}conversations${sep}${key}${sep}`),
+				);
+				if (!launch?.cwd || !launch.codexHome || !launch.home)
+					throw new Error("Missing native launch");
+				actorStorage.set(user.id, {
+					home: launch.home,
+					codexHome: launch.codexHome,
+					cwd: launch.cwd,
+				});
+			}
+		}
 		async function open() {
 			driver = await CodexRuntimeDriver.open({
 				path: join(directory, "driver.json"),
@@ -1622,23 +1896,6 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				}),
 			);
 			return driver;
-		}
-		async function prepareRawNativeStorage() {
-			const rawDriver = await CodexRuntimeDriver.open({
-				path: rawDriverPath,
-				configVersion: "synthetic-config-1",
-				defaultModelOptionId: "synthetic",
-				defaultReasoningLevel: "high",
-				modelOptions: [
-					{
-						modelOptionId: "synthetic",
-						model: "gpt-5.3-codex",
-						reasoningLevels: ["high"],
-					},
-				],
-			});
-			await rawDriver.close();
-			bootstrapDriverLaunches = 1;
 		}
 		function request(
 			user: (typeof users)[number],
@@ -1846,12 +2103,19 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			const foreignMarker = users.at(1)?.context;
 			if (!foreignMarker) throw new Error("Missing foreign isolation marker");
 			const hold = model.holdObservation(probe);
-			const beforeRawClient = (await launcher.observations()).filter(
-				(entry) => entry.method === "launch",
-			).length;
+			const beforeRawClient = (
+				await launcher.observations({ allowEmptyBeforeLaunch: true })
+			).filter((entry) => entry.method === "launch").length;
 			let client: RawNativeClient | undefined;
 			try {
-				client = await RawNativeClient.open(`${rawDriverPath}.native`);
+				client = await RawNativeClient.open(
+					`${rawDriverPath}.native`,
+					codexConversationKey({
+						agentId: "agent-isolation-raw-probe",
+						conversationId: "conversation-isolation-raw-probe",
+						sessionGeneration: 1,
+					}),
+				);
 				rawActiveThreadControl = await sampleRawForeignMarkerControl(
 					client,
 					foreignMarker,
@@ -2034,7 +2298,8 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 							? historyScanCommand({
 									ownerMarker: user.context,
 									foreignMarker: other.context,
-									directory: join(nativeHome, "sessions"),
+									ownerDirectory: historyDirectory(user),
+									foreignDirectory: historyDirectory(other),
 								})
 							: fileReadCommand({
 									target: filePath(other, "private.txt"),
@@ -2172,46 +2437,68 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			model = await isolationModel();
 			launcher = await nativeIsolationLauncher(directory, binary, model.url);
 			process.env.PATH = launcher.bin + delimiter + (originalPath ?? "");
-			await prepareRawNativeStorage();
 			await sampleActiveThreadHistory();
 			activeDriver = await open();
+			// A Conversation's native process starts with its first Turn, so the
+			// positive control runs before any launch can be observed.
+			stage = "host-positive-control";
+			const seeds = await pair(undefined, true);
+			await resolveActorStorage();
 			report.provenanceVerified = true;
-			const launch = (await launcher.observations())
-				.filter((entry) => entry.method === "launch")
-				.at(-1);
-			if (!launch?.codexHome || !launch.cwd || !launch.home)
-				throw new Error("Missing native launch");
-			nativeHome = launch.codexHome;
-			workspace = launch.cwd;
 			const ownedRoot = await realpath(directory);
 			const temporaryRoot = await realpath(tmpdir());
-			const resolvedHome = await realpath(launch.home);
-			const resolvedNativeHome = await realpath(nativeHome);
-			const resolvedWorkspace = await realpath(workspace);
-			for (const resolved of [
-				resolvedHome,
-				resolvedNativeHome,
-				resolvedWorkspace,
-			]) {
-				if (
-					!resolved.startsWith(`${ownedRoot}${sep}`) &&
-					!(
-						dirname(resolved) === temporaryRoot &&
-						basename(resolved).startsWith("agent-runtime-codex-home-")
+			const launchConfigurations: Record<string, unknown> = {};
+			const resolvedStorage = new Map<
+				string,
+				{ home: string; codexHome: string; cwd: string }
+			>();
+			for (const user of users) {
+				const storage = storageOf(user);
+				const resolved = {
+					home: await realpath(storage.home),
+					codexHome: await realpath(storage.codexHome),
+					cwd: await realpath(storage.cwd),
+				};
+				resolvedStorage.set(user.id, resolved);
+				for (const path of Object.values(resolved)) {
+					if (
+						!path.startsWith(`${ownedRoot}${sep}`) &&
+						!(
+							dirname(path) === temporaryRoot &&
+							basename(path).startsWith("agent-runtime-codex-home-")
+						)
 					)
-				)
-					throw new Error("Native directory is not synthetic");
+						throw new Error("Native directory is not synthetic");
+				}
+				const launchConfiguration = nativeLaunchDirectoryRelations(resolved);
+				launchConfigurations[user.id] = launchConfiguration;
+				if (!launchConfiguration.isolated)
+					throw new Error("Native HOME, CODEX_HOME, and cwd overlap");
 			}
-			const launchConfiguration = nativeLaunchDirectoryRelations({
-				home: resolvedHome,
-				codexHome: resolvedNativeHome,
-				cwd: resolvedWorkspace,
+			// Two actors must never share a native workspace or native home.
+			const [first, second] = users.map((user) => {
+				const resolved = resolvedStorage.get(user.id);
+				if (!resolved) throw new Error("Missing native launch");
+				return resolved;
 			});
-			report.launchConfiguration = launchConfiguration;
-			if (!launchConfiguration.isolated)
-				throw new Error("Native HOME, CODEX_HOME, and cwd overlap");
-			const memoryDisabled = /^memories\s+\S+\s+false$/m.test(
-				launcher.features(nativeHome),
+			if (!first || !second) throw new Error("Missing native launch");
+			const disjoint = (left: string, right: string) =>
+				left !== right &&
+				!left.startsWith(`${right}${sep}`) &&
+				!right.startsWith(`${left}${sep}`);
+			const actorsDisjoint =
+				disjoint(first.cwd, second.cwd) &&
+				disjoint(first.codexHome, second.codexHome) &&
+				disjoint(first.cwd, second.codexHome) &&
+				disjoint(second.cwd, first.codexHome);
+			report.launchConfiguration = {
+				actors: launchConfigurations,
+				actorsDisjoint,
+			};
+			if (!actorsDisjoint)
+				throw new Error("Native actor storage is not separated");
+			const memoryDisabled = users.every((user) =>
+				/^memories\s+\S+\s+false$/m.test(features(storageOf(user).codexHome)),
 			);
 			record(
 				"configuration.personal-memory",
@@ -2220,8 +2507,6 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 					? "pinned-native-feature-disabled"
 					: "enabled-or-feature-status-unavailable",
 			);
-			stage = "host-positive-control";
-			const seeds = await pair(undefined, true);
 			record(stage, "pass", "both-native-turns-completed-and-replayed");
 			const memoryTools = seeds.some(({ probe }) =>
 				probe.tools.some((tool) => /memor/i.test(tool)),
@@ -2243,6 +2528,22 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 			driver = undefined;
 			stage = "restart-resume";
 			await open();
+			// The resumed Conversations reuse their durable directories, so the
+			// pre-restart paths must still be the ones observed here.
+			const beforeRestart = new Map(actorStorage);
+			await pair(undefined, true);
+			await resolveActorStorage();
+			for (const user of users) {
+				const before = beforeRestart.get(user.id);
+				const after = actorStorage.get(user.id);
+				if (
+					!before ||
+					!after ||
+					before.cwd !== after.cwd ||
+					before.codexHome !== after.codexHome
+				)
+					throw new Error("Resumed native storage changed");
+			}
 			await phase(stage);
 		} catch (error) {
 			report.errorCode =
@@ -2288,7 +2589,7 @@ it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
 				);
 				const restarted =
 					observations.filter((entry) => entry.method === "launch").length ===
-					2 + rawProbeLaunches + bootstrapDriverLaunches;
+					2 * users.length + rawProbeLaunches;
 				if (
 					stage === "restart-resume" &&
 					restartEvidence.status === "pass" &&

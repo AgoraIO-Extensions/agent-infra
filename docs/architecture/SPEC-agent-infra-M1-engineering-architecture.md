@@ -528,6 +528,33 @@ RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威�
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。
 取舍见 [ADR: Codex 模型错误在原生持久化前脱敏](../adr/0007-sanitize-codex-model-errors-before-native-storage.md)。
 
+### 10.9 Codex 原生 Conversation 隔离边界
+
+Codex Driver 为每个 Conversation 代次维护一个独立的原生 `app-server` 进程。进程选择键由服务端
+从可信 `agentId`、`conversationId` 与 `sessionGeneration` 派生，不接受调用方提交的字段，也不由
+原生回包决定。每个进程独立完成 pinned provenance、`initialize` 与受限配置准入；一个进程的准入
+结果不为另一个进程担保。一个原生传输只允许一个请求多路复用器。
+
+原生持久存储位于该 Agent PVC 上 Driver 状态的同级目录，按 `conversations/<key>/{home,workspace}`
+分配；`CODEX_HOME` 与 cwd 按 Conversation 绑定，因此原生历史与 rollout 天然不共享目录。所有层级
+以 0700 创建并校验归属与权限位，持久目录中出现原生配置或凭证文件即拒绝启动。旧布局与丢失所属
+目录的 Session 保留原始文件与映射，相关原生操作 fail closed。
+
+文件边界由 pinned Codex 自身的权限 profile 施加（Linux 经 Landlock、Darwin 经 Seatbelt），以 session
+flag 注入且不落盘配置文件：Conversation 根 `deny`、本 Conversation `home` 只读、`workspace` 可写。
+因此模型工具不能读取、搜索、修改或引用其他 Conversation 的工作区与历史，也不能写入原生配置、
+skills 或 HOME；路径别名、符号链接与父目录穿越同样被拒绝。不在原生进程外再包一层平台沙箱：
+pinned 版本在 Darwin 用 `sandbox-exec` 执行工具，任何具有约束力的外层 profile 都会使内层
+`sandbox_apply` 失败，从而让工具普遍不可用并伪造出“隔离通过”。
+
+平台自有模型传输始终是 loopback 入口，原生进程必须拒绝为 loopback 走代理，避免宿主代理配置
+拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。
+
+Runtime Contract、部署单元、Grant 校验与 §10.8 的模型传输边界不变，也不引入平台统一 Sandbox。
+验收必须使用真实 pinned Codex 与正式 Host/Driver/Bridge，覆盖并发、进程重启与原 Session 恢复；
+本人访问必须成功，工具普遍不可用或平台能力关闭都不构成隔离通过。取舍见
+[ADR: 按 Conversation 隔离 Codex 原生进程与文件边界](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
+
 ## 11. Agent Runtime 边界
 
 ### 11.1 Platform Conversation Contract

@@ -217,10 +217,15 @@ Codex Native Bridge 在 Linux 使用固定 Codex 版本的 legacy Landlock 后�
 
 只有探针正常退出且退出码为 0，才允许启动 `app-server` 并向原生子进程注入受限模型传输凭证。工具缺失、无法安装或应用规则集、异常退出、非零退出和超时均拒绝启动，返回稳定且脱敏的错误；不回退到部分权限或 unrestricted 模式。该准入不新增 RuntimeHost 对外配置或改变 Agent Runtime Contract。
 
+### 10.2 Codex 原生 Conversation 隔离
+
+Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录，文件边界由固定 Codex 版本自身的权限 profile 施加。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
+
 ## 11. 验证
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - Codex Linux 启动准入覆盖可信工具缺失、权限能力不足、安装失败、异常退出和超时，验证拒绝发生在 `app-server` 启动及向子进程注入模型凭证之前。正式镜像在工程 Spec 规定的容器安全约束下，通过真实 Host/Driver/Bridge 验证工具执行的退出码、stdout 与受限写入结果；该兼容性检查不替代多用户隔离验收。
+- Codex 多用户隔离验收使用真实 pinned Codex 与正式 Host/Driver/Bridge，为同一 Agent 的两个用户建立各自 Conversation，验证本人文件与运行上下文访问成功，而跨 Conversation 的读取、搜索、修改、历史扫描与模型输入/结果均被原生权限 profile 拒绝；覆盖并发、进程重启与原 Session 恢复。工具普遍不可用或平台能力关闭都不构成通过。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。

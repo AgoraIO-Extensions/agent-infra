@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
+	codexConversationKey,
 } from "./codex-app-server-bridge.js";
 import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
 import type { RuntimeDriverCommand } from "./driver.js";
@@ -161,6 +162,11 @@ async function directory() {
 async function nativeClient(path: string, experimentalApi = false) {
 	const bridge = await CodexAppServerBridge.open({
 		dataDirectory: path,
+		conversationKey: codexConversationKey({
+			agentId: "agent-native-recovery",
+			conversationId: "conversation-native-recovery",
+			sessionGeneration: 1,
+		}),
 		model: "gpt-5.3-codex",
 		reasoningEffort: "low",
 		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
@@ -328,6 +334,24 @@ function submit(
 	};
 }
 
+// Native storage is one directory per Conversation generation.
+function nativeHome(path: string) {
+	return join(
+		`${path}.native`,
+		"conversations",
+		codexConversationKey({
+			agentId: "synthetic-agent",
+			conversationId: "synthetic-conversation",
+			sessionGeneration: 1,
+		}),
+		"home",
+	);
+}
+
+function nativeWorkspace(path: string) {
+	return join(dirname(nativeHome(path)), "workspace");
+}
+
 function stop(
 	executionId: string,
 	turnId: string,
@@ -442,9 +466,12 @@ async function seedDriver(path: string) {
 			() => {
 				let database: DatabaseSync | undefined;
 				try {
-					database = new DatabaseSync(`${path}.native/home/state_5.sqlite`, {
-						readOnly: true,
-					});
+					database = new DatabaseSync(
+						join(nativeHome(path), "state_5.sqlite"),
+						{
+							readOnly: true,
+						},
+					);
 					return database
 						.prepare("SELECT first_user_message FROM threads")
 						.all()
@@ -690,7 +717,7 @@ describe
 			);
 			let nativeSessionRef: string | undefined;
 			let threadId: string | undefined;
-			const home = `${path}.native/home`;
+			const home = nativeHome(path);
 
 			for (let index = 0; index < 8; index += 1) {
 				const seed = syntheticHistoryInputs[index];
@@ -855,7 +882,7 @@ describe
 				const path = join(await directory(), "driver.json");
 				const accepted = await seedDriver(path);
 				const original = await mapping(path);
-				const home = `${path}.native/home`;
+				const home = nativeHome(path);
 				const rollouts = (await readdir(home, { recursive: true })).filter(
 					(name) => name.endsWith(".jsonl"),
 				);
@@ -905,7 +932,7 @@ describe
 				if (damage === "missing native root")
 					await rm(`${path}.native`, { recursive: true });
 				if (damage === "missing workspace")
-					await rm(`${path}.native/workspace`, { recursive: true });
+					await rm(nativeWorkspace(path), { recursive: true });
 				await expect(nativeDriver(path)).rejects.toMatchObject({
 					httpStatus: 503,
 				});
@@ -914,7 +941,7 @@ describe
 				if (damage === "missing native root")
 					await expect(access(`${path}.native`)).rejects.toThrow();
 				if (damage === "missing workspace")
-					await expect(access(`${path}.native/workspace`)).rejects.toThrow();
+					await expect(access(nativeWorkspace(path))).rejects.toThrow();
 			},
 			90_000,
 		);
