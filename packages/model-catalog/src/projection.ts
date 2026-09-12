@@ -160,6 +160,7 @@ export function validateRuntimeModelProjectionV1(
 			) ||
 			content.options.some(
 				(option) =>
+					!option.endpoint.available ||
 					option.secretRef.configRevision > content.configurationRevision ||
 					new Set(option.reasoningLevels).size !==
 						option.reasoningLevels.length ||

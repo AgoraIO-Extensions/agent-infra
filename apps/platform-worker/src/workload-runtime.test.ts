@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -775,6 +776,22 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(await runtime.observe(JSON.parse(JSON.stringify(state)))).toBe(
 			"healthy",
 		);
+		const unavailable = structuredClone(state.candidate.modelProjection) as {
+			fingerprint: string;
+			options: { endpoint: { available: boolean } }[];
+		};
+		assert(unavailable.options[0]);
+		unavailable.options[0].endpoint.available = false;
+		const { fingerprint: _, ...unavailableContent } = unavailable;
+		unavailable.fingerprint = createHash("sha256")
+			.update(JSON.stringify(unavailableContent))
+			.digest("hex");
+		await expect(
+			runtime.observe({
+				...state,
+				candidate: { ...state.candidate, modelProjection: unavailable },
+			}),
+		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 		for (const override of [
 			{ agentId: "agent-b" },
 			{ configurationRevision: 2 },
