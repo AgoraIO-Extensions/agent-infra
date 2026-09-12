@@ -13,6 +13,7 @@ import {
 	type ModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
 	projectRuntimeModelConfigurationV1,
+	revalidateRuntimeModelCatalogV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -362,6 +363,39 @@ export function createWorkloadRuntimeV1(
 				: { state: "absent" },
 		});
 	}
+	async function revalidateCandidateCatalog(
+		state: WorkloadReconciliationStateV1,
+	) {
+		if (
+			state.candidate.configuration.source.kind !== "standard" ||
+			state.candidate.configuration.revision ===
+				state.verified?.configuration.revision
+		)
+			return;
+		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
+		await revalidateRuntimeModelCatalogV1(
+			validateRuntimeModelProjectionV1(
+				state.candidate.modelProjection,
+				state.candidate.configuration,
+			),
+			options.modelCatalog,
+			AbortSignal.timeout(60_000),
+		);
+	}
+	async function cleanupModelConfiguration(
+		state: WorkloadReconciliationStateV1,
+	) {
+		if (
+			state.candidate.configuration.source.kind !== "standard" ||
+			state.candidate.deployment === null ||
+			state.candidate.configuration.revision ===
+				state.verified?.configuration.revision
+		)
+			return true;
+		return createAdapter(undefined, state).removeModelConfiguration(
+			desired(state),
+		);
+	}
 	function routeSelectorMode(
 		state: WorkloadReconciliationStateV1,
 	): "closed" | "open" {
@@ -651,7 +685,10 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is closing");
 		},
 		async discardUnactivatedSecrets(state, input) {
-			return cleanupUnactivatedSecrets(state, input);
+			return (
+				(await cleanupUnactivatedSecrets(state, input)) &&
+				(await cleanupModelConfiguration(state))
+			);
 		},
 		async apply(state, stopped, input) {
 			if (stopped)
@@ -660,6 +697,7 @@ export function createWorkloadRuntimeV1(
 					state.revision,
 					state.fence,
 				);
+			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
 			const adapter = createAdapter(undefined, state);
 			const activeBindingsToRepair: {
@@ -758,6 +796,7 @@ export function createWorkloadRuntimeV1(
 			return health;
 		},
 		async activateSecrets(state, input) {
+			await revalidateCandidateCatalog(state);
 			const adapter = createAdapter(undefined, state);
 			const bindings = bindingsFor(state, input);
 			if (!bindings.length) return "active";
@@ -838,6 +877,7 @@ export function createWorkloadRuntimeV1(
 			return "active";
 		},
 		async promote(state) {
+			await revalidateCandidateCatalog(state);
 			const adapter = createAdapter(undefined, state);
 			if (!state.identity) throw new Error();
 			if (
@@ -905,7 +945,7 @@ export function createWorkloadRuntimeV1(
 					deleteNewVolume,
 				);
 			}
-			return resourcesRemoved;
+			return resourcesRemoved && (await cleanupModelConfiguration(state));
 		},
 	};
 }

@@ -436,7 +436,7 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 - 普通 env 保存于 Platform DB。Secret `algorithmVersion = aes-256-gcm:v1` 要求每次加密（包括轮换和失败重试）都由 CSPRNG 新生成 256-bit DEK 和 96-bit nonce，同一 DEK 只允许加密一条记录且不得复用 nonce；`platform-api` 计算不泄露 DEK 的 SHA-256 fingerprint，并通过 Platform DB 唯一约束检测冲突，冲突时丢弃结果并重新生成 DEK/nonce。AEAD 使用 128-bit authentication tag 和版本化 canonical AAD；AAD 按固定顺序对 Secret ID、Owner 类型/ID、Agent ID、Secret 名称、Secret 版本和 `algorithmVersion` 做无歧义的长度前缀 UTF-8 编码。`platform-api` 用 DEK 加密明文，再用部署 active 公钥按 `wrappingAlgorithmVersion = rsa-oaep-sha256:v1` 和至少 3072-bit RSA key 封装 DEK。Platform DB 保存 DEK fingerprint、nonce、ciphertext、authentication tag、wrapped DEK、`algorithmVersion`、`wrappingAlgorithmVersion`、`wrappingKeyVersion` 和生命周期状态；任何字段或 AAD 绑定不一致都必须认证失败。
 - 部署只向 `platform-api` 注入版本化加密公钥，向 `platform-worker` 注入对应私钥 keyring；API 不持有可解密历史 Secret 的私钥。私钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标私钥、DEK 解封或 AEAD 认证失败、密文元数据非法时 fail closed。
 - 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 解封 DEK、受控解密，并以包含 Agent、Secret 版本和配置修订标识的不可变名称创建 Agent 专属 Kubernetes Secret；禁止原地修改已被任一 Workload 引用的 Secret，再调谐只引用该版本化名称的候选 Workload。
-- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源配置修订，与后续 Workload 配置修订不同。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常复用时不解密、复制、重新加密或重新激活；物化丢失或 UID 变化时仅允许下述受控恢复。只有新引入或替换的引用才创建并激活新的 pending 版本。
+- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源配置修订，与后续 Workload 配置修订不同。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常物化复用时不解密、复制、重新加密或重新激活；候选模型访问验证仅允许 10.7 的受控解密例外，物化丢失或 UID 变化时仅允许下述受控恢复。只有新引入或替换的引用才创建并激活新的 pending 版本。
 - Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应版本化 Secret、通过健康检查，且观测到的 Agent ID、Secret 版本、配置修订、Workload UID/generation 与当前 fence 全部匹配后，才能在同一条件更新中将 pending 版本提升为 active；任一值变化都拒绝激活并重新调谐。Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效、没有 Workload 引用旧名称且满足回滚保留策略前不得回收旧版本。
 - Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 公钥/私钥版本后，由 Worker 执行幂等、可恢复的历史 Secret 重新加密或 DEK 重新封装；数据库不再引用旧 `wrappingKeyVersion` 后，部署才能移除旧私钥。
 - `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问解密私钥或其他 Agent Secret。
@@ -474,6 +474,9 @@ Worker 在 preflight 对每个 option 独立可信解密并审计，通过有截
 任何选项失败都不物化候选 Workload；临时解密 buffer 在验证后清零。
 Workload 部署使用 Worker-only `createWorkloadSecretKeyringDecryptorV1`，允许解密 Store
 已确认的 current/active-origin 记录；仍验证完整记录与加密 AAD，不改变 Secret 状态。
+候选 preflight 的访问验证是 10.6 物化复用规则的受控解密例外：沿原 AAD 解密并记录既有
+Secret ID、Agent ID、keyVersion、结果与 traceId 审计；不复制、重新加密或重新激活 active-origin。
+已验证配置的正常调谐、漂移修复与回滚不重复访问验证；物化恢复仍遵循 10.6。
 独立 Secret 激活入口继续使用拒绝 active 记录的 `createSecretKeyringDecryptorV1`。
 
 通过验证的投影及 SHA-256 指纹与 candidate/verified 一起保存在 Worker 的持久调谐状态，
@@ -483,7 +486,14 @@ Workload 部署使用 Worker-only `createWorkloadSecretKeyringDecryptorV1`，允
 导入。Owner 的普通模型环境变量不参与 Runtime V2 选择，平台保留键仍拒绝。
 annotation 仅保存模型投影指纹；观察和路由提升从 Worker 持久投影校验配置 Secret、Pod
 变量、引用和已有 Workload/Secret fence，不从 live annotation 恢复 endpoint。
-失败候选复用既有回滚流程及 verified 投影，版本化配置 Secret 按回滚保留策略保留。
+候选在 apply、Secret 激活及路由开放前重新解析当前目录，要求 endpoint 与 policy 和持久投影
+完全一致；目录过期、移除或变化时继续关闭路由并进入既有失败处理。已验证版本的恢复与
+回滚使用 verified 投影，不依赖目录仍保留旧修订。
+失败候选复用既有回滚流程及 verified 投影。回收仅针对持久候选确定的配置 Secret：先关闭
+路由、排空 Pod，并从停止的 Workload 移除该配置引用；精确校验内容、Agent、配置修订和
+fence 后通过 UID/resourceVersion 前置条件删除。初次失败在资源清理后同样回收配置 Secret。
+清理未完成时保留 candidate 重试，不删除 verified 配置或其他 Agent 标记的 Secret；已验证
+版本化配置仍按回滚保留策略保留。
 
 ### 10.8 Codex 原生模型传输边界
 

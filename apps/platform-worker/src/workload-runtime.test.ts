@@ -14,6 +14,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
+	createDeploymentModelCatalogAdapterV1,
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
@@ -457,6 +458,151 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it.each(["expired", "removed", "changed"] as const)(
+		"rejects a %s catalog after candidate preflight and before every activation boundary",
+		async (change) => {
+			const catalog = catalogFixture();
+			const record = pendingSecretRecord({
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			const secrets = cleanupSecrets(secretCleanupStore(record));
+			const f = fixture(
+				{
+					modelCatalog: createDeploymentModelCatalogAdapterV1({
+						load: async () => catalog,
+					}),
+					modelAccess: createFakeModelAccessValidatorV1([
+						{
+							endpointId: "endpoint-a",
+							modelId: "model-a",
+							reasoningLevels: ["medium"],
+							credential: "synthetic-primary-credential",
+						},
+					]),
+					decryptor: {
+						async decrypt() {
+							return {
+								outcome: "decrypted",
+								plaintext: new TextEncoder().encode(
+									"synthetic-primary-credential",
+								),
+							};
+						},
+					},
+				},
+				{ configuration: standardModelConfiguration(), secrets },
+			);
+			await f.tick(4);
+			const state = f.state;
+			assert(state?.identity);
+			if (change === "expired") catalog.validUntil = Date.now() - 1;
+			else if (change === "removed") catalog.endpoints = [];
+			else {
+				assert(catalog.endpoints[0]);
+				catalog.endpoints[0].baseUrl = "https://models.example.test/changed/v1";
+			}
+			const runtime = createWorkloadRuntimeV1(f.options);
+			const input = {
+				configuration: state.candidate.configuration,
+				management: f.management,
+				state,
+				secrets,
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			const writes = f.writes.length;
+			await expect(runtime.apply(state, false, input)).rejects.toThrow(
+				"MODEL_CONFIGURATION_UNAVAILABLE",
+			);
+			await expect(runtime.activateSecrets(state, input)).rejects.toThrow(
+				"MODEL_CONFIGURATION_UNAVAILABLE",
+			);
+			await expect(runtime.promote(state)).rejects.toThrow(
+				"MODEL_CONFIGURATION_UNAVAILABLE",
+			);
+			expect(f.writes.length).toBe(writes);
+			const verified = {
+				...state,
+				verified: state.candidate,
+				verifiedRevision: state.revision,
+				rollback: true,
+			};
+			await expect(runtime.apply(verified, false, input)).resolves.toEqual(
+				state.identity,
+			);
+		},
+	);
+	it.each([false, true])(
+		"cleans the exact failed model config Secret when recorded identity is %s",
+		async (hasIdentity) => {
+			const record = pendingSecretRecord({
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			const secrets = cleanupSecrets(secretCleanupStore(record));
+			const f = fixture(
+				{
+					modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+					modelAccess: createFakeModelAccessValidatorV1([
+						{
+							endpointId: "endpoint-a",
+							modelId: "model-a",
+							reasoningLevels: ["medium"],
+							credential: "synthetic-primary-credential",
+						},
+					]),
+					decryptor: {
+						async decrypt() {
+							return {
+								outcome: "decrypted",
+								plaintext: new TextEncoder().encode(
+									"synthetic-primary-credential",
+								),
+							};
+						},
+					},
+				},
+				{ configuration: standardModelConfiguration(), secrets },
+			);
+			await f.tick(4);
+			assert(f.state);
+			const state = {
+				...f.state,
+				phase: "cleaning" as const,
+				identity: hasIdentity ? f.state.identity : null,
+			};
+			const configSecret = [...f.resources.values()].find(
+				(value) =>
+					value.kind === "Secret" &&
+					value.metadata?.name?.startsWith("model-config-"),
+			);
+			assert(configSecret?.metadata?.name);
+			const unrelated = {
+				...structuredClone(configSecret),
+				metadata: { ...configSecret.metadata, name: "model-config-unrelated" },
+			};
+			f.resources.set("Secret/model-config-unrelated", unrelated);
+			const runtime = createWorkloadRuntimeV1(f.options);
+			const input = {
+				configuration: state.candidate.configuration,
+				management: f.management,
+				state,
+				secrets,
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			for (let attempt = 0; attempt < 5; attempt++) {
+				if (await runtime.cleanup(state, true, input)) break;
+			}
+			expect(f.resources.has(`Secret/${configSecret.metadata.name}`)).toBe(
+				false,
+			);
+			expect(f.resources.get("Secret/model-config-unrelated")).toEqual(
+				unrelated,
+			);
+		},
+	);
 	it("projects two options with the same model into isolated endpoint and credential bindings consumed by Runtime", async () => {
 		const configuration = standardModelConfiguration();
 		const model = configuration.modelConfiguration;

@@ -1568,6 +1568,15 @@ describe("PostgreSQL Workload steps", () => {
 		expect((await state()).rollback).toBe(true);
 		expect((await state()).verified?.configuration.revision).toBe(1);
 		expect((await state()).candidate.modelProjection).toEqual(projection);
+		expect(
+			[...api.resources.values()]
+				.filter(
+					(resource) =>
+						resource.kind === "Secret" &&
+						resource.metadata?.name?.startsWith("model-config-"),
+				)
+				.map((resource) => resource.metadata?.name),
+		).toEqual([modelSecretName]);
 		const rejectedConfiguration = {
 			...configuration,
 			revision: 3,

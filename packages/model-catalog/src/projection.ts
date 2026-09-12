@@ -211,6 +211,27 @@ export function validateRuntimeModelProjectionV1(
 	}
 }
 
+/** Candidate authorization is refreshed at each durable activation boundary. */
+export async function revalidateRuntimeModelCatalogV1(
+	projection: RuntimeModelProjectionV1,
+	catalog: ModelCatalogAdapterV1,
+	signal: AbortSignal,
+): Promise<void> {
+	await modelOperationV1(signal, async () => {
+		for (const option of validateRuntimeModelProjectionV1(projection).options) {
+			const endpoint = await catalog.resolve(
+				{
+					endpointId: option.endpoint.endpointId,
+					catalogRevision: projection.catalogRevision,
+				},
+				{ signal },
+			);
+			if (!isDeepStrictEqual(endpoint, option.endpoint))
+				throw new ModelConfigurationErrorV1();
+		}
+	});
+}
+
 export function runtimeModelInjectionV1(value: RuntimeModelProjectionV1) {
 	const projection = validateRuntimeModelProjectionV1(value);
 	const secretName = `model-config-${projection.fingerprint.slice(0, 48)}`;

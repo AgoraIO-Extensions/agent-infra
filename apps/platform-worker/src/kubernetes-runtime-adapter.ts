@@ -396,6 +396,33 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				),
 		);
 	}
+	function podReferencesSecret(
+		pod: V1PodSpec | undefined,
+		name: string,
+	): boolean {
+		return (
+			!!pod &&
+			([
+				...pod.containers,
+				...(pod.initContainers ?? []),
+				...(pod.ephemeralContainers ?? []),
+			].some(
+				(container) =>
+					container.env?.some(
+						(entry) => entry.valueFrom?.secretKeyRef?.name === name,
+					) ||
+					container.envFrom?.some((entry) => entry.secretRef?.name === name),
+			) ||
+				(pod.volumes ?? []).some(
+					(volume) =>
+						volume.secret?.secretName === name ||
+						volume.projected?.sources?.some(
+							(source) => source.secret?.name === name,
+						),
+				) ||
+				(pod.imagePullSecrets ?? []).some((secret) => secret.name === name))
+		);
+	}
 	function matchesModelSecret(
 		value: AgentWorkloadDesiredV1,
 		secret: V1Secret | null,
@@ -2492,6 +2519,68 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				{ agentId, workloadRevision, fence },
 				deleteNewVolume,
 			);
+		},
+		/** Worker authorizes only a rejected candidate, never a retained verified projection. */
+		async removeModelConfiguration(input: unknown): Promise<boolean> {
+			const value = desired(input);
+			const injection = modelBindings(value);
+			if (!injection) return true;
+			const secret = await client.read<V1Secret>(
+				"Secret",
+				injection.secretName,
+			);
+			if (!secret) return true;
+			if (
+				!matchesModelSecret(value, secret) ||
+				secret.metadata?.annotations?.[secretConfigRevisionAnnotation] !==
+					String(value.configRevision)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			if (!(await closeAgentAtFence(value))) return false;
+			if (
+				(await adapter.scaleDownAgent(
+					value.agentId,
+					value.workloadRevision,
+					value.fence,
+				)) === "pending"
+			)
+				return false;
+			const current = await statefulSet(value);
+			if (current) {
+				if (current.spec?.replicas !== 0 || !current.spec.template.spec)
+					return false;
+				const next = structuredClone(current);
+				const pod = next.spec?.template.spec;
+				if (!pod) return false;
+				for (const container of pod.containers) {
+					container.env = container.env?.filter(
+						(entry) =>
+							!(
+								container.name === "agent" &&
+								entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG" &&
+								entry.valueFrom?.secretKeyRef?.name === injection.secretName
+							),
+					);
+				}
+				// Any other reference is unexpected; do not reclaim material still in use.
+				if (podReferencesSecret(pod, injection.secretName)) return false;
+				if (!hasSameStructure(current.spec, next.spec))
+					await client.replace(next);
+			}
+			const live = await statefulSet(value);
+			if (
+				(live &&
+					(live.spec?.replicas !== 0 ||
+						podReferencesSecret(
+							live.spec?.template.spec,
+							injection.secretName,
+						))) ||
+				(await client.list("Pod", selector(value.agentId))).length > 0
+			)
+				return false;
+			// client.delete supplies UID/resourceVersion preconditions from the exact read above.
+			await client.delete(secret);
+			return (await client.read("Secret", injection.secretName)) === null;
 		},
 		async removeImmutableSecret(
 			input: unknown,
