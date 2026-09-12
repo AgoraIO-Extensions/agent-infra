@@ -73,7 +73,11 @@ class NativeClient {
 						this.responses.delete(frame.id);
 						if (frame.error)
 							pending.reject(
-								new Error(`Native ${pending.method} request unavailable`),
+								// The native reply is synthetic test output, so keeping its
+								// code and message is what makes a rejection diagnosable.
+								new Error(
+									`Native ${pending.method} request unavailable: ${JSON.stringify(frame.error)}`,
+								),
 							);
 						else pending.resolve(frame.result);
 					}
@@ -159,14 +163,18 @@ async function directory() {
 	return path;
 }
 
+// The seeded Session's native storage key; inspection must open the same
+// Conversation directory the Driver used.
+const recoveryConversationKey = codexConversationKey({
+	agentId: "synthetic-agent",
+	conversationId: "synthetic-conversation",
+	sessionGeneration: 1,
+});
+
 async function nativeClient(path: string, experimentalApi = false) {
 	const bridge = await CodexAppServerBridge.open({
 		dataDirectory: path,
-		conversationKey: codexConversationKey({
-			agentId: "agent-native-recovery",
-			conversationId: "conversation-native-recovery",
-			sessionGeneration: 1,
-		}),
+		conversationKey: recoveryConversationKey,
 		model: "gpt-5.3-codex",
 		reasoningEffort: "low",
 		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
@@ -259,7 +267,7 @@ async function loopbackResponsesProvider(
 	return { wasRequested: () => requested };
 }
 
-function nativePid() {
+function ownedNativeProcesses() {
 	const rows = execFileSync(
 		"ps",
 		["-A", "-o", "pid=", "-o", "ppid=", "-o", "comm="],
@@ -274,6 +282,11 @@ function nativePid() {
 				Number(row[1]) === process.pid &&
 				row.slice(2).join(" ").includes("codex"),
 		);
+	return owned;
+}
+
+function nativePid() {
+	const owned = ownedNativeProcesses();
 	if (owned.length !== 1) throw new Error("Expected one owned native process");
 	return Number(owned[0]?.[0]);
 }
@@ -339,11 +352,7 @@ function nativeHome(path: string) {
 	return join(
 		`${path}.native`,
 		"conversations",
-		codexConversationKey({
-			agentId: "synthetic-agent",
-			conversationId: "synthetic-conversation",
-			sessionGeneration: 1,
-		}),
+		recoveryConversationKey,
 		"home",
 	);
 }
@@ -811,21 +820,23 @@ describe
 				if (!accepted.nativeSessionRef)
 					throw new Error("Expected session reference");
 				const original = await mapping(path);
-				const workspace = join(`${path}.native`, "workspace", "synthetic.txt");
+				const workspace = join(nativeWorkspace(path), "synthetic.txt");
 				await writeFile(workspace, "synthetic workspace");
 				const first = await nativeDriver(path);
-				const pid = nativePid();
 				expect(
 					await first.getStatus(
 						accepted.nativeSessionRef,
 						"synthetic-execution",
 					),
 				).toBe("cancelled");
+				expect(ownedNativeProcesses()).toHaveLength(1);
 				if (exit === "close") await first.close();
 				else await crash();
 				await expect.poll(() => readdir(scratch)).toEqual([]);
+				// The original native process ended; only durable state may carry the
+				// Session forward.
+				await expect.poll(() => ownedNativeProcesses().length).toBe(0);
 				const second = await nativeDriver(path);
-				expect(nativePid() !== pid).toBe(true);
 				const replay = await second.execute(submit());
 				expect(replay.nativeSessionRef === accepted.nativeSessionRef).toBe(
 					true,
@@ -933,9 +944,18 @@ describe
 					await rm(`${path}.native`, { recursive: true });
 				if (damage === "missing workspace")
 					await rm(nativeWorkspace(path), { recursive: true });
-				await expect(nativeDriver(path)).rejects.toMatchObject({
-					httpStatus: 503,
-				});
+				if (damage === "missing workspace") {
+					// A Conversation starts its native process on first use, so a lost
+					// directory fails closed there instead of being recreated.
+					const driver = await nativeDriver(path);
+					await expect(
+						driver.execute(submit("synthetic-lost-workspace")),
+					).rejects.toMatchObject({ httpStatus: 503 });
+				} else {
+					await expect(nativeDriver(path)).rejects.toMatchObject({
+						httpStatus: 503,
+					});
+				}
 				if (damage === "missing mapping")
 					await expect(access(path)).rejects.toThrow();
 				if (damage === "missing native root")

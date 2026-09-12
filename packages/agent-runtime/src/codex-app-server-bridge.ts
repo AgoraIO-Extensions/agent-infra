@@ -518,12 +518,14 @@ interface ConversationLaunchPolicy extends IsolatedLaunchPolicy {
 	home: string;
 }
 
-async function ensureOwnedDirectory(directory: string) {
-	await mkdir(directory, { mode: 0o700 }).catch(
-		(error: NodeJS.ErrnoException) => {
-			if (error.code !== "EEXIST") throw error;
-		},
-	);
+async function ensureOwnedDirectory(directory: string, create: boolean) {
+	if (create) {
+		await mkdir(directory, { mode: 0o700 }).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "EEXIST") throw error;
+			},
+		);
+	}
 	const metadata = await lstat(directory);
 	if (
 		!metadata.isDirectory() ||
@@ -566,8 +568,16 @@ async function persistentLaunchPolicy(
 		const root = join(boundary, conversationKey);
 		const home = join(root, "home");
 		const workspace = join(root, "workspace");
-		for (const directory of [dataRoot, boundary, root, home, workspace]) {
-			await ensureOwnedDirectory(directory);
+		await ensureOwnedDirectory(dataRoot, true);
+		await ensureOwnedDirectory(boundary, true);
+		// A Conversation that already owns storage never has a lost directory
+		// recreated; its native operations and replay fail closed instead.
+		const existing = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		for (const directory of [root, home, workspace]) {
+			await ensureOwnedDirectory(directory, !existing);
 		}
 		// Durable native state is not a source of credentials or configuration.
 		for (const file of [
