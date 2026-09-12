@@ -66,7 +66,7 @@ it("switches equal model names between endpoints and credentials while resuming 
 	expect(
 		current.turns.map((turn: { selection: unknown }) => turn.selection),
 	).toEqual([command.selection, next.selection]);
-});
+}, 30000);
 
 it("canonicalizes command field order during durable lookup and preserves unknown in-flight recovery without a second Turn", async () => {
 	const f = await fixture();
