@@ -33,7 +33,6 @@ import { RuntimeHost } from "./runtime-host.js";
 const directories: string[] = [];
 const closers: (() => Promise<unknown>)[] = [];
 const enabled = process.env.AGENT_INFRA_CODEX_NATIVE_TEST === "1";
-const nativeStderrName = "synthetic-native-stderr.log";
 
 interface NativeResponses {
 	initialize: unknown;
@@ -259,9 +258,11 @@ async function loopbackResponsesProvider(
 		`model_providers.${provider}.request_max_retries=0`,
 		`model_providers.${provider}.stream_max_retries=0`,
 	];
+	// The launch runs inside the Conversation boundary, so the shim must not open
+	// any path outside it; native stderr stays with the bridge.
 	await writeFile(
 		join(bin, "codex"),
-		`#!/bin/sh\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")} 2>>"$PWD/${nativeStderrName}"\n`,
+		`#!/bin/sh\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")}\n`,
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
@@ -321,31 +322,6 @@ function driverOptions(path: string) {
 			},
 		],
 	};
-}
-
-// The bridge never exposes native stderr, so a launch failure would otherwise
-// carry no reason at all on a host where the sandbox behaves differently.
-async function nativeStderr(root: string) {
-	const found: string[] = [];
-	{
-		const stack = [root];
-		while (stack.length > 0 && found.length < 4) {
-			const current = stack.pop();
-			if (!current) break;
-			const entries = await readdir(current, { withFileTypes: true }).catch(
-				() => [],
-			);
-			for (const entry of entries) {
-				const full = join(current, entry.name);
-				if (entry.isDirectory()) stack.push(full);
-				else if (entry.name === nativeStderrName) {
-					found.push(await readFile(full, "utf8").catch(() => ""));
-				}
-			}
-		}
-	}
-	const text = found.join("\n").trim();
-	return text.length > 0 ? `native stderr: ${text.slice(-2_000)}` : "";
 }
 
 async function nativeDriver(path: string) {
@@ -531,11 +507,8 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	for (const close of closers.splice(0).reverse())
 		await close().catch(() => {});
-	for (const path of directories.splice(0)) {
-		const reason = await nativeStderr(path);
-		if (reason.length > 0) console.error(reason);
+	for (const path of directories.splice(0))
 		await rm(path, { recursive: true, force: true });
-	}
 });
 
 describe
