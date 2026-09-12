@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
@@ -20,6 +21,7 @@ import { serve } from "@hono/node-server";
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
 	readCodexPilotConfiguration,
+	readRuntimeModelConfigurationV3,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
 
@@ -75,7 +77,8 @@ export function startRuntimeHost(options: StartOptions) {
 export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const required = (name: string) => requiredEnvironment(environment, name);
 	const binding = required("AGENT_INFRA_RUNTIME_DRIVER");
-	if (binding !== "codex" && binding !== "fake") runtimeConfigurationInvalid();
+	if (binding !== "codex" && binding !== "claude" && binding !== "fake")
+		runtimeConfigurationInvalid();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
 		!isAbsolute(dataDirectory) ||
@@ -101,7 +104,12 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
-	const agentId = configuration
+	const claudeConfiguration =
+		binding === "claude"
+			? readRuntimeModelConfigurationV3(environment, "claude")
+			: undefined;
+	const activeConfiguration = configuration ?? claudeConfiguration;
+	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
 	if (configuration) {
@@ -116,9 +124,18 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
 				modelOptions: configuration.modelOptions,
 			})
-		: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
+		: claudeConfiguration
+			? await ClaudeRuntimeDriver.open({
+					...claudeConfiguration,
+					path: join(dataDirectory, "claude-driver"),
+				})
+			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 	const close = async () => {
-		if (driver instanceof CodexRuntimeDriver) await driver.close();
+		if (
+			driver instanceof CodexRuntimeDriver ||
+			driver instanceof ClaudeRuntimeDriver
+		)
+			await driver.close();
 	};
 	try {
 		const host = await RuntimeHost.open({
@@ -129,7 +146,9 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
-			...(configuration ? { configVersion: configuration.configVersion } : {}),
+			...(activeConfiguration
+				? { configVersion: activeConfiguration.configVersion }
+				: {}),
 			serviceToken,
 			port,
 			close,

@@ -1475,6 +1475,13 @@ describe("PostgreSQL Workload steps", () => {
 			modelCatalog: createDeploymentModelCatalogAdapterV1({
 				load: async () => catalog,
 			}),
+			templateModelBindings: [
+				{
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					protocol: "openai-responses-v1" as const,
+				},
+			],
 			modelAccess: createFakeModelAccessValidatorV1(
 				modelOptions.map((option) => ({
 					endpointId: option.endpointId,

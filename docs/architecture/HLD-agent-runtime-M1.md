@@ -63,6 +63,11 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 标准 Runtime 只接收 Platform 当前 active 的模型 endpoint、模型、reasoning 和注入到本 Agent 的运行凭证。获准 endpoint 与 Owner 配置、Secret 密文和候选修订的权威边界见工程 Spec 10.6 和 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
+标准模板的模型协议与原生 Driver 协议是不同边界。Codex Native 当前消费 Responses，Claude
+Native 消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
+版本化配置并校验它与部署固定 Driver 绑定一致；profile 的来源、认证、版本兼容和候选回滚
+统一遵循工程 Spec 的[标准模板模型配置](SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
+
 ### 3.2 自定义 Agent
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
@@ -113,6 +118,24 @@ Platform Conversation Contract 只定义以下语义，不暴露具体 Runtime �
 RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，并在每次原生执行入口显式应用已配置的默认模型和 reasoning；新接受的 Execution 必须使用 V2。取舍见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)，V1 退役需要独立的 breaking-change 决策。
 
 固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
+
+Claude Native 使用固定版本的官方 Claude Agent SDK。每个 Conversation/generation 的 Query、
+工作区和原生持久目录保持独立；SDK 的用户配置、权限默认值及产品 Session 管理不能覆盖本仓
+身份和隔离要求。每次 submit 显式应用有效选项的模型和 reasoning，并绑定其 endpoint 与
+认证配置；只调用 `setModel()` 不构成 endpoint/credential 已切换的证明。需要重建 Query 时，
+在无活跃 Turn 的边界退役并排空旧 Query/进程，再携带新配置恢复原 native Session，保持原生
+Session ID、Host 映射和平台 Conversation 连续；退役失败时拒绝新 Turn。旧 Query 的迟到退出
+与事件不能改变新 Query 的状态。配置版本变化时按持久执行选择拒绝不匹配的恢复，不能用新
+配置重放尚未确定结果的旧操作。
+
+Claude 的真实凭证和供应商错误正文在原生持久化前处理，具体准入、传输与退役规则见
+[工程 Spec §10.9](SPEC-agent-infra-M1-engineering-architecture.md#109-claude-原生模型传输边界)。
+
+Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–8；SDK 恢复原 Session 不等于
+证明某次提交未执行，缺少可靠原生证据时不得盲目重投。可选补充指令只在所选 SDK 的队列取消
+与本仓持久去重均通过 Conformance 后启用，不能依赖未验证的可选方法。核心 Driver 验收包含
+真实文本、模型切换、停止、原 Session 恢复和双用户隔离；文件及 Connection 的完整模板验收
+仍须分别完成，核心 Driver 通过不能提前开放尚未验收的产品能力。
 
 `platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；Owner 通过平台配置的相关 env/Secret 遵循工程 Spec 10.6 的通用规则，Adapter 不从 Runtime 的模型选项读取或保存凭证，也不把它们复制到标准模板模型配置。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
@@ -255,7 +278,7 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 - M1 不因为潜在抽取而改变 PRD、四个标准模板、Platform/Connection 授权、Kubernetes 部署、平台历史权威或现有验收范围。
 - 只有出现 Agent Infra 以外的真实 consumer、内部 Interface 经多个上游升级保持稳定，并完成独立安全、维护和供应链评审后，后续决策才能批准抽取。
 
-## 13. 参考与非目标
+## 13. 上游复用与非目标
 
 M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生命周期、事件归一化和 capability 分层：
 
@@ -263,7 +286,24 @@ M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生
 - [Paseo](https://github.com/getpaseo/paseo)
 - [Open Design](https://github.com/nexu-io/open-design)
 
-这些项目只作为结构和生命周期参考。M1 不直接复制其代码、产品权限、存储模型或完整协议集合。
+优先使用官方 SDK、协议客户端和成熟上游已实现的生命周期与事件处理。允许按所选版本的
+许可证直接引入或移植当前交付所需的叶子模块与回归场景；上游没有独立可安装库，不构成
+重新实现协议的理由。不得一并引入本仓未要求的产品功能、权限默认值、身份或存储权威，
+不复制完整 daemon、产品 Session 或无实际消费者的通用框架。
+
+每次采用前核验具体版本和文件的许可；实现说明记录 source SHA、文件/函数、采用方式、
+必要差异与对应回归，保留适用的版权、LICENSE、NOTICE 和修改标识。复用代码进入对应 Driver
+或已有模块，原生类型不越过内部 Seam；不依赖个人 HOME 或继承上游自动授权行为。依赖、
+镜像、脱敏、恢复与真实隔离仍按本仓契约验收，上游功能声明或上游测试不能代替本仓证据。
+
+Claude 的首个复用基线为 Paseo
+`d1b705a0cd91617a5707fae25d80cb0be3057950` 的
+[claudeQuery](https://github.com/getpaseo/paseo/blob/d1b705a0cd91617a5707fae25d80cb0be3057950/packages/server/src/server/agent/providers/claude/query.ts)
+与
+[ClaudeAgentSession](https://github.com/getpaseo/paseo/blob/d1b705a0cd91617a5707fae25d80cb0be3057950/packages/server/src/server/agent/providers/claude/agent.ts)：
+采用其 SDK 启动、create/resume、Query 退役和迟到退出处理，映射到既有 RuntimeDriver。
+共享配置由首个非 Responses 消费方扩展，后续 Driver 复用同一候选验证与投影链路；各自的
+原生模型表示、配置切换和恢复语义留在各自 Driver，不能通过平台 ID 的宽泛放行替代映射。
 
 以下内容不进入 M1：
 

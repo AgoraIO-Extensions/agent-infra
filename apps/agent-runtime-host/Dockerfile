@@ -25,6 +25,8 @@ RUN cp -R /prod/agent-runtime-host /prod/agent-runtime-host-normalized \
     && rm -r /prod/agent-runtime-host \
     && mv /prod/agent-runtime-host-normalized /prod/agent-runtime-host
 
+RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyClaudeInstallation} from "@agent-infra/agent-runtime"; import {execFileSync} from "node:child_process"; const p = await verifyClaudeInstallation(); if (execFileSync(p.executable, ["--version"], {encoding:"utf8"}).trim() !== `${p.nativeVersion} (Claude Code)`) throw new Error("RUNTIME_CLAUDE_PROVENANCE_MISMATCH");'
+
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runner
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT

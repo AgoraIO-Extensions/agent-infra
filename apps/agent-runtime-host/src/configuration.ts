@@ -2,8 +2,41 @@ import {
 	type CodexRuntimeModelOption,
 	validateCodexModelAccess,
 } from "@agent-infra/agent-runtime";
+import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
+
+export function readRuntimeModelConfigurationV3(
+	environment: NodeJS.ProcessEnv,
+	driver: "codex" | "claude",
+) {
+	try {
+		const value = RuntimeModelConfigurationV3Schema.parse(
+			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
+		);
+		const protocol =
+			driver === "claude" ? "anthropic-messages-v1" : "openai-responses-v1";
+		const modelOptions = value.modelOptions.map(
+			({ credentialEnvironmentVariable, ...option }) => {
+				if (option.protocol !== protocol) runtimeConfigurationInvalid();
+				const access = validateCodexModelAccess({
+					endpoint: option.endpoint,
+					credential: environment[credentialEnvironmentVariable],
+				});
+				if (!access) runtimeConfigurationInvalid();
+				return { ...option, ...access };
+			},
+		);
+		return {
+			configVersion: value.configVersion,
+			defaultModelOptionId: value.defaultModelOptionId,
+			defaultReasoningLevel: value.defaultReasoningLevel,
+			modelOptions,
+		};
+	} catch {
+		runtimeConfigurationInvalid();
+	}
+}
 
 export interface CodexPilotConfiguration {
 	readonly configVersion: string;
@@ -41,6 +74,8 @@ export function readCodexPilotConfiguration(
 	} catch {
 		runtimeConfigurationInvalid();
 	}
+	if (record(value) && value.schemaVersion === 3)
+		return readRuntimeModelConfigurationV3(environment, "codex");
 	if (
 		!record(value) ||
 		!keys(value, [

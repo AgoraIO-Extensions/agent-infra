@@ -8,7 +8,7 @@ import type {
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { openClaudeRuntimeDriverConformanceFixture } from "./claude-runtime-driver.test-support.js";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
 import {
@@ -19,7 +19,7 @@ import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
 
 const directories: string[] = [];
 const driverClosers: (() => Promise<void>)[] = [];
-const driverNames = ["Fake", "Codex"] as const;
+const driverNames = ["Fake", "Codex", "Claude"] as const;
 
 async function directory() {
 	const path = await mkdtemp(
@@ -30,6 +30,7 @@ async function directory() {
 }
 
 interface ConformanceDriverFixture {
+	recoveryStatus?: "running" | "unknown";
 	driver: RuntimeDriver;
 	emitRunningEvent(): Promise<void>;
 	submitWithPreStartEvent<T>(submit: () => Promise<T>): Promise<T>;
@@ -50,6 +51,14 @@ async function openConformanceDriver(
 	path: string,
 	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
+	if (name === "Claude") {
+		const fixture = await openClaudeRuntimeDriverConformanceFixture(
+			path,
+			loseTurnStartResponse,
+		);
+		driverClosers.push(() => fixture.close());
+		return fixture;
+	}
 	if (name === "Fake") {
 		const driver = await FakeRuntimeDriver.open(path);
 		const execute = driver.execute.bind(driver);
@@ -411,7 +420,7 @@ describe("Runtime Driver shared conformance", () => {
 					...context,
 					grant: runtimeGrantFixture(context, ["session.status"]),
 				}),
-			).toMatchObject({ status: "running" });
+			).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
 			expect(await restarted.createdTurnCount()).toBe(1);
 		},
 	);
@@ -653,7 +662,7 @@ describe("Runtime Driver shared conformance", () => {
 			);
 			expect((await recoveredHost.submitTurn(request)).result).toEqual({
 				outcome: "accepted",
-				status: "running",
+				status: restarted.recoveryStatus ?? "running",
 			});
 			expect(await restarted.createdTurnCount()).toBe(1);
 		},
@@ -667,7 +676,7 @@ describe("Runtime Driver shared conformance", () => {
 			const fixture = await openConformanceDriver(
 				name,
 				join(path, "driver.json"),
-				name === "Codex",
+				name !== "Fake",
 			);
 			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
 				afterDriverResult: () => {

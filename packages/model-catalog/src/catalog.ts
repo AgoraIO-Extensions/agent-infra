@@ -1,3 +1,4 @@
+import { RuntimeModelProtocolV1Schema } from "@agent-infra/contracts/runtime";
 import { z } from "zod";
 
 export const modelIdentifier = z
@@ -17,7 +18,8 @@ export const ModelEndpointV1Schema = z
 		endpointId: modelIdentifier,
 		baseUrl: z.string().min(1).max(2048),
 		origin: z.string().min(1).max(2048),
-		protocol: z.literal("openai-responses-v1"),
+		protocol: RuntimeModelProtocolV1Schema,
+		authentication: z.enum(["bearer", "api-key"]).optional(),
 		security: z.strictObject({
 			tls: z.enum(["verify-peer", "loopback-http"]),
 			redirects: z.literal("reject"),
@@ -30,6 +32,11 @@ export const ModelEndpointV1Schema = z
 		allowedModels: z.array(modelIdentifier).min(1).max(1024).nullable(),
 		available: z.boolean(),
 	})
+	.refine((value) =>
+		value.protocol === "anthropic-messages-v1"
+			? value.authentication !== undefined
+			: value.authentication === undefined || value.authentication === "bearer",
+	)
 	.refine((value) => {
 		try {
 			const url = new URL(value.baseUrl);
