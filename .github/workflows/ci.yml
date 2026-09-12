@@ -57,85 +57,29 @@ jobs:
           --tag agent-infra-codex-native-test .
 
       # TEMPORARY #404 diagnostic: the bridge drains native stderr by design, so
-      # the reason a wrapped launch exits is invisible in the suite above. Remove
-      # this step once the Linux Conversation boundary is verified.
-      - name: Diagnose the native Conversation boundary
+      # the reason the suite below fails is invisible. This runs the same suite in
+      # a writable copy of the image with native stderr forwarded. Remove once the
+      # Linux Conversation boundary is verified.
+      - name: Diagnose the native Codex recovery suite
         continue-on-error: true
         run: |
-          docker run --rm -i --pull=never --network=none --read-only \
-            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+          docker run --rm -i --pull=never --network=none \
             --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
             --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
-            --entrypoint sh agent-infra-codex-native-test \
-            -c 'cat > /tmp/probe.mjs && node /tmp/probe.mjs' <<'PROBE'
-          import { spawn, spawnSync } from "node:child_process";
-          import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
-          import { tmpdir } from "node:os";
-          import { join } from "node:path";
-
-          const run = (cmd, args) => {
-            const result = spawnSync(cmd, args, { encoding: "utf8" });
-            return `status=${result.status} signal=${result.signal} err=${(result.stderr || "").trim()}`;
-          };
-          console.log("kernel:", run("uname", ["-rm"]));
-          console.log("setpriv:", spawnSync("setpriv", ["--version"], { encoding: "utf8" }).stdout.trim());
-
-          const rights = [
-            "execute", "write-file", "read-file", "read-dir", "remove-dir",
-            "remove-file", "make-char", "make-dir", "make-reg", "make-sock",
-            "make-fifo", "make-block", "make-sym", "refer", "truncate",
-          ].join(",");
-          console.log("access-only:", run("setpriv", ["--no-new-privs", "--landlock-access", `fs:${rights}`, "--", "/bin/true"]));
-          console.log("ioctl-only:", run("setpriv", ["--no-new-privs", "--landlock-access", "fs:ioctl-dev", "--", "/bin/true"]));
-
-          const root = mkdtempSync(join(tmpdir(), "probe-"));
-          const conversation = join(root, "conversations", "k");
-          mkdirSync(join(conversation, "home"), { recursive: true, mode: 0o700 });
-          mkdirSync(join(conversation, "workspace"), { recursive: true, mode: 0o700 });
-          const home = mkdtempSync(join(tmpdir(), "probe-home-"));
-          const rules = [];
-          const allow = (access, path) => {
-            if (existsSync(path)) rules.push("--landlock-rule", `path-beneath:${access}:${path}`);
-          };
-          const program = "execute,read-file,read-dir";
-          for (const path of ["/opt/codex", "/opt/codex/bin", "/usr/local/bin", "/usr/bin", "/bin", "/sbin", "/usr", "/lib", "/lib64"]) allow(program, path);
-          for (const path of ["/etc", "/proc", "/sys"]) allow("read-file,read-dir", path);
-          for (const path of ["/dev", home, conversation]) allow(rights, path);
-          console.log("rule-only:", run("setpriv", ["--no-new-privs", "--landlock-access", `fs:${rights}`, ...rules, "--", "/bin/true"]));
-
-          const launch = [
-            "app-server", "--stdio", "--strict-config",
-            "--config", 'model="gpt-5.3-codex"',
-            "--config", 'model_reasoning_effort="high"',
-            "--config", "mcp_servers={}",
-            "--config", "features.plugins=false",
-            "--config", 'sandbox_mode="workspace-write"',
-            "--config", "features.use_legacy_landlock=true",
-          ];
-          const environment = { HOME: home, CODEX_HOME: join(conversation, "home"), PATH: process.env.PATH, TMPDIR: home };
-          const attempt = (label, command, args) => new Promise((resolve) => {
-            const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], cwd: join(conversation, "workspace"), env: environment });
-            let out = "";
-            let err = "";
-            child.stdout.on("data", (chunk) => { out += chunk; });
-            child.stderr.on("data", (chunk) => { err += chunk; });
-            child.on("error", (error) => { console.log(label, "spawn error", error.message); });
-            child.stdin.write(`${JSON.stringify({ id: 1, method: "initialize", params: { clientInfo: { name: "probe", version: "1" }, capabilities: { experimentalApi: true } } })}\n`);
-            setTimeout(() => { try { child.stdin.write(`${JSON.stringify({ id: 2, method: "thread/start", params: { historyMode: "paginated" } })}\n`); } catch {} }, 1500);
-            child.on("close", (code, signal) => { console.log(label, "closed", code, signal); });
-            setTimeout(() => {
-              console.log(`=== ${label} stdout ===`);
-              console.log(out.slice(0, 900));
-              console.log(`=== ${label} stderr ===`);
-              console.log(err.slice(0, 2500));
-              child.kill("SIGKILL");
-              resolve();
-            }, 9000);
-          });
-          await attempt("direct", "/opt/codex/bin/codex", launch);
-          await attempt("wrapped", "setpriv", ["--no-new-privs", "--landlock-access", `fs:${rights}`, ...rules, "--", "/opt/codex/bin/codex", ...launch]);
-          process.exit(0);
-          PROBE
+            --entrypoint sh agent-infra-codex-native-test -s <<'DIAGNOSE'
+          set -u
+          cd /app
+          sed -i 's#process.stderr.resume();#process.stderr.on("data", (chunk) => { try { require("node:fs").appendFileSync("/tmp/native-stderr.log", String(chunk)); } catch {} });#' \
+            packages/agent-runtime/src/codex-app-server-bridge.ts
+          grep -c native-stderr.log packages/agent-runtime/src/codex-app-server-bridge.ts
+          cd packages/agent-runtime
+          ./node_modules/.bin/vitest run src/codex-native-recovery.test.ts --cache=false \
+            -t "rejects missing mapping" 2>&1 | tail -40
+          echo "=== native stderr ==="
+          tail -c 4000 /tmp/native-stderr.log || echo "(none)"
+          exit 0
+          DIAGNOSE
 
       - name: Verify native Codex recovery
         run: |
