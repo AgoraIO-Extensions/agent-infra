@@ -3,8 +3,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | Draft for Review |
-| 版本 | v0.1 |
-| 日期 | 2026-07-30 |
+| 版本 | v0.2 |
+| 日期 | 2026-09-13 |
 | 适用范围 | Agent 平台 M1、Connection M1 |
 | 关联 PRD | [企业级 Agent 平台 M1 产品需求](../prd/PRD-agent-platform-M1.md)、[Connection M1 产品需求](../prd/PRD-connection-M1.md) |
 
@@ -18,7 +18,7 @@
 4. 长任务、流式回复、Pod 生命周期和失败恢复如何落地。
 5. 前后端分别交付什么，以及如何进行测试和上线验收。
 
-本文不改变 PRD 的产品范围。Roadmap 中的 Eval、Skill Hub、平台级 Sandbox、多 Agent 协作、知识能力、Agent 删除、API/Webhook/定时任务和主动通知不进入 M1 实现。
+本文不改变 PRD 的产品范围。M1 包含用户与应用 API、后台任务调度、运行可观测、模型质量评估与效果分析（Eval）和持久审计。Skill Hub、平台级 Sandbox、多 Agent 协作、知识能力、Agent 删除、Webhook、定时任务和主动通知仍在 Roadmap。
 
 ## 2. 架构结论
 
@@ -70,12 +70,12 @@ server-deploy: docker
 ## 3. 架构原则
 
 1. **产品状态与集群状态分离。** PostgreSQL 保存 Agent 期望状态，Kubernetes 保存实际运行状态，调谐进程负责持续收敛。
-2. **平台与 Connection 各自保持权威数据。** Agent、Owner Action policy、执行和会话属于平台；Principal、Consumer/Actor、Connection Grant、Provider、外部账号、凭证和 Action 调用属于 Connection。
-3. **凭证不进入 Agent。** Agent 只能提交 Action 和参数，不能读取外部 Access Token、Refresh Token 或 API Key。
-4. **先持久化再异步处理。** 消息、审批、生命周期命令和 Action 调用先获得稳定 ID 与状态，再触发后续处理。
+2. **平台与 Connection 各自保持权威数据。** Agent、应用与 API 凭证、执行、会话、Eval 和平台审计属于平台；直连身份、Connection Grant、Provider、外部账号、凭证、外部调用和审计属于 Connection。
+3. **外部凭证不进入 Agent。** Agent 或客户端使用 Connection 独立签发的访问凭据直连 MCP/API，不能读取外部账号的 Access Token、Refresh Token 或 API Key。
+4. **先持久化再异步处理。** 消息、API 任务、审批和生命周期命令先在平台持久受理；外部调用由实际执行系统先可靠记录意图，再触发处理。
 5. **接口也是测试面。** Hono、Drizzle、Kubernetes Client 和 OpenConnector 都位于 Adapter 层，领域模块不依赖这些实现。
 6. **M1 不预建扩展基础设施。** PostgreSQL 足以支持当前事务、outbox、任务认领和事件回放；不预先引入 Redis、Kafka、NATS 或 Temporal。
-7. **用户隔离由服务端决定。** 浏览器、Agent 和模型传入的用户 ID、Connection ID 或组织信息不能成为授权依据。
+7. **主体隔离由服务端决定。** 用户与应用均使用可信主体上下文；浏览器、Agent、模型和 API 调用方提交的身份、组织或关联字段不能成为授权依据。
 8. **部署能力通过 Port 接入。** 身份、OCI Registry、模型端点、Kubernetes 和对象存储的具体产品属于部署环境，领域模块只依赖稳定 Adapter 契约。
 9. **只冻结跨模块契约。** Wire Schema、数据权威、事务和安全不变量属于 Architecture Baseline；数据库表、UI 结构和 Adapter 内部算法可以在模块内演进。
 
@@ -86,6 +86,8 @@ flowchart LR
     U[公司员工] --> W[Platform Web SPA]
     U --> CW[Connection Web SPA]
     QW[企微] --> PA[Platform API]
+    CLI[用户或应用客户端] --> PA
+    CLI -->|独立身份 / MCP + API| CA
     W --> PA
     CW --> CA[Connection API]
 
@@ -98,8 +100,7 @@ flowchart LR
     K8S --> AP[Agent Pod]
     PW -->|RuntimeHost Client / HTTP + SSE| AP
 
-    AP -->|Action + Execution Grant / Tool Gateway| PA
-    PA --> CA
+    AP -->|独立身份 / MCP + API| CA
     CA --> CD[(Connection DB)]
     CA --> LDAP[Company LDAP]
     PA -.->|写入版本化 Secret 密文| PD
@@ -116,14 +117,14 @@ flowchart LR
 
 | 部署单元 | 职责 | 是否保存权威状态 |
 | --- | --- | --- |
-| `web` | Agent 列表、配置、审批和对话；可独立静态托管 | 否 |
+| `web` | Agent、凭证与应用管理、审批、对话、执行详情、Eval 和审计；可独立静态托管 | 否 |
 | `connection-web` | 独立 Connection 中文 SPA、登录和 OAuth/Grant 管理入口 | 否 |
-| `platform-api` | IdentityContext 接入、Agent 管理、权限、消息、命令与 outbox 持久化、浏览器 SSE、企微回调、Agent Tool Gateway；部署位置无关 | 否 |
-| `platform-worker` | Kubernetes Workload Plane 中的 Agent Workload 调谐、模板升级、outbox 认领、RuntimeHost Client 和消息投递 | 否 |
-| `connection-api` | LDAP Principal/Session、Provider/Action、OAuth、Grant、凭证、Action 执行、恢复和调用审计 | 否 |
+| `platform-api` | 可信用户/应用接入、Agent 与任务 API、权限、业务状态/outbox/审计事务、SSE、企微回调、Eval 管理和查询；部署位置无关 | 否 |
+| `platform-worker` | Kubernetes Workload Plane 中的 Workload 调谐、模板升级、outbox 认领、有界任务投递、RuntimeHost Client 与 Eval 执行/评分工作项 | 否 |
+| `connection-api` | 独立登录与客户端身份、MCP/API、Provider/Action、OAuth、Grant、凭证、外部执行、恢复和审计 | 否 |
 | `agent pod` | 标准模板与 `platform-adapter` 的 RuntimeHost/Driver，或 `self-managed` Agent 的自有服务与实际运行环境 | 仅保存 Agent 自有运行数据 |
-| `platform database` | Agent、Owner、范围、审批、Action policy、配置、会话、执行事件和平台审计 | 是 |
-| `connection database` | Principal、Consumer/Actor、Grant、Provider/Action、外部账号、加密凭证、OAuth 状态、调用/Effect 和审计 | 是 |
+| `platform database` | Agent、Owner、范围、应用/API 凭证及授权、审批、配置、会话、执行、Eval、反馈和平台审计 | 是 |
+| `connection database` | 独立身份与客户端授权、Grant、Provider/Action、外部账号、加密凭证、OAuth 状态、调用/效果和审计 | 是 |
 
 `platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
 
@@ -131,7 +132,7 @@ Connection 的单一账号级权威和独立 Web 部署取舍分别见 [ADR: Con
 
 ### 4.2 不拆分的部署单元
 
-M1 不单独部署审批、企微、审计、附件或模型配置微服务。这些能力作为平台领域模块存在，由 `platform-api` 或 `platform-worker` 调用。只有独立的安全职责、扩容方式或故障范围出现后，才新增部署单元。
+M1 不单独部署审批、企微、审计、附件、任务调度、Eval 或模型配置微服务。这些能力作为平台领域模块存在，由 `platform-api` 或 `platform-worker` 调用。只有独立的安全职责、扩容方式或故障范围出现后，才新增部署单元。
 
 ## 5. 单仓库结构
 
@@ -140,10 +141,10 @@ agent-infra/
   apps/
     web/                     React SPA
     connection-web/          独立 Connection React SPA
-    platform-api/            Hono HTTP、SSE、企微和 Tool Gateway
-    platform-worker/         调谐、outbox、RuntimeHost Client 和投递
+    platform-api/            Hono HTTP API、SSE、企微和查询入口
+    platform-worker/         调谐、outbox、RuntimeHost Client、投递和 Eval 工作项
     agent-runtime-host/      Agent Pod 内的薄 RuntimeHost 进程入口
-    connection-api/          Connection Browser/Catalog/Delegated HTTP 与 Action 执行
+    connection-api/          Connection 独立 Web、MCP/API 与外部操作执行
   packages/
     platform-core/           单一深 Platform 领域 Module、Use Case 与 Port
     connection-core/         Connection 领域规则与用例
@@ -188,23 +189,18 @@ agent-infra/
 
 | 模块 | 负责 | 不负责 |
 | --- | --- | --- |
-| Agent Lifecycle | 申请、审批、撤回、停止、重启、停用、期望版本和状态迁移 | 直接操作 Kubernetes |
-| Agent Access | Owner、共同 Owner、员工与组织范围、账号禁用后的权限判断 | 保存公司用户目录 |
-| Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、模型、渠道和 Action 选择 | 模型路由和 Provider 凭证 |
+| Agent Lifecycle | Web 申请审批、API 直接创建、启动/停止/重启/停用、期望版本与状态迁移 | 直接操作 Kubernetes |
+| Agent Access | Owner、员工/组织范围、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | 公司用户目录、Connection 授权 |
+| Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、模型、渠道和已验证的集成能力 | 模型路由和 Provider 凭证 |
 | Conversation | 会话、消息、回答版本、附件引用、执行事件和历史查询 | Agent 内部思考原文 |
-| Agent Dispatch | 持久化消息投递、幂等、繁忙反馈、取消和补充指令 | Agent 自身的任务调度算法 |
-| Channel | Web、企微机器人和企微应用的身份、会话与附件映射 | Runtime 原生 Session 和协议语义 |
-| Platform Audit | 管理操作、使用记录和跨系统关联 ID | Connection 的调用细节 |
+| Agent Dispatch | API 有界受理/等待与投递、幂等、取消/恢复、Web 繁忙与补充指令 | Runtime 内部执行算法、通用调度服务 |
+| Channel | Web、API、企微的主体、会话与附件映射 | Runtime 原生 Session 和协议语义 |
+| Platform Audit | 治理、API/执行/Eval 元数据、持久审计与受控查询 | 会话正文、Connection 状态或审计副本 |
+| Evaluation | 评测用途授权、版本化数据集/标准、实验/逐例评分、对比、人工复核与主动反馈 | 第二套任务调度、自动导入线上正文 |
 
 ### 6.2 Connection 模块
 
-| 模块 | 负责 | 不负责 |
-| --- | --- | --- |
-| Provider Catalog | Provider、Action、版本、参数和外部权限说明 | Agent 是否选择该 Action |
-| Connection Account | 个人/共享 Connection、外部账号识别、OAuth 和凭证刷新 | Agent 可用范围 |
-| Agent Grant | 校验 Agent、Connection 和已确认 Action 的交集 | 允许 Agent 自行选择用户或账号 |
-| Action Execution | 注入凭证、调用 Provider、脱敏结果、幂等与错误映射 | 向 Agent 返回原始凭证 |
-| Connection Audit | 连接、授权、Action 调用和结果审计 | 保存平台会话正文 |
+Connection 在自己的 Core/Store/API/Web 中负责客户端身份、Provider/Action、外部账号与凭证、授权、执行、恢复和审计。Platform 只消费独立入口与真实调用的关联信息，不维护这些模块的目录、状态或授权投影。内部模块和 wire contract 由 [Connection M1 HLD](HLD-connection-M1.md) 维护，系统边界见第 13 节。
 
 ### 6.3 Adapter 接口
 
@@ -223,24 +219,24 @@ agent-infra/
 
 领域模块只接收业务 ID、命令和结果，不接收 Hono Context、数据库连接、Kubernetes 对象或 Provider Token。
 
-`packages/platform-core` 是单一 Platform bounded context，对外只暴露版本化 Use Case、领域结果和窄 Port；Lifecycle、Access、Configuration、Conversation、Dispatch、Channel 和 Audit 只作为内部模块，不拆成 workspace package。Core 定义“业务状态 + outbox + 必要审计”的原子性，`platform-store` 以用例级事务实现；不创建通用 CRUD Repository，也不允许 Hono 路由或 Worker 编排领域 Drizzle 查询。
+`packages/platform-core` 是单一 Platform bounded context，对外只暴露版本化 Use Case、领域结果和窄 Port；Lifecycle、Access、Configuration、Conversation、Dispatch、Channel、Audit 和 Evaluation 只作为内部模块，不拆成 workspace package。Core 定义“业务状态 + outbox + 必要审计”的原子性，`platform-store` 以用例级事务实现；不创建通用 CRUD Repository，也不允许 Hono 路由或 Worker 编排领域 Drizzle 查询。
 
 `packages/contracts` 只保存跨进程 wire DTO/Schema，不依赖 React、Hono、Drizzle、Kubernetes 或应用入口，也不复用数据库实体作为协议类型。Web、API、Worker、RuntimeHost 和 Connection Client 在边界显式映射协议 DTO 与领域对象。
 
 ### 6.4 Contract Schema authority
 
-`packages/contracts` 中由 Agent Platform 主系统维护的 wire Schema 只手写 Zod 4，并从该 authoring source 单向生成两类提交到仓库的标准产物：浏览器和内部 HTTP Contract 使用 OpenAPI 3.1，SSE payload、Runtime Manifest 等非 HTTP Contract 使用 JSON Schema 2020-12。生成后的 OpenAPI 是 HTTP 消费者评审和兼容检查的规范来源，其中浏览器 OpenAPI 也是 TypeScript Client 的生成输入；JSON Schema 是非 HTTP Contract 的机器校验入口。调用方不得直接编辑生成产物，也不能从 OpenAPI 或 JSON Schema 反向生成 Zod，项目不维护第三套通用 Schema IR。取舍见 [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](../adr/0003-zod-authored-wire-contracts.md)。
+`packages/contracts` 中由 Agent Platform 主系统维护的 wire Schema 只手写 Zod 4，并从该 authoring source 单向生成两类提交到仓库的标准产物：浏览器、用户/应用 API 和内部 HTTP Contract 使用 OpenAPI 3.1，SSE payload、Runtime Manifest 等非 HTTP Contract 使用 JSON Schema 2020-12。生成后的 OpenAPI 是 HTTP 消费者评审和兼容检查的规范来源，其中浏览器 OpenAPI 也是 TypeScript Client 的生成输入；JSON Schema 是非 HTTP Contract 的机器校验入口。调用方不得直接编辑生成产物，也不能从 OpenAPI 或 JSON Schema 反向生成 Zod，项目不维护第三套通用 Schema IR。取舍见 [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](../adr/0003-zod-authored-wire-contracts.md)。
 
-M1 的 Schema family 按以下顺序和主责 artifact 交付：
+M1 的 Schema family 由以下主责 artifact 维护；表中 Issue 是既有交付入口，新增 API、任务和 Eval 契约的实施归属须在交付计划中对齐，不隐式扩展原 Issue 范围：
 
 | Schema family | 主责 artifact | Implementation Issue |
 | --- | --- | --- |
 | 公共 primitives、错误模型、生成与兼容工具 | Platform Core/API | [#179](https://github.com/AgoraIO-Extensions/agent-infra/issues/179) |
-| 浏览器 OpenAPI/SSE、delegated contract 和生产 Web Client | Platform Core/API，Web/Connection 消费方评审 | [#180](https://github.com/AgoraIO-Extensions/agent-infra/issues/180) |
+| Platform HTTP/OpenAPI、SSE 与生产 Web Client | Platform Core/API，Web/API 消费方评审 | [#180](https://github.com/AgoraIO-Extensions/agent-infra/issues/180) |
 | RuntimeHost/Driver wire Schema | Codex Runtime，Worker 消费方评审 | [#181](https://github.com/AgoraIO-Extensions/agent-infra/issues/181) |
 | Registry、Secret、Kubernetes Workload 与 Runtime Manifest Contract | Agent Workload，Core/Delivery 消费方评审 | [#182](https://github.com/AgoraIO-Extensions/agent-infra/issues/182)；OCI admission 由 [#188](https://github.com/AgoraIO-Extensions/agent-infra/issues/188) 实现 |
 
-生成工具固定版本；产物使用稳定 key/property 顺序、LF 和一个末尾换行，不能包含时间戳、绝对路径或工具版本等易漂移字段。`packages/contracts` 必须在现有 `pnpm test` 路径中执行生成漂移、基于 pull-request merge-base 的 breaking-change 和 consumer contract 检查。test-only Client smoke 只验证 OpenAPI 到浏览器 TypeScript Client 的单向链路，不进入 package exports、`files` 或 `dist`；`packages/test-support` 只提供由正式 Schema 校验的静态 builder/fixture，生产代码不得依赖它。Connection 内部 Provider、OAuth、凭证和 Action Schema 仍由 Connection 子地图决定；本节只覆盖 Platform-owned namespaces 以及由 Platform 主责、Connection 作为消费方评审的 delegated contract。
+生成工具固定版本；产物使用稳定 key/property 顺序、LF 和一个末尾换行，不能包含时间戳、绝对路径或工具版本等易漂移字段。`packages/contracts` 必须在现有 `pnpm test` 路径中执行生成漂移、基于 pull-request merge-base 的 breaking-change 和 consumer contract 检查。test-only Client smoke 只验证 OpenAPI 到浏览器 TypeScript Client 的单向链路，不进入 package exports、`files` 或 `dist`；`packages/test-support` 只提供由正式 Schema 校验的静态 builder/fixture，生产代码不得依赖它。Connection 的 MCP/API、客户端身份、OAuth、Grant、凭证和 Action Schema 由 Connection 自己维护；Platform Schema 不定义 Connection 代调用协议或数据投影。
 
 ## 7. Web 架构
 
@@ -251,13 +247,15 @@ Platform Web 按产品入口划分路由：
 - `/agents`：Agent 列表与详情。
 - `/chat/:agentId/:conversationId?`：对话与历史。
 - `/my-agents`：申请和 Owner 管理。
-- `/my-agents/:agentId/settings`：范围、模型、渠道和 Action 配置。
+- `/my-agents/:agentId/settings`：范围、模型、渠道和已验证的集成入口。
 - `/admin/approvals`：系统管理员审批。
-- `/admin/audit`：平台操作审计。
+- `/admin/audit`：必须交付的平台审计筛选、分页与详情。
+
+Web 同时提供个人 API 凭证、应用及其凭证/Agent 授权、任务执行详情、Eval 数据集/实验/对比和主动反馈入口；具体页面行为以 [平台 Web PRD](../prd/PRD-agent-platform-M1.md#111-页面) 为准。运维观测由部署的日志、指标和 Trace 后端承接。
 
 Connection 使用独立 `connection-web` 和独立浏览器会话，包含登录、个人 Connection、Agent Grant、调用记录、待人工处理、Provider/Action、共享 Connection 和 Connection 审计页面。Platform Web 只跳转到 Connection 返回的受控 URL，不能承载或复制 Connection 管理页面。
 
-Platform Web 只管理 Agent Action policy；个人 Connection、OAuth、Grant、Action 确认、撤销和调用记录全部写入 `connection-api`。前端不能把两个系统的数据拼成新的授权结论。
+个人 Connection、OAuth、Grant、Action 确认、撤销和调用记录全部由独立 Connection 入口管理。Platform Web 不复制其页面或数据，也不能把两侧关联信息拼成授权结论。
 
 ### 7.2 状态管理
 
@@ -274,33 +272,37 @@ Platform Web 只管理 Agent Action policy；个人 Connection、OAuth、Grant�
 
 ## 8. HTTP 与事件契约
 
-### 8.1 浏览器接口
+### 8.1 浏览器与用户/应用 API
 
 - 管理和查询使用 `/api/v1/*` HTTP/JSON。
 - 创建、更新和命令类请求支持 `Idempotency-Key`。
-- 浏览器接口遵循 [Contract Schema authority](#64-contract-schema-authority)；生成并提交的 OpenAPI 3.1 是消费者使用的规范来源。
+- 浏览器与用户/应用 API 遵循 [Contract Schema authority](#64-contract-schema-authority)；生成并提交的 OpenAPI 3.1 是消费者使用的规范来源。
 - TypeScript 客户端由 OpenAPI 生成，禁止手写重复的请求/响应类型。
 - 文件使用预签名上传/下载；业务接口只传文件引用和元数据。
+
+API 契约覆盖 Agent 创建/启动/停止/重启、任务提交/查询/取消、结果订阅、凭证与应用授权、审计和 Eval。产品行为分别引用 PRD [API 身份](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)、[后台任务](../prd/PRD-agent-platform-M1.md#104-agent-api-与后台任务)、[审计](../prd/PRD-agent-platform-M1.md#13-平台操作审计)和 [Eval](../prd/PRD-agent-platform-M1.md#15-模型质量评估与效果分析)。路由只解析可信上下文、校验 Schema 并调用 Core；创建和任务受理返回稳定资源 ID 与持久状态，不能把 HTTP 成功等同于 Workload 就绪或任务完成。
 
 ### 8.2 SSE
 
 对话回复和状态流使用 `text/event-stream`：
 
 - 每个事件包含稳定 `eventId`、`executionId`、Execution 内递增 `sequence`、Conversation 内严格递增 `conversationCursor`、`type`、`occurredAt` 和类型化 payload。
-- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；M1 唯一的 Platform 来源类型是 `model.selection.fell_back`，它绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度和固定的受限原因。
+- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消等状态事件和 `model.selection.fell_back`；其中模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度和固定的受限原因。
 - 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
-- 浏览器通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前有权访问的 Conversation。
+- Web/API 调用方通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前主体有权访问的 Conversation/Execution，任务流不能带出同会话其他任务的数据。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。
 - 心跳只用于保持连接，不进入业务时间线。
-- 同一事件可能被重复投递，前端按 `eventId` 去重。
+- 同一事件可能被重复投递，消费者按 `eventId` 去重。订阅建立、续传和存续期间执行当前主体/凭证授权；失效后关闭流，审计订阅起止，不逐条审计输出。
 
 M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通过普通 HTTP 命令完成；只有出现必须由同一连接双向交换低延迟事件的需求后才重新评估。
 
 ### 8.3 内部接口
 
-平台到 Connection、`platform-worker` 到 Agent Pod 均使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，不因位于集群内而跳过鉴权。Platform 读取 Connection Catalog 时使用短期、可撤销且仅具 `catalog:read` 权限的 workload credential；该凭据不能调用 Action 或读取用户 Connection、Grant、Credential 和审计。
+`platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，并验证执行授权，不因位于集群内而跳过鉴权。
 
-M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其他语言客户端和测试工具共同使用同一份契约。
+Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
+
+M1 不引入 tRPC/oRPC/ConnectRPC。
 
 ## 9. 身份与权限
 
@@ -313,38 +315,33 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - 账号状态与组织关系在每次敏感操作前重新解析；短期缓存不能成为独立权限来源。IdentityAdapter 缺失、返回非法结果或暂时不可用时，敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
 - IdentityAdapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
-Connection 不消费 Platform 浏览器会话。它按 [Connection M1 HLD](HLD-connection-M1.md) 使用部署批准的公司 LDAP profile 完成员工登录，以 `issuer + uid` 映射稳定 Principal，并建立自己的 hash-only 浏览器会话。当前公司 profile 参考 Rehoboam 已验证的 Service Bind 查找、稳定 `uid` 和用户 DN bind 契约，但不复制其应用 Token、Socket 登录或 Session。默认 profile 必须使用验证证书和主机名的 LDAPS/StartTLS；当前 LA3 受监督 Pilot 可以显式沿用 Rehoboam 固定私网 `ldap://` 例外，但不得自动降级、fallback 或扩展到其他环境，正式上线前必须关闭。登录后按 Principal 最多每 15 分钟复核 LDAP 条目，过期并发复核必须合并；LDAP 不可用时敏感操作 fail closed。当前 Pilot 只确认条目存在，不把该结果描述为员工仍在职。
+Connection 不消费 Platform 浏览器会话或 Platform API 凭证；其 LDAP 登录、OAuth 客户端身份、授权及复核机制由 [Connection M1 HLD](HLD-connection-M1.md) 定义。
 
 ### 9.2 权限顺序
 
-每次 Agent 使用按以下顺序判断：
+Web/企微依次校验可信用户当前状态、Agent 可用范围/有效 Owner、渠道权限和已验证 Runtime 能力。模型选择须属于标准模板 Owner 当前允许清单或 ACP Runtime 当前有效选项，API 也遵循该模型边界。Connection 的独立授权在其调用入口完成。
 
-1. IdentityContext 表示当前账号仍然有效。
-2. 用户属于 Agent 当前可用范围，或是当前有效 Owner。
-3. 当前渠道已绑定并支持目标操作。
-4. 模型选项属于标准模板 Owner 当前允许清单，或属于 `platform-adapter` 自定义 Runtime 通过 ACP 返回的当前选项集合。
-5. 若调用 Connection，Action 属于 Owner 当前选择范围。
-6. Connection 中当前 Principal 对 Agent Platform Consumer、当前 Agent Actor、唯一 Connection 和 exact ActionVersion 的 Grant 仍有效。
+`platform-core` 的 Access 模块维护独立应用、注册责任人、API 凭证元数据与显式 Agent 授权；用户状态/组织关系仍来自 IdentityAdapter。API Adapter 验证凭证后生成可信用户或应用上下文，保留主体类型、稳定 ID、凭证引用、操作范围及有效期，不能由请求字段覆盖。凭证只保存不可逆校验材料和必要元数据，首次交付后不提供原值读取；个人凭证由本人管理，应用凭证由登记责任人管理。
 
-任何一步失败都停止后续处理，并返回可理解的产品错误。错误不能暴露其他用户、Agent 或 Connection 是否存在。
+创建用例将 Agent、创建主体、Owner、初始管理/使用授权、outbox 和必要审计原子保存。用户创建的 Owner 为本人，应用创建的 Owner 为登记的自然人责任人，创建主体仍为应用。API 不进入 Web 申请审批状态机，也不设预审批；镜像/配置与运行能力准入仍适用。管理与使用授权可分别撤销，应用不继承责任人的权限，Owner 不能绕过已撤销的 API 授权。
+
+每次 API 操作在 Core 中检查：当前主体有效、当前对应业务授权、凭证操作范围与有效期、目标 Agent/渠道/Runtime 能力。任务查询、订阅、结果文件访问与调用方取消还须匹配持久保存的提交主体，并具有当前 Agent 使用权；Owner 或责任人角色不能替代这项匹配。相同主体的另一有效凭证可在其权限范围内操作原任务。
+
+| 变化 | API/订阅 | 已受理任务 |
+| --- | --- | --- |
+| 单个凭证过期或撤销 | 拒绝该凭证并关闭其流 | 继续执行，不把凭证失效当作主体撤权 |
+| 主体禁用或 Agent 使用权撤销 | 拒绝新工作和访问 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
+| 身份或授权依赖无法确认 | 敏感操作 fail closed | 不凭旧缓存继续投递；保持可解释的等待/未知状态，按原执行恢复核实 |
+
+撤权控制以服务端持久授权关系定位 Execution，由系统身份执行，不能借用已失效调用方凭证。取消请求与实际停止分开保存，不回滚已发生的外部效果；Connection 在自己的入口执行当前授权。
 
 ### 9.3 服务端授权上下文
 
-平台在每个 Turn 或补充指令实际投递前重新解析授权，并生成新的短期、不可篡改且版本化的 Execution Grant。Grant 必须包含可验证的签发方、目标服务 audience、签发与过期时间和唯一 `grantId`；RuntimeHost 与 Platform Tool Gateway 只接受包含自身 audience 的 Grant，并在访问对象或产生 Runtime/Connection 副作用前校验签名、签发方、audience、有效期及下列全部绑定：
+Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按 9.2 校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；受理时凭证的后续失效按 9.2 处理。
 
-- 当前执行。
-- 当前 Agent。
-- 当前平台用户。
-- 当前渠道。
-- 当前 Conversation 与 Turn。
-- 本次 RuntimeHost 调用允许的命令、附件引用集合及其允许操作。
-- 当前允许的 Action 集合版本。
+RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience、有效期与全部对象绑定。服务身份、请求字段、Session Ref 或 Runtime 返回值不能单独作为授权依据。补充指令取原 Execution 边界与当前授权的交集；不匹配或过期时拒绝，日志和审计只保存 Grant 引用及受限原因，不保存原始证明。
 
-补充指令 Grant 的范围取原 Execution 授权边界与当前授权的交集，不能扩大原用户、Agent、Conversation、渠道或 Action 范围。
-
-服务身份、请求字段、Host Session Ref、附件引用或 Runtime 返回值都不能单独作为授权依据，也不能扩大 Grant。任一请求字段与 Grant 绑定不一致、Grant 过期或 audience 不匹配时必须在读取附件、调用 Runtime 或调用 Connection 前拒绝；日志只记录 `grantId` 和脱敏的拒绝原因，不记录原始 Grant。
-
-Agent 调用 Tool Gateway 时只提交 Action 和参数。Platform Tool Gateway 校验当前 policy 后，以注册 workload 为当前平台用户和 Agent Actor 签发短期 delegated assertion；其中的 Principal evidence 必须来自可信 Platform IdentityContext，并按部署批准的稳定 issuer/subject 映射到 Connection 中同一员工的 `issuer + uid`，不能使用邮箱或显示名。Connection 独立验证签名、issuer、audience、期限、一次性 `jti`、workload、Consumer/Instance、Actor、ActionVersion、参数摘要、幂等键和 recovery generation，再从自己的 current Grant 解析唯一 Connection。Platform 不能提交或覆盖 Principal、Connection 或外部账号，assertion 也不能创建或扩大 Grant。
+Runtime Execution Grant 仅授权平台 Runtime 操作，不是 Connection 访问凭据。平台不为 Connection 签发 assertion、不传递 Owner Action policy，也不替 Connection 决定客户端可调用的外部账号。
 
 ## 10. Agent Workload 与调谐
 
@@ -362,7 +359,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
 - Agent 自有记忆或工作区通过独立持久卷保存，并由模板或自定义 Agent 负责用户隔离。
 
-Owner 不能修改 CPU、内存、副本数和存储规格。资源规格由平台按 Agent 类型选择预设 Profile，并在审批页展示。
+Owner 不能修改 CPU、内存、副本数和存储规格。资源规格由平台按 Agent 类型选择预设 Profile，Web 审批页展示该配置；API 创建复用相同规格选择，不增加审批。
 
 ### 10.2 期望状态
 
@@ -391,7 +388,7 @@ Kubernetes 调谐结果在已停止、期望副本为 0、实际 StatefulSet 不
 运行中期望不能接受该结果；资源期望身份、归属、fence 或路由关闭校验失败仍返回失败，
 不能以资源缺失掩盖拒绝或不完整操作。保留的持久卷不因该结果被删除。
 
-Platform DB 中的 outbox 和工作项只是保证状态变更可恢复的内部实现，不向用户提供统一任务队列、优先级或排队管理能力。
+Platform DB 的 outbox 保证状态变更和投递可恢复；API 任务在同一 Store 内另保存受理顺序、等待期限和调度状态，由 Dispatch 实施第 12.4 节的有界等待。M1 不提供通用队列管理、优先级、定时调度、资源池、自动休眠或调用方逐任务执行时限参数。
 
 ### 10.3 并发与 Leader
 
@@ -569,9 +566,9 @@ RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威�
 
 ### 11.1 Platform Conversation Contract
 
-Web 和平台托管渠道只面对统一 Platform Conversation Contract。该 Contract 定义创建或恢复 Runtime Session、为新消息或重新生成提交一个带 Execution 已固化有效模型选择的 Turn、停止 Turn、查询状态、接收规范化事件和读取 capability，不暴露 ACP、Pi RPC、stdio 或其他 Runtime 原生消息。
+Web、任务 API、Eval 执行和平台托管渠道只面对统一 Platform Conversation Contract。该 Contract 定义创建或恢复 Runtime Session、为新消息或重新生成提交一个带 Execution 已固化有效模型选择的 Turn、停止 Turn、查询状态、接收规范化事件和读取 capability，不暴露 ACP、Pi RPC、stdio 或其他 Runtime 原生消息。
 
-四个标准模板实现完整 Contract。使用平台交互入口的自定义 Agent 通过 Generic ACP Adapter 实现 Contract；使用自有交互入口的自定义 Agent 不进入该 Contract。
+四个标准模板实现完整 Contract。使用平台交互入口的自定义 Agent 通过 Generic ACP Adapter 实现 Contract；使用自有交互入口的自定义 Agent 不进入该 Contract；管理 API 可用不能被解释为任务 API、观测或 Eval 可用。自定义 Agent 的这些能力以接入验证结果为准。
 
 ### 11.2 Adapter 部署与 Registry 边界
 
@@ -581,7 +578,7 @@ Codex Linux 部署必须启用并完整支持 Landlock ABI V5 的文件系统权
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在 Agent PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration` 及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、渠道或 Agent 请求中的身份与授权依据。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在 Agent PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration` 及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
@@ -626,96 +623,68 @@ sequenceDiagram
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
 - 用户可见结果以 [Agent Platform PRD 11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 为准；幂等键、事务分支、outbox 状态迁移、Runtime 接受竞态和失败收敛的完整工程契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
-- 平台不自动重试可能产生副作用的 Connection 写操作，除非 Provider 支持明确的幂等键。
+- Connection 的外部调用幂等、未知结果与恢复由 Connection 负责；平台不能通过重投整个任务来绕过原调用对账。
 
 ### 12.3 事件保存
 
-平台保存用户可见消息、最终回答、状态变化、模型调用摘要和 Connection 调用引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
+平台保存用户可见消息、最终回答、状态变化、模型/工具调用事实和已验证的 Connection 关联引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
+
+### 12.4 API 受理、调度与恢复
+
+API task 直接映射一个 Platform Execution，不另设与 Execution 竞争的任务状态权威。默认在当前主体与 Agent 下创建新 Conversation；显式续接只接受同主体、同 Agent 且可恢复的 Conversation。任务输入/结果属于受控业务存储，查询和 SSE 从持久状态读取。
+
+- **受理事务：** Core 在 Agent 容量与 Conversation 锁定的用例级事务内检查当前资格和等待容量，保存幂等绑定、输入引用、Execution、受理顺序、等待期限、outbox 与必要审计。重复请求先查原绑定，不重复消耗容量；容量满或停止/停用/故障未恢复时拒绝且不创建新任务。启动/更新中允许有界等待，任务提交不隐式启动 Agent。
+- **投递：** Worker 认领持久工作项；Dispatch 只允许同 Conversation 最早的可执行任务占用 Turn，并在 Agent 经验证的并发能力内调度不同 Conversation。认领租约、修订/fence 与事务条件防止双 Worker 重复投递。等待期限由平台配置，在重启后沿用；到期任务明确失败。RuntimeHost 管理原生 Turn，不再维护另一套用户排队状态。
+- **入口差异：** 等待中的 Execution 还没有活跃 Runtime Turn。API 后续任务排队不改变 Web 的补充指令/繁忙语义；Web 与 API 均通过同一 Conversation 串行准入，后续新 Turn 不能越过已受理任务或改写其他主体上下文；对当前活跃 Turn 的合法补充指令仍按 Web 规则处理。
+- **取消：** 未投递任务在与认领互斥的事务中终结，Worker 不能继续启动；投递或接受结果不确定时，先核实原操作。运行中持久保存取消请求与停止工作项，确认停止后才标记已取消。未确认或待核实状态占住该 Conversation，下一任务不能启动。
+- **恢复：** API/Worker 重启重新认领未开始工作，沿原执行查询 Runtime 接受状态与 Session。已运行任务能恢复则沿原身份继续，确认不可恢复则明确失败；无法确认时标记待核实并阻止受影响 Conversation，不能新建 Session 或重放可能有副作用的任务。结果与审计恢复均按原操作引用去重。
+
+RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Runtime HLD](HLD-agent-runtime-M1.md) 细化；API 的持久等待属于 Platform Dispatch，不把排队义务下推到 Driver。
 
 ## 13. Connection 架构
 
-### 13.1 OpenConnector 使用方式
+### 13.1 独立直连与权威边界
 
-Connection 从固定 OpenConnector commit 导出经 allowlist 审核的 Provider metadata、Action schema、OAuth helper、guarded fetch 和 executor closure，保留来源、许可证、notice 和 digest。只有 `openconnector-adapter` 可以在 `connection-api` 进程内依赖该 Kernel；上游 Runtime Server、SQLite、Credential Store、Runtime token、global alias 和 Web Console 不进入正式拓扑。
+按 [平台 Connection PRD](../prd/PRD-agent-platform-M1.md#9-connection-集成)，Agent 或客户端直接调用独立 Connection MCP/API。Connection 负责自己的用户/应用身份、客户端访问凭据、Grant、外部账号、Provider/Action、原始凭证、外部调用和审计。Platform 不代理调用、不签发 Connection 代调用证明、不维护其目录、授权或状态/审计投影；应用在 Connection 独立获权，不继承自然人责任人的权限。
 
-默认通过重新导出固定 closure 吸收上游版本。只有通用 Provider/OAuth/executor 缺口确实需要维护上游修改时，才建立保留历史的最小 Fork；Connection Principal、Grant、Credential、审计和恢复不得进入 Fork。
+Platform 仅记录自己的任务、模型和工具执行事实。Connection 访问凭据与 Platform API 凭证分别管理；外部账号原始凭证只由 Connection 的受控执行路径使用，不能进入 Agent、模型、浏览器或 Platform DB。平台 Runtime Execution Grant 不参与 Connection 的授权判定。
 
-首个 GitHub Pilot 只发布 `github.get_current_user`、`github.list_my_repositories` 和 `github.create_pull_request` 三个 immutable ActionVersion。repository allowlist 绑定唯一受控 private 仓库的 GitHub numeric repository ID；`create_pull_request` 在提交前解析并核对稳定 ID，`list_my_repositories` 的返回结果按同一 ID 过滤。Bitbucket、Jira、Confluence 和其他 GitHub Action 不进入该 runtime。
-
-### 13.2 授权模型
-
-Platform DB 是 Agent Owner Action policy 的权威来源；Connection DB 是 `Principal -> Consumer -> Actor -> Connection -> exact ActionVersion` Grant、外部账号、Credential 和 Action 执行的权威来源。Platform 不保存第二份可写 Grant。
-
-该数据和身份边界的取舍见 [ADR: Connection 使用单一账号级权威](../adr/0005-use-one-account-backed-connection-authority.md)。
-
-一次 Action 调用的有效能力为以下集合的交集：
-
-```text
-Platform Owner 当前 Agent Action policy
-∩ Connection 当前 ProviderRelease/ActionVersion
-∩ Principal 对 Consumer/Actor、Connection 和 ActionVersion 的 current Grant
-∩ 当前 Principal、Consumer/Instance、Actor/workload、Connection 和 Credential 状态
-∩ Provider 外部权限与 Pilot repository policy
-```
-
-Owner 新增 Action 后，旧 Grant 不包含新增项；用户必须在 Connection 重新确认。Owner 移除 policy 或 Connection 停用 Provider/Action 后立即拒绝新调用。Connection 不读取 Platform DB，而是验证由 Platform 当前 policy 约束的短期 assertion；assertion 只能证明调用主体和请求绑定，不能创建或扩大 Grant。
-
-为使已签发 assertion 不能越过后续 Platform 撤权，Connection 只保存 Agent/Action policy 的单调 revision 和 revocation fence，不保存 policy 内容。Platform 撤权命令必须先原子停止签发新 assertion，并禁用受影响的 delegated route 或 workload credential，再持久终结 Connection fence；取得成功确认后才能标记撤权完成并恢复不受影响的入口。Connection 不可用或 fence 尚未同步时，撤权保持处理中，相关 delegated route 或 workload credential 必须持续 fail closed；服务恢复后必须先完成 fence 同步，再恢复入口。Dispatch 事务同时检查 assertion revision 与 current fence。
-
-### 13.3 调用链路
+### 13.2 调用与审计关联
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent Runtime
-    participant P as Platform Tool Gateway
-    participant C as Connection API
+    participant A as Agent / Client
+    participant P as Platform execution records
+    participant C as Connection MCP / API
     participant D as Connection DB
-    participant X as GitHub
+    participant X as External Provider
 
-    A->>P: actionId + args + execution token
-    P->>P: 校验当前用户、Agent 和 Action policy
-    P->>C: workload identity + delegated assertion + actionVersion + args
-    C->>C: 校验 assertion、workload、Actor 和防重放
-    C->>D: 解析 current Grant、唯一 Connection 和 CredentialVersion
-    C->>D: 持久化 ActionCall/Effect/Dispatch
-    C->>D: dispatch 前重验并原子标记 SUBMISSION_STARTED
-    C->>X: 注入凭证并执行
-    X-->>C: 结果或错误
-    C->>D: 脱敏并完成结果或进入未知结果对账
-    C-->>P: 脱敏结果 + callId
-    P-->>A: 工具结果
+    A->>C: 独立客户端凭据 + 调用请求
+    C->>C: 校验当前直连身份与授权
+    C->>D: 可靠记录原调用和外部操作意图
+    C->>X: 使用受控外部凭证执行
+    X-->>C: 实际结果或未确认
+    C->>D: 保存结果或原调用对账状态及审计
+    C-->>A: 受控结果与真实调用关联信息
+    A-->>P: 可信运行采集记录自身工具事实与关联引用
+    Note over P,D: 两侧分别鉴权查询，不复制 Connection 状态或审计
 ```
 
-`ActionCall` 是已接受的逻辑调用，`Dispatch` 是每次 Provider 执行尝试，`Effect` 只表示 WRITE Action 可能产生的外部副作用。三者只由 Connection DB 持久化；Platform 只保存 `callId`、状态和脱敏结果引用。
+关联至少能从平台实际执行定位实际工具调用，再核对 Connection 产生的原调用引用及两侧记录。平台关联写入须来源于绑定 Execution 的受信运行采集，Connection 侧须有真实调用记录支撑；普通调用方自行提交相同 `traceId`、字符串或 URL 不构成已验证绑定。独立客户端缺少可信平台执行来源时只保留可核实的 Connection 记录，不能伪造平台执行关联。
 
-WRITE Action 的 `SUBMISSION_STARTED` 是撤权线性化点。此前完成撤权时当前调用必须本地拒绝；此后发生撤权时保留 Provider 实际结果，但阻止后续新调用。进程恢复只能对账持久证据，不能重发未知写操作。
+关联信息不是授权。调用方与两侧管理员分别在各自受控 API/页面查询；无权访问时不返回对方对象、状态或存在性。平台工具成功只表示自身已确认的执行事实，不能替代 Connection 对外部效果的结论。响应丢失、关联缺失或无法核实时如实标记，沿原调用补充核实，不把猜测写为成功。
 
-### 13.4 凭证
+### 13.3 外部执行与恢复
 
-- Connection 系统负责保护外部凭证，具体密文、主密钥和轮换模型由 Connection 的独立 Source of Truth 决定，不复用或覆盖 Platform Secret 模型。
-- Connection DB 只保存受保护的 CredentialVersion 和必要元数据，Platform DB 不复制 Provider 凭证。
-- 只有 `connection-api` 运行身份可以解密。
-- OAuth state 为一次性、短期有效，并绑定发起用户、Connection scope 和受控回跳地址。
-- 日志、Trace、错误和审计都经过统一脱敏。
+Connection 在实际外部操作开始前持久保存意图，并在执行前重验自己的当前身份、Grant 与凭证状态；拒绝不能因审计故障变为放行。业务幂等键绑定原调用主体、操作及请求，同键同请求复用原操作，冲突拒绝。可能已经提交且无可证明幂等保障的写操作只沿原调用对账，不自动重发。
 
-首个 Pilot 沿用 GitHub OAuth App，只使用专用 GitHub 测试账号，请求 `read:user repo`，不请求 `user:email`、`workflow` 或 `delete_repo`。GitHub OAuth 只创建 Connection，用户仍需在 Connection Web 为具体 Agent Actor 再次确认 Grant。
+取消或撤权不抹去既有外部效果。Connection 的执行尝试、结果不确定、后续对账、人工处理和凭证撤销均保留自身审计；平台不接管其状态机或建立分布式事务。
 
-断开 GitHub Connection 时先立即执行本地 Grant/Credential fence，再持久执行该 Connection 单个 GitHub Token 的 revoke attempt；不默认撤销用户对整个 OAuth App 的 grant。Provider revoke 的请求、成功、失败/待重试和证据都进入审计。
+### 13.4 实现与详细设计归属
 
-### 13.5 幂等、未知结果与人工处理
+Connection 只复用固定且经 allowlist 审核的 OpenConnector Provider/OAuth/executor Kernel，保留来源、许可证、notice 和 digest；上游 Runtime Server、Credential Store 和 Web Console 不进入正式拓扑。首个受监督 GitHub Pilot 的范围以 PRD 为准，不把局部 Pilot 推广为完整 M1。
 
-所有 WRITE Action 要求 Consumer 生成并跨重试保持稳定的业务幂等键。Connection 在首次 Provider dispatch 前把该键与 Principal、Consumer/Actor、ActionVersion 和参数摘要绑定；同键同请求返回原 `callId`，同键不同请求拒绝。
-
-GitHub create-PR 没有 Provider 业务幂等键。Provider 可能已接受请求但响应丢失时进入 `RESULT_PENDING/UNCERTAIN`，不自动 POST：
-
-- 自动对账最多持续 24 小时并使用退避；唯一且完整匹配的 PR 可以确认成功。
-- 多个候选或字段冲突立即进入 `NEEDS_MANUAL_REVIEW`。
-- Connection 管理员在独立 Connection Web 处理，普通用户只能查看脱敏证据并提供线索。
-- 七天后仍无法确认则进入终态 `UNRESOLVED`，既不是成功也不是失败，不再自动查询或重试，原幂等键永久指向原调用。
-
-### 13.6 详细设计
-
-Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/Dispatch、Provider revoke 和 GitHub Pilot 验证矩阵见 [Connection M1 HLD](HLD-connection-M1.md)。
+Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
 
 ## 14. 使用渠道
 
@@ -734,7 +703,7 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 3. 校验 Agent 可用范围和渠道绑定。
 4. 按单聊、群聊和线程规则生成稳定的 Platform Conversation 映射；群聊和线程的映射键必须包含服务端解析的发送者 ID。
 5. 持久化消息和 outbox，由 `platform-worker` 通过 RuntimeHost Client 交给 Agent Pod 内的固定 Driver。
-6. 使用触发消息发送者的 Connection 授权。
+6. 需要外部操作时由 Agent/客户端直连 Connection；Connection 独立验证触发消息发送者已经授予的调用权限，不能使用其他群成员的授权。
 
 群聊、线程和附件映射由 Channel 层负责；同一群或线程中的不同发送者必须映射到不同 Platform Conversation 和 RuntimeHost Session。RuntimeHost/Driver 不感知企微身份或自行改变会话键。四个标准模板和通过 ACP 验证的自定义 Agent 使用同一渠道链路。Web 与企微会话不合并。
 
@@ -749,36 +718,33 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 
 ### 15.1 Platform DB 主要实体
 
-- Agent 申请、Agent、Owner、可用范围。
+- Agent 申请、Agent、创建主体、Owner、可用范围、独立应用/责任人和显式管理/使用授权。
+- API 凭证的校验材料、范围、有效期和撤销状态，不保存可回读原值。
 - 模板版本、自定义镜像 Digest、Runtime Manifest、env、版本化 Secret 密文状态和资源 Profile。
-- 模型 endpoint、加密 credential reference、模型选项、渠道绑定、Owner Action 选择。
+- 模型 endpoint、加密 credential reference、模型选项、渠道绑定和已验证的集成能力。
 - 会话、消息、回答版本、执行和执行事件。
 - worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态。
 - 附件与结果文件元数据。
-- Agent Owner 的 Provider/Action policy；Connection 调用只保存 `callId`、状态和脱敏结果等只读引用，不在 Platform DB 建立 Connection Grant 或其他可写副本。
+- 平台实际模型/工具事实与经核实的 Connection 关联引用，不保存 Connection 目录、账号、Grant、状态或审计投影。
+- Eval 用途授权、版本化数据集/标准、实验及逐例 Execution 引用、实际版本、评分/人工复核、主动反馈；正文和评分理由作为受控业务数据保存。
 - Agent 期望状态、已应用修订和平台审计。
 - Outbox 和可重试工作项。
 
 ### 15.2 Connection DB 主要实体
 
-- Principal、identity mapping、Browser Session、Consumer/Instance 和 Actor/workload registration。
-- ProviderRelease、immutable ActionVersion 和 Consumer declaration。
-- 个人/共享 Connection、外部账号安全标识、scope、Connection Grant 和确认快照。
-- 加密 CredentialVersion、OAuth state、刷新，以及不可变绑定断开时 CredentialVersion 的 Provider revoke attempt。
-- AuthorizedInvocation、Platform policy revision/fence、ActionCall、Effect、Dispatch、对账任务、脱敏结果和 Connection 审计。
+Connection DB 保存自己的用户/应用及客户端身份、授权、Provider/Action、个人/公司 Connection、外部账号与凭证、OAuth 状态、外部调用/效果、恢复记录和审计。具体实体与事务由 Connection HLD 定义，不保存 Platform policy revision/fence。
 
 ### 15.3 跨系统一致性
 
-- 两个系统不使用分布式事务。
-- 跨系统操作使用稳定 ID、幂等键、状态机和关联 ID。
-- Connection 或 Action 停用由 Connection 立即拒绝新调用；平台目录通过版本或事件最终同步展示状态。
-- Platform Agent policy 撤销后，Platform Tool Gateway 立即停止签发新 delegated assertion；Connection Grant 撤销由 Connection 在线校验并立即阻止新 dispatch。
-- 已开始的外部操作保留 Provider 返回的实际结果，不伪造回滚。
+- 两个系统不使用分布式事务、不跨库读写或同步目录/审计投影。
+- Platform 的主体/Agent 撤权在平台受控路径生效；Connection 的身份/Grant/凭证撤权在 Connection 的执行入口生效，权限不互相继承。
+- 跨系统核对只使用第 13.2 节的真实调用关联，不能从另一侧的成功或可用状态推断本侧授权。
+- 已开始的外部操作保留实际结果；缺失或未知沿原调用核实，不伪造回滚。
 
 ### 15.4 文件
 
 - 数据库只保存对象引用、所有者、会话、类型、大小、Hash 和生命周期状态。
-- 上传和下载 URL 短期有效并绑定当前用户。
+- 上传和下载 URL 短期有效并绑定当前主体与获授权对象；Eval 文件另外检查评测用途授权。
 - Agent 获取文件时使用执行期临时访问，不获得对象存储长期凭证。
 - 文件类型与大小在 Web、平台和 Agent Runtime 三处按同一能力声明校验。
 
@@ -796,13 +762,18 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 | 正在应用新修订 | 更新中 |
 | 探针失败或 Adapter 不可达 | 暂时不可用 |
 | 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响 |
+| API 等待容量已满 | 受理前拒绝，可稍后重试，不返回新任务标识 |
+| 已受理任务等待到期 | 原执行明确失败，保留失败原因 |
+| 取消已请求但停止未确认 | 取消处理中，同 Conversation 后续任务继续等待 |
+| Runtime 接受或外部结果不确定 | 待核实，不能显示已取消或成功；相关 Conversation 禁止继续执行 |
 | Agent 明确拒绝新任务 | 繁忙，可重试 |
 | Provider 限流或短暂故障 | 明确提示稍后重试 |
 | Connection 失效 | 说明原因并提供重连入口 |
 
 ### 16.2 幂等
 
-- Agent 申请、审批、停止、重启、配置保存和消息提交接受幂等键。
+- Agent API 创建、任务提交与 Web 申请、审批、生命周期及配置命令接受幂等键。绑定为可信主体 + 操作 + 键 + 规范化请求摘要；同请求返回原对象，不同请求拒绝。每次访问仍先校验当前权限，不能借重试读取越权对象。
+- 请求尝试有各自 requestId；业务操作、outbox、Runtime 命令和审计引用稳定，不把网络重试计作新任务或新外部效果。
 - Worker 通过业务 ID 与修订号判断是否已经执行。
 - Runtime 投递和事件去重按 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md) 的稳定标识执行。
 - OAuth callback 的 state 只能消费一次。
@@ -817,42 +788,63 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 - 所有用户访问路由使用 TLS；平台身份入口使用可信 IdentityContext 和 Agent 可用范围校验。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、部署解密私钥或 Kubernetes API。
-- Agent Pod 只能通过 Platform Tool Gateway 使用 Connection。
+- Agent/客户端使用 Connection 自己的访问凭据直连其 MCP/API；Platform 不充当代理或授权签发方，原始外部凭证始终留在 Connection。
 - 标准模板只使用 ModelCatalogAdapter 返回的获准模型端点；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循部署网络策略，M1 不新增按 Agent 维护的 egress allowlist。
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 模型 API Key、Owner Secret 和企微凭证加密保存、不回显，只能替换。
 - 审计和日志不记录聊天正文、模型思考原文和原始凭证。
-- 所有跨用户资源访问测试按“资源不存在”返回，避免枚举。
-- 会话和附件查询始终以当前使用者为主体；Agent Owner 身份本身不授予查看其他使用者内容的权限。
+- 所有跨主体（用户或应用）资源访问测试按“资源不存在”返回，避免枚举。
+- 任务、会话、附件、执行详情和自身审计查询始终匹配提交主体；Owner/应用责任人不因此获得他人内容或使用记录。Eval 按独立用途和对象授权，不能成为会话访问旁路。
 
 网络、IdentityAdapter、OCI Registry、模型目录、加密公钥/解密 keyring 注入和对象存储的具体产品或配置由部署环境决定，但上述访问结果是 M1 的硬性要求。
 
-## 18. 可观测性
+## 18. 运行观测、持久审计与 Eval
 
-### 18.1 关联 ID
+### 18.1 真实执行事实与关联
 
-一次用户请求至少关联：
+`packages/observability` 提供 OpenTelemetry、Pino、受限错误和关联上下文的公共实现；不承载领域授权、审计权威存储或 Eval 正文。Platform API 产生请求与受理事实，Dispatch/Worker 产生等待与投递事实，RuntimeHost/Driver 从实际模型和工具边界采集开始、终态、耗时及可获得的用量，Worker 校验、去重并保存规范化事实。结果保存与 SSE 投递分别观测。
 
-- `traceId`
-- `requestId`
-- `agentId`
-- `conversationId`
-- 内部 `executionId`
-- Connection `callId`（如有）
+一次任务用 `requestId`、`traceId`、`agentId`、`conversationId`、`executionId`、实际操作/尝试引用及适用的 Runtime fence/cursor 串起 API → 等待/投递 → Worker → Runtime → 模型/工具 → 结果。持久工作项保留关联上下文，异步 Trace 可用 span link 关联原请求；外部调用按第 13.2 节独立核对，不能采信任意传入 Trace 字段作为身份。
 
-日志不记录原始消息内容，只记录必要的类型、状态、耗时、大小和脱敏错误。
+四个标准模板必须验证实际模型/工具调用采集，不能以整体 Turn 耗时代替模型耗时。自定义 Agent 只报告已验证能力；缺失、无法确认、不支持与失败是不同结果，不能填成成功、零耗时或零 Token。重连、重放与恢复按稳定事实标识去重，合法的新尝试独立记录。
 
-### 18.2 工程指标
+调用方的执行详情从平台业务事件读取，按 PRD 展示受理、等待、执行、模型/工具和结果阶段；技术组件、主机与依赖定位属于运维后端。详情与结果内容使用原任务权限。日志、指标和 Trace 仅含必要元数据及脱敏错误，不含任务/Eval 正文、附件、思考、调用证明或凭证。
 
-- HTTP 请求量、错误率和延迟。
-- SSE 在线连接、重连和积压事件。
-- 消息提交、投递、繁忙、失败和完成数量。
-- Agent 启动、更新、不可用和调谐失败数量。
-- Connection 调用状态、Provider 限流和凭证刷新失败。
-- PostgreSQL 连接池、慢查询、outbox 积压和对象存储失败。
+### 18.2 运行指标与故障
 
-这些是系统运行指标，不是 Roadmap 中的 Agent Eval 与效果指标。
+部署提供日志、指标、Trace 的采集/查询后端及告警出口；M1 不绑定具体观测厂商。覆盖：
+
+- HTTP 请求量、授权拒绝、错误率与延迟，SSE 在线/重连/事件积压。
+- 任务受理、等待时长/数量、投递、执行、取消、失败、待核实与完成；实际模型/工具耗时和错误。
+- Agent 启动、更新、可用性、调谐与恢复失败。
+- PostgreSQL 连接池/查询延迟、outbox 积压、对象存储和 Runtime 依赖故障。
+- 两侧各自的审计写入/查询故障；Connection 在自己的后端观测外部调用、Provider 限流与凭证刷新。
+
+服务不可用、持续积压和异常错误必须有告警与可复现验证，阈值随部署容量配置。高基数 request/execution/用户 ID 放入受控日志和 Trace，不作为指标 label。采集/导出失败有独立健康信号，不能修改任务业务结果；持久审计失败按 18.3 处理，不能套用遥测尽力而为的规则。
+
+### 18.3 持久审计
+
+Core 定义 [平台审计 PRD](../prd/PRD-agent-platform-M1.md#13-平台操作审计) 的事件和查询权限，Store 以用例级事务原子保存业务变更、outbox 与必要审计。API/Worker 只调用这些用例，不能另写无事务保障的成功日志充当审计。审计不随 Trace 采样丢失，不另建审计微服务。
+
+每条记录保存可信主体类型/引用、原始发起人、实际后台执行组件、时间、动作、受控对象、授权与操作结果及请求/执行/操作关联；身份或对象无法确认时明确未知，只记录受限原因，不回显任意自报字段。覆盖治理、应用/凭证/授权、配置/生命周期、API 访问及拒绝、任务全过程、实际模型/工具操作和 Eval 管理/评分/复核。订阅按建立与结束记录；审计查询记录主体、受控筛选范围与结果，不把审计写入递归当作新查询。
+
+API/Worker 的外部操作在调用前保存意图；RuntimeHost/Driver 的实际模型/工具操作须在执行侧可靠记录原操作意图及结果，再按稳定引用投递平台必要审计。只有已持久确认的意图才允许开始操作，记录失败时阻止尚未发生的操作并报告故障。响应或结果保存失败只能记录未确认并沿原操作核实，不能重发有副作用的请求制造结果；Connection 的外部意图/效果始终由 Connection 自己记录。
+
+请求尝试与业务幂等操作、受理与完成、取消请求与停止确认、工具结果与外部效果分别表达。必要审计无法可靠保存时不返回虚假成功；已经发生的效果不能抹去，授权拒绝不能变成放行。审计 API/页面按时间、主体、Agent、动作、结果和执行引用筛选、分页并查看详情；查询故障明确报错，不返回伪空列表。
+
+系统管理员仅按职责读取平台元数据，用户/应用只能查询自己的执行审计；Owner/责任人没有他人使用记录权限，Connection 管理权限不互相继承。审计不存正文、附件、思考、证明或凭证值；保留与受控清理服从部署数据政策，清理不伪造历史业务结果，访问和清理均受权限控制。
+
+### 18.4 Eval 数据与执行
+
+Evaluation 是 `platform-core` 内部模块，API 提供管理与查询，Store 保存权威业务数据，Worker 消费持久工作项。Web 提供数据集/实验/逐例对比/人工复核入口，对话或任务详情提供主动反馈；不新增 Eval 服务、通用评测框架或固定厂商依赖。产品闭环和评分维度以 [Eval PRD](../prd/PRD-agent-platform-M1.md#15-模型质量评估与效果分析) 为准。
+
+- **版本与数据：** 数据集保存获授权样本的输入、必要上下文、任务类型及预期结果/判定标准；修改生成新版本。实验固定数据集/标准版本、基线/候选及评分器版本，每例引用实际 Execution、实际模型、模板/镜像、非敏感配置版本和工具环境。请求的版本与实际执行版本不能混同；条件变化或随机性影响须可见，不可比样本不能冒充同条件排名。
+- **任务复用：** 每例通过现有 Dispatch/Conversation/Execution 执行，拥有独立任务引用，默认隔离样本上下文；使用原发起主体的当前 Agent 使用权和独立数据权限，不能借 Worker 身份、Owner 或责任人身份访问其他任务。取消、查询与恢复复用任务用例，Connection 调用仍需独立授权。四模板必须验证；模板版本对比由平台受控测试配置执行，不赋予 Owner 锁定生产旧模板的能力。
+- **评分与复核：** Worker 执行版本化确定性规则或获授权模型评分工作项，人工评分/复核经同一 Core 保存独立结论；评分理由、来源、评分模型与 rubric 版本可追溯。模型评分复用获准模型目录与受控请求能力，不扩展 Runtime 传输协议或另建模型路由。任务业务失败、评分器故障、缺失和不适用独立保存，评分重试只重跑评分，不重放业务任务。
+- **分析与反馈：** 汇总和逐例对比使用相同样本/标准，展示分母、已评分数、缺失/错误及可比覆盖；耗时和 Token 取实际采集值。历史结论保留，新样本/标准以新版本重跑。反馈仅由提交主体对自己的任务主动提交有用/无用和问题分类，绑定实际模型/配置/时间；单独统计数量、反馈率和分布，未反馈不作成功，反馈不混入离线通过率。
+- **内容与授权：** 样本、输出、评分理由与实验明细走独立 Eval 用途授权和受控存储，不进入遥测/审计。线上正文禁止自动导入，实际材料须获明确 Eval 用途授权并脱敏；原任务访问权不替代该授权。获授权 Owner 可访问允许的评测数据与反馈汇总，不能因此读取其他主体原会话。评分端点与数据用途需获准，工具使用受控测试账号/环境/响应，不自动重放线上写操作。
+- **生命周期：** API、Worker 执行/评分和内容读取都校验当前数据授权；保留、撤权和删除按部署政策执行，历史可回看不绕过当前授权。删除正文后仅保留政策允许的版本和结果元数据，不能继续展示被撤权或删除的样本。
 
 ## 19. 测试策略
 
@@ -872,14 +864,17 @@ Principal、Session、Catalog、delegated assertion、Grant、ActionCall/Effect/
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
 - OpenConnector Adapter 运行固定来源、三项 GitHub Action、OAuth scope、repository allowlist、凭证隐藏和跨 scope 拒绝测试。
-- Connection delegated assertion 测试覆盖签名、issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数摘要、幂等键和 recovery generation；任何不匹配均 fail closed。
-- Connection ActionCall/Effect/Dispatch 测试覆盖 dispatch 前撤权、响应丢失、24 小时对账、管理员处理、七天 `UNRESOLVED` 和单 Token revoke，未知写操作不得自动重发。
+- 用户/应用 API 契约覆盖可信主体、凭证范围/失效、独立初始授权、跨主体及 Owner/责任人越权拒绝、SSE 撤权关闭；Runtime Grant 不能充当 Connection 凭据。
+- 直连关联契约验证真实调用与原执行的绑定、伪造关联拒绝和两侧独立查询权限；不以相同调用方字符串证明关联。
+- Connection 的直连身份、Grant、外部执行、幂等/未知结果、撤销和审计测试由其 HLD 验证矩阵维护；未知写操作不得自动重发。
 
 ### 19.3 集成测试
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - Conversation、Execution、outbox、双 Worker 和 Pod 重启的集成与故障注入测试执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
 - Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，停止或停用后 StatefulSet 缩容到 0、重启后从 0 恢复且保留原 PVC 与 Platform DB 状态，候选 Service/健康检查变更，候选提升任一步骤的 Worker 重启和部分切换恢复，升级失败后恢复旧 Digest、路由、渠道和平台历史，切换期间不出现双路由或失败候选继续接收流量，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
+- API 受理事务、同会话串行、双 Worker/取消竞态、等待容量/到期、服务重启与未知结果验证持久状态不丢失；凭证失效任务继续与主体撤权系统取消分别注入故障验证。
+- 审计事务失败、执行前意图保存失败、查询故障、Trace 采样/导出失败与事件重放分别验证，不能丢必要审计、伪造成功或重复计数。Eval 评分失败、版本变化、数据撤权/删除与用量缺失使用受控样本验证。
 - Identity、OCI Registry、模型端点、对象存储和企微边界提供可控 Fake；Fake 使用与正式 Contract 相同的 Schema，不维护第二套接口。
 - GitHub Adapter 使用专用测试账号和唯一受控 private 仓库完成 current-user、repository-read 和 create-PR；其他 Provider 不进入首个 Pilot。
 
@@ -889,7 +884,9 @@ Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
 - Owner、范围、组织变化和账号禁用；平台对话页、平台托管渠道和平台身份入口必须立即执行当前结果，确认撤权后平台中止仍可中止的活跃 Execution。
-- 四个标准模板的平台 Web、企微、模型切换、附件、Connection 和长任务恢复。
+- 四个标准模板的平台 Web、API 真实任务、企微、模型切换、附件、独立 Connection 和长任务恢复；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
+- 用户和应用分别 API 创建/启动/停止/重启、提交/查询/订阅/取消任务；无审批且初始授权和 Owner 归属正确，应用不继承责任人权限。审计 API 与基础管理页按条件查询，跨主体和两侧管理员越权拒绝。
+- 同一获授权固定集含回答和受控工具样本，以两组模型或配置真实运行；查看汇总/失败样本、规则/人工/模型评分与独立复核，修订后再跑并保留历史。线上反馈独立汇总，评分失败/缺失不算通过，Eval 内容及真实材料用途授权有负向验证。
 - 受控的自有身份样例验证匿名、伪造身份字段或在 Owner 身份体系中无权限的请求被 Agent 服务端拒绝，合法身份只能按该体系的权限使用；该入口不获得平台身份或撤权上下文。自有交互入口经平台 Auth Gateway 访问时不能绕过权限，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝，且两类入口的历史都不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；`self-managed` 的 capability 声明不能开放平台能力，Adapter 不从 Runtime 模型选项读取或保存凭证，平台只按 10.6 把 Owner env/Secret 作为不透明配置保存和注入，选项失效时不能静默改用其他模型。
 - Connection 独立 Web 的 LDAP 登录、GitHub OAuth、Grant 再确认、三项 Action、调用记录、管理员未知结果处理、换账号和撤销。
@@ -898,20 +895,22 @@ Playwright 覆盖：
 
 ### 19.5 负载与故障测试
 
-M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本，逐步增加：并发 Web 用户、同一 Agent 消息、SSE 连接和 Connection 调用。验收要求是消息有明确状态、不静默丢失、用户数据不串线，并获得当前环境的容量基线。
+M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本，逐步增加：并发 Web/API 主体、同一 Agent 的多 Conversation/任务、SSE 连接、Eval 工作项和 Connection 调用。验收要求是消息有明确状态、不静默丢失、用户数据不串线，等待和投递有界、采集故障可见、持续积压有告警，并获得当前环境的容量基线。
 
 ## 20. 前后端职责
 
 | 领域 | 前端交付 | 后端交付 |
 | --- | --- | --- |
-| 身份与权限 | 登录态、无权限页面、Owner/范围配置 | IdentityAdapter、IdentityContext、RBAC 和每次操作校验 |
-| Agent 生命周期 | 申请、审批、状态和操作入口 | 状态机、资源 Profile、outbox 和 Kubernetes 调谐 |
-| Agent 使用 | 对话时间线、SSE、停止、重生成、模型选择 | 会话存储、outbox、RuntimeHost/固定 Driver、事件保存和恢复 |
+| 身份与权限 | 登录态、Owner/范围、个人凭证与应用管理 | IdentityAdapter、可信用户/应用上下文、凭证/当前授权交集 |
+| Agent 生命周期 | Web 申请/审批、状态和操作入口 | API 直接创建与显式授权、状态机、Profile、outbox 和调谐 |
+| Agent 使用 | 对话/任务详情、SSE、停止、重生成、模型选择 | API 闭环、会话/Execution、有界 Dispatch、RuntimeHost/Driver、恢复 |
 | 附件 | 上传、预览、限制和下载 | 预签名地址、对象权限、元数据和 Agent 临时访问 |
-| Connection | 独立中文登录、连接、Grant、扩权确认、调用记录和管理员待处理页面 | LDAP Session、OAuth、Credential、Catalog、Grant、delegated verifier、Action 执行、恢复和审计 |
+| Connection | 独立中文登录、连接、Grant、扩权确认、调用记录和管理员待处理页面 | 独立用户/应用身份、OAuth、MCP/API、Credential、Grant、外部执行、恢复和审计 |
 | 企微渠道 | Owner 绑定配置和状态 | 回调校验、身份映射、Channel 会话键和消息持久化 |
 | 自有交互入口 | 入口、不可用与无权限状态 | Auth Gateway、Runtime Manifest、Service 和访问调谐 |
-| 管理与审计 | 审批、Provider/Action、共享 Connection 和审计页面 | 管理接口、审计事件、脱敏与跨系统关联 |
+| 管理与审计 | 平台审计查询页；Connection 管理在独立入口 | 持久事务审计、受控查询 API、真实调用关联 |
+| 运行观测 | 本主体执行阶段/失败详情；运维使用部署后端 | 实际模型/工具采集、日志/指标/Trace、去重与告警 |
+| Eval | 数据集、实验、逐例对比、复核与反馈 | 版本/用途授权、复用任务、规则/人工/模型评分、可比汇总 |
 
 前后端共同维护 `packages/contracts`，但后端是权限和数据结果的权威方。Web 从 OpenAPI 生成 Client，并使用同一 Schema 校验的 Mock/fixture 并行开发；后端通过 consumer contract 证明实现一致。
 
@@ -985,11 +984,12 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 本节只定义依赖顺序，不替代后续实施计划。
 
 1. **工程底座：** monorepo、wire contracts、单一 `platform-core`、用例级 Store ports、部署边界 Fake、数据库迁移、可观测性和 CI。
-2. **Agent 生命周期：** 申请审批、权限、OCI Digest、Secret 修订、Worker 调谐和状态展示。
-3. **Runtime 与 Web 对话：** Conversation/outbox、SSE、RuntimeHost、四个固定 Runtime Driver、Generic ACP 样例、附件和长任务恢复。
-4. **Connection 闭环：** 先合入 Connection 权威文档、wire contract 和 PostgreSQL Core/Store，再并行交付 LDAP Session、三项 GitHub Adapter、Catalog、Web/Grant、delegated verifier 和可靠 Effect，最后装配受监督 HCI runtime。
+2. **Agent 生命周期与 API 身份：** Web 申请审批、用户/应用与凭证、API 直接创建及显式授权、OCI Digest、Secret 修订、Worker 调谐和状态展示。
+3. **Runtime 与任务闭环：** Conversation/Execution/outbox、API 有界等待/取消、Web 行为、SSE、RuntimeHost/固定 Driver、附件和恢复，逐个验证实际模型/工具采集与必要审计。
+4. **Connection 独立直连：** 由 Connection 自身文档与实施计划交付身份、MCP/API、Grant、外部执行/恢复和审计，再验证平台实际执行与直连调用的独立授权关联；本文不重排其内部 DAG。
 5. **渠道与自定义 Agent：** 企微 Channel、Runtime Manifest、自有交互入口 Auth Gateway。
-6. **上线加固：** 审计、故障注入、隔离测试、负载基线和运维手册。
+6. **Eval 与查询入口：** 版本化数据集、实验/逐例任务、评分/复核/反馈、可比分析、审计查询 API 与页面、运行观测后端和告警。
+7. **上线加固：** 真实任务/评测、故障注入、权限/隐私隔离、负载基线和运维手册；审计持久化随业务切片交付，不留到最后补日志。
 
 ## 23. 关键风险与处理
 
@@ -999,7 +999,9 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 | 部署产品渗入开源领域边界 | Identity、OCI Registry、模型目录、对象存储和 Kubernetes 路由通过窄 Adapter 接入，核心只保存稳定 ID、准入结果和业务状态 |
 | Secret 外部服务成为强制依赖 | 项目使用随机 DEK、版本化 AEAD 和公钥封装；API 只能加密、Worker 独占解密私钥，候选修订通过可恢复两阶段协议激活 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游 Runtime 不直接暴露；只复用固定 allowlist Kernel，由 Connection Grant、repository policy 和跨用户攻击测试建立边界 |
-| 长任务跨进程和断线后状态丢失 | 所有业务事件先持久化；SSE 只负责传输，使用事件游标恢复 |
+| 长任务跨进程和断线后状态丢失 | 受理/等待/取消与原执行持久化，SSE 按游标恢复，未知结果不盲重放 |
+| 模型/工具采集与审计被混为尽力日志 | 真实操作边界采集；必要审计先持久化，遥测导出故障独立报告 |
+| Eval 分数掩盖缺失或数据越权 | 版本与可比覆盖可追溯，执行/评分失败分开，业务内容独立用途授权 |
 | 自定义镜像的入口或能力声明不真实 | 使用最小 OCI Runtime Manifest；创建和升级时验证健康检查与 ACP capability；无有效交互入口则拒绝 |
 | 原生 Runtime 的 Session 与事件语义不同 | 只维护四个固定 Adapter 和 Generic ACP；用统一 Conformance Suite 验证恢复、去重与并发，不建设动态协议矩阵 |
 | 平台与 Connection 无分布式事务 | 使用稳定 ID、幂等键、状态机和审计关联；停用与撤销在权威系统即时拒绝 |
@@ -1010,16 +1012,20 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 工程架构完成 M1 的最低标准：
 
 1. 两份 PRD 的上线验收场景均有对应模块、接口和自动化测试入口。
-2. 浏览器、Agent 和模型都不能伪造用户、Connection 或组织身份完成越权。
+2. 浏览器、API 调用方、Agent 和模型不能伪造用户/应用、Connection 或组织身份完成越权，Owner/责任人不能读取或取消他人任务。
 3. Agent 停止、重启、升级和平台进程重启后，配置、历史、附件引用和授权关系不丢失。
 4. Web 断线或离开页面不影响已提交长任务，返回后可以按游标恢复状态。
 5. Codex、Claude、OpenCode 和 Pi 通过统一 Runtime Conformance Suite；Generic ACP 自定义镜像无需新增 Adapter 即可使用平台入口。
 6. Pod 重启恢复原 Runtime Session；恢复失败时只有原 Conversation 保持不可用，不静默创建新 Session，其他 Conversation 和 Agent 服务保持正常。
 7. 自有交互入口只使用 `platform-worker` 发布的网络入口；自有身份入口由 Agent 服务端鉴权，平台身份入口不能绕过可信 IdentityContext 与 Agent 范围校验；其会话不进入平台历史。
-8. 首个受监督 GitHub Pilot 使用两个测试 Principal、两个专用账号和一个受控 private 仓库完成 OAuth、Grant、三项 Action、真实 PR、幂等、审计和撤销；Platform policy 和 Connection Grant 任一失败都拒绝调用，结果只适用于具名环境和固定镜像。
+8. 首个受监督 GitHub Pilot 使用两个测试 Principal、两个专用账号和一个受控 private 仓库完成 OAuth、Grant、三项 Action、真实 PR、幂等、审计和撤销；Connection 独立身份与 Grant 任一失败都拒绝调用，伪造关联不成立且两侧审计分别鉴权查询，结果只适用于具名环境和固定镜像。
 9. 负载与故障测试中，所有消息都有可解释状态，企微群聊会话按发送者隔离，不出现静默丢失、重复 Turn 和跨用户数据混用。
 10. Web、API、Worker、RuntimeHost 和 Delivery 只通过版本化 Contract 与窄 Port 汇合；架构测试阻止应用入口、Drizzle/Kubernetes 对象和部署产品类型进入 `platform-core` 或 wire contracts。
 11. Web/API 位置无关，只有 Kubernetes Workload Plane 中的 Worker 持有 namespace-scoped Kubernetes authority；部署在现代 GA API 上通过生命周期、安全和失败恢复验证。
+12. 用户/应用 API 无审批完成创建与初始授权、启动/停止/重启、任务受理/查询/订阅/取消；同会话串行、等待有界、幂等稳定，凭证失效与主体撤权各按产品规则生效。
+13. 四模板有真实模型/工具观测与任务关联，采集缺失和故障如实呈现；运行后端覆盖服务/任务/依赖并验证告警，恢复不重复计数。
+14. 审计 API 与基础管理页完整覆盖治理、执行和 Eval；必要审计与状态可靠保存，外部意图先记录，查询故障不显示空结果，记录不随 Trace 采样丢失。
+15. 固定集基线/候选真实对比，支持规则/人工/模型评分、逐例分析、复核和新版本再跑；分母/覆盖/评分故障及独立反馈可见，Eval 用途授权与数据生命周期有正负向验证。
 
 ## 25. 评审结论记录
 
