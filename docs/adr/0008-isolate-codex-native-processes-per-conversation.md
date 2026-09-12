@@ -11,14 +11,22 @@ profile 施加文件边界；具体约束由
 从可信 `agentId`/`conversationId`/`sessionGeneration` 派生，使路径不能被 wire 字段选择或穿越，并让恢复
 后的会话回到同一目录。
 
-Darwin 上不采用外层 `sandbox-exec`。pinned 版本在 macOS 通过 `/usr/bin/sandbox-exec` 执行工具，实测只要
-外层 profile 含任何具有约束力的规则，内层 `sandbox_apply` 即失败；那会让工具普遍不可用，正好构成本票
-禁止的假通过。改用原生权限 profile 后，Linux 经 Landlock、Darwin 经 Seatbelt 由同一份配置生效，边界与
-工具可用性同时成立，Linux 的 `setpriv` 启动准入探针保留不变。
+边界的施加方式按平台不同，这不是偏好而是两个实测约束的结果。
 
-profile 以 session flag 注入而不落盘：持久 `CODEX_HOME` 中出现配置或凭证文件仍然拒绝启动，配置来源也
-继续限定为 session flag。Conversation 根 `deny`、本 Conversation `home` 只读、`workspace` 可写，使模型工具
-既保有本人读写，又不能写入原生配置、skills 与历史。
+Darwin 上不能用外层 `sandbox-exec`：pinned 版本在 macOS 通过 `/usr/bin/sandbox-exec` 执行工具，实测只要
+外层 profile 含任何具有约束力的规则，内层 `sandbox_apply` 即失败；那会让工具普遍不可用，正好构成本票
+禁止的假通过。因此 Darwin 采用 pinned Codex 自身的权限 profile，以 session flag 注入而不落盘：持久
+`CODEX_HOME` 中出现配置或凭证文件仍然拒绝启动，配置来源也继续限定为 session flag。
+
+Linux 上不能用该权限 profile：pinned 版本明确拒绝把需要直接运行时强制的权限 profile 与
+`--use-legacy-landlock` 同时使用，`thread/start` 直接 fail closed。本仓库固定 legacy Landlock 后端并以
+`setpriv` ABI V5 探针做启动准入，因此改由该可信 `setpriv` 对整个原生进程施加 Landlock 边界，这也是本票
+最初为 Linux 授权的做法。Landlock 规则只能增加访问、深层规则无法收窄父规则，实测确认无法“只拒绝某个
+子树”，所以边界必须是 allowlist；兄弟 Conversation 目录只要不出现在 allowlist 中即不可达。Landlock
+规则集可叠加，pinned Codex 仍对工具子进程施加自身策略，与 Darwin 的 Seatbelt 无法嵌套不同。
+
+两侧都保持本人 workspace 可写、本人 `home` 只读，使模型工具既保有本人读写，又不能写入原生配置、
+skills 与历史。无法施加边界的平台拒绝启动原生进程，不存在无边界回退。
 
 准入改为按进程执行：每个原生进程独立验证 provenance 与受限配置，Driver 打开时不再预启动进程。代价是
 部署配置错误在首个 Turn 才暴露，收益是任一进程都不能借另一进程的准入结果获得信任。

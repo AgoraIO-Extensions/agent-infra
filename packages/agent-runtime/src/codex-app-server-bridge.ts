@@ -73,6 +73,27 @@ const conversationBoundaryDirectory = "conversations";
 const conversationPermissionProfileId = "agent_infra_conversation";
 const conversationKeyPattern = /^[a-f0-9]{64}$/;
 const loopbackProxyExclusions = "127.0.0.1,::1,localhost";
+// Every Landlock filesystem right the pinned ABI V5 admission requires.
+const landlockDataRights = [
+	"execute",
+	"write-file",
+	"read-file",
+	"read-dir",
+	"remove-dir",
+	"remove-file",
+	"make-char",
+	"make-dir",
+	"make-reg",
+	"make-sock",
+	"make-fifo",
+	"make-block",
+	"make-sym",
+	"refer",
+	"truncate",
+	"ioctl-dev",
+].join(",");
+const landlockProgramRights = "execute,read-file,read-dir";
+const landlockMetadataRights = "read-file,read-dir";
 
 /**
  * Stable native storage key for one Conversation generation. Derived from
@@ -513,8 +534,9 @@ async function removeIsolatedDirectory(directory: string) {
 }
 
 interface ConversationLaunchPolicy extends IsolatedLaunchPolicy {
-	// Native filesystem boundary the pinned permission profile denies.
+	// Native filesystem boundary the enforced policy excludes.
 	boundary: string;
+	root: string;
 	home: string;
 }
 
@@ -595,6 +617,7 @@ async function persistentLaunchPolicy(
 		return {
 			directory: workspace,
 			boundary,
+			root,
 			home,
 			environment: {
 				...isolated.environment,
@@ -609,11 +632,14 @@ async function persistentLaunchPolicy(
 }
 
 /**
- * Pinned Codex enforces this profile itself: Landlock on Linux and Seatbelt on
- * Darwin. Denying the shared boundary keeps every other Conversation's native
- * workspace and history unreadable, while the owning Conversation keeps a
- * writable workspace and read-only native home. Model tools therefore cannot
- * write native configuration, skills, or history.
+ * Darwin cannot wrap the native process in a further restricted Seatbelt
+ * profile: pinned Codex runs its own tools through `sandbox-exec`, and any
+ * enforcing outer profile makes the nested `sandbox_apply` fail, which would
+ * disable every tool instead of isolating Conversations. Pinned Codex therefore
+ * enforces this profile itself. Denying the shared boundary keeps every other
+ * Conversation's native workspace and history unreadable, while the owning
+ * Conversation keeps a writable workspace and a read-only native home, so model
+ * tools cannot write native configuration, skills, or history.
  */
 function conversationPermissionArguments(policy: ConversationLaunchPolicy) {
 	const filesystem = [
@@ -630,6 +656,56 @@ function conversationPermissionArguments(policy: ConversationLaunchPolicy) {
 		`permissions={${conversationPermissionProfileId}={extends=":workspace",filesystem={${filesystem}}}}`,
 		"--config",
 		`default_permissions=${JSON.stringify(conversationPermissionProfileId)}`,
+	];
+}
+
+async function existingDirectory(path: string) {
+	const metadata = await lstat(path).catch(() => undefined);
+	return metadata?.isDirectory() === true;
+}
+
+/**
+ * Linux keeps the pinned legacy Landlock backend, which refuses a permission
+ * profile requiring direct runtime enforcement. The deployment's trusted
+ * `setpriv` therefore applies the boundary to the whole native process instead.
+ * Landlock rules only ever add access, so an allowlist is the only way to
+ * exclude a sibling Conversation; Landlock rulesets stack, so pinned Codex still
+ * applies its own policy to tool children beneath this one.
+ */
+async function conversationLandlockArguments(
+	executable: string,
+	launchPath: string | undefined,
+	policy: ConversationLaunchPolicy,
+) {
+	const rules: string[] = [];
+	const allow = async (rights: string, path: string) => {
+		if (!(await existingDirectory(path))) return;
+		rules.push("--landlock-rule", `path-beneath:${rights}:${path}`);
+	};
+	// The pinned release and its bundled resources stay read-only.
+	await allow(landlockProgramRights, dirname(dirname(executable)));
+	for (const entry of (launchPath ?? "").split(delimiter)) {
+		if (entry) await allow(landlockProgramRights, entry);
+	}
+	for (const path of ["/bin", "/sbin", "/usr", "/lib", "/lib64"]) {
+		await allow(landlockProgramRights, path);
+	}
+	for (const path of ["/etc", "/proc", "/sys"]) {
+		await allow(landlockMetadataRights, path);
+	}
+	await allow(landlockDataRights, "/dev");
+	// Only this Conversation's durable directory and the ephemeral HOME/TMPDIR.
+	const ephemeral = policy.environment.TMPDIR;
+	if (ephemeral) await allow(landlockDataRights, ephemeral);
+	await allow(landlockDataRights, policy.root);
+	if (!rules.includes(`path-beneath:${landlockDataRights}:${policy.root}`)) {
+		throw unavailable();
+	}
+	return [
+		"--no-new-privs",
+		"--landlock-access",
+		`fs:${landlockDataRights}`,
+		...rules,
 	];
 }
 
@@ -851,6 +927,7 @@ export class CodexAppServerBridge {
 		const executable = await resolveExecutable(launchPath, "codex");
 		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
 		let nativeLaunchPolicy: ConversationLaunchPolicy;
+		let boundary: string[];
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
@@ -860,15 +937,39 @@ export class CodexAppServerBridge {
 				validated.conversationKey,
 				launchPolicy,
 			);
+			// A platform without an enforceable Conversation boundary never starts a
+			// native process; there is no unrestricted fallback.
+			if (platform === "linux") {
+				const helper = await resolveExecutable(launchPath, "setpriv");
+				boundary = [
+					helper,
+					...(await conversationLandlockArguments(
+						executable,
+						launchPath,
+						nativeLaunchPolicy,
+					)),
+					"--",
+				];
+			} else if (platform === "darwin") {
+				boundary = [];
+			} else {
+				throw new CodexAppServerBridgeError(
+					"CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
+					"Codex requires an enforceable Conversation filesystem boundary",
+				);
+			}
 		} catch (error) {
 			await removeIsolatedDirectory(launchPolicy.directory);
 			throw error;
 		}
+		const [command = executable, ...boundaryArguments] = boundary;
 		let process: ChildProcessWithoutNullStreams;
 		try {
 			process = spawn(
-				executable,
+				command,
 				[
+					...boundaryArguments,
+					...(boundary.length > 0 ? [executable] : []),
 					"app-server",
 					"--stdio",
 					"--strict-config",
@@ -880,12 +981,21 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
-					// Landlock enforces the native policy without namespace privileges.
-					// Admission above requires the full pinned filesystem capability set.
+					// The owning Conversation keeps a writable workspace on every
+					// platform; the boundary above keeps siblings unreachable. Pinned
+					// Codex refuses sandbox_mode beside a permissions profile, so each
+					// platform states it once.
 					...(platform === "linux"
-						? ["--config", "features.use_legacy_landlock=true"]
-						: []),
-					...conversationPermissionArguments(nativeLaunchPolicy),
+						? [
+								"--config",
+								'sandbox_mode="workspace-write"',
+								// Landlock enforces the native policy without namespace
+								// privileges. Admission above requires the full pinned
+								// filesystem capability set.
+								"--config",
+								"features.use_legacy_landlock=true",
+							]
+						: conversationPermissionArguments(nativeLaunchPolicy)),
 					...modelAccessArguments(validated.modelAccess),
 				],
 				{

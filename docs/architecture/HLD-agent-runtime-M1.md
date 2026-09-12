@@ -219,7 +219,7 @@ Codex Native Bridge 在 Linux 使用固定 Codex 版本的 legacy Landlock 后�
 
 ### 10.2 Codex 原生 Conversation 隔离
 
-Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录，文件边界由固定 Codex 版本自身的权限 profile 施加。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
+Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。文件边界在 Linux 由部署可信 `setpriv` 的 Landlock allowlist 施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加，无法施加边界的平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
 
 ## 11. 验证
 

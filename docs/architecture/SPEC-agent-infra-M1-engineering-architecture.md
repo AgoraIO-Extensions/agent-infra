@@ -540,12 +540,23 @@ Codex Driver 为每个 Conversation 代次维护一个独立的原生 `app-serve
 以 0700 创建并校验归属与权限位，持久目录中出现原生配置或凭证文件即拒绝启动。旧布局与丢失所属
 目录的 Session 保留原始文件与映射，相关原生操作 fail closed。
 
-文件边界由 pinned Codex 自身的权限 profile 施加（Linux 经 Landlock、Darwin 经 Seatbelt），以 session
-flag 注入且不落盘配置文件：Conversation 根 `deny`、本 Conversation `home` 只读、`workspace` 可写。
-因此模型工具不能读取、搜索、修改或引用其他 Conversation 的工作区与历史，也不能写入原生配置、
-skills 或 HOME；路径别名、符号链接与父目录穿越同样被拒绝。不在原生进程外再包一层平台沙箱：
-pinned 版本在 Darwin 用 `sandbox-exec` 执行工具，任何具有约束力的外层 profile 都会使内层
-`sandbox_apply` 失败，从而让工具普遍不可用并伪造出“隔离通过”。
+文件边界按平台施加，两种方式都限定到本 Conversation 目录，且不落盘配置文件。任一平台无法施加
+边界时拒绝启动原生进程，不回退到无边界模式。
+
+Linux 保留 pinned legacy Landlock 后端，而该后端拒绝需要直接运行时强制的权限 profile，因此由部署
+提供的可信 `setpriv` 对整个原生进程施加 Landlock 边界。Landlock 规则只能增加访问，深层规则无法
+收窄父规则，所以必须使用 allowlist：只允许 pinned 发行版及其资源、系统程序与库目录只读，`/etc`、
+`/proc`、`/sys` 只读元数据，`/dev` 可读写，以及本次临时 HOME/TMPDIR 与本 Conversation 目录可读写；
+兄弟 Conversation 目录与共享边界目录都不在 allowlist 内。Landlock 规则集可叠加，pinned Codex 仍对
+工具子进程施加自身策略。Linux 另以 `sandbox_mode="workspace-write"` 保持本人 workspace 可写。
+
+Darwin 由 pinned Codex 自身的权限 profile 施加，以 session flag 注入：Conversation 根 `deny`、
+本 Conversation `home` 只读、`workspace` 可写。Darwin 不在原生进程外再包一层平台沙箱：pinned 版本
+在 Darwin 用 `sandbox-exec` 执行工具，任何具有约束力的外层 profile 都会使内层 `sandbox_apply` 失败，
+从而让工具普遍不可用并伪造出“隔离通过”。
+
+两条路径的效果一致：模型工具不能读取、搜索、修改或引用其他 Conversation 的工作区与历史，也不能
+写入原生配置、skills 或 HOME；路径别名、符号链接与父目录穿越同样被拒绝。
 
 平台自有模型传输始终是 loopback 入口，原生进程必须拒绝为 loopback 走代理，避免宿主代理配置
 拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。

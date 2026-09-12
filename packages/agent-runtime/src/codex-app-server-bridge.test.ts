@@ -140,18 +140,27 @@ if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes
 	);
 	await chmod(executable, 0o755);
 	const sandboxCapturePath = join(directory, "sandbox-admission.json");
+	const boundaryCapturePath = join(directory, "sandbox-boundary.json");
 	const helper = join(directory, "setpriv");
 	await writeFile(
 		helper,
 		`#!/usr/bin/env node
 const { writeFileSync } = require("node:fs");
-writeFileSync(${JSON.stringify(sandboxCapturePath)}, JSON.stringify({
-  args: process.argv.slice(2),
+const args = process.argv.slice(2);
+const separator = args.indexOf("--");
+const command = separator < 0 ? [] : args.slice(separator + 1);
+const admission = command[0] === "/bin/true";
+writeFileSync(admission ? ${JSON.stringify(sandboxCapturePath)} : ${JSON.stringify(boundaryCapturePath)}, JSON.stringify({
+  args,
   pid: process.pid,
   cwd: process.cwd(),
   environmentKeys: Object.keys(process.env).sort(),
 }));
-if (${JSON.stringify(mode)} === "sandbox-hangs") {
+if (!admission) {
+  // The real helper execs its command, so the launch must stay one process.
+  process.argv = [process.argv[0], command[0], ...command.slice(1)];
+  require(command[0]);
+} else if (${JSON.stringify(mode)} === "sandbox-hangs") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1_000);
 } else process.exit(${JSON.stringify(mode)} === "sandbox-unsupported" ? 127 : 0);
@@ -159,7 +168,7 @@ if (${JSON.stringify(mode)} === "sandbox-hangs") {
 	);
 	await chmod(helper, 0o755);
 	process.env.PATH = `${directory}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
-	return { capturePath, sandboxCapturePath };
+	return { capturePath, sandboxCapturePath, boundaryCapturePath };
 }
 
 function options(overrides: Record<string, unknown> = {}) {
@@ -184,33 +193,44 @@ function conversationRoot(dataDirectory: string) {
 	return join(dataDirectory, "conversations", testConversationKey);
 }
 
-// Pinned Codex enforces this profile itself; only the parent of the data root
-// is symlink-resolved, matching the bridge.
-async function expectedPermissionArguments(
+// Only the parent of the data root is symlink-resolved, matching the bridge.
+async function conversationRootPath(
 	dataDirectory: string,
 	conversationKey = testConversationKey,
 ) {
-	const root = join(
+	return join(
 		await realpath(dirname(dataDirectory)),
 		basename(dataDirectory),
+		"conversations",
+		conversationKey,
 	);
-	const boundary = join(root, "conversations");
-	const conversation = join(boundary, conversationKey);
-	const filesystem = [
-		[boundary, "deny"],
-		[join(conversation, "home"), "read"],
-		[join(conversation, "workspace"), "write"],
-	]
-		.map(
-			([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`,
-		)
-		.join(",");
-	return [
-		"--config",
-		`permissions={agent_infra_conversation={extends=":workspace",filesystem={${filesystem}}}}`,
-		"--config",
-		'default_permissions="agent_infra_conversation"',
-	];
+}
+
+const landlockDataRights = [
+	"execute",
+	"write-file",
+	"read-file",
+	"read-dir",
+	"remove-dir",
+	"remove-file",
+	"make-char",
+	"make-dir",
+	"make-reg",
+	"make-sock",
+	"make-fifo",
+	"make-block",
+	"make-sym",
+	"refer",
+	"truncate",
+	"ioctl-dev",
+].join(",");
+
+async function boundaryCapture(path: string) {
+	return JSON.parse(await readFile(path, "utf8")) as {
+		args: string[];
+		cwd: string;
+		environmentKeys: string[];
+	};
 }
 
 function createStalledBridge(isolatedDirectory: string) {
@@ -528,12 +548,16 @@ describe.sequential("Codex app-server v2 bridge", () => {
 	);
 
 	it("separates native storage and the enforced boundary per Conversation", async () => {
-		const { capturePath } = await installFakeCodex("echo");
+		const { capturePath, boundaryCapturePath } = await installFakeCodex("echo");
 		const directory = mkdtempSync(join(tmpdir(), "agent-runtime-codex-pvc-"));
 		directories.push(directory);
 		const dataDirectory = join(directory, "native");
 		const keys = [`${"1".repeat(63)}b`, `${"2".repeat(63)}c`];
-		const launches: { cwd: string; codexHome: string; args: string[] }[] = [];
+		const launches: {
+			cwd: string;
+			codexHome: string;
+			boundary: string[];
+		}[] = [];
 		for (const conversationKey of keys) {
 			const bridge = await CodexAppServerBridge.open(
 				options({ dataDirectory, conversationKey }),
@@ -546,7 +570,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			launches.push({
 				cwd: server.cwd,
 				codexHome: server.environment.codexHome,
-				args: server.args,
+				boundary: (await boundaryCapture(boundaryCapturePath)).args,
 			});
 			await rm(capturePath, { force: true });
 		}
@@ -555,26 +579,29 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		// Distinct Conversations never share a workspace or a native home.
 		expect(first.cwd).not.toBe(second.cwd);
 		expect(first.codexHome).not.toBe(second.codexHome);
-		const root = join(
-			await realpath(dirname(dataDirectory)),
-			basename(dataDirectory),
-		);
-		const boundary = join(root, "conversations");
 		for (const [index, launch] of launches.entries()) {
 			const key = keys[index];
 			if (!key) throw new Error("Missing synthetic key");
-			expect(launch.cwd).toBe(join(boundary, key, "workspace"));
-			expect(launch.codexHome).toBe(join(boundary, key, "home"));
-			// The shared boundary is denied, so a sibling stays unreachable even
-			// though both native processes run as the same runtime user.
-			expect(launch.args).toEqual(
-				expect.arrayContaining(
-					await expectedPermissionArguments(dataDirectory, key),
-				),
+			const conversation = await conversationRootPath(dataDirectory, key);
+			expect(launch.cwd).toBe(join(conversation, "workspace"));
+			expect(launch.codexHome).toBe(join(conversation, "home"));
+			// Landlock rules only add access, so the allowlist names this
+			// Conversation and never the shared boundary or a sibling.
+			expect(launch.boundary).toEqual(
+				expect.arrayContaining([
+					"--no-new-privs",
+					"--landlock-access",
+					`fs:${landlockDataRights}`,
+					"--landlock-rule",
+					`path-beneath:${landlockDataRights}:${conversation}`,
+				]),
+			);
+			expect(launch.boundary).not.toContain(
+				`path-beneath:${landlockDataRights}:${dirname(conversation)}`,
 			);
 			const other = keys[index === 0 ? 1 : 0];
 			if (!other) throw new Error("Missing synthetic key");
-			expect(launch.args.some((argument) => argument.includes(other))).toBe(
+			expect(launch.boundary.some((argument) => argument.includes(other))).toBe(
 				false,
 			);
 		}
@@ -802,8 +829,9 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				"--config",
 				"features.plugins=false",
 				"--config",
+				'sandbox_mode="workspace-write"',
+				"--config",
 				"features.use_legacy_landlock=true",
-				...(await expectedPermissionArguments(configuration.dataDirectory)),
 			]);
 		} finally {
 			await bridge.close();
@@ -855,8 +883,9 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			"--config",
 			"features.plugins=false",
 			"--config",
+			'sandbox_mode="workspace-write"',
+			"--config",
 			"features.use_legacy_landlock=true",
-			...(await expectedPermissionArguments(configuration.dataDirectory)),
 		]);
 		expect(captured.args).not.toContain("--session-source");
 		expect(bridge.provenance()).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
