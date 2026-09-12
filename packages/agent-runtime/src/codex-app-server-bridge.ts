@@ -686,10 +686,13 @@ async function conversationLandlockArguments(
 	};
 	// The pinned release and its bundled resources stay read-only.
 	await allow(landlockProgramRights, dirname(dirname(executable)));
-	// TEMPORARY #404 diagnostic: widen reads to the whole filesystem so CI can
-	// tell a missing allowlist entry apart from a failing helper invocation.
-	// This weakens cross-Conversation read isolation and must be narrowed again.
-	await allow(landlockProgramRights, "/");
+	// TEMPORARY #404 diagnostic, scoped to the pinned native suite: widen reads to
+	// the whole filesystem so CI can tell a missing allowlist entry apart from a
+	// failing helper invocation. This weakens cross-Conversation read isolation
+	// and must be removed once the reason is known.
+	if (env.AGENT_INFRA_CODEX_NATIVE_TEST === "1") {
+		await allow(landlockProgramRights, "/");
+	}
 	for (const entry of (launchPath ?? "").split(delimiter)) {
 		if (entry) await allow(landlockProgramRights, entry);
 	}
