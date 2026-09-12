@@ -9,6 +9,13 @@ import {
 } from "@agent-infra/contracts/workload";
 import type { ImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
+	type ModelAccessValidatorV1,
+	type ModelCatalogAdapterV1,
+	ModelConfigurationErrorV1,
+	projectRuntimeModelConfigurationV1,
+	validateRuntimeModelProjectionV1,
+} from "@agent-infra/model-catalog";
+import {
 	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
 	immutableSecretNameV1,
@@ -35,7 +42,10 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly registry: ImageRegistryAdapterV1;
 	readonly admissionPolicyRef: string;
 	readonly registrySubjectRef: string;
+	/** Workload-only decryptor supports Store-authorized current and active-origin records. */
 	readonly decryptor: SecretActivationDecryptorPortV1;
+	readonly modelCatalog?: ModelCatalogAdapterV1;
+	readonly modelAccess?: ModelAccessValidatorV1;
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -239,10 +249,18 @@ export function createWorkloadRuntimeV1(
 	>();
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
+		state?: WorkloadReconciliationStateV1,
 	) {
 		return createKubernetesRuntimeAdapterV1({
 			client: options.client,
 			policy: options.policy,
+			modelProjection:
+				state?.candidate.configuration.source.kind === "standard"
+					? validateRuntimeModelProjectionV1(
+							state.candidate.modelProjection,
+							state.candidate.configuration,
+						)
+					: undefined,
 			async probe({ desired, serviceOrigin }) {
 				const baseUrl = serviceOrigin;
 				const response = await fetcher(`${baseUrl}${desired.health.path}`, {
@@ -484,6 +502,63 @@ export function createWorkloadRuntimeV1(
 				throw new WorkloadPreflightRejectedErrorV1();
 			const secretBindings = bindingsFor(state, input);
 			validateSecretDataKeys(configuration, secretBindings);
+			let modelProjection: unknown;
+			if (configuration.source.kind === "standard") {
+				if (!options.modelCatalog || !options.modelAccess)
+					throw new WorkloadPreflightRejectedErrorV1();
+				try {
+					modelProjection = await projectRuntimeModelConfigurationV1({
+						configuration,
+						catalog: options.modelCatalog,
+						access: options.modelAccess,
+						signal: AbortSignal.timeout(60_000),
+						async credentialFor(option) {
+							const binding = secretBindings.find(
+								({ record }) => record.name === `model:${option.optionId}`,
+							);
+							if (!binding) throw new WorkloadPreflightRejectedErrorV1();
+							const { record } = binding;
+							const decrypted = await options.decryptor.decrypt({
+								encryptedRecord: record,
+								traceId: input.traceId,
+							});
+							if (decrypted.outcome !== "decrypted") {
+								await input.secrets?.auditDecryption(
+									record.secretId,
+									record.crypto.wrappingKeyVersion,
+									"rejected",
+								);
+								throw new WorkloadPreflightRejectedErrorV1();
+							}
+							try {
+								await input.secrets?.auditDecryption(
+									record.secretId,
+									record.crypto.wrappingKeyVersion,
+									"succeeded",
+								);
+							} catch {
+								decrypted.plaintext.fill(0);
+								throw new WorkloadPreflightRejectedErrorV1();
+							}
+							const ref = recordReference(record);
+							return {
+								reference: {
+									name: ref.name,
+									secretId: ref.secretId,
+									secretVersion: ref.secretVersion,
+									configRevision: ref.configRevision,
+								},
+								key: secretDataKey(record.name),
+								plaintext: decrypted.plaintext,
+							};
+						},
+					});
+				} catch (error) {
+					if (error instanceof ModelConfigurationErrorV1 && error.retryable)
+						throw new Error("Workload model configuration is unavailable");
+					throw new WorkloadPreflightRejectedErrorV1();
+				}
+			}
 			const name = workloadResourceNameV1(state.agentId);
 			const exposure =
 				mode === "platform-adapter"
@@ -557,7 +632,11 @@ export function createWorkloadRuntimeV1(
 					desiredState: "running",
 					replicas: 1,
 				});
-				return { configuration, deployment };
+				return {
+					configuration,
+					deployment,
+					...(modelProjection ? { modelProjection } : {}),
+				};
 			} catch {
 				throw new WorkloadPreflightRejectedErrorV1();
 			}
@@ -576,12 +655,13 @@ export function createWorkloadRuntimeV1(
 		},
 		async apply(state, stopped, input) {
 			if (stopped)
-				return adapter.scaleDownAgent(
+				return createAdapter().scaleDownAgent(
 					state.agentId,
 					state.revision,
 					state.fence,
 				);
 			const workload = desired(state);
+			const adapter = createAdapter(undefined, state);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
 				readonly activationFence: NonNullable<
@@ -666,7 +746,7 @@ export function createWorkloadRuntimeV1(
 			let capabilities: Record<string, boolean> | undefined;
 			const observation = createAdapter((value) => {
 				capabilities = value;
-			});
+			}, state);
 			const health = await observation.observe(
 				desired(state),
 				state.identity,
@@ -678,6 +758,7 @@ export function createWorkloadRuntimeV1(
 			return health;
 		},
 		async activateSecrets(state, input) {
+			const adapter = createAdapter(undefined, state);
 			const bindings = bindingsFor(state, input);
 			if (!bindings.length) return "active";
 			if (!input.secrets || !state.identity) return "failed";
@@ -757,6 +838,7 @@ export function createWorkloadRuntimeV1(
 			return "active";
 		},
 		async promote(state) {
+			const adapter = createAdapter(undefined, state);
 			if (!state.identity) throw new Error();
 			if (
 				state.phase === "promoting" &&
@@ -781,6 +863,7 @@ export function createWorkloadRuntimeV1(
 					},
 				},
 				routeSelectorMode(state),
+				workload,
 			);
 			if (result.status !== "completed")
 				throw new Error("Workload route is unavailable");

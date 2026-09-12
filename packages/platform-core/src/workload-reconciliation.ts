@@ -30,6 +30,8 @@ export interface WorkloadVersionV1 {
 	readonly configuration: AgentConfigurationRecordV1;
 	/** Validated, credential-free deployment contract; never a Kubernetes object. */
 	readonly deployment: unknown;
+	/** Private Worker projection, persisted with candidate/verified; never public desired state. */
+	readonly modelProjection?: unknown;
 }
 
 export interface WorkloadReconciliationStateV1 {

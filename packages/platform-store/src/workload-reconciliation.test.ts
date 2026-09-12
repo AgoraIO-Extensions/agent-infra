@@ -6,6 +6,10 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
+	createDeploymentModelCatalogAdapterV1,
+	createFakeModelAccessValidatorV1,
+} from "@agent-infra/model-catalog";
+import {
 	createAgentManagementV1,
 	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
@@ -13,7 +17,10 @@ import {
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
-import { createSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
+import {
+	createSecretKeyringDecryptorV1,
+	createWorkloadSecretKeyringDecryptorV1,
+} from "@agent-infra/secret-store/worker";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -35,6 +42,7 @@ import {
 import { WorkloadKubernetesError } from "../../../apps/platform-worker/src/kubernetes-client.js";
 import { createKubernetesRuntimeAdapterV1 } from "../../../apps/platform-worker/src/kubernetes-runtime-adapter.js";
 import { createWorkloadRuntimeV1 } from "../../../apps/platform-worker/src/workload-runtime.js";
+import { catalogFixture } from "../../model-catalog/src/catalog.fixture.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import {
 	PostgresAgentManagementTransactionV1,
@@ -176,6 +184,7 @@ function secretCryptoFixture() {
 	return {
 		encryptor: createSecretEncryptorV1({ encryptionKeys }),
 		decryptor: createSecretKeyringDecryptorV1({ keys }),
+		workloadDecryptor: createWorkloadSecretKeyringDecryptorV1({ keys }),
 	};
 }
 
@@ -196,7 +205,7 @@ async function configureSecretReference(
 		secrets: [{ ...reference, isSet: true }],
 	};
 	if (revision === 1) {
-		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration)} where agent_id = 'agent-a' and revision = 1`;
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id = 'agent-a' and revision = 1`;
 		return;
 	}
 	await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) select 'agent-a', ${revision}, source_reference, ${sql.json(configuration)}, now() from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
@@ -1389,6 +1398,215 @@ describe("PostgreSQL Workload steps", () => {
 			await expectResolverRejection();
 		},
 	);
+	it("persists model projections across Workers, activates atomically and retains active models after candidate rejection", async () => {
+		const crypto = secretCryptoFixture();
+		const api = fakeKubernetesApi();
+		const catalog = catalogFixture();
+		const catalogEndpoint = catalog.endpoints[0];
+		if (!catalogEndpoint) throw new Error();
+		catalog.endpoints.push({
+			...catalogEndpoint,
+			endpointId: "endpoint-b",
+			baseUrl: "https://alternate.example.test/private/v1",
+			origin: "https://alternate.example.test",
+		});
+		const modelOptions = ["a", "b"].map((id) => ({
+			optionId: `option-${id}`,
+			endpointId: `endpoint-${id}`,
+			modelId: "model-a",
+			reasoningLevels: ["medium"],
+			credential: { secretId: `credential-${id}`, version: 1, isSet: true },
+		}));
+		const configuration = {
+			...structuredClone(agentConfigurationConformanceRecordV1),
+			agentId: "agent-a",
+			revision: 1,
+			secrets: [],
+			environment: [],
+			source: {
+				kind: "standard",
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				admissionRevision: "admission-a",
+				allowedEnvironmentKeys: [],
+				allowedSecretKeys: [],
+				platformManagedKeys: [],
+				connectionEnabled: false,
+			},
+			modelConfiguration: {
+				catalogRevision: "catalog-a",
+				options: modelOptions,
+				defaultOptionId: "option-a",
+				defaultReasoningLevel: "medium",
+			},
+		};
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id = 'agent-a' and revision = 1`;
+		for (const option of modelOptions)
+			await insertSecretRecord(
+				crypto.encryptor.encrypt({
+					schemaVersion: 1,
+					secretId: option.credential.secretId,
+					ownerType: "agent-owner",
+					ownerId: "owner-a",
+					agentId: "agent-a",
+					name: `model:${option.optionId}`,
+					secretVersion: 1,
+					configRevision: 1,
+					plaintext: `synthetic-${option.optionId}-credential`,
+					occurredAt: "2026-09-07T00:00:00Z",
+				}),
+			);
+		const buffers: Uint8Array[] = [];
+		let failNextProbe = false;
+		const options = {
+			workerId: "worker-a",
+			client: api.client,
+			policy: workloadTestPolicy,
+			registry: workloadRegistryFixture({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: {},
+			}),
+			admissionPolicyRef: "policy-a",
+			registrySubjectRef: "subject-a",
+			modelCatalog: createDeploymentModelCatalogAdapterV1({
+				load: async () => catalog,
+			}),
+			modelAccess: createFakeModelAccessValidatorV1(
+				modelOptions.map((option) => ({
+					endpointId: option.endpointId,
+					modelId: option.modelId,
+					credential: `synthetic-${option.optionId}-credential`,
+					reasoningLevels: option.reasoningLevels,
+				})),
+			),
+			decryptor: {
+				async decrypt(
+					input: Parameters<typeof crypto.workloadDecryptor.decrypt>[0],
+				) {
+					const result = await crypto.workloadDecryptor.decrypt(input);
+					if (result.outcome === "decrypted") buffers.push(result.plaintext);
+					return result;
+				},
+			},
+			fetch: (async () => new Response("ok")) as typeof fetch,
+			probeRuntime: async () => {
+				const core: "passed" | "failed" = failNextProbe ? "failed" : "passed";
+				failNextProbe = false;
+				return { core, capabilities: {} };
+			},
+		};
+		async function advance(times: number) {
+			for (let i = 0; i < times; i++)
+				await createWorkloadReconciliationV1({
+					store: i % 2 ? first : second,
+					runtime: createWorkloadRuntimeV1(options),
+				}).tick(`worker-${i % 2}`);
+		}
+		api.failAfter(2);
+		await advance(16);
+		const state = async () => {
+			const row = (
+				await sql`select state from platform.workload_reconciliations`
+			)[0];
+			if (!row) throw new Error();
+			return row.state as WorkloadReconciliationStateV1;
+		};
+		const ready = await state();
+		expect(ready.phase).toBe("ready");
+		expect(ready.verified?.modelProjection).toEqual(
+			ready.candidate.modelProjection,
+		);
+		expect(
+			(
+				await sql`select lifecycle_state from platform.secret_records order by secret_id`
+			).map((row) => row.lifecycle_state),
+		).toEqual(["active", "active"]);
+		expect(buffers.every((buffer) => buffer.every((byte) => byte === 0))).toBe(
+			true,
+		);
+		const name = validateAgentWorkloadDesiredV1(ready.candidate.deployment)
+			.service.name;
+		const projection = ready.candidate.modelProjection;
+		const secret = [...api.resources.values()].find(
+			(resource) =>
+				resource.kind === "Secret" &&
+				resource.metadata?.name?.startsWith("model-config-"),
+		);
+		const modelSecretName = secret?.metadata?.name;
+		if (!modelSecretName) throw new Error();
+		api.resources.delete(`Secret/${modelSecretName}`);
+		await advance(1);
+		expect(
+			(
+				await api.client.read<{
+					kind: "Service";
+					spec?: { selector?: Record<string, string> };
+				}>("Service", name)
+			)?.spec?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+		await advance(12);
+		expect((await state()).phase).toBe("ready");
+		expect((await state()).candidate.modelProjection).toEqual(projection);
+		expect(api.resources.has(`Secret/${modelSecretName}`)).toBe(true);
+		const revisedConfiguration = {
+			...configuration,
+			revision: 2,
+			modelConfiguration: {
+				...configuration.modelConfiguration,
+				defaultOptionId: "option-b",
+			},
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${configuration.source.imageDigest}, ${sql.json(revisedConfiguration as unknown as postgres.JSONValue)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+		failNextProbe = true;
+		await advance(16);
+		expect((await state()).phase).toBe("ready");
+		expect((await state()).rollback).toBe(true);
+		expect((await state()).verified?.configuration.revision).toBe(1);
+		expect((await state()).candidate.modelProjection).toEqual(projection);
+		const rejectedConfiguration = {
+			...configuration,
+			revision: 3,
+			modelConfiguration: {
+				...configuration.modelConfiguration,
+				options: modelOptions.map((option, index) =>
+					index === 1 ? { ...option, modelId: "forbidden-model" } : option,
+				),
+			},
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 3, ${configuration.source.imageDigest}, ${sql.json(rejectedConfiguration as unknown as postgres.JSONValue)}, now())`;
+		await sql`update platform.agents set current_configuration_revision = 3 where id = 'agent-a'`;
+		const writes = api.writes.length;
+		await advance(4);
+		expect((await state()).phase).toBe("rejected");
+		expect((await state()).verified?.configuration.revision).toBe(1);
+		expect((await state()).candidate.modelProjection).toEqual(projection);
+		expect(api.writes).toHaveLength(writes);
+		const audits = JSON.stringify(
+			await sql`select action, details from platform.audit_events`,
+		);
+		const annotations = JSON.stringify(
+			[...api.resources.values()].map(
+				(resource) => resource.metadata?.annotations,
+			),
+		);
+		for (const value of [
+			"synthetic-option-a-credential",
+			"synthetic-option-b-credential",
+			"models.example.test",
+			"alternate.example.test",
+		]) {
+			expect(audits).not.toContain(value);
+			expect(annotations).not.toContain(value);
+		}
+		expect(
+			JSON.stringify(await sql`select record from platform.secret_records`),
+		).not.toContain("synthetic-option-a-credential");
+	});
 	it("runs A-to-B, rejects C, recovers each step on another Worker and retains one PVC", async () => {
 		const api = fakeKubernetesApi();
 		const registry = workloadRegistryFixture();

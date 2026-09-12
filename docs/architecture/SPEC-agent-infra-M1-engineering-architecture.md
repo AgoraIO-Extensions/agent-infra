@@ -458,6 +458,33 @@ StatefulSet 的逐 Secret activation-fence 旁持久保存实际 Secret UID；�
 - Platform 不代理模型流量，也不负责供应商路由、成本、预算、配额或故障切换。Agent Pod 只获得本 Agent 当前 active credential；endpoint、认证、模型、额度和 capability 错误映射为稳定、脱敏且可操作的产品错误。
 - 自定义 Agent 的模型配置属于镜像内部；通过 ACP 探测到模型选择能力时，平台入口读取 Runtime 当前提供的选项和默认项并转发使用者选择，不配置或读取其 Base URL 与凭证。提交 Turn 前必须确认选项仍有效，不能在选项失效时静默改用其他模型。
 
+部署 Workload options 通过 `packages/model-catalog` 的
+`createDeploymentModelCatalogAdapterV1({ load })` 注入目录，通过
+`createResponsesModelAccessValidatorV1()` 注入访问验证。目录快照必须带
+`schemaVersion: 1`、精确 `revision` 和毫秒时间戳 `validUntil`；每个端点带
+`endpointId`、精确 `baseUrl`/`origin`、`openai-responses-v1` profile、TLS 与禁止重定向策略、
+streaming/tool/reasoning policy、可选 `allowedModels` 和可用状态。`allowedModels: null`
+表示目录不额外限制模型名单，仍须验证 Owner 指定的模型。未知字段、缺失、移除、过期、
+修订不匹配和不可用结果均返回 `MODEL_CONFIGURATION_UNAVAILABLE`，不回传原始异常。
+
+Worker 在 preflight 对每个 option 独立可信解密并审计，通过有截止时间的合成 Responses
+请求验证 credential、模型、每个 reasoning 档位、流式完成和 function call；探测不使用会话内容，
+不执行工具，设置 `store: false`，整个投影最多 60 秒，每次响应最多 1 MiB。
+部署应计入这些配置验证请求的额度。Runtime Driver 继续负责 pinned native profile 验证。
+任何选项失败都不物化候选 Workload；临时解密 buffer 在验证后清零。
+Workload 部署使用 Worker-only `createWorkloadSecretKeyringDecryptorV1`，允许解密 Store
+已确认的 current/active-origin 记录；仍验证完整记录与加密 AAD，不改变 Secret 状态。
+独立 Secret 激活入口继续使用拒绝 active 记录的 `createSecretKeyringDecryptorV1`。
+
+通过验证的投影及 SHA-256 指纹与 candidate/verified 一起保存在 Worker 的持久调谐状态，
+不进入公开 desired contract。Runtime V2 JSON 写入独立 immutable 配置 Secret，每个 option
+通过显式 `secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`，配置 JSON 同样通过
+`secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CONFIG`；模型 credential 不再通过 `envFrom`
+导入。Owner 的普通模型环境变量不参与 Runtime V2 选择，平台保留键仍拒绝。
+annotation 仅保存模型投影指纹；观察和路由提升从 Worker 持久投影校验配置 Secret、Pod
+变量、引用和已有 Workload/Secret fence，不从 live annotation 恢复 endpoint。
+失败候选复用既有回滚流程及 verified 投影，版本化配置 Secret 按回滚保留策略保留。
+
 ### 10.8 Codex 原生模型传输边界
 
 Codex Driver 在 Agent Pod 内管理一个仅绑定 loopback 的模型传输入口，将原生模型请求转发到
