@@ -681,6 +681,10 @@ async function conversationLandlockArguments(
 ) {
 	const rules: string[] = [];
 	const allow = async (rights: string, path: string) => {
+		// The helper resolves rule paths in the native process working directory,
+		// so a relative entry would either fail the launch or name another
+		// directory entirely.
+		if (!isAbsolute(path) || resolve(path) !== path) return;
 		if (!(await existingDirectory(path))) return;
 		rules.push("--landlock-rule", `path-beneath:${rights}:${path}`);
 	};

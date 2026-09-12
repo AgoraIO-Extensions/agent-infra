@@ -13,7 +13,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -524,6 +524,28 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			});
 		},
 	);
+
+	it("never turns a relative launch PATH entry into a boundary rule", async () => {
+		const { capturePath, boundaryCapturePath } = await installFakeCodex("echo");
+		// A tool runner can inject a relative entry, and the helper would resolve
+		// it in the native working directory instead of this process directory.
+		process.env.PATH = `./node_modules/.bin${delimiter}${process.env.PATH ?? ""}`;
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		await bridge.close();
+		await readCaptures(capturePath, 3);
+		const boundary = await boundaryCapture(boundaryCapturePath);
+		expect(
+			boundary.args.some((argument) => argument.includes("./node_modules")),
+		).toBe(false);
+		expect(
+			boundary.args.every(
+				(argument) =>
+					!argument.startsWith("path-beneath:") ||
+					isAbsolute(argument.slice(argument.lastIndexOf(":") + 1)),
+			),
+		).toBe(true);
+	});
 
 	it.each([
 		"",
