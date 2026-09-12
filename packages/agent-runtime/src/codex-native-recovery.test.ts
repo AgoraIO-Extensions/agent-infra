@@ -33,6 +33,7 @@ import { RuntimeHost } from "./runtime-host.js";
 const directories: string[] = [];
 const closers: (() => Promise<unknown>)[] = [];
 const enabled = process.env.AGENT_INFRA_CODEX_NATIVE_TEST === "1";
+const nativeStderrName = "synthetic-native-stderr.log";
 
 interface NativeResponses {
 	initialize: unknown;
@@ -260,7 +261,7 @@ async function loopbackResponsesProvider(
 	];
 	await writeFile(
 		join(bin, "codex"),
-		`#!/bin/sh\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")}\n`,
+		`#!/bin/sh\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")} 2>>"$PWD/${nativeStderrName}"\n`,
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
@@ -322,8 +323,41 @@ function driverOptions(path: string) {
 	};
 }
 
+// The bridge never exposes native stderr, so a launch failure would otherwise
+// carry no reason at all on a host where the sandbox behaves differently.
+async function nativeStderr(path: string) {
+	const roots = [`${path}.native`, dirname(path)];
+	const found: string[] = [];
+	for (const root of roots) {
+		const stack = [root];
+		while (stack.length > 0 && found.length < 4) {
+			const current = stack.pop();
+			if (!current) break;
+			const entries = await readdir(current, { withFileTypes: true }).catch(
+				() => [],
+			);
+			for (const entry of entries) {
+				const full = join(current, entry.name);
+				if (entry.isDirectory()) stack.push(full);
+				else if (entry.name === nativeStderrName) {
+					found.push(await readFile(full, "utf8").catch(() => ""));
+				}
+			}
+		}
+	}
+	const text = found.join("\n").trim();
+	return text.length > 0 ? `; native stderr: ${text.slice(-2_000)}` : "";
+}
+
 async function nativeDriver(path: string) {
-	const driver = await CodexRuntimeDriver.open(driverOptions(path));
+	const driver = await CodexRuntimeDriver.open(driverOptions(path)).catch(
+		async (error: unknown) => {
+			const reason = error instanceof Error ? error.message : String(error);
+			throw Object.assign(error instanceof Error ? error : new Error(reason), {
+				message: `${reason}${await nativeStderr(path)}`,
+			});
+		},
+	);
 	closers.push(() => driver.close());
 	return driver;
 }
