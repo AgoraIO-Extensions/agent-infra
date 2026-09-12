@@ -56,30 +56,37 @@ jobs:
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
           --tag agent-infra-codex-native-test .
 
-      # TEMPORARY #404 diagnostic: the bridge drains native stderr by design, so
-      # the reason the suite below fails is invisible. This runs the same suite in
-      # a writable copy of the image with native stderr forwarded. Remove once the
+      # TEMPORARY #404 diagnostic: the suite passes in an unhardened container, so
+      # isolate which hardening flag the wrapped launch depends on. Remove once the
       # Linux Conversation boundary is verified.
-      - name: Diagnose the native Codex recovery suite
+      - name: Diagnose the native Codex recovery hardening
         continue-on-error: true
         run: |
-          docker run --rm -i --pull=never --network=none \
-            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
-            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
-            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
-            --entrypoint sh agent-infra-codex-native-test -s <<'DIAGNOSE'
-          set -u
-          cd /app
-          sed -i 's#process.stderr.resume();#process.stderr.on("data", (chunk) => { try { require("node:fs").appendFileSync("/tmp/native-stderr.log", String(chunk)); } catch {} });#' \
-            packages/agent-runtime/src/codex-app-server-bridge.ts
-          grep -c native-stderr.log packages/agent-runtime/src/codex-app-server-bridge.ts
-          cd packages/agent-runtime
-          ./node_modules/.bin/vitest run src/codex-native-recovery.test.ts --cache=false \
-            -t "rejects missing mapping" 2>&1 | tail -40
-          echo "=== native stderr ==="
-          tail -c 4000 /tmp/native-stderr.log || echo "(none)"
+          base="--rm --pull=never --network=none --tmpfs /tmp:rw,exec,size=256m,mode=1777"
+          base="$base --env AGENT_INFRA_CODEX_NATIVE_TEST=1"
+          base="$base --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin"
+          suite="pnpm --filter @agent-infra/agent-runtime exec vitest run"
+          suite="$suite src/codex-native-recovery.test.ts --cache=false -t rejects_missing_mapping"
+          for variant in all no-read-only no-user no-new-privs no-cap-drop; do
+            extra="--read-only --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges"
+            case "$variant" in
+              no-read-only) extra="--user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges" ;;
+              no-user) extra="--read-only --cap-drop=ALL --security-opt=no-new-privileges" ;;
+              no-new-privs) extra="--read-only --user 1000:1000 --cap-drop=ALL" ;;
+              no-cap-drop) extra="--read-only --user 1000:1000 --security-opt=no-new-privileges" ;;
+            esac
+            # shellcheck disable=SC2086
+            if docker run $base $extra agent-infra-codex-native-test \
+              pnpm --filter @agent-infra/agent-runtime exec vitest run \
+              src/codex-native-recovery.test.ts --cache=false \
+              -t "rejects missing mapping" >/tmp/variant.log 2>&1; then
+              echo "VARIANT $variant: pass"
+            else
+              echo "VARIANT $variant: fail"
+              grep -E "Tests +[0-9]|Error" /tmp/variant.log | head -3 || true
+            fi
+          done
           exit 0
-          DIAGNOSE
 
       - name: Verify native Codex recovery
         run: |
