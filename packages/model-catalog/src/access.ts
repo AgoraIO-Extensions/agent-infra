@@ -1,3 +1,4 @@
+import { createParser } from "eventsource-parser";
 import { z } from "zod";
 import {
 	ModelConfigurationErrorV1,
@@ -130,51 +131,61 @@ export function createResponsesModelAccessValidatorV1(
 					}
 					const reader = response.body.getReader();
 					const decoder = new TextDecoder("utf-8", { fatal: true });
-					let pending = "";
+					let ending = "";
 					let bytes = 0;
 					let passed = false;
+					const parser = createParser({
+						onError() {
+							throw new ModelConfigurationErrorV1();
+						},
+						onRetry() {
+							throw new ModelConfigurationErrorV1();
+						},
+						onEvent({ data }) {
+							if (passed) throw new ModelConfigurationErrorV1();
+							if (!data) return;
+							const value = JSON.parse(data);
+							if (
+								["error", "response.failed", "response.incomplete"].includes(
+									value?.type,
+								)
+							)
+								throw new ModelConfigurationErrorV1();
+							if (value?.type !== "response.completed") return;
+							const result = completedSchema.parse(value).response;
+							passed =
+								(result.model === input.modelId ||
+									result.model.startsWith(`${input.modelId}-`)) &&
+								result.reasoning.effort === level &&
+								result.output.some(
+									(item) =>
+										item.type === "function_call" &&
+										item.name === "agent_infra_conformance" &&
+										item.status === "completed" &&
+										item.arguments !== undefined &&
+										Object.keys(
+											z.strictObject({}).parse(JSON.parse(item.arguments)),
+										).length === 0,
+								);
+							if (!passed) throw new ModelConfigurationErrorV1();
+						},
+					});
 					try {
-						while (!passed) {
+						while (true) {
 							const chunk = await modelOperationV1(signal, () => reader.read());
 							if (chunk.done) break;
 							bytes += chunk.value.byteLength;
 							if (bytes > 1_048_576) throw new ModelConfigurationErrorV1();
-							pending += decoder.decode(chunk.value, { stream: true });
-							const events = pending.split(/\r?\n\r?\n/);
-							pending = events.pop() ?? "";
-							for (const event of events) {
-								const data = event
-									.split(/\r?\n/)
-									.filter((line) => line.startsWith("data:"))
-									.map((line) => line.slice(5).trimStart())
-									.join("\n");
-								if (!data) continue;
-								const value = JSON.parse(data);
-								if (
-									["error", "response.failed", "response.incomplete"].includes(
-										value?.type,
-									)
-								)
-									throw new ModelConfigurationErrorV1();
-								if (value?.type !== "response.completed") continue;
-								const result = completedSchema.parse(value).response;
-								passed =
-									(result.model === input.modelId ||
-										result.model.startsWith(`${input.modelId}-`)) &&
-									result.reasoning.effort === level &&
-									result.output.some(
-										(item) =>
-											item.type === "function_call" &&
-											item.name === "agent_infra_conformance" &&
-											item.status === "completed" &&
-											item.arguments !== undefined &&
-											Object.keys(
-												z.strictObject({}).parse(JSON.parse(item.arguments)),
-											).length === 0,
-									);
-								if (!passed) throw new ModelConfigurationErrorV1();
-							}
+							const decoded = decoder.decode(chunk.value, { stream: true });
+							ending = `${ending}${decoded}`.slice(-4);
+							parser.feed(decoded);
 						}
+						parser.feed(decoder.decode());
+						// The parser defers a trailing CR while waiting to distinguish CRLF.
+						// At EOF, finish that terminator without completing a missing blank line.
+						if (ending.endsWith("\r")) parser.feed("\n");
+						if (!ending.replace(/\r\n?/g, "\n").endsWith("\n\n"))
+							throw new ModelConfigurationErrorV1();
 					} finally {
 						void reader.cancel().catch(() => {});
 					}
