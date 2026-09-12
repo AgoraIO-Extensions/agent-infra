@@ -56,37 +56,38 @@ jobs:
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
           --tag agent-infra-codex-native-test .
 
-      # TEMPORARY #404 diagnostic: the suite passes in an unhardened container, so
-      # isolate which hardening flag the wrapped launch depends on. Remove once the
-      # Linux Conversation boundary is verified.
-      - name: Diagnose the native Codex recovery hardening
+      # TEMPORARY #404 diagnostic: container hardening is not the factor, so run the
+      # failing invocation with native stderr forwarded. Remove once the Linux
+      # Conversation boundary is verified.
+      - name: Diagnose the native Codex recovery reason
         continue-on-error: true
         run: |
-          base="--rm --pull=never --network=none --tmpfs /tmp:rw,exec,size=256m,mode=1777"
-          base="$base --env AGENT_INFRA_CODEX_NATIVE_TEST=1"
-          base="$base --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin"
-          suite="pnpm --filter @agent-infra/agent-runtime exec vitest run"
-          suite="$suite src/codex-native-recovery.test.ts --cache=false -t rejects_missing_mapping"
-          for variant in all no-read-only no-user no-new-privs no-cap-drop; do
-            extra="--read-only --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges"
-            case "$variant" in
-              no-read-only) extra="--user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges" ;;
-              no-user) extra="--read-only --cap-drop=ALL --security-opt=no-new-privileges" ;;
-              no-new-privs) extra="--read-only --user 1000:1000 --cap-drop=ALL" ;;
-              no-cap-drop) extra="--read-only --user 1000:1000 --security-opt=no-new-privileges" ;;
-            esac
-            # shellcheck disable=SC2086
-            if docker run $base $extra agent-infra-codex-native-test \
-              pnpm --filter @agent-infra/agent-runtime exec vitest run \
-              src/codex-native-recovery.test.ts --cache=false \
-              -t "rejects missing mapping" >/tmp/variant.log 2>&1; then
-              echo "VARIANT $variant: pass"
-            else
-              echo "VARIANT $variant: fail"
-              grep -E "Tests +[0-9]|Error" /tmp/variant.log | head -3 || true
-            fi
-          done
+          docker run --rm -i --pull=never --network=none \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
+            --entrypoint sh agent-infra-codex-native-test -s <<'DIAGNOSE'
+          set -u
+          cd /app
+          sed -i 's#process.stderr.resume();#process.stderr.on("data", (chunk) => { try { require("node:fs").appendFileSync("/tmp/native-stderr.log", String(chunk)); } catch (error) { require("node:fs").appendFileSync("/tmp/native-stderr.log", "handler failed: " + error.message); } });#' \
+            packages/agent-runtime/src/codex-app-server-bridge.ts
+          echo "patched=$(grep -c native-stderr.log packages/agent-runtime/src/codex-app-server-bridge.ts)"
+          echo "--- via pnpm exec ---"
+          pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/codex-native-recovery.test.ts --cache=false \
+            -t "rejects missing mapping" 2>&1 | grep -E "Tests +[0-9]|Error|×" | head -6
+          echo "--- native stderr after pnpm exec ---"
+          tail -c 3000 /tmp/native-stderr.log || echo "(none)"
+          rm -f /tmp/native-stderr.log
+          echo "--- via direct vitest ---"
+          cd packages/agent-runtime
+          ./node_modules/.bin/vitest run src/codex-native-recovery.test.ts --cache=false \
+            -t "rejects missing mapping" 2>&1 | grep -E "Tests +[0-9]|Error|×" | head -6
+          echo "--- native stderr after direct vitest ---"
+          tail -c 3000 /tmp/native-stderr.log || echo "(none)"
           exit 0
+          DIAGNOSE
 
       - name: Verify native Codex recovery
         run: |
