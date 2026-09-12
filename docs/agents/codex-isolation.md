@@ -47,11 +47,13 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   父进程 HOME 和 `TMPDIR` 仍是独立临时目录。关闭只清理临时 launch/probe/schema/scratch，不清理持久目录。
   Bridge 要求绝对规范路径、无 symlink、Runtime UID 私有 `0700`，拒绝与父 HOME/CODEX_HOME/cwd 重叠
   及持久化配置或凭证文件，并拒绝非服务端派生的存储键。
-- 文件边界按平台施加：Linux 由部署可信 `setpriv` 以 Landlock allowlist 限定整个原生进程，Darwin 由固定
-  Codex 版本自身的权限 profile 以 session flag 注入（Conversation 根 `deny`、本 `home` 只读、`workspace` 可写）。
+- 文件边界按平台施加：Linux 由部署可信 `setpriv` 以 Landlock allowlist 限定整个原生进程，并关闭原生
+  自有文件 sandbox；Darwin 由固定 Codex 版本自身的权限 profile 以 session flag 注入（Conversation 根
+  `deny`、本 `home` 只读、`workspace` 可写）。
   测试不额外包裹沙箱，也不放宽边界；约束以工程 Spec 的
   [Codex 原生 Conversation 隔离边界](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为权威。
-  本入口当前在 darwin 运行，因此其结果不外推为 Linux/Pod 验收。
+  本入口当前在 darwin 运行，因此其结果不外推为 Linux/Pod 验收；Linux 的兄弟 Conversation 负向证据由
+  `tests/runtime-image-probe.mjs` 在正式镜像中产生。
 - 原生进程按 Conversation 启动，因此 launch 观测按存储键归属到对应 actor；两个 actor 的
   cwd 与 `CODEX_HOME` 必须互不重叠，重启恢复后仍回到同一持久目录。
 - active-history 兼容性探针使用测试专用的持久 root 与独立存储键，以单个 pinned app-server

@@ -96,6 +96,11 @@ const landlockDataRights = [
 ].join(",");
 const landlockProgramRights = "execute,read-file,read-dir";
 const landlockMetadataRights = "read-file,read-dir";
+// The platform Landlock domain is the whole Conversation boundary on Linux, so
+// pinned Codex must not add its own filesystem sandbox on top of it: the pinned
+// legacy Landlock backend needs `read-dir` on `/`, and Landlock only ever adds
+// access, so granting that would make every sibling Conversation listable again.
+const linuxNativeSandboxMode = "danger-full-access";
 
 /**
  * Stable native storage key for one Conversation generation. Derived from
@@ -987,14 +992,18 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
-					// Linux keeps the pinned native sandbox exactly as before: the
-					// Conversation boundary comes from the helper above, not from a
-					// wider native sandbox mode that would need a namespace sandbox.
+					// On Linux the boundary above is the only filesystem boundary. The
+					// pinned legacy Landlock backend has to read the whole filesystem
+					// tree before it runs a tool, so keeping it enabled would force a
+					// recursive `read-dir` grant on `/` that re-exposes every sibling
+					// Conversation. See the ADR for the measured trade-off.
 					...(platform === "linux"
 						? [
-								// Landlock enforces the native policy without namespace
-								// privileges. Admission above requires the full pinned
-								// filesystem capability set.
+								"--config",
+								`sandbox_mode=${JSON.stringify(linuxNativeSandboxMode)}`,
+								// If a pinned code path still sandboxes a child, keep it on
+								// the backend this deployment can run: the namespace sandbox
+								// needs privileges the runtime never has.
 								"--config",
 								"features.use_legacy_landlock=true",
 							]

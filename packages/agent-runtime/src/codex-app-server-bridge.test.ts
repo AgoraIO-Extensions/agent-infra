@@ -850,6 +850,8 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				"--config",
 				"features.plugins=false",
 				"--config",
+				'sandbox_mode="danger-full-access"',
+				"--config",
 				"features.use_legacy_landlock=true",
 			]);
 		} finally {
@@ -901,6 +903,8 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			"mcp_servers={}",
 			"--config",
 			"features.plugins=false",
+			"--config",
+			'sandbox_mode="danger-full-access"',
 			"--config",
 			"features.use_legacy_landlock=true",
 		]);

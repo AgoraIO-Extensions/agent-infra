@@ -94,26 +94,6 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node .github/scripts/vulnerability-scan.mjs build
 
-      # TEMPORARY #404 diagnostic: print the native tool output the probe checks,
-      # using a patched copy so the repository file stays unchanged. Remove once the
-      # runtime image probe matches the per-Conversation boundary.
-      - name: Diagnose the native Codex runtime image probe
-        continue-on-error: true
-        run: |
-          cp tests/runtime-image-probe.mjs "$RUNNER_TEMP/probe.mjs"
-          perl -0pi -e 's/\t\tcheck\(\n\t\t\t"native-sandboxed-tool-execution",/\t\tconsole.error(JSON.stringify({ toolProbeOutput }));\n\t\tcheck(\n\t\t\t"native-sandboxed-tool-execution",/' "$RUNNER_TEMP/probe.mjs"
-          grep -c toolProbeOutput "$RUNNER_TEMP/probe.mjs"
-          docker run --rm --pull=never --network=none --read-only \
-            --cap-drop=ALL --security-opt=no-new-privileges \
-            --tmpfs /tmp:size=128m,mode=1777 \
-            --tmpfs /var/lib/agent-runtime:size=128m,uid=1000,gid=1000,mode=0700 \
-            --mount "type=bind,src=$RUNNER_TEMP/probe.mjs,dst=/probe/runtime-image-probe.mjs,readonly" \
-            --mount "type=bind,src=$PWD/tests/support/runtime-probe-diagnostics.mjs,dst=/probe/support/runtime-probe-diagnostics.mjs,readonly" \
-            "agent-infra-ci/agent-runtime-host:$SCAN_COMMIT" \
-            node /probe/runtime-image-probe.mjs > /tmp/probe-out.log 2> /tmp/probe-err.log || true
-          echo "--- probe stderr ---"
-          tail -c 4000 /tmp/probe-err.log || true
-
       - name: Probe native Codex runtime image
         id: runtime_probe
         run: >-
