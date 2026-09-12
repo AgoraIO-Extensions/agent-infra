@@ -10,6 +10,11 @@ import {
 	validateWorkloadRouteSwitchResultV1,
 	WorkloadCleanupRequestV1Schema,
 } from "@agent-infra/contracts/workload";
+import {
+	type RuntimeModelProjectionV1,
+	runtimeModelInjectionV1,
+	validateRuntimeModelProjectionV1,
+} from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
 	V1Ingress,
@@ -34,6 +39,7 @@ const revisionLabel = "agent-infra.agora.io/revision";
 const agentAnnotation = "agent-infra.agora.io/agent-id";
 const fingerprintAnnotation = "agent-infra.agora.io/spec-hash";
 const desiredAnnotation = "agent-infra.agora.io/desired";
+const modelFingerprintAnnotation = "agent-infra.agora.io/model-config-hash";
 const controllerAnnotationPrefix = "agent-infra.agora.io/";
 const secretIdAnnotation = "agent-infra.agora.io/secret-id";
 const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
@@ -339,12 +345,102 @@ export interface KubernetesWorkloadPolicyV1 {
 export function createKubernetesRuntimeAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	/** Supplied from Worker persistent state, never restored from live annotations. */
+	readonly modelProjection?: RuntimeModelProjectionV1;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const modelProjection =
+		options.modelProjection === undefined
+			? undefined
+			: validateRuntimeModelProjectionV1(options.modelProjection);
+	const modelInjection = modelProjection
+		? runtimeModelInjectionV1(modelProjection)
+		: undefined;
+	function modelBindings(value: AgentWorkloadDesiredV1) {
+		if (!modelProjection || !modelInjection) return undefined;
+		if (
+			value.agentId !== modelProjection.agentId ||
+			value.configRevision !== modelProjection.configurationRevision ||
+			Object.keys(value.env).some((name) => name.startsWith("AGENT_INFRA_")) ||
+			modelProjection.options.some(
+				(option) =>
+					!value.secretRefs.some(
+						(ref) =>
+							ref.name === option.secretRef.name &&
+							ref.secretId === option.secretRef.secretId &&
+							ref.secretVersion === option.secretRef.secretVersion &&
+							ref.configRevision === option.secretRef.configRevision,
+					),
+			)
+		)
+			throw new WorkloadKubernetesError("policy");
+		return modelInjection;
+	}
+	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
+		const injection = modelBindings(value);
+		return [
+			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
+			...(injection?.env ?? []),
+		];
+	}
+	function environmentSecrets(value: AgentWorkloadDesiredV1) {
+		modelBindings(value);
+		return value.secretRefs.filter(
+			(ref) =>
+				!modelProjection?.options.some(
+					(option) => option.secretRef.name === ref.name,
+				),
+		);
+	}
+	function podReferencesSecret(
+		pod: V1PodSpec | undefined,
+		name: string,
+	): boolean {
+		return (
+			!!pod &&
+			([
+				...pod.containers,
+				...(pod.initContainers ?? []),
+				...(pod.ephemeralContainers ?? []),
+			].some(
+				(container) =>
+					container.env?.some(
+						(entry) => entry.valueFrom?.secretKeyRef?.name === name,
+					) ||
+					container.envFrom?.some((entry) => entry.secretRef?.name === name),
+			) ||
+				(pod.volumes ?? []).some(
+					(volume) =>
+						volume.secret?.secretName === name ||
+						volume.projected?.sources?.some(
+							(source) => source.secret?.name === name,
+						),
+				) ||
+				(pod.imagePullSecrets ?? []).some((secret) => secret.name === name))
+		);
+	}
+	function matchesModelSecret(
+		value: AgentWorkloadDesiredV1,
+		secret: V1Secret | null,
+	) {
+		const injection = modelBindings(value);
+		if (!injection) return true;
+		if (!secret) return false;
+		own(secret, value.agentId, value.workloadRevision, value.fence);
+		return (
+			!secret.metadata?.deletionTimestamp &&
+			secret.immutable === true &&
+			secret.type === "Opaque" &&
+			secret.stringData === undefined &&
+			hasSameStructure(secret.data, {
+				configuration: Buffer.from(injection.configuration).toString("base64"),
+			})
+		);
+	}
 	if (
 		client.namespace !== policy.namespace ||
 		!Object.keys(policy.workerSelector).length ||
@@ -1000,7 +1096,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					...entry,
 					value: entry.value ?? "",
 				})),
-				Object.entries(value.env).map(([name, value]) => ({ name, value })),
+				workloadEnvironment(value).map((entry) => ({
+					...entry,
+					value: "value" in entry ? entry.value : "",
+				})),
 			) ||
 			!hasSameStructure(
 				(container?.envFrom ?? []).map((entry) => ({
@@ -1011,7 +1110,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						optional: entry.secretRef?.optional ?? false,
 					},
 				})),
-				value.secretRefs.map((ref) => ({
+				environmentSecrets(value).map((ref) => ({
 					prefix: "",
 					secretRef: { name: ref.name, optional: false },
 				})),
@@ -1459,6 +1558,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
 		const current = await statefulSet(value);
+		const injection = modelBindings(value);
+		if (
+			injection &&
+			(current?.metadata?.annotations?.[modelFingerprintAnnotation] !==
+				modelProjection?.fingerprint ||
+				!matchesModelSecret(
+					value,
+					await client.read<V1Secret>("Secret", injection.secretName),
+				))
+		)
+			return "drifted";
 		if (
 			!current ||
 			current.metadata?.deletionTimestamp ||
@@ -1617,7 +1727,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			container?.envFrom?.map((entry) => entry.secretRef?.name).sort() ?? [];
 		if (
 			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
-			!hasSameStructure(refs, value.secretRefs.map((ref) => ref.name).sort()) ||
+			!hasSameStructure(
+				refs,
+				environmentSecrets(value)
+					.map((ref) => ref.name)
+					.sort(),
+			) ||
 			pod.spec?.automountServiceAccountToken !== false
 		)
 			return "unhealthy";
@@ -2258,6 +2373,37 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					value,
 				);
 			await put(networkPolicy(value), value);
+			const injection = modelBindings(value);
+			if (injection) {
+				const existing = await client.read<V1Secret>(
+					"Secret",
+					injection.secretName,
+				);
+				if (existing && !matchesModelSecret(value, existing))
+					throw new WorkloadKubernetesError("conflict");
+				await put<V1Secret>(
+					{
+						apiVersion: "v1",
+						kind: "Secret",
+						metadata: metadata(value, injection.secretName),
+						immutable: true,
+						type: "Opaque",
+						data: {
+							configuration: Buffer.from(injection.configuration).toString(
+								"base64",
+							),
+						},
+					},
+					value,
+				);
+				if (
+					!matchesModelSecret(
+						value,
+						await client.read<V1Secret>("Secret", injection.secretName),
+					)
+				)
+					throw new WorkloadKubernetesError("conflict");
+			}
 			const workload: V1StatefulSet = {
 				apiVersion: "apps/v1",
 				kind: "StatefulSet",
@@ -2266,6 +2412,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					annotations: {
 						...metadata(value).annotations,
 						[desiredAnnotation]: JSON.stringify(value),
+						...(modelProjection
+							? { [modelFingerprintAnnotation]: modelProjection.fingerprint }
+							: {}),
 					},
 				},
 				spec: {
@@ -2293,11 +2442,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									ports: [
 										{ name: "runtime", containerPort: value.service.port },
 									],
-									env: Object.entries(value.env).map(([name, value]) => ({
-										name,
-										value,
-									})),
-									envFrom: value.secretRefs.map((ref) => ({
+									env: workloadEnvironment(value),
+									envFrom: environmentSecrets(value).map((ref) => ({
 										secretRef: { name: ref.name },
 									})),
 									readinessProbe: {
@@ -2373,6 +2519,68 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				{ agentId, workloadRevision, fence },
 				deleteNewVolume,
 			);
+		},
+		/** Worker authorizes only a rejected candidate, never a retained verified projection. */
+		async removeModelConfiguration(input: unknown): Promise<boolean> {
+			const value = desired(input);
+			const injection = modelBindings(value);
+			if (!injection) return true;
+			const secret = await client.read<V1Secret>(
+				"Secret",
+				injection.secretName,
+			);
+			if (!secret) return true;
+			if (
+				!matchesModelSecret(value, secret) ||
+				secret.metadata?.annotations?.[secretConfigRevisionAnnotation] !==
+					String(value.configRevision)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			if (!(await closeAgentAtFence(value))) return false;
+			if (
+				(await adapter.scaleDownAgent(
+					value.agentId,
+					value.workloadRevision,
+					value.fence,
+				)) === "pending"
+			)
+				return false;
+			const current = await statefulSet(value);
+			if (current) {
+				if (current.spec?.replicas !== 0 || !current.spec.template.spec)
+					return false;
+				const next = structuredClone(current);
+				const pod = next.spec?.template.spec;
+				if (!pod) return false;
+				for (const container of pod.containers) {
+					container.env = container.env?.filter(
+						(entry) =>
+							!(
+								container.name === "agent" &&
+								entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG" &&
+								entry.valueFrom?.secretKeyRef?.name === injection.secretName
+							),
+					);
+				}
+				// Any other reference is unexpected; do not reclaim material still in use.
+				if (podReferencesSecret(pod, injection.secretName)) return false;
+				if (!hasSameStructure(current.spec, next.spec))
+					await client.replace(next);
+			}
+			const live = await statefulSet(value);
+			if (
+				(live &&
+					(live.spec?.replicas !== 0 ||
+						podReferencesSecret(
+							live.spec?.template.spec,
+							injection.secretName,
+						))) ||
+				(await client.list("Pod", selector(value.agentId))).length > 0
+			)
+				return false;
+			// client.delete supplies UID/resourceVersion preconditions from the exact read above.
+			await client.delete(secret);
+			return (await client.read("Secret", injection.secretName)) === null;
 		},
 		async removeImmutableSecret(
 			input: unknown,
@@ -2518,7 +2726,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				});
 			}
 		},
-		async switchRoute(input: unknown, routeMode: RouteSelectorMode = "closed") {
+		async switchRoute(
+			input: unknown,
+			routeMode: RouteSelectorMode = "closed",
+			trustedDesired?: AgentWorkloadDesiredV1,
+		) {
 			const request = validateWorkloadRouteSwitchRequestV1(input);
 			const correlation = {
 				schemaVersion: 1,
@@ -2540,10 +2752,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				);
 				if (current)
 					own(current, request.agentId, target.workloadRevision, request.fence);
+				if (modelProjection && !trustedDesired)
+					throw new WorkloadKubernetesError("policy");
 				const value = desired(
-					JSON.parse(
-						current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
-					),
+					trustedDesired ??
+						JSON.parse(
+							current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
+						),
 				);
 				if (
 					value.agentId !== request.agentId ||

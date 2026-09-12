@@ -4,6 +4,7 @@ import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import {
 	createSecretKeyRotationCryptoV1,
 	createSecretKeyringDecryptorV1,
+	createWorkloadSecretKeyringDecryptorV1,
 } from "@agent-infra/secret-store/worker";
 import { describe, expect, it } from "vitest";
 import { secretActivationDecryptorConformanceV1 } from "../../../packages/platform-core/src/secret-decryptor.conformance.js";
@@ -104,6 +105,81 @@ secretActivationDecryptorConformanceV1("Worker", () => {
 });
 
 describe("Worker Secret decryptor", () => {
+	it("allows authenticated active-origin material only through the Workload entry and rejects foreign AAD", async () => {
+		const fixture = encryptedRecord();
+		const record = fixture.record;
+		const reference = {
+			schemaVersion: 1,
+			ownerType: record.ownerType,
+			ownerId: record.ownerId,
+			agentId: record.agentId,
+			secretId: record.secretId,
+			secretVersion: record.secretVersion,
+			configRevision: record.configRevision,
+			algorithmVersion: record.crypto.algorithmVersion,
+			wrappingAlgorithmVersion: record.crypto.wrappingAlgorithmVersion,
+			wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+			name: "agent-secret-v2-r7",
+		};
+		const active = {
+			...record,
+			lifecycleState: "active",
+			kubernetesSecretRef: reference,
+			activationFence: {
+				schemaVersion: 1,
+				agentId: record.agentId,
+				secretId: record.secretId,
+				secretVersion: record.secretVersion,
+				configRevision: record.configRevision,
+				kubernetesSecretName: reference.name,
+				workloadUid: "workload-a",
+				workloadGeneration: 1,
+				fence: 1,
+			},
+		};
+		const decryptor = createWorkloadSecretKeyringDecryptorV1({
+			keys: [
+				{
+					keyVersion: fixture.keyVersion,
+					privateKeyPkcs8DerBase64: fixture.privateKeyPkcs8DerBase64,
+				},
+			],
+		});
+		await expect(
+			fixture.decryptor.decrypt({
+				encryptedRecord: active,
+				traceId: "trace-a",
+			}),
+		).resolves.toEqual({ outcome: "failed", code: "SECRET_METADATA_INVALID" });
+		const result = await decryptor.decrypt({
+			encryptedRecord: active,
+			traceId: "trace-a",
+		});
+		expect(result.outcome).toBe("decrypted");
+		if (result.outcome !== "decrypted") throw new Error();
+		try {
+			expect(createHash("sha256").update(result.plaintext).digest("hex")).toBe(
+				fixture.plaintextDigest,
+			);
+		} finally {
+			result.plaintext.fill(0);
+		}
+		const foreign = {
+			...active,
+			ownerId: "foreign-owner",
+			kubernetesSecretRef: { ...reference, ownerId: "foreign-owner" },
+			crypto: {
+				...active.crypto,
+				aadBinding: { ...active.crypto.aadBinding, ownerId: "foreign-owner" },
+			},
+		};
+		await expect(
+			decryptor.decrypt({ encryptedRecord: foreign, traceId: "trace-a" }),
+		).resolves.toEqual({
+			outcome: "failed",
+			code: "SECRET_AUTHENTICATION_FAILED",
+		});
+	});
 	it("decrypts an authenticated record only with the matching private key", async () => {
 		const fixture = encryptedRecord();
 
