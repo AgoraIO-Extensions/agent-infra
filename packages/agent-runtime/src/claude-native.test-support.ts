@@ -30,6 +30,7 @@ export function completeClaudeResponse(
 	id: string,
 	model: string,
 	text = "OK",
+	reads: readonly string[] = [],
 ) {
 	response.writeHead(200, { "content-type": "text/event-stream" });
 	for (const event of [
@@ -46,20 +47,47 @@ export function completeClaudeResponse(
 				usage: { input_tokens: 10, output_tokens: 0 },
 			},
 		},
-		{
-			type: "content_block_start",
-			index: 0,
-			content_block: { type: "text", text: "" },
-		},
-		{
-			type: "content_block_delta",
-			index: 0,
-			delta: { type: "text_delta", text },
-		},
-		{ type: "content_block_stop", index: 0 },
+		...(reads.length
+			? reads.flatMap((filePath, index) => [
+					{
+						type: "content_block_start",
+						index,
+						content_block: {
+							type: "tool_use",
+							id: `read_${index}`,
+							name: "Read",
+							input: {},
+						},
+					},
+					{
+						type: "content_block_delta",
+						index,
+						delta: {
+							type: "input_json_delta",
+							partial_json: JSON.stringify({ file_path: filePath }),
+						},
+					},
+					{ type: "content_block_stop", index },
+				])
+			: [
+					{
+						type: "content_block_start",
+						index: 0,
+						content_block: { type: "text", text: "" },
+					},
+					{
+						type: "content_block_delta",
+						index: 0,
+						delta: { type: "text_delta", text },
+					},
+					{ type: "content_block_stop", index: 0 },
+				]),
 		{
 			type: "message_delta",
-			delta: { stop_reason: "end_turn", stop_sequence: null },
+			delta: {
+				stop_reason: reads.length ? "tool_use" : "end_turn",
+				stop_sequence: null,
+			},
 			usage: { output_tokens: 2 },
 		},
 		{ type: "message_stop" },

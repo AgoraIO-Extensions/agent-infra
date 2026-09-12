@@ -1,9 +1,17 @@
-import { readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	readdir,
+	readFile,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	claudeCommand,
 	claudeNativeFixture,
+	completeClaudeResponse,
 } from "./claude-native.test-support.js";
 
 const fixtures: Awaited<ReturnType<typeof claudeNativeFixture>>[] = [];
@@ -369,3 +377,106 @@ it.each([400, 503])(
 		} else expect(f.calls).toHaveLength(1);
 	},
 );
+
+it("enforces real native tool isolation for direct paths and symlink escapes before and after restart", async () => {
+	const f = await fixture();
+	const root = await realpath(f.path);
+	const own = await f.driver.execute(claudeCommand("seed-own"));
+	await f.settled(own.nativeSessionRef, "execution-seed-own");
+	const peer = await f.driver.execute({
+		...claudeCommand("seed-peer"),
+		conversationId: "conversation-peer",
+	});
+	await f.settled(peer.nativeSessionRef, "execution-seed-peer");
+	const ownPaths = [
+		join(root, own.nativeSessionRef, "workspace/canary.txt"),
+		join(root, own.nativeSessionRef, "memory/MEMORY.md"),
+	];
+	const peerPaths = [
+		join(root, peer.nativeSessionRef, "workspace/canary.txt"),
+		join(root, peer.nativeSessionRef, "memory/MEMORY.md"),
+	];
+	const aliases = [
+		join(root, own.nativeSessionRef, "workspace/linked-workspace.txt"),
+		join(root, own.nativeSessionRef, "workspace/linked-memory.md"),
+	];
+	for (const path of ownPaths) await writeFile(path, "synthetic-own-canary");
+	for (const path of peerPaths) await writeFile(path, "synthetic-peer-canary");
+	for (const [index, path] of aliases.entries())
+		await symlink(peerPaths[index] as string, path);
+	for (const id of ["before-restart", "after-restart"]) {
+		if (id === "after-restart") await f.restart();
+		f.hold();
+		const offset = f.calls.length;
+		const command = {
+			...claudeCommand(id),
+			nativeSessionRef: own.nativeSessionRef,
+		};
+		const accepted = await f.driver.execute(command);
+		await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 1));
+		const first = f.calls[offset];
+		if (!first) throw Error();
+		completeClaudeResponse(
+			first.response,
+			`msg_${id}`,
+			String(first.body.model),
+			"",
+			[...ownPaths, ...peerPaths, ...aliases],
+		);
+		await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 2), {
+			timeout: 10000,
+		});
+		const messages = f.calls[offset + 1]?.body.messages as {
+			content: {
+				type: string;
+				tool_use_id?: string;
+				is_error?: boolean;
+				content?: unknown;
+			}[];
+		}[];
+		const results = messages
+			.flatMap((message) =>
+				Array.isArray(message.content)
+					? message.content.filter((block) => block.type === "tool_result")
+					: [],
+			)
+			.slice(-6);
+		expect(results).toHaveLength(6);
+		for (const [index] of [...ownPaths, ...peerPaths, ...aliases].entries()) {
+			const result = results.find(
+				(result) => result.tool_use_id === `read_${index}`,
+			);
+			expect(result).toBeDefined();
+			if (index < 2) {
+				expect(result?.is_error).not.toBe(true);
+				expect(JSON.stringify(result?.content)).toContain(
+					"synthetic-own-canary",
+				);
+			} else {
+				expect(result?.is_error).toBe(true);
+				expect(JSON.stringify(result?.content)).not.toContain(
+					"synthetic-peer-canary",
+				);
+			}
+		}
+		expect(JSON.stringify(f.calls[offset + 1]?.body.messages)).not.toContain(
+			"synthetic-peer-canary",
+		);
+		f.release();
+		await f.settled(accepted.nativeSessionRef, command.executionId);
+		const events = await f.driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(
+			events.filter(
+				(event) => event.type === "tool" && event.payload.phase === "completed",
+			),
+		).toHaveLength(2);
+		expect(
+			events.filter(
+				(event) => event.type === "tool" && event.payload.phase === "failed",
+			),
+		).toHaveLength(4);
+	}
+}, 30000);

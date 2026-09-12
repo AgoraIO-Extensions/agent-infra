@@ -114,7 +114,11 @@ node ../../deploy/runtime/claude-conformance.mjs \
 
 配置文件按 Claude `settings.json` 的 `env` 结构提供 `ANTHROPIC_BASE_URL` 与
 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_API_KEY`。探针不修改该文件，只使用合成 canary，
-验证双用户并行读写、各自记忆和重启后的正负对照。默认要求干净源码；`--allow-dirty`
+验证双用户并行读写、各自记忆和重启后的正负对照。真实负向向量明确记录为
+`symlink-escape`：探针创建并核验指向另一用户现有 canary 的工作区别名，用 SDK 历史将
+实际 Read 与结果逐项关联；口头拒绝不能通过，任意越界读取成功或 canary 泄漏均判失败。
+直接绝对路径拒绝另由同版本原生 CLI 的确定性测试覆盖，不将别名测试报告为直接路径的
+真实模型验收。默认要求干净源码；`--allow-dirty`
 仅用于开发诊断，结果明确标记，不能用作交付验收。报告保留版本、源码及原生文件摘要、
 配置版本、实际模型和布尔结果。原生记录和临时目录在结束时清理。
 
