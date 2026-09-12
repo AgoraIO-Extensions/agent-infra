@@ -30,6 +30,7 @@
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
+		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
 		"@types/node": "catalog:",
 		"drizzle-kit": "catalog:",

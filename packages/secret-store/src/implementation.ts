@@ -341,6 +341,13 @@ export function createSecretKeyringDecryptorV1(input: {
 	return secretKeyringDecryptor(parsePrivateKeyring(input), false);
 }
 
+/** Worker-only: callers must resolve current/active-origin bindings from the Store before decrypting. */
+export function createWorkloadSecretKeyringDecryptorV1(
+	input: Parameters<typeof createSecretKeyringDecryptorV1>[0],
+): SecretKeyringDecryptorV1 {
+	return secretKeyringDecryptor(parsePrivateKeyring(input), true);
+}
+
 export function createSecretKeyRotationCryptoV1(input: {
 	readonly keys: readonly {
 		readonly keyVersion: string;
