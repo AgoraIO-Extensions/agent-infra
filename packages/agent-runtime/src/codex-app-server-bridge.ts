@@ -987,14 +987,11 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
-					// The owning Conversation keeps a writable workspace on every
-					// platform; the boundary above keeps siblings unreachable. Pinned
-					// Codex refuses sandbox_mode beside a permissions profile, so each
-					// platform states it once.
+					// Linux keeps the pinned native sandbox exactly as before: the
+					// Conversation boundary comes from the helper above, not from a
+					// wider native sandbox mode that would need a namespace sandbox.
 					...(platform === "linux"
 						? [
-								"--config",
-								'sandbox_mode="workspace-write"',
 								// Landlock enforces the native policy without namespace
 								// privileges. Admission above requires the full pinned
 								// filesystem capability set.

@@ -548,16 +548,19 @@ Linux 保留 pinned legacy Landlock 后端，而该后端拒绝需要直接运�
 收窄父规则，所以必须使用 allowlist。受管权限覆盖可触达常规文件与目录的文件系统权限，不含只作用于
 字符/块设备的 `ioctl-dev`；allowlist 只允许 pinned 发行版及其资源、系统程序与库目录只读，`/etc`、
 `/proc`、`/sys` 只读元数据，`/dev` 可读写，以及本次临时 HOME/TMPDIR 与本 Conversation 目录可读写；
-兄弟 Conversation 目录与共享边界目录都不在 allowlist 内。Landlock 规则集可叠加，pinned Codex 仍对
-工具子进程施加自身策略。Linux 另以 `sandbox_mode="workspace-write"` 保持本人 workspace 可写。
+兄弟 Conversation 目录与共享边界目录都不在 allowlist 内。规则路径必须是绝对路径，因为该 helper 在原生
+进程工作目录下解析它们。Landlock 规则集可叠加，pinned Codex 仍对工具子进程施加自身策略，Linux 的
+原生 sandbox 模式保持不变，不改为需要 namespace 沙箱的更宽模式。
 
 Darwin 由 pinned Codex 自身的权限 profile 施加，以 session flag 注入：Conversation 根 `deny`、
 本 Conversation `home` 只读、`workspace` 可写。Darwin 不在原生进程外再包一层平台沙箱：pinned 版本
 在 Darwin 用 `sandbox-exec` 执行工具，任何具有约束力的外层 profile 都会使内层 `sandbox_apply` 失败，
 从而让工具普遍不可用并伪造出“隔离通过”。
 
-两条路径的效果一致：模型工具不能读取、搜索、修改或引用其他 Conversation 的工作区与历史，也不能
-写入原生配置、skills 或 HOME；路径别名、符号链接与父目录穿越同样被拒绝。
+两条路径在跨 Conversation 上的效果一致：模型工具不能读取、搜索、修改或引用其他 Conversation 的
+工作区与历史，也不能写入原生配置、skills 或 HOME；路径别名、符号链接与父目录穿越同样被拒绝。
+本 Conversation 内的写入能力由各平台的原生 sandbox 决定：Darwin 的 profile 使本人 `workspace` 可写、
+`home` 只读；Linux 保持 pinned 版本原有的原生 sandbox 模式。
 
 平台自有模型传输始终是 loopback 入口，原生进程必须拒绝为 loopback 走代理，避免宿主代理配置
 拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。

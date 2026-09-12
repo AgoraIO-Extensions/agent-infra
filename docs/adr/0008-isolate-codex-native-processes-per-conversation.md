@@ -25,8 +25,13 @@ Linux 上不能用该权限 profile：pinned 版本明确拒绝把需要直接�
 子树”，所以边界必须是 allowlist；兄弟 Conversation 目录只要不出现在 allowlist 中即不可达。Landlock
 规则集可叠加，pinned Codex 仍对工具子进程施加自身策略，与 Darwin 的 Seatbelt 无法嵌套不同。
 
-两侧都保持本人 workspace 可写、本人 `home` 只读，使模型工具既保有本人读写，又不能写入原生配置、
-skills 与历史。无法施加边界的平台拒绝启动原生进程，不存在无边界回退。
+Landlock 规则路径必须是绝对路径：该 helper 在原生进程的工作目录下解析规则路径，相对条目会让启动失败
+或指向另一个目录。工具运行器可能向 `PATH` 注入相对条目，因此边界只接受绝对且规范的目录。
+
+Darwin 的 profile 使本人 `workspace` 可写、`home` 只读；Linux 保持 pinned 版本原有的原生 sandbox 模式，
+不改为需要 namespace 沙箱的更宽模式——部署镜像不提供该沙箱，改宽会让工具执行失败。跨 Conversation
+边界在两侧都成立，本 Conversation 内的写入能力按平台不同。无法施加边界的平台拒绝启动原生进程，
+不存在无边界回退。
 
 准入改为按进程执行：每个原生进程独立验证 provenance 与受限配置，Driver 打开时不再预启动进程。代价是
 部署配置错误在首个 Turn 才暴露，收益是任一进程都不能借另一进程的准入结果获得信任。
