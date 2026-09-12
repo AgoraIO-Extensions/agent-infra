@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile, realpath, mkdtemp, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -13,8 +12,7 @@ const { values } = parseArgs({ options: {
  "allow-dirty": { type: "boolean", default: false }, "image-digest": { type: "string" }, "source-commit": { type: "string" },
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
-const require = createRequire(resolve("package.json"));
-const { ClaudeRuntimeDriver, verifyClaudeInstallation } = await import(pathToFileURL(require.resolve("@agent-infra/agent-runtime")).href);
+const { ClaudeRuntimeDriver, verifyClaudeInstallation } = await import(pathToFileURL(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs")).href);
 const provenance = await verifyClaudeInstallation();
 let sourceCommit = values["source-commit"], dirty = false;
 if (!values["image-digest"]) {
