@@ -545,7 +545,8 @@ Codex Driver 为每个 Conversation 代次维护一个独立的原生 `app-serve
 
 Linux 保留 pinned legacy Landlock 后端，而该后端拒绝需要直接运行时强制的权限 profile，因此由部署
 提供的可信 `setpriv` 对整个原生进程施加 Landlock 边界。Landlock 规则只能增加访问，深层规则无法
-收窄父规则，所以必须使用 allowlist：只允许 pinned 发行版及其资源、系统程序与库目录只读，`/etc`、
+收窄父规则，所以必须使用 allowlist。受管权限覆盖可触达常规文件与目录的文件系统权限，不含只作用于
+字符/块设备的 `ioctl-dev`；allowlist 只允许 pinned 发行版及其资源、系统程序与库目录只读，`/etc`、
 `/proc`、`/sys` 只读元数据，`/dev` 可读写，以及本次临时 HOME/TMPDIR 与本 Conversation 目录可读写；
 兄弟 Conversation 目录与共享边界目录都不在 allowlist 内。Landlock 规则集可叠加，pinned Codex 仍对
 工具子进程施加自身策略。Linux 另以 `sandbox_mode="workspace-write"` 保持本人 workspace 可写。

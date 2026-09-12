@@ -222,7 +222,6 @@ const landlockDataRights = [
 	"make-sym",
 	"refer",
 	"truncate",
-	"ioctl-dev",
 ].join(",");
 
 async function boundaryCapture(path: string) {

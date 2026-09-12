@@ -73,7 +73,10 @@ const conversationBoundaryDirectory = "conversations";
 const conversationPermissionProfileId = "agent_infra_conversation";
 const conversationKeyPattern = /^[a-f0-9]{64}$/;
 const loopbackProxyExclusions = "127.0.0.1,::1,localhost";
-// Every Landlock filesystem right the pinned ABI V5 admission requires.
+// Conversation data is only ever regular files and directories, so the boundary
+// handles the filesystem rights that reach them. ioctl-dev governs character and
+// block devices, which hold no Conversation data, and handling it would only risk
+// breaking native device access without adding isolation.
 const landlockDataRights = [
 	"execute",
 	"write-file",
@@ -90,7 +93,6 @@ const landlockDataRights = [
 	"make-sym",
 	"refer",
 	"truncate",
-	"ioctl-dev",
 ].join(",");
 const landlockProgramRights = "execute,read-file,read-dir";
 const landlockMetadataRights = "read-file,read-dir";
