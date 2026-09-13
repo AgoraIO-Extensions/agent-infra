@@ -130,6 +130,7 @@ export async function forwardClaudeMessages(
 							content = { type: block.type, text: block.text };
 						} else if (block.type === "thinking") {
 							payload(index as number, "thinking", block.thinking);
+							payload(index as number, "signature", block.signature ?? "");
 							content = {
 								type: block.type,
 								thinking: block.thinking,

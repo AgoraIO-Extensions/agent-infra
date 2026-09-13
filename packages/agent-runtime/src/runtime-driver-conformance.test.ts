@@ -456,99 +456,102 @@ describe("Runtime Driver shared conformance", () => {
 		},
 	);
 
-	it.each(driverNames)(
-		"binds, replays, rejects, and isolates V2 selection through %s",
-		async (name) => {
-			const path = await directory();
-			const fixture = await openConformanceDriver(
-				name,
-				join(path, "driver.json"),
-			);
-			const host = await openConformanceHost(
-				join(path, "host.json"),
-				fixture.driver,
-			);
-			const first = submitRequestV2();
-			const accepted = await host.submitTurnV2(first);
-			expect(
-				await host.submitTurnV2({
+	for (const name of driverNames)
+		it(
+			`binds, replays, rejects, and isolates V2 selection through ${name}`,
+			async () => {
+				const path = await directory();
+				const fixture = await openConformanceDriver(
+					name,
+					join(path, "driver.json"),
+				);
+				const host = await openConformanceHost(
+					join(path, "host.json"),
+					fixture.driver,
+				);
+				const first = submitRequestV2();
+				const accepted = await host.submitTurnV2(first);
+				expect(
+					await host.submitTurnV2({
+						...first,
+						requestId: "request-conformance-selection-replay",
+					}),
+				).toEqual(accepted);
+				await expect(
+					host.submitTurnV2({
+						...first,
+						requestId: "request-conformance-selection-mismatch",
+						selection: {
+							...first.selection,
+							reasoningLevel: "low",
+						},
+					}),
+				).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+				expect(fixture.turnSelections()).toEqual([first.selection]);
+
+				fixture.completeStopAsCancelled();
+				const context = requestContext(
+					first,
+					accepted.hostSessionRef,
+					"request-conformance-selection-stop",
+				);
+				await host.stop({
+					...context,
+					executionDeliveryFence: 1,
+					stopRequestId: "stop-conformance-selection",
+					grant: runtimeGrantFixture(context, ["turn.stop"]),
+				});
+
+				const secondBinding = {
 					...first,
-					requestId: "request-conformance-selection-replay",
-				}),
-			).toEqual(accepted);
-			await expect(
-				host.submitTurnV2({
-					...first,
-					requestId: "request-conformance-selection-mismatch",
-					selection: {
-						...first.selection,
-						reasoningLevel: "low",
-					},
-				}),
-			).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
-			expect(fixture.turnSelections()).toEqual([first.selection]);
-
-			fixture.completeStopAsCancelled();
-			const context = requestContext(
-				first,
-				accepted.hostSessionRef,
-				"request-conformance-selection-stop",
-			);
-			await host.stop({
-				...context,
-				executionDeliveryFence: 1,
-				stopRequestId: "stop-conformance-selection",
-				grant: runtimeGrantFixture(context, ["turn.stop"]),
-			});
-
-			const secondBinding = {
-				...first,
-				executionId: "execution-conformance-selection-second",
-				turnId: "turn-conformance-selection-second",
-			};
-			const second = submitRequestV2({
-				...secondBinding,
-				requestId: "request-conformance-selection-second",
-				hostSessionRef: accepted.hostSessionRef,
-				selection: {
-					schemaVersion: 1,
-					modelOptionId: "model-option-alternate",
-					reasoningLevel: "low",
-				},
-				grant: runtimeGrantFixture(secondBinding, ["turn.submit"]),
-			});
-			expect((await host.submitTurnV2(second)).result).toMatchObject({
-				outcome: "accepted",
-			});
-			expect(fixture.turnSelections()).toEqual([
-				first.selection,
-				second.selection,
-			]);
-
-			const unsupportedBinding = {
-				...second,
-				executionId: "execution-conformance-selection-unsupported",
-				turnId: "turn-conformance-selection-unsupported",
-			};
-			const unsupported = await host.submitTurnV2(
-				submitRequestV2({
-					...unsupportedBinding,
-					requestId: "request-conformance-selection-unsupported",
+					executionId: "execution-conformance-selection-second",
+					turnId: "turn-conformance-selection-second",
+				};
+				const second = submitRequestV2({
+					...secondBinding,
+					requestId: "request-conformance-selection-second",
+					hostSessionRef: accepted.hostSessionRef,
 					selection: {
 						schemaVersion: 1,
-						modelOptionId: "model-option-unsupported",
-						reasoningLevel: "high",
+						modelOptionId: "model-option-alternate",
+						reasoningLevel: "low",
 					},
-					grant: runtimeGrantFixture(unsupportedBinding, ["turn.submit"]),
-				}),
-			);
-			expect(unsupported.result).toMatchObject({
-				outcome: "rejected",
-				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
-			});
-			expect(fixture.turnSelections()).toHaveLength(2);
-		},
-	);
+					grant: runtimeGrantFixture(secondBinding, ["turn.submit"]),
+				});
+				expect((await host.submitTurnV2(second)).result).toMatchObject({
+					outcome: "accepted",
+				});
+				expect(fixture.turnSelections()).toEqual([
+					first.selection,
+					second.selection,
+				]);
+
+				const unsupportedBinding = {
+					...second,
+					executionId: "execution-conformance-selection-unsupported",
+					turnId: "turn-conformance-selection-unsupported",
+				};
+				const unsupported = await host.submitTurnV2(
+					submitRequestV2({
+						...unsupportedBinding,
+						requestId: "request-conformance-selection-unsupported",
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: "model-option-unsupported",
+							reasoningLevel: "high",
+						},
+						grant: runtimeGrantFixture(unsupportedBinding, ["turn.submit"]),
+					}),
+				);
+				expect(unsupported.result).toMatchObject({
+					outcome: "rejected",
+					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				});
+				expect(fixture.turnSelections()).toHaveLength(2);
+			},
+			// Claude starts and retires real Native processes for both model options.
+			name === "Claude" ? 30_000 : undefined,
+		);
 
 	it.each(driverNames)(
 		"converges competing Worker fence takeover without a second Turn through %s",

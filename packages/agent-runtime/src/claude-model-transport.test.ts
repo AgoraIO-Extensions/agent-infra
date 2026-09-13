@@ -96,6 +96,99 @@ it.each(["valid", "credential", "late-error", "incomplete"])(
 	},
 );
 
+it.each(["valid", "credential"])(
+	"checks the initial thinking signature together with its deltas: %s",
+	async (scenario) => {
+		const initial =
+			scenario === "credential" ? "synthetic-provider-" : "signed-";
+		const suffix = scenario === "credential" ? "credential" : "thinking";
+		const values = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_synthetic",
+					type: "message",
+					role: "assistant",
+					model: "claude-opus-5",
+					content: [],
+					usage: { input_tokens: 10, output_tokens: 0 },
+				},
+			},
+			{
+				type: "content_block_start",
+				index: 0,
+				content_block: { type: "thinking", thinking: "", signature: initial },
+			},
+			{
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "signature_delta", signature: suffix },
+			},
+			{ type: "content_block_stop", index: 0 },
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn" },
+				usage: { output_tokens: 2 },
+			},
+			{ type: "message_stop" },
+		];
+		const transport = await openClaudeModelTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			fetch: async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							for (const value of values)
+								controller.enqueue(
+									new TextEncoder().encode(
+										`event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`,
+									),
+								);
+							controller.close();
+						},
+					}),
+					{ headers: { "content-type": "text/event-stream" } },
+				),
+		});
+		try {
+			const response = await fetch(
+				`${transport.modelAccess.endpoint}/v1/messages`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({
+						model: "claude-opus-5",
+						output_config: { effort: "high" },
+						thinking: { type: "adaptive" },
+						stream: true,
+						messages: [],
+					}),
+				},
+			);
+			const body = await response.text();
+			if (scenario === "valid") {
+				expect(body).toContain(`"signature":"${initial}"`);
+				expect(body).toContain(`"signature":"${suffix}"`);
+				expect(body).toContain('"type":"message_stop"');
+				expect(transport.failure()).toBeUndefined();
+			} else {
+				expect(body).not.toContain(initial);
+				expect(body).not.toContain('"type":"message_stop"');
+				expect(transport.failure()).toBe("unknown");
+			}
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
 it("admits the bound option before sending and prevents a native retry after a provider error", async () => {
 	let admitted = false;
 	let calls = 0;
