@@ -1,6 +1,7 @@
 // Adapted from Paseo claude/query.ts at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	type Options,
 	query,
@@ -14,6 +15,7 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 		finishInput = resolve;
 	});
 	let finishExit: () => void = () => {};
+	let childClosed = false;
 	const exited = new Promise<void>((resolve) => {
 		finishExit = resolve;
 	});
@@ -37,7 +39,10 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 					detached: true,
 				});
 				child.stderr.resume();
-				child.once("close", finishExit);
+				child.once("close", () => {
+					childClosed = true;
+					finishExit();
+				});
 				child.on("error", () => {});
 				return child;
 			},
@@ -53,59 +58,36 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 				finishInput();
 				native.close();
 				if (!child) return;
-				const kill = (signal: NodeJS.Signals) => {
-					if (child?.pid) {
+				const pid = child.pid;
+				if (!pid) throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+				for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+					try {
+						process.kill(-pid, signal);
+					} catch (error) {
+						// Darwin may report EPERM for an SDK-killed, not-yet-reaped child.
+						if (
+							!["ESRCH", "EPERM"].includes(
+								(error as NodeJS.ErrnoException).code ?? "",
+							)
+						)
+							throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+					}
+					const deadline = Date.now() + 2000;
+					do {
+						let groupGone = false;
 						try {
-							process.kill(-child.pid, signal);
+							process.kill(-pid, 0);
 						} catch (error) {
-							if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-								throw error;
+							const code = (error as NodeJS.ErrnoException).code;
+							if (code === "ESRCH") groupGone = true;
+							else if (code !== "EPERM")
+								throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 						}
-					}
-				};
-				try {
-					kill("SIGTERM");
-				} catch (error) {
-					// Darwin can report EPERM while the SDK-killed child is a zombie.
-					// Require both reaping and absence of the entire group before continuing.
-					if ((error as NodeJS.ErrnoException).code !== "EPERM")
-						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-					let deadline: ReturnType<typeof setTimeout> | undefined;
-					try {
-						await Promise.race([
-							exited,
-							new Promise<never>((_, reject) => {
-								deadline = setTimeout(
-									() => reject(new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE")),
-									2000,
-								);
-							}),
-						]);
-						if (!child.pid) throw new Error();
-						try {
-							process.kill(-child.pid, 0);
-						} catch (probeError) {
-							if ((probeError as NodeJS.ErrnoException).code === "ESRCH")
-								return;
-							throw probeError;
-						}
-						throw new Error();
-					} catch {
-						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-					} finally {
-						clearTimeout(deadline);
-					}
+						if (childClosed && groupGone) return;
+						await delay(25);
+					} while (Date.now() < deadline);
 				}
-				const timer = setTimeout(() => {
-					try {
-						kill("SIGKILL");
-					} catch {}
-				}, 2000);
-				try {
-					await exited;
-				} finally {
-					clearTimeout(timer);
-				}
+				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 			})();
 			return closing;
 		},

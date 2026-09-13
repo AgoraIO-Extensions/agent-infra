@@ -11,7 +11,7 @@ const {getSessionInfo, getSessionMessages} = await import(process.argv[1]);
 const [id, dir, userId] = process.argv.slice(2);
 const info = await getSessionInfo(id, {dir});
 if (!info || info.sessionId !== id) process.exit(1);
-const messages = await getSessionMessages(id, {dir, limit: 10000});
+const messages = await getSessionMessages(id, {dir});
 if (messages.some(m => m.session_id !== id || m.parent_tool_use_id !== null)) process.exit(1);
 const start = messages.findIndex(m => m.uuid === userId && m.type === 'user');
 const tail = start < 0 ? [] : messages.slice(start + 1);

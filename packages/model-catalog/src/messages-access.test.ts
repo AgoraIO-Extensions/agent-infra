@@ -50,6 +50,9 @@ it.each(["api-key", "bearer"])(
 					),
 				).toBe(false);
 				expect(headers.get("anthropic-version")).toBe("2023-06-01");
+				expect(headers.get("anthropic-beta")?.split(",")).toContain(
+					"fallback-credit-2026-06-01",
+				);
 				expect(init?.redirect).toBe("error");
 				if (String(url).endsWith("/count_tokens?beta=true"))
 					return Response.json({ input_tokens: 100 });

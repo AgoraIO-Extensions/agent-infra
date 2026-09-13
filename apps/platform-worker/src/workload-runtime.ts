@@ -49,7 +49,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly decryptor: SecretActivationDecryptorPortV1;
 	readonly modelCatalog?: ModelCatalogAdapterV1;
 	readonly modelAccess?: ModelAccessValidatorV1;
-	readonly templateModelBindings?: readonly StandardTemplateModelBindingV1[];
+	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
+	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -246,6 +247,8 @@ function bindingsFor(
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 {
+	if (!Array.isArray(options.templateModelBindings))
+		throw new TypeError("Template model bindings are required");
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
@@ -378,7 +381,7 @@ export function createWorkloadRuntimeV1(
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
 		const protocol = standardTemplateModelProtocolV1(
 			state.candidate.configuration.source,
-			options.templateModelBindings ?? [],
+			options.templateModelBindings,
 		);
 		const projection = validateRuntimeModelProjectionV1(
 			state.candidate.modelProjection,
@@ -557,7 +560,7 @@ export function createWorkloadRuntimeV1(
 						configuration,
 						protocol: standardTemplateModelProtocolV1(
 							configuration.source,
-							options.templateModelBindings ?? [],
+							options.templateModelBindings,
 						),
 						catalog: options.modelCatalog,
 						access: options.modelAccess,

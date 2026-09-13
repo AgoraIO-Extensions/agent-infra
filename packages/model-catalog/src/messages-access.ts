@@ -5,7 +5,7 @@ import { ModelConfigurationErrorV1, modelOperationV1 } from "./catalog.js";
 
 // Fixed Claude SDK 0.3.246 / CLI 2.1.246 Messages profile, also exercised by native conformance.
 const betas =
-	"claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24";
+	"claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01";
 const efforts = ["low", "medium", "high", "xhigh", "max"];
 
 async function boundedBody(response: Response, signal: AbortSignal) {

@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import {
+	appendFile,
 	readdir,
 	readFile,
 	realpath,
@@ -24,6 +26,68 @@ async function fixture() {
 afterEach(async () => {
 	for (const value of fixtures.splice(0)) await value.close();
 });
+
+it("reads native continuity and completion beyond the first 10000 messages", async () => {
+	const f = await fixture();
+	const accepted = await f.driver.execute(claudeCommand());
+	await f.settled(accepted.nativeSessionRef, "execution-one");
+	await f.driver.close();
+	const directory = join(f.path, accepted.nativeSessionRef);
+	const state = JSON.parse(
+		await readFile(join(directory, "state.json"), "utf8"),
+	);
+	const config = join(directory, "config");
+	const transcript = (await readdir(config, { recursive: true })).find((file) =>
+		file.endsWith(`${state.nativeId}.jsonl`),
+	);
+	if (!transcript) throw new Error("Synthetic transcript was not persisted");
+	const file = join(config, transcript);
+	const records = (await readFile(file, "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	const templates = {
+		user: records.find((entry) => entry.type === "user"),
+		assistant: records.find((entry) => entry.type === "assistant"),
+	};
+	let parentUuid = records.findLast(
+		(entry) => entry.type === "user" || entry.type === "assistant",
+	).uuid;
+	let lastUser = "";
+	const added = [];
+	for (let i = 0; i < 10002; i++) {
+		const type = i % 2 === 0 ? "user" : "assistant";
+		const uuid = randomUUID();
+		if (type === "user") lastUser = uuid;
+		added.push(
+			JSON.stringify({
+				...templates[type],
+				uuid,
+				parentUuid,
+				message: {
+					...templates[type].message,
+					id: `synthetic-${uuid}`,
+					content: [{ type: "text", text: "synthetic-long-history" }],
+					...(type === "assistant" ? { stop_reason: "end_turn" } : {}),
+				},
+			}),
+		);
+		parentUuid = uuid;
+	}
+	await appendFile(file, `${added.join("\n")}\n`);
+	const history = await readClaudeSessionHistory(
+		state.nativeId,
+		join(directory, "workspace"),
+		config,
+		lastUser,
+	);
+	expect(history.users).toContain(state.turns[0].userMessageId);
+	expect(history.users).toContain(lastUser);
+	expect(history.completed).toBe(true);
+	expect(history.events).toEqual([
+		{ type: "text", payload: { delta: "synthetic-long-history" } },
+	]);
+}, 30000);
 
 it("switches equal model names between endpoints and credentials while resuming the original native history", async () => {
 	const f = await fixture();
