@@ -1440,16 +1440,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	// server-resolved binding, never from a wire field.
 	private readonly conversationRpcs = new Map<string, CodexRpc>();
 	// A transport multiplexes one JSON-RPC id space, so it can never carry two
-	// request multiplexers.
+	// request multiplexers. It is also bound to the Conversation it was opened
+	// for: reusing it for another key would alias two Conversations onto one
+	// native process, which is exactly the isolation this class provides.
 	private readonly rpcsByTransport = new Map<
 		CodexAppServerTransport,
-		CodexRpc
+		{ readonly conversationKey: string; readonly rpc: CodexRpc }
 	>();
 	private readonly inFlightConversationRpcs = new Map<
 		string,
 		Promise<CodexRpc>
 	>();
 	private closed = false;
+	// Only a scripted test double serves every Conversation from one transport;
+	// production always opens one native process per Conversation.
+	private sharedNativeTransport = false;
 
 	private conversationKeyFor(nativeSessionRef: string) {
 		const session = this.session(nativeSessionRef);
@@ -1487,8 +1492,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const opened = this.rpcsByTransport.get(bridge);
 		if (opened) {
-			this.conversationRpcs.set(conversationKey, opened);
-			return opened;
+			// A production transport is a freshly opened native process, so seeing one
+			// again for another Conversation would alias two Conversations onto one
+			// process and undo the isolation this class exists to provide.
+			if (
+				opened.conversationKey !== conversationKey &&
+				!this.sharedNativeTransport
+			)
+				unavailable();
+			this.conversationRpcs.set(conversationKey, opened.rpc);
+			return opened.rpc;
 		}
 		const rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
 		try {
@@ -1514,7 +1527,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await rpc.close().catch(() => {});
 			unavailable();
 		}
-		this.rpcsByTransport.set(bridge, rpc);
+		this.rpcsByTransport.set(bridge, { conversationKey, rpc });
 		this.conversationRpcs.set(conversationKey, rpc);
 		return rpc;
 	}
@@ -1556,6 +1569,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	protected static async openWithBridge(
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
+		// Test-only: the scripted double is one transport for every Conversation.
+		sharedNativeTransport = false,
 	) {
 		const {
 			configured: modelOptions,
@@ -1594,7 +1609,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				await assertPinnedModelProfiles(rpc, modelOptions);
 			}
 		};
-		return new CodexRuntimeDriver(
+		const driver = new CodexRuntimeDriver(
 			file,
 			openConversationBridge,
 			assertContainedNativeConfiguration,
@@ -1609,6 +1624,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport?.cancelTurn,
 			modelTransport?.revokeTurn,
 		);
+		driver.sharedNativeTransport = sharedNativeTransport;
+		return driver;
 	}
 
 	private static async openState(path: string) {
@@ -2190,7 +2207,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await Promise.allSettled(opening);
 		const rpcs = new Set([
 			...this.conversationRpcs.values(),
-			...this.rpcsByTransport.values(),
+			...[...this.rpcsByTransport.values()].map(({ rpc }) => rpc),
 		]);
 		this.conversationRpcs.clear();
 		this.rpcsByTransport.clear();

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import {
 	access,
 	chmod,
@@ -614,12 +614,27 @@ describe.sequential("Codex app-server v2 bridge", () => {
 					"--landlock-access",
 					`fs:${landlockDataRights}`,
 					"--landlock-rule",
-					`path-beneath:${landlockDataRights}:${conversation}`,
+					`path-beneath:${landlockDataRights}:${join(conversation, "home")}`,
+					"--landlock-rule",
+					`path-beneath:${landlockDataRights}:${join(conversation, "workspace")}`,
 				]),
 			);
-			expect(launch.boundary).not.toContain(
-				`path-beneath:${landlockDataRights}:${dirname(conversation)}`,
-			);
+			// Neither the Conversation root nor the shared boundary is writable.
+			for (const path of [conversation, dirname(conversation)]) {
+				expect(launch.boundary).not.toContain(
+					`path-beneath:${landlockDataRights}:${path}`,
+				);
+			}
+			// `/proc` is only ever listed, never readable: a sibling native
+			// process's environment would otherwise expose its model credential.
+			// The directory only exists on Linux hosts, so this asserts the rights
+			// of whichever `/proc` rule the platform produced.
+			expect(
+				launch.boundary.filter(
+					(argument) =>
+						argument.startsWith("path-beneath:") && argument.endsWith(":/proc"),
+				),
+			).toEqual(existsSync("/proc") ? ["path-beneath:read-dir:/proc"] : []);
 			const other = keys[index === 0 ? 1 : 0];
 			if (!other) throw new Error("Missing synthetic key");
 			expect(launch.boundary.some((argument) => argument.includes(other))).toBe(

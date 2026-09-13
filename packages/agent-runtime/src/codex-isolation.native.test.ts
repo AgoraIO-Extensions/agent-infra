@@ -350,6 +350,21 @@ function toolExitCodes(outputs: readonly string[]) {
 	return codes;
 }
 
+// Mirrors the native exec envelope the runtime returns. Evidence helpers refuse
+// output without an observed exit code, so a fixture for a completed native run
+// must carry the framing a real run carries.
+function nativeExecOutput(body: string) {
+	return JSON.stringify(
+		[
+			"Chunk ID: synthetic",
+			"Wall time: 0.0000 seconds",
+			"Process exited with code 0",
+			"Output:",
+			body,
+		].join("\n"),
+	);
+}
+
 function completeToolOutput(
 	outputs: readonly string[],
 	completionMarker?: string,
@@ -359,8 +374,11 @@ function completeToolOutput(
 	return (
 		decoded.length > 0 &&
 		decoded.every((output): output is string => output !== undefined) &&
+		// A missing envelope is incomplete evidence, not a successful tool: without
+		// an observed exit code the decoded text could be anything.
 		exitCodes !== undefined &&
-		exitCodes.every((code) => code === undefined || code === 0) &&
+		exitCodes.length === decoded.length &&
+		exitCodes.every((code) => code === 0) &&
 		!decoded.some((output) =>
 			/truncated|Process running with session ID/i.test(output),
 		) &&
@@ -1232,7 +1250,7 @@ it.skipIf(process.platform === "win32")(
 			expect(command).not.toContain(foreign);
 			const evidence = historyScenarioEvidence({
 				outputs: [
-					JSON.stringify(
+					nativeExecOutput(
 						execFileSync("sh", ["-c", command], { encoding: "utf8" }),
 					),
 				],
@@ -1272,7 +1290,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 			await writeFile(join(foreignSessions, "foreign-history.json"), foreign);
 			await chmod(foreignSessions, 0o000);
 			const outputs = [
-				JSON.stringify(
+				nativeExecOutput(
 					execFileSync(
 						"sh",
 						[
@@ -1454,10 +1472,12 @@ it.skipIf(process.platform === "win32")(
 					);
 				const success = run(target);
 				expect(success).toContain("SYNTH_PRIVATE_TEST");
-				expect(fileReadOutcome([JSON.stringify(success)], marker)).toBe("READ");
+				expect(fileReadOutcome([nativeExecOutput(success)], marker)).toBe(
+					"READ",
+				);
 				if (search) expect(success).not.toContain("irrelevant");
 				for (const path of [directory, join(directory, "missing")]) {
-					const outputs = [JSON.stringify(run(path))];
+					const outputs = [nativeExecOutput(run(path))];
 					expect(fileReadOutcome(outputs, marker)).toBe("ERROR");
 					expect(
 						crossFileReadEvidence({
@@ -1478,7 +1498,7 @@ it.skipIf(process.platform === "win32")(
 			foreignMarkerObserved = false,
 		) =>
 			crossFileReadEvidence({
-				outputs: [JSON.stringify(text)],
+				outputs: [nativeExecOutput(text)],
 				outcomeMarker: marker,
 				positiveControl,
 				foreignMarkerObserved,
@@ -1560,7 +1580,7 @@ it("accepts only a complete nonce-bound filesystem permission denial", () => {
 			changed,
 			ownerWriteSucceeded,
 			outcomeMarker,
-			outputs: [JSON.stringify(lines.join("\n"))],
+			outputs: [nativeExecOutput(lines.join("\n"))],
 		});
 	for (const code of ["EACCES", "EPERM"])
 		expect(evidence([`${outcomeMarker}=${code}`])).toEqual({
@@ -1627,11 +1647,11 @@ it.skipIf(process.platform === "win32")(
 		const statuses: Status[] = [];
 		for (const [input, expected] of [
 			[
-				{ changed: true, outputs: [JSON.stringify(appliedMarker)] },
+				{ changed: true, outputs: [nativeExecOutput(appliedMarker)] },
 				{ status: "fail", reason: "foreign-file-modified" },
 			],
 			[
-				{ outputs: [JSON.stringify(genericFailureOutput)] },
+				{ outputs: [nativeExecOutput(genericFailureOutput)] },
 				{ status: "unverified", reason: "foreign-write-denial-unclassified" },
 			],
 			[
@@ -1647,7 +1667,7 @@ it.skipIf(process.platform === "win32")(
 				{ status: "unverified", reason: "foreign-write-output-incomplete" },
 			],
 			[
-				{ outputs: [JSON.stringify("native command failed")] },
+				{ outputs: [nativeExecOutput("native command failed")] },
 				{ status: "unverified", reason: "foreign-write-denial-unclassified" },
 			],
 		] as const) {

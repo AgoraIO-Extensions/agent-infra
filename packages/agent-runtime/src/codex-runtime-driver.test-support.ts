@@ -325,6 +325,7 @@ class CodexRuntimeDriverTestAccess extends CodexRuntimeDriver {
 		const driver = (await CodexRuntimeDriverTestAccess.openWithBridge(
 			options,
 			openBridge,
+			true,
 		)) as CodexRuntimeDriverTestAccess;
 		try {
 			// Production admits a native process when a Conversation first needs it.

@@ -96,6 +96,10 @@ const landlockDataRights = [
 ].join(",");
 const landlockProgramRights = "execute,read-file,read-dir";
 const landlockMetadataRights = "read-file,read-dir";
+const landlockDirectoryRights = "read-dir";
+// Devices only ever need to be opened and written; the native process never
+// creates or removes entries beneath `/dev`.
+const landlockDeviceRights = "read-file,read-dir,write-file";
 // The platform Landlock domain is the whole Conversation boundary on Linux, so
 // pinned Codex must not add its own filesystem sandbox on top of it: the pinned
 // legacy Landlock backend needs `read-dir` on `/`, and Landlock only ever adds
@@ -666,9 +670,23 @@ function conversationPermissionArguments(policy: ConversationLaunchPolicy) {
 	];
 }
 
-async function existingDirectory(path: string) {
+/**
+ * A boundary rule may only name a directory whose every component is already
+ * canonical. `lstat` alone would accept a symlinked ancestor, and Landlock
+ * attaches a rule to the resolved directory, so such an entry could silently
+ * widen the boundary to a tree the deployment never intended to allow.
+ */
+async function canonicalDirectory(path: string) {
+	// The helper resolves rule paths in the native process working directory, so
+	// a relative entry would either fail the launch or name another directory.
+	if (!isAbsolute(path) || resolve(path) !== path) return undefined;
+	if ((await realpath(path).catch(() => undefined)) !== path) return undefined;
 	const metadata = await lstat(path).catch(() => undefined);
-	return metadata?.isDirectory() === true;
+	return metadata?.isDirectory() === true ? path : undefined;
+}
+
+function withinTree(path: string, tree: string) {
+	return path === tree || path.startsWith(`${tree}${sep}`);
 }
 
 /**
@@ -685,13 +703,29 @@ async function conversationLandlockArguments(
 	policy: ConversationLaunchPolicy,
 ) {
 	const rules: string[] = [];
+	const rule = (rights: string, path: string) =>
+		`path-beneath:${rights}:${path}`;
+	// Every rule outside this Conversation is an allowlist entry, so it must not
+	// reach the shared boundary in either direction: an entry inside it would
+	// expose a sibling Conversation, and an entry containing it would expose all
+	// of them. A release installed directly in a system root is rejected here
+	// rather than silently granting that root.
 	const allow = async (rights: string, path: string) => {
-		// The helper resolves rule paths in the native process working directory,
-		// so a relative entry would either fail the launch or name another
-		// directory entirely.
-		if (!isAbsolute(path) || resolve(path) !== path) return;
-		if (!(await existingDirectory(path))) return;
-		rules.push("--landlock-rule", `path-beneath:${rights}:${path}`);
+		const directory = await canonicalDirectory(path);
+		if (!directory) return;
+		if (
+			withinTree(directory, policy.boundary) ||
+			withinTree(policy.boundary, directory)
+		)
+			return;
+		rules.push("--landlock-rule", rule(rights, directory));
+	};
+	// This Conversation's own directories are required, so a missing or
+	// non-canonical one fails the launch instead of dropping the rule.
+	const allowOwned = async (rights: string, path: string) => {
+		const directory = await canonicalDirectory(path);
+		if (!directory || !withinTree(directory, policy.root)) throw unavailable();
+		rules.push("--landlock-rule", rule(rights, directory));
 	};
 	// The pinned release and its bundled resources stay read-only.
 	await allow(landlockProgramRights, dirname(dirname(executable)));
@@ -701,16 +735,20 @@ async function conversationLandlockArguments(
 	for (const path of ["/bin", "/sbin", "/usr", "/lib", "/lib64"]) {
 		await allow(landlockProgramRights, path);
 	}
-	for (const path of ["/etc", "/proc", "/sys"]) {
+	for (const path of ["/etc", "/sys"]) {
 		await allow(landlockMetadataRights, path);
 	}
-	await allow(landlockDataRights, "/dev");
-	// Only this Conversation's durable directory and the ephemeral HOME/TMPDIR.
+	// `/proc` is only listed, never read. Landlock already denies reading another
+	// domain's process entries, so this closes the remaining path: a model tool
+	// reading its own native process's `environ` and lifting the model credential.
+	await allow(landlockDirectoryRights, "/proc");
+	await allow(landlockDeviceRights, "/dev");
+	// Only the ephemeral HOME/TMPDIR and this Conversation's own directories; the
+	// Conversation root itself is never writable, only the two it owns.
 	const ephemeral = policy.environment.TMPDIR;
 	if (ephemeral) await allow(landlockDataRights, ephemeral);
-	await allow(landlockDataRights, policy.root);
-	if (!rules.includes(`path-beneath:${landlockDataRights}:${policy.root}`)) {
-		throw unavailable();
+	for (const owned of [policy.home, policy.directory]) {
+		await allowOwned(landlockDataRights, owned);
 	}
 	return [
 		"--no-new-privs",

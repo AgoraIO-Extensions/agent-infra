@@ -125,7 +125,7 @@ function syntheticToolResponse(response, sequence) {
 		call_id: toolCallId,
 		name: "exec_command",
 		arguments: JSON.stringify({
-			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; printf 'runtime-sibling-denied\\n'`,
+			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; printf 'runtime-sibling-denied\\n'`,
 			max_output_tokens: 100,
 			yield_time_ms: 1000,
 		}),
@@ -1134,6 +1134,9 @@ try {
 				toolProbeOutput.includes("runtime-truncate-denied") &&
 				toolProbeOutput.includes("Permission denied"),
 		);
+		// The same marker also covers the process environment channel: a readable
+		// `/proc` would let a model tool lift the model credential straight out of
+		// a native process's environment.
 		check(
 			"native-sibling-conversation-denied",
 			typeof toolProbeOutput === "string" &&
