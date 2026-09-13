@@ -94,7 +94,7 @@ if (args[0] === "run") {
   if (args.includes("/probe/runtime-image-probe.mjs")) {
     if (process.env.FAKE_RUNTIME_PROBE_FAIL) { console.error(process.env.FAKE_RUNTIME_PROBE_STDERR ?? "synthetic-credential-do-not-log"); process.exit(42); }
     if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
-    else console.log(JSON.stringify({ schemaVersion: 1, status: "passed", codexVersion: "0.153.0", configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-sandboxed-tool-execution", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
+    else console.log(JSON.stringify({ schemaVersion: 1, status: "passed", codexVersion: "0.153.0", configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-sandboxed-tool-execution", "native-sibling-conversation-denied", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
     process.exit(0);
   }
   if (args.includes("--entrypoint")) console.log(process.env.FAKE_RUNTIME_UID ?? "1000");
