@@ -38,7 +38,7 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 				});
 				child.stderr.resume();
 				child.once("close", finishExit);
-				child.once("error", finishExit);
+				child.on("error", () => {});
 				return child;
 			},
 			stderr: () => {},
@@ -59,11 +59,43 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 							process.kill(-child.pid, signal);
 						} catch (error) {
 							if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-								throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+								throw error;
 						}
 					}
 				};
-				kill("SIGTERM");
+				try {
+					kill("SIGTERM");
+				} catch (error) {
+					// Darwin can report EPERM while the SDK-killed child is a zombie.
+					// Require both reaping and absence of the entire group before continuing.
+					if ((error as NodeJS.ErrnoException).code !== "EPERM")
+						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+					let deadline: ReturnType<typeof setTimeout> | undefined;
+					try {
+						await Promise.race([
+							exited,
+							new Promise<never>((_, reject) => {
+								deadline = setTimeout(
+									() => reject(new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE")),
+									2000,
+								);
+							}),
+						]);
+						if (!child.pid) throw new Error();
+						try {
+							process.kill(-child.pid, 0);
+						} catch (probeError) {
+							if ((probeError as NodeJS.ErrnoException).code === "ESRCH")
+								return;
+							throw probeError;
+						}
+						throw new Error();
+					} catch {
+						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+					} finally {
+						clearTimeout(deadline);
+					}
+				}
 				const timer = setTimeout(() => {
 					try {
 						kill("SIGKILL");

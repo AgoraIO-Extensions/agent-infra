@@ -181,12 +181,15 @@ export async function claudeNativeFixture() {
 			driver = await ClaudeRuntimeDriver.open(config);
 		},
 		async close() {
-			await driver.close();
-			for (const server of servers) {
-				server.closeAllConnections();
-				await new Promise<void>((resolve) => server.close(() => resolve()));
+			try {
+				await driver.close();
+			} finally {
+				for (const server of servers) {
+					server.closeAllConnections();
+					await new Promise<void>((resolve) => server.close(() => resolve()));
+				}
+				await rm(path, { recursive: true, force: true });
 			}
-			await rm(path, { recursive: true, force: true });
 		},
 	};
 }

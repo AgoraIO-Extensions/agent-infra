@@ -480,3 +480,116 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 		).toHaveLength(4);
 	}
 }, 30000);
+
+it("waits for native exit after a permission error on the retiring process group before resuming", async () => {
+	const f = await fixture();
+	f.hold();
+	const first = await f.driver.execute(claudeCommand());
+	await vi.waitFor(() => expect(f.calls).toHaveLength(1));
+	const nativeKill = process.kill.bind(process);
+	let denied = false;
+	let reaped = false;
+	const signal = vi.spyOn(process, "kill").mockImplementation((pid, action) => {
+		if (pid < 0 && action === "SIGTERM" && !denied) {
+			denied = true;
+			// Reproduce a terminated, not-yet-reaped group; a live EPERM must stay fatal.
+			try {
+				nativeKill(pid, "SIGKILL");
+			} catch (error) {
+				if (
+					!["ESRCH", "EPERM"].includes(
+						(error as NodeJS.ErrnoException).code ?? "",
+					)
+				)
+					throw error;
+			}
+			throw Object.assign(new Error("Synthetic zombie process group"), {
+				code: "EPERM",
+			});
+		}
+		try {
+			return nativeKill(pid, action);
+		} catch (error) {
+			if (
+				pid < 0 &&
+				action === 0 &&
+				(error as NodeJS.ErrnoException).code === "ESRCH"
+			)
+				reaped = true;
+			throw error;
+		}
+	});
+	try {
+		await f.driver.execute({
+			schemaVersion: 1,
+			kind: "stop",
+			agentId: "agent-one",
+			conversationId: "conversation-one",
+			sessionGeneration: 1,
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: "execution-one",
+			turnId: "turn-one",
+			operationId: "stop-one",
+		});
+		await f.restart();
+		f.release();
+		expect(denied).toBe(true);
+		expect(reaped).toBe(true);
+		const next = claudeCommand("two");
+		const result = await f.driver.execute({
+			...next,
+			nativeSessionRef: first.nativeSessionRef,
+		});
+		await f.settled(result.nativeSessionRef, next.executionId);
+		expect(result.nativeSessionRef).toBe(first.nativeSessionRef);
+		expect(f.calls).toHaveLength(2);
+	} finally {
+		signal.mockRestore();
+	}
+}, 30000);
+
+it.each(["exists", "permission-denied"])(
+	"refuses another native Turn if the retired group probe is %s",
+	async (probe) => {
+		const f = await claudeNativeFixture();
+		f.hold();
+		const first = await f.driver.execute(claudeCommand());
+		await vi.waitFor(() => expect(f.calls).toHaveLength(1));
+		const nativeKill = process.kill.bind(process);
+		const signal = vi
+			.spyOn(process, "kill")
+			.mockImplementation((pid, action) => {
+				if (pid < 0 && action === "SIGTERM") {
+					try {
+						nativeKill(pid, "SIGKILL");
+					} catch {}
+					throw Object.assign(new Error("Synthetic permission error"), {
+						code: "EPERM",
+					});
+				}
+				if (pid < 0 && action === 0) {
+					if (probe === "exists") return true;
+					throw Object.assign(new Error("Synthetic probe permission error"), {
+						code: "EPERM",
+					});
+				}
+				return nativeKill(pid, action);
+			});
+		try {
+			await expect(f.driver.close()).rejects.toThrow(
+				"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+			);
+			await expect(
+				f.driver.execute({
+					...claudeCommand("two"),
+					nativeSessionRef: first.nativeSessionRef,
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+			expect(f.calls).toHaveLength(1);
+		} finally {
+			signal.mockRestore();
+			await f.close().catch(() => {});
+		}
+	},
+	30000,
+);
