@@ -3,14 +3,24 @@ import { catalogFixture } from "./catalog.fixture.js";
 import { ModelEndpointV1Schema } from "./catalog.js";
 import { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 
-export function messagesStreamFixture() {
+export function messagesStreamFixture(
+	message: unknown = {
+		id: "msg_conformance",
+		type: "message",
+		role: "assistant",
+		model: "claude-opus-5",
+		content: [],
+		usage: { input_tokens: 100, output_tokens: 1 },
+	},
+) {
 	return [
-		{ type: "message_start", message: { model: "claude-opus-5" } },
+		{ type: "message_start", message },
 		{
 			type: "content_block_start",
 			index: 0,
 			content_block: {
 				type: "tool_use",
+				id: "tool_conformance",
 				name: "agent_infra_conformance",
 				input: {},
 			},
@@ -21,7 +31,11 @@ export function messagesStreamFixture() {
 			delta: { type: "input_json_delta", partial_json: "{}" },
 		},
 		{ type: "content_block_stop", index: 0 },
-		{ type: "message_delta", delta: { stop_reason: "tool_use" } },
+		{
+			type: "message_delta",
+			delta: { stop_reason: "tool_use" },
+			usage: { output_tokens: 10 },
+		},
 		{ type: "message_stop" },
 	]
 		.map((v) => `event: ${v.type}\ndata: ${JSON.stringify(v)}\n\n`)
@@ -85,6 +99,52 @@ it.each(["api-key", "bearer"])(
 		expect(efforts).toEqual(["medium", "high"]);
 	},
 );
+
+it.each([
+	{ type: undefined },
+	{ type: "completion" },
+	{ role: "user" },
+	{ id: undefined },
+	{ id: 1 },
+	{ content: undefined },
+	{ content: [{ type: "text", text: "unexpected" }] },
+	{ usage: undefined },
+	{ usage: null },
+	{ usage: [] },
+])("rejects malformed message_start %j before activation", async (patch) => {
+	const validator = createMessagesModelAccessValidatorV1({
+		fetch: async (url) =>
+			String(url).includes("count_tokens")
+				? Response.json({ input_tokens: 100 })
+				: new Response(
+						messagesStreamFixture({
+							id: "msg_conformance",
+							type: "message",
+							role: "assistant",
+							model: "claude-opus-5",
+							content: [],
+							usage: { input_tokens: 100, output_tokens: 1 },
+							...patch,
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+	});
+	await expect(
+		validator.validate(
+			{
+				endpoint: ModelEndpointV1Schema.parse({
+					...catalogFixture().endpoints[0],
+					protocol: "anthropic-messages-v1",
+					authentication: "bearer",
+				}),
+				modelId: "claude-opus-5",
+				reasoningLevels: ["high"],
+				credential: new TextEncoder().encode("synthetic-credential-a"),
+			},
+			{ signal: AbortSignal.timeout(1000) },
+		),
+	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
 
 it.each([
 	"error",

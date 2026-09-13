@@ -51,10 +51,25 @@ function verifyCompletion(body: string, model: string) {
 				fail();
 			if (value.type === "ping") return;
 			if (value.type === "message_start") {
+				const message = value.message;
 				if (
 					started ||
-					(value.message?.model !== model &&
-						!value.message?.model?.startsWith(`${model}-`))
+					!message ||
+					typeof message !== "object" ||
+					Array.isArray(message) ||
+					message.type !== "message" ||
+					message.role !== "assistant" ||
+					typeof message.id !== "string" ||
+					(message.model !== model &&
+						!(
+							typeof message.model === "string" &&
+							message.model.startsWith(`${model}-`)
+						)) ||
+					!Array.isArray(message.content) ||
+					message.content.length !== 0 ||
+					!message.usage ||
+					typeof message.usage !== "object" ||
+					Array.isArray(message.usage)
 				)
 					fail();
 				started = true;
