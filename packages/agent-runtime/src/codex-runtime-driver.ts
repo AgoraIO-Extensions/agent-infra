@@ -1452,9 +1452,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		Promise<CodexRpc>
 	>();
 	private closed = false;
-	// Only a scripted test double serves every Conversation from one transport;
-	// production always opens one native process per Conversation.
-	private sharedNativeTransport = false;
+	private closing?: Promise<void>;
+
+	/**
+	 * Production opens one native process per Conversation, so a transport is
+	 * permanently bound to the Conversation that opened it. Only a scripted test
+	 * double serves every Conversation from a single transport, because one
+	 * transport can host exactly one JSON-RPC multiplexer.
+	 */
+	protected sharesOneNativeTransport() {
+		return false;
+	}
 
 	private conversationKeyFor(nativeSessionRef: string) {
 		const session = this.session(nativeSessionRef);
@@ -1497,7 +1505,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// process and undo the isolation this class exists to provide.
 			if (
 				opened.conversationKey !== conversationKey &&
-				!this.sharedNativeTransport
+				!this.sharesOneNativeTransport()
 			)
 				unavailable();
 			this.conversationRpcs.set(conversationKey, opened.rpc);
@@ -1511,7 +1519,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				frame,
 				// The scripted test double serves every Conversation from one
 				// transport, so only production can bind routing to one key.
-				this.sharedNativeTransport ? undefined : conversationKey,
+				this.sharesOneNativeTransport() ? undefined : conversationKey,
 			),
 		);
 		try {
@@ -1579,8 +1587,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	protected static async openWithBridge(
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
-		// Test-only: the scripted double is one transport for every Conversation.
-		sharedNativeTransport = false,
 	) {
 		const {
 			configured: modelOptions,
@@ -1619,7 +1625,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				await assertPinnedModelProfiles(rpc, modelOptions);
 			}
 		};
-		const driver = new CodexRuntimeDriver(
+		// `new this` keeps the transport-sharing policy in the class that needs it
+		// instead of carrying a test-only flag through production state.
+		return new this(
 			file,
 			openConversationBridge,
 			assertContainedNativeConfiguration,
@@ -1634,8 +1642,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport?.cancelTurn,
 			modelTransport?.revokeTurn,
 		);
-		driver.sharedNativeTransport = sharedNativeTransport;
-		return driver;
 	}
 
 	private static async openState(path: string) {
@@ -2210,7 +2216,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		})();
 	}
 
+	// Concurrent or repeated shutdown joins the first one, so the model transport
+	// is closed exactly once and no caller returns before shutdown finished.
 	async close() {
+		this.closing ??= this.shutdown();
+		await this.closing;
+	}
+
+	private async shutdown() {
 		this.closed = true;
 		const opening = [...this.inFlightConversationRpcs.values()];
 		this.inFlightConversationRpcs.clear();

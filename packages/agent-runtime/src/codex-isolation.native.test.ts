@@ -1771,7 +1771,13 @@ console.log("SYNTH_HISTORY_SCAN_COMPLETE");`;
 }
 
 // A skipped native suite is never isolation acceptance evidence.
-it.skipIf(!process.env.CODEX_ISOLATION_BINARY)(
+// This entry point observes the native launch through a byte-preserving wrapper
+// that appends to a file in the harness directory. On Linux the Bridge confines
+// the native process to the Conversation boundary, which does not include that
+// directory, so the wrapper cannot observe anything there. Linux evidence for the
+// same boundary comes from the runtime image probe instead, so this refuses to run
+// rather than reporting a boundary as a harness failure.
+it.skipIf(!process.env.CODEX_ISOLATION_BINARY || process.platform !== "darwin")(
 	"requires real Codex cross-user data isolation with successful owner controls",
 	async () => {
 		const binary = process.env.CODEX_ISOLATION_BINARY;
