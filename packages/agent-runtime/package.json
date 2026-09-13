@@ -12,7 +12,9 @@
 		}
 	},
 	"files": [
-		"dist"
+		"dist",
+		"THIRD_PARTY_NOTICES.md",
+		"third-party"
 	],
 	"scripts": {
 		"build": "tsdown",
@@ -21,6 +23,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@anthropic-ai/claude-agent-sdk": "0.3.246",
 		"eventsource-parser": "3.1.0"
 	},
 	"devDependencies": {

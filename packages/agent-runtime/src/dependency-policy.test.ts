@@ -13,13 +13,14 @@ const forbiddenImports = [
 ];
 
 describe("agent-runtime dependency direction", () => {
-	it("depends only on wire contracts and the SSE parser at runtime", async () => {
+	it("depends only on wire contracts, the official Claude SDK and the SSE parser at runtime", async () => {
 		const packageJson = JSON.parse(
 			await readFile(new URL("../package.json", import.meta.url), "utf8"),
 		) as { dependencies?: Record<string, string> };
 
 		expect(Object.keys(packageJson.dependencies ?? {})).toEqual([
 			"@agent-infra/contracts",
+			"@anthropic-ai/claude-agent-sdk",
 			"eventsource-parser",
 		]);
 	});

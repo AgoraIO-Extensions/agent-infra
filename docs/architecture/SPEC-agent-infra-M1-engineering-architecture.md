@@ -460,16 +460,28 @@ StatefulSet 的逐 Secret activation-fence 旁持久保存实际 Secret UID；�
 
 部署 Workload options 通过 `packages/model-catalog` 的
 `createDeploymentModelCatalogAdapterV1({ load })` 注入目录，通过
-`createResponsesModelAccessValidatorV1()` 注入访问验证。目录快照必须带
+按目录 profile 分派的访问验证器执行候选预检。目录快照必须带
 `schemaVersion: 1`、精确 `revision` 和毫秒时间戳 `validUntil`；每个端点带
-`endpointId`、精确 `baseUrl`/`origin`、`openai-responses-v1` profile、TLS 与禁止重定向策略、
+`endpointId`、精确 `baseUrl`/`origin`、protocol profile、TLS 与禁止重定向策略、
 streaming/tool/reasoning policy、可选 `allowedModels` 和可用状态。`allowedModels: null`
 表示目录不额外限制模型名单，仍须验证 Owner 指定的模型。未知字段、缺失、移除、过期、
 修订不匹配和不可用结果均返回 `MODEL_CONFIGURATION_UNAVAILABLE`，不回传原始异常。
 
-Worker 在 preflight 对每个 option 独立可信解密并审计，通过有截止时间的合成 Responses
-请求验证 credential、模型、每个 reasoning 档位、流式完成和 function call；探测不使用会话内容，
-不执行工具，设置 `store: false`，整个投影最多 60 秒，每次响应最多 1 MiB。
+目录的 `protocol` 是 profile 的唯一协议判别字段；当前实现范围为 `openai-responses-v1`
+与 `anthropic-messages-v1`。Messages 端点还必须由目录声明 `authentication` 为 `bearer`
+或 `api-key`，分别映射到 Authorization 或 x-api-key；Owner 只提供对应 credential，不能选择
+认证方式或提交任意 header。旧 Responses 端点继续使用固定 Bearer 认证，其缺省语义不扩展到
+Messages。预检先校验目录 profile 与可信标准模板 Driver 绑定兼容，未知或不兼容组合在模型
+请求与候选物化前拒绝；不能根据 URL、模型名或探测回退猜测协议。
+
+Worker 在 preflight 对每个 option 独立可信解密并审计，通过该 profile 的有界合成请求验证
+credential、模型、每个 reasoning 档位、流式完成和工具调用；探测不使用会话内容，不执行工具。
+Responses 保留 `createResponsesModelAccessValidatorV1()` 与 `store: false`；Messages 使用
+实际 `/v1/messages` 路径、选定认证方式和 pinned SDK 所需的版本/capability 参数，按该协议
+验证完整终态，不能以 Responses 成功替代。覆盖 `/v1/messages/count_tokens`：固定原生版本
+要求该能力时必须成功；版本明确支持缺失时的估算回退，须验证其真实行为，不能把可选接口
+误作必需能力，也不能将认证、协议或模型错误当作可选缺失忽略。
+整个投影最多 60 秒，每次响应最多 1 MiB。
 部署应计入这些配置验证请求的额度。Runtime Driver 继续负责 pinned native profile 验证。
 任何选项失败都不物化候选 Workload；临时解密 buffer 在验证后清零。
 Workload 部署使用 Worker-only `createWorkloadSecretKeyringDecryptorV1`，允许解密 Store
@@ -480,7 +492,7 @@ Secret ID、Agent ID、keyVersion、结果与 traceId 审计；不复制、重�
 独立 Secret 激活入口继续使用拒绝 active 记录的 `createSecretKeyringDecryptorV1`。
 
 通过验证的投影及 SHA-256 指纹与 candidate/verified 一起保存在 Worker 的持久调谐状态，
-不进入公开 desired contract。Runtime V2 JSON 写入独立 immutable 配置 Secret，每个 option
+不进入公开 desired contract。版本化 Runtime JSON 写入独立 immutable 配置 Secret，每个 option
 通过显式 `secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`，配置 JSON 同样通过
 `secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CONFIG`；模型 credential 不再通过 `envFrom`
 导入。Owner 的普通模型环境变量不参与 Runtime V2 选择，平台保留键仍拒绝。
@@ -494,6 +506,19 @@ annotation 仅保存模型投影指纹；观察和路由提升从 Worker 持久�
 fence 后通过 UID/resourceVersion 前置条件删除。初次失败在资源清理后同样回收配置 Secret。
 清理未完成时保留 candidate 重试，不删除 verified 配置或其他 Agent 标记的 Secret；已验证
 版本化配置仍按回滚保留策略保留。
+
+新增 profile 使用 Runtime 配置 V3，每个 option 除既有字段外携带目录确认的 `protocol` 和
+`authentication`，二者纳入持久投影、指纹、重验和 Host 校验，不能在 Worker 到 Host 的装配中
+丢失。旧 V2 只按既有 Codex/Responses 语义读取；不能把 V2 当作 Claude 配置或为其推断新的
+协议。旧 verified 投影的读取和指纹保持兼容，不通过添加缺省字段改写历史快照。
+Host 在启动 Driver 前校验全部选项与部署固定绑定兼容；执行命令仍只传平台模型选项及
+reasoning，不携带 profile、endpoint 或 credential。共享 Schema 由 `packages/contracts`
+维护，ModelCatalog/Worker 与 Host 消费同一版本；后续 ACP/Pi 的真实 profile 在各自实现中
+扩展，不提前宣称兼容。取舍见 [ADR: 按目录协议绑定标准模板模型配置](../adr/0009-bind-model-profiles-to-runtime-configuration.md)。
+
+V3 JSON Schema 的具名定义提供结构校验；选项 ID 与选项内 reasoning 的唯一性、默认选项和
+reasoning 的关联由共享 `RuntimeModelConfigurationV3Schema` 执行语义校验，Worker 与 Host
+均必须执行，不能仅凭 JSON Schema 校验通过物化候选配置或准入 Runtime。
 
 ### 10.8 Codex 原生模型传输边界
 
@@ -616,6 +641,27 @@ Runtime Contract、部署单元、Grant 校验与 §10.8 的模型传输边界�
 验收必须使用真实 pinned Codex 与正式 Host/Driver/Bridge，覆盖并发、进程重启与原 Session 恢复；
 本人访问必须成功，工具普遍不可用或平台能力关闭都不构成隔离通过。取舍见
 [ADR: 按 Conversation 隔离 Codex 原生进程与文件边界](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
+
+### 10.10 Claude 原生模型传输边界
+
+Claude 原生进程会将模型 API 的错误正文写入会话记录；仅归一化 SDK 事件不能满足凭证与
+供应商错误正文不落盘的要求。固定 Claude Driver 在同一 Agent Pod 内为每次 Query 创建
+独立的 loopback 传输入口，绑定该 Query 已批准的唯一 endpoint、认证、模型和 reasoning。
+真实 credential 只保留在 Driver 传输层内存；原生进程只获得该入口的随机短期能力，不能
+通过模型名、请求 URL 或请求 header 选择其他选项。该入口不提供平台服务、协议转换、
+供应商发现、重试或故障切换。
+
+只允许固定 Messages profile 的 POST 路径；目录 base URL 表示供应商根路径，入口追加
+`/v1/messages` 或 `/v1/messages/count_tokens`，保留 pinned CLI 所需的固定查询参数与
+版本/capability header，拒绝重定向。每次发送前核对模型、reasoning、Query 与已持久提交
+操作的绑定；尚未持久接受、取消中、已退役或配置版本不匹配的 Query 不得向供应商发送。
+原生网络重试不能重投接受结果不确定的请求；模型请求已发送但完整响应未确认时，关闭
+该 Query 的转发能力并保持执行 unknown，禁止静默重试。
+
+非成功 HTTP、流内错误、非法帧和不完整终态在进入原生进程前替换为固定脱敏错误；不转发
+供应商错误正文或响应 header。合法文本和工具内容使用既有凭证泄漏检测原则，传输层不写
+请求、响应或诊断日志。停止和 Query 退役先撤销能力、取消并排空上游请求，再确认原生
+进程退出；能力不转移到下一个 Query。恢复保持原 Session，不能携带旧入口能力。
 
 ## 11. Agent Runtime 边界
 

@@ -8,7 +8,7 @@ import type {
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { openClaudeRuntimeDriverConformanceFixture } from "./claude-runtime-driver.test-support.js";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
 import {
@@ -19,7 +19,7 @@ import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
 
 const directories: string[] = [];
 const driverClosers: (() => Promise<void>)[] = [];
-const driverNames = ["Fake", "Codex"] as const;
+const driverNames = ["Fake", "Codex", "Claude"] as const;
 
 async function directory() {
 	const path = await mkdtemp(
@@ -30,6 +30,7 @@ async function directory() {
 }
 
 interface ConformanceDriverFixture {
+	recoveryStatus?: "running" | "unknown";
 	driver: RuntimeDriver;
 	emitRunningEvent(): Promise<void>;
 	submitWithPreStartEvent<T>(submit: () => Promise<T>): Promise<T>;
@@ -50,6 +51,14 @@ async function openConformanceDriver(
 	path: string,
 	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
+	if (name === "Claude") {
+		const fixture = await openClaudeRuntimeDriverConformanceFixture(
+			path,
+			loseTurnStartResponse,
+		);
+		driverClosers.push(() => fixture.close());
+		return fixture;
+	}
 	if (name === "Fake") {
 		const driver = await FakeRuntimeDriver.open(path);
 		const execute = driver.execute.bind(driver);
@@ -411,7 +420,7 @@ describe("Runtime Driver shared conformance", () => {
 					...context,
 					grant: runtimeGrantFixture(context, ["session.status"]),
 				}),
-			).toMatchObject({ status: "running" });
+			).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
 			expect(await restarted.createdTurnCount()).toBe(1);
 		},
 	);
@@ -447,99 +456,102 @@ describe("Runtime Driver shared conformance", () => {
 		},
 	);
 
-	it.each(driverNames)(
-		"binds, replays, rejects, and isolates V2 selection through %s",
-		async (name) => {
-			const path = await directory();
-			const fixture = await openConformanceDriver(
-				name,
-				join(path, "driver.json"),
-			);
-			const host = await openConformanceHost(
-				join(path, "host.json"),
-				fixture.driver,
-			);
-			const first = submitRequestV2();
-			const accepted = await host.submitTurnV2(first);
-			expect(
-				await host.submitTurnV2({
+	for (const name of driverNames)
+		it(
+			`binds, replays, rejects, and isolates V2 selection through ${name}`,
+			async () => {
+				const path = await directory();
+				const fixture = await openConformanceDriver(
+					name,
+					join(path, "driver.json"),
+				);
+				const host = await openConformanceHost(
+					join(path, "host.json"),
+					fixture.driver,
+				);
+				const first = submitRequestV2();
+				const accepted = await host.submitTurnV2(first);
+				expect(
+					await host.submitTurnV2({
+						...first,
+						requestId: "request-conformance-selection-replay",
+					}),
+				).toEqual(accepted);
+				await expect(
+					host.submitTurnV2({
+						...first,
+						requestId: "request-conformance-selection-mismatch",
+						selection: {
+							...first.selection,
+							reasoningLevel: "low",
+						},
+					}),
+				).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+				expect(fixture.turnSelections()).toEqual([first.selection]);
+
+				fixture.completeStopAsCancelled();
+				const context = requestContext(
+					first,
+					accepted.hostSessionRef,
+					"request-conformance-selection-stop",
+				);
+				await host.stop({
+					...context,
+					executionDeliveryFence: 1,
+					stopRequestId: "stop-conformance-selection",
+					grant: runtimeGrantFixture(context, ["turn.stop"]),
+				});
+
+				const secondBinding = {
 					...first,
-					requestId: "request-conformance-selection-replay",
-				}),
-			).toEqual(accepted);
-			await expect(
-				host.submitTurnV2({
-					...first,
-					requestId: "request-conformance-selection-mismatch",
-					selection: {
-						...first.selection,
-						reasoningLevel: "low",
-					},
-				}),
-			).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
-			expect(fixture.turnSelections()).toEqual([first.selection]);
-
-			fixture.completeStopAsCancelled();
-			const context = requestContext(
-				first,
-				accepted.hostSessionRef,
-				"request-conformance-selection-stop",
-			);
-			await host.stop({
-				...context,
-				executionDeliveryFence: 1,
-				stopRequestId: "stop-conformance-selection",
-				grant: runtimeGrantFixture(context, ["turn.stop"]),
-			});
-
-			const secondBinding = {
-				...first,
-				executionId: "execution-conformance-selection-second",
-				turnId: "turn-conformance-selection-second",
-			};
-			const second = submitRequestV2({
-				...secondBinding,
-				requestId: "request-conformance-selection-second",
-				hostSessionRef: accepted.hostSessionRef,
-				selection: {
-					schemaVersion: 1,
-					modelOptionId: "model-option-alternate",
-					reasoningLevel: "low",
-				},
-				grant: runtimeGrantFixture(secondBinding, ["turn.submit"]),
-			});
-			expect((await host.submitTurnV2(second)).result).toMatchObject({
-				outcome: "accepted",
-			});
-			expect(fixture.turnSelections()).toEqual([
-				first.selection,
-				second.selection,
-			]);
-
-			const unsupportedBinding = {
-				...second,
-				executionId: "execution-conformance-selection-unsupported",
-				turnId: "turn-conformance-selection-unsupported",
-			};
-			const unsupported = await host.submitTurnV2(
-				submitRequestV2({
-					...unsupportedBinding,
-					requestId: "request-conformance-selection-unsupported",
+					executionId: "execution-conformance-selection-second",
+					turnId: "turn-conformance-selection-second",
+				};
+				const second = submitRequestV2({
+					...secondBinding,
+					requestId: "request-conformance-selection-second",
+					hostSessionRef: accepted.hostSessionRef,
 					selection: {
 						schemaVersion: 1,
-						modelOptionId: "model-option-unsupported",
-						reasoningLevel: "high",
+						modelOptionId: "model-option-alternate",
+						reasoningLevel: "low",
 					},
-					grant: runtimeGrantFixture(unsupportedBinding, ["turn.submit"]),
-				}),
-			);
-			expect(unsupported.result).toMatchObject({
-				outcome: "rejected",
-				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
-			});
-			expect(fixture.turnSelections()).toHaveLength(2);
-		},
-	);
+					grant: runtimeGrantFixture(secondBinding, ["turn.submit"]),
+				});
+				expect((await host.submitTurnV2(second)).result).toMatchObject({
+					outcome: "accepted",
+				});
+				expect(fixture.turnSelections()).toEqual([
+					first.selection,
+					second.selection,
+				]);
+
+				const unsupportedBinding = {
+					...second,
+					executionId: "execution-conformance-selection-unsupported",
+					turnId: "turn-conformance-selection-unsupported",
+				};
+				const unsupported = await host.submitTurnV2(
+					submitRequestV2({
+						...unsupportedBinding,
+						requestId: "request-conformance-selection-unsupported",
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: "model-option-unsupported",
+							reasoningLevel: "high",
+						},
+						grant: runtimeGrantFixture(unsupportedBinding, ["turn.submit"]),
+					}),
+				);
+				expect(unsupported.result).toMatchObject({
+					outcome: "rejected",
+					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				});
+				expect(fixture.turnSelections()).toHaveLength(2);
+			},
+			// Claude starts and retires real Native processes for both model options.
+			name === "Claude" ? 30_000 : undefined,
+		);
 
 	it.each(driverNames)(
 		"converges competing Worker fence takeover without a second Turn through %s",
@@ -653,7 +665,7 @@ describe("Runtime Driver shared conformance", () => {
 			);
 			expect((await recoveredHost.submitTurn(request)).result).toEqual({
 				outcome: "accepted",
-				status: "running",
+				status: restarted.recoveryStatus ?? "running",
 			});
 			expect(await restarted.createdTurnCount()).toBe(1);
 		},
@@ -667,7 +679,7 @@ describe("Runtime Driver shared conformance", () => {
 			const fixture = await openConformanceDriver(
 				name,
 				join(path, "driver.json"),
-				name === "Codex",
+				name !== "Fake",
 			);
 			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
 				afterDriverResult: () => {

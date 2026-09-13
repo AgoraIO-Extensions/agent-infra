@@ -35,6 +35,29 @@ describe.each([
 	],
 	["fake", (snapshot: unknown) => createFakeModelCatalogAdapterV1(snapshot)],
 ] as const)("%s ModelCatalog conformance", (_name, create) => {
+	it("requires deployment-owned authentication for Messages without rewriting Responses snapshots", async () => {
+		const messages = {
+			...endpoint,
+			protocol: "anthropic-messages-v1",
+			authentication: "api-key",
+		};
+		const input = { endpointId: "endpoint-a", catalogRevision: "catalog-a" };
+		const options = { signal: AbortSignal.timeout(1000) };
+		expect(
+			await create({ ...catalogFixture(), endpoints: [messages] }).resolve(
+				input,
+				options,
+			),
+		).toEqual(messages);
+		const { authentication: _authentication, ...missingAuthentication } =
+			messages;
+		await expect(
+			create({
+				...catalogFixture(),
+				endpoints: [missingAuthentication],
+			}).resolve(input, options),
+		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	});
 	it("resolves the exact approved endpoint and policy without credentials", async () => {
 		const catalog = create(catalogFixture());
 		expect(

@@ -1,3 +1,4 @@
+export * from "./configuration.ts";
 export * from "./driver.ts";
 export * from "./events.ts";
 export * from "./grant.ts";
