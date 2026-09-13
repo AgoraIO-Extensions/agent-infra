@@ -223,12 +223,17 @@ function browserAccountProjection(account: {
 
 function secureHtmlHeaders(
 	context: { header(name: string, value: string): void },
-	options: { allowLoopbackFormRedirect?: boolean } = {},
+	options: {
+		allowLoopbackFormRedirect?: boolean;
+		formActionOrigins?: readonly string[];
+	} = {},
 ) {
 	context.header("cache-control", "no-store");
-	const formAction = options.allowLoopbackFormRedirect
-		? "'self' http://127.0.0.1:*"
-		: "'self'";
+	const formAction = [
+		"'self'",
+		...(options.allowLoopbackFormRedirect ? ["http://127.0.0.1:*"] : []),
+		...(options.formActionOrigins ?? []),
+	].join(" ");
 	context.header(
 		"content-security-policy",
 		`default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
@@ -684,7 +689,9 @@ export function createConnectionOAuthApp(
 			login.searchParams.set("returnTo", context.req.path);
 			return context.redirect(login.toString(), 302);
 		}
-		secureHtmlHeaders(context);
+		secureHtmlHeaders(context, {
+			formActionOrigins: [new URL(binding.callbackUrl).origin],
+		});
 		return context.html(
 			patBindingPage({
 				consumerName: binding.consumerName,

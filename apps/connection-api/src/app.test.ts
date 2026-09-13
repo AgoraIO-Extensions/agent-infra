@@ -488,6 +488,7 @@ describe("Connection API", () => {
 				seen.push({ operation: "read", state: value });
 				return {
 					bindingId: "pat-binding-1",
+					callbackUrl: "https://rehoboam.example/api/connection/callback",
 					consumerId: "consumer-rehoboam-ai",
 					consumerName: "RehoboamAI",
 					expiresAt: new Date("2026-09-11T07:00:00.000Z"),
@@ -527,6 +528,9 @@ describe("Connection API", () => {
 			headers: { cookie: `connection_session=${sessionToken}` },
 		});
 		expect(page.status).toBe(200);
+		expect(page.headers.get("content-security-policy")).toContain(
+			"form-action 'self' https://rehoboam.example",
+		);
 		expect(await page.text()).toContain("Alice / Agent A");
 
 		const confirmed = await app.request("/connection/pat-bindings/confirm", {
