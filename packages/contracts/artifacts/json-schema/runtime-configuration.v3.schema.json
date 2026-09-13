@@ -2,6 +2,7 @@
   "$defs": {
     "RuntimeModelConfigurationV3": {
       "additionalProperties": false,
+      "description": "JSON Schema validates structure only. Configuration admission additionally requires unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV3Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
       "properties": {
         "configVersion": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",

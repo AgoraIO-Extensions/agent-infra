@@ -59,6 +59,9 @@ export const RuntimeModelConfigurationV3Schema = z
 					entry.modelOptionId === value.defaultModelOptionId &&
 					entry.reasoningLevels.includes(value.defaultReasoningLevel),
 			),
+	)
+	.describe(
+		"JSON Schema validates structure only. Configuration admission additionally requires unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV3Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
 	);
 export type RuntimeModelConfigurationV3 = z.infer<
 	typeof RuntimeModelConfigurationV3Schema

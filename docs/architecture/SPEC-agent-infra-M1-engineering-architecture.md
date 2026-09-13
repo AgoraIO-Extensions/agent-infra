@@ -516,6 +516,10 @@ reasoning，不携带 profile、endpoint 或 credential。共享 Schema 由 `pac
 维护，ModelCatalog/Worker 与 Host 消费同一版本；后续 ACP/Pi 的真实 profile 在各自实现中
 扩展，不提前宣称兼容。取舍见 [ADR: 按目录协议绑定标准模板模型配置](../adr/0009-bind-model-profiles-to-runtime-configuration.md)。
 
+V3 JSON Schema 的具名定义提供结构校验；选项 ID 与选项内 reasoning 的唯一性、默认选项和
+reasoning 的关联由共享 `RuntimeModelConfigurationV3Schema` 执行语义校验，Worker 与 Host
+均必须执行，不能仅凭 JSON Schema 校验通过物化候选配置或准入 Runtime。
+
 ### 10.8 Codex 原生模型传输边界
 
 Codex Driver 在 Agent Pod 内管理一个仅绑定 loopback 的模型传输入口，将原生模型请求转发到

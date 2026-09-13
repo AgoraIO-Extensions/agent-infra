@@ -17,6 +17,9 @@ import {
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 
+// These integration cases start pinned Native processes and read SDK history.
+vi.setConfig({ testTimeout: 30_000 });
+
 const fixtures: Awaited<ReturnType<typeof claudeNativeFixture>>[] = [];
 async function fixture() {
 	const value = await claudeNativeFixture();
