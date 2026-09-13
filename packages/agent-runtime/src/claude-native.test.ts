@@ -13,6 +13,7 @@ import {
 	claudeNativeFixture,
 	completeClaudeResponse,
 } from "./claude-native.test-support.js";
+import { readClaudeSessionHistory } from "./claude-session-history.js";
 
 const fixtures: Awaited<ReturnType<typeof claudeNativeFixture>>[] = [];
 async function fixture() {
@@ -486,6 +487,22 @@ it("waits for native exit after a permission error on the retiring process group
 	f.hold();
 	const first = await f.driver.execute(claudeCommand());
 	await vi.waitFor(() => expect(f.calls).toHaveLength(1));
+	const directory = join(f.path, first.nativeSessionRef);
+	const state = JSON.parse(
+		await readFile(join(directory, "state.json"), "utf8"),
+	);
+	// A request reaching the model does not prove Native has flushed its history.
+	await vi.waitFor(
+		async () => {
+			const history = await readClaudeSessionHistory(
+				state.nativeId,
+				join(directory, "workspace"),
+				join(directory, "config"),
+			);
+			expect(history.users).toContain(state.turns[0].userMessageId);
+		},
+		{ timeout: 10000 },
+	);
 	const nativeKill = process.kill.bind(process);
 	let denied = false;
 	let reaped = false;
