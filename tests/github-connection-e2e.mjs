@@ -111,7 +111,11 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		) {
 			throw new Error(`${actionId} did not succeed`);
 		}
-		calls.push({ actionId, callId: projection.callId, status: projection.status });
+		calls.push({
+			actionId,
+			callId: projection.callId,
+			status: projection.status,
+		});
 		return projection.result;
 	};
 	const marker = `connection-e2e:${runId}`;
