@@ -382,7 +382,9 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				await rm(join(dirname(capturePath), "setpriv"));
 			const configuration = options({
 				launchPath: `${dirname(capturePath)}:${dirname(process.execPath)}`,
-				startupTimeoutMs: 2_000,
+				// Only the hanging helper needs a short deadline; the other two reject
+				// deterministically, so a short one only makes them flaky under load.
+				startupTimeoutMs: mode === "sandbox-hangs" ? 2_000 : 20_000,
 				model: "option_a/synthetic-model",
 				modelAccess: {
 					endpoint: "http://127.0.0.1:12345",

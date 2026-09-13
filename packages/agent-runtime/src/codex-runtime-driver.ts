@@ -1503,7 +1503,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.conversationRpcs.set(conversationKey, opened.rpc);
 			return opened.rpc;
 		}
-		const rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
+		const rpc = new CodexRpc(bridge, (frame) =>
+			// Native thread and turn IDs are scoped to one app-server process, so
+			// notification routing is bound to the Conversation that owns the
+			// transport rather than to the ID alone.
+			this.recordNotification(
+				frame,
+				// The scripted test double serves every Conversation from one
+				// transport, so only production can bind routing to one key.
+				this.sharedNativeTransport ? undefined : conversationKey,
+			),
+		);
 		try {
 			// Every native process is admitted on its own; a contained
 			// configuration on one process never vouches for another.
@@ -2293,12 +2303,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private async recordNotification(frame: CodexAppServerFrame) {
+	private async recordNotification(
+		frame: CodexAppServerFrame,
+		conversationKey: string | undefined,
+	) {
 		const started = turnStartedNotification(frame);
 		if (started) {
 			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
+					conversationKey,
 					started.threadId,
 					started.nativeTurnId,
 				);
@@ -2345,6 +2359,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
+					conversationKey,
 					completed.threadId,
 					completed.nativeTurnId,
 				);
@@ -2391,6 +2406,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const messageStreamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
+					conversationKey,
 					message.threadId,
 					message.nativeTurnId,
 				);
@@ -2430,6 +2446,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const streamKey = await this.update((state) => {
 			const resolved = this.resolveNotificationJournal(
 				state,
+				conversationKey,
 				delta.threadId,
 				delta.nativeTurnId,
 			);
@@ -2453,11 +2470,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private resolveNotificationJournal(
 		state: CodexDriverState,
+		conversationKey: string | undefined,
 		threadId: string,
 		nativeTurnId: string,
 	) {
+		// A native ID only means anything inside the process that issued it, so the
+		// owning Conversation is part of the match, not just the thread ID.
 		const matchingSessions = Object.entries(state.sessions).filter(
-			([, session]) => session.threadId === threadId,
+			([, session]) =>
+				session.threadId === threadId &&
+				(conversationKey === undefined ||
+					codexConversationKey({
+						agentId: session.agentId,
+						conversationId: session.conversationId,
+						sessionGeneration: session.sessionGeneration,
+					}) === conversationKey),
 		);
 		if (matchingSessions.length === 0) return undefined;
 		if (matchingSessions.length !== 1) stateInvalid();
