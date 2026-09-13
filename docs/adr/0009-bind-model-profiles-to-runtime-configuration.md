@@ -24,4 +24,4 @@ Claude 使用官方 SDK，并按 [Runtime HLD 的上游复用条款](../architec
 消息和原生会话文件，正文回显的凭证也会被保存。因此 Claude 在原生持久化前使用每 Query
 绑定单一获准选项的本地传输入口，真实凭证留在 Driver 内存，原生进程只接收短期能力。
 该边界也阻止原生重试盲目重复不确定调用；完整规则见
-[工程 Spec §10.9](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#109-claude-原生模型传输边界)。
+[工程 Spec §10.10](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1010-claude-原生模型传输边界)。

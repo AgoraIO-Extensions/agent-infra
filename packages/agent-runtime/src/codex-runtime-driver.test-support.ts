@@ -318,13 +318,35 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 }
 
 class CodexRuntimeDriverTestAccess extends CodexRuntimeDriver {
-	static openForTest(
+	// One scripted transport can host exactly one JSON-RPC multiplexer, so this
+	// double serves every Conversation from it. Production never does: each
+	// Conversation gets its own native process, and the Driver fails closed if a
+	// transport ever comes back for a second Conversation.
+	protected override sharesOneNativeTransport() {
+		return true;
+	}
+
+	static async openForTest(
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenTestCodexBridge,
 	) {
-		return CodexRuntimeDriverTestAccess.openWithBridge(options, openBridge);
+		const driver = (await CodexRuntimeDriverTestAccess.openWithBridge(
+			options,
+			openBridge,
+		)) as CodexRuntimeDriverTestAccess;
+		try {
+			// Production admits a native process when a Conversation first needs it.
+			// Tests keep asserting deployment admission at Driver open.
+			await driver.openConversationRpc(admissionConversationKey);
+		} catch (error) {
+			await driver.close().catch(() => {});
+			throw error;
+		}
+		return driver;
 	}
 }
+
+const admissionConversationKey = `${"0".repeat(63)}1`;
 
 /** @internal Test-only source helper. It is intentionally absent from the package barrel. */
 export function openCodexRuntimeDriverForTest(

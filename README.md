@@ -54,7 +54,7 @@ pnpm docker:build
 ### Codex 原生恢复验证
 
 Codex Driver 的部署端 `path` 必须位于当前 Agent PVC，Driver 使用其旁的
-`<path>.native/home` 保存原生 Session，`<path>.native/workspace` 保存工作区。
+`<path>.native/conversations/<key>/home` 保存原生 Session，同级 `workspace` 保存工作区；`<key>` 由服务端从 Agent、Conversation 与 sessionGeneration 派生。
 部署必须同时保留映射文件和这两个目录。进程退出仅清理临时 HOME、schema 与 scratch；
 持久目录不得与父进程 HOME、CODEX_HOME 或 cwd 重叠，不得包含个人配置、凭证文件或工作区 `.codex` 配置。
 POSIX 部署中三个目录必须归 Runtime UID 所有，且不能授予 group/other 权限；新目录以 `0700` 创建。
