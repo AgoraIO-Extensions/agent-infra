@@ -23,6 +23,7 @@
 		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
 		"dev:connection-web": "turbo run dev -F @agent-infra/connection-web",
 		"connection:conformance": "pnpm --filter @agent-infra/connection-api conformance",
+		"connection:github:e2e": "node tests/github-connection-e2e.mjs",
 		"connection:admin:bootstrap": "pnpm --filter @agent-infra/connection-api admin:bootstrap",
 		"docker:build": "DATABASE_URL=postgresql://build.invalid/connection docker compose -f docker-compose.production.yml build connection-api connection-web",
 		"docker:up": "docker compose up -d --build",

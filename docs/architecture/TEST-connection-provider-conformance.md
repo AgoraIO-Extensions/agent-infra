@@ -40,6 +40,27 @@ project/repository、Jira project、Confluence space。优先使用独立 test t
 不适用 CRUD 的 workflow Action（例如 approve、merge、transition）使用本次运行创建的资源验证
 真实状态迁移，随后执行同样的 ownership 校验和清理。
 
+### GitHub Actions E2E
+
+GitHub 的第一条真实闭环由 `Connection GitHub E2E` workflow 执行。它使用固定的生产 Connection
+MCP endpoint 和确定性 Action 序列，不运行 Codex 或其他模型。执行边界固定为：
+
+- Provider Connection external account ID：`328682695`
+- owner：`AGORAconnectionE2E`
+- repository：`connector-conformance`
+- repository ID：`1368335067`
+- visibility：`private`
+- default branch：`main`
+
+workflow 只在 repository variable `CONNECTION_GITHUB_E2E_ENABLED=true` 时运行，并从受保护的
+`connection-e2e` Environment 读取 `CONNECTION_E2E_TOKEN`。该 token 只授予专用 Connection CI
+ConsumerInstance；GitHub OAuth credential 不进入 GitHub Actions。runner 先使用 GitHub-hosted
+`ubuntu-24.04` 验证 Connection endpoint 的公网可达性；若网络验证失败，再切换到具有
+`connection-e2e` label 的受控 self-hosted runner。
+
+当前生命周期覆盖 Issue 和 comment 的创建、读取、更新、删除 comment 与关闭 Issue。暂不执行
+repository 删除、协作者变更、fork、workflow、merge 或 release mutation。
+
 ## 测试层级与门禁
 
 - 每个 PR：UT、Adapter contract、PostgreSQL integration；不访问第三方站点。
