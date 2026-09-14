@@ -203,7 +203,8 @@ function scenarioInput(name: string): Readonly<Record<string, unknown>> {
 		};
 	if (name === "search_code")
 		return {
-			query: "repo:AgoraConnectionE2EORG/connector-conformance connection-e2e",
+			query:
+				"repo:AgoraConnectionE2EORG/connector-conformance connection-e2e-no-such-code-token-502",
 		};
 	if (name === "search_labels")
 		return { query: "connection-e2e", repositoryId: fixture.repositoryId };
