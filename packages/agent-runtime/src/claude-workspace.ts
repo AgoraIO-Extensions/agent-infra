@@ -1,6 +1,5 @@
-import { lstat, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import { workspacePathAllowed } from "./workspace-path.js";
 
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
 export function claudeWorkspaceTools(
@@ -17,38 +16,7 @@ export function claudeWorkspaceTools(
 			input.file_path.includes("\0")
 		)
 			return false;
-		const path = resolve(workspace, input.file_path);
-		const root = [workspace, memory].find((root) => {
-			const within = relative(root, path);
-			return (
-				within &&
-				within !== ".." &&
-				!within.startsWith(`..${sep}`) &&
-				!isAbsolute(within)
-			);
-		});
-		if (!root) return false;
-		try {
-			if ((await realpath(root)) !== root) return false;
-			let candidate = path;
-			while (candidate !== root) {
-				try {
-					const stat = await lstat(candidate);
-					if (
-						stat.isSymbolicLink() ||
-						(candidate === path && !stat.isFile()) ||
-						(candidate !== path && !stat.isDirectory())
-					)
-						return false;
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-				}
-				candidate = dirname(candidate);
-			}
-			return true;
-		} catch {
-			return false;
-		}
+		return workspacePathAllowed(workspace, memory, input.file_path);
 	};
 	return {
 		tools: ["Read", "Write", "Edit"],

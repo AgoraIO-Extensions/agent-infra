@@ -658,7 +658,7 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each(["codex", "claude"] as const)(
+	it.each(["codex", "claude", "acp"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
 			const runtimeAuth = {
@@ -694,14 +694,14 @@ describe("assembled Workload Runtime contracts", () => {
 				}),
 			);
 			const profile =
-				driver === "claude"
+				driver !== "codex"
 					? ("anthropic-messages-v1" as const)
 					: ("openai-responses-v1" as const);
 			const catalog = catalogFixture();
 			catalog.endpoints = catalog.endpoints.map((endpoint) => ({
 				...endpoint,
 				protocol: profile,
-				...(driver === "claude" ? { authentication: "bearer" } : {}),
+				...(driver !== "codex" ? { authentication: "bearer" } : {}),
 			}));
 			const catalogEndpoint = catalog.endpoints[0];
 			assert(catalogEndpoint);
@@ -807,8 +807,8 @@ describe("assembled Workload Runtime contracts", () => {
 				} else environment[entry.name] = entry.value;
 			}
 			const consumed =
-				driver === "claude"
-					? readRuntimeModelConfigurationV3(environment, "claude")
+				driver !== "codex"
+					? readRuntimeModelConfigurationV3(environment, driver)
 					: readCodexPilotConfiguration(environment);
 			expect(environment.AGENT_INFRA_RUNTIME_AGENT_ID).toBe(
 				configuration.agentId,
@@ -826,11 +826,11 @@ describe("assembled Workload Runtime contracts", () => {
 			expect(
 				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
 					.schemaVersion,
-			).toBe(driver === "claude" ? 3 : 2);
+			).toBe(driver !== "codex" ? 3 : 2);
 			expect(consumed.modelOptions).toEqual([
 				{
 					modelOptionId: "primary",
-					...(driver === "claude"
+					...(driver !== "codex"
 						? { protocol: profile, authentication: "bearer" }
 						: {}),
 					endpoint: "https://models.example.test/team-a/v1",
@@ -840,7 +840,7 @@ describe("assembled Workload Runtime contracts", () => {
 				},
 				{
 					modelOptionId: "secondary",
-					...(driver === "claude"
+					...(driver !== "codex"
 						? { protocol: profile, authentication: "bearer" }
 						: {}),
 					endpoint: "https://alternate.example.test/private/v1",

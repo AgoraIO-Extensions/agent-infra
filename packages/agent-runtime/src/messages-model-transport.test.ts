@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { openClaudeModelTransport } from "./claude-model-transport.js";
+import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 
 function messages(text: string[]) {
 	return [
@@ -46,7 +46,7 @@ it.each(["valid", "credential", "late-error", "incomplete"])(
 				? ["synthetic-provider-", "credential"]
 				: ["O", "K"],
 		);
-		const transport = await openClaudeModelTransport({
+		const transport = await openRuntimeMessagesTransport({
 			endpoint: "https://model.example.test",
 			credential: "synthetic-provider-credential",
 			authentication: "bearer",
@@ -132,7 +132,7 @@ it.each(["valid", "credential"])(
 			},
 			{ type: "message_stop" },
 		];
-		const transport = await openClaudeModelTransport({
+		const transport = await openRuntimeMessagesTransport({
 			endpoint: "https://model.example.test",
 			credential: "synthetic-provider-credential",
 			authentication: "bearer",
@@ -192,7 +192,7 @@ it.each(["valid", "credential"])(
 it("admits the bound option before sending and prevents a native retry after a provider error", async () => {
 	let admitted = false;
 	let calls = 0;
-	const transport = await openClaudeModelTransport({
+	const transport = await openRuntimeMessagesTransport({
 		endpoint: "https://model.example.test/team",
 		credential: "synthetic-provider-credential",
 		authentication: "api-key",
@@ -244,7 +244,7 @@ it.each([200, 404, 501, 401])(
 	"contains token-count responses with status %s",
 	async (status) => {
 		let admitted = false;
-		const transport = await openClaudeModelTransport({
+		const transport = await openRuntimeMessagesTransport({
 			endpoint: "https://model.example.test",
 			credential: "synthetic-provider-credential",
 			authentication: "bearer",
@@ -328,7 +328,7 @@ it("does not deliver escaped credentials in streamed tool arguments to the nativ
 		},
 		{ type: "message_stop" },
 	];
-	const transport = await openClaudeModelTransport({
+	const transport = await openRuntimeMessagesTransport({
 		endpoint: "https://model.example.test",
 		credential: "synthetic-provider-credential",
 		authentication: "bearer",
@@ -372,7 +372,7 @@ it.each(["admission", "unknown-beta"])(
 	"blocks count_tokens before upstream side effects on %s failure",
 	async (reason) => {
 		let requests = 0;
-		const transport = await openClaudeModelTransport({
+		const transport = await openRuntimeMessagesTransport({
 			endpoint: "https://model.example.test",
 			credential: "synthetic-credential",
 			authentication: "bearer",
@@ -412,7 +412,7 @@ it.each(["admission", "unknown-beta"])(
 it("contains persistent receipt failures without an upstream retry or unhandled rejection", async () => {
 	let requests = 0;
 	let writes = 0;
-	const transport = await openClaudeModelTransport({
+	const transport = await openRuntimeMessagesTransport({
 		endpoint: "https://model.example.test",
 		credential: "synthetic-credential",
 		authentication: "bearer",

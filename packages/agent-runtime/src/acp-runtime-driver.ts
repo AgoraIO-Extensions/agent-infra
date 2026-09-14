@@ -8,18 +8,13 @@ import {
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
-	RuntimeModelConfigurationV3Schema,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { verifyClaudeInstallation } from "./claude-installation.js";
-import { claudeQuery } from "./claude-query.js";
-import { readClaudeSessionHistory } from "./claude-session-history.js";
-import { claudeWorkspaceTools } from "./claude-workspace.js";
-import { validateModelAccess } from "./codex-app-server-bridge.js";
+import { retireAcpProcess } from "./acp-process.js";
+import { type AcpLaunch, openAcpSession } from "./acp-session.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -33,22 +28,23 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
-import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 
-export interface ClaudeRuntimeModelOption {
+export interface AcpRuntimeModelOption {
 	readonly modelOptionId: string;
-	readonly model: string;
+	readonly nativeModelId: string;
 	readonly reasoningLevels: readonly string[];
-	readonly endpoint: string;
-	readonly credential: string;
-	readonly authentication: "api-key" | "bearer";
 }
-export interface ClaudeRuntimeDriverOptions {
+export interface GenericAcpRuntimeDriverOptions {
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
-	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
+	readonly modelOptions: readonly AcpRuntimeModelOption[];
+	readonly launch: (
+		directory: string,
+		selection: RuntimeSelectionV1,
+		admit: () => Promise<void>,
+	) => Promise<AcpLaunch>;
 }
 interface Binding {
 	ref: string;
@@ -61,35 +57,33 @@ interface Operation {
 	digest: string;
 	record?: RuntimeDriverOperationRecord;
 }
+interface Index {
+	schemaVersion: 1;
+	sessions: Binding[];
+	barriers?: (Operation & { ref: string })[];
+}
 interface Turn {
 	executionId: string;
 	turnId: string;
 	operationKey: string;
-	userMessageId: string;
 	configVersion: string;
 	selection: RuntimeSelectionV1;
-	modelResponse?: {
-		state: "sent" | "completed" | "failed" | "unknown";
-		endTurn: boolean;
-	};
 	status: RuntimeStatusV1;
+	nativeStopReason?: string;
 	events: RuntimeEventV1[];
 }
 interface Session {
 	schemaVersion: 1;
 	binding: Binding;
-	nativeId: string;
-	started: boolean;
+	nativeId?: string;
 	cancelled: boolean;
 	sequence: number;
 	operations: Operation[];
 	turns: Turn[];
 }
 interface Handle {
-	native: ReturnType<typeof claudeQuery>;
-	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>;
+	native: Awaited<ReturnType<typeof openAcpSession>>;
 	pump: Promise<void>;
-	retiring: boolean;
 }
 type Submit = Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
 const terminal = (status: RuntimeStatusV1) =>
@@ -117,7 +111,7 @@ const unknownResult = {
 	message: "Runtime command acceptance could not be confirmed",
 } as const;
 
-export class ClaudeRuntimeDriver implements RuntimeDriver {
+export class GenericAcpRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
@@ -126,48 +120,24 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
 	private closing?: Promise<void>;
 	private constructor(
-		private readonly options: ClaudeRuntimeDriverOptions,
-		private readonly executable: string,
-		private readonly index: DurableJsonFile<{
-			schemaVersion: 1;
-			sessions: Binding[];
-		}>,
+		private readonly options: GenericAcpRuntimeDriverOptions,
+		private readonly index: DurableJsonFile<Index>,
 	) {}
-	static async open(options: ClaudeRuntimeDriverOptions) {
-		try {
-			if (!isAbsolute(options.path) || options.path === "/") throw new Error();
-			RuntimeModelConfigurationV3Schema.parse({
-				configVersion: options.configVersion,
-				defaultModelOptionId: options.defaultModelOptionId,
-				defaultReasoningLevel: options.defaultReasoningLevel,
-				schemaVersion: 3,
-				modelOptions: options.modelOptions.map((option) => ({
-					modelOptionId: option.modelOptionId,
-					model: option.model,
-					endpoint: option.endpoint,
-					reasoningLevels: [...option.reasoningLevels],
-					protocol: "anthropic-messages-v1",
-					authentication: option.authentication,
-					credentialEnvironmentVariable:
-						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_VALIDATED",
-				})),
-			});
-		} catch {
-			throw new Error("RUNTIME_CONFIGURATION_INVALID");
-		}
-		for (const option of options.modelOptions) {
-			validateModelAccess({
-				endpoint: option.endpoint,
-				credential: option.credential,
-			});
-			if (
-				option.reasoningLevels.some(
-					(level) => !["low", "medium", "high", "xhigh", "max"].includes(level),
-				)
+	static async open(options: GenericAcpRuntimeDriverOptions) {
+		if (
+			!isAbsolute(options.path) ||
+			options.path === "/" ||
+			!options.configVersion ||
+			!options.modelOptions.length ||
+			new Set(options.modelOptions.map((o) => o.modelOptionId)).size !==
+				options.modelOptions.length ||
+			!options.modelOptions.some(
+				(o) =>
+					o.modelOptionId === options.defaultModelOptionId &&
+					o.reasoningLevels.includes(options.defaultReasoningLevel),
 			)
-				throw new Error("RUNTIME_CONFIGURATION_INVALID");
-		}
-		const { executable } = await verifyClaudeInstallation();
+		)
+			throw new Error("RUNTIME_CONFIGURATION_INVALID");
 		await mkdir(options.path, { recursive: true, mode: 0o700 });
 		const path = await realpath(options.path);
 		const existing = await readdir(path);
@@ -177,7 +147,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			!(await lstat(join(path, "index.json"))).isFile()
 		)
 			unavailable();
-		const index = await DurableJsonFile.open(join(path, "index.json"), {
+		const index = await DurableJsonFile.open<Index>(join(path, "index.json"), {
 			schemaVersion: 1 as const,
 			sessions: [] as Binding[],
 		});
@@ -202,9 +172,47 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			).size !== state.sessions.length
 		)
 			unavailable();
-		return new ClaudeRuntimeDriver(
+		const barriers = state.barriers ?? [];
+		if (!Array.isArray(barriers)) unavailable();
+		const keys = new Set<string>();
+		for (const barrier of barriers) {
+			const binding = state.sessions.find((entry) => entry.ref === barrier.ref);
+			const unique = JSON.stringify([barrier.ref, barrier.key]);
+			if (
+				!binding ||
+				keys.has(unique) ||
+				!/^[a-f0-9]{64}$/.test(barrier.digest)
+			)
+				unavailable();
+			keys.add(unique);
+			const key: unknown = JSON.parse(barrier.key);
+			if (
+				!Array.isArray(key) ||
+				key.length !== 2 ||
+				key[0] !== "generation-cancel" ||
+				typeof key[1] !== "string" ||
+				!key[1]
+			)
+				unavailable();
+			if (barrier.record) {
+				const record = RuntimeDriverOperationRecordV1Schema.parse(
+					barrier.record,
+				);
+				if (
+					record.agentId !== binding.agentId ||
+					record.conversationId !== binding.conversationId ||
+					record.sessionGeneration !== binding.sessionGeneration ||
+					record.nativeSessionRef !== binding.ref ||
+					record.kind !== "generation-cancel" ||
+					record.operationId !== key[1] ||
+					record.result.outcome !== "accepted" ||
+					record.result.status !== "cancelled"
+				)
+					unavailable();
+			}
+		}
+		return new GenericAcpRuntimeDriver(
 			{ ...options, path, modelOptions: structuredClone(options.modelOptions) },
-			executable,
 			index,
 		);
 	}
@@ -236,8 +244,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				{
 					schemaVersion: 1,
 					binding,
-					nativeId: randomUUID(),
-					started: false,
 					cancelled: false,
 					sequence: 0,
 					operations: [],
@@ -265,8 +271,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					{
 						schemaVersion: 1,
 						binding,
-						nativeId: randomUUID(),
-						started: false,
 						cancelled: false,
 						sequence: 0,
 						operations: [],
@@ -277,8 +281,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				if (
 					state.schemaVersion !== 1 ||
 					JSON.stringify(state.binding) !== JSON.stringify(binding) ||
-					!uuid.test(state.nativeId) ||
-					typeof state.started !== "boolean" ||
+					(state.nativeId !== undefined &&
+						(typeof state.nativeId !== "string" || !state.nativeId)) ||
 					typeof state.cancelled !== "boolean" ||
 					!Number.isSafeInteger(state.sequence) ||
 					state.sequence < 0 ||
@@ -328,39 +332,24 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				}
 				const executions = new Set<string>();
 				const turns = new Set<string>();
-				const users = new Set<string>();
 				const eventKeys = new Set<string>();
 				let sequence = 0;
 				for (const turn of state.turns) {
 					if (
 						!turn.executionId ||
 						!turn.turnId ||
-						!uuid.test(turn.userMessageId) ||
 						!turn.configVersion ||
 						!Array.isArray(turn.events) ||
 						!RuntimeStatusV1Schema.safeParse(turn.status).success ||
 						!RuntimeSelectionV1Schema.safeParse(turn.selection).success ||
 						executions.has(turn.executionId) ||
 						turns.has(turn.turnId) ||
-						users.has(turn.userMessageId) ||
 						!operationKeys.has(turn.operationKey) ||
 						JSON.parse(turn.operationKey)[0] !== "submit-turn"
 					)
 						unavailable();
-					if (
-						turn.modelResponse !== undefined &&
-						(!turn.modelResponse ||
-							!["sent", "completed", "failed", "unknown"].includes(
-								turn.modelResponse.state,
-							) ||
-							typeof turn.modelResponse.endTurn !== "boolean" ||
-							(turn.modelResponse.endTurn &&
-								turn.modelResponse.state !== "completed"))
-					)
-						unavailable();
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
-					users.add(turn.userMessageId);
 					let completed = false;
 					for (const event of turn.events) {
 						sequence++;
@@ -368,7 +357,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							completed ||
 							!RuntimeEventV1Schema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
-							event.cursor !== `claude-${sequence}` ||
+							event.cursor !== `acp-${sequence}` ||
 							eventKeys.has(event.adapterEventKey)
 						)
 							unavailable();
@@ -379,6 +368,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						}
 					}
 					if (terminal(turn.status) !== completed) unavailable();
+					if (
+						completed &&
+						(turn.nativeStopReason === "end_turn"
+							? turn.status !== "completed"
+							: turn.nativeStopReason === "cancelled"
+								? turn.status !== "cancelled"
+								: !["max_tokens", "max_turn_requests", "refusal"].includes(
+										turn.nativeStopReason ?? "",
+									) || turn.status !== "failed")
+					)
+						unavailable();
 				}
 				if (
 					sequence !== state.sequence ||
@@ -389,104 +389,86 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					for (const turn of state.turns)
 						if (turn.status === "running") turn.status = "unknown";
 				});
-				for (const turn of file.read().turns) {
-					if (
-						!terminal(turn.status) &&
-						turn.configVersion === this.options.configVersion &&
-						turn.modelResponse?.state === "failed"
-					) {
-						await this.status(file, turn.executionId, "failed");
-						continue;
-					}
-					if (
-						terminal(turn.status) ||
-						turn.configVersion !== this.options.configVersion ||
-						turn.modelResponse?.state !== "completed" ||
-						!turn.modelResponse.endTurn
+				const active = state.turns.find((turn) => !terminal(turn.status));
+				if (active && !this.cancelled(binding.ref)) {
+					if (!state.nativeId) unavailable();
+					const workspace = join(directory, "workspace");
+					if ((await realpath(workspace)) !== workspace) unavailable();
+					await retireAcpProcess(directory);
+					const selection = this.options.modelOptions.some(
+						(option) =>
+							option.modelOptionId === active.selection.modelOptionId &&
+							option.reasoningLevels.includes(active.selection.reasoningLevel),
 					)
-						continue;
-					const history = await readClaudeSessionHistory(
-						state.nativeId,
-						join(directory, "workspace"),
-						join(directory, "config"),
-						turn.userMessageId,
-					);
-					if (!history.users.includes(turn.userMessageId) || !history.completed)
-						continue;
-					const recovered: Pick<RuntimeEventV1, "type" | "payload">[] = [];
-					const tools = new Map<string, string>();
-					for (const event of history.events) {
-						if (
-							event.type === "text" &&
-							typeof event.payload.delta === "string"
-						)
-							recovered.push({
-								type: "text",
-								payload: { delta: event.payload.delta },
-							});
-						else if (
-							event.type === "tool" &&
-							typeof event.payload.id === "string"
-						) {
-							if (event.payload.phase === "started")
-								tools.set(
-									event.payload.id,
-									["Read", "Write", "Edit"].includes(event.payload.name ?? "")
-										? (event.payload.name ?? unavailable())
-										: "unavailable",
-								);
-							const name = tools.get(event.payload.id) ?? unavailable();
-							recovered.push({
-								type: "tool",
-								payload: {
-									toolCallId: createHash("sha256")
-										.update(event.payload.id)
-										.digest("hex"),
-									name,
-									phase: event.payload.phase ?? unavailable(),
-								},
-							});
-						} else unavailable();
-					}
-					// Native blocks can contain many live deltas. Consume only the already durable prefix.
-					let offset = 0;
-					for (const event of turn.events.filter(
-						(event) => event.type === "text" || event.type === "tool",
-					)) {
-						const expected = recovered[offset];
-						if (
-							event.type === "text" &&
-							expected?.type === "text" &&
-							"delta" in expected.payload &&
-							typeof expected.payload.delta === "string" &&
-							expected.payload.delta.startsWith(event.payload.delta)
-						) {
-							const remaining = expected.payload.delta.slice(
-								event.payload.delta.length,
-							);
-							if (remaining)
-								recovered[offset] = {
-									type: "text",
-									payload: { delta: remaining },
-								};
-							else offset++;
-						} else if (
-							event.type === "tool" &&
-							expected?.type === "tool" &&
-							JSON.stringify(event.payload) === JSON.stringify(expected.payload)
-						)
-							offset++;
-						else unavailable();
-					}
-					for (const event of recovered.slice(offset))
-						await this.event(file, turn.executionId, event);
-					await this.status(file, turn.executionId, "completed");
+						? active.selection
+						: {
+								schemaVersion: 1 as const,
+								modelOptionId: this.options.defaultModelOptionId,
+								reasoningLevel: this.options.defaultReasoningLevel,
+							};
+					const restored = await openAcpSession({
+						directory,
+						cwd: workspace,
+						nativeId: state.nativeId,
+						launch: await this.options.launch(directory, selection, async () =>
+							unavailable(),
+						),
+						update: async () => {},
+					});
+					await restored.close();
 				}
 				return file;
 			})().catch(() => unavailable());
 			this.files.set(binding.ref, file);
 		}
 		return file;
+	}
+	private cancelled(ref: string) {
+		return (
+			this.index.read().barriers?.some((barrier) => barrier.ref === ref) ??
+			false
+		);
+	}
+	private async cancelGeneration(
+		binding: Binding,
+		command: Extract<RuntimeDriverCommand, { kind: "generation-cancel" }>,
+	) {
+		const previous = await this.index.update((state) => {
+			state.barriers ??= [];
+			const previous = state.barriers.find(
+				(entry) =>
+					entry.ref === binding.ref && entry.key === operationKey(command),
+			);
+			if (previous) {
+				if (previous.digest !== digest(command)) conflict();
+				return previous.record;
+			}
+			state.barriers.push({
+				ref: binding.ref,
+				key: operationKey(command),
+				digest: digest(command),
+			});
+			return undefined;
+		});
+		if (previous) return previous;
+		// The barrier does not depend on recoverable Turn history. Retire every owned
+		// effect source and drain in-flight events before confirming this control operation.
+		await this.files.get(binding.ref)?.catch(() => {});
+		await this.retire(binding.ref);
+		const record = result(command, binding.ref, {
+			outcome: "accepted",
+			status: "cancelled",
+		});
+		await this.index.update((state) => {
+			const barrier = state.barriers?.find(
+				(entry) =>
+					entry.ref === binding.ref && entry.key === operationKey(command),
+			);
+			if (!barrier) unavailable();
+			barrier.record = record;
+		});
+		// This receipt confirms generation retirement, never the original native Turn's outcome.
+		return record;
 	}
 	private async forReference(ref: string) {
 		const binding = this.index
@@ -532,14 +514,21 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		if (!binding) unavailable();
 		return this.exclusive(binding.ref, async () => {
 			if (this.closed) unavailable();
+			if (command.kind === "generation-cancel")
+				return this.cancelGeneration(binding, command);
 			const file = await this.file(binding);
 			const previous = file
 				.read()
 				.operations.find((entry) => entry.key === operationKey(command));
 			if (previous) {
 				if (previous.digest !== digest(command)) conflict();
-				if (previous.record) return previous.record;
-				if (command.kind !== "stop" && command.kind !== "generation-cancel")
+				if (
+					previous.record &&
+					(previous.record.result.outcome !== "unknown" ||
+						command.kind !== "stop")
+				)
+					return previous.record;
+				if (command.kind !== "stop")
 					return result(command, binding.ref, unknownResult);
 			}
 			if (command.kind === "submit-turn") return this.submit(file, command);
@@ -559,12 +548,31 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						key: operationKey(command),
 						digest: digest(command),
 					});
-				if (command.kind === "generation-cancel") state.cancelled = true;
 			});
 			if (!terminal(turn.status)) {
-				await this.retire(binding.ref);
-				await this.status(file, turn.executionId, "cancelled");
+				const handle = this.handles.get(binding.ref);
+				if (handle) {
+					await handle.native.cancel().catch(() => {});
+					await Promise.race([
+						handle.pump,
+						new Promise<void>((resolve) => {
+							const timer = setTimeout(resolve, 2000);
+							timer.unref();
+						}),
+					]);
+				}
 			}
+			if (
+				command.kind === "stop" &&
+				!terminal(
+					file
+						.read()
+						.turns.find((entry) => entry.executionId === turn.executionId)
+						?.status ?? unavailable(),
+				)
+			)
+				return this.resolve(file, command, unknownResult);
+
 			return this.resolve(file, command, {
 				outcome: "accepted",
 				status:
@@ -596,7 +604,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private async submit(file: DurableJsonFile<Session>, command: Submit) {
 		const before = file.read();
 		const ref = before.binding.ref;
-		if (before.cancelled) unavailable();
+		if (before.cancelled || this.cancelled(ref)) unavailable();
 		const selection =
 			command.schemaVersion === 2
 				? command.selection
@@ -631,34 +639,110 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			conflict();
 		if (!("text" in command.input) || command.input.attachments.length)
 			unavailable();
-		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
+		const inputText = command.input.text;
 		await this.retire(ref);
 		const directory = join(this.options.path, ref);
-		if (before.started) {
-			try {
-				const history = await readClaudeSessionHistory(
-					before.nativeId,
-					join(directory, "workspace"),
-					join(directory, "config"),
-				);
-				if (
-					before.turns.some(
-						(turn) =>
-							terminal(turn.status) &&
-							!history.users.includes(turn.userMessageId),
+		const workspace = join(directory, "workspace");
+		await mkdir(workspace, { recursive: true, mode: 0o700 });
+		if ((await realpath(workspace)) !== workspace) unavailable();
+		let admitted: () => void = () => {};
+		const admission = new Promise<void>((resolve) => {
+			admitted = resolve;
+		});
+		let dispatched = false;
+		const toolPhases = new Map<string, string>();
+		let native: Awaited<ReturnType<typeof openAcpSession>>;
+		try {
+			native = await openAcpSession({
+				directory,
+				launch: await this.options.launch(directory, selection, async () => {
+					if (!dispatched || this.closed)
+						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+					await this.resolve(file, command, {
+						outcome: "accepted",
+						status: "running",
+					});
+					await this.status(file, command.executionId, "running");
+					admitted();
+				}),
+				cwd: workspace,
+				nativeId: before.nativeId,
+				update: async (notification) => {
+					if (!dispatched || notification.sessionId !== native.nativeId) return;
+					await this.resolve(file, command, {
+						outcome: "accepted",
+						status: "running",
+					});
+					if (
+						file
+							.read()
+							.turns.find((turn) => turn.executionId === command.executionId)
+							?.status !== "running"
 					)
-				)
-					unavailable();
-			} catch {
-				unavailable();
-			}
+						await this.status(file, command.executionId, "running");
+					const update = notification.update;
+					if (
+						update.sessionUpdate === "agent_message_chunk" &&
+						update.content.type === "text" &&
+						update.content.text
+					)
+						await this.event(file, command.executionId, {
+							type: "text",
+							payload: { delta: update.content.text },
+						});
+					if (
+						update.sessionUpdate === "tool_call" ||
+						update.sessionUpdate === "tool_call_update"
+					) {
+						const phase =
+							update.status === "completed"
+								? "completed"
+								: update.status === "failed"
+									? "failed"
+									: "started";
+						if (toolPhases.get(update.toolCallId) !== phase) {
+							toolPhases.set(update.toolCallId, phase);
+							await this.event(file, command.executionId, {
+								type: "tool",
+								payload: {
+									toolCallId: createHash("sha256")
+										.update(update.toolCallId)
+										.digest("hex"),
+									name:
+										update.kind === "read"
+											? "Read"
+											: update.kind === "edit"
+												? "Edit"
+												: "unavailable",
+									phase,
+								},
+							});
+						}
+					}
+					admitted();
+				},
+			});
+		} catch {
+			unavailable();
 		}
-		for (const name of ["workspace", "config", "tmp", "memory"]) {
-			const path = join(directory, name);
-			await mkdir(path, { recursive: true, mode: 0o700 });
-			if ((await lstat(path)).isSymbolicLink()) unavailable();
+		await file.update((state) => {
+			state.nativeId = native.nativeId;
+		});
+		try {
+			await native.select(option.nativeModelId, selection.reasoningLevel);
+		} catch {
+			await native.close();
+			return this.resolve(file, command, {
+				outcome: "rejected",
+				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				message: "Runtime model selection is unsupported",
+				retryable: false,
+			});
 		}
-		const userMessageId = randomUUID();
+		if (this.closed) {
+			await native.close();
+			unavailable();
+		}
 		await file.update((state) => {
 			state.operations.push({
 				key: operationKey(command),
@@ -668,238 +752,39 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				executionId: command.executionId,
 				turnId: command.turnId,
 				operationKey: operationKey(command),
-				userMessageId,
 				configVersion: this.options.configVersion,
 				selection,
 				status: "unknown",
 				events: [],
 			});
 		});
-		let admitted: () => void = () => {};
-		const admission = new Promise<void>((resolve) => {
-			admitted = resolve;
-		});
-		const transport = await openRuntimeMessagesTransport({
-			...option,
-			effort: selection.reasoningLevel,
-			receipt: async (response, endTurn = false) => {
-				await file.update((state) => {
-					const turn =
-						state.turns.find(
-							(turn) => turn.executionId === command.executionId,
-						) ?? unavailable();
-					turn.modelResponse = { state: response, endTurn };
-				});
-			},
-			admit: async () => {
-				if (this.closed) unavailable();
-				await file.update((state) => {
-					state.started = true;
-				});
+		dispatched = true;
+		const handle: Handle = { native, pump: Promise.resolve() };
+		this.handles.set(ref, handle);
+		handle.pump = (async () => {
+			try {
+				const response = await native.prompt(inputText);
 				await this.resolve(file, command, {
 					outcome: "accepted",
 					status: "running",
 				});
-				await this.status(file, command.executionId, "running");
+				await this.status(
+					file,
+					command.executionId,
+					response.stopReason === "end_turn"
+						? "completed"
+						: response.stopReason === "cancelled"
+							? "cancelled"
+							: ["max_tokens", "max_turn_requests", "refusal"].includes(
+										response.stopReason,
+									)
+								? "failed"
+								: "unknown",
+					response.stopReason,
+				);
 				admitted();
-			},
-		});
-		if (this.closed) {
-			await transport.close();
-			unavailable();
-		}
-		let native: ReturnType<typeof claudeQuery>;
-		try {
-			native = claudeQuery(
-				{
-					pathToClaudeCodeExecutable: this.executable,
-					cwd: join(directory, "workspace"),
-					env: {
-						PATH: process.env.PATH,
-						TMPDIR: join(directory, "tmp"),
-						CLAUDE_CONFIG_DIR: join(directory, "config"),
-						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
-						ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
-						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-					},
-					settingSources: [],
-					...claudeWorkspaceTools(
-						join(directory, "workspace"),
-						join(directory, "memory"),
-					),
-					strictMcpConfig: true,
-					mcpServers: {},
-					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
-					model: option.model,
-					effort: selection.reasoningLevel as EffortLevel,
-					thinking: { type: "adaptive" },
-					includePartialMessages: true,
-					...(before.started
-						? { resume: before.nativeId }
-						: { sessionId: before.nativeId }),
-					extraArgs: { "disable-slash-commands": null },
-				},
-				{
-					type: "user",
-					session_id: before.nativeId,
-					uuid: userMessageId,
-					parent_tool_use_id: null,
-					message: {
-						role: "user",
-						content: [{ type: "text", text: command.input.text }],
-					},
-				},
-			);
-		} catch {
-			await transport.close();
-			return result(command, ref, unknownResult);
-		}
-		const handle: Handle = {
-			native,
-			transport,
-			pump: Promise.resolve(),
-			retiring: false,
-		};
-		this.handles.set(ref, handle);
-		handle.pump = (async () => {
-			const seen = new Map<string, string>();
-			const tools = new Map<string, string>();
-			try {
-				for await (const message of native.query) {
-					if (handle.retiring || this.handles.get(ref) !== handle) break;
-					if (message.session_id !== before.nativeId) unavailable();
-					if (
-						"user_message_uuid" in message &&
-						message.user_message_uuid !== undefined &&
-						message.user_message_uuid !== userMessageId
-					)
-						unavailable();
-					if (message.uuid) {
-						const fingerprint = createHash("sha256")
-							.update(JSON.stringify(message))
-							.digest("hex");
-						const previous = seen.get(message.uuid);
-						if (previous) {
-							if (previous !== fingerprint) unavailable();
-							continue;
-						}
-						seen.set(message.uuid, fingerprint);
-					}
-					if (message.type === "assistant" && message.error) {
-						await this.status(
-							file,
-							command.executionId,
-							transport.failure() ?? "failed",
-						);
-						break;
-					}
-					if (
-						message.type === "user" &&
-						message.parent_tool_use_id === null &&
-						Array.isArray(message.message.content)
-					) {
-						for (const block of message.message.content) {
-							if (block.type !== "tool_result") continue;
-							const name = tools.get(block.tool_use_id);
-							if (!name) unavailable();
-							tools.delete(block.tool_use_id);
-							await this.event(file, command.executionId, {
-								type: "tool",
-								payload: {
-									toolCallId: createHash("sha256")
-										.update(block.tool_use_id)
-										.digest("hex"),
-									name,
-									phase: block.is_error ? "failed" : "completed",
-								},
-							});
-						}
-					}
-					if (
-						message.type === "stream_event" &&
-						message.parent_tool_use_id === null &&
-						message.event.type === "content_block_start" &&
-						message.event.content_block.type === "tool_use"
-					) {
-						if (tools.has(message.event.content_block.id)) unavailable();
-						tools.set(
-							message.event.content_block.id,
-							["Read", "Write", "Edit"].includes(
-								message.event.content_block.name,
-							)
-								? message.event.content_block.name
-								: "unavailable",
-						);
-						await this.event(file, command.executionId, {
-							type: "tool",
-							payload: {
-								toolCallId: createHash("sha256")
-									.update(message.event.content_block.id)
-									.digest("hex"),
-								name: ["Read", "Write", "Edit"].includes(
-									message.event.content_block.name,
-								)
-									? message.event.content_block.name
-									: "unavailable",
-								phase: "started",
-							},
-						});
-					}
-					if (
-						message.type === "stream_event" &&
-						message.parent_tool_use_id === null &&
-						message.event.type === "content_block_delta" &&
-						message.event.delta.type === "text_delta" &&
-						message.event.delta.text
-					)
-						await this.event(file, command.executionId, {
-							type: "text",
-							payload: { delta: message.event.delta.text },
-						});
-					if (message.type === "result") {
-						await this.status(
-							file,
-							command.executionId,
-							transport.failure() ??
-								(message.subtype === "success" && !message.is_error
-									? "completed"
-									: "failed"),
-						);
-						break;
-					}
-				}
-				if (
-					!handle.retiring &&
-					!terminal(
-						file
-							.read()
-							.turns.find((turn) => turn.executionId === command.executionId)
-							?.status ?? unavailable(),
-					)
-				)
-					await this.status(
-						file,
-						command.executionId,
-						transport.failure() ?? "unknown",
-					);
 			} catch {
-				if (
-					!handle.retiring &&
-					!terminal(
-						file
-							.read()
-							.turns.find((turn) => turn.executionId === command.executionId)
-							?.status ?? unavailable(),
-					)
-				)
-					await this.status(
-						file,
-						command.executionId,
-						transport.failure() ?? "unknown",
-					);
-			} finally {
-				await transport.close();
-				await native.close();
+				await this.status(file, command.executionId, "unknown");
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -908,17 +793,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				admission,
 				handle.pump,
 				new Promise<void>((resolve) => {
-					timer = setTimeout(resolve, 30_000);
+					timer = setTimeout(resolve, 30000);
 				}),
 			]);
 		} finally {
 			clearTimeout(timer);
 		}
-		const resolved = file
-			.read()
-			.operations.find((entry) => entry.key === operationKey(command))?.record;
-		if (!resolved) await this.retire(ref);
-		return resolved ?? result(command, ref, unknownResult);
+		return (
+			file
+				.read()
+				.operations.find((entry) => entry.key === operationKey(command))
+				?.record ?? result(command, ref, unknownResult)
+		);
 	}
 	private async event(
 		file: DurableJsonFile<Session>,
@@ -934,7 +820,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					schemaVersion: 1,
 					executionId,
 					adapterEventKey: randomUUID(),
-					cursor: `claude-${state.sequence}`,
+					cursor: `acp-${state.sequence}`,
 					occurredAt: new Date().toISOString(),
 					...value,
 				}),
@@ -946,17 +832,51 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		status: RuntimeStatusV1,
+		nativeStopReason?: string,
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (terminal(status)) {
+				if (
+					!nativeStopReason ||
+					![
+						"end_turn",
+						"cancelled",
+						"max_tokens",
+						"max_turn_requests",
+						"refusal",
+					].includes(nativeStopReason)
+				)
+					unavailable();
+				turn.nativeStopReason = nativeStopReason;
+			}
+			if (status === "failed") {
+				state.sequence++;
+				turn.events.push(
+					RuntimeEventV1Schema.parse({
+						schemaVersion: 1,
+						executionId,
+						adapterEventKey: randomUUID(),
+						cursor: `acp-${state.sequence}`,
+						occurredAt: new Date().toISOString(),
+						type: "error",
+						payload: {
+							code: "RUNTIME_EXECUTION_FAILED",
+							message: "Runtime execution failed",
+							retryable: false,
+						},
+					}),
+				);
+			}
+
 			state.sequence++;
 			turn.events.push(
 				RuntimeEventV1Schema.parse({
 					schemaVersion: 1,
 					executionId,
 					adapterEventKey: randomUUID(),
-					cursor: `claude-${state.sequence}`,
+					cursor: `acp-${state.sequence}`,
 					occurredAt: new Date().toISOString(),
 					...(terminal(status)
 						? { type: "completed", payload: { status } }
@@ -969,25 +889,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 	private async retire(ref: string) {
 		const handle = this.handles.get(ref);
-		if (!handle) return;
-		handle.retiring = true;
-		await handle.transport.close();
+		if (!handle) {
+			await retireAcpProcess(join(this.options.path, ref));
+			return;
+		}
 		await handle.native.close();
 		await handle.pump;
-		if (this.handles.get(ref) === handle) this.handles.delete(ref);
+		this.handles.delete(ref);
 	}
 	close() {
+		this.closed = true;
 		this.closing ??= (async () => {
-			this.closed = true;
-			await Promise.all(
-				[...this.handles.keys()].map((ref) => this.retire(ref)),
-			);
+			for (const waiters of this.waiters.values())
+				for (const wake of waiters) wake();
 			await Promise.allSettled([...this.pending]);
 			await Promise.all(
 				[...this.handles.keys()].map((ref) => this.retire(ref)),
 			);
-			for (const values of this.waiters.values())
-				for (const wake of values) wake();
 		})();
 		return this.closing;
 	}
@@ -997,15 +915,47 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	): Promise<RuntimeDriverLookup> {
 		const binding = await this.binding(command, false);
 		if (!binding) return { state: "missing" };
-		const previous = (await this.file(binding))
+		if (command.kind === "generation-cancel") {
+			const barrier = this.index
+				.read()
+				.barriers?.find(
+					(entry) =>
+						entry.ref === binding.ref && entry.key === operationKey(command),
+				);
+			if (!barrier) return { state: "missing" };
+			if (barrier.digest !== digest(command)) conflict();
+			return {
+				state: "found",
+				record: barrier.record ?? (await this.execute(command)),
+			};
+		}
+		const file = await this.file(binding);
+		const previous = file
 			.read()
 			.operations.find((entry) => entry.key === operationKey(command));
 		if (!previous) return { state: "missing" };
 		if (previous.digest !== digest(command)) conflict();
 		if (
-			!previous.record &&
-			(command.kind === "stop" || command.kind === "generation-cancel")
-		)
+			command.kind === "stop" &&
+			previous.record?.result.outcome === "unknown"
+		) {
+			const turn = file
+				.read()
+				.turns.find(
+					(turn) =>
+						turn.executionId === command.executionId &&
+						turn.turnId === command.turnId,
+				);
+			if (turn && terminal(turn.status))
+				return {
+					state: "found",
+					record: await this.resolve(file, command, {
+						outcome: "accepted",
+						status: turn.status,
+					}),
+				};
+		}
+		if (!previous.record && command.kind === "stop")
 			return { state: "found", record: await this.execute(command) };
 		return previous.record
 			? { state: "found", record: previous.record }
@@ -1016,11 +966,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();
-		if (
-			!terminal(turn.status) &&
-			turn.configVersion !== this.options.configVersion
-		)
-			unavailable();
 		return turn.status;
 	}
 	async getCapabilities() {

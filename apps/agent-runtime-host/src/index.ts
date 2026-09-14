@@ -9,6 +9,8 @@ import {
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
+	GenericAcpRuntimeDriver,
+	openOpenCodeRuntime,
 	RuntimeHost,
 	RuntimeHostError,
 	verifyCodexPilotInstallation,
@@ -80,7 +82,12 @@ export function startRuntimeHost(options: StartOptions) {
 export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const required = (name: string) => requiredEnvironment(environment, name);
 	const binding = required("AGENT_INFRA_RUNTIME_DRIVER");
-	if (binding !== "codex" && binding !== "claude" && binding !== "fake")
+	if (
+		binding !== "codex" &&
+		binding !== "claude" &&
+		binding !== "acp" &&
+		binding !== "fake"
+	)
 		runtimeConfigurationInvalid();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
@@ -108,11 +115,11 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
-	const claudeConfiguration =
-		binding === "claude"
-			? readRuntimeModelConfigurationV3(environment, "claude")
+	const messagesConfiguration =
+		binding === "claude" || binding === "acp"
+			? readRuntimeModelConfigurationV3(environment, binding)
 			: undefined;
-	const activeConfiguration = configuration ?? claudeConfiguration;
+	const activeConfiguration = configuration ?? messagesConfiguration;
 	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
@@ -128,16 +135,25 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
 				modelOptions: configuration.modelOptions,
 			})
-		: claudeConfiguration
-			? await ClaudeRuntimeDriver.open({
-					...claudeConfiguration,
-					path: join(dataDirectory, "claude-driver"),
-				})
+		: messagesConfiguration
+			? binding === "acp"
+				? await openOpenCodeRuntime({
+						...messagesConfiguration,
+						path: join(dataDirectory, "acp-driver"),
+						executable:
+							environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
+							"/opt/opencode/bin/opencode",
+					})
+				: await ClaudeRuntimeDriver.open({
+						...messagesConfiguration,
+						path: join(dataDirectory, "claude-driver"),
+					})
 			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 	const close = async () => {
 		if (
 			driver instanceof CodexRuntimeDriver ||
-			driver instanceof ClaudeRuntimeDriver
+			driver instanceof ClaudeRuntimeDriver ||
+			driver instanceof GenericAcpRuntimeDriver
 		)
 			await driver.close();
 	};

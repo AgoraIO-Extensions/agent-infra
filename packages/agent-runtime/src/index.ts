@@ -1,3 +1,4 @@
+export * from "./acp-runtime-driver.js";
 export {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
@@ -11,5 +12,7 @@ export * from "./errors.js";
 export * from "./fake-runtime-driver.js";
 export * from "./file-runtime-store.js";
 export * from "./grant.js";
+export * from "./opencode-bootstrap.js";
+export * from "./opencode-installation.js";
 export * from "./readiness.js";
 export * from "./runtime-host.js";
