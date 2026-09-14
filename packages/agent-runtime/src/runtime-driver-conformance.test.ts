@@ -8,7 +8,6 @@ import type {
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openClaudeRuntimeDriverConformanceFixture } from "./claude-runtime-driver.test-support.js";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
 import {
@@ -16,10 +15,16 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
 
 const directories: string[] = [];
 const driverClosers: (() => Promise<void>)[] = [];
-const driverNames = ["Fake", "Codex", "Claude"] as const;
+const driverNames = [
+	"Fake",
+	"Codex",
+	"Claude",
+	...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode" as const] : []),
+] as const;
 
 async function directory() {
 	const path = await mkdtemp(
@@ -51,10 +56,11 @@ async function openConformanceDriver(
 	path: string,
 	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
-	if (name === "Claude") {
-		const fixture = await openClaudeRuntimeDriverConformanceFixture(
+	if (name === "Claude" || name === "OpenCode") {
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
 			path,
 			loseTurnStartResponse,
+			name === "OpenCode" ? "opencode" : "claude",
 		);
 		driverClosers.push(() => fixture.close());
 		return fixture;
@@ -389,41 +395,45 @@ describe("Runtime Driver shared conformance", () => {
 				);
 			});
 		},
+		30_000,
 	);
 
-	it.each(driverNames)(
-		"recovers one durable Session without a second Turn through %s",
-		async (name) => {
-			const path = await directory();
-			const hostPath = join(path, "host.json");
-			const first = await openConformanceDriver(
-				name,
-				join(path, "driver.json"),
-			);
-			const firstHost = await openConformanceHost(hostPath, first.driver);
-			const request = submitRequest();
-			const submitted = await firstHost.submitTurn(request);
-			expect(await first.createdTurnCount()).toBe(1);
+	for (const name of driverNames)
+		it(
+			`recovers one durable Session without a second Turn through ${name}`,
+			async () => {
+				const path = await directory();
+				const hostPath = join(path, "host.json");
+				const first = await openConformanceDriver(
+					name,
+					join(path, "driver.json"),
+				);
+				const firstHost = await openConformanceHost(hostPath, first.driver);
+				const request = submitRequest();
+				const submitted = await firstHost.submitTurn(request);
+				expect(await first.createdTurnCount()).toBe(1);
 
-			const restarted = await first.restart();
-			const restartedHost = await openConformanceHost(
-				hostPath,
-				restarted.driver,
-			);
-			const context = requestContext(
-				request,
-				submitted.hostSessionRef,
-				"request-conformance-recovered-status",
-			);
-			expect(
-				await restartedHost.status({
-					...context,
-					grant: runtimeGrantFixture(context, ["session.status"]),
-				}),
-			).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
-			expect(await restarted.createdTurnCount()).toBe(1);
-		},
-	);
+				const restarted = await first.restart();
+				const restartedHost = await openConformanceHost(
+					hostPath,
+					restarted.driver,
+				);
+				const context = requestContext(
+					request,
+					submitted.hostSessionRef,
+					"request-conformance-recovered-status",
+				);
+				expect(
+					await restartedHost.status({
+						...context,
+						grant: runtimeGrantFixture(context, ["session.status"]),
+					}),
+				).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
+				expect(await restarted.createdTurnCount()).toBe(1);
+			},
+			// OpenCode recovery starts both the original and restored native processes.
+			name === "OpenCode" ? 30_000 : undefined,
+		);
 
 	it.each(driverNames)(
 		"replays duplicate delivery and fence takeover without a second Turn through %s",
@@ -550,7 +560,7 @@ describe("Runtime Driver shared conformance", () => {
 				expect(fixture.turnSelections()).toHaveLength(2);
 			},
 			// Claude starts and retires real Native processes for both model options.
-			name === "Claude" ? 30_000 : undefined,
+			name === "Claude" || name === "OpenCode" ? 30_000 : undefined,
 		);
 
 	it.each(driverNames)(
@@ -637,74 +647,88 @@ describe("Runtime Driver shared conformance", () => {
 		},
 	);
 
-	it.each(driverNames)(
-		"recovers a crash after Driver acceptance through %s",
-		async (name) => {
-			const path = await directory();
-			const hostPath = join(path, "host.json");
-			const fixture = await openConformanceDriver(
-				name,
-				join(path, "driver.json"),
-			);
-			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
-				afterDriverResult: () => {
-					throw new Error("simulated crash after Driver acceptance");
-				},
-			});
+	for (const name of driverNames)
+		it(
+			`recovers a crash after Driver acceptance through ${name}`,
+			async () => {
+				const path = await directory();
+				const hostPath = join(path, "host.json");
+				const fixture = await openConformanceDriver(
+					name,
+					join(path, "driver.json"),
+				);
+				const crashingHost = await openConformanceHost(
+					hostPath,
+					fixture.driver,
+					{
+						afterDriverResult: () => {
+							throw new Error("simulated crash after Driver acceptance");
+						},
+					},
+				);
 
-			const request = submitRequest();
-			await expect(crashingHost.submitTurn(request)).rejects.toThrow(
-				"simulated crash after Driver acceptance",
-			);
-			expect(await fixture.createdTurnCount()).toBe(1);
+				const request = submitRequest();
+				await expect(crashingHost.submitTurn(request)).rejects.toThrow(
+					"simulated crash after Driver acceptance",
+				);
+				expect(await fixture.createdTurnCount()).toBe(1);
 
-			const restarted = await fixture.restart();
-			const recoveredHost = await openConformanceHost(
-				hostPath,
-				restarted.driver,
-			);
-			expect((await recoveredHost.submitTurn(request)).result).toEqual({
-				outcome: "accepted",
-				status: restarted.recoveryStatus ?? "running",
-			});
-			expect(await restarted.createdTurnCount()).toBe(1);
-		},
-	);
+				const restarted = await fixture.restart();
+				const recoveredHost = await openConformanceHost(
+					hostPath,
+					restarted.driver,
+				);
+				expect((await recoveredHost.submitTurn(request)).result).toEqual({
+					outcome: "accepted",
+					status: restarted.recoveryStatus ?? "running",
+				});
+				expect(await restarted.createdTurnCount()).toBe(1);
+			},
+			// OpenCode recovery starts both the original and restored native processes.
+			name === "OpenCode" ? 30_000 : undefined,
+		);
 
-	it.each(driverNames)(
-		"keeps an unqueryable accepted Turn unknown through %s",
-		async (name) => {
-			const path = await directory();
-			const hostPath = join(path, "host.json");
-			const fixture = await openConformanceDriver(
-				name,
-				join(path, "driver.json"),
-				name !== "Fake",
-			);
-			const crashingHost = await openConformanceHost(hostPath, fixture.driver, {
-				afterDriverResult: () => {
-					if (name === "Fake") {
-						throw new Error("simulated lost Driver response");
-					}
-				},
-			});
-			const request = submitRequest();
+	for (const name of driverNames)
+		it(
+			`keeps an unqueryable accepted Turn unknown through ${name}`,
+			async () => {
+				const path = await directory();
+				const hostPath = join(path, "host.json");
+				const fixture = await openConformanceDriver(
+					name,
+					join(path, "driver.json"),
+					name !== "Fake",
+				);
+				const crashingHost = await openConformanceHost(
+					hostPath,
+					fixture.driver,
+					{
+						afterDriverResult: () => {
+							if (name === "Fake") {
+								throw new Error("simulated lost Driver response");
+							}
+						},
+					},
+				);
+				const request = submitRequest();
 
-			await expect(crashingHost.submitTurn(request)).rejects.toThrow();
-			await fixture.makeOperationUnknown(request.executionId);
+				await expect(crashingHost.submitTurn(request)).rejects.toThrow();
+				await fixture.makeOperationUnknown(request.executionId);
 
-			const restarted = await fixture.restart();
-			const recoveredHost = await openConformanceHost(
-				hostPath,
-				restarted.driver,
-			);
-			expect((await recoveredHost.submitTurn(request)).result).toMatchObject({
-				outcome: "unknown",
-				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-			});
-			expect(await restarted.createdTurnCount()).toBe(1);
-		},
-	);
+				const restarted = await fixture.restart();
+				const recoveredHost = await openConformanceHost(
+					hostPath,
+					restarted.driver,
+				);
+				expect((await recoveredHost.submitTurn(request)).result).toMatchObject({
+					outcome: "unknown",
+					code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				});
+				expect(await restarted.createdTurnCount()).toBe(1);
+			},
+			// OpenCode recovery starts both the original and restored native processes.
+			name === "OpenCode" ? 30_000 : undefined,
+		);
 
 	it.each(driverNames)(
 		"preserves a pre-start event race through %s",

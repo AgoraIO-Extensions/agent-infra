@@ -3,7 +3,8 @@ import { createServer, type ServerResponse } from "node:http";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
-export interface ClaudeModelTransportOptions {
+export interface RuntimeMessagesTransportOptions {
+	readonly client?: "claude" | "opencode";
 	readonly endpoint: string;
 	readonly credential: string;
 	readonly authentication: "api-key" | "bearer";
@@ -18,7 +19,7 @@ export interface ClaudeModelTransportOptions {
 }
 
 const allowedBetas = new Set(
-	"claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01".split(
+	"structured-outputs-2025-11-13,fine-grained-tool-streaming-2025-05-14,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01".split(
 		",",
 	),
 );
@@ -38,8 +39,8 @@ function reject(response: ServerResponse, status = 400) {
 }
 
 /** One Query, one fixed option. No discovery, routing, retries, or user-supplied upstream headers. */
-export async function openClaudeModelTransport(
-	options: ClaudeModelTransportOptions,
+export async function openRuntimeMessagesTransport(
+	options: RuntimeMessagesTransportOptions,
 ) {
 	const access = validateModelAccess({
 		endpoint: options.endpoint,
@@ -65,7 +66,9 @@ export async function openClaudeModelTransport(
 				closed ||
 				failure ||
 				request.method !== "POST" ||
-				request.headers.authorization !== `Bearer ${token}` ||
+				(options.client === "opencode"
+					? request.headers["x-api-key"] !== token
+					: request.headers.authorization !== `Bearer ${token}`) ||
 				![
 					"/v1/messages",
 					"/v1/messages?beta=true",
@@ -131,7 +134,9 @@ export async function openClaudeModelTransport(
 					"content-type": "application/json",
 					"anthropic-version": "2023-06-01",
 					"user-agent":
-						"claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
+						options.client === "opencode"
+							? "agent-infra-opencode/1.18.30"
+							: "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
 					"x-app": "cli",
 				};
 				if (typeof beta === "string") headers["anthropic-beta"] = beta;

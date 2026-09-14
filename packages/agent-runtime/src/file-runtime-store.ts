@@ -579,17 +579,23 @@ export class FileRuntimeStore {
 		assertStoreState(state);
 		return Object.values(state.sessions).flatMap((session) =>
 			Object.values(session.operations)
-				.filter(
-					(operation) =>
+				.filter((operation) => {
+					// Once isolation starts, recover only its control operation. A confirmed
+					// barrier preserves history without reviving any retired generation work.
+					if (session.generationBarrier) {
+						return (
+							session.generationBarrier.state === "active" &&
+							session.generationBarrier.tombstoneId === operation.operationId
+						);
+					}
+					return (
 						operation.state === "prepared" ||
-						(session.generationBarrier?.state === "active" &&
-							session.generationBarrier.tombstoneId ===
-								operation.operationId) ||
 						(session.recovery?.status === "blocked" &&
 							session.recovery.operationId === operation.operationId) ||
 						(operation.result?.outcome === "accepted" &&
-							["running", "unknown"].includes(operation.result.status)),
-				)
+							["running", "unknown"].includes(operation.result.status))
+					);
+				})
 				.map((operation) => ({
 					session: structuredClone(session),
 					operation: structuredClone(operation),

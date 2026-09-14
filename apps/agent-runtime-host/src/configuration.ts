@@ -8,14 +8,14 @@ export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
 export function readRuntimeModelConfigurationV3(
 	environment: NodeJS.ProcessEnv,
-	driver: "codex" | "claude",
+	driver: "codex" | "claude" | "acp",
 ) {
 	try {
 		const value = RuntimeModelConfigurationV3Schema.parse(
 			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
 		);
 		const protocol =
-			driver === "claude" ? "anthropic-messages-v1" : "openai-responses-v1";
+			driver === "codex" ? "openai-responses-v1" : "anthropic-messages-v1";
 		const modelOptions = value.modelOptions.map(
 			({ credentialEnvironmentVariable, ...option }) => {
 				if (option.protocol !== protocol) runtimeConfigurationInvalid();
