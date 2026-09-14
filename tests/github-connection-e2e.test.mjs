@@ -363,6 +363,14 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			status: "SUCCEEDED",
 		})),
 		cleanup: "SUCCEEDED",
+		idempotencyKeys: [
+			"run-happy:issue-create",
+			"run-happy:issue-update",
+			"run-happy:comment-create",
+			"run-happy:comment-update",
+			"run-happy:comment-delete",
+			"run-happy:issue-close",
+		],
 		issueNumber: 17,
 		runId: "run-happy",
 	});
