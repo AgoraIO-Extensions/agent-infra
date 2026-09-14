@@ -5,8 +5,13 @@ import { createInterface } from "node:readline";
 const mode = process.env.PI_PEER_MODE;
 const sessionFile = process.argv[process.argv.indexOf("--session") + 1];
 let header;
+let entries = [];
 try {
-	header = JSON.parse((await readFile(sessionFile, "utf8")).split("\n")[0]);
+	entries = (await readFile(sessionFile, "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	header = entries[0];
 } catch {
 	header = {
 		type: "session",
@@ -15,13 +20,16 @@ try {
 		cwd: process.cwd(),
 	};
 }
-await writeFile(sessionFile, `${JSON.stringify(header)}\n`);
+if (!entries.length)
+	await writeFile(sessionFile, `${JSON.stringify(header)}\n`);
 let model = { provider: "configured", id: "model" };
 let thinkingLevel = "high";
 let isStreaming = false;
-const messages = [];
+const messages = entries
+	.filter((e) => e.type === "message")
+	.map((e) => e.message);
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const finish = (stopReason) => {
+const finish = async (stopReason) => {
 	if (!isStreaming) return;
 	send({
 		type: "message_update",
@@ -32,6 +40,20 @@ const finish = (stopReason) => {
 		content: [{ type: "text", text: "synthetic result" }],
 		stopReason,
 	});
+	await writeFile(
+		sessionFile,
+		`${[
+			header,
+			...messages.map((message, index) => ({
+				type: "message",
+				id: String(index),
+				parentId: index ? String(index - 1) : null,
+				message,
+			})),
+		]
+			.map((e) => JSON.stringify(e))
+			.join("\n")}\n`,
+	);
 	isStreaming = false;
 	send({ type: "agent_end" });
 	// Queued duplicates and unknown vendor frames must not create a second terminal.

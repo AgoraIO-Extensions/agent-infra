@@ -58,3 +58,8 @@ Pi RPC 使用未修改的官方 `@earendil-works/pi-coding-agent@0.85.1`，源�
 - 官方 `RpcClient` 隐式继承进程环境并收集 stderr，因此本仓只依赖未修改的官方 CLI，
   采用上述受限客户端叶子逻辑。持久操作、游标、屏障和进程所有权复用 ACP 已有实现；
   Pi 特有 ACK/终态核实、原生历史 checkpoint、可信工具策略留在 Pi 模块。
+
+Pi 的路径解析、read 文件名 fallback、edit 和 write 队列不在本仓重写。可信扩展使用官方
+`createReadToolDefinition`、`createWriteToolDefinition`、`createEditToolDefinition` 的
+filesystem operations 接口，在 Pi 完成路径解析后校验实际访问目标；恢复时使用官方纯函数
+`buildSessionContext` 核对已持久历史 checkpoint，在启动 CLI 前拒绝截断或替换的上下文。

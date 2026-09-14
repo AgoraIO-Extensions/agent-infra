@@ -49,6 +49,7 @@ export interface NativeSessionOptions {
 	directory: string;
 	cwd: string;
 	nativeId?: string;
+	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
@@ -56,13 +57,15 @@ export interface NativeSessionOptions {
 export interface NativeSession {
 	nativeId: string;
 	select(model: string, effort: string): Promise<void>;
-	prompt(text: string): Promise<{ stopReason: string }>;
+	prompt(text: string): Promise<{ stopReason: string; checkpoint?: string }>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
 	checkpoint?(): Promise<string>;
 	recover?(
 		checkpoint: string,
-	): Promise<{ stopReason: string; text: string } | undefined>;
+	): Promise<
+		{ stopReason: string; text: string; checkpoint?: string } | undefined
+	>;
 	cancel(): Promise<void>;
 	close(): Promise<void>;
 }
@@ -92,6 +95,7 @@ interface Turn {
 	status: RuntimeStatusV1;
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
+	nativeTerminalCheckpoint?: string;
 	events: RuntimeEventV1[];
 }
 interface Session {
@@ -393,6 +397,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					if (terminal(turn.status) !== completed) unavailable();
 					if (
 						completed &&
+						turn.nativeCheckpoint &&
+						!turn.nativeTerminalCheckpoint
+					)
+						unavailable();
+					if (
+						completed &&
 						this.options.completionStatus(turn.nativeStopReason ?? "") !==
 							turn.status
 					)
@@ -408,17 +418,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						if (turn.status === "running") turn.status = "unknown";
 				});
 				const active = state.turns.find((turn) => !terminal(turn.status));
-				if (active && !this.cancelled(binding.ref)) {
+				const latest = active ?? state.turns.at(-1);
+				if (
+					latest &&
+					(active || latest.nativeTerminalCheckpoint) &&
+					!this.cancelled(binding.ref)
+				) {
 					if (!state.nativeId) unavailable();
 					const workspace = join(directory, "workspace");
 					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
 					const selection = this.options.modelOptions.some(
 						(option) =>
-							option.modelOptionId === active.selection.modelOptionId &&
-							option.reasoningLevels.includes(active.selection.reasoningLevel),
+							option.modelOptionId === latest.selection.modelOptionId &&
+							option.reasoningLevels.includes(latest.selection.reasoningLevel),
 					)
-						? active.selection
+						? latest.selection
 						: {
 								schemaVersion: 1 as const,
 								modelOptionId: this.options.defaultModelOptionId,
@@ -428,15 +443,30 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						directory,
 						cwd: workspace,
 						nativeId: state.nativeId,
+						history: latest.nativeCheckpoint
+							? {
+									checkpoint: active
+										? latest.nativeCheckpoint
+										: (latest.nativeTerminalCheckpoint ?? unavailable()),
+									complete: !active,
+								}
+							: undefined,
 						selection,
 						admit: async () => unavailable(),
 						update: async () => {},
 					});
 					try {
-						const recovered = active.nativeCheckpoint
+						if (
+							!active &&
+							latest.nativeTerminalCheckpoint !==
+								(await restored.checkpoint?.())
+						)
+							unavailable();
+						const recovered = active?.nativeCheckpoint
 							? await restored.recover?.(active.nativeCheckpoint)
 							: undefined;
 						if (
+							active &&
 							recovered &&
 							terminal(this.options.completionStatus(recovered.stopReason))
 						) {
@@ -455,6 +485,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 									active.executionId,
 									this.options.completionStatus(recovered.stopReason),
 									recovered.stopReason,
+									recovered.checkpoint,
 								);
 							}
 						}
@@ -721,6 +752,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				cwd: workspace,
 				nativeId: before.nativeId,
+				history: before.turns.at(-1)?.nativeTerminalCheckpoint
+					? {
+							checkpoint:
+								before.turns.at(-1)?.nativeTerminalCheckpoint ?? unavailable(),
+							complete: true,
+						}
+					: undefined,
 				update: async (event) => {
 					if (!dispatched) return;
 					await this.resolve(file, command, {
@@ -808,6 +846,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					command.executionId,
 					this.options.completionStatus(response.stopReason),
 					response.stopReason,
+					response.checkpoint,
 				);
 				admitted();
 			} catch {
@@ -860,6 +899,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		status: RuntimeStatusV1,
 		nativeStopReason?: string,
+		nativeTerminalCheckpoint?: string,
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
@@ -871,6 +911,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				)
 					unavailable();
 				turn.nativeStopReason = nativeStopReason;
+				if (turn.nativeCheckpoint && !nativeTerminalCheckpoint) unavailable();
+				if (nativeTerminalCheckpoint)
+					turn.nativeTerminalCheckpoint = nativeTerminalCheckpoint;
 			}
 			if (status === "failed") {
 				state.sequence++;

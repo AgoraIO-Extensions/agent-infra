@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { openPiRpc, piRecord } from "./pi-rpc.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
@@ -30,10 +31,27 @@ export async function openPiSession(
 				.map((line) => JSON.parse(line));
 			if (
 				lines[0]?.type !== "session" ||
+				lines[0].version !== 3 ||
 				lines[0].id !== options.nativeId ||
 				lines[0].cwd !== options.cwd
 			)
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			if (options.history) {
+				const expected = piRecord(JSON.parse(options.history.checkpoint));
+				const count = Number(expected?.count);
+				const messages = buildSessionContext(lines.slice(1)).messages;
+				if (
+					!expected ||
+					!Number.isSafeInteger(count) ||
+					count < 0 ||
+					messages.length < count ||
+					(options.history.complete && messages.length !== count) ||
+					createHash("sha256")
+						.update(JSON.stringify(messages.slice(0, count)))
+						.digest("hex") !== expected.digest
+				)
+					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			}
 		} else {
 			try {
 				const file = await open(sessionFile, "wx", 0o600);
@@ -51,7 +69,7 @@ export async function openPiSession(
 	let updates = Promise.resolve();
 	let active:
 		| {
-				resolve: (result: { stopReason: string }) => void;
+				resolve: (result: { stopReason: string; checkpoint: string }) => void;
 				reject: (error: Error) => void;
 		  }
 		| undefined;
@@ -144,7 +162,7 @@ export async function openPiSession(
 							? await confirmedTerminal(currentCheckpoint)
 							: undefined;
 						if (!confirmed) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
-						const { stopReason } = confirmed;
+						const { stopReason, checkpoint } = confirmed;
 						const persisted = await open(sessionFile, "r");
 						try {
 							await persisted.sync();
@@ -153,7 +171,7 @@ export async function openPiSession(
 						}
 						const completion = active;
 						active = undefined;
-						completion.resolve({ stopReason });
+						completion.resolve({ stopReason, checkpoint });
 					}
 				})
 				.catch(() => {
@@ -220,6 +238,12 @@ export async function openPiSession(
 			return;
 		return {
 			stopReason: String(last.stopReason),
+			checkpoint: JSON.stringify({
+				count: messages.length,
+				digest: createHash("sha256")
+					.update(JSON.stringify(messages))
+					.digest("hex"),
+			}),
 			text: current
 				.filter((message) => message?.role === "assistant")
 				.flatMap((message) =>
@@ -292,7 +316,10 @@ export async function openPiSession(
 				if (active || exited) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				started = false;
 				phases.clear();
-				const terminal = Promise.withResolvers<{ stopReason: string }>();
+				const terminal = Promise.withResolvers<{
+					stopReason: string;
+					checkpoint: string;
+				}>();
 				const target = { resolve: terminal.resolve, reject: terminal.reject };
 				active = target;
 				void rpc

@@ -188,9 +188,11 @@ Messages V3 配置。版本、源码和 CLI bundle 校验值以
 `prompt` 与 `abort` ACK 不代表完成或停止。终态由 `agent_end`、`get_state`、
 `get_messages` 核实，原生 session file 同步落盘后才发布。恢复时以提交前持久 checkpoint
 核对历史前缀、唯一新 user 消息和明确终止原因；无法证明的执行保留 `unknown`，不重投。
-已保存的事件游标稳定重放，损坏的原生文件不被新 Session 替换。
+已确认终态同时持久保存原生历史 checkpoint；重启前读取官方 session context，拒绝
+完整行截断、上下文替换或缺失。已保存的事件游标稳定重放，损坏文件不被新 Session 替换。
 
-原生工具仅开放 read/write/edit，经镜像内可信扩展校验实际路径；启动必须收到该策略的
+原生工具仅开放 read/write/edit，复用官方工具的 filesystem operations，在路径解析及
+文件名 fallback 之后由镜像内可信扩展校验实际访问目标；启动必须收到该策略的
 就绪信号。显式关闭项目授权、扩展/技能/模板/上下文自动发现以及自动重试和压缩。
 `.memory/MEMORY.md` 仅从当前 workspace 读取。supplement、文件传输、结果文件和
 Connection capability 保持关闭；本项交付不代表完整模板整装通过。

@@ -86,7 +86,7 @@ jobs:
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \
-            src/pi-native.test.ts src/pi-runtime-driver.test.ts \
+            src/pi-native.test.ts src/pi-runtime-driver.test.ts src/pi-policy.test.ts \
             src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
       - name: Build applications

@@ -114,6 +114,29 @@ it("runs the pinned Pi CLI against Messages and persists the confirmed result", 
 			},
 		]);
 		await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+		await fixture.driver.close();
+		const nativeFile = join(
+			path,
+			record.nativeSessionRef,
+			"native/session.jsonl",
+		);
+		const header = (await readFile(nativeFile, "utf8")).split("\n")[0];
+		await writeFile(nativeFile, `${header}\n`);
+		await fixture.restart();
+		await expect(
+			fixture.driver.getStatus(record.nativeSessionRef, "execution-b"),
+		).rejects.toThrow("Runtime session could not be recovered");
+		await expect(
+			fixture.driver.execute({
+				...command,
+				nativeSessionRef: record.nativeSessionRef,
+				executionId: "execution-c",
+				turnId: "turn-c",
+				operationId: "operation-c",
+			}),
+		).rejects.toThrow("Runtime session could not be recovered");
+		expect(await readFile(nativeFile, "utf8")).toBe(`${header}\n`);
+		expect(await fixture.createdTurnCount()).toBe(2);
 	} finally {
 		await fixture.close();
 		await rm(path, { recursive: true, force: true });
