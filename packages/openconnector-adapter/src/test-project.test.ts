@@ -57,6 +57,23 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 		matrix.filter((item) => item.status === "UNVERIFIED").length,
 		136,
 	);
+	assert.deepEqual(
+		matrix
+			.filter((item) => item.status === "LIVE_VERIFIED")
+			.map((item) => item.actionVersionId)
+			.sort(),
+		[
+			"github.create_issue@v7",
+			"github.create_issue_comment@v7",
+			"github.delete_issue_comment@v7",
+			"github.get_issue@v7",
+			"github.get_issue_comment@v7",
+			"github.get_repository@v7",
+			"github.list_issue_comments@v7",
+			"github.update_issue@v7",
+			"github.update_issue_comment@v7",
+		],
+	);
 	assert.ok(
 		matrix
 			.filter((item) => item.status === "LIVE_VERIFIED")
@@ -81,6 +98,16 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 			capabilityVerificationMatrix(bumpedCatalog, githubV7VerificationEvidence),
 		/unknown ActionVersions/,
 	);
+	for (const evidence of [
+		{ ...githubV7VerificationEvidence, cleanup: "FAILED" as const },
+		{ ...githubV7VerificationEvidence, provider: "foreign" },
+		{ ...githubV7VerificationEvidence, providerReleaseId: "github-stale" },
+	]) {
+		assert.throws(
+			() => capabilityVerificationMatrix(githubConnectionCatalog, evidence),
+			/verification evidence does not match the catalog/,
+		);
+	}
 });
 
 test("capability coverage rejects duplicate IDs and unknown effects", () => {

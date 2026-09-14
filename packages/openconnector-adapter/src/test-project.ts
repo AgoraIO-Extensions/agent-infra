@@ -80,19 +80,20 @@ export function capabilityVerificationMatrix(
 	) {
 		throw new Error("verification evidence contains unknown ActionVersions");
 	}
+	if (
+		evidence.cleanup !== "SUCCEEDED" ||
+		evidence.provider !== catalog.provider ||
+		evidence.providerReleaseId !== catalog.providerReleaseId
+	) {
+		throw new Error("verification evidence does not match the catalog");
+	}
 	for (const [name, value] of Object.entries(evidence)) {
 		if (name !== "actionVersionIds" && name !== "cleanup") {
 			requireValue(`verification evidence ${name}`, value);
 		}
 	}
-	const evidenceMatchesCatalog =
-		evidence.cleanup === "SUCCEEDED" &&
-		evidence.provider === catalog.provider &&
-		evidence.providerReleaseId === catalog.providerReleaseId;
-
 	return capabilityCoverage([catalog]).map((coverage) => {
-		const verified =
-			evidenceMatchesCatalog && actionVersionIds.has(coverage.actionId);
+		const verified = actionVersionIds.has(coverage.actionId);
 		return {
 			...coverage,
 			actionVersionId: coverage.actionId,
