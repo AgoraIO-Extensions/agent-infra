@@ -15,6 +15,10 @@ export PATH="$state_dir/bin:$PATH"
 cluster_name="workload-${RANDOM}-$$"
 registry_name="${cluster_name}-registry"
 export KUBECONFIG="$state_dir/kubeconfig"
+export WORKLOAD_KIND_CONTEXT="kind-$cluster_name"
+kube() {
+  kubectl --kubeconfig "$KUBECONFIG" --context "$WORKLOAD_KIND_CONTEXT" "$@"
+}
 cleanup() {
   "$kind_bin" delete cluster --name "$cluster_name"
   docker rm --force "$registry_name" >/dev/null 2>&1 || true
@@ -34,7 +38,12 @@ export WORKLOAD_KIND_IMAGE_A
 export WORKLOAD_KIND_IMAGE_B
 WORKLOAD_KIND_IMAGE_A=$(docker inspect "$WORKLOAD_KIND_REPOSITORY:A" --format '{{index .RepoDigests 0}}' | awk -F@ '{print $2}')
 WORKLOAD_KIND_IMAGE_B=$(docker inspect "$WORKLOAD_KIND_REPOSITORY:B" --format '{{index .RepoDigests 0}}' | awk -F@ '{print $2}')
-"$kind_bin" create cluster --name "$cluster_name" --config deploy/kind/workload-cluster.yaml --kubeconfig "$KUBECONFIG"
+kind_node_image=${WORKLOAD_KIND_NODE_IMAGE:-kindest/node:v1.33.4@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2}
+[[ "$kind_node_image" == *@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2 ]] || {
+  echo "The pinned Kubernetes v1.33.4 node digest is required" >&2
+  exit 1
+}
+"$kind_bin" create cluster --name "$cluster_name" --image "$kind_node_image" --config deploy/kind/workload-cluster.yaml --kubeconfig "$KUBECONFIG"
 docker network connect kind "$registry_name"
 for node in $("$kind_bin" get nodes --name "$cluster_name"); do
   docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${registry_port}"
@@ -53,8 +62,8 @@ curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
 printf '%s  %s\n' \
   9382d2b27a76f40c170454b408653e6d71e2205ef0aef069e942bb690e7381d0 \
   "$state_dir/calico.yaml" | shasum -a 256 --check --status
-kubectl create --request-timeout=60s -f "$state_dir/calico.yaml"
-kubectl rollout status daemonset/calico-node --namespace kube-system --timeout=300s
-kubectl wait nodes --all --for=condition=Ready --timeout=300s
+kube create --namespace kube-system --request-timeout=60s -f "$state_dir/calico.yaml"
+kube rollout status daemonset/calico-node --namespace kube-system --timeout=300s
+kube wait nodes --namespace default --all --for=condition=Ready --timeout=300s
 export WORKLOAD_KIND_TEST=1
 pnpm --filter @agent-infra/platform-worker exec vitest run src/workload.kind.test.ts

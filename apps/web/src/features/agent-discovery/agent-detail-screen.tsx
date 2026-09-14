@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { buttonVariants } from "@/components/ui/button";
 
-import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { AgentDetailState } from "./agent-discovery.js";
 import { agentServiceAvailabilityLabel } from "./agent-discovery-screen.js";
@@ -16,7 +16,7 @@ const channelKindLabels = {
 	wecom_bot: "WeCom bot",
 	wecom_app: "WeCom app",
 } satisfies Record<
-	AgentProjectionV1["configuration"]["channels"][number]["kind"],
+	AgentProjectionV2["configuration"]["channels"][number]["kind"],
 	string
 >;
 
@@ -27,7 +27,7 @@ const channelStatusLabels = {
 	bound: "bound",
 	failed: "failed",
 } satisfies Record<
-	AgentProjectionV1["configuration"]["channels"][number]["status"],
+	AgentProjectionV2["configuration"]["channels"][number]["status"],
 	string
 >;
 
@@ -155,20 +155,11 @@ export function AgentDetailScreen({
 					</dd>
 				</div>
 				<div className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6">
-					<dt className="font-medium text-slate-700 text-sm">
-						Connection actions
-					</dt>
+					<dt className="font-medium text-slate-700 text-sm">Connection</dt>
 					<dd className="text-slate-950 text-sm">
-						{!agent.capabilities.connection
-							? "Not required"
-							: agent.configuration.actions.length === 0
-								? "Connection capability available"
-								: agent.configuration.actions
-										.map(
-											(action) =>
-												`${action.providerId} / ${action.actionId} (${action.actionVersion})`,
-										)
-										.join(", ")}
+						{agent.capabilities.connection
+							? "Authorize external access in Connection"
+							: "Not available"}
 					</dd>
 				</div>
 			</dl>

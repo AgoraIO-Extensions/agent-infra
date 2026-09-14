@@ -3,6 +3,7 @@ export * from "./driver.ts";
 export * from "./events.ts";
 export * from "./grant.ts";
 export * from "./host.ts";
+export * from "./readiness.ts";
 
 import {
 	RuntimeDriverCommandV1Schema,

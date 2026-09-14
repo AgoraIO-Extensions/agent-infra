@@ -15,6 +15,8 @@ import type {
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
 	RuntimeSupplementRequestV1,
+	WorkloadReadinessRequestV1,
+	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
@@ -33,6 +35,8 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	WorkloadReadinessRequestV1Schema,
+	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
 
 import type { RuntimeDriver } from "./driver.js";
@@ -47,8 +51,10 @@ import {
 	type ExecutionGrantValidationOptions,
 	validateRuntimeExecutionGrant,
 } from "./grant.js";
+import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 
 interface RuntimeHostOptions {
+	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
 	grantValidation: ExecutionGrantValidationOptions;
@@ -451,6 +457,56 @@ export class RuntimeHost {
 		);
 		if (!status.success) driverInvalid();
 		return status.data;
+	}
+
+	async readiness(
+		value: WorkloadReadinessRequestV1,
+		authenticatedWorkerId: string,
+		signal: AbortSignal,
+	): Promise<WorkloadReadinessResponseV1> {
+		const parsed = WorkloadReadinessRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		const verify = this.options.readinessVerifier;
+		if (!verify)
+			throw new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness is not configured",
+				503,
+				true,
+			);
+		verify(request, authenticatedWorkerId);
+		if (!this.options.driver.probeReadiness) driverInvalid();
+		const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+		bounded.throwIfAborted();
+		let abort = () => {};
+		try {
+			const capabilities = await Promise.race([
+				new Promise<never>((_resolve, reject) => {
+					abort = () =>
+						reject(
+							new RuntimeHostError(
+								"RUNTIME_READINESS_UNAVAILABLE",
+								"Workload readiness was interrupted",
+								503,
+								true,
+							),
+						);
+					bounded.addEventListener("abort", abort, { once: true });
+				}),
+				this.options.driver.probeReadiness(bounded),
+			]);
+			bounded.throwIfAborted();
+			verify(request, authenticatedWorkerId);
+			const { grant: _proof, ...binding } = request;
+			return WorkloadReadinessResponseV1Schema.parse({
+				...binding,
+				core: "passed",
+				capabilities,
+			});
+		} finally {
+			bounded.removeEventListener("abort", abort);
+		}
 	}
 
 	async capabilities(

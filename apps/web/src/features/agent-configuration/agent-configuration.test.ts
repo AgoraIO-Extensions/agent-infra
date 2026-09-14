@@ -1,31 +1,31 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
-	createPilotAgentMockServerV1,
-	pilotFakeScenariosV1,
+	createPilotAgentMockServerV2,
+	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 
-import { createClient } from "../../pilot/generated/client/index.js";
-import type { AgentConfigurationUpdateRequestV1Writable } from "../../pilot/generated/types.gen.js";
+import { createClient } from "../../pilot/generated-v2/client/index.js";
+import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
 } from "./agent-configuration.js";
 
-const agent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const agent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
 const body = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	coOwnerIds: ["user-owner-1", "user-owner-2"],
 	availability: [{ kind: "organization", organizationId: "organization-1" }],
-	actions: [],
+
 	secrets: [{ name: "MODEL_API_KEY", value: "replacement-secret" }],
-} satisfies AgentConfigurationUpdateRequestV1Writable;
+} satisfies AgentConfigurationUpdateRequestV2Writable;
 
 describe("Agent configuration generated-client consumer", () => {
 	it("uses the generated configuration and custom image commands", async () => {
-		const configuredAgent = AgentProjectionV1Schema.parse({
+		const configuredAgent = AgentProjectionV2Schema.parse({
 			...agent,
 			configuration: {
 				...agent.configuration,
@@ -39,7 +39,7 @@ describe("Agent configuration generated-client consumer", () => {
 				],
 			},
 		});
-		const upgradedAgent = AgentProjectionV1Schema.parse({
+		const upgradedAgent = AgentProjectionV2Schema.parse({
 			...configuredAgent,
 			source: {
 				kind: "custom",
@@ -47,7 +47,7 @@ describe("Agent configuration generated-client consumer", () => {
 				interactionMode: "platform-adapter",
 			},
 		});
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: agent },
 			updateAgentConfiguration: { status: 200, body: configuredAgent },
@@ -80,11 +80,11 @@ describe("Agent configuration generated-client consumer", () => {
 		).toEqual([
 			[
 				"PUT",
-				"https://platform.example.test/api/v1/agents/agent-pilot-1/configuration",
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/configuration",
 			],
 			[
 				"POST",
-				"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 			],
 		]);
 		expect(server.requests[0]?.headers.get("Idempotency-Key")).toBe(
@@ -99,7 +99,7 @@ describe("Agent configuration generated-client consumer", () => {
 	});
 
 	it("fails closed when configuration response belongs to another Agent", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: agent },
 			updateAgentConfiguration: {

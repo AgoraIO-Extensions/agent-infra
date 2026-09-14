@@ -154,6 +154,12 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/image-registry':
+        specifier: workspace:*
+        version: link:../../packages/image-registry
+      '@agent-infra/model-catalog':
+        specifier: workspace:*
+        version: link:../../packages/model-catalog
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../../packages/platform-core

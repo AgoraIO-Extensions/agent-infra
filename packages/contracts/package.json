@@ -27,6 +27,7 @@
 		"./json-schema/worker-result.v1": "./artifacts/json-schema/worker-result.v1.schema.json",
 		"./json-schema/runtime.v1": "./artifacts/json-schema/runtime.v1.schema.json",
 		"./json-schema/runtime.v2": "./artifacts/json-schema/runtime.v2.schema.json",
+		"./json-schema/runtime-readiness.v1": "./artifacts/json-schema/runtime-readiness.v1.schema.json",
 		"./json-schema/runtime-configuration.v3": "./artifacts/json-schema/runtime-configuration.v3.schema.json",
 		"./openapi/common.v1": "./artifacts/openapi/common.v1.openapi.json",
 		"./openapi/pilot-browser.v1": "./artifacts/openapi/pilot-browser.v1.openapi.json",
@@ -34,6 +35,7 @@
 		"./openapi/pilot-delegated.v1": "./artifacts/openapi/pilot-delegated.v1.openapi.json",
 		"./openapi/runtime-host.v1": "./artifacts/openapi/runtime-host.v1.openapi.json",
 		"./openapi/runtime-host.v2": "./artifacts/openapi/runtime-host.v2.openapi.json",
+		"./openapi/runtime-readiness.v1": "./artifacts/openapi/runtime-readiness.v1.openapi.json",
 		"./workload": {
 			"types": "./dist/workload/index.d.mts",
 			"import": "./dist/workload/index.mjs"

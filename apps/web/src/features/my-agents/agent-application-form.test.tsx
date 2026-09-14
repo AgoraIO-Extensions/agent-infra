@@ -1,4 +1,4 @@
-import { AgentApplicationProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -82,7 +82,7 @@ describe("AgentApplicationForm", () => {
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
 		const onSubmit = vi.fn();
-		const rejectedApplication = AgentApplicationProjectionV1Schema.parse({
+		const rejectedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			status: "rejected",
 			decision: {
@@ -112,13 +112,13 @@ describe("AgentApplicationForm", () => {
 		);
 
 		expect(onSubmit).toHaveBeenCalledWith({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			name: pendingApplication.name,
 			description: "Resubmitted after capacity review",
 			source: pendingApplication.source,
 			coOwnerIds: ["user-applicant-1"],
 			availability: [],
-			actions: [],
+
 			environment: [],
 		});
 		expect(screen.queryByDisplayValue("MODEL_API_KEY")).toBeNull();
@@ -127,7 +127,7 @@ describe("AgentApplicationForm", () => {
 
 	it("keeps the source fixed for an existing application", () => {
 		const onSubmit = vi.fn();
-		const customApplication = AgentApplicationProjectionV1Schema.parse({
+		const customApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			source: {
 				kind: "custom",
@@ -231,16 +231,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Organization availability IDs"), {
 			target: { value: "organization-available" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Add action" }));
-		fireEvent.change(screen.getByLabelText("Action provider ID"), {
-			target: { value: "github" },
-		});
-		fireEvent.change(screen.getByLabelText("Action ID"), {
-			target: { value: "issues.read" },
-		});
-		fireEvent.change(screen.getByLabelText("Action version"), {
-			target: { value: "v3" },
-		});
+		expect(screen.queryByRole("button", { name: "Add action" })).toBeNull();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Add environment value" }),
 		);
@@ -281,7 +272,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			name: "Release assistant",
 			description: "Helps the release team",
 			source: { kind: "standard", templateId: "codex" },
@@ -290,13 +281,7 @@ describe("AgentApplicationForm", () => {
 				{ kind: "user", userId: "user-available" },
 				{ kind: "organization", organizationId: "organization-available" },
 			],
-			actions: [
-				{
-					providerId: "github",
-					actionId: "issues.read",
-					actionVersion: "v3",
-				},
-			],
+
 			environment: [{ name: "LOG_LEVEL", value: "debug" }],
 			secrets: [{ name: "MODEL_API_KEY", value: "never-echo" }],
 			modelConfiguration: {
@@ -334,12 +319,14 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("Standard template ID"), {
 			target: { value: "codex" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Add action" }));
-		fireEvent.change(screen.getByLabelText("Action provider ID"), {
+		fireEvent.click(
+			screen.getByRole("button", { name: "Add environment value" }),
+		);
+		fireEvent.change(screen.getByLabelText("Environment name"), {
 			target: { value: "github" },
 		});
 		expect(
-			(screen.getByLabelText("Action ID") as HTMLInputElement).required,
+			(screen.getByLabelText("Environment value") as HTMLInputElement).required,
 		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
 
@@ -347,7 +334,7 @@ describe("AgentApplicationForm", () => {
 	});
 
 	it("uses a new server projection when an edit form changes application", () => {
-		const first = AgentApplicationProjectionV1Schema.parse({
+		const first = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			status: "rejected",
 			decision: {
@@ -355,7 +342,7 @@ describe("AgentApplicationForm", () => {
 				reason: "Capacity is unavailable.",
 			},
 		});
-		const second = AgentApplicationProjectionV1Schema.parse({
+		const second = AgentApplicationProjectionV2Schema.parse({
 			...first,
 			applicationId: "application-other",
 			name: "Other release assistant",

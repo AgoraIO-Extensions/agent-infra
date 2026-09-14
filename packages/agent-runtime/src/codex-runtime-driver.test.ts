@@ -1110,6 +1110,98 @@ afterEach(async () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it("performs readiness initialize/config handshake in disposable storage without a business session or turn", async () => {
+		class ProbeDriver extends CodexRuntimeDriver {
+			static openProbe(
+				options: CodexRuntimeDriverOptions,
+				factory: Parameters<typeof openCodexRuntimeDriverForTest>[1],
+			) {
+				return ProbeDriver.openWithBridge(options, factory);
+			}
+		}
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const opened: CodexAppServerBridgeOptions[] = [];
+		const bridges: TestCodexBridge[] = [];
+		const driver = await ProbeDriver.openProbe(
+			driverOptions(path),
+			async (options) => {
+				opened.push(options);
+				const bridge = new TestCodexBridge();
+				bridges.push(bridge);
+				vi.spyOn(bridge, "close");
+				return bridge;
+			},
+		);
+		drivers.push(driver);
+		const before = await readFile(path, "utf8");
+		for (let index = 0; index < 2; index++)
+			expect(
+				await driver.probeReadiness(new AbortController().signal),
+			).toMatchObject({ modelSelection: true });
+		expect(opened).toHaveLength(2);
+		expect(opened[0]?.dataDirectory).not.toBe(opened[1]?.dataDirectory);
+		for (const [index, options] of opened.entries()) {
+			expect(options.dataDirectory).not.toBe(`${path}.native`);
+			await expect(readFile(options.dataDirectory)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			expect(bridges[index]?.requests.map((request) => request.method)).toEqual(
+				["initialize", "config/read"],
+			);
+			expect(bridges[index]?.close).toHaveBeenCalled();
+		}
+		expect(await readFile(path, "utf8")).toBe(before);
+		await expect(readFile(`${path}.native`)).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
+	it.each(["config", "abort", "startup"])(
+		"cleans native readiness storage/process on %s failure",
+		async (failure) => {
+			class ProbeDriver extends CodexRuntimeDriver {
+				static openProbe(
+					options: CodexRuntimeDriverOptions,
+					factory: Parameters<typeof openCodexRuntimeDriverForTest>[1],
+				) {
+					return ProbeDriver.openWithBridge(options, factory);
+				}
+			}
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const controller = new AbortController();
+			let probeDirectory = "";
+			const bridge = new TestCodexBridge();
+			const closed = vi.spyOn(bridge, "close");
+			if (failure === "config")
+				bridge.setConfigReadResult(
+					configReadResult({ config: { model: "forbidden" } }),
+				);
+			const driver = await ProbeDriver.openProbe(
+				driverOptions(path),
+				async (options) => {
+					probeDirectory = options.dataDirectory;
+					if (failure === "startup")
+						throw new Error("Synthetic startup failure");
+					if (failure === "abort") controller.abort();
+					return bridge;
+				},
+			);
+			drivers.push(driver);
+			const before = await readFile(path, "utf8");
+			await expect(driver.probeReadiness(controller.signal)).rejects.toThrow();
+			await expect(readFile(probeDirectory)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			if (failure !== "startup") expect(closed).toHaveBeenCalled();
+			expect(
+				bridge.requests.every((request) =>
+					["initialize", "config/read"].includes(request.method),
+				),
+			).toBe(true);
+			expect(await readFile(path, "utf8")).toBe(before);
+		},
+	);
 	it("passes a deployment launch PATH only when configured without changing the process PATH", async () => {
 		const directory = await runtimeDirectory();
 		const processPath = process.env.PATH;

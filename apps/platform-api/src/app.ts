@@ -13,6 +13,7 @@ import {
 	type ManagementRouteDependencies,
 	registerManagementRoutes,
 } from "./http/management-routes.js";
+import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
@@ -21,6 +22,10 @@ import {
 export const platformApiService = "platform-api";
 
 export interface PlatformAppDependencies {
+	readonly requestScope?: (
+		request: Request,
+		work: () => Promise<void>,
+	) => Promise<void>;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -51,6 +56,11 @@ export function createPlatformHealthApp() {
 
 export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	const app = createPlatformHealthApp();
+	if (dependencies.requestScope) {
+		const requestScope = dependencies.requestScope;
+		app.use("*", (context, next) => requestScope(context.req.raw, next));
+	}
+	registerRetiredManagementRoutes(app);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
 	registerConversationRoutes(app, dependencies.conversation);

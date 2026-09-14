@@ -1,13 +1,13 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentDiscoveryScreen } from "./agent-discovery-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
-const startingAgent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const startingAgent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
 
 describe("AgentDiscoveryScreen", () => {
@@ -25,7 +25,7 @@ describe("AgentDiscoveryScreen", () => {
 	});
 
 	it("uses Router navigation for an opaque Agent identifier", async () => {
-		const agent = AgentProjectionV1Schema.parse({
+		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			agentId: "agent:tenant/01?draft#one%",
 		});

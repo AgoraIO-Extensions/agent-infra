@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -25,7 +25,7 @@ type Transaction = Parameters<
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
-	configuration: AgentConfigurationRecordV1,
+	configuration: AgentConfigurationRecordV2,
 ): Promise<boolean> {
 	await transaction.insert(agentConfigurationRevisions).values({
 		agentId: plan.agentId,

@@ -20,6 +20,8 @@ export type RuntimeDriverLookup =
 	| { state: "unknown" };
 
 export interface RuntimeDriver {
+	/** Bounded native protocol handshake only; no business Session/Turn or model call. */
+	probeReadiness?(signal: AbortSignal): Promise<RuntimeCapabilitiesV1>;
 	execute(command: RuntimeDriverCommand): Promise<RuntimeDriverOperationRecord>;
 	lookupOperation(command: RuntimeDriverCommand): Promise<RuntimeDriverLookup>;
 	getStatus(

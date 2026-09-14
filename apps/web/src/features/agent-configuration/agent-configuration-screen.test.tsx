@@ -1,8 +1,8 @@
 import {
-	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import {
 	cleanup,
 	fireEvent,
@@ -14,8 +14,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 
-const agent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const agent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
 const ownerSession = BrowserSessionProjectionV1Schema.parse({
 	schemaVersion: 1,
@@ -62,7 +62,7 @@ describe("AgentConfigurationScreen", () => {
 
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				secrets: [{ name: "NEW_SECRET", value: "test-secret-value" }],
 			}),
 		);
@@ -91,7 +91,7 @@ describe("AgentConfigurationScreen", () => {
 
 	it("uses a separate custom image upgrade command", () => {
 		const onUpgradeImage = vi.fn();
-		const customAgent = AgentProjectionV1Schema.parse({
+		const customAgent = AgentProjectionV2Schema.parse({
 			...agent,
 			source: {
 				kind: "custom",

@@ -1,4 +1,4 @@
-import { AgentApplicationProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -42,7 +42,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 	});
 
 	it("renders a rejected application history without lifecycle controls", async () => {
-		const rejectedApplication = AgentApplicationProjectionV1Schema.parse({
+		const rejectedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			applicationId: "application-pilot-rejected",
 			status: "rejected",
@@ -79,7 +79,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 	});
 
 	it("renders an approved decision history without inventing a rejection reason", async () => {
-		const approvedApplication = AgentApplicationProjectionV1Schema.parse({
+		const approvedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			applicationId: "application-pilot-approved",
 			agentId: "agent-pilot-approved",

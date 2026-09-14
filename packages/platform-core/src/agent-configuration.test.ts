@@ -10,13 +10,13 @@ import {
 	type AgentConfigurationActorContextV1,
 	type AgentConfigurationAuthorityContextV1,
 	AgentConfigurationError,
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	type AgentConfigurationUseCaseDependenciesV1,
 	beginInitialAgentConfigurationAdmissionV1,
 	createAgentConfigurationUseCaseV1,
-	decodeAgentConfigurationRecordV1,
+	decodeAgentConfigurationRecordV2,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
-	type InitialAgentConfigurationCommandV1,
+	type InitialAgentConfigurationCommandV2,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
 import type { AgentManagementStateV1 } from "./agent-management.ts";
@@ -35,7 +35,7 @@ const actor = {
 	rawRequestDigest: "0".repeat(64),
 };
 const command = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	agentId: "agent_01",
 	idempotencyKey: "configuration-update-01",
 	requestId: "request_01",
@@ -94,8 +94,8 @@ const initialAuthorityContext: AgentConfigurationAuthorityContextV1 = {
 	organizationIds: ["org_platform"],
 };
 
-const initialCommand: InitialAgentConfigurationCommandV1 = {
-	schemaVersion: 1,
+const initialCommand: InitialAgentConfigurationCommandV2 = {
+	schemaVersion: 2,
 	agentId: "agent_01",
 	requestId: "request_01",
 	traceId: "trace_01",
@@ -120,13 +120,6 @@ const initialCommand: InitialAgentConfigurationCommandV1 = {
 	},
 	environment: [{ name: "LOG_LEVEL", value: "info" }],
 	secrets: [{ name: "BOT_TOKEN", replace: true }],
-	actions: [
-		{
-			providerId: "github",
-			actionId: "issues.read",
-			actionVersion: "v3",
-		},
-	],
 	channels: [
 		{
 			kind: "wecom_bot",
@@ -157,14 +150,13 @@ function createInitialAdmissionDependencies(): {
 			imageAdmission: admissions,
 			modelAdmission: admissions,
 			secretAdmission: admissions,
-			actionAdmission: admissions,
 			channelAdmission: admissions,
 		},
 	};
 }
 
 async function completeInitialAgentConfiguration(
-	commandInput: InitialAgentConfigurationCommandV1,
+	commandInput: InitialAgentConfigurationCommandV2,
 	actorContext: AgentConfigurationActorContextV1,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
 ) {
@@ -178,7 +170,7 @@ async function completeInitialAgentConfiguration(
 }
 
 interface HarnessOptions {
-	record?: AgentConfigurationRecordV1;
+	record?: AgentConfigurationRecordV2;
 	admissions?: Partial<FakeAgentConfigurationAdmissionsOptionsV1>;
 	dependencies?: Partial<AgentConfigurationUseCaseDependenciesV1>;
 	transactionState?: FakeAgentConfigurationTransactionOptionsV1;
@@ -199,7 +191,6 @@ function createHarness(options: HarnessOptions = {}) {
 		imageAdmission: admissions,
 		modelAdmission: admissions,
 		secretAdmission: admissions,
-		actionAdmission: admissions,
 		channelAdmission: admissions,
 		...options.dependencies,
 	};
@@ -303,7 +294,7 @@ describe("Custom Agent image upgrade conformance", () => {
 });
 
 it("snapshots custom image upgrade commands and rejects hostile accessors", async () => {
-	const record: AgentConfigurationRecordV1 = {
+	const record: AgentConfigurationRecordV2 = {
 		...agentConfigurationConformanceRecordV1,
 		source: {
 			kind: "custom",
@@ -349,7 +340,7 @@ it("snapshots custom image upgrade commands and rejects hostile accessors", asyn
 	await expect(result).resolves.toMatchObject({ changedFields: ["source"] });
 
 	const hostile = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: "agent_01",
 		get imageReference() {
 			throw new Error("hostile accessor");
@@ -432,12 +423,6 @@ describe("Initial Agent configuration admission", () => {
 					return dependencies.secretAdmission.admitSecrets(input);
 				},
 			},
-			actionAdmission: {
-				async admitActions(input) {
-					calls.push("action");
-					return dependencies.actionAdmission.admitActions(input);
-				},
-			},
 			channelAdmission: {
 				async admitChannels(input) {
 					calls.push("channel");
@@ -474,7 +459,7 @@ describe("Initial Agent configuration admission", () => {
 				{ kind: "user", userId: "owner_02" },
 			],
 			configuration: {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: "agent_01",
 				revision: 1,
 				source: agentConfigurationConformanceRecordV1.source,
@@ -496,8 +481,6 @@ describe("Initial Agent configuration admission", () => {
 					defaultOptionId: "model_primary",
 					defaultReasoningLevel: "low",
 				},
-				actions: initialCommand.actions,
-				actionSetRevision: "actions_2",
 				environment: initialCommand.environment,
 				secrets: [
 					{
@@ -516,7 +499,6 @@ describe("Initial Agent configuration admission", () => {
 			"image",
 			"model",
 			"secret",
-			"action",
 			"channel",
 			"authorization",
 		]);
@@ -552,12 +534,6 @@ describe("Initial Agent configuration admission", () => {
 					async admitSecrets(input) {
 						calls.push("secret");
 						return dependencies.secretAdmission.admitSecrets(input);
-					},
-				},
-				actionAdmission: {
-					async admitActions(input) {
-						calls.push("action");
-						return dependencies.actionAdmission.admitActions(input);
 					},
 				},
 				channelAdmission: {
@@ -848,13 +824,13 @@ describe("Initial Agent configuration admission", () => {
 	});
 
 	it("exports the same strict canonical decoder used by persisted reads", () => {
-		const decoded = decodeAgentConfigurationRecordV1(
+		const decoded = decodeAgentConfigurationRecordV2(
 			agentConfigurationConformanceRecordV1,
 		);
 		expect(decoded).toEqual(agentConfigurationConformanceRecordV1);
 		expect(decoded).not.toBe(agentConfigurationConformanceRecordV1);
 		expect(() =>
-			decodeAgentConfigurationRecordV1({
+			decodeAgentConfigurationRecordV2({
 				...agentConfigurationConformanceRecordV1,
 				plaintext: "sensitive",
 			}),
@@ -984,18 +960,6 @@ describe("Agent configuration policy", () => {
 				{ secrets: [{ name: "BOT_TOKEN", replace: true }] },
 			],
 			[
-				{ actionAdmission: { admitActions: async () => malformedEnvelope() } },
-				{
-					actions: [
-						{
-							providerId: "github",
-							actionId: "issues.read",
-							actionVersion: "v3",
-						},
-					],
-				},
-			],
-			[
 				{
 					channelAdmission: { admitChannels: async () => malformedEnvelope() },
 				},
@@ -1074,7 +1038,6 @@ describe("Agent configuration policy", () => {
 				imageAdmission: admissions,
 				modelAdmission: admissions,
 				secretAdmission: admissions,
-				actionAdmission: admissions,
 				channelAdmission: admissions,
 			});
 		};
@@ -1146,7 +1109,6 @@ describe("Agent configuration policy", () => {
 				imageAdmission: admissions,
 				modelAdmission: admissions,
 				secretAdmission: admissions,
-				actionAdmission: admissions,
 				channelAdmission: admissions,
 			});
 		const replayCommand = {
@@ -1228,7 +1190,6 @@ describe("Agent configuration policy", () => {
 			imageAdmission: admissions,
 			modelAdmission: admissions,
 			secretAdmission: admissions,
-			actionAdmission: admissions,
 			channelAdmission: admissions,
 		});
 		await expect(
@@ -1283,7 +1244,6 @@ describe("Agent configuration policy", () => {
 				imageAdmission: admissions,
 				modelAdmission: admissions,
 				secretAdmission: admissions,
-				actionAdmission: admissions,
 				channelAdmission: admissions,
 			};
 			const resultCommand = {
@@ -1409,7 +1369,6 @@ describe("Agent configuration policy", () => {
 					imageAdmission: admissions,
 					modelAdmission: admissions,
 					secretAdmission: admissions,
-					actionAdmission: admissions,
 					channelAdmission: admissions,
 				}),
 			};
@@ -1963,7 +1922,7 @@ describe("Agent configuration policy", () => {
 			expect(harness.transaction.snapshot().commitCount).toBe(0);
 		}
 
-		const customRecord: AgentConfigurationRecordV1 = {
+		const customRecord: AgentConfigurationRecordV2 = {
 			...agentConfigurationConformanceRecordV1,
 			source: {
 				kind: "custom",
@@ -2005,7 +1964,7 @@ describe("Agent configuration policy", () => {
 	});
 
 	it("pins admitted images and rejects caller-supplied digest selectors", async () => {
-		const current: AgentConfigurationRecordV1 = {
+		const current: AgentConfigurationRecordV2 = {
 			...agentConfigurationConformanceRecordV1,
 			source: {
 				kind: "custom",
@@ -2063,7 +2022,7 @@ describe("Agent configuration policy", () => {
 		).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
 	});
 
-	it("fails closed for unauthorized Actions, self-managed channels, and plaintext admissions", async () => {
+	it("fails closed for unauthorized callers, self-managed channels, and plaintext admissions", async () => {
 		const unauthorized = createHarness({ admissions: { authorizations: [] } });
 		await expect(
 			unauthorized.useCase.update(
@@ -2075,26 +2034,7 @@ describe("Agent configuration policy", () => {
 			),
 		).rejects.toEqual(expect.objectContaining({ code: "not_authorized" }));
 
-		const action = createHarness();
-		await expect(
-			action.useCase.update(
-				{
-					...command,
-					changes: {
-						actions: [
-							{
-								providerId: "github",
-								actionId: "issues.delete",
-								actionVersion: "v1",
-							},
-						],
-					},
-				},
-				actor,
-			),
-		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
-
-		const selfManagedRecord: AgentConfigurationRecordV1 = {
+		const selfManagedRecord: AgentConfigurationRecordV2 = {
 			...agentConfigurationConformanceRecordV1,
 			source: {
 				kind: "custom",
@@ -2160,7 +2100,7 @@ describe("Agent configuration policy", () => {
 			expect.objectContaining({ code: "dependency_unavailable" }),
 		);
 
-		for (const harness of [unauthorized, action, channel, plaintext]) {
+		for (const harness of [unauthorized, channel, plaintext]) {
 			expect(harness.transaction.snapshot().commitCount).toBe(0);
 		}
 	});
@@ -2203,7 +2143,7 @@ describe("Agent configuration policy", () => {
 					isSet: true as const,
 				},
 			};
-			const record: AgentConfigurationRecordV1 = {
+			const record: AgentConfigurationRecordV2 = {
 				...agentConfigurationConformanceRecordV1,
 				source: {
 					...storedSource,
@@ -2222,10 +2162,6 @@ describe("Agent configuration policy", () => {
 					defaultOptionId: firstOption.optionId,
 					defaultReasoningLevel: "low",
 				},
-				actions: [
-					{ providerId: "提供方-z", actionId: "!read", actionVersion: "v2" },
-					{ providerId: "!provider-a", actionId: "写", actionVersion: "v1" },
-				],
 				environment: [
 					{ name: "Z_KEY", value: "old-z" },
 					{ name: "A_KEY", value: "old-a" },
@@ -2249,7 +2185,6 @@ describe("Agent configuration policy", () => {
 					{ kind: "wecom_bot", bindingReference: "binding-old-bot" },
 				],
 			};
-			const actions = [...record.actions].reverse();
 			const admissions = new FakeAgentConfigurationAdmissionsV1({
 				...agentConfigurationConformanceAdmissionsV1,
 				authorizations: [
@@ -2288,7 +2223,6 @@ describe("Agent configuration policy", () => {
 						version: 1,
 					},
 				],
-				actions,
 				channelBindings: [
 					{ kind: "wecom_app", bindingReference: "binding-new-app" },
 					{ kind: "wecom_bot", bindingReference: "binding-new-bot" },
@@ -2305,7 +2239,6 @@ describe("Agent configuration policy", () => {
 					imageAdmission: admissions,
 					modelAdmission: admissions,
 					secretAdmission: admissions,
-					actionAdmission: admissions,
 					channelAdmission: admissions,
 				},
 				{ now: () => new Date(serverInstant) },
@@ -2341,7 +2274,6 @@ describe("Agent configuration policy", () => {
 							{ name: "NEW_Z_SECRET", replace: true as const },
 							{ name: "NEW_A_SECRET", replace: true as const },
 						],
-						actions,
 						channels: [
 							{
 								kind: "wecom_app" as const,
@@ -2390,132 +2322,25 @@ describe("Agent configuration policy", () => {
 		expect(patched.transaction.snapshot().lastPlan).toEqual(baselinePlan);
 	});
 
-	it("clears Actions atomically when an admitted image removes Connection capability", async () => {
-		const selection = {
-			kind: "custom" as const,
-			imageReference: "registry.example/agent:no-connection",
-			interactionMode: "platform-adapter" as const,
-		};
-		const disabledSource = {
-			kind: "custom" as const,
-			imageDigest: `sha256:${"b".repeat(64)}`,
-			admissionRevision: "image_policy_no_connection",
-			interactionMode: "platform-adapter" as const,
-			connectionEnabled: false,
-		};
-		const currentAction = {
-			providerId: "github",
-			actionId: "issues.read",
-			actionVersion: "v3",
-		};
-		const currentRecord = (
-			actions: AgentConfigurationRecordV1["actions"],
-			connectionEnabled = true,
-		): AgentConfigurationRecordV1 => ({
-			...agentConfigurationConformanceRecordV1,
-			source: {
-				kind: "custom",
-				imageDigest: connectionEnabled
-					? agentConfigurationConformanceRecordV1.source.imageDigest
-					: disabledSource.imageDigest,
-				admissionRevision: connectionEnabled
-					? "image_policy_connection"
-					: "image_policy_no_connection_old",
-				interactionMode: "platform-adapter",
-				connectionEnabled,
-			},
-			modelConfiguration: null,
-			actions,
-			channels: [],
-		});
-		const createConnectionHarness = (record: AgentConfigurationRecordV1) => {
-			let actionAdmissionCalls = 0;
-			const harness = createHarness({
-				record,
-				admissions: {
-					images: [{ selection, source: disabledSource }],
-				},
-				dependencies: {
-					actionAdmission: {
-						async admitActions() {
-							actionAdmissionCalls += 1;
-							throw new Error("Action admission must not run");
-						},
-					},
-				},
-			});
-			return { ...harness, actionAdmissionCalls: () => actionAdmissionCalls };
-		};
-
-		const cleared = createConnectionHarness(currentRecord([currentAction]));
-		await expect(
-			cleared.useCase.update(
-				{
-					...command,
-					idempotencyKey: "disable-connection-clear-actions",
-					changes: { source: selection, actions: [] },
-				},
-				actor,
-			),
-		).resolves.toMatchObject({ changedFields: ["actions", "source"] });
-		expect(cleared.actionAdmissionCalls()).toBe(0);
-		expect(cleared.transaction.snapshot()).toMatchObject({
-			commitCount: 1,
-			configuration: { source: disabledSource, actions: [] },
-		});
-
-		for (const [idempotencyKey, actions] of [
-			["disable-connection-source-only", undefined],
-			["disable-connection-non-empty-actions", [currentAction]],
-		] as const) {
-			const rejected = createConnectionHarness(currentRecord([currentAction]));
+	it("rejects retired Action fields before authorization or persistence", async () => {
+		for (const actions of [
+			[],
+			[{ providerId: "github", actionId: "issues.read", actionVersion: "v3" }],
+		]) {
+			const harness = createHarness();
 			await expect(
-				rejected.useCase.update(
-					{
-						...command,
-						idempotencyKey,
-						changes: {
-							source: selection,
-							...(actions === undefined ? {} : { actions }),
-						},
-					},
+				harness.useCase.update(
+					{ ...command, changes: { actions } } as never,
 					actor,
 				),
-			).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
-			expect(rejected.actionAdmissionCalls()).toBe(0);
-			expect(rejected.transaction.snapshot()).toMatchObject({
+			).rejects.toMatchObject({ code: "invalid_command" });
+			expect(harness.transaction.snapshot()).toMatchObject({
 				commitCount: 0,
 				idempotencyCount: 0,
 				outboxCount: 0,
 				auditCount: 0,
 			});
 		}
-
-		const alreadyEmpty = createConnectionHarness(currentRecord([]));
-		await expect(
-			alreadyEmpty.useCase.update(
-				{
-					...command,
-					idempotencyKey: "disable-connection-empty-actions",
-					changes: { source: selection, actions: [] },
-				},
-				actor,
-			),
-		).resolves.toMatchObject({ changedFields: ["source"] });
-		expect(alreadyEmpty.actionAdmissionCalls()).toBe(0);
-
-		const noChange = createConnectionHarness(currentRecord([], false));
-		await expect(
-			noChange.useCase.update(
-				{
-					...command,
-					idempotencyKey: "disable-connection-no-change",
-					changes: { source: selection, actions: [] },
-				},
-				actor,
-			),
-		).rejects.toEqual(expect.objectContaining({ code: "no_change" }));
-		expect(noChange.actionAdmissionCalls()).toBe(0);
 	});
 
 	it("isolates nested Adapter inputs and the transaction plan from mutation", async () => {
@@ -2543,7 +2368,7 @@ describe("Agent configuration policy", () => {
 				},
 			},
 		};
-		const imageRecord: AgentConfigurationRecordV1 = {
+		const imageRecord: AgentConfigurationRecordV2 = {
 			...agentConfigurationConformanceRecordV1,
 			source: {
 				kind: "custom",
@@ -2679,7 +2504,7 @@ describe("Agent configuration policy", () => {
 						isSet: true,
 					},
 				],
-			} as AgentConfigurationRecordV1,
+			} as AgentConfigurationRecordV2,
 			dependencies: {
 				secretAdmission: {
 					async admitSecrets(input) {
@@ -2708,43 +2533,6 @@ describe("Agent configuration policy", () => {
 		);
 		expect(secretCommand.changes.secrets[0]?.name).toBe("BOT_TOKEN");
 		expectNoEffects(secret.transaction);
-
-		const actionCommand = {
-			...command,
-			idempotencyKey: "mutating-action-adapter",
-			changes: {
-				actions: [
-					{
-						providerId: "github",
-						actionId: "issues.read",
-						actionVersion: "v3",
-					},
-				],
-			},
-		};
-		const action = createHarness({
-			dependencies: {
-				actionAdmission: {
-					async admitActions(input) {
-						(input.requested[0] as { actionId: string }).actionId =
-							"issues.mutated";
-						return {
-							schemaVersion: 1,
-							status: "admitted",
-							agentId: input.agentId,
-							requestId: input.requestId,
-							actionSetRevision: "actions_mutated",
-							actions: input.requested,
-						};
-					},
-				},
-			},
-		});
-		await expect(action.useCase.update(actionCommand, actor)).rejects.toEqual(
-			expect.objectContaining({ code: "not_admitted" }),
-		);
-		expect(actionCommand.changes.actions[0]?.actionId).toBe("issues.read");
-		expectNoEffects(action.transaction);
 
 		const channelCommand = {
 			...command,

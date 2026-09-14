@@ -1,13 +1,7 @@
 import type {
-	AgentConfigurationUpdateRequestV1Writable,
-	AgentProjectionV1,
-} from "../../pilot/generated/types.gen.js";
-
-export type AgentConfigurationActionDraft = {
-	actionId: string;
-	actionVersion: string;
-	providerId: string;
-};
+	AgentConfigurationUpdateRequestV2Writable,
+	AgentProjectionV2,
+} from "../../pilot/generated-v2/types.gen.js";
 
 export type AgentConfigurationModelDraft = {
 	credentialValue: string;
@@ -23,7 +17,6 @@ export type AgentConfigurationSecretDraft = {
 };
 
 export type AgentConfigurationDraft = {
-	actions: readonly AgentConfigurationActionDraft[];
 	coOwnerIds: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
@@ -42,7 +35,7 @@ function splitValues(value: string) {
 }
 
 export function configurationDraftFromAgent(
-	agent: AgentProjectionV1,
+	agent: AgentProjectionV2,
 ): AgentConfigurationDraft {
 	return {
 		coOwnerIds: agent.configuration.owners
@@ -56,7 +49,6 @@ export function configurationDraftFromAgent(
 			.filter((target) => target.kind === "organization")
 			.map((target) => target.organizationId)
 			.join("\n"),
-		actions: agent.configuration.actions.map((action) => ({ ...action })),
 		replaceModels: false,
 		models: [],
 		defaultModelOptionId: "",
@@ -67,7 +59,7 @@ export function configurationDraftFromAgent(
 
 export function buildAgentConfigurationRequest(
 	draft: AgentConfigurationDraft,
-): AgentConfigurationUpdateRequestV1Writable {
+): AgentConfigurationUpdateRequestV2Writable {
 	const modelConfiguration = draft.replaceModels
 		? {
 				options: draft.models.map((model) => ({
@@ -89,7 +81,7 @@ export function buildAgentConfigurationRequest(
 	}));
 
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		coOwnerIds: splitValues(draft.coOwnerIds),
 		availability: [
 			...splitValues(draft.userAvailabilityIds).map((userId) => ({
@@ -103,11 +95,6 @@ export function buildAgentConfigurationRequest(
 				}),
 			),
 		],
-		actions: draft.actions.map((action) => ({
-			providerId: action.providerId.trim(),
-			actionId: action.actionId.trim(),
-			actionVersion: action.actionVersion.trim(),
-		})),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(secrets.length === 0 ? {} : { secrets }),
 	};

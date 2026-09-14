@@ -16,12 +16,14 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/worker-result.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
@@ -768,6 +770,54 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #504 adds versioned management routes. Preserve the published audit contract
+// exactly and admit only this immutable addition, as for Runtime recovery above.
+function isAgentLifecycleV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/admin/agent-applications",
+		"/api/v2/admin/agent-applications/{applicationId}/decision",
+		"/api/v2/agent-applications",
+		"/api/v2/agent-applications/{applicationId}",
+		"/api/v2/agent-applications/{applicationId}/withdraw",
+		"/api/v2/agents",
+		"/api/v2/agents/{agentId}",
+		"/api/v2/agents/{agentId}/configuration",
+		"/api/v2/agents/{agentId}/lifecycle",
+	];
+	const schemas = [
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationProjectionV2",
+		"AgentApplicationUpdateRequestV2",
+		"AgentConfigurationProjectionV2",
+		"AgentConfigurationUpdateRequestV2",
+		"AgentLifecycleCommandRequestV1",
+		"AgentProjectionV2",
+		"ApprovalDecisionRequestV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"75bcba81cd9d5ab09407ea0ad48f23bc086bb9d9545f25796a0e1fce737a8a58"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -775,7 +825,8 @@ function findBreakingChanges(previous, current) {
 			!sameValue(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
-			!isRuntimeStatusRecoveryOpenApiAddition(previous, current)
+			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isAgentLifecycleV2OpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

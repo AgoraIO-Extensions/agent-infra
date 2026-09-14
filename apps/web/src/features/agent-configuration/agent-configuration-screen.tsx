@@ -8,15 +8,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
-	AgentConfigurationUpdateRequestV1Writable,
-	AgentProjectionV1,
-} from "../../pilot/generated/types.gen.js";
+	AgentConfigurationUpdateRequestV2Writable,
+	AgentProjectionV2,
+} from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../agent-administration/agent-administration.js";
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
-	type AgentConfigurationActionDraft,
 	type AgentConfigurationModelDraft,
 	type AgentConfigurationSecretDraft,
 	buildAgentConfigurationRequest,
@@ -26,10 +25,10 @@ import {
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
 type AgentConfigurationScreenProps = {
-	agent: AgentProjectionV1;
+	agent: AgentProjectionV2;
 	commandError?: (Error & { readonly retryable?: boolean }) | null;
-	commandResult?: AgentProjectionV1;
-	onSave: (body: AgentConfigurationUpdateRequestV1Writable) => void;
+	commandResult?: AgentProjectionV2;
+	onSave: (body: AgentConfigurationUpdateRequestV2Writable) => void;
 	onUpgradeImage: (imageReference: string) => void;
 	session: ConfigurationSessionState;
 	submitting: boolean;
@@ -50,10 +49,6 @@ type DraftRowsProps<T extends string> = {
 	onRemove: (index: number) => void;
 	rows: readonly Record<T, string>[];
 };
-
-function blankAction(): AgentConfigurationActionDraft {
-	return { providerId: "", actionId: "", actionVersion: "" };
-}
 
 function blankModel(): AgentConfigurationModelDraft {
 	return {
@@ -166,17 +161,6 @@ export function AgentConfigurationScreen({
 				`${secret.name} (${secret.isSet ? "set" : "not set"}${secret.version === null ? "" : `, version ${secret.version}`})`,
 		)
 		.join(", ");
-	const updateAction = (
-		index: number,
-		key: keyof AgentConfigurationActionDraft,
-		value: string,
-	) =>
-		setDraft((current) => ({
-			...current,
-			actions: current.actions.map((action, actionIndex) =>
-				actionIndex === index ? { ...action, [key]: value } : action,
-			),
-		}));
 	const updateModel = (
 		index: number,
 		key: keyof AgentConfigurationModelDraft,
@@ -323,55 +307,6 @@ export function AgentConfigurationScreen({
 								</div>
 							</div>
 						</fieldset>
-						{agent.capabilities.connection ? (
-							<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-								<legend className="font-semibold text-slate-950 text-sm">
-									Connection actions
-								</legend>
-								<DraftRows
-									fields={
-										[
-											{
-												key: "providerId",
-												label: "Provider ID",
-												required: true,
-											},
-											{ key: "actionId", label: "Action ID", required: true },
-											{
-												key: "actionVersion",
-												label: "Action version",
-												required: true,
-											},
-										] as const
-									}
-									idPrefix="action"
-									label="action"
-									onChange={updateAction}
-									onRemove={(index) =>
-										setDraft((current) => ({
-											...current,
-											actions: current.actions.filter(
-												(_, actionIndex) => actionIndex !== index,
-											),
-										}))
-									}
-									rows={draft.actions}
-								/>
-								<Button
-									variant="outline"
-									onClick={() =>
-										setDraft((current) => ({
-											...current,
-											actions: [...current.actions, blankAction()],
-										}))
-									}
-									type="button"
-								>
-									<PlusIcon aria-hidden="true" data-icon="inline-start" />
-									Add action
-								</Button>
-							</fieldset>
-						) : null}
 						{agent.source.kind === "standard" ? (
 							<fieldset className="space-y-4 border-slate-200 border-t pt-5">
 								<legend className="font-semibold text-slate-950 text-sm">

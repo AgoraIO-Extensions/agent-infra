@@ -1,8 +1,8 @@
 import {
-	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,10 +25,10 @@ const ownerSession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["employee"],
 	},
 });
-const firstAgent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const firstAgent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
-const secondAgent = AgentProjectionV1Schema.parse({
+const secondAgent = AgentProjectionV2Schema.parse({
 	...firstAgent,
 	agentId: "agent-configuration-2",
 	configuration: {

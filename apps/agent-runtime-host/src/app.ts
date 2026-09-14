@@ -13,6 +13,7 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 	type VerifiedExecutionGrantV1,
+	WorkloadReadinessRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -21,6 +22,8 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** The transport token authenticates this deployment-provisioned Worker identity. */
+	readinessWorkerId?: string;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -88,6 +91,26 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			await options.host.submitTurn(
 				request,
 				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/readiness", async (context) => {
+		if (!options.readinessWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness is not configured",
+				503,
+				true,
+			);
+		const request = await parseBody(
+			context.req.raw,
+			WorkloadReadinessRequestV1Schema,
+		);
+		return context.json(
+			await options.host.readiness(
+				request,
+				options.readinessWorkerId,
+				context.req.raw.signal,
 			),
 		);
 	});

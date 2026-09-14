@@ -14,4 +14,5 @@ export * from "./file-runtime-store.js";
 export * from "./grant.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
+export * from "./readiness.js";
 export * from "./runtime-host.js";

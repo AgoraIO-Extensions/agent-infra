@@ -4,6 +4,253 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AgentApplicationCreateRequestV2 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
+    secrets: Array<{
+        name: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentApplicationProjectionV2 = {
+    agentId: string | null;
+    applicationId: string;
+    configuration: AgentConfigurationProjectionV2;
+    decision: {
+        decidedAt: string;
+        reason: string | null;
+    } | null;
+    description: string;
+    name: string;
+    resourceProfile: {
+        displayName: string;
+        estimatedResources: {
+            cpuMillicores: number;
+            memoryMiB: number;
+            storageGiB: number;
+        };
+        profileId: string;
+    };
+    schemaVersion: 2;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+    status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+    submittedAt: string;
+};
+
+export type AgentApplicationUpdateRequestV2 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentConfigurationProjectionV2 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels: Array<{
+        kind: 'web' | 'wecom_bot' | 'wecom_app';
+        status: 'available' | 'not_configured' | 'binding' | 'bound' | 'failed';
+    }>;
+    defaultModelOptionId: string | null;
+    defaultReasoningLevel: string | null;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelOptions: Array<{
+        displayName: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    owners: Array<{
+        displayName: string;
+        roles: Array<'employee' | 'system_admin'>;
+        userId: string;
+    }>;
+    secrets: Array<{
+        isSet: boolean;
+        name: string;
+        version: number | null;
+    }>;
+};
+
+export type AgentConfigurationUpdateRequestV2 = {
+    availability?: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+    }>;
+};
+
+export type AgentLifecycleCommandRequestV1 = {
+    command: 'stop' | 'restart' | 'retry_creation' | 'disable';
+    schemaVersion: 1;
+} | {
+    command: 'upgrade_custom_image';
+    imageReference: string;
+    schemaVersion: 1;
+};
+
+export type AgentProjectionV2 = {
+    agentId: string;
+    capabilities: {
+        attachments: boolean;
+        connection: boolean;
+        modelSelection: boolean;
+        resultFiles: boolean;
+        supplementaryInstruction: boolean;
+    };
+    configuration: AgentConfigurationProjectionV2;
+    description: string;
+    interactionUrl: string | null;
+    managementStatus: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+    name: string;
+    schemaVersion: 2;
+    serviceAvailability: 'ready' | 'starting' | 'updating' | 'unavailable' | null;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type ApprovalDecisionRequestV1 = {
+    decision: 'approve';
+    schemaVersion: 1;
+} | {
+    decision: 'reject';
+    reason: string;
+    schemaVersion: 1;
+};
+
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
     message: string;
@@ -45,6 +292,246 @@ export type PlatformAuditProjectionV2 = {
     summary: string;
     traceId: string;
 };
+
+export type AgentApplicationCreateRequestV2Writable = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentApplicationUpdateRequestV2Writable = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentConfigurationUpdateRequestV2Writable = {
+    availability?: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+};
+
+export type ListPendingAgentApplicationsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/admin/agent-applications';
+};
+
+export type ListPendingAgentApplicationsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListPendingAgentApplicationsV2Error = ListPendingAgentApplicationsV2Errors[keyof ListPendingAgentApplicationsV2Errors];
+
+export type ListPendingAgentApplicationsV2Responses = {
+    /**
+     * Pending applications
+     */
+    200: {
+        items: Array<AgentApplicationProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListPendingAgentApplicationsV2Response = ListPendingAgentApplicationsV2Responses[keyof ListPendingAgentApplicationsV2Responses];
+
+export type DecideAgentApplicationV2Data = {
+    body: ApprovalDecisionRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/admin/agent-applications/{applicationId}/decision';
+};
+
+export type DecideAgentApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DecideAgentApplicationV2Error = DecideAgentApplicationV2Errors[keyof DecideAgentApplicationV2Errors];
+
+export type DecideAgentApplicationV2Responses = {
+    /**
+     * Application decision
+     */
+    200: AgentApplicationProjectionV2;
+};
+
+export type DecideAgentApplicationV2Response = DecideAgentApplicationV2Responses[keyof DecideAgentApplicationV2Responses];
 
 export type ListPlatformAuditV2Data = {
     body?: never;
@@ -100,3 +587,483 @@ export type ListPlatformAuditV2Responses = {
 };
 
 export type ListPlatformAuditV2Response = ListPlatformAuditV2Responses[keyof ListPlatformAuditV2Responses];
+
+export type ListAgentApplicationsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/agent-applications';
+};
+
+export type ListAgentApplicationsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListAgentApplicationsV2Error = ListAgentApplicationsV2Errors[keyof ListAgentApplicationsV2Errors];
+
+export type ListAgentApplicationsV2Responses = {
+    /**
+     * Current user's applications
+     */
+    200: {
+        items: Array<AgentApplicationProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListAgentApplicationsV2Response = ListAgentApplicationsV2Responses[keyof ListAgentApplicationsV2Responses];
+
+export type CreateAgentApplicationV2Data = {
+    body: AgentApplicationCreateRequestV2Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/agent-applications';
+};
+
+export type CreateAgentApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateAgentApplicationV2Error = CreateAgentApplicationV2Errors[keyof CreateAgentApplicationV2Errors];
+
+export type CreateAgentApplicationV2Responses = {
+    /**
+     * Application submitted
+     */
+    201: AgentApplicationProjectionV2;
+};
+
+export type CreateAgentApplicationV2Response = CreateAgentApplicationV2Responses[keyof CreateAgentApplicationV2Responses];
+
+export type GetAgentApplicationV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agent-applications/{applicationId}';
+};
+
+export type GetAgentApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentApplicationV2Error = GetAgentApplicationV2Errors[keyof GetAgentApplicationV2Errors];
+
+export type GetAgentApplicationV2Responses = {
+    /**
+     * Application detail
+     */
+    200: AgentApplicationProjectionV2;
+};
+
+export type GetAgentApplicationV2Response = GetAgentApplicationV2Responses[keyof GetAgentApplicationV2Responses];
+
+export type UpdateAgentApplicationV2Data = {
+    body: AgentApplicationUpdateRequestV2Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agent-applications/{applicationId}';
+};
+
+export type UpdateAgentApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateAgentApplicationV2Error = UpdateAgentApplicationV2Errors[keyof UpdateAgentApplicationV2Errors];
+
+export type UpdateAgentApplicationV2Responses = {
+    /**
+     * Application updated
+     */
+    200: AgentApplicationProjectionV2;
+};
+
+export type UpdateAgentApplicationV2Response = UpdateAgentApplicationV2Responses[keyof UpdateAgentApplicationV2Responses];
+
+export type WithdrawAgentApplicationV2Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agent-applications/{applicationId}/withdraw';
+};
+
+export type WithdrawAgentApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type WithdrawAgentApplicationV2Error = WithdrawAgentApplicationV2Errors[keyof WithdrawAgentApplicationV2Errors];
+
+export type WithdrawAgentApplicationV2Responses = {
+    /**
+     * Application withdrawn
+     */
+    200: AgentApplicationProjectionV2;
+};
+
+export type WithdrawAgentApplicationV2Response = WithdrawAgentApplicationV2Responses[keyof WithdrawAgentApplicationV2Responses];
+
+export type ListAgentsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/agents';
+};
+
+export type ListAgentsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListAgentsV2Error = ListAgentsV2Errors[keyof ListAgentsV2Errors];
+
+export type ListAgentsV2Responses = {
+    /**
+     * Visible agents
+     */
+    200: {
+        items: Array<AgentProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListAgentsV2Response = ListAgentsV2Responses[keyof ListAgentsV2Responses];
+
+export type GetAgentV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}';
+};
+
+export type GetAgentV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentV2Error = GetAgentV2Errors[keyof GetAgentV2Errors];
+
+export type GetAgentV2Responses = {
+    /**
+     * Agent detail
+     */
+    200: AgentProjectionV2;
+};
+
+export type GetAgentV2Response = GetAgentV2Responses[keyof GetAgentV2Responses];
+
+export type UpdateAgentConfigurationV2Data = {
+    body: AgentConfigurationUpdateRequestV2Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/configuration';
+};
+
+export type UpdateAgentConfigurationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateAgentConfigurationV2Error = UpdateAgentConfigurationV2Errors[keyof UpdateAgentConfigurationV2Errors];
+
+export type UpdateAgentConfigurationV2Responses = {
+    /**
+     * Agent configuration
+     */
+    200: AgentProjectionV2;
+};
+
+export type UpdateAgentConfigurationV2Response = UpdateAgentConfigurationV2Responses[keyof UpdateAgentConfigurationV2Responses];
+
+export type CommandAgentLifecycleV2Data = {
+    body: AgentLifecycleCommandRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/lifecycle';
+};
+
+export type CommandAgentLifecycleV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CommandAgentLifecycleV2Error = CommandAgentLifecycleV2Errors[keyof CommandAgentLifecycleV2Errors];
+
+export type CommandAgentLifecycleV2Responses = {
+    /**
+     * Lifecycle command accepted
+     */
+    202: AgentProjectionV2;
+};
+
+export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];

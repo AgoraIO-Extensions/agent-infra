@@ -1,4 +1,7 @@
-import { pilotBrowserHttpOpenApiPathsV1 } from "@agent-infra/contracts/pilot";
+import {
+	pilotBrowserHttpOpenApiPathsV1,
+	pilotBrowserHttpOpenApiPathsV2,
+} from "@agent-infra/contracts/pilot";
 
 export type PilotAgentMockResponseV1 = {
 	readonly status: number;
@@ -60,42 +63,6 @@ type Operation = {
 	>;
 };
 
-const listAgentsOperation = pilotBrowserHttpOpenApiPathsV1["/api/v1/agents"]
-	.get as unknown as Operation;
-const getCurrentSessionOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/session"
-].get as unknown as Operation;
-const getAgentOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agents/{agentId}"
-].get as unknown as Operation;
-const updateAgentConfigurationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agents/{agentId}/configuration"
-].put as unknown as Operation;
-const listAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agent-applications"
-].get as unknown as Operation;
-const createAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agent-applications"
-].post as unknown as Operation;
-const getAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agent-applications/{applicationId}"
-].get as unknown as Operation;
-const updateAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agent-applications/{applicationId}"
-].put as unknown as Operation;
-const withdrawAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agent-applications/{applicationId}/withdraw"
-].post as unknown as Operation;
-const listPendingAgentApplicationsOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/admin/agent-applications"
-].get as unknown as Operation;
-const decideAgentApplicationOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/admin/agent-applications/{applicationId}/decision"
-].post as unknown as Operation;
-const commandAgentLifecycleOperation = pilotBrowserHttpOpenApiPathsV1[
-	"/api/v1/agents/{agentId}/lifecycle"
-].post as unknown as Operation;
-
 function validateResponse(
 	operation: Operation,
 	response: PilotAgentMockResponseV1,
@@ -139,6 +106,75 @@ function jsonResponse(response: PilotAgentMockResponseV1) {
 export function createPilotAgentMockServerV1(
 	scenario: PilotAgentMockServerScenarioV1,
 ): PilotAgentMockServerV1 {
+	return createPilotAgentMockServer(scenario, 1);
+}
+
+export function createPilotAgentMockServerV2(
+	scenario: PilotAgentMockServerScenarioV1,
+): PilotAgentMockServerV1 {
+	return createPilotAgentMockServer(scenario, 2);
+}
+
+function createPilotAgentMockServer(
+	scenario: PilotAgentMockServerScenarioV1,
+	version: 1 | 2,
+): PilotAgentMockServerV1 {
+	function operation(path: string, method: string): Operation {
+		const paths =
+			version === 1 || path === "/api/v1/session"
+				? pilotBrowserHttpOpenApiPathsV1
+				: pilotBrowserHttpOpenApiPathsV2;
+		const key =
+			version === 2 && path !== "/api/v1/session"
+				? path.replace("/api/v1/", "/api/v2/")
+				: path;
+		const found = (
+			paths as unknown as Record<string, Record<string, Operation>>
+		)[key]?.[method];
+		if (!found)
+			throw new TypeError("Pilot Agent Mock Server operation is missing");
+		return found;
+	}
+	const listAgentsOperation = operation("/api/v1/agents", "get");
+	const getCurrentSessionOperation = operation("/api/v1/session", "get");
+	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
+	const updateAgentConfigurationOperation = operation(
+		"/api/v1/agents/{agentId}/configuration",
+		"put",
+	);
+	const listAgentApplicationsOperation = operation(
+		"/api/v1/agent-applications",
+		"get",
+	);
+	const createAgentApplicationOperation = operation(
+		"/api/v1/agent-applications",
+		"post",
+	);
+	const getAgentApplicationOperation = operation(
+		"/api/v1/agent-applications/{applicationId}",
+		"get",
+	);
+	const updateAgentApplicationOperation = operation(
+		"/api/v1/agent-applications/{applicationId}",
+		"put",
+	);
+	const withdrawAgentApplicationOperation = operation(
+		"/api/v1/agent-applications/{applicationId}/withdraw",
+		"post",
+	);
+	const listPendingAgentApplicationsOperation = operation(
+		"/api/v1/admin/agent-applications",
+		"get",
+	);
+	const decideAgentApplicationOperation = operation(
+		"/api/v1/admin/agent-applications/{applicationId}/decision",
+		"post",
+	);
+	const commandAgentLifecycleOperation = operation(
+		"/api/v1/agents/{agentId}/lifecycle",
+		"post",
+	);
+
 	validateStaticResponse(
 		scenario.getCurrentSession,
 		getCurrentSessionOperation,
@@ -187,10 +223,16 @@ export function createPilotAgentMockServerV1(
 		const request = new Request(input, init);
 		requests.push(request);
 		const url = new URL(request.url);
+		const routingPath =
+			version === 1 || url.pathname === "/api/v1/session"
+				? url.pathname
+				: url.pathname.startsWith("/api/v2/")
+					? url.pathname.replace("/api/v2/", "/api/v1/")
+					: "/unsupported-version";
 
 		if (
 			request.method === "GET" &&
-			url.pathname === "/api/v1/session" &&
+			routingPath === "/api/v1/session" &&
 			scenario.getCurrentSession !== undefined
 		) {
 			const responder = scenario.getCurrentSession;
@@ -200,7 +242,7 @@ export function createPilotAgentMockServerV1(
 			return jsonResponse(response);
 		}
 
-		if (request.method === "GET" && url.pathname === "/api/v1/agents") {
+		if (request.method === "GET" && routingPath === "/api/v1/agents") {
 			listAgentsOperation.requestParams.query?.parse(
 				Object.fromEntries(url.searchParams),
 			);
@@ -214,7 +256,7 @@ export function createPilotAgentMockServerV1(
 
 		if (
 			request.method === "POST" &&
-			url.pathname === "/api/v1/agent-applications" &&
+			routingPath === "/api/v1/agent-applications" &&
 			scenario.createAgentApplication !== undefined
 		) {
 			createAgentApplicationOperation.requestParams.header?.parse({
@@ -229,7 +271,7 @@ export function createPilotAgentMockServerV1(
 		}
 
 		const configurationAgentId =
-			/^\/api\/v1\/agents\/([^/]+)\/configuration$/.exec(url.pathname)?.[1];
+			/^\/api\/v1\/agents\/([^/]+)\/configuration$/.exec(routingPath)?.[1];
 		if (
 			request.method === "PUT" &&
 			configurationAgentId !== undefined &&
@@ -252,7 +294,7 @@ export function createPilotAgentMockServerV1(
 
 		if (
 			request.method === "GET" &&
-			url.pathname === "/api/v1/admin/agent-applications" &&
+			routingPath === "/api/v1/admin/agent-applications" &&
 			scenario.listPendingAgentApplications !== undefined
 		) {
 			listPendingAgentApplicationsOperation.requestParams.query?.parse(
@@ -267,7 +309,7 @@ export function createPilotAgentMockServerV1(
 
 		const decisionApplicationId =
 			/^\/api\/v1\/admin\/agent-applications\/([^/]+)\/decision$/.exec(
-				url.pathname,
+				routingPath,
 			)?.[1];
 		if (
 			request.method === "POST" &&
@@ -292,7 +334,7 @@ export function createPilotAgentMockServerV1(
 		}
 
 		const lifecycleAgentId = /^\/api\/v1\/agents\/([^/]+)\/lifecycle$/.exec(
-			url.pathname,
+			routingPath,
 		)?.[1];
 		if (
 			request.method === "POST" &&
@@ -316,7 +358,7 @@ export function createPilotAgentMockServerV1(
 
 		if (
 			request.method === "GET" &&
-			url.pathname === "/api/v1/agent-applications" &&
+			routingPath === "/api/v1/agent-applications" &&
 			scenario.listAgentApplications !== undefined
 		) {
 			listAgentApplicationsOperation.requestParams.query?.parse(
@@ -331,7 +373,7 @@ export function createPilotAgentMockServerV1(
 
 		const withdrawalApplicationId =
 			/^\/api\/v1\/agent-applications\/([^/]+)\/withdraw$/.exec(
-				url.pathname,
+				routingPath,
 			)?.[1];
 		if (
 			request.method === "POST" &&
@@ -355,7 +397,7 @@ export function createPilotAgentMockServerV1(
 		}
 
 		const applicationIdPath = /^\/api\/v1\/agent-applications\/([^/]+)$/.exec(
-			url.pathname,
+			routingPath,
 		)?.[1];
 		if (
 			request.method === "PUT" &&
@@ -394,7 +436,7 @@ export function createPilotAgentMockServerV1(
 			return jsonResponse(response);
 		}
 
-		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(url.pathname)?.[1];
+		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(routingPath)?.[1];
 		if (request.method === "GET" && agentIdPath !== undefined) {
 			const agentId = decodeURIComponent(agentIdPath);
 			getAgentOperation.requestParams.path?.parse({ agentId });
@@ -407,7 +449,7 @@ export function createPilotAgentMockServerV1(
 		}
 
 		throw new Error(
-			`Pilot Agent Mock Server does not handle ${request.method} ${url.pathname}`,
+			`Pilot Agent Mock Server does not handle ${request.method} ${routingPath}`,
 		);
 	};
 

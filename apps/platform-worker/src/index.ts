@@ -3,7 +3,9 @@ import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.j
 
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
+export type { WorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 export * from "./workload-worker.js";
 
 import {

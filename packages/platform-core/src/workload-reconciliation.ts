@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import {
 	type AgentManagementDecisionV1,
 	type AgentManagementStateV1,
@@ -27,7 +27,7 @@ export interface WorkloadIdentityV1 {
 }
 
 export interface WorkloadVersionV1 {
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	/** Validated, credential-free deployment contract; never a Kubernetes object. */
 	readonly deployment: unknown;
 	/** Private Worker projection, persisted with candidate/verified; never public desired state. */
@@ -68,7 +68,7 @@ export interface WorkloadSecretBindingV1 {
 
 export interface WorkloadReconciliationInputV1 {
 	readonly management: AgentManagementStateV1;
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly state: WorkloadReconciliationStateV1 | null;
 	readonly requestId: string;
 	readonly traceId: string;
