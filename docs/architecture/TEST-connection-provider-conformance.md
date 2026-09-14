@@ -60,7 +60,7 @@ ConsumerInstance；GitHub OAuth credential 不进入 GitHub Actions。GitHub-hos
 
 当前生命周期覆盖 Issue 和 comment 的创建、读取、更新、删除 comment 与关闭 Issue。暂不执行
 repository 删除、协作者变更、fork、workflow、merge 或 release mutation。
-九个 lifecycle Action 固定使用已批准的 `@v5` ActionVersion；catalog 升级必须先更新测试基线并评审，
+九个 lifecycle Action 固定使用已批准的 `@v7` ActionVersion；catalog 升级必须先更新测试基线并评审，
 不能由 nightly 自动接受新版本。
 
 ## 测试层级与门禁

@@ -95,7 +95,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	const actionVersions = {};
 	for (const [actionId, effect] of Object.entries(actionEffects)) {
 		const guide = await call("get_action_guide", { actionId });
-		const approvedVersion = `${actionId}@v5`;
+		const approvedVersion = `${actionId}@v7`;
 		if (guide?.action?.actionVersionId !== approvedVersion) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
 		}
