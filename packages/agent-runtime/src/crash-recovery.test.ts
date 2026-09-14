@@ -345,6 +345,9 @@ describe("RuntimeHost crash-window recovery", () => {
 		});
 
 		await writeFile(driverPath, provenDriverState, "utf8");
+		await (await FakeRuntimeDriver.open(driverPath)).failStatusFor(
+			original.executionId,
+		);
 		await openIngressVerifiedRuntimeHost({
 			store: await FileRuntimeStore.open(hostPath),
 			driver: await FakeRuntimeDriver.open(driverPath),
@@ -796,17 +799,10 @@ describe("RuntimeHost crash-window recovery", () => {
 				tombstoneId,
 				grant: signedGrant(affectedRequest, ["generation.cancel"]),
 			});
-			expect(cancellation).toMatchObject(
-				failure === "status"
-					? {
-							result: {
-								outcome: "unknown",
-								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-							},
-						}
-					: { result: { outcome: "accepted", status: "cancelled" } },
-			);
-			await restartedDriver.clearRecoveryFailures();
+			expect(cancellation).toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			// Generation retirement remains confirmed even when the original Turn is unreadable.
 			await openIngressVerifiedRuntimeHost({
 				store: await FileRuntimeStore.open(hostPath),
 				driver: await FakeRuntimeDriver.open(driverPath),

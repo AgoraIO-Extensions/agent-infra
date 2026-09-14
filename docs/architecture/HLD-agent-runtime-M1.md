@@ -64,7 +64,7 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 标准 Runtime 只接收 Platform 当前 active 的模型 endpoint、模型、reasoning 和注入到本 Agent 的运行凭证。获准 endpoint 与 Owner 配置、Secret 密文和候选修订的权威边界见工程 Spec 10.6 和 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
 标准模板的模型协议与原生 Driver 协议是不同边界。Codex Native 当前消费 Responses，Claude
-Native 消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
+Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
 版本化配置并校验它与部署固定 Driver 绑定一致；profile 的来源、认证、版本兼容和候选回滚
 统一遵循工程 Spec 的[标准模板模型配置](SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
 
@@ -173,11 +173,14 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 ### 7.3 重启恢复
 
+- Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在 PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Agent Pod 重启后复用原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
 - 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution 和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
 - 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能创建新的 Runtime Session。
+
+- `generation-cancel` 的持久 `accepted` 终态回执确认目标代次的 cancellation barrier 已完成；它是控制操作结果，不是原 Turn 的原生终态。Host 以该回执确认 tombstone，不以原 Turn 的 `unknown` 或不可查询状态覆盖控制回执。Driver 必须先独立持久化屏障，再确认所有旧代次执行源已退出且在途事件与状态写已排空；即使 Session 或 Turn 持久状态无法恢复，也不能跳过这些条件。无法证明停止副作用时不确认。原 Turn 的未知结果和已保存历史保持原状，不生成合成终态事件。
 
 ## 8. 消息、事件与 SSE 可靠性
 

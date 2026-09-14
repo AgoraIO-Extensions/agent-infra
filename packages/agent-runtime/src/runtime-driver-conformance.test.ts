@@ -8,7 +8,6 @@ import type {
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openClaudeRuntimeDriverConformanceFixture } from "./claude-runtime-driver.test-support.js";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
 import {
@@ -16,10 +15,16 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
 
 const directories: string[] = [];
 const driverClosers: (() => Promise<void>)[] = [];
-const driverNames = ["Fake", "Codex", "Claude"] as const;
+const driverNames = [
+	"Fake",
+	"Codex",
+	"Claude",
+	...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode" as const] : []),
+] as const;
 
 async function directory() {
 	const path = await mkdtemp(
@@ -51,10 +56,11 @@ async function openConformanceDriver(
 	path: string,
 	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
-	if (name === "Claude") {
-		const fixture = await openClaudeRuntimeDriverConformanceFixture(
+	if (name === "Claude" || name === "OpenCode") {
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
 			path,
 			loseTurnStartResponse,
+			name === "OpenCode" ? "opencode" : "claude",
 		);
 		driverClosers.push(() => fixture.close());
 		return fixture;
@@ -389,6 +395,7 @@ describe("Runtime Driver shared conformance", () => {
 				);
 			});
 		},
+		30_000,
 	);
 
 	it.each(driverNames)(
@@ -550,7 +557,7 @@ describe("Runtime Driver shared conformance", () => {
 				expect(fixture.turnSelections()).toHaveLength(2);
 			},
 			// Claude starts and retires real Native processes for both model options.
-			name === "Claude" ? 30_000 : undefined,
+			name === "Claude" || name === "OpenCode" ? 30_000 : undefined,
 		);
 
 	it.each(driverNames)(

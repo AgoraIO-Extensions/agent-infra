@@ -23,6 +23,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agentclientprotocol/sdk": "1.4.0",
 		"@anthropic-ai/claude-agent-sdk": "0.3.246",
 		"eventsource-parser": "3.1.0"
 	},

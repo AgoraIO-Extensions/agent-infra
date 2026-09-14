@@ -8,6 +8,10 @@ WORKDIR /app
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
 RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex
+COPY deploy/runtime/install-opencode.mjs ./deploy/runtime/install-opencode.mjs
+COPY packages/agent-runtime/src/opencode-release.json ./packages/agent-runtime/src/opencode-release.json
+COPY packages/agent-runtime/third-party/opencode-LICENSE ./packages/agent-runtime/third-party/opencode-LICENSE
+RUN node --use-env-proxy deploy/runtime/install-opencode.mjs "$TARGETARCH" /opt/opencode
 RUN apk add --no-cache 'setpriv=2.42.3-r1'
 COPY . .
 RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
@@ -37,6 +41,7 @@ ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
+COPY --from=builder /opt/opencode/ /opt/opencode/
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 VOLUME ["/var/lib/agent-runtime"]

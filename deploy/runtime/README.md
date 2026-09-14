@@ -107,7 +107,7 @@ Linux 容器再次运行。Messages 预检必须验证完整流式工具调用�
 经授权的真实模型验收可从 `apps/agent-runtime-host` 目录运行：
 
 ```bash
-node ../../deploy/runtime/claude-conformance.mjs \
+node ../../deploy/runtime/messages-conformance.mjs \
   --settings /secure/test-settings.json --model claude-opus-5 \
   --output /secure/claude-conformance.json
 ```
@@ -126,3 +126,42 @@ node ../../deploy/runtime/claude-conformance.mjs \
 Digest、source label、non-root/只读根/可写挂载，以及同一镜像运行探针的结果；不能仅靠
 传入 `--image-digest`、`--source-commit` 声明完成验证。完整模板的文件和 Connection
 验收仍由其独立任务负责。
+
+
+## Generic ACP 与 OpenCode 核心验证
+
+OpenCode 静态绑定 `AGENT_INFRA_RUNTIME_DRIVER=acp`，由同一个 Generic ACP Driver 消费
+共享模型配置 V3 的 `anthropic-messages-v1` 选项。平台选项映射为原生
+`anthropic/<model>`，reasoning 经 ACP 的 `effort` 配置精确设置并复验；每 Turn 的
+Messages 传输只允许选中的模型、reasoning、endpoint 和 credential。Files、Connection
+与补充指令 capability 保持不可用。
+
+镜像安装 `/opt/opencode/bin/opencode`，版本、来源和每平台校验值只在
+[opencode-release.json](../../packages/agent-runtime/src/opencode-release.json) 维护。
+Host 启动校验 SDK 版本和可执行文件 SHA-256。部署者可用
+`AGENT_INFRA_OPENCODE_EXECUTABLE` 指定同一校验值的本地二进制路径，不能借此运行其他版本。
+
+Session 数据位于 Agent 数据目录的 `acp-driver`；每 Conversation 使用独立原生配置、
+工作区和 `.memory/MEMORY.md`。只允许该工作区内经真实路径检查的 read/edit 工具；
+终端、任意命令、外部目录、MCP 和项目配置加载保持关闭。未知 Turn 和真实 Session
+恢复失败的边界统一见 [HLD 重启恢复](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复)。
+
+有本地已校验二进制时，从仓库根目录运行：
+
+```bash
+OPENCODE_EXECUTABLE=/opt/opencode/bin/opencode pnpm exec vitest run \
+  packages/agent-runtime/src/acp-runtime-driver.test.ts \
+  packages/agent-runtime/src/acp-session.test.ts \
+  packages/agent-runtime/src/opencode-native.test.ts \
+  packages/agent-runtime/src/runtime-driver-conformance.test.ts
+```
+
+`opencode-native.test.ts` 使用真实原生进程和合成 Messages 服务，证明模型/工具/恢复
+行为；它不替代真实模型、双用户与 Pod 的验收。共享 conformance 在显式提供
+`OPENCODE_EXECUTABLE` 时加入 OpenCode；CI 在固定 Linux 镜像中执行该分支，并要求
+non-root、只读根文件系统、禁网和独立可写临时目录。
+
+真实模型与双用户探针复用上述 `messages-conformance.mjs`，增加 `--runtime opencode`
+及 `--executable /opt/opencode/bin/opencode`。OpenCode 使用自身 `export` 命令读取测试
+Session，将实际 read 调用、结果、记忆和恢复后的上下文逐项关联；仅保存布尔验收结果，
+不输出原生历史或配置凭证。
