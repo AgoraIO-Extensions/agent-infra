@@ -883,13 +883,6 @@ export class ConnectionApplicationService {
 		private readonly credentialConnectors: Readonly<
 			Record<string, ProviderCredentialConnector>
 		> = {},
-		private readonly options: {
-			actionVersionAllowlistByProviderRelease?: ReadonlyMap<
-				string,
-				ReadonlySet<string>
-			>;
-			gatedProviderIds?: ReadonlySet<string>;
-		} = {},
 	) {}
 
 	async overview(principalId: string) {
@@ -1021,10 +1014,7 @@ export class ConnectionApplicationService {
 
 	async listDirectActions(session: string | undefined) {
 		const invocation = await this.repository.resolveDirectSession(session);
-		return this.eligibleActions(
-			invocation,
-			await this.repository.listAuthorizedActions(invocation),
-		);
+		return this.repository.listAuthorizedActions(invocation);
 	}
 
 	async listDirectActionsForIdentity(input: {
@@ -1033,12 +1023,8 @@ export class ConnectionApplicationService {
 		principalId: string;
 	}) {
 		const actionSets = await Promise.all(
-			(await this.repository.resolveDirectIdentities(input)).map(
-				async (invocation) =>
-					this.eligibleActions(
-						invocation,
-						await this.repository.listAuthorizedActions(invocation),
-					),
+			(await this.repository.resolveDirectIdentities(input)).map((invocation) =>
+				this.repository.listAuthorizedActions(invocation),
 			),
 		);
 		return actionSets
@@ -1132,16 +1118,8 @@ export class ConnectionApplicationService {
 			await Promise.all(
 				(
 					await this.repository.resolveDirectIdentities(input)
-				).map(async (invocation) =>
-					(
-						await this.repository.listAuthorizedConnections(invocation)
-					).map((connection) => ({
-						...connection,
-						actionVersionIds: this.eligibleActionVersionIds(
-							invocation,
-							connection.actionVersionIds,
-						),
-					})),
+				).map((invocation) =>
+					this.repository.listAuthorizedConnections(invocation),
 				),
 			)
 		).flat();
@@ -1550,9 +1528,8 @@ export class ConnectionApplicationService {
 		invocation: InvocationContext,
 		action: ActionName,
 	) {
-		const definition = this.eligibleActions(
-			invocation,
-			await this.repository.listAuthorizedActions(invocation),
+		const definition = (
+			await this.repository.listAuthorizedActions(invocation)
 		).find((entry) => entry.name === action);
 		if (!definition) {
 			throw new ConnectionError(
@@ -1570,9 +1547,8 @@ export class ConnectionApplicationService {
 		for (const invocation of await this.repository.resolveDirectIdentities(
 			identity,
 		)) {
-			const action = this.eligibleActions(
-				invocation,
-				await this.repository.listAuthorizedActions(invocation),
+			const action = (
+				await this.repository.listAuthorizedActions(invocation)
 			).find(
 				(candidate) =>
 					candidate.id === actionId ||
@@ -1597,9 +1573,8 @@ export class ConnectionApplicationService {
 			workload,
 			actorKey,
 		)) {
-			const action = this.eligibleActions(
-				invocation,
-				await this.repository.listAuthorizedActions(invocation),
+			const action = (
+				await this.repository.listAuthorizedActions(invocation)
 			).find(
 				(candidate) =>
 					candidate.name === actionName &&
@@ -1611,36 +1586,6 @@ export class ConnectionApplicationService {
 			"FORBIDDEN",
 			"Connection authorization is not active",
 		);
-	}
-
-	private eligibleActions(
-		invocation: InvocationContext,
-		actions: readonly ActionDefinition[],
-	) {
-		const allowlist = this.options.actionVersionAllowlistByProviderRelease?.get(
-			invocation.providerReleaseId,
-		);
-		if (allowlist) return actions.filter((action) => allowlist.has(action.id));
-		return this.options.gatedProviderIds?.has(invocation.providerId)
-			? []
-			: [...actions];
-	}
-
-	private eligibleActionVersionIds(
-		invocation: InvocationContext,
-		actionVersionIds: readonly string[],
-	) {
-		const allowlist = this.options.actionVersionAllowlistByProviderRelease?.get(
-			invocation.providerReleaseId,
-		);
-		if (allowlist) {
-			return actionVersionIds.filter((actionVersionId) =>
-				allowlist.has(actionVersionId),
-			);
-		}
-		return this.options.gatedProviderIds?.has(invocation.providerId)
-			? []
-			: [...actionVersionIds];
 	}
 }
 
