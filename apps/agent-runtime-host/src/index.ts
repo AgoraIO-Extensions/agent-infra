@@ -8,8 +8,8 @@ import {
 	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
-	GenericAcpRuntimeDriver,
 	openOpenCodeRuntime,
+	openPiRuntime,
 	RuntimeHost,
 	RuntimeHostError,
 	verifyCodexPilotInstallation,
@@ -83,6 +83,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		binding !== "codex" &&
 		binding !== "claude" &&
 		binding !== "acp" &&
+		binding !== "pi" &&
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
@@ -112,7 +113,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
 	const messagesConfiguration =
-		binding === "claude" || binding === "acp"
+		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
 			: undefined;
 	const activeConfiguration = configuration ?? messagesConfiguration;
@@ -140,18 +141,18 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 							environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
 							"/opt/opencode/bin/opencode",
 					})
-				: await ClaudeRuntimeDriver.open({
-						...messagesConfiguration,
-						path: join(dataDirectory, "claude-driver"),
-					})
+				: binding === "pi"
+					? await openPiRuntime({
+							...messagesConfiguration,
+							path: join(dataDirectory, "pi-driver"),
+						})
+					: await ClaudeRuntimeDriver.open({
+							...messagesConfiguration,
+							path: join(dataDirectory, "claude-driver"),
+						})
 			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 	const close = async () => {
-		if (
-			driver instanceof CodexRuntimeDriver ||
-			driver instanceof ClaudeRuntimeDriver ||
-			driver instanceof GenericAcpRuntimeDriver
-		)
-			await driver.close();
+		if ("close" in driver) await driver.close();
 	};
 	try {
 		const host = await RuntimeHost.open({

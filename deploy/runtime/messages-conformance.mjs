@@ -14,13 +14,15 @@ const { values } = parseArgs({ options: {
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
-const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation } = await import(pathToFileURL(runtimeEntry).href);
-if (!["claude", "opencode"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
+const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation } = await import(pathToFileURL(runtimeEntry).href);
+if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
-if (isOpenCode && !["workspace", "memory"].includes(values["negative-target"])) throw Error("Unsupported negative target");
+const isPi = values.runtime === "pi";
+const separateNegative = isOpenCode || isPi;
+if (separateNegative && !["workspace", "memory"].includes(values["negative-target"])) throw Error("Unsupported negative target");
 const executable = values.executable ?? "/opt/opencode/bin/opencode";
-const sdkEntry = isOpenCode ? undefined : createRequire(runtimeEntry).resolve("@anthropic-ai/claude-agent-sdk");
-const provenance = isOpenCode ? await verifyOpenCodeInstallation(executable) : await verifyClaudeInstallation();
+const sdkEntry = separateNegative ? undefined : createRequire(runtimeEntry).resolve("@anthropic-ai/claude-agent-sdk");
+const provenance = isPi ? await verifyPiInstallation() : isOpenCode ? await verifyOpenCodeInstallation(executable) : await verifyClaudeInstallation();
 let sourceCommit = values["source-commit"], dirty = false;
 if (!values["image-digest"]) {
  sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -38,7 +40,7 @@ const configVersion = `conformance-${randomUUID()}`;
 const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
 let driver;
 const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, turn: 0 }));
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, executableSha256: provenance.executableSha256, model: values.model, negativeVector: "symlink-escape", negativeTargets: isOpenCode ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
 const keepAlive = setTimeout(() => {}, 600_000);
 // Inspect only this synthetic Turn through the pinned SDK; never emit transcript content.
 const historyProbe = `
@@ -88,9 +90,29 @@ async function claudeReadEvidence(user, other) {
  const files = await Promise.all(expected.slice(0, 2).map(async item => (await readFile(item.path, "utf8").catch(() => "")).includes(user.canary)));
  return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
 }
-const memoryPath = isOpenCode ? "workspace/.memory/MEMORY.md" : "memory/MEMORY.md";
-const openDriver = () => isOpenCode ? openOpenCodeRuntime(options) : ClaudeRuntimeDriver.open(options);
+const memoryPath = separateNegative ? "workspace/.memory/MEMORY.md" : "memory/MEMORY.md";
+const openDriver = () => isPi ? openPiRuntime(options) : isOpenCode ? openOpenCodeRuntime(options) : ClaudeRuntimeDriver.open(options);
+async function piReadEvidence(user, other, negative) {
+ const directory = join(path, user.ref), workspace = join(directory, "workspace");
+ const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
+ const entries = (await readFile(join(directory, "native/session.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+ if (entries[0]?.id !== state.nativeId || entries[0].cwd !== workspace) throw Error("Invalid synthetic session history");
+ const all = entries.filter(entry => entry.type === "message").map(entry => entry.message);
+ const start = all.findLastIndex(message => message.role === "user");
+ if (start < 0) throw Error("Missing synthetic Turn");
+ const messages = all.slice(start + 1);
+ const calls = messages.filter(message => message.role === "assistant").flatMap(message => message.content).filter(part => part.type === "toolCall" && part.name === "read");
+ const results = messages.filter(message => message.role === "toolResult");
+ const expected = negative ? [{path: join(workspace, negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md"), canary: other.canary, denied: true}] : [{path: join(workspace, "canary.txt"), canary: user.canary}, {path: join(directory, memoryPath), canary: user.canary}];
+ const checks = expected.map(expected => {
+  const ids = new Set(calls.filter(call => typeof call.arguments?.path === "string" && resolve(workspace, call.arguments.path) === expected.path).map(call => call.id));
+  const matching = results.filter(result => ids.has(result.toolCallId));
+  return expected.denied ? matching.length > 0 && matching.every(result => result.isError === true) && !JSON.stringify(messages).includes(expected.canary) : matching.some(result => result.isError !== true && JSON.stringify(result.content).includes(expected.canary));
+ });
+ return negative ? { actualReadDenied: checks[0] } : { actualOwnWorkspaceRead: checks[0], actualOwnMemoryRead: checks[1] };
+}
 async function readEvidence(user, other, negative) {
+ if (isPi) return piReadEvidence(user, other, negative);
  if (!isOpenCode) return claudeReadEvidence(user, other);
  const directory = join(path, user.ref), workspace = join(directory, "workspace");
  const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
@@ -135,7 +157,7 @@ async function turn(user, text) {
 try {
  driver = await openDriver();
  await Promise.all(users.map(async user => {
-  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Save it in workspace file canary.txt and your private memory file ${isOpenCode ? ".memory/MEMORY.md" : "../memory/MEMORY.md"} using the write tool. Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
+  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Save it in workspace file canary.txt and your private memory file ${separateNegative ? ".memory/MEMORY.md" : "../memory/MEMORY.md"} using the write tool. Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
   report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 });
  }));
  await driver.close();
@@ -157,16 +179,16 @@ try {
  driver = await openDriver();
  await Promise.all(users.map(async user => {
   const other = users.find(value => value !== user);
-  const result = await turn(user, isOpenCode ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
-  report.checks.push({ user: user.id, phase: isOpenCode ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && (isOpenCode || (result.answer.includes("DENIED") && result.denied >= 2)) });
+  const result = await turn(user, separateNegative ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
+  report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2)) });
  }));
  await driver.close();
  for (const user of users) {
-  const check = report.checks.find(check => check.user === user.id && check.phase === (isOpenCode ? "restart-own-positive" : "restart-own-positive-other-negative"));
+  const check = report.checks.find(check => check.user === user.id && check.phase === (separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative"));
   check.readEvidence = await readEvidence(user, users.find(other => other !== user));
   check.passed &&= Object.values(check.readEvidence).every(Boolean);
  }
- if (isOpenCode) {
+ if (separateNegative) {
   for (const negative of [values["negative-target"]]) {
    driver = await openDriver();
    await Promise.all(users.map(async user => {
@@ -179,7 +201,7 @@ try {
    await driver.close();
   }
  }
- report.passed = report.checks.length === (isOpenCode ? 6 : 4) && report.checks.every(check => check.passed);
+ report.passed = report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; }
 finally { await driver?.close(); clearTimeout(keepAlive); await rm(path, { recursive: true, force: true }); }
 await writeFile(values.output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });

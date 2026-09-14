@@ -61,7 +61,11 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it.each(["claude", ...(process.env.OPENCODE_EXECUTABLE ? ["acp"] : [])])(
+	it.each([
+		"claude",
+		"pi",
+		...(process.env.OPENCODE_EXECUTABLE ? ["acp"] : []),
+	])(
 		"assembles the fixed %s Driver with per-option V3 configuration and closes it",
 		async (driver) => {
 			const runtime = await assembleRuntimeHost({
