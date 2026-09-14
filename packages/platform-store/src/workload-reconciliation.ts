@@ -29,7 +29,32 @@ type LegacyWorkloadReconciliationStateV1 = Omit<
 	"fence"
 >;
 
-function persistedState(
+function persistedWorkloadVersion(input: unknown, agentId: string) {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new Error();
+	const value = input as Record<string, unknown>;
+	const keys = Object.keys(value);
+	if (
+		!Object.hasOwn(value, "configuration") ||
+		!Object.hasOwn(value, "deployment") ||
+		keys.some(
+			(key) =>
+				!["configuration", "deployment", "modelProjection"].includes(key),
+		)
+	)
+		throw new Error();
+	const configuration = decodeAgentConfigurationRecord(value.configuration);
+	if (configuration.agentId !== agentId) throw new Error();
+	return {
+		configuration,
+		deployment: value.deployment,
+		...(Object.hasOwn(value, "modelProjection")
+			? { modelProjection: value.modelProjection }
+			: {}),
+	};
+}
+
+export function decodePersistedWorkloadStateV1(
 	input: unknown,
 	agentId: string,
 ):
@@ -42,6 +67,92 @@ function persistedState(
 	if (input === null || input === undefined) return null;
 	if (typeof input !== "object" || Array.isArray(input)) throw new Error();
 	const value = input as Record<string, unknown>;
+	const required = [
+		"schemaVersion",
+		"agentId",
+		"sourceConfigurationRevision",
+		"sourceLifecycleRevision",
+		"revision",
+		"phase",
+		"candidate",
+		"verified",
+		"verifiedRevision",
+		"identity",
+		"rollback",
+		"failureCode",
+		"attempts",
+	];
+	const optional = ["fence", "cleanupInterrupted", "capabilities"];
+	if (
+		required.some((key) => !Object.hasOwn(value, key)) ||
+		Object.keys(value).some(
+			(key) => !required.includes(key) && !optional.includes(key),
+		)
+	)
+		throw new Error();
+	if (
+		![
+			"preflight",
+			"closing",
+			"applying",
+			"observing",
+			"activating",
+			"promoting",
+			"ready",
+			"rejected",
+			"stopped",
+			"cleaning",
+			"failed",
+		].includes(String(value.phase)) ||
+		typeof value.rollback !== "boolean" ||
+		![null, "reconciliation_failed", "health_check_failed"].includes(
+			value.failureCode as never,
+		) ||
+		!Number.isSafeInteger(value.sourceConfigurationRevision) ||
+		(value.sourceConfigurationRevision as number) < 1 ||
+		!Number.isSafeInteger(value.sourceLifecycleRevision) ||
+		(value.sourceLifecycleRevision as number) < 0 ||
+		!Number.isSafeInteger(value.attempts) ||
+		(value.attempts as number) < 0 ||
+		(value.verifiedRevision !== null &&
+			(!Number.isSafeInteger(value.verifiedRevision) ||
+				(value.verifiedRevision as number) < 1))
+	)
+		throw new Error();
+	if (value.identity !== null) {
+		const identity = value.identity as Record<string, unknown>;
+		if (
+			!identity ||
+			typeof identity !== "object" ||
+			Array.isArray(identity) ||
+			Object.keys(identity).length !== 2 ||
+			typeof identity.uid !== "string" ||
+			identity.uid.length === 0 ||
+			!Number.isSafeInteger(identity.generation) ||
+			(identity.generation as number) < 1
+		)
+			throw new Error();
+	}
+	if (
+		Object.hasOwn(value, "capabilities") &&
+		(!value.capabilities ||
+			typeof value.capabilities !== "object" ||
+			Array.isArray(value.capabilities) ||
+			Object.values(value.capabilities).some(
+				(item) => typeof item !== "boolean",
+			))
+	)
+		throw new Error();
+	const normalized = {
+		...value,
+		candidate: persistedWorkloadVersion(value.candidate, agentId),
+		verified:
+			value.verified === null
+				? null
+				: persistedWorkloadVersion(value.verified, agentId),
+	};
+	if ((normalized.verified === null) !== (value.verifiedRevision === null))
+		throw new Error();
 	if (
 		value.schemaVersion !== 1 ||
 		value.agentId !== agentId ||
@@ -53,13 +164,13 @@ function persistedState(
 		throw new Error();
 	if (!Object.hasOwn(value, "fence"))
 		return {
-			state: value as unknown as LegacyWorkloadReconciliationStateV1,
+			state: normalized as unknown as LegacyWorkloadReconciliationStateV1,
 			legacy: true,
 		};
 	if (!Number.isSafeInteger(value.fence) || (value.fence as number) < 1)
 		throw new Error();
 	return {
-		state: value as unknown as WorkloadReconciliationStateV1,
+		state: normalized as unknown as WorkloadReconciliationStateV1,
 		legacy: false,
 	};
 }
@@ -260,7 +371,41 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					const [persisted] = await sql<
 						{ state: unknown }[]
 					>`select state from platform.workload_reconciliations where agent_id = ${agent.id}`;
-					const decodedState = persistedState(persisted?.state, agent.id);
+					const decodedState = decodePersistedWorkloadStateV1(
+						persisted?.state,
+						agent.id,
+					);
+					if (decodedState) {
+						const versions = [
+							decodedState.state.candidate,
+							...(decodedState.state.verified
+								? [decodedState.state.verified]
+								: []),
+						];
+						const revisions = [
+							...new Set(
+								versions.map((version) => version.configuration.revision),
+							),
+						];
+						const rows = await sql<
+							{ configuration: unknown }[]
+						>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = any(${sql.array(revisions)}::bigint[])`;
+						const historical = rows.map((row) =>
+							decodeAgentConfigurationRecord(row.configuration),
+						);
+						if (
+							versions.some(
+								(version) =>
+									!historical.some(
+										(record) =>
+											record.agentId === agent.id &&
+											record.revision === version.configuration.revision &&
+											isDeepStrictEqual(record, version.configuration),
+									),
+							)
+						)
+							throw new Error();
+					}
 					let state: WorkloadReconciliationStateV1 | null = null;
 					if (decodedState?.legacy) {
 						// Legacy rows used the local Workload revision as the Kubernetes

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	createWorkloadReconciliationV1,
@@ -10,11 +10,11 @@ import {
 
 function fixture() {
 	let configuration = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: "agent-a",
 		revision: 1,
 		source: { kind: "standard", imageDigest: "image-a" },
-	} as AgentConfigurationRecordV1;
+	} as AgentConfigurationRecordV2;
 	let management = {
 		agentId: "agent-a",
 		workloadRevision: 1,

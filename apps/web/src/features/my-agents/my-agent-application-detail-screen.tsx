@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
-import type { AgentApplicationProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import {
 	agentApplicationEditActionLabels,
@@ -15,7 +15,7 @@ type MyAgentApplicationDetailScreenProps = {
 	onWithdraw: () => void;
 	state: MyAgentApplicationState | { kind: "loading" };
 	withdrawalError?: boolean;
-	withdrawalResult?: AgentApplicationProjectionV1;
+	withdrawalResult?: AgentApplicationProjectionV2;
 	withdrawing: boolean;
 };
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type {
 	RuntimeCapabilitiesV1,
 	RuntimeDriverOperationRecordV1,
@@ -1434,6 +1434,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
 		private readonly revokeModelTurn?: (turn: CodexNativeTurn) => void,
+		private readonly probeNative?: (
+			signal: AbortSignal,
+		) => Promise<RuntimeCapabilitiesV1>,
 	) {}
 
 	// One native process per Conversation generation. The key is derived from the
@@ -1625,6 +1628,68 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				await assertPinnedModelProfiles(rpc, modelOptions);
 			}
 		};
+		const probeNative = async (signal: AbortSignal) => {
+			signal.throwIfAborted();
+			// Dedicated temporary native HOME; never pass a real Conversation key or Store.
+			const directory = await mkdtemp(
+				join(dirname(options.path), ".readiness-"),
+			);
+			let bridge: CodexAppServerTransport | undefined;
+			let rpc: CodexRpc | undefined;
+			const abort = () => {
+				void (rpc ? rpc.close() : bridge?.close?.())?.catch(() => {});
+			};
+			signal.addEventListener("abort", abort, { once: true });
+			try {
+				signal.throwIfAborted();
+				bridge = await openBridge({
+					dataDirectory: directory,
+					conversationKey: createHash("sha256")
+						.update(randomUUID())
+						.digest("hex"),
+					...(options.launchPath ? { launchPath: options.launchPath } : {}),
+					...containedConfiguration,
+					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+					startupTimeoutMs: 3000,
+				});
+				signal.throwIfAborted();
+				rpc = new CodexRpc(bridge, async () => {});
+				const deadline = Date.now() + 5000;
+				await rpc.request(
+					"initialize",
+					{
+						clientInfo: { name: "agent-infra-readiness", version: "1" },
+						capabilities: { experimentalApi: true },
+					},
+					(value) => {
+						if (!isPlainRecord(value)) protocolInvalid();
+					},
+					false,
+					false,
+					deadline,
+				);
+				signal.throwIfAborted();
+				await rpc.request(
+					"config/read",
+					{ includeLayers: false },
+					(value) =>
+						assertContainedConfiguration(value, containedConfiguration),
+					false,
+					false,
+					deadline,
+				);
+				signal.throwIfAborted();
+				return capabilities;
+			} finally {
+				signal.removeEventListener("abort", abort);
+				try {
+					if (rpc) await rpc.close();
+					else await bridge?.close?.();
+				} finally {
+					await rm(directory, { recursive: true, force: true });
+				}
+			}
+		};
 		// `new this` keeps the transport-sharing policy in the class that needs it
 		// instead of carrying a test-only flag through production state.
 		return new this(
@@ -1641,6 +1706,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport?.abandonTurnAdmission,
 			modelTransport?.cancelTurn,
 			modelTransport?.revokeTurn,
+			probeNative,
 		);
 	}
 
@@ -2122,6 +2188,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	async getCapabilities() {
 		return capabilities;
+	}
+
+	async probeReadiness(signal: AbortSignal) {
+		if (this.closed || !this.probeNative) unavailable();
+		return this.probeNative(signal);
 	}
 
 	async replayEvents(

@@ -59,7 +59,16 @@ describe("standard contract artifacts", () => {
 			"/api/v1/conversations/{conversationId}/events",
 		);
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
+			"/api/v2/admin/agent-applications",
+			"/api/v2/admin/agent-applications/{applicationId}/decision",
 			"/api/v2/admin/audit",
+			"/api/v2/agent-applications",
+			"/api/v2/agent-applications/{applicationId}",
+			"/api/v2/agent-applications/{applicationId}/withdraw",
+			"/api/v2/agents",
+			"/api/v2/agents/{agentId}",
+			"/api/v2/agents/{agentId}/configuration",
+			"/api/v2/agents/{agentId}/lifecycle",
 		]);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",

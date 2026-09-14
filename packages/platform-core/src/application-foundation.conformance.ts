@@ -1,17 +1,14 @@
 import { expect, it } from "vitest";
-import {
-	agentConfigurationConformanceAdmissionsV1,
-	agentConfigurationConformanceRecordV1,
-} from "./agent-configuration.conformance.ts";
+import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.ts";
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	InitialAgentConfigurationAdmissionDependenciesV1,
 } from "./agent-configuration.ts";
 import {
 	type ApplicationFoundationActorContextV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
-	type CommitApplicationFoundationCommandV1,
+	type CommitApplicationFoundationCommandV2,
 	createApplicationFoundationUseCaseV1,
 } from "./application-foundation.ts";
 import type { ApplicationFoundationSnapshot } from "./fake-application-foundation.ts";
@@ -47,7 +44,7 @@ const applicationId = "application opaque alpha";
 const serverInstant = new Date("2026-08-30T12:00:00.000Z");
 const fixedNow = () => new Date(serverInstant.valueOf());
 
-export const applicationFoundationConfigurationV1: AgentConfigurationRecordV1 =
+export const applicationFoundationConfigurationV1: AgentConfigurationRecordV2 =
 	{
 		...agentConfigurationConformanceRecordV1,
 		agentId,
@@ -70,8 +67,6 @@ export const applicationFoundationConfigurationV1: AgentConfigurationRecordV1 =
 			defaultOptionId: "model_primary",
 			defaultReasoningLevel: "low",
 		},
-		actions: agentConfigurationConformanceAdmissionsV1.actions,
-		actionSetRevision: "actions_2",
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		secrets: [
 			{
@@ -85,9 +80,9 @@ export const applicationFoundationConfigurationV1: AgentConfigurationRecordV1 =
 		channelRevision: "channels_2",
 	};
 
-export const applicationFoundationCommandV1: CommitApplicationFoundationCommandV1 =
+export const applicationFoundationCommandV1: CommitApplicationFoundationCommandV2 =
 	{
-		schemaVersion: 1,
+		schemaVersion: 2,
 		applicationId,
 		agentId,
 		idempotencyKey: "application-submit-alpha",
@@ -115,7 +110,6 @@ export const applicationFoundationCommandV1: CommitApplicationFoundationCommandV
 		},
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		secrets: [{ name: "BOT_TOKEN", replace: true }],
-		actions: agentConfigurationConformanceAdmissionsV1.actions,
 		channels: [
 			{
 				kind: "wecom_bot",
@@ -239,18 +233,6 @@ export function applicationFoundationAdmissionDependenciesV1(): InitialAgentConf
 				};
 			},
 		},
-		actionAdmission: {
-			async admitActions(input) {
-				return {
-					schemaVersion: 1,
-					status: "admitted",
-					agentId: input.agentId,
-					requestId: input.requestId,
-					actionSetRevision: "actions_2",
-					actions: structuredClone(input.requested),
-				};
-			},
-		},
 		channelAdmission: {
 			async admitChannels(input) {
 				return {
@@ -354,7 +336,7 @@ export function applicationFoundationTransactionConformance(
 			]) {
 				await expect(
 					useCase.submit(
-						invalid as CommitApplicationFoundationCommandV1,
+						invalid as CommitApplicationFoundationCommandV2,
 						applicationFoundationActorContextV1,
 					),
 				).rejects.toMatchObject({
@@ -527,7 +509,7 @@ export function applicationFoundationTransactionConformance(
 		const harness = await createHarness();
 		const useCase = createUseCase(harness.transaction);
 		const exactAgentId = `${"g".repeat(1021)}\u754c`;
-		const exactCommand: CommitApplicationFoundationCommandV1 = {
+		const exactCommand: CommitApplicationFoundationCommandV2 = {
 			...applicationFoundationCommandV1,
 			applicationId: `${"a".repeat(1021)}\u754c`,
 			agentId: exactAgentId,

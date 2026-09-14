@@ -349,6 +349,18 @@ RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience
 
 Runtime Execution Grant 仅授权平台 Runtime 操作，不是 Connection 访问凭据。平台不为 Connection 签发 assertion、不传递 Owner Action policy，也不替 Connection 决定客户端可调用的外部账号。
 
+Workload 就绪检查不以业务 Conversation/Execution 为授权上下文，而使用独立版本化的
+只读 Workload Readiness Grant。Worker 在当前调谐候选的权限与 fence 下签发最多 30 秒有效的
+证明，绑定签发方、专用 RuntimeHost readiness audience、唯一 Grant/请求标识、Worker、Agent、
+Workload revision、fence、镜像 Digest 和 `readiness.read` 用途。Host 同时校验服务身份、签名、
+时效及部署注入的本机 Agent/revision/fence/Digest，并将已认证 Worker 与 Grant 绑定核对；
+缺失本机绑定或任何不匹配均拒绝。
+该接口仅执行无副作用的核心与 capability 读取，不创建 Session/Turn、不读会话或附件，
+不调用模型、工具或 Connection。它没有用户、Conversation、Execution 或 Action 字段，不能
+用于业务或控制命令；同一有效请求的重复只允许重复读取。Worker 必须按当前候选和 fence
+提交检查结果，迟到结果不能激活其他候选。该边界见
+[ADR: 独立的 Workload 就绪授权](../adr/0010-separate-workload-readiness-authorization.md)。
+
 ## 10. Agent Workload 与调谐
 
 ### 10.1 Workload 形态

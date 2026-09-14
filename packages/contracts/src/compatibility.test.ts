@@ -218,6 +218,71 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the V2 lifecycle addition and preserves existing audit authority", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths)) {
+			if (path !== "/api/v2/admin/audit") delete previous.paths[path];
+		}
+		for (const name of [
+			"AgentApplicationCreateRequestV2",
+			"AgentApplicationProjectionV2",
+			"AgentApplicationUpdateRequestV2",
+			"AgentConfigurationProjectionV2",
+			"AgentConfigurationUpdateRequestV2",
+			"AgentLifecycleCommandRequestV1",
+			"AgentProjectionV2",
+			"ApprovalDecisionRequestV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-lifecycle-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous), "utf8");
+			await writeFile(currentPath, JSON.stringify(current), "utf8");
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths["/api/v2/agents"];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/admin/audit"].get.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.AgentApplicationCreateRequestV2.required =
+						[];
+				},
+				(document: typeof current) => {
+					document.components.schemas.PlatformAuditProjectionV2.required = [];
+				},
+				(document: typeof current) => {
+					document.info.title = "changed";
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed), "utf8");
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		["removed", "removed"],
 		["narrowed", "narrowed"],

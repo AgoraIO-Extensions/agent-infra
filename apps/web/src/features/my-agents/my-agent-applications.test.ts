@@ -1,16 +1,16 @@
-import { AgentApplicationProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
-	createPilotAgentMockServerV1,
+	createPilotAgentMockServerV2,
 	type PilotAgentMockServerScenarioV1,
-	pilotFakeScenariosV1,
+	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 
-import { createClient } from "../../pilot/generated/client/index.js";
+import { createClient } from "../../pilot/generated-v2/client/index.js";
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
 	createMyAgentApplication,
 	getAgentApplicationEditAction,
@@ -20,8 +20,8 @@ import {
 	withdrawMyAgentApplication,
 } from "./my-agent-applications.js";
 
-const pendingApplication = AgentApplicationProjectionV1Schema.parse({
-	schemaVersion: 1,
+const pendingApplication = AgentApplicationProjectionV2Schema.parse({
+	schemaVersion: 2,
 	applicationId: "application-pilot-1",
 	agentId: null,
 	name: "Release assistant request",
@@ -49,7 +49,7 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 		modelOptions: [],
 		defaultModelOptionId: null,
 		defaultReasoningLevel: null,
-		actions: [],
+
 		environment: [],
 		channels: [],
 		secrets: [],
@@ -57,13 +57,13 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	submittedAt: "2026-09-03T08:00:00Z",
 	decision: null,
 });
-const creatingApplication = AgentApplicationProjectionV1Schema.parse({
+const creatingApplication = AgentApplicationProjectionV2Schema.parse({
 	...pendingApplication,
 	applicationId: "application-pilot-2",
 	agentId: "agent-pilot-2",
 	status: "creating",
 });
-const withdrawnApplication = AgentApplicationProjectionV1Schema.parse({
+const withdrawnApplication = AgentApplicationProjectionV2Schema.parse({
 	...pendingApplication,
 	status: "withdrawn",
 });
@@ -78,18 +78,18 @@ type ApplicationScenario = Pick<
 >;
 
 function createApplicationServer(scenario: ApplicationScenario) {
-	return createPilotAgentMockServerV1({
+	return createPilotAgentMockServerV2({
 		listAgents: { status: 200, body: { items: [], nextCursor: null } },
 		getAgent: {
 			status: 403,
-			body: pilotFakeScenariosV1.unauthorized.response.body,
+			body: pilotFakeScenariosV2.unauthorized.response.body,
 		},
 		...scenario,
 	});
 }
 
 function createApplicationClient(
-	server: ReturnType<typeof createPilotAgentMockServerV1>,
+	server: ReturnType<typeof createPilotAgentMockServerV2>,
 ) {
 	return createClient({
 		baseUrl: "https://platform.example.test",
@@ -102,7 +102,7 @@ describe("My Agents generated-client consumer", () => {
 		expect(getAgentApplicationEditAction(pendingApplication)).toBe("edit");
 		expect(
 			getAgentApplicationEditAction(
-				AgentApplicationProjectionV1Schema.parse({
+				AgentApplicationProjectionV2Schema.parse({
 					...pendingApplication,
 					status: "rejected",
 					decision: {
@@ -121,7 +121,7 @@ describe("My Agents generated-client consumer", () => {
 	});
 
 	it("submits create and update commands through generated writable operations", async () => {
-		const updatedApplication = AgentApplicationProjectionV1Schema.parse({
+		const updatedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			name: "Updated release assistant request",
 		});
@@ -131,7 +131,7 @@ describe("My Agents generated-client consumer", () => {
 		});
 		const client = createApplicationClient(server);
 		const createBody = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			name: pendingApplication.name,
 			description: pendingApplication.description,
 			source: pendingApplication.source,
@@ -149,10 +149,10 @@ describe("My Agents generated-client consumer", () => {
 				defaultOptionId: "model-option-1",
 				defaultReasoningLevel: "medium",
 			},
-			actions: [],
+
 			environment: [],
 			secrets: [],
-		} satisfies AgentApplicationCreateRequestV1Writable;
+		} satisfies AgentApplicationCreateRequestV2Writable;
 		const { secrets: _secrets, ...updateBody } = createBody;
 
 		await expect(
@@ -161,7 +161,7 @@ describe("My Agents generated-client consumer", () => {
 		await expect(
 			updateMyAgentApplication(
 				pendingApplication.applicationId,
-				updateBody satisfies AgentApplicationUpdateRequestV1Writable,
+				updateBody satisfies AgentApplicationUpdateRequestV2Writable,
 				"application-update-1",
 				client,
 			),
@@ -169,10 +169,10 @@ describe("My Agents generated-client consumer", () => {
 		expect(
 			server.requests.map((request) => [request.method, request.url]),
 		).toEqual([
-			["POST", "https://platform.example.test/api/v1/agent-applications"],
+			["POST", "https://platform.example.test/api/v2/agent-applications"],
 			[
 				"PUT",
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1",
 			],
 		]);
 		expect(server.requests[0]?.headers.get("Idempotency-Key")).toBe(
@@ -200,7 +200,7 @@ describe("My Agents generated-client consumer", () => {
 			},
 		});
 		const { secrets: _secrets, ...updateBody } = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			name: pendingApplication.name,
 			description: pendingApplication.description,
 			source: pendingApplication.source,
@@ -218,15 +218,15 @@ describe("My Agents generated-client consumer", () => {
 				defaultOptionId: "model-option-1",
 				defaultReasoningLevel: "medium",
 			},
-			actions: [],
+
 			environment: [],
 			secrets: [],
-		} satisfies AgentApplicationCreateRequestV1Writable;
+		} satisfies AgentApplicationCreateRequestV2Writable;
 
 		await expect(
 			updateMyAgentApplication(
 				pendingApplication.applicationId,
-				updateBody satisfies AgentApplicationUpdateRequestV1Writable,
+				updateBody satisfies AgentApplicationUpdateRequestV2Writable,
 				"application-update-cross-subject",
 				createApplicationClient(server),
 			),
@@ -261,14 +261,14 @@ describe("My Agents generated-client consumer", () => {
 		expect(
 			server.requests.map((request) => [request.method, request.url]),
 		).toEqual([
-			["GET", "https://platform.example.test/api/v1/agent-applications"],
+			["GET", "https://platform.example.test/api/v2/agent-applications"],
 			[
 				"GET",
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1",
 			],
 			[
 				"POST",
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1/withdraw",
 			],
 		]);
 		expect(server.requests[2]?.headers.get("Idempotency-Key")).toBe(
@@ -295,7 +295,7 @@ describe("My Agents generated-client consumer", () => {
 		});
 		expect(server.requests).toHaveLength(1);
 		expect(server.requests[0]?.url).toBe(
-			"https://platform.example.test/api/v1/agent-applications",
+			"https://platform.example.test/api/v2/agent-applications",
 		);
 	});
 
@@ -327,8 +327,8 @@ describe("My Agents generated-client consumer", () => {
 			applications: [pendingApplication, creatingApplication],
 		});
 		expect(server.requests.map((request) => request.url)).toEqual([
-			"https://platform.example.test/api/v1/agent-applications",
-			"https://platform.example.test/api/v1/agent-applications?cursor=application-pilot-1",
+			"https://platform.example.test/api/v2/agent-applications",
+			"https://platform.example.test/api/v2/agent-applications?cursor=application-pilot-1",
 		]);
 	});
 
@@ -380,7 +380,7 @@ describe("My Agents generated-client consumer", () => {
 				listAgentApplications: {
 					status,
 					body: {
-						...pilotFakeScenariosV1.unauthorized.response.body,
+						...pilotFakeScenariosV2.unauthorized.response.body,
 						message: "private authorization detail",
 					},
 				},
@@ -398,8 +398,8 @@ describe("My Agents generated-client consumer", () => {
 	it("surfaces a retryable current applicant history failure", async () => {
 		const server = createApplicationServer({
 			listAgentApplications: {
-				status: pilotFakeScenariosV1.unavailable.response.status,
-				body: pilotFakeScenariosV1.unavailable.response.body,
+				status: pilotFakeScenariosV2.unavailable.response.status,
+				body: pilotFakeScenariosV2.unavailable.response.body,
 			},
 		});
 
@@ -422,7 +422,7 @@ describe("My Agents generated-client consumer", () => {
 			),
 		).resolves.toEqual({ kind: "ready", application: pendingApplication });
 		expect(server.requests[0]?.url).toBe(
-			"https://platform.example.test/api/v1/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25",
+			"https://platform.example.test/api/v2/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25",
 		);
 	});
 
@@ -432,7 +432,7 @@ describe("My Agents generated-client consumer", () => {
 				getAgentApplication: {
 					status,
 					body: {
-						...pilotFakeScenariosV1.unauthorized.response.body,
+						...pilotFakeScenariosV2.unauthorized.response.body,
 						message: "private application detail",
 					},
 				},
@@ -461,7 +461,7 @@ describe("My Agents generated-client consumer", () => {
 		).resolves.toEqual(withdrawnApplication);
 		expect(server.requests[0]?.method).toBe("POST");
 		expect(server.requests[0]?.url).toBe(
-			"https://platform.example.test/api/v1/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25/withdraw",
+			"https://platform.example.test/api/v2/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25/withdraw",
 		);
 		expect(server.requests[0]?.headers.get("Idempotency-Key")).toBe(
 			"withdrawal-request-1",
@@ -474,7 +474,7 @@ describe("My Agents generated-client consumer", () => {
 				withdrawAgentApplication: {
 					status,
 					body: {
-						...pilotFakeScenariosV1.unauthorized.response.body,
+						...pilotFakeScenariosV2.unauthorized.response.body,
 						message: "private authorization detail",
 					},
 				},
@@ -498,7 +498,7 @@ describe("My Agents generated-client consumer", () => {
 			withdrawAgentApplication: {
 				status: 503,
 				body: {
-					...pilotFakeScenariosV1.unavailable.response.body,
+					...pilotFakeScenariosV2.unavailable.response.body,
 					message: "private upstream detail",
 				},
 			},

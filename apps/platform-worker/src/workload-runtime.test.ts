@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ import {
 	ModelConfigurationErrorV1,
 } from "@agent-infra/model-catalog";
 import {
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
@@ -63,12 +63,10 @@ import {
 } from "./workload-runtime.js";
 
 function configurationFixture(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return {
-		schemaVersion: 1,
-		actions: [],
-		actionSetRevision: "actions-a",
+		schemaVersion: 2,
 		channels: [],
 		channelRevision: "channels-a",
 		agentId: "agent-a",
@@ -401,8 +399,8 @@ function rejectedRegistry(): WorkloadRuntimeOptionsV1["registry"] {
 }
 
 function secretConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		secrets: [
 			{
@@ -420,8 +418,8 @@ const modelCredentialEnvironmentKey =
 	"MODEL_CREDENTIAL_8797B0599D5943E951FFB4D92C441B669B051F3EC38058B37737816D5C061E52";
 
 function standardModelConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		source: {
 			kind: "standard",
@@ -663,6 +661,15 @@ describe("assembled Workload Runtime contracts", () => {
 	it.each(["codex", "claude"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
+			const runtimeAuth = {
+				workerId: "worker-a",
+				grantKeyId: "runtime-probe-key",
+				grantIssuer: "agent-platform",
+				grantPublicKey: generateKeyPairSync("ed25519")
+					.publicKey.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "runtime-transport", key: "token" },
+			};
 			const configuration = standardModelConfiguration();
 			const model = configuration.modelConfiguration;
 			assert(model);
@@ -709,6 +716,7 @@ describe("assembled Workload Runtime contracts", () => {
 			let unavailableOnce = true;
 			const f = fixture(
 				{
+					policy: { ...workloadTestPolicy, runtimeAuth },
 					templateModelBindings: [
 						{
 							templateId: "template-a",
@@ -769,6 +777,17 @@ describe("assembled Workload Runtime contracts", () => {
 			await f.tick(2);
 			expect(f.state?.phase).toBe("preflight");
 			expect(f.resources.size).toBe(0);
+			f.resources.set("Secret/runtime-transport", {
+				apiVersion: "v1",
+				kind: "Secret",
+				metadata: {
+					name: "runtime-transport",
+					namespace: workloadTestPolicy.namespace,
+				},
+				data: {
+					token: Buffer.from("synthetic-runtime-token").toString("base64"),
+				},
+			} as V1Secret);
 			await f.tick(3);
 			expect(f.state?.phase).toBe("observing");
 			const workload = await f.client.read<V1StatefulSet>(
@@ -791,6 +810,19 @@ describe("assembled Workload Runtime contracts", () => {
 				driver === "claude"
 					? readRuntimeModelConfigurationV3(environment, "claude")
 					: readCodexPilotConfiguration(environment);
+			expect(environment.AGENT_INFRA_RUNTIME_AGENT_ID).toBe(
+				configuration.agentId,
+			);
+			expect(environment.AGENT_INFRA_RUNTIME_SERVICE_TOKEN).toBe(
+				"synthetic-runtime-token",
+			);
+			expect(environment.AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY).toBe(
+				runtimeAuth.grantPublicKey,
+			);
+			expect(environment.AGENT_INFRA_RUNTIME_DATA_DIR).toBe(
+				"/workspace/runtime",
+			);
+			expect(environment.PORT).toBe("8080");
 			expect(
 				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
 					.schemaVersion,

@@ -1,14 +1,14 @@
 import {
-	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
-	createPilotAgentMockServerV1,
+	createPilotAgentMockServerV2,
 	type PilotAgentMockServerScenarioV1,
 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 
-import { createClient } from "../../pilot/generated/client/index.js";
+import { createClient } from "../../pilot/generated-v2/client/index.js";
 import { pendingApplication } from "../my-agents/test-fixtures.js";
 import {
 	commandAgentLifecycle,
@@ -26,8 +26,8 @@ const approvedApplication = {
 		reason: null,
 	},
 };
-const restartingAgent = AgentProjectionV1Schema.parse({
-	schemaVersion: 1,
+const restartingAgent = AgentProjectionV2Schema.parse({
+	schemaVersion: 2,
 	agentId: "agent-pilot-1",
 	name: "Release assistant",
 	description: "Helps the release team",
@@ -75,7 +75,7 @@ describe("Agent administration generated-client consumer", () => {
 			decideAgentApplication: { status: 200, body: approvedApplication },
 			commandAgentLifecycle: { status: 202, body: restartingAgent },
 		};
-		const server = createPilotAgentMockServerV1(scenario);
+		const server = createPilotAgentMockServerV2(scenario);
 		const client = createClient({
 			baseUrl: "https://platform.example.test",
 			fetch: server.fetch,
@@ -109,14 +109,14 @@ describe("Agent administration generated-client consumer", () => {
 			server.requests.map((request) => [request.method, request.url]),
 		).toEqual([
 			["GET", "https://platform.example.test/api/v1/session"],
-			["GET", "https://platform.example.test/api/v1/admin/agent-applications"],
+			["GET", "https://platform.example.test/api/v2/admin/agent-applications"],
 			[
 				"POST",
-				"https://platform.example.test/api/v1/admin/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25/decision",
+				"https://platform.example.test/api/v2/admin/agent-applications/application%3Atenant%2F01%3Fdraft%23one%25/decision",
 			],
 			[
 				"POST",
-				"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 			],
 		]);
 		expect(server.requests[2]?.headers.get("Idempotency-Key")).toBe(
@@ -128,7 +128,7 @@ describe("Agent administration generated-client consumer", () => {
 	});
 
 	it("fails closed when a generated command response belongs to another application or Agent", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: {
 				status: 403,
@@ -173,7 +173,7 @@ describe("Agent administration generated-client consumer", () => {
 	});
 
 	it("keeps a non-retryable browser session failure opaque", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: {
 				status: 403,

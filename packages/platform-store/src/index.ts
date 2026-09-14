@@ -1,9 +1,13 @@
 export {
+	type AgentConfigurationAuthorityQueryInputV1,
+	type AgentConfigurationAuthorityQueryResultV1,
 	type AgentConfigurationProjectionV1,
 	type AgentConfigurationQueryInputV1,
 	type AgentConfigurationQueryIntentV1,
 	type AgentConfigurationQueryResultV1,
 	AgentConfigurationStoreError,
+	type AgentRuntimePresentationQueryInputV1,
+	type AgentRuntimePresentationQueryResultV1,
 	type PostgresAgentConfigurationOptionsV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,

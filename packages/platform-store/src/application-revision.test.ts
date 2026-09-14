@@ -2,7 +2,7 @@ import type {
 	AgentManagementStateV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
-	ReviseApplicationCommandV1,
+	ReviseApplicationCommandV2,
 } from "@agent-infra/platform-core";
 import { createApplicationRevisionUseCaseV1 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
@@ -110,9 +110,9 @@ function actor(digest = "0".repeat(64)) {
 function command(
 	key = "application-revision-01",
 	access = false,
-): ReviseApplicationCommandV1 {
+): ReviseApplicationCommandV2 {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		idempotencyKey: key,
 		requestId: "request_01",
 		traceId: "trace_01",
@@ -138,7 +138,6 @@ function command(
 		},
 		environment: [{ name: "LOG_LEVEL", value: "debug" }],
 		secrets: [{ name: "BOT_TOKEN", replace: true }],
-		actions: agentConfigurationConformanceAdmissionsV1.actions,
 		channels: [
 			{
 				kind: "wecom_bot",
@@ -149,9 +148,9 @@ function command(
 	};
 }
 
-function nameOnlyCommand(): ReviseApplicationCommandV1 {
+function nameOnlyCommand(): ReviseApplicationCommandV2 {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		idempotencyKey: "application-name-only",
 		requestId: "request_name_only",
 		traceId: "trace_name_only",
@@ -175,7 +174,6 @@ function nameOnlyCommand(): ReviseApplicationCommandV1 {
 		},
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		secrets: [],
-		actions: [],
 		channels: [],
 	};
 }
@@ -218,7 +216,6 @@ function admissions(
 					models: agentConfigurationConformanceAdmissionsV1.models.map(
 						(model) => ({ ...model, catalogRevision: "catalog_3" }),
 					),
-					actionSetRevision: "actions_1",
 					channelRevision: "channels_1",
 				}
 			: {}),
@@ -243,7 +240,6 @@ function useCase(
 			imageAdmission: admission,
 			modelAdmission: admission,
 			secretAdmission: admission,
-			actionAdmission: admission,
 			channelAdmission: admission,
 		},
 		{ now: () => new Date(occurredAt) },

@@ -1,4 +1,4 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,8 +6,8 @@ import {
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
 
-const agent = AgentProjectionV1Schema.parse({
-	schemaVersion: 1,
+const agent = AgentProjectionV2Schema.parse({
+	schemaVersion: 2,
 	agentId: "agent-configuration-1",
 	name: "Configuration assistant",
 	description: "Helps the release team",
@@ -36,13 +36,7 @@ const agent = AgentProjectionV1Schema.parse({
 		],
 		defaultModelOptionId: "model-option-1",
 		defaultReasoningLevel: "medium",
-		actions: [
-			{
-				providerId: "github",
-				actionId: "issues.read",
-				actionVersion: "3",
-			},
-		],
+
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		channels: [{ kind: "web", status: "available" }],
 		secrets: [{ name: "MODEL_API_KEY", isSet: true, version: 4 }],
@@ -65,13 +59,7 @@ describe("Agent configuration draft", () => {
 			coOwnerIds: "user-owner-1",
 			userAvailabilityIds: "user-reader-1",
 			organizationAvailabilityIds: "organization-1",
-			actions: [
-				{
-					providerId: "github",
-					actionId: "issues.read",
-					actionVersion: "3",
-				},
-			],
+
 			models: [],
 			secrets: [],
 		});
@@ -98,19 +86,13 @@ describe("Agent configuration draft", () => {
 		});
 
 		expect(request).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			coOwnerIds: ["user-owner-1"],
 			availability: [
 				{ kind: "user", userId: "user-reader-1" },
 				{ kind: "organization", organizationId: "organization-1" },
 			],
-			actions: [
-				{
-					providerId: "github",
-					actionId: "issues.read",
-					actionVersion: "3",
-				},
-			],
+
 			modelConfiguration: {
 				options: [
 					{

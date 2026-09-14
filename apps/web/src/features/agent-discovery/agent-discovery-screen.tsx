@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 
-import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import type { AgentDiscoveryState } from "./agent-discovery.js";
 
 type AgentDiscoveryScreenProps = {
@@ -9,7 +9,7 @@ type AgentDiscoveryScreenProps = {
 };
 
 export function agentServiceAvailabilityLabel(
-	availability: NonNullable<AgentProjectionV1["serviceAvailability"]>,
+	availability: NonNullable<AgentProjectionV2["serviceAvailability"]>,
 ) {
 	if (availability === "starting") return "Starting";
 	if (availability === "updating") return "Updating";

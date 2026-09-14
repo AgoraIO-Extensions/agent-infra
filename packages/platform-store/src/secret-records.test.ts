@@ -1,5 +1,5 @@
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
-import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
+import type { AgentConfigurationRecordV2 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -83,7 +83,7 @@ const configuration = {
 		},
 	],
 	modelConfiguration: null,
-} as unknown as AgentConfigurationRecordV1;
+} as unknown as AgentConfigurationRecordV2;
 
 function transaction() {
 	const values = vi.fn().mockResolvedValue(undefined);

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses } from './types.gen';
+import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -18,4 +18,61 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
 
+export const listPendingAgentApplicationsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListPendingAgentApplicationsV2Data, ThrowOnError>): RequestResult<ListPendingAgentApplicationsV2Responses, ListPendingAgentApplicationsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListPendingAgentApplicationsV2Responses, ListPendingAgentApplicationsV2Errors, ThrowOnError>({ url: '/api/v2/admin/agent-applications', ...options });
+
+export const decideAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<DecideAgentApplicationV2Data, ThrowOnError>): RequestResult<DecideAgentApplicationV2Responses, DecideAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<DecideAgentApplicationV2Responses, DecideAgentApplicationV2Errors, ThrowOnError>({
+    url: '/api/v2/admin/agent-applications/{applicationId}/decision',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const listPlatformAuditV2 = <ThrowOnError extends boolean = false>(options?: Options<ListPlatformAuditV2Data, ThrowOnError>): RequestResult<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError> => (options?.client ?? client).get<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError>({ url: '/api/v2/admin/audit', ...options });
+
+export const listAgentApplicationsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAgentApplicationsV2Data, ThrowOnError>): RequestResult<ListAgentApplicationsV2Responses, ListAgentApplicationsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAgentApplicationsV2Responses, ListAgentApplicationsV2Errors, ThrowOnError>({ url: '/api/v2/agent-applications', ...options });
+
+export const createAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<CreateAgentApplicationV2Data, ThrowOnError>): RequestResult<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError>({
+    url: '/api/v2/agent-applications',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<GetAgentApplicationV2Data, ThrowOnError>): RequestResult<GetAgentApplicationV2Responses, GetAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).get<GetAgentApplicationV2Responses, GetAgentApplicationV2Errors, ThrowOnError>({ url: '/api/v2/agent-applications/{applicationId}', ...options });
+
+export const updateAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentApplicationV2Data, ThrowOnError>): RequestResult<UpdateAgentApplicationV2Responses, UpdateAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).put<UpdateAgentApplicationV2Responses, UpdateAgentApplicationV2Errors, ThrowOnError>({
+    url: '/api/v2/agent-applications/{applicationId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const withdrawAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<WithdrawAgentApplicationV2Data, ThrowOnError>): RequestResult<WithdrawAgentApplicationV2Responses, WithdrawAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<WithdrawAgentApplicationV2Responses, WithdrawAgentApplicationV2Errors, ThrowOnError>({ url: '/api/v2/agent-applications/{applicationId}/withdraw', ...options });
+
+export const listAgentsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsV2Data, ThrowOnError>): RequestResult<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError>({ url: '/api/v2/agents', ...options });
+
+export const getAgentV2 = <ThrowOnError extends boolean = false>(options: Options<GetAgentV2Data, ThrowOnError>): RequestResult<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError> => (options.client ?? client).get<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError>({ url: '/api/v2/agents/{agentId}', ...options });
+
+export const updateAgentConfigurationV2 = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentConfigurationV2Data, ThrowOnError>): RequestResult<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError> => (options.client ?? client).put<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError>({
+    url: '/api/v2/agents/{agentId}/configuration',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const commandAgentLifecycleV2 = <ThrowOnError extends boolean = false>(options: Options<CommandAgentLifecycleV2Data, ThrowOnError>): RequestResult<CommandAgentLifecycleV2Responses, CommandAgentLifecycleV2Errors, ThrowOnError> => (options.client ?? client).post<CommandAgentLifecycleV2Responses, CommandAgentLifecycleV2Errors, ThrowOnError>({
+    url: '/api/v2/agents/{agentId}/lifecycle',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});

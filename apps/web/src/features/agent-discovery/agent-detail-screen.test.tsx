@@ -1,13 +1,13 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV1 } from "@agent-infra/test-support/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentDetailScreen } from "./agent-detail-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
-const startingAgent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const startingAgent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
 
 describe("AgentDetailScreen", () => {
@@ -27,7 +27,9 @@ describe("AgentDetailScreen", () => {
 			screen.getByText("Web: available, WeCom bot: not configured"),
 		).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium, high/)).toBeTruthy();
-		expect(screen.getByText("github / issues.read (v3)")).toBeTruthy();
+		expect(
+			screen.getByText("Authorize external access in Connection"),
+		).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: "Back to Agents" }).getAttribute("href"),
 		).toBe("/agents");
@@ -51,7 +53,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("renders a server-projected self-managed access entry", async () => {
-		const agent = AgentProjectionV1Schema.parse({
+		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -77,7 +79,7 @@ describe("AgentDetailScreen", () => {
 		"https://agent.example.test?access_token=secret",
 		"https://agent.example.test/#token=secret",
 	])("omits unsafe self-managed access entry %s", async (interactionUrl) => {
-		const selfManagedAgent = AgentProjectionV1Schema.parse({
+		const selfManagedAgent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -98,7 +100,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("omits a self-managed access entry from a platform-adapter projection", async () => {
-		const agent = AgentProjectionV1Schema.parse({
+		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -116,7 +118,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("omits a direct access entry when Platform owns self-managed identity", async () => {
-		const agent = AgentProjectionV1Schema.parse({
+		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {

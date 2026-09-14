@@ -1,29 +1,31 @@
+import { getCurrentSession } from "../../pilot/generated/sdk.gen.js";
+import type {
+	AgentLifecycleCommandRequestV1,
+	ApprovalDecisionRequestV1,
+	BrowserSessionProjectionV1,
+	GetCurrentSessionErrors,
+	GetCurrentSessionResponses,
+} from "../../pilot/generated/types.gen.js";
 import type {
 	Client,
 	RequestResult,
-} from "../../pilot/generated/client/index.js";
+} from "../../pilot/generated-v2/client/index.js";
 import {
-	getCurrentSession,
-	listPendingAgentApplications,
-	commandAgentLifecycle as requestAgentLifecycle,
-	decideAgentApplication as requestApplicationDecision,
-} from "../../pilot/generated/sdk.gen.js";
+	listPendingAgentApplicationsV2,
+	commandAgentLifecycleV2 as requestAgentLifecycle,
+	decideAgentApplicationV2 as requestApplicationDecision,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	AgentApplicationProjectionV1,
-	AgentLifecycleCommandRequestV1,
-	AgentProjectionV1,
-	ApprovalDecisionRequestV1,
-	BrowserSessionProjectionV1,
-	CommandAgentLifecycleErrors,
-	CommandAgentLifecycleResponses,
-	DecideAgentApplicationErrors,
-	DecideAgentApplicationResponses,
-	GetCurrentSessionErrors,
-	GetCurrentSessionResponses,
-	ListPendingAgentApplicationsData,
-	ListPendingAgentApplicationsErrors,
-	ListPendingAgentApplicationsResponses,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationProjectionV2,
+	AgentProjectionV2,
+	CommandAgentLifecycleV2Errors,
+	CommandAgentLifecycleV2Responses,
+	DecideAgentApplicationV2Errors,
+	DecideAgentApplicationV2Responses,
+	ListPendingAgentApplicationsV2Data,
+	ListPendingAgentApplicationsV2Errors,
+	ListPendingAgentApplicationsV2Responses,
+} from "../../pilot/generated-v2/types.gen.js";
 
 type UnavailableState = {
 	kind: "unavailable";
@@ -31,7 +33,7 @@ type UnavailableState = {
 };
 
 export type PendingAgentApplicationsState =
-	| { kind: "ready"; applications: AgentApplicationProjectionV1[] }
+	| { kind: "ready"; applications: AgentApplicationProjectionV2[] }
 	| UnavailableState;
 
 export type BrowserSessionState =
@@ -92,7 +94,7 @@ export async function loadBrowserSession(
 export async function loadPendingAgentApplications(
 	client?: Client,
 ): Promise<PendingAgentApplicationsState> {
-	const applications: AgentApplicationProjectionV1[] = [];
+	const applications: AgentApplicationProjectionV2[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
 	let pages = 0;
@@ -100,15 +102,15 @@ export async function loadPendingAgentApplications(
 	do {
 		if (pages >= maximumPendingApplicationPages) throw retryableError();
 		pages += 1;
-		const query: ListPendingAgentApplicationsData["query"] =
+		const query: ListPendingAgentApplicationsV2Data["query"] =
 			cursor === null ? undefined : { cursor };
 		const result: Awaited<
 			RequestResult<
-				ListPendingAgentApplicationsResponses,
-				ListPendingAgentApplicationsErrors,
+				ListPendingAgentApplicationsV2Responses,
+				ListPendingAgentApplicationsV2Errors,
 				false
 			>
-		> = await listPendingAgentApplications<false>({
+		> = await listPendingAgentApplicationsV2<false>({
 			client,
 			query,
 			responseStyle: "fields",
@@ -130,11 +132,11 @@ export async function decideAgentApplication(
 	decision: AgentApplicationDecision,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentApplicationProjectionV1> {
+): Promise<AgentApplicationProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			DecideAgentApplicationResponses,
-			DecideAgentApplicationErrors,
+			DecideAgentApplicationV2Responses,
+			DecideAgentApplicationV2Errors,
 			false
 		>
 	> = await requestApplicationDecision<false>({
@@ -156,11 +158,11 @@ export async function commandAgentLifecycle(
 	command: AgentLifecycleCommand,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV1> {
+): Promise<AgentProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			CommandAgentLifecycleResponses,
-			CommandAgentLifecycleErrors,
+			CommandAgentLifecycleV2Responses,
+			CommandAgentLifecycleV2Errors,
 			false
 		>
 	> = await requestAgentLifecycle<false>({

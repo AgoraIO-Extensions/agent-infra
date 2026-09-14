@@ -56,6 +56,8 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly agentId: string;
 		readonly workloadRevision: number;
 		readonly baseUrl: string;
+		readonly fence: number;
+		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
 		readonly signal: AbortSignal;
 	}) => Promise<{
@@ -290,6 +292,8 @@ export function createWorkloadRuntimeV1(
 						options.probeRuntime({
 							agentId: desired.agentId,
 							workloadRevision: desired.workloadRevision,
+							fence: desired.fence,
+							imageDigest: desired.imageDigest,
 							baseUrl,
 							manifest: desired.runtimeManifest,
 							signal: controller.signal,

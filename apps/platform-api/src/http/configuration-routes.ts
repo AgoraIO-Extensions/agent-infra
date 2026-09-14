@@ -1,8 +1,8 @@
 import { types } from "node:util";
 
 import {
-	AgentConfigurationUpdateRequestV1Schema,
-	AgentProjectionV1Schema,
+	AgentConfigurationUpdateRequestV2Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
 	AgentConfigurationUseCaseV1,
@@ -27,7 +27,7 @@ import {
 	resolveIdentity,
 } from "./identity.js";
 
-type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
 
 export interface ConfigurationRoutesDependencies {
 	readonly identity: IdentityAdapter;
@@ -69,7 +69,7 @@ export interface ConfigurationRoutesDependencies {
 }
 
 function configurationChanges(
-	input: ReturnType<typeof AgentConfigurationUpdateRequestV1Schema.parse>,
+	input: ReturnType<typeof AgentConfigurationUpdateRequestV2Schema.parse>,
 	preparedModelCredentialOptionIds: ReadonlySet<string>,
 ) {
 	return {
@@ -92,7 +92,6 @@ function configurationChanges(
 						),
 					},
 				}),
-		...(input.actions === undefined ? {} : { actions: input.actions }),
 		...(input.environment === undefined
 			? {}
 			: { environment: input.environment }),
@@ -135,7 +134,7 @@ function snapshotArray(input: unknown): unknown[] {
 }
 
 function validatePreparedSecrets(
-	input: ReturnType<typeof AgentConfigurationUpdateRequestV1Schema.parse>,
+	input: ReturnType<typeof AgentConfigurationUpdateRequestV2Schema.parse>,
 	prepared: Awaited<
 		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 	>,
@@ -199,7 +198,7 @@ export function registerConfigurationRoutes(
 	app: Hono,
 	dependencies: ConfigurationRoutesDependencies,
 ): void {
-	app.put("/api/v1/agents/:agentId/configuration", async (context) => {
+	app.put("/api/v2/agents/:agentId/configuration", async (context) => {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
 		const identity = await resolveIdentity(
@@ -210,7 +209,7 @@ export function registerConfigurationRoutes(
 		const idempotencyKey = parseIdempotencyKey(request, metadata.traceId);
 		const { value: body, rawRequestDigest } = await parseJson(
 			request,
-			AgentConfigurationUpdateRequestV1Schema,
+			AgentConfigurationUpdateRequestV2Schema,
 			metadata.traceId,
 		);
 		let prepared: Awaited<
@@ -266,7 +265,7 @@ export function registerConfigurationRoutes(
 		try {
 			await dependencies.configuration.update(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					agentId: context.req.param("agentId"),
 					idempotencyKey,
 					requestId: metadata.requestId,
@@ -300,7 +299,7 @@ export function registerConfigurationRoutes(
 		if (!projection) {
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 		}
-		const parsed = AgentProjectionV1Schema.safeParse(projection);
+		const parsed = AgentProjectionV2Schema.safeParse(projection);
 		if (!parsed.success) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}

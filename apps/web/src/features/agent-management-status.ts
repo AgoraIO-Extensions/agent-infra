@@ -1,7 +1,7 @@
 import type {
-	AgentApplicationProjectionV1,
-	AgentProjectionV1,
-} from "../pilot/generated/types.gen.js";
+	AgentApplicationProjectionV2,
+	AgentProjectionV2,
+} from "../pilot/generated-v2/types.gen.js";
 
 export const agentManagementStatusLabels = {
 	pending_approval: "Pending approval",
@@ -13,7 +13,7 @@ export const agentManagementStatusLabels = {
 	creation_failed: "Creation failed",
 	disabled: "Disabled",
 } satisfies Record<
-	| AgentApplicationProjectionV1["status"]
-	| AgentProjectionV1["managementStatus"],
+	| AgentApplicationProjectionV2["status"]
+	| AgentProjectionV2["managementStatus"],
 	string
 >;

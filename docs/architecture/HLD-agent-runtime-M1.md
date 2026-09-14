@@ -104,6 +104,11 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 
 候选修订、Workload、健康检查、路由切换、失败清理、PVC 和回滚机制只在工程 Spec 的[模板与自定义镜像升级](SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)与[自定义 Agent Runtime Manifest](SPEC-agent-infra-M1-engineering-architecture.md#105-自定义-agent-runtime-manifest)中维护。
 
+候选 Runtime 的只读就绪与能力探测遵循工程 Spec 的
+[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，
+使用独立 Workload Readiness Grant。Host 必须在调用 Driver 的无副作用 capability 读取前
+校验本机 Workload 绑定；此路径不使用业务 Session，也不开放任务提交或事件查询。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：

@@ -4,11 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 
-import type {
-	AgentApplicationProjectionV1,
-	BrowserSessionProjectionV1,
-} from "../../pilot/generated/types.gen.js";
+import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type {
 	AgentApplicationDecision,
@@ -27,7 +25,7 @@ type RequestError = Error & { readonly retryable?: boolean };
 
 type AdminAgentApplicationsScreenProps = {
 	decisionError?: RequestError | null;
-	decisionResult?: AgentApplicationProjectionV1;
+	decisionResult?: AgentApplicationProjectionV2;
 	onDecision: (
 		applicationId: string,
 		decision: AgentApplicationDecision,
@@ -42,7 +40,7 @@ function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	return session.user.roles.includes("system_admin");
 }
 
-function resourceSummary(application: AgentApplicationProjectionV1) {
+function resourceSummary(application: AgentApplicationProjectionV2) {
 	const { estimatedResources } = application.resourceProfile;
 	return `${estimatedResources.cpuMillicores}m CPU, ${estimatedResources.memoryMiB} MiB memory, ${estimatedResources.storageGiB} GiB storage`;
 }
@@ -50,7 +48,7 @@ function resourceSummary(application: AgentApplicationProjectionV1) {
 function DecisionFeedback({
 	decision,
 }: {
-	decision?: AgentApplicationProjectionV1;
+	decision?: AgentApplicationProjectionV2;
 }) {
 	const resultRef = useResultFocus(decision);
 	return decision ? (
@@ -71,7 +69,7 @@ function ApplicationDecisionControls({
 	onDecision,
 	pendingDecision,
 }: {
-	application: AgentApplicationProjectionV1;
+	application: AgentApplicationProjectionV2;
 	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
 	pendingDecision?: PendingDecision;
 }) {

@@ -1,4 +1,4 @@
-import { decodeAgentConfigurationRecordV1 } from "./agent-configuration.js";
+import { decodeAgentConfigurationRecordV2 } from "./agent-configuration.js";
 import {
 	ApplicationRevisionError,
 	type ApplicationRevisionReadStateV1,
@@ -88,7 +88,7 @@ export class FakeApplicationRevisionTransactionV1
 		const revision = this.#state.configuration.revision + 1;
 		this.#state = {
 			...this.#state,
-			configuration: decodeAgentConfigurationRecordV1({
+			configuration: decodeAgentConfigurationRecordV2({
 				...this.#state.configuration,
 				revision,
 			}),

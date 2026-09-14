@@ -6,6 +6,7 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
@@ -22,12 +23,14 @@ import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
+	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	readinessWorkerId?: string;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -88,6 +91,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		runtimeConfigurationInvalid();
 	}
 	const port = runtimePort(environment.PORT, 3003);
+	const readinessBinding = readWorkloadReadinessBindingV1(environment);
 	const keyId = required("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
 	const serviceToken = required("AGENT_INFRA_RUNTIME_SERVICE_TOKEN");
 	const expectedIssuer = required("AGENT_INFRA_RUNTIME_GRANT_ISSUER");
@@ -139,6 +143,15 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	};
 	try {
 		const host = await RuntimeHost.open({
+			...(readinessBinding
+				? {
+						readinessVerifier: createWorkloadReadinessVerifierV1({
+							binding: readinessBinding,
+							expectedIssuer,
+							publicKeys: new Map([[keyId, publicKey]]),
+						}),
+					}
+				: {}),
 			store: await FileRuntimeStore.open(join(dataDirectory, "host.json")),
 			driver,
 			grantValidation: { expectedIssuer },
@@ -146,6 +159,9 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			...(readinessBinding
+				? { readinessWorkerId: readinessBinding.workerId }
+				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),

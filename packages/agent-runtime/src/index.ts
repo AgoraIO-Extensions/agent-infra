@@ -11,4 +11,5 @@ export * from "./errors.js";
 export * from "./fake-runtime-driver.js";
 export * from "./file-runtime-store.js";
 export * from "./grant.js";
+export * from "./readiness.js";
 export * from "./runtime-host.js";

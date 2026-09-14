@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
-import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type {
@@ -18,9 +18,9 @@ type PendingLifecycleCommand = {
 type RequestError = Error & { readonly retryable?: boolean };
 
 type AgentLifecycleControlsProps = {
-	agent: AgentProjectionV1;
+	agent: AgentProjectionV2;
 	commandError?: RequestError | null;
-	commandResult?: AgentProjectionV1;
+	commandResult?: AgentProjectionV2;
 	onCommand: (command: AgentLifecycleCommand) => void;
 	pendingCommand?: PendingLifecycleCommand;
 	session: AdministrationSessionState;
@@ -40,7 +40,7 @@ const commandProgressLabels = {
 } satisfies Record<AgentLifecycleCommand, string>;
 
 function serviceAvailabilityMessage(
-	availability: NonNullable<AgentProjectionV1["serviceAvailability"]>,
+	availability: NonNullable<AgentProjectionV2["serviceAvailability"]>,
 ) {
 	if (availability === "starting") {
 		return "Service is starting. History is read-only until it is ready.";
@@ -55,7 +55,7 @@ function serviceAvailabilityMessage(
 }
 
 function visibleLifecycleCommands(
-	agent: AgentProjectionV1,
+	agent: AgentProjectionV2,
 	session: AdministrationSessionState,
 ): AgentLifecycleCommand[] {
 	if (session.kind !== "ready") return [];

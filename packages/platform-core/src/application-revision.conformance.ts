@@ -8,7 +8,7 @@ import {
 	type ApplicationRevisionTransactionPortV1,
 	type ApplicationRevisionUseCaseDependenciesV1,
 	createApplicationRevisionUseCaseV1,
-	type ReviseApplicationCommandV1,
+	type ReviseApplicationCommandV2,
 } from "./application-revision.ts";
 import { FakeAgentConfigurationAdmissionsV1 } from "./fake-agent-configuration.ts";
 import type {
@@ -49,8 +49,8 @@ export const applicationRevisionStateV1: ApplicationRevisionReadStateV1 = {
 	authorizationRevision: "authorization_9",
 };
 
-export const applicationRevisionCommandV1: ReviseApplicationCommandV1 = {
-	schemaVersion: 1,
+export const applicationRevisionCommandV1: ReviseApplicationCommandV2 = {
+	schemaVersion: 2,
 	idempotencyKey: "application-revision-01",
 	requestId: "request_01",
 	traceId: "trace_01",
@@ -74,7 +74,6 @@ export const applicationRevisionCommandV1: ReviseApplicationCommandV1 = {
 	},
 	environment: [{ name: "LOG_LEVEL", value: "debug" }],
 	secrets: [],
-	actions: [],
 	channels: [],
 };
 
@@ -141,8 +140,6 @@ export function applicationRevisionAdmissionsV1(
 				version: 2,
 			},
 		],
-		actions: [],
-		actionSetRevision: "actions_1",
 		channelBindings: [],
 		channelRevision: "channels_1",
 	});
@@ -151,7 +148,6 @@ export function applicationRevisionAdmissionsV1(
 		imageAdmission: admissions,
 		modelAdmission: admissions,
 		secretAdmission: admissions,
-		actionAdmission: admissions,
 		channelAdmission: admissions,
 	};
 }
@@ -207,7 +203,7 @@ function stateWithExistingSecretAndChannel(): ApplicationRevisionReadStateV1 {
 	};
 }
 
-function commandWithoutSecretOrChannel(): ReviseApplicationCommandV1 {
+function commandWithoutSecretOrChannel(): ReviseApplicationCommandV2 {
 	const {
 		secrets: _secrets,
 		channels: _channels,
@@ -256,7 +252,7 @@ export function applicationRevisionTransactionConformance(
 
 	it("does not invent a configuration revision for omitted revision fields", async () => {
 		const state = stateWithExistingSecretAndChannel();
-		const command: ReviseApplicationCommandV1 = {
+		const command: ReviseApplicationCommandV2 = {
 			...commandWithoutSecretOrChannel(),
 			environment: state.configuration.environment,
 		};
@@ -542,7 +538,6 @@ export function applicationRevisionTransactionConformance(
 			"imageAdmission",
 			"modelAdmission",
 			"secretAdmission",
-			"actionAdmission",
 			"channelAdmission",
 		] as const) {
 			const harness = await createHarness();
@@ -571,9 +566,7 @@ export function applicationRevisionTransactionConformance(
 										? "admitModels"
 										: kind === "secretAdmission"
 											? "admitSecrets"
-											: kind === "actionAdmission"
-												? "admitActions"
-												: "admitChannels"]: async (input: {
+											: "admitChannels"]: async (input: {
 									agentId: string;
 									requestId: string;
 								}) => ({

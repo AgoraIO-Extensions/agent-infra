@@ -20,6 +20,8 @@ import type {
 	V1Ingress,
 	V1LabelSelector,
 	V1NetworkPolicy,
+	V1NetworkPolicyPeer,
+	V1NetworkPolicyPort,
 	V1PersistentVolumeClaim,
 	V1Pod,
 	V1PodSpec,
@@ -33,6 +35,15 @@ import {
 	WorkloadKubernetesError,
 	type WorkloadResourceKind,
 } from "./kubernetes-client.js";
+import {
+	type WorkloadEgressPolicyV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
+import {
+	validateWorkloadRuntimeAuthV1,
+	type WorkloadRuntimeAuthV1,
+	workloadRuntimeAuthEnvironmentV1,
+} from "./workload-runtime-auth.js";
 
 const ownerLabel = "agent-infra.agora.io/agent";
 const revisionLabel = "agent-infra.agora.io/revision";
@@ -209,38 +220,39 @@ function matchesNetworkPolicySpec(
 	actual: V1NetworkPolicy["spec"] | undefined,
 	expected: V1NetworkPolicy["spec"] | undefined,
 ) {
-	const matchesPodSelector = (
-		actualSelector: V1LabelSelector | undefined,
-		expectedSelector: V1LabelSelector | undefined,
-	) => {
-		if (!actualSelector || !expectedSelector)
-			return actualSelector === expectedSelector;
-		return (
-			Object.keys(actualSelector).every(
-				(key) => key === "matchLabels" || key === "matchExpressions",
-			) &&
-			hasSameStructure(
-				actualSelector.matchLabels,
-				expectedSelector.matchLabels,
-			) &&
-			(actualSelector.matchExpressions?.length ?? 0) === 0 &&
-			(expectedSelector.matchExpressions?.length ?? 0) === 0
-		);
-	};
-	return (
-		containsDesired(actual, expected) &&
-		matchesPodSelector(actual?.podSelector, expected?.podSelector) &&
-		![actual?.ingress, actual?.egress].some((rules) =>
-			rules?.some((rule) =>
-				rule.ports?.some(
-					(port) =>
-						typeof port.port === "number" &&
-						port.endPort !== undefined &&
-						port.endPort > port.port,
-				),
-			),
-		)
-	);
+	const selector = (value: V1LabelSelector | undefined) =>
+		value ? { matchExpressions: [], ...value } : undefined;
+	const peer = (value: V1NetworkPolicyPeer) => ({
+		...value,
+		...(value.podSelector ? { podSelector: selector(value.podSelector) } : {}),
+		...(value.namespaceSelector
+			? { namespaceSelector: selector(value.namespaceSelector) }
+			: {}),
+	});
+	const normalize = (value: V1NetworkPolicy["spec"]) =>
+		value && {
+			...value,
+			podSelector: selector(value.podSelector),
+			ingress: value.ingress?.map((rule) => ({
+				...rule,
+				_from: rule._from?.map(peer),
+				ports: rule.ports?.map(port),
+			})),
+			egress: value.egress?.map((rule) => ({
+				...rule,
+				to: rule.to?.map(peer),
+				ports: rule.ports?.map(port),
+			})),
+		};
+	function port(value: V1NetworkPolicyPort) {
+		const { endPort, ...rest } = value;
+		return {
+			protocol: "TCP",
+			...rest,
+			...(endPort === undefined || endPort === value.port ? {} : { endPort }),
+		};
+	}
+	return hasSameStructure(normalize(actual), normalize(expected));
 }
 
 function matchesServiceSpec(
@@ -319,7 +331,7 @@ export function workloadResourceNameV1(agentId: string): string {
 	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
 }
 
-export interface KubernetesWorkloadPolicyV1 {
+export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -340,6 +352,7 @@ export interface KubernetesWorkloadPolicyV1 {
 	readonly tlsSecretName: string;
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
+	readonly runtimeAuth?: WorkloadRuntimeAuthV1;
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
@@ -353,6 +366,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const egress = workloadEgressRulesV1(policy);
+	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
@@ -382,9 +397,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
 		const injection = modelBindings(value);
+		const runtimeAuth =
+			injection && policy.runtimeAuth
+				? workloadRuntimeAuthEnvironmentV1(policy.runtimeAuth, value)
+				: [];
+		if (runtimeAuth.some((entry) => Object.hasOwn(value.env, entry.name)))
+			throw new WorkloadKubernetesError("policy");
 		return [
 			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...runtimeAuth,
 		];
 	}
 	function environmentSecrets(value: AgentWorkloadDesiredV1) {
@@ -1546,7 +1568,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 								},
 							]),
 				],
-				egress: [],
+				egress: structuredClone(egress),
 			},
 		};
 	}
