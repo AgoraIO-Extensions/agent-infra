@@ -11,7 +11,7 @@ const sourceCommit = "5cd85feb1a19cb43a711fe305ea1b40f388792aa";
 const providerId = "jira";
 const apiOrigin = "https://jira.agoralab.co";
 const apiBasePath = "/rest/api/2";
-const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v7`;
+const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v8`;
 const credentialScope = "jira.server.access";
 const maxResponseBytes = 10 * 1024 * 1024;
 const requestTimeoutMs = 12_000;
@@ -330,7 +330,7 @@ export const jiraServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v7`,
+		id: `${providerId}.${action.name}@v8`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -867,6 +867,7 @@ function providerError(
 	message: string,
 	metadata: {
 		providerCode?: string;
+		providerMessage?: string;
 		providerStatus?: number;
 		submissionUncertain?: boolean;
 	} = {},
@@ -969,6 +970,7 @@ async function request(
 		)
 			throw invalidCredential("Jira credential was rejected");
 		if (!response.ok) {
+			const providerMessage = await jiraErrorMessage(response);
 			const providerCode =
 				response.status === 401 || response.status === 403
 					? "authorization_failed"
@@ -979,6 +981,7 @@ async function request(
 							: "provider_error";
 			throw providerError(`Jira Server request failed (${response.status})`, {
 				providerCode,
+				providerMessage,
 				providerStatus: response.status,
 				submissionUncertain:
 					(options.method ?? "GET") !== "GET" && response.status >= 500,
@@ -1002,6 +1005,37 @@ async function request(
 	} finally {
 		clearTimeout(timeout);
 	}
+}
+
+async function jiraErrorMessage(response: Response) {
+	let payload: unknown;
+	try {
+		payload = JSON.parse(await boundedText(response));
+	} catch {
+		return undefined;
+	}
+	if (!isJsonObject(payload)) return undefined;
+	const messages = Array.isArray(payload.errorMessages)
+		? payload.errorMessages.filter(
+				(value): value is string => typeof value === "string",
+			)
+		: [];
+	const errors = isJsonObject(payload.errors)
+		? Object.entries(payload.errors).flatMap(([field, value]) =>
+				typeof value === "string" ? [`${field}: ${value}`] : [],
+			)
+		: [];
+	const message = [...messages, ...errors]
+		.slice(0, 3)
+		.map((value) =>
+			value
+				.replace(/[\r\n\t]+/g, " ")
+				.trim()
+				.slice(0, 200),
+		)
+		.filter(Boolean)
+		.join("; ");
+	return message || undefined;
 }
 
 async function boundedText(response: Response) {

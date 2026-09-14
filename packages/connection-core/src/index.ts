@@ -1503,7 +1503,10 @@ export class ConnectionApplicationService {
 			) {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
-					"Provider rejected the action input",
+					typeof (error as { providerMessage?: unknown }).providerMessage ===
+						"string"
+						? `Provider rejected the action input: ${(error as { providerMessage: string }).providerMessage}`
+						: "Provider rejected the action input",
 				);
 			}
 			if (
