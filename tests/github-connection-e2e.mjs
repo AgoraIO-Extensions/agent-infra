@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-
-import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
+import { githubV7VerificationEvidence } from "../packages/openconnector-adapter/src/verification/github-v7.ts";
 import { githubV7ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v7-read-scenarios.ts";
 
 const target = {
@@ -126,7 +125,7 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 	}
 	return {
 		calls,
-		providerReleaseId: githubConnectionCatalog.providerReleaseId,
+		providerReleaseId: githubV7VerificationEvidence.providerReleaseId,
 		runId,
 		skipped: githubV7ReadScenarios
 			.filter((scenario) => scenario.execution !== "LIVE")
