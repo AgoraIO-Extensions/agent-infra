@@ -836,6 +836,31 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("records deterministic write rejection without entering reconciliation", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Jira Server request failed (400)"), {
+					providerCode: "invalid_input",
+					providerStatus: 400,
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				base: "main",
+				head: "feature/invalid",
+				idempotencyKey: "invalid-1",
+				repository: "acme/widgets",
+				title: "Invalid",
+			}),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
+	});
+
 	it("requires reauthorization when a Provider rejects the credential", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
@@ -924,7 +949,9 @@ describe("Connection application service", () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
-				throw new Error("response lost");
+				throw Object.assign(new Error("response lost"), {
+					submissionUncertain: true,
+				});
 			},
 		});
 		await expect(
@@ -1183,7 +1210,9 @@ describe("Connection application service", () => {
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
 				submissions += 1;
-				throw new Error("response lost");
+				throw Object.assign(new Error("response lost"), {
+					submissionUncertain: true,
+				});
 			},
 		});
 		const input = {

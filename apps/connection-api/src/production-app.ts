@@ -1,3 +1,6 @@
 export const connectionApiService = "connection-api";
 
-export { createConnectionRuntimeApp as createProductionConnectionApp } from "./runtime-app";
+export {
+	createConnectionRuntime,
+	createConnectionRuntimeApp as createProductionConnectionApp,
+} from "./runtime-app";

@@ -1,6 +1,7 @@
 import {
 	ConnectionApplicationService,
 	ConnectionOAuthService,
+	ConnectionRecoveryService,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
 	rehoboamAiConsumer,
@@ -34,6 +35,12 @@ import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
 
 export async function createConnectionRuntimeApp(
+	environment: Record<string, string | undefined> = process.env,
+) {
+	return (await createConnectionRuntime(environment)).app;
+}
+
+export async function createConnectionRuntime(
 	environment: Record<string, string | undefined> = process.env,
 ) {
 	const config = fullConnectionRuntimeConfig(environment);
@@ -105,18 +112,19 @@ export async function createConnectionRuntimeApp(
 		jiraFetch,
 		atlassianTokenProvider,
 	);
+	const executors = new ProviderExecutorRouter({
+		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
+		[githubConnectionCatalog.providerReleaseId]: github,
+		[jiraServerConnectionCatalog.providerReleaseId]: jira,
+		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
+	});
 	const service = new ConnectionApplicationService(
 		repository,
-		new ProviderExecutorRouter({
-			[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
-			[githubConnectionCatalog.providerReleaseId]: github,
-			[jiraServerConnectionCatalog.providerReleaseId]: jira,
-			[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
-		}),
+		executors,
 		new OpenConnectorGitHubOAuthAdapter(config.github),
 		{ bitbucket, confluence, jira },
 	);
-	return createConnectionApp({
+	const app = createConnectionApp({
 		accessTokens: oauth,
 		connectionWebUrl: config.publicBaseUrl,
 		directMcpEnabled: true,
@@ -142,4 +150,8 @@ export async function createConnectionRuntimeApp(
 			confluenceServerConnectionCatalog.provider,
 		],
 	});
+	return {
+		app,
+		recovery: new ConnectionRecoveryService(repository, executors),
+	};
 }

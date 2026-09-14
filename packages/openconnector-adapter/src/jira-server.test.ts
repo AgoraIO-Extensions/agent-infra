@@ -55,7 +55,7 @@ test("Jira Server catalog covers OpenConnector overlap and CLI additions", () =>
 	assert.equal(jiraServerConnectionCatalog.deploymentProfile.build, "711000");
 	assert.match(
 		jiraServerConnectionCatalog.providerReleaseId,
-		/-connection-v5$/,
+		/-connection-v6$/,
 	);
 	for (const action of jiraServerConnectionCatalog.actions) {
 		assert.match(action.id, /^jira\.[a-z_]+@v5$/);
@@ -131,6 +131,115 @@ test("Jira Server execution encodes issue paths and maps JSON responses", async 
 		});
 		assert.equal(requests[1]?.init?.method, "POST");
 		assert.equal(requests[1]?.init?.body, JSON.stringify({ body: "hello" }));
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Jira Server exposes deterministic write rejection metadata", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json(
+			{ errors: { reporter: "Reporter is required" } },
+			{ status: 400 },
+		);
+
+	try {
+		await assert.rejects(
+			createAdapter().execute({
+				action: "jira.create_issue",
+				credential: { accessToken: credential },
+				input: {
+					issueTypeName: "Task",
+					projectKey: "EP",
+					summary: "Invalid issue",
+				},
+			}),
+			(
+				error: Error & {
+					providerCode?: string;
+					providerStatus?: number;
+					submissionUncertain?: boolean;
+				},
+			) =>
+				error.providerCode === "invalid_input" &&
+				error.providerStatus === 400 &&
+				error.submissionUncertain !== true &&
+				!error.message.includes("Reporter is required"),
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Jira Server marks a lost write response as submission uncertain", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () => {
+		throw new TypeError("socket closed");
+	};
+
+	try {
+		await assert.rejects(
+			createAdapter().execute({
+				action: "jira.create_issue",
+				credential: { accessToken: credential },
+				input: {
+					issueTypeName: "Task",
+					projectKey: "EP",
+					summary: "Uncertain issue",
+				},
+			}),
+			(error: Error & { submissionUncertain?: boolean }) =>
+				error.submissionUncertain === true,
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Jira Server reconciles exactly one matching created issue", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () =>
+		Response.json({
+			issues: [
+				{
+					fields: {
+						components: [{ id: "28001", name: "ci" }],
+						description: "Map body",
+						issuetype: { id: "10002", name: "Task" },
+						project: { id: "17600", key: "EP" },
+						summary: "Wayfinder map",
+					},
+					id: "10001",
+					key: "EP-900",
+				},
+			],
+			maxResults: 100,
+			startAt: 0,
+			total: 1,
+		});
+
+	try {
+		const result = await createAdapter().reconcile({
+			action: "jira.create_issue",
+			credential: { accessToken: credential },
+			input: {
+				descriptionText: "Map body",
+				extraFields: { components: [{ id: "28001" }] },
+				issueTypeId: "10002",
+				issueTypeName: "Task",
+				projectId: "17600",
+				projectKey: "EP",
+				summary: "Wayfinder map",
+			},
+			providerId: "jira",
+			providerReleaseId: jiraServerConnectionCatalog.providerReleaseId,
+		});
+
+		assert.equal(
+			result?.issue && (result.issue as { key?: string }).key,
+			"EP-900",
+		);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

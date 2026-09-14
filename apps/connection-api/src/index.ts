@@ -3,7 +3,7 @@ import { serve } from "@hono/node-server";
 
 import {
 	connectionApiService,
-	createProductionConnectionApp,
+	createConnectionRuntime,
 } from "./production-app";
 
 interface StartOptions {
@@ -11,6 +11,8 @@ interface StartOptions {
 	hostname?: string;
 	log?: (message: string) => void;
 	port?: number;
+	recovery?: { runOnce(): Promise<boolean> };
+	recoveryIntervalMs?: number;
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -24,7 +26,7 @@ function runtimePort(value: string | undefined, fallback: number) {
 export function startConnectionApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3002);
 	const log = options.log ?? console.info;
-	return serve(
+	const server = serve(
 		{
 			fetch: options.app.fetch,
 			hostname: options.hostname,
@@ -39,10 +41,35 @@ export function startConnectionApi(options: StartOptions) {
 				}),
 			),
 	);
+	if (options.recovery) {
+		let recoveryRunning = false;
+		const timer = setInterval(() => {
+			if (recoveryRunning) return;
+			recoveryRunning = true;
+			void options.recovery
+				?.runOnce()
+				.catch((error: unknown) =>
+					log(
+						JSON.stringify({
+							error: error instanceof Error ? error.message : "Recovery failed",
+							service: connectionApiService,
+							status: "recovery_failed",
+						}),
+					),
+				)
+				.finally(() => {
+					recoveryRunning = false;
+				});
+		}, options.recoveryIntervalMs ?? 1_000);
+		timer.unref();
+		server.once("close", () => clearInterval(timer));
+	}
+	return server;
 }
 
 async function startConfiguredConnectionApi() {
-	return startConnectionApi({ app: await createProductionConnectionApp() });
+	const runtime = await createConnectionRuntime();
+	return startConnectionApi(runtime);
 }
 
 const entrypoint = process.argv[1];
