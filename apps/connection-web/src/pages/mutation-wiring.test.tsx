@@ -249,12 +249,7 @@ describe("Connection 管理 mutation wiring", () => {
 
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
-		const popup = {
-			close: vi.fn(),
-			location: { replace: vi.fn() },
-			opener: null,
-		};
-		vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+		const open = vi.spyOn(window, "open");
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 		expect(screen.getByRole("columnheader", { name: "平台" })).toBeTruthy();
@@ -281,6 +276,7 @@ describe("Connection 管理 mutation wiring", () => {
 			undefined,
 			undefined,
 		]);
+		expect(open).not.toHaveBeenCalled();
 
 		fireEvent.click(screen.getByRole("button", { name: "断开 GitHub" }));
 		await waitFor(() =>
@@ -417,12 +413,7 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("共享页面调用全部共享管理 API", async () => {
-		const popup = {
-			close: vi.fn(),
-			location: { replace: vi.fn() },
-			opener: null,
-		};
-		vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+		const open = vi.spyOn(window, "open");
 		renderPage(<SharedConnectionsPage />);
 		await screen.findByText("声网研发");
 
@@ -447,6 +438,7 @@ describe("Connection 管理 mutation wiring", () => {
 		await waitFor(() => expect(api.createSharedScope).toHaveBeenCalledOnce());
 		expect(calls(api.createSharedScope)[0]?.[0]).toBe("中国研发");
 		expect(calls(api.startGithubOAuth)[0]?.[0]).toBe("scope-company");
+		expect(open).not.toHaveBeenCalled();
 		expect(api.grantSharedScopePrincipal).toHaveBeenCalledWith(
 			"scope-company",
 			"principal-candidate",
