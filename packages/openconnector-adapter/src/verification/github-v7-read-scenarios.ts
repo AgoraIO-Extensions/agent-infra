@@ -1,18 +1,24 @@
 type GitHubReadScenarioBase = {
 	actionVersionId: `github.${string}@v7`;
+	execution: "LIVE" | "SKIPPED_MISSING_SECOND_ACTOR";
 	fixture: "ISSUE_PR" | "RELEASE_WORKFLOW" | "REPOSITORY_REF" | "USER_ACTIVITY";
 };
 
 export type GitHubReadScenario = GitHubReadScenarioBase &
 	(
 		| { boundary: "ACCOUNT"; target: typeof accountTarget }
+		| { boundary: "ORGANIZATION"; target: typeof organizationTarget }
 		| { boundary: "REPOSITORY"; target: typeof repositoryTarget }
 	);
 
 const accountTarget = { externalAccount: "328682695" } as const;
 const repositoryTarget = {
 	externalAccount: "328682695",
-	repositoryId: "1368335067",
+	repositoryId: "1369705971",
+} as const;
+const organizationTarget = {
+	externalAccount: "328682695",
+	organizationId: "329053903",
 } as const;
 
 const repositoryRef = [
@@ -37,7 +43,6 @@ const repositoryRef = [
 	"list_repository_contributors",
 	"list_repository_topics",
 	"get_repository_readme",
-	"list_organization_repositories",
 	"list_user_repositories",
 	"list_repository_collaborators",
 	"get_repository_permission_for_user",
@@ -73,7 +78,6 @@ const issuePr = [
 	"get_issue_comment",
 	"get_label",
 	"list_assignees",
-	"get_pull_request_review",
 ] as const;
 
 const releaseWorkflow = [
@@ -109,27 +113,49 @@ function scenarios(
 	names: readonly string[],
 	fixture: GitHubReadScenario["fixture"],
 	boundary: GitHubReadScenario["boundary"] = "REPOSITORY",
+	execution: GitHubReadScenario["execution"] = "LIVE",
 ): GitHubReadScenario[] {
 	return names.map((name) =>
 		boundary === "ACCOUNT"
 			? {
 					actionVersionId: `github.${name}@v7`,
 					boundary,
+					execution,
 					fixture,
 					target: accountTarget,
 				}
-			: {
-					actionVersionId: `github.${name}@v7`,
-					boundary,
-					fixture,
-					target: repositoryTarget,
-				},
+			: boundary === "ORGANIZATION"
+				? {
+						actionVersionId: `github.${name}@v7`,
+						boundary,
+						execution,
+						fixture,
+						target: organizationTarget,
+					}
+				: {
+						actionVersionId: `github.${name}@v7`,
+						boundary,
+						execution,
+						fixture,
+						target: repositoryTarget,
+					},
 	);
 }
 
 export const githubV7ReadScenarios = [
 	...scenarios(repositoryRef, "REPOSITORY_REF"),
+	...scenarios(
+		["list_organization_repositories"],
+		"REPOSITORY_REF",
+		"ORGANIZATION",
+	),
 	...scenarios(issuePr, "ISSUE_PR"),
+	...scenarios(
+		["get_pull_request_review"],
+		"ISSUE_PR",
+		"REPOSITORY",
+		"SKIPPED_MISSING_SECOND_ACTOR",
+	),
 	...scenarios(releaseWorkflow, "RELEASE_WORKFLOW"),
 	...scenarios(userActivity, "USER_ACTIVITY", "ACCOUNT"),
 ] as const satisfies readonly GitHubReadScenario[];

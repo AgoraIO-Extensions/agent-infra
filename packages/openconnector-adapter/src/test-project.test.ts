@@ -36,13 +36,24 @@ test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
 	assert.equal(new Set(scenarioIds).size, githubV7ReadScenarios.length);
 	assert.deepEqual(scenarioIds, catalogReads);
 	for (const scenario of githubV7ReadScenarios) {
-		assert.ok(["ACCOUNT", "REPOSITORY"].includes(scenario.boundary));
+		assert.ok(
+			["ACCOUNT", "ORGANIZATION", "REPOSITORY"].includes(scenario.boundary),
+		);
 		assert.ok(scenario.fixture.length > 0);
 		assert.equal(scenario.target.externalAccount, "328682695");
 		if (scenario.boundary === "REPOSITORY") {
-			assert.equal(scenario.target.repositoryId, "1368335067");
+			assert.equal(scenario.target.repositoryId, "1369705971");
+		}
+		if (scenario.boundary === "ORGANIZATION") {
+			assert.equal(scenario.target.organizationId, "329053903");
 		}
 	}
+	assert.deepEqual(
+		githubV7ReadScenarios
+			.filter((scenario) => scenario.execution !== "LIVE")
+			.map((scenario) => scenario.actionVersionId),
+		["github.get_pull_request_review@v7"],
+	);
 });
 
 test("every catalog action receives a fail-closed conformance strategy", () => {
