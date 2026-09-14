@@ -124,6 +124,20 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		return projection.result;
 	};
 	const marker = `connection-e2e:${runId}`;
+	const assertOwnedIssue = (issue) => {
+		const hasCreatedMarker =
+			issue?.body === `${marker} created` &&
+			issue?.title === `${marker} conformance`;
+		const hasUpdatedMarker =
+			issue?.body === `${marker} updated` &&
+			issue?.title === `${marker} updated`;
+		if (
+			issue?.number !== issueNumber ||
+			(!hasCreatedMarker && !hasUpdatedMarker)
+		) {
+			throw new Error("test issue ownership marker does not match");
+		}
+	};
 	const idempotencyKeys = new Set();
 	const key = (step) => {
 		const value = `${runId}:${step}`;
@@ -136,7 +150,6 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	let commentDeleted = false;
 	let commentDeleteStarted = false;
 	let issueClosed = false;
-	let issueCloseStarted = false;
 	let cleanup = "SUCCEEDED";
 	let result;
 	let failure;
@@ -240,6 +253,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			});
 			commentDeleted = true;
 		} catch (error) {
+			cleanup = "FAILED";
 			const reconciliation = await execute("github.list_issue_comments", {
 				...repositoryInput,
 				issueNumber,
@@ -266,7 +280,14 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			}
 		}
 
-		issueCloseStarted = true;
+		const issueBeforeClose = await execute("github.get_issue", {
+			...repositoryInput,
+			issueNumber,
+		});
+		assertOwnedIssue(issueBeforeClose);
+		if (issueBeforeClose.state !== "open") {
+			throw new Error("test issue is not open before close");
+		}
 		await execute("github.update_issue", {
 			...repositoryInput,
 			idempotencyKey: key("issue-close"),
@@ -306,33 +327,29 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		}
 		if (issueNumber && !issueClosed) {
 			try {
-				let issueState = "open";
-				if (issueCloseStarted) {
-					const issue = await execute("github.get_issue", {
-						...repositoryInput,
-						issueNumber,
-					});
-					issueState = issue?.state;
-				}
-				if (issueState === "open") {
+				let issue = await execute("github.get_issue", {
+					...repositoryInput,
+					issueNumber,
+				});
+				assertOwnedIssue(issue);
+				if (issue.state === "open") {
 					await execute("github.update_issue", {
 						...repositoryInput,
 						idempotencyKey: key("issue-close"),
 						issueNumber,
 						state: "closed",
 					});
-				}
-				if (issueState !== "closed") {
-					const issue = await execute("github.get_issue", {
+					issue = await execute("github.get_issue", {
 						...repositoryInput,
 						issueNumber,
 					});
-					if (issue?.state !== "closed") {
-						cleanup = "FAILED";
-						cleanupError ??= new Error(
-							"test issue cleanup did not close the issue",
-						);
-					}
+					assertOwnedIssue(issue);
+				}
+				if (issue.state !== "closed") {
+					cleanup = "FAILED";
+					cleanupError ??= new Error(
+						"test issue cleanup did not close the issue",
+					);
 				}
 			} catch (error) {
 				cleanup = "FAILED";

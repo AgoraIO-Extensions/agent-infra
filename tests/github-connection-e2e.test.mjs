@@ -322,6 +322,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			"github.get_issue_comment",
 			"github.delete_issue_comment",
 			"github.list_issue_comments",
+			"github.get_issue",
 			"github.update_issue",
 			"github.get_issue",
 		],
