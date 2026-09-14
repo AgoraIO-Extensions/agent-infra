@@ -207,38 +207,71 @@ it("fails closed without the workspace policy and retires the process", async ()
 	}
 });
 
-it("rejects a damaged native session without replacing it or blocking a healthy conversation", async () => {
-	const f = await fixture();
-	try {
-		const result = await f.driver.execute(command);
-		await vi.waitFor(async () =>
-			expect(
-				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
-			).toBe("completed"),
-		);
-		await f.restart();
-		const file = join(f.path, result.nativeSessionRef, "native/session.jsonl");
-		await writeFile(file, "damaged-session-evidence");
-		await expect(
-			f.driver.execute({
+it.each(["invalid-json", "self-cycle", "two-node-cycle"])(
+	"rejects a damaged native session (%s) without blocking a healthy conversation",
+	async (corruption) => {
+		const f = await fixture();
+		try {
+			const result = await f.driver.execute(command);
+			await vi.waitFor(async () =>
+				expect(
+					await f.driver.getStatus(
+						result.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			);
+			await f.restart();
+			const file = join(
+				f.path,
+				result.nativeSessionRef,
+				"native/session.jsonl",
+			);
+			const header = (await readFile(file, "utf8")).split("\n")[0];
+			const nodes = [
+				{
+					type: "message",
+					id: "cycle-a",
+					parentId: corruption === "self-cycle" ? "cycle-a" : "cycle-b",
+					message: { role: "user", content: "synthetic" },
+				},
+			];
+			if (corruption === "two-node-cycle")
+				nodes.push({
+					type: "message",
+					id: "cycle-b",
+					parentId: "cycle-a",
+					message: { role: "user", content: "synthetic" },
+				});
+			const corrupt =
+				corruption === "invalid-json"
+					? "damaged-session-evidence"
+					: `${header}\n${nodes.map((node) => JSON.stringify(node)).join("\n")}\n`;
+			await writeFile(file, corrupt);
+			await expect(
+				f.driver.execute({
+					...command,
+					nativeSessionRef: result.nativeSessionRef,
+					executionId: "execution-b",
+					turnId: "turn-b",
+					operationId: "operation-b",
+				}),
+			).rejects.toThrow("Runtime session could not be recovered");
+			expect(await readFile(file, "utf8")).toBe(corrupt);
+			const healthy = await f.driver.execute({
 				...command,
-				nativeSessionRef: result.nativeSessionRef,
-				executionId: "execution-b",
-				turnId: "turn-b",
-				operationId: "operation-b",
-			}),
-		).rejects.toThrow("Runtime session could not be recovered");
-		expect(await readFile(file, "utf8")).toBe("damaged-session-evidence");
-		const healthy = await f.driver.execute({
-			...command,
-			conversationId: "healthy-conversation",
-		});
-		await vi.waitFor(async () =>
-			expect(
-				await f.driver.getStatus(healthy.nativeSessionRef, command.executionId),
-			).toBe("completed"),
-		);
-	} finally {
-		await f.close();
-	}
-});
+				conversationId: "healthy-conversation",
+			});
+			await vi.waitFor(async () =>
+				expect(
+					await f.driver.getStatus(
+						healthy.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			);
+		} finally {
+			await f.close();
+		}
+	},
+);

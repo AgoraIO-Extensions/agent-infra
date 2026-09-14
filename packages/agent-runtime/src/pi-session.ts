@@ -22,20 +22,53 @@ export async function openPiSession(
 	}
 	const sessionFile = join(directory, "session.jsonl");
 	try {
-		if (options.nativeId) {
-			if (!(await lstat(sessionFile)).isFile())
+		if (!options.nativeId) {
+			try {
+				const file = await open(sessionFile, "wx", 0o600);
+				try {
+					await file.sync();
+				} finally {
+					await file.close();
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
+		}
+		if (!(await lstat(sessionFile)).isFile())
+			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+		const raw = (await readFile(sessionFile, "utf8")).trim();
+		const lines = raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
+		if (!lines.length) {
+			if (options.nativeId)
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-			const lines = (await readFile(sessionFile, "utf8"))
-				.trim()
-				.split("\n")
-				.map((line) => JSON.parse(line));
+		} else {
+			const header = piRecord(lines[0]);
 			if (
-				lines[0]?.type !== "session" ||
-				lines[0].version !== 3 ||
-				lines[0].id !== options.nativeId ||
-				lines[0].cwd !== options.cwd
+				header?.type !== "session" ||
+				header.version !== 3 ||
+				typeof header.id !== "string" ||
+				!header.id ||
+				(options.nativeId && header.id !== options.nativeId) ||
+				header.cwd !== options.cwd
 			)
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			// Pi's context traversal assumes a valid tree. Reject corrupt cycles and
+			// missing parents before its pure helper or CLI can follow those links.
+			const ids = new Set<string>();
+			for (const line of lines.slice(1)) {
+				const entry = piRecord(line);
+				if (
+					!entry ||
+					typeof entry.type !== "string" ||
+					typeof entry.id !== "string" ||
+					!entry.id ||
+					ids.has(entry.id) ||
+					(entry.parentId !== null &&
+						(typeof entry.parentId !== "string" || !ids.has(entry.parentId)))
+				)
+					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+				ids.add(entry.id);
+			}
 			if (options.history) {
 				const expected = piRecord(JSON.parse(options.history.checkpoint));
 				const count = Number(expected?.count);
@@ -51,14 +84,6 @@ export async function openPiSession(
 						.digest("hex") !== expected.digest
 				)
 					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-			}
-		} else {
-			try {
-				const file = await open(sessionFile, "wx", 0o600);
-				await file.sync();
-				await file.close();
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			}
 		}
 	} catch {
