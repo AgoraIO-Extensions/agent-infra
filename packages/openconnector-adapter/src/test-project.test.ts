@@ -54,6 +54,36 @@ test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
 			.map((scenario) => scenario.actionVersionId),
 		["github.get_pull_request_review@v7"],
 	);
+	for (const scenario of githubV7ReadScenarios.filter(
+		(item) => item.execution === "LIVE",
+	)) {
+		const action = githubConnectionCatalog.actions.find(
+			(item) => item.id === scenario.actionVersionId,
+		);
+		assert.ok(action);
+		for (const field of action.inputSchema.required) {
+			assert.ok(
+				field in scenario.input,
+				`${scenario.actionVersionId}: ${field}`,
+			);
+		}
+		assert.ok(
+			scenario.input.owner === undefined ||
+				scenario.input.owner === "AgoraConnectionE2EORG",
+		);
+		assert.ok(
+			scenario.input.repo === undefined ||
+				scenario.input.repo === "connector-conformance",
+		);
+		assert.ok(
+			scenario.input.org === undefined ||
+				scenario.input.org === "AgoraConnectionE2EORG",
+		);
+		assert.ok(
+			scenario.input.username === undefined ||
+				scenario.input.username === "AGORAconnectionE2E",
+		);
+	}
 });
 
 test("every catalog action receives a fail-closed conformance strategy", () => {

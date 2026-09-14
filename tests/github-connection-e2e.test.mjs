@@ -3,7 +3,70 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runGitHubIssueConformance } from "./github-connection-e2e.mjs";
+import {
+	runGitHubIssueConformance,
+	runGitHubReadConformance,
+} from "./github-connection-e2e.mjs";
+
+test("GitHub read conformance emits sanitized evidence for every runnable scenario", async () => {
+	const actions = [];
+	const fetch = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		const { arguments: args, name: tool } = request.params;
+		if (tool === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		if (tool === "get_action_guide") {
+			return actionGuide(request.id, args.actionId);
+		}
+		actions.push(args.actionId);
+		return mcpResponse(request.id, {
+			action: args.actionId,
+			callId: `read-call-${actions.length}`,
+			result:
+				args.actionId === "github.get_repository"
+					? testRepository()
+					: { ignored: "provider response body" },
+			status: "SUCCEEDED",
+		});
+	};
+
+	const evidence = await runGitHubReadConformance({
+		environment: enabledEnvironment(),
+		fetch,
+		runId: "read-run",
+	});
+
+	assert.equal(actions.length, 77);
+	assert.equal(actions[0], "github.get_repository");
+	assert.equal(evidence.calls.length, 77);
+	assert.deepEqual(evidence.skipped, [
+		{
+			actionVersionId: "github.get_pull_request_review@v7",
+			reason: "SKIPPED_MISSING_SECOND_ACTOR",
+		},
+	]);
+	assert.ok(
+		evidence.calls.every(
+			(call) =>
+				call.actionVersionId.endsWith("@v7") &&
+				call.inputHash.match(/^[a-f0-9]{64}$/) &&
+				call.status === "SUCCEEDED",
+		),
+	);
+	assert.doesNotMatch(
+		JSON.stringify(evidence),
+		/test-token|provider response body/,
+	);
+});
 
 test("GitHub conformance is disabled by default without any network request", async () => {
 	let requests = 0;
@@ -59,6 +122,7 @@ test("GitHub conformance CLI emits structured failure evidence", () => {
 		error: "CONNECTION_E2E_TOKEN is required",
 		outcome: "FAILED",
 		runId: "run-cli",
+		suite: "issue",
 	});
 });
 
@@ -86,7 +150,7 @@ test("GitHub conformance rejects a mismatched repository before mutation", async
 						action: "github.get_repository",
 						result: {
 							default_branch: "main",
-							full_name: "AGORAconnectionE2E/connector-conformance",
+							full_name: "AgoraConnectionE2EORG/connector-conformance",
 							id: 999,
 							private: true,
 						},
@@ -269,8 +333,8 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			action === "github.get_repository"
 				? {
 						default_branch: "main",
-						full_name: "AGORAconnectionE2E/connector-conformance",
-						id: 1368335067,
+						full_name: "AgoraConnectionE2EORG/connector-conformance",
+						id: 1369705971,
 						private: true,
 					}
 				: action === "github.create_issue"
@@ -454,8 +518,8 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 			action === "github.get_repository"
 				? {
 						default_branch: "main",
-						full_name: "AGORAconnectionE2E/connector-conformance",
-						id: 1368335067,
+						full_name: "AgoraConnectionE2EORG/connector-conformance",
+						id: 1369705971,
 						private: true,
 					}
 				: action === "github.create_issue"
@@ -530,15 +594,14 @@ function mcpResponse(id, structuredContent) {
 }
 
 function actionGuide(id, actionId) {
+	const verb = actionId.slice("github.".length).split("_", 1)[0];
 	return mcpResponse(id, {
 		action: {
 			actionId,
 			actionVersionId: `${actionId}@v7`,
-			effect:
-				actionId.startsWith("github.get_") ||
-				actionId.startsWith("github.list_")
-					? "READ"
-					: "WRITE",
+			effect: ["check", "compare", "get", "list", "search"].includes(verb)
+				? "READ"
+				: "WRITE",
 		},
 	});
 }
@@ -546,8 +609,8 @@ function actionGuide(id, actionId) {
 function testRepository() {
 	return {
 		default_branch: "main",
-		full_name: "AGORAconnectionE2E/connector-conformance",
-		id: 1368335067,
+		full_name: "AgoraConnectionE2EORG/connector-conformance",
+		id: 1369705971,
 		private: true,
 	};
 }

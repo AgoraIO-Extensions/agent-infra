@@ -1,11 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+
+import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
+import { githubV7ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v7-read-scenarios.ts";
 
 const target = {
 	externalAccount: "328682695",
-	owner: "AGORAconnectionE2E",
+	owner: "AgoraConnectionE2EORG",
 	repository: "connector-conformance",
-	repositoryId: 1368335067,
+	repositoryId: 1369705971,
 };
 const connectionEndpoint = "https://agent-connector.la3.agoralab.co/mcp";
 const requestTimeoutMs = 30_000;
@@ -20,6 +23,129 @@ const actionEffects = {
 	"github.delete_issue_comment": "WRITE",
 	"github.list_issue_comments": "READ",
 };
+
+export async function runGitHubReadConformance({ environment, fetch, runId }) {
+	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true") {
+		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
+	}
+	const token = environment.CONNECTION_E2E_TOKEN?.trim();
+	if (!token) throw new Error("CONNECTION_E2E_TOKEN is required");
+	if (typeof runId !== "string" || !runId.trim()) {
+		throw new Error("runId is required");
+	}
+	let requestId = 0;
+	const call = async (name, args) => {
+		requestId += 1;
+		const response = await fetch(connectionEndpoint, {
+			body: JSON.stringify({
+				id: requestId,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: { arguments: args, name },
+			}),
+			headers: {
+				authorization: `Bearer ${token}`,
+				"content-type": "application/json",
+			},
+			method: "POST",
+			signal: AbortSignal.timeout(requestTimeoutMs),
+		});
+		if (!response.ok)
+			throw new Error(`Connection returned HTTP ${response.status}`);
+		const payload = await response.json();
+		if (payload.error)
+			throw new McpCallError(payload.error.code, payload.error.data);
+		return payload.result?.structuredContent;
+	};
+
+	const connectionResult = await call("list_connections", {
+		service: "github",
+	});
+	const active = connectionResult?.connections?.filter(
+		(item) => item.providerId === "github" && item.status === "ACTIVE",
+	);
+	if (
+		!Array.isArray(active) ||
+		active.length !== 1 ||
+		active[0]?.externalAccount !== target.externalAccount
+	) {
+		throw new Error(
+			"Connection E2E consumer must expose exactly the approved GitHub account",
+		);
+	}
+
+	const runnable = githubV7ReadScenarios.filter(
+		(scenario) => scenario.execution === "LIVE",
+	);
+	const repositoryScenario = runnable.find(
+		(scenario) => scenario.actionVersionId === "github.get_repository@v7",
+	);
+	if (!repositoryScenario)
+		throw new Error("repository preflight scenario is missing");
+	const ordered = [
+		repositoryScenario,
+		...runnable.filter((scenario) => scenario !== repositoryScenario),
+	];
+	const calls = [];
+	for (const scenario of ordered) {
+		const actionId = scenario.actionVersionId.slice(0, -3);
+		const guide = await call("get_action_guide", { actionId });
+		if (
+			guide?.action?.actionId !== actionId ||
+			guide.action.actionVersionId !== scenario.actionVersionId ||
+			guide.action.effect !== "READ"
+		) {
+			throw new Error(`${actionId} contract does not match`);
+		}
+		const projection = await call("execute_action", {
+			actionId,
+			input: scenario.input,
+		});
+		if (
+			projection?.action !== actionId ||
+			typeof projection.callId !== "string" ||
+			!projection.callId ||
+			projection.status !== "SUCCEEDED"
+		) {
+			throw new Error(`${actionId} did not succeed`);
+		}
+		if (actionId === "github.get_repository") {
+			const repository = projection.result;
+			if (
+				repository?.id !== target.repositoryId ||
+				repository.full_name !== `${target.owner}/${target.repository}` ||
+				repository.private !== true ||
+				repository.default_branch !== "main"
+			) {
+				throw new Error("repository boundary does not match");
+			}
+		}
+		calls.push({
+			actionVersionId: scenario.actionVersionId,
+			callId: projection.callId,
+			inputHash: createHash("sha256")
+				.update(
+					JSON.stringify(
+						Object.fromEntries(Object.entries(scenario.input).sort()),
+					),
+				)
+				.digest("hex"),
+			status: projection.status,
+			target: scenario.target,
+		});
+	}
+	return {
+		calls,
+		providerReleaseId: githubConnectionCatalog.providerReleaseId,
+		runId,
+		skipped: githubV7ReadScenarios
+			.filter((scenario) => scenario.execution !== "LIVE")
+			.map((scenario) => ({
+				actionVersionId: scenario.actionVersionId,
+				reason: scenario.execution,
+			})),
+	};
+}
 
 export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true") {
@@ -435,9 +561,14 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-	const runId = process.argv[2]?.trim() || randomUUID();
+	const suite = process.argv[2] === "read" ? "read" : "issue";
+	const runId =
+		(suite === "read" ? process.argv[3] : process.argv[2])?.trim() ||
+		randomUUID();
 	try {
-		const result = await runGitHubIssueConformance({
+		const result = await (suite === "read"
+			? runGitHubReadConformance
+			: runGitHubIssueConformance)({
 			environment: process.env,
 			fetch: globalThis.fetch,
 			runId,
@@ -450,6 +581,7 @@ if (
 				error: errorMessage(error),
 				outcome: "FAILED",
 				runId,
+				suite,
 			}),
 		);
 		process.exitCode = 1;
