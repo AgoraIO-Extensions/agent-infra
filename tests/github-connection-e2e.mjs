@@ -131,6 +131,9 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	let issueClosed = false;
 	let issueCloseStarted = false;
 	let cleanup = "SUCCEEDED";
+	let result;
+	let failure;
+	let cleanupError;
 	try {
 		const issue = await execute("github.create_issue", {
 			...repositoryInput,
@@ -263,7 +266,6 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			issueNumber,
 			state: "closed",
 		});
-		issueClosed = true;
 		const closedIssue = await execute("github.get_issue", {
 			...repositoryInput,
 			issueNumber,
@@ -271,24 +273,62 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		if (closedIssue?.state !== "closed") {
 			throw new Error("test issue is not closed");
 		}
-		return { actionVersions, calls, cleanup, issueNumber, runId };
+		issueClosed = true;
+		result = { actionVersions, calls, cleanup, issueNumber, runId };
+	} catch (error) {
+		failure = error;
 	} finally {
 		if (commentId && !commentDeleted && !commentDeleteStarted) {
-			await execute("github.delete_issue_comment", {
-				...repositoryInput,
-				commentId,
-				idempotencyKey: key("comment-cleanup"),
-			});
+			try {
+				await execute("github.delete_issue_comment", {
+					...repositoryInput,
+					commentId,
+					idempotencyKey: key("comment-cleanup"),
+				});
+			} catch (error) {
+				cleanupError = error;
+			}
 		}
-		if (issueNumber && !issueClosed && !issueCloseStarted) {
-			await execute("github.update_issue", {
-				...repositoryInput,
-				idempotencyKey: key("issue-cleanup"),
-				issueNumber,
-				state: "closed",
-			});
+		if (issueNumber && !issueClosed) {
+			try {
+				let issueState = "open";
+				if (issueCloseStarted) {
+					const issue = await execute("github.get_issue", {
+						...repositoryInput,
+						issueNumber,
+					});
+					issueState = issue?.state;
+				}
+				if (issueState === "open") {
+					await execute("github.update_issue", {
+						...repositoryInput,
+						idempotencyKey: key("issue-close"),
+						issueNumber,
+						state: "closed",
+					});
+				}
+				if (issueState !== "closed") {
+					const issue = await execute("github.get_issue", {
+						...repositoryInput,
+						issueNumber,
+					});
+					if (issue?.state !== "closed") {
+						cleanupError ??= new Error(
+							"test issue cleanup did not close the issue",
+						);
+					}
+				}
+			} catch (error) {
+				cleanupError ??= error;
+			}
 		}
 	}
+	if (failure && cleanupError) {
+		throw new Error("GitHub conformance and cleanup failed");
+	}
+	if (failure) throw failure;
+	if (cleanupError) throw cleanupError;
+	return result;
 }
 
 function requirePositiveInteger(value, name) {
