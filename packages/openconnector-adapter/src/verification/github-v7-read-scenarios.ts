@@ -63,7 +63,6 @@ const repositoryRef = [
 	"list_repository_contributors",
 	"list_repository_topics",
 	"get_repository_readme",
-	"list_user_repositories",
 	"list_repository_collaborators",
 	"get_repository_permission_for_user",
 	"get_ref",
@@ -126,6 +125,7 @@ const userActivity = [
 	"list_repository_events",
 	"search_users",
 	"get_user",
+	"list_user_repositories",
 	"list_my_starred_repositories",
 ] as const;
 
