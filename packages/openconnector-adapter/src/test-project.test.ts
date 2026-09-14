@@ -14,6 +14,7 @@ import {
 	testResourceMarker,
 } from "./test-project.ts";
 import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
+import { githubV7ReadScenarios } from "./verification/github-v7-read-scenarios.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -21,6 +22,69 @@ const catalogs = [
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
 ] as const;
+
+test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
+	const catalogReads = githubConnectionCatalog.actions
+		.filter((action) => action.effect === "READ")
+		.map((action) => action.id)
+		.sort();
+	const scenarioIds = githubV7ReadScenarios
+		.map((scenario) => scenario.actionVersionId)
+		.sort();
+
+	assert.equal(catalogReads.length, 78);
+	assert.equal(new Set(scenarioIds).size, githubV7ReadScenarios.length);
+	assert.deepEqual(scenarioIds, catalogReads);
+	for (const scenario of githubV7ReadScenarios) {
+		assert.ok(
+			["ACCOUNT", "ORGANIZATION", "REPOSITORY"].includes(scenario.boundary),
+		);
+		assert.ok(scenario.fixture.length > 0);
+		assert.equal(scenario.target.externalAccount, "328682695");
+		if (scenario.boundary === "REPOSITORY") {
+			assert.equal(scenario.target.repositoryId, "1369705971");
+		}
+		if (scenario.boundary === "ORGANIZATION") {
+			assert.equal(scenario.target.organizationId, "329053903");
+		}
+	}
+	assert.deepEqual(
+		githubV7ReadScenarios
+			.filter((scenario) => scenario.execution !== "LIVE")
+			.map((scenario) => scenario.actionVersionId),
+		["github.get_pull_request_review@v7"],
+	);
+	for (const scenario of githubV7ReadScenarios.filter(
+		(item) => item.execution === "LIVE",
+	)) {
+		const action = githubConnectionCatalog.actions.find(
+			(item) => item.id === scenario.actionVersionId,
+		);
+		assert.ok(action);
+		for (const field of action.inputSchema.required) {
+			assert.ok(
+				field in scenario.input,
+				`${scenario.actionVersionId}: ${field}`,
+			);
+		}
+		assert.ok(
+			scenario.input.owner === undefined ||
+				scenario.input.owner === "AgoraConnectionE2EORG",
+		);
+		assert.ok(
+			scenario.input.repo === undefined ||
+				scenario.input.repo === "connector-conformance",
+		);
+		assert.ok(
+			scenario.input.org === undefined ||
+				scenario.input.org === "AgoraConnectionE2EORG",
+		);
+		assert.ok(
+			scenario.input.username === undefined ||
+				scenario.input.username === "AGORAconnectionE2E",
+		);
+	}
+});
 
 test("every catalog action receives a fail-closed conformance strategy", () => {
 	const coverage = capabilityCoverage(catalogs);

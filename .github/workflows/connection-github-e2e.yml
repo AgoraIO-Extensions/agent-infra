@@ -43,8 +43,16 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          set +e
+          node tests/github-connection-e2e.mjs read \
+            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-read-e2e-result.json
+          read_status=${PIPESTATUS[0]}
           node tests/github-connection-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json
+          issue_status=${PIPESTATUS[0]}
+          if [ "$read_status" -ne 0 ] || [ "$issue_status" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Upload conformance evidence
         if: always()
@@ -52,7 +60,9 @@ jobs:
         with:
           if-no-files-found: error
           name: connection-github-e2e-${{ github.run_id }}
-          path: connection-github-e2e-result.json
+          path: |
+            connection-github-e2e-result.json
+            connection-github-read-e2e-result.json
           retention-days: 30
 
   outcome:

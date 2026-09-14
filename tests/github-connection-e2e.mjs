@@ -1,11 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+
+import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
+import { githubV7ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v7-read-scenarios.ts";
 
 const target = {
 	externalAccount: "328682695",
-	owner: "AGORAconnectionE2E",
+	owner: "AgoraConnectionE2EORG",
 	repository: "connector-conformance",
-	repositoryId: 1368335067,
+	repositoryId: 1369705971,
 };
 const connectionEndpoint = "https://agent-connector.la3.agoralab.co/mcp";
 const requestTimeoutMs = 30_000;
@@ -20,6 +23,335 @@ const actionEffects = {
 	"github.delete_issue_comment": "WRITE",
 	"github.list_issue_comments": "READ",
 };
+
+export async function runGitHubReadConformance({ environment, fetch, runId }) {
+	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true") {
+		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
+	}
+	const token = environment.CONNECTION_E2E_TOKEN?.trim();
+	if (!token) throw new Error("CONNECTION_E2E_TOKEN is required");
+	if (typeof runId !== "string" || !runId.trim()) {
+		throw new Error("runId is required");
+	}
+	let requestId = 0;
+	const call = async (name, args) => {
+		requestId += 1;
+		const response = await fetch(connectionEndpoint, {
+			body: JSON.stringify({
+				id: requestId,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: { arguments: args, name },
+			}),
+			headers: {
+				authorization: `Bearer ${token}`,
+				"content-type": "application/json",
+			},
+			method: "POST",
+			signal: AbortSignal.timeout(requestTimeoutMs),
+		});
+		if (!response.ok)
+			throw new Error(`Connection returned HTTP ${response.status}`);
+		const payload = await response.json();
+		if (payload.error)
+			throw new McpCallError(payload.error.code, payload.error.data);
+		return payload.result?.structuredContent;
+	};
+
+	const connectionResult = await call("list_connections", {
+		service: "github",
+	});
+	const active = connectionResult?.connections?.filter(
+		(item) => item.providerId === "github" && item.status === "ACTIVE",
+	);
+	if (
+		!Array.isArray(active) ||
+		active.length !== 1 ||
+		active[0]?.externalAccount !== target.externalAccount
+	) {
+		throw new Error(
+			"Connection E2E consumer must expose exactly the approved GitHub account",
+		);
+	}
+
+	const runnable = githubV7ReadScenarios.filter(
+		(scenario) => scenario.execution === "LIVE",
+	);
+	const repositoryScenario = runnable.find(
+		(scenario) => scenario.actionVersionId === "github.get_repository@v7",
+	);
+	if (!repositoryScenario)
+		throw new Error("repository preflight scenario is missing");
+	const ordered = [
+		repositoryScenario,
+		...runnable.filter((scenario) => scenario !== repositoryScenario),
+	];
+	const calls = [];
+	for (const scenario of ordered) {
+		const actionId = scenario.actionVersionId.slice(0, -3);
+		const guide = await call("get_action_guide", { actionId });
+		if (
+			guide?.action?.actionId !== actionId ||
+			guide.action.actionVersionId !== scenario.actionVersionId ||
+			guide.action.effect !== "READ"
+		) {
+			throw new Error(`${actionId} contract does not match`);
+		}
+		const projection = await call("execute_action", {
+			actionId,
+			input: scenario.input,
+		});
+		if (
+			projection?.action !== actionId ||
+			typeof projection.callId !== "string" ||
+			!projection.callId ||
+			projection.status !== "SUCCEEDED"
+		) {
+			throw new Error(`${actionId} did not succeed`);
+		}
+		assertReadResult(actionId, projection.result);
+		calls.push({
+			actionVersionId: scenario.actionVersionId,
+			callId: projection.callId,
+			inputHash: createHash("sha256")
+				.update(
+					JSON.stringify(
+						Object.fromEntries(Object.entries(scenario.input).sort()),
+					),
+				)
+				.digest("hex"),
+			status: projection.status,
+			target: scenario.target,
+		});
+	}
+	return {
+		calls,
+		providerReleaseId: githubConnectionCatalog.providerReleaseId,
+		runId,
+		skipped: githubV7ReadScenarios
+			.filter((scenario) => scenario.execution !== "LIVE")
+			.map((scenario) => ({
+				actionVersionId: scenario.actionVersionId,
+				reason: scenario.execution,
+			})),
+	};
+}
+
+function assertReadResult(actionId, result) {
+	if (!result || typeof result !== "object" || Array.isArray(result)) {
+		throw new Error(`${actionId} returned an invalid result`);
+	}
+	const exact = {
+		"github.check_pull_request_merged": ["merged", false],
+		"github.check_repository_starred": ["starred", true],
+		"github.get_branch": ["name", "main"],
+		"github.get_commit": ["sha", "410b111ccf673ab03ecb7239391442e226ad48fd"],
+		"github.get_current_user": ["id", 328682695],
+		"github.get_file_contents": ["path", "fixtures/read-target.txt"],
+		"github.get_issue": ["number", 1],
+		"github.get_issue_comment": ["id", 5662497553],
+		"github.get_label": ["name", "connection-e2e-fixture"],
+		"github.get_latest_release": ["id", 388309497],
+		"github.get_milestone": ["number", 1],
+		"github.get_pull_request": ["number", 2],
+		"github.get_ref": ["ref", "refs/heads/main"],
+		"github.get_release": ["id", 388309497],
+		"github.get_release_asset": ["id", 563149878],
+		"github.get_release_by_tag": ["tag_name", "connection-e2e-fixture-v1"],
+		"github.get_repository_readme": ["path", "README.md"],
+		"github.get_user": ["id", 328682695],
+		"github.get_workflow": ["id", 357727076],
+		"github.get_workflow_run": ["id", 34833158492],
+	};
+	const expected = exact[actionId];
+	if (expected) {
+		if (result[expected[0]] !== expected[1])
+			throw new Error(`${actionId} fixture does not match`);
+		return;
+	}
+	if (actionId === "github.get_repository") {
+		if (
+			result.id !== target.repositoryId ||
+			result.full_name !== `${target.owner}/${target.repository}` ||
+			result.private !== true ||
+			result.default_branch !== "main"
+		) {
+			throw new Error("repository boundary does not match");
+		}
+		return;
+	}
+	if (actionId === "github.get_repository_permission_for_user") {
+		if (result.user?.id !== 328682695)
+			throw new Error(`${actionId} fixture does not match`);
+		return;
+	}
+	if (actionId === "github.compare_commits") {
+		if (!result.comparison || typeof result.comparison !== "object")
+			throw new Error(`${actionId} returned an invalid result`);
+		return;
+	}
+	if (actionId === "github.list_repository_languages") {
+		if (!result.languages || typeof result.languages !== "object")
+			throw new Error(`${actionId} returned an invalid result`);
+		return;
+	}
+	const envelope = readArrayEnvelope(actionId);
+	if (!envelope || !Array.isArray(result[envelope])) {
+		throw new Error(`${actionId} returned an invalid result`);
+	}
+	const contains = {
+		"github.list_assignees": ["id", 328682695],
+		"github.list_branches": ["name", "main"],
+		"github.list_check_runs_for_ref": ["id", 103940918709],
+		"github.list_commit_comments": ["id", 200307541],
+		"github.list_commits": ["sha", "410b111ccf673ab03ecb7239391442e226ad48fd"],
+		"github.list_directory_contents": ["path", "README.md"],
+		"github.list_issue_comments": ["id", 5662497553],
+		"github.list_issue_events": ["actor.id", 328682695],
+		"github.list_issue_labels": ["name", "connection-e2e-fixture"],
+		"github.list_issue_timeline_events": ["actor.id", 328682695],
+		"github.list_matching_refs": ["ref", "refs/heads/main"],
+		"github.list_milestones": ["number", 1],
+		"github.list_my_repositories": ["id", 1369705971],
+		"github.list_my_starred_repositories": ["id", 1369705971],
+		"github.list_organization_repositories": ["id", 1369705971],
+		"github.list_pull_request_commits": [
+			"sha",
+			"82285418de307b681dd8842e24c1af705a88345d",
+		],
+		"github.list_pull_request_files": ["filename", "fixtures/pull-request.txt"],
+		"github.list_pull_requests": ["number", 2],
+		"github.list_pull_requests_associated_with_commit": ["number", 2],
+		"github.list_release_assets": ["id", 563149878],
+		"github.list_releases": ["id", 388309497],
+		"github.list_repository_contributors": ["id", 328682695],
+		"github.list_repository_collaborators": ["id", 328682695],
+		"github.list_repository_events": ["repo.id", 1369705971],
+		"github.list_repository_issue_events": ["actor.id", 328682695],
+		"github.list_repository_issues": ["number", 1],
+		"github.list_repository_labels": ["name", "connection-e2e-fixture"],
+		"github.list_repository_stargazers": ["id", 328682695],
+		"github.list_repository_tags": ["name", "connection-e2e-fixture-v1"],
+		"github.list_user_repositories": ["id", 1368335067],
+		"github.list_workflow_run_artifacts": ["id", 10343191621],
+		"github.list_workflow_run_jobs": ["id", 103940918709],
+		"github.list_workflow_runs": ["id", 34833158492],
+		"github.list_repository_workflows": ["id", 357727076],
+		"github.search_code": ["path", "fixtures/read-target.txt"],
+		"github.search_commits": [
+			"sha",
+			"410b111ccf673ab03ecb7239391442e226ad48fd",
+		],
+		"github.search_issues_and_pull_requests": ["number", 1],
+		"github.search_labels": ["name", "connection-e2e-fixture"],
+		"github.search_repositories": ["id", 1369705971],
+		"github.search_users": ["id", 328682695],
+	};
+	const member = contains[actionId];
+	if (
+		member &&
+		!result[envelope].some((item) => valueAt(item, member[0]) === member[1])
+	) {
+		throw new Error(`${actionId} fixture does not match`);
+	}
+	const variableFeeds = new Set([
+		"github.list_authenticated_user_events",
+		"github.list_authenticated_user_received_events",
+		"github.list_public_events",
+		"github.list_user_public_events",
+		"github.list_user_received_public_events",
+	]);
+	if (!member && variableFeeds.has(actionId)) return;
+	const expectedEmpty = new Set([
+		"github.get_commit_statuses",
+		"github.list_pull_request_requested_reviewers",
+		"github.list_pull_request_review_comments",
+		"github.list_pull_request_reviews",
+		"github.list_repository_forks",
+		"github.list_repository_topics",
+		"github.list_repository_watchers",
+		"github.search_topics",
+	]);
+	if (!member && expectedEmpty.has(actionId) && result[envelope].length !== 0) {
+		throw new Error(`${actionId} expected an empty fixture result`);
+	}
+	if (!member && !expectedEmpty.has(actionId)) {
+		throw new Error(`${actionId} has no fixture assertion`);
+	}
+}
+
+function valueAt(value, path) {
+	return path.split(".").reduce((current, key) => current?.[key], value);
+}
+
+function readArrayEnvelope(actionId) {
+	const groups = {
+		artifacts: ["list_workflow_run_artifacts"],
+		assets: ["list_release_assets"],
+		assignees: ["list_assignees"],
+		branches: ["list_branches"],
+		check_runs: ["list_check_runs_for_ref"],
+		collaborators: ["list_repository_collaborators"],
+		comments: [
+			"list_commit_comments",
+			"list_issue_comments",
+			"list_pull_request_review_comments",
+		],
+		commits: ["list_commits", "list_pull_request_commits"],
+		contributors: ["list_repository_contributors"],
+		entries: ["list_directory_contents"],
+		events: [
+			"list_authenticated_user_events",
+			"list_authenticated_user_received_events",
+			"list_issue_events",
+			"list_issue_timeline_events",
+			"list_public_events",
+			"list_repository_events",
+			"list_repository_issue_events",
+			"list_user_public_events",
+			"list_user_received_public_events",
+		],
+		files: ["list_pull_request_files"],
+		items: [
+			"search_code",
+			"search_commits",
+			"search_issues_and_pull_requests",
+			"search_labels",
+			"search_topics",
+			"search_users",
+		],
+		issues: ["list_repository_issues"],
+		jobs: ["list_workflow_run_jobs"],
+		labels: ["list_issue_labels", "list_repository_labels"],
+		milestones: ["list_milestones"],
+		names: ["list_repository_topics"],
+		pull_requests: [
+			"list_pull_requests",
+			"list_pull_requests_associated_with_commit",
+		],
+		refs: ["list_matching_refs"],
+		releases: ["list_releases"],
+		repositories: [
+			"list_my_repositories",
+			"list_my_starred_repositories",
+			"list_organization_repositories",
+			"list_repository_forks",
+			"list_user_repositories",
+			"search_repositories",
+		],
+		reviews: ["list_pull_request_reviews"],
+		stargazers: ["list_repository_stargazers"],
+		statuses: ["get_commit_statuses"],
+		tags: ["list_repository_tags"],
+		teams: [],
+		users: ["list_pull_request_requested_reviewers"],
+		watchers: ["list_repository_watchers"],
+		workflow_runs: ["list_workflow_runs"],
+		workflows: ["list_repository_workflows"],
+	};
+	const name = actionId.slice("github.".length);
+	return Object.entries(groups).find(([, names]) => names.includes(name))?.[0];
+}
 
 export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true") {
@@ -435,9 +767,14 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-	const runId = process.argv[2]?.trim() || randomUUID();
+	const isReadSuite = process.argv[2] === "read" && process.argv.length >= 4;
+	const suite = isReadSuite ? "read" : "issue";
+	const runId =
+		(isReadSuite ? process.argv[3] : process.argv[2])?.trim() || randomUUID();
 	try {
-		const result = await runGitHubIssueConformance({
+		const result = await (suite === "read"
+			? runGitHubReadConformance
+			: runGitHubIssueConformance)({
 			environment: process.env,
 			fetch: globalThis.fetch,
 			runId,
@@ -450,6 +787,7 @@ if (
 				error: errorMessage(error),
 				outcome: "FAILED",
 				runId,
+				suite,
 			}),
 		);
 		process.exitCode = 1;

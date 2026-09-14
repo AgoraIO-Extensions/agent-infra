@@ -162,6 +162,22 @@ test("keeps the Connection E2E token only in its fixed conformance step", async 
 	);
 });
 
+test("keeps GitHub read conformance in the fixed token-bearing step", async () => {
+	const workflows = await actualWorkflows();
+	const step = workflows["connection-github-e2e.yml"].jobs.conformance.steps.find(
+		(item) => item.env?.CONNECTION_E2E_TOKEN,
+	);
+	step.run = step.run.replace(
+		/node tests\/github-connection-e2e\.mjs read[^\n]*\n[^\n]*\n/,
+		"",
+	);
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("fixed GitHub conformance step"),
+		),
+	);
+});
+
 test("binds Connection E2E to the immutable connection dispatch commit", async () => {
 	const workflows = await actualWorkflows();
 	const checkout = workflows["connection-github-e2e.yml"].jobs.conformance.steps[0];
