@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	githubConnectionCatalog,
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "./index.ts";
@@ -88,5 +89,12 @@ test("GitHub execution resolves a newly cataloged action through the kernel", as
 		assert.deepEqual(result, { branches: [{ name: "main" }] });
 	} finally {
 		globalThis.fetch = originalFetch;
+	}
+});
+
+test("GitHub catalog publishes one immutable release generation", () => {
+	assert.match(githubConnectionCatalog.providerReleaseId, /-connection-v7$/);
+	for (const action of githubConnectionCatalog.actions) {
+		assert.match(action.id, /@v7$/);
 	}
 });

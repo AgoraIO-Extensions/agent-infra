@@ -53,7 +53,7 @@ export const githubConnectionCatalog = {
 	actions: githubActions.map((action) => ({
 		description: action.description,
 		effect: connectionEffect(action.name),
-		id: `${action.id}@v5`,
+		id: `${action.id}@v7`,
 		inputSchema: connectionInputSchema(action.inputSchema),
 		name: action.id,
 		requiredScopes: [...action.requiredScopes],
