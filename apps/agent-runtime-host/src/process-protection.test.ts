@@ -84,24 +84,22 @@ describe("credential holder process protection", () => {
 		});
 	});
 
-	it("rejects inspector entry points, diagnostic settings and a raisable core limit", async () => {
-		for (const options of [
-			{ flags: [] },
-			{ flags: ["--disable-sigusr1", "--inspect=127.0.0.1:0"] },
-			{ flags: ["--disable-sigusr1", "--report-on-fatalerror"] },
-			{ preamble: "process.report.reportOnSignal = true;" },
-			{ preamble: 'process.env.NODE_OPTIONS = "sentinel-private-value";' },
-			{
-				preamble:
-					'const inspector = await import("node:inspector"); inspector.open(0, "127.0.0.1");',
-			},
-			{ coreLimit: 'ulimit -S -c 0\nexec "$@"' },
-		]) {
-			await expect(runGuard(options)).rejects.toMatchObject({
-				code: 17,
-				stdout: `${failure}\n`,
-			});
-		}
+	it.each([
+		{ flags: [] },
+		{ flags: ["--disable-sigusr1", "--inspect=127.0.0.1:0"] },
+		{ flags: ["--disable-sigusr1", "--report-on-fatalerror"] },
+		{ preamble: "process.report.reportOnSignal = true;" },
+		{ preamble: 'process.env.NODE_OPTIONS = "sentinel-private-value";' },
+		{
+			preamble:
+				'const inspector = await import("node:inspector"); inspector.open(0, "127.0.0.1");',
+		},
+		{ coreLimit: 'ulimit -S -c 0\nexec "$@"' },
+	])("rejects an unprotected process: %j", async (options) => {
+		await expect(runGuard(options)).rejects.toMatchObject({
+			code: 17,
+			stdout: `${failure}\n`,
+		});
 	});
 
 	it("refuses diagnostic environment before Node or any preload starts", async () => {

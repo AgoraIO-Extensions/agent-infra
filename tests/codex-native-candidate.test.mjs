@@ -247,6 +247,16 @@ class CandidateGates(unittest.TestCase):
             commands.append(command)
             self.assertEqual(cwd, self.source)
             self.assertEqual(env['CODEX_BWRAP_SHA256'], 'a' * 64)
+            # Both focused runs need Core's target-specific vendored OpenSSL feature.
+            self.assertEqual([command[index + 1] for index, value in enumerate(command) if value == '-p'],
+                             ['codex-rmcp-client', 'codex-core'])
+            self.assertIn('--no-tests=fail', command)
+            self.assertEqual(command[command.index('--target') + 1], candidate.TARGET)
+            expected_selection = {
+                'native-tests-connection': 'package(=codex-rmcp-client) & (test(native_connection))',
+                'native-tests-barrier': 'package(=codex-core) & (test(native_connection_bootstrap) | test(native_operation_barrier))',
+            }
+            self.assertEqual(command[command.index('-E') + 1], expected_selection[name])
             if name == 'native-tests-barrier':
                 raise RuntimeError('native test failed')
         builder.run = run

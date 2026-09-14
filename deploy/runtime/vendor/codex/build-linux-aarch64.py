@@ -439,12 +439,15 @@ class Builder:
         env = os.environ.copy()
         env["CODEX_BWRAP_SHA256"] = record["bwrapSha256"].removeprefix("sha256:")
         commands = []
+        # Core enables vendored OpenSSL for musl. Select both existing test crates
+        # so Connection tests inherit that feature, then preserve each test scope.
         for name, crate, selection in (
             ("connection", "codex-rmcp-client", "test(native_connection)"),
             ("barrier", "codex-core", "test(native_connection_bootstrap) | test(native_operation_barrier)"),
         ):
-            command = ["just", "test", "-p", crate, "--locked", "--lib", "--target", TARGET,
-                       "--release", "--test-threads", "2", "--no-tests=fail", "-E", selection]
+            command = ["just", "test", "-p", "codex-rmcp-client", "-p", "codex-core",
+                       "--locked", "--lib", "--target", TARGET, "--release", "--test-threads", "2",
+                       "--no-tests=fail", "-E", f"package(={crate}) & ({selection})"]
             commands.append(command)
             self.run(f"native-tests-{name}", command, cwd=self.source, env=env)
         require(self.inputs() == inputs
